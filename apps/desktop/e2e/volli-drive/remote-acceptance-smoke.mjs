@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { createRegistry, findInSnapshot, instanceLayout, REPO } from "./lib/core.mjs";
 import { request } from "./lib/protocol.mjs";
+import { windowTargeting } from "./lib/window-targeting.mjs";
 import { waitUntil } from "../lib/smoke-kit.mjs";
 import {
   ANSWER_QUESTION,
@@ -42,7 +43,8 @@ let localKeepaliveStarted = false;
 let nativeQuitAttempted = false;
 let instance;
 let socket;
-const call = (cmd, args = {}) => request(socket, cmd, args, { timeoutMs: 150_000 });
+const driveWindows = windowTargeting((cmd, args = {}) => request(socket, cmd, args, { timeoutMs: 150_000 }));
+const call = driveWindows.call;
 const snap = () => call("snapshot");
 const wait = async (text, timeout = 45_000) => (await call("wait", { text, timeout })).snapshot;
 
@@ -134,6 +136,7 @@ async function card() {
 }
 async function stopLocalKeepalive() {
   if (!localKeepaliveStarted) return;
+  driveWindows.useMainWindow();
   if (nativeQuitAttempted) {
     await call("native-reopen");
     nativeQuitAttempted = false;
@@ -202,6 +205,7 @@ async function journey() {
     // Prove the saved pairing in Settings, where the host reads its real
     // enrolled devices over SSH and marks this device as This Mac.
     await click("button", "Settings");
+    await driveWindows.useSettingsWindow();
     await wait("Settings categories");
     await click("button", "Hosts");
     await click("button", REMOTE_HOST, { contains: true, first: true });
@@ -220,7 +224,8 @@ async function journey() {
     // Never click Forget: this is only a real UI scroll for the evidence frame.
     await action("scroll", "button", "Forget…", { direction: "down" });
     await shot("step-1-paired-device");
-    await click("button", "Close Settings");
+    // Settings stays open independently; returning to Home targets the workbench.
+    driveWindows.useMainWindow();
     await click("button", "Home");
   });
 
@@ -230,10 +235,9 @@ async function journey() {
     async () => {
       // Only benign Git box state is arranged. Project registration is UI-only.
       await call("acceptance-arrange-box");
-      await click("button", "Settings");
-      await wait("Settings categories");
-      await click("button", "Hosts");
-      await click("button", REMOTE_HOST, { contains: true, first: true });
+      // Reuse the same native Hosts detail; opening Settings again must not be
+      // used as a reset or a recovery shortcut for this retained view.
+      await driveWindows.useSettingsWindow();
       await wait("New project…");
       await click("button", "New project…");
       await wait(`New project on ${REMOTE_HOST}`);
@@ -259,18 +263,15 @@ async function journey() {
         "PASS",
         "The folder project must open through production UI registration",
       );
-      // The success toast arrives before the project's dialog has finished
-      // exiting. Wait for navigation's real accessibility name/ref to return;
-      // text behind a still-modal dialog is not an actionable Home button.
+      // The toast precedes the project's sheet exit. Prove that exit in its
+      // owning Settings window, then target the independently live workbench.
+      await call("wait", { text: `New project on ${REMOTE_HOST}`, gone: true, timeout: 10_000 });
+      driveWindows.useMainWindow();
       await waitUntil(
         "project dialog exits and Home is actionable",
         async () => hasActionableControl((await snap()).text, "button", "Home"),
         { timeout: 10_000, interval: 100 },
       );
-      // The project sheet is nested in floating Settings. Closing the sheet
-      // does not dismiss its parent or make the sidebar pointer-actionable.
-      await click("button", "Close Settings");
-      await call("wait", { text: "Close Settings", gone: true, timeout: 10_000 });
       await click("button", "Home");
       await selectHost(REMOTE_HOST);
       const selected = await wait(REMOTE_PROJECT);
@@ -335,6 +336,7 @@ async function journey() {
       await type(`Azure OpenAI API key, stored on ${REMOTE_HOST}`, "volli-drive-fake-key");
       await click("button", "Save");
       await wait(`Signed in on ${REMOTE_HOST} · API key`);
+      // This is the remote sign-in modal in main, not native Settings.
       await press("Escape");
       await waitUntil(
         "sign-in sheet exits and the host chip is actionable",
@@ -363,6 +365,7 @@ async function journey() {
         { timeout: 10_000, interval: 100 },
       );
       await shot("step-4-model-default");
+      // Escape closes only this workbench-owned model sheet.
       await press("Escape");
       await waitUntil(
         "model sheet exits and the host chip is actionable",
@@ -441,6 +444,7 @@ async function journey() {
     "Logs: This Mac and box source buttons, real hostd serving line labelled with box",
     async () => {
       await click("button", "Settings");
+      await driveWindows.useSettingsWindow();
       await wait("Settings categories");
       await click("button", "Logs", { contains: true, first: true });
       await wait("Sources");

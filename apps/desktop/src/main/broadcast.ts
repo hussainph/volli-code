@@ -46,6 +46,14 @@ function sendToEveryWindow(channel: VolliIpcEvent, payload: unknown): void {
   });
 }
 
+/** Accepted device preferences reach every other renderer, without echoing the writer. */
+export function broadcastAppStateChanged(key: string, value: string, senderId: number): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.webContents.id === senderId || window.webContents.isDestroyed()) continue;
+    window.webContents.send("volli:app-state-changed" satisfies VolliIpcEvent, { key, value });
+  }
+}
+
 /**
  * The app's one coalescing window, whose sink is every live window. The rule
  * and its state live in `data-change-coalescer.ts`; what is process-global here

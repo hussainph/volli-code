@@ -3,120 +3,64 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 import { SettingsPanel, useSettingsShortcut } from "./settings-panel";
-import { useUiStore } from "@renderer/stores/ui";
-import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
+import { setSettingsWindowOpener, useUiStore } from "@renderer/stores/ui";
 
 vi.mock("@renderer/components/pages/settings-page", () => ({
-  SettingsPage: () => (
-    <>
-      <input type="search" aria-label="Search settings" />
-      <Popover>
-        <PopoverTrigger>Nested choice</PopoverTrigger>
-        <PopoverContent>
-          <button>Choice</button>
-        </PopoverContent>
-      </Popover>
-    </>
-  ),
+  SettingsPage: () => <input type="search" aria-label="Search settings" />,
 }));
+vi.mock("@renderer/components/ui/sonner", () => ({ Toaster: () => null }));
+vi.mock("@renderer/components/update/update-install-dialog", () => ({ UpdateInstallDialog: () => null }));
+vi.mock("@renderer/components/cloud-moves/cloud-moves", () => ({ CloudMovesRoot: () => null }));
+vi.mock("@renderer/components/hosts/hosts-chrome", () => ({ HostsChrome: () => null }));
+vi.mock("@renderer/components/rail/folder-claim-dialog", () => ({ FolderClaimDialog: () => null }));
+vi.mock("@renderer/hooks/use-overlay-scrollbars", () => ({ useOverlayScrollbars: () => {} }));
+vi.mock("@renderer/hooks/use-zoom-commands", () => ({ useZoomCommands: () => {} }));
 let root: Root;
 let host: HTMLDivElement;
-const outside = vi.fn();
-function Host() {
+const open = vi.fn();
+const ready = vi.fn(async () => ({ ok: true, navigation: null }));
+function ShortcutHost() {
   useSettingsShortcut();
-  const open = useUiStore((s) => s.settingsOpen);
-  return (
-    <>
-      <button onClick={() => useUiStore.getState().setSettingsOpen(true)}>Preferences</button>
-      <button onClick={outside}>Underlying action</button>
-      {open ? <SettingsPanel /> : null}
-    </>
-  );
+  return <button onClick={() => useUiStore.getState().setSettingsOpen(true)}>Settings</button>;
 }
-const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
-beforeEach(async () => {
+beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  window.api = { settingsWindow: { ready } } as unknown as typeof window.api;
   useUiStore.setState({ settingsOpen: false });
-  outside.mockClear();
+  setSettingsWindowOpener(open);
+  open.mockClear();
+  ready.mockClear();
   host = document.body.appendChild(document.createElement("div"));
   root = createRoot(host);
-  await act(async () => root.render(<Host />));
 });
 afterEach(async () => {
-  await act(async () => {
-    root.unmount();
-    await tick();
-  });
+  await act(async () => root.unmount());
   host.remove();
-  useUiStore.setState({ settingsOpen: false });
+  setSettingsWindowOpener(null);
   vi.unstubAllGlobals();
 });
-async function openPanel() {
-  const button = host.querySelector<HTMLButtonElement>("button")!;
-  button.focus();
+it("repeated Command-comma opens or raises Settings without blocking the workspace", async () => {
+  await act(async () => root.render(<ShortcutHost />));
   await act(async () => {
-    button.click();
-    await tick();
+    for (let i = 0; i < 2; i++) window.dispatchEvent(new KeyboardEvent("keydown", { key: ",", metaKey: true, cancelable: true }));
   });
-  return button;
-}
-it("has no scrim or modal lock and restores focus on Escape", async () => {
-  const opener = await openPanel();
-  expect(document.querySelector('[role="dialog"]')).not.toBeNull();
-  expect(document.querySelector('[aria-modal="true"]')).toBeNull();
-  expect(document.querySelector('[data-slot="dialog-overlay"]')).toBeNull();
+  expect(open).toHaveBeenCalledTimes(2);
+  expect(useUiStore.getState().settingsOpen).toBe(false);
+});
+it("routes pane and provider intents through the same native opener", () => {
+  useUiStore.getState().setSettingsOpen(true, "models", "openai");
+  useUiStore.getState().requestConfigureCategory("worktrees");
+  useUiStore.getState().setSettingsOpen(false);
+  expect(open.mock.calls).toEqual([[{ category: "models", signInProviderId: "openai" }], [{ configureCategory: "worktrees" }]]);
+  expect(useUiStore.getState().configureCategory).toBeNull();
+});
+it("renders a window root without modal semantics or Escape dismissal", async () => {
+  await act(async () => root.render(<SettingsPanel />));
+  expect(host.querySelector('[data-settings-panel]')).not.toBeNull();
+  expect(host.querySelector('[role="dialog"]')).toBeNull();
+  expect(host.querySelector('[data-slot="dialog-overlay"]')).toBeNull();
   expect(document.activeElement?.getAttribute("aria-label")).toBe("Search settings");
-  await act(async () => {
-    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    await tick();
-  });
-  expect(useUiStore.getState().settingsOpen).toBe(false);
-  await vi.waitFor(() => expect(document.activeElement).toBe(opener));
-});
-it("dismisses on an outside pointer without eating its click or stealing its focus", async () => {
-  await openPanel();
-  const button = host.querySelectorAll<HTMLButtonElement>("button")[1];
-  await act(async () => {
-    button.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, cancelable: true }));
-    button.focus();
-    button.click();
-    await tick();
-  });
-  expect(useUiStore.getState().settingsOpen).toBe(false);
-  expect(outside).toHaveBeenCalledOnce();
-  expect(document.activeElement).toBe(button);
-});
-it("toggles with Command-comma while the search field has focus", async () => {
-  await act(async () => {
-    window.dispatchEvent(
-      new KeyboardEvent("keydown", { key: ",", metaKey: true, bubbles: true, cancelable: true }),
-    );
-    await tick();
-  });
-  expect(useUiStore.getState().settingsOpen).toBe(true);
-  await act(async () => {
-    document.activeElement?.dispatchEvent(
-      new KeyboardEvent("keydown", { key: ",", metaKey: true, bubbles: true, cancelable: true }),
-    );
-    await tick();
-  });
-  expect(useUiStore.getState().settingsOpen).toBe(false);
-});
-it("keeps a nested portaled popover within preferences' interaction scope", async () => {
-  await openPanel();
-  await act(async () => {
-    [...document.querySelectorAll<HTMLButtonElement>("button")]
-      .find((b) => b.textContent === "Nested choice")!
-      .click();
-    await tick();
-  });
-  const choice = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
-    (b) => b.textContent === "Choice",
-  )!;
-  await act(async () => {
-    choice.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
-    choice.click();
-    await tick();
-  });
-  expect(useUiStore.getState().settingsOpen).toBe(true);
+  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  expect(host.querySelector('[data-settings-panel]')).not.toBeNull();
+  expect(open).not.toHaveBeenCalled();
 });

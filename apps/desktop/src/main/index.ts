@@ -10,13 +10,14 @@ import {
   powerMonitor,
   protocol,
   safeStorage,
+  screen,
   session,
   shell,
   systemPreferences,
 } from "electron";
 import { autoUpdater } from "electron-updater";
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -88,6 +89,7 @@ import {
 } from "./quit-gate";
 import { isInternalNavigationTarget } from "./navigation";
 import { onRawIpc } from "./raw-ipc";
+import { currentRendererId } from "./renderer-call";
 import {
   applyQuietAppPolicy,
   hideDockForMenuBar,
@@ -275,6 +277,10 @@ import { createClientStateFlush } from "./client-state-flush";
 import { registerGhosttyConfigIpc } from "./ghostty-config";
 import { registerIpcHandlers } from "./ipc";
 import { registerAppMenu } from "./menu";
+import { createSettingsWindowOwner, restoreSettingsFrame, SETTINGS_WINDOW_SIZE } from "./settings-window";
+import { registerSettingsWindowIpcHandlers, sendSettingsWindowNavigation, sendWorkspaceWindowNavigation } from "./settings-window-ipc";
+import { registerAppWindow, getAppContentsRole, mainWindows } from "./window-roles";
+import type { SettingsWindowNavigation, WorkspaceWindowNavigation } from "../ipc/settings-window";
 import { confirmDestructiveClose, prepareTerminalQuit, registerTerminalIpcHandlers } from "./pty";
 import { ensureHarnessWorkspaceFiles } from "./harness-workspace";
 import { clientEventSink } from "./client-event-sink";
@@ -477,8 +483,9 @@ const worktreeLog = hostLogger("worktree");
 let revealWindowForLaunch: (() => void) | null = null;
 if (ownsAppProfile) {
   app.on("second-instance", () => {
-    answerSecondInstance(BrowserWindow.getAllWindows()[0], {
+    answerSecondInstance(mainWindows()[0], {
       cloudEnabled: () => isExperimentEnabled("cloud"),
+      hasSettingsWindow: () => BrowserWindow.getAllWindows().some((window) => getAppContentsRole(window.webContents) === "settings"),
       revealForLaunch: revealWindowForLaunch,
       show: (window) => {
         revealWindow(window, nativeWindowPolicy);
@@ -585,6 +592,8 @@ function confirmDiscardUnsaved(
 interface CreateWindowOptions {
   /** `false` keeps the window hidden for a login launch that enters the menu bar. */
   readonly revealOnReady?: boolean;
+  readonly role?: "main" | "settings";
+  readonly bounds?: Partial<Electron.Rectangle>;
 }
 
 function createWindow(
@@ -592,12 +601,21 @@ function createWindow(
   firstPaint: FirstPaintHint,
   options: CreateWindowOptions = {},
 ): BrowserWindow {
+  const settings = options.role === "settings";
   const mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
     // Usability floor: rail + max-width sidebar + a workable content column.
     minWidth: 940,
     minHeight: 600,
+    ...(settings ? {
+      ...SETTINGS_WINDOW_SIZE,
+      ...options.bounds,
+      title: "Settings",
+      vibrancy: "sidebar" as const,
+      visualEffectState: "followWindow" as const,
+      fullscreenable: false,
+    } : {}),
     show: false,
     // A quiet macOS smoke window must be incapable of becoming key. Playwright
     // focus emulation still gives its page document focus and CDP input.
@@ -642,6 +660,8 @@ function createWindow(
       sandbox: true,
     },
   });
+  registerAppWindow(mainWindow, settings ? "settings" : "main");
+  if (settings) mainWindow.on("page-title-updated", (event) => event.preventDefault());
   clearUnsavedDocumentsOnWindowClosed(mainWindow);
 
   mainWindow.on("ready-to-show", () => {
@@ -678,7 +698,7 @@ function createWindow(
     // Same plan as the quit gate, skip-confirm seam included: the smokes close
     // windows with editors deliberately left dirty, and a native modal here
     // would hang their teardown exactly as one on the quit path would.
-    const unsaved = unsavedDocumentNames();
+    const unsaved = unsavedDocumentNames(mainWindow.webContents.id);
     const unsavedStep = planUnsavedQuit({
       names: unsaved,
       skipConfirm: process.env["VOLLI_SKIP_CLOSE_CONFIRM"] === "1",
@@ -755,9 +775,9 @@ function createWindow(
   // app-owned origin (including local packaged-runtime smoke launches).
   // DevTools is not auto-opened — toggle it with ⌥⌘I when needed.
   if (isDev && process.env["ELECTRON_RENDERER_URL"]) {
-    mainWindow.loadURL(process.env["ELECTRON_RENDERER_URL"]);
+    mainWindow.loadURL(`${process.env["ELECTRON_RENDERER_URL"]}${settings ? "#settings" : ""}`);
   } else {
-    mainWindow.loadURL(PACKAGED_RENDERER_ENTRY_URL);
+    mainWindow.loadURL(`${PACKAGED_RENDERER_ENTRY_URL}${settings ? "#settings" : ""}`);
   }
   return mainWindow;
 }
@@ -1064,7 +1084,7 @@ const appStartup = app.whenReady().then(async () => {
             };
       },
       confirm: createNativeSendConfirmation({
-        getWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
+        getWindow: () => mainWindows()[0] ?? null,
         showMessageBox: (window, options) => dialog.showMessageBox(window, options),
       }),
     },
@@ -1205,7 +1225,7 @@ const appStartup = app.whenReady().then(async () => {
               defaultId: 0,
               cancelId: 2,
             };
-            const owner = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+            const owner = BrowserWindow.getFocusedWindow() ?? mainWindows()[0];
             const answer =
               owner === undefined
                 ? dialog.showMessageBoxSync(options)
@@ -1548,9 +1568,12 @@ const appStartup = app.whenReady().then(async () => {
   sessionWakeBus?.subscribe(({ event }) => {
     if (retiresSessionSecrets(event.payload)) void secrets.endSession(event.sessionId);
   });
-  registerSecretIpc(secrets, (sender) =>
-    isSecretRenderer(sender.getURL(), isDev ? process.env["ELECTRON_RENDERER_URL"] : undefined),
-  );
+  registerSecretIpc(secrets, (sender) => {
+    const role = getAppContentsRole(sender);
+    return role !== null && isSecretRenderer(
+      sender.getURL(), isDev ? process.env["ELECTRON_RENDERER_URL"] : undefined, role,
+    );
+  });
   const mcpSettings = liveHost?.runtimeServices.mcp ?? null;
   // Where Code Mode's sandbox worker and WebAssembly are (VC-471): the
   // workspace's installed copy unpackaged, and the copy electron-builder
@@ -1598,7 +1621,7 @@ const appStartup = app.whenReady().then(async () => {
     createId: randomUUID,
     createView: (options) => new WebContentsView(options),
     fromPartition: (partition) => session.fromPartition(partition),
-    getWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
+    getWindow: () => mainWindows()[0] ?? null,
     // The off-screen stage every tab waits in until a person shows it (VC-278).
     // A tab nobody has revealed still needs a window to hold its compositor
     // surface, or its clicks land nowhere and its screenshots never answer.
@@ -2022,7 +2045,7 @@ const appStartup = app.whenReady().then(async () => {
           },
           reportUnsavedWrites: (count) => {
             if (!accountEnrollmentEnabled()) throw new OperationUnavailableError(ACCOUNT_CLOUD_OFF);
-            recordUnsavedBoardWrites(count);
+            recordUnsavedBoardWrites(count, currentRendererId());
           },
           // Only a cloud launch has a board to keep, and only its own account's.
           saveSnapshot: (text) => {
@@ -2101,6 +2124,7 @@ const appStartup = app.whenReady().then(async () => {
   registerNotificationIpcHandlers({
     settings: notifications.settings,
     takePendingActivation: () => notifications.takePendingActivation(),
+    mayActivate: (sender) => getAppContentsRole(sender) === "main",
     // A renderer asking for the parked click is a renderer that has just
     // subscribed to them (VC-295): until then main parks rather than
     // pushes, because a window exists long before anything inside it listens.
@@ -2433,8 +2457,8 @@ const appStartup = app.whenReady().then(async () => {
 
   onRawIpc(
     "volli:unsaved-documents" satisfies VolliIpcChannel,
-    (_event, ...args: unknown[]): void => {
-      recordUnsavedDocuments(args[0]);
+    (event, ...args: unknown[]): void => {
+      if (getAppContentsRole(event.sender) !== null) recordUnsavedDocuments(args[0], event.sender.id);
     },
   );
   // The accepted-quit coordinator registered above only holds the event
@@ -2502,7 +2526,7 @@ const appStartup = app.whenReady().then(async () => {
       });
       return view;
     },
-    getWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
+    getWindow: () => mainWindows()[0] ?? null,
     // macOS is the one platform Electron reads the setting on; elsewhere the
     // cursor moves, which is the default a person who never asked expects.
     prefersReducedMotion: () =>
@@ -2566,6 +2590,8 @@ const appStartup = app.whenReady().then(async () => {
       clientStateFlush.acknowledge(args[0]);
     },
   );
+  const pendingWorkspaceNavigation = new Map<number, WorkspaceWindowNavigation>();
+  const workspaceRendererReady = new Set<number>();
   const createOwnedWindow = (options: CreateWindowOptions = {}): BrowserWindow => {
     const window = createWindow(ptyManager, currentFirstPaint(), options);
     // Browser Tabs are live machine resources, not durable documents. Once the
@@ -2575,16 +2601,26 @@ const appStartup = app.whenReady().then(async () => {
     // And a closed window is showing nothing: its last reported target must not
     // linger and suppress an alert nobody can see (VC-295).
     const windowId = window.id;
-    window.once("closed", () => notifications.forgetWindow(windowId));
+    window.once("closed", () => {
+      notifications.forgetWindow(windowId);
+      pendingWorkspaceNavigation.delete(windowId);
+      workspaceRendererReady.delete(windowId);
+    });
     // A page that reloads, navigates, or crashes takes its click subscription
     // and its reported target with it, while the window id lives on. Drop
     // both, so the next click parks for the fresh page instead of being pushed
     // into one that no longer listens. Same-document navigations (a hash
     // change) keep the page and are skipped.
     window.webContents.on("did-start-navigation", (details) => {
-      if (details.isMainFrame && !details.isSameDocument) notifications.forgetRenderer(windowId);
+      if (details.isMainFrame && !details.isSameDocument) {
+        notifications.forgetRenderer(windowId);
+        workspaceRendererReady.delete(windowId);
+      }
     });
-    window.webContents.on("render-process-gone", () => notifications.forgetRenderer(windowId));
+    window.webContents.on("render-process-gone", () => {
+      notifications.forgetRenderer(windowId);
+      workspaceRendererReady.delete(windowId);
+    });
     // A committed page reset strands any Browser plane the old page had put on
     // screen (VC-424): a native view is the window's child, not the page's, so
     // it goes on compositing over a fresh app UI that cannot hide a tab it has
@@ -2600,10 +2636,111 @@ const appStartup = app.whenReady().then(async () => {
     });
     return window;
   };
+  // Settings has no parent: it is movable between displays and never blocks the workbench.
+  const settingsFramePath = join(app.getPath("userData"), "settings-window-frame.json");
+  let settingsNavigation: SettingsWindowNavigation | null = null;
+  let settingsRevision = 0;
+  let settingsRendererReady = false;
+  let settingsNativeReady = false;
+  const showSettings = (window: BrowserWindow): void => {
+    if (!settingsRendererReady || !settingsNativeReady || window.isDestroyed()) return;
+    if (window.isMinimized()) window.restore();
+    revealWindow(window, nativeWindowPolicy);
+    sealQuietAppActivation(app, nativeWindowPolicy);
+  };
+  const settingsWindow = createSettingsWindowOwner({
+    create: (navigation) => {
+      settingsNavigation = { ...navigation, revision: ++settingsRevision };
+      settingsRendererReady = false;
+      settingsNativeReady = false;
+      let bounds: Partial<Electron.Rectangle> = {};
+      try {
+        bounds = restoreSettingsFrame(JSON.parse(readFileSync(settingsFramePath, "utf8")), screen.getAllDisplays().map((display) => display.workArea));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") log.warn("couldn't restore Settings frame", { error });
+      }
+      // Settings initially paints App scope; project navigation is resolved before reveal.
+      const paint = dbHandle.ok ? resolveFirstPaint({
+        hint: null, canvas: getGlobalCanvas(dbHandle.db), appearance: getGlobalAppearance(dbHandle.db),
+        systemPrefersDark: nativeTheme.shouldUseDarkColors,
+      }) : currentFirstPaint();
+      const window = createWindow(ptyManager, paint, { role: "settings", revealOnReady: false, bounds });
+      window.once("ready-to-show", () => { settingsNativeReady = true; showSettings(window); });
+      window.webContents.on("did-start-navigation", (details) => {
+        if (details.isMainFrame && !details.isSameDocument) settingsRendererReady = false;
+      });
+      window.webContents.on("render-process-gone", () => { settingsRendererReady = false; });
+      const saveFrame = () => {
+        if (window.isDestroyed()) return;
+        try {
+          writeFileSync(`${settingsFramePath}.tmp`, JSON.stringify(window.getNormalBounds()));
+          renameSync(`${settingsFramePath}.tmp`, settingsFramePath);
+        } catch (error) { log.warn("couldn't save Settings frame", { error }); }
+      };
+      window.on("resized", saveFrame);
+      window.on("moved", saveFrame);
+      window.on("close", saveFrame);
+      return window;
+    },
+    navigate: (window, navigation) => {
+      settingsNavigation = { ...navigation, revision: ++settingsRevision };
+      const listening = settingsRendererReady;
+      settingsRendererReady = false;
+      if (listening) sendSettingsWindowNavigation(window.webContents, settingsNavigation);
+    },
+    reveal: showSettings,
+  });
+  const assertSettingsRequester = (sender: Electron.WebContents): void => {
+    if (settingsWindow.current()?.webContents !== sender || getAppContentsRole(sender) !== "settings") {
+      throw new Error("Only the Settings window can receive Settings navigation.");
+    }
+  };
+  registerSettingsWindowIpcHandlers({
+    open: (navigation, sender) => {
+      if (getAppContentsRole(sender) === null) throw new Error("Only an app window can open Settings.");
+      settingsWindow.open(navigation);
+    },
+    openWorkspace: (navigation, sender) => {
+      assertSettingsRequester(sender);
+      // Reuse the ordinary menu-bar exit path so a retained workbench is no
+      // longer scheduled for destruction when its draft flush acknowledges.
+      appWindows.openForNotification(runnerEdge.menuBar());
+      const focused = BrowserWindow.getFocusedWindow();
+      const window = focused !== null && getAppContentsRole(focused.webContents) === "main"
+        ? focused : mainWindows()[0] ?? createOwnedWindow();
+      if (window.isMinimized()) window.restore();
+      if (workspaceRendererReady.has(window.id)) sendWorkspaceWindowNavigation(window.webContents, navigation);
+      else pendingWorkspaceNavigation.set(window.id, navigation);
+      revealWindow(window, nativeWindowPolicy);
+      sealQuietAppActivation(app, nativeWindowPolicy);
+    },
+    pendingWorkspaceNavigation: (sender) => {
+      if (getAppContentsRole(sender) !== "main") throw new Error("Only a workspace window can receive workspace navigation.");
+      const window = BrowserWindow.fromWebContents(sender);
+      if (window === null) throw new Error("The workspace window is closed.");
+      workspaceRendererReady.add(window.id);
+      const navigation = pendingWorkspaceNavigation.get(window.id) ?? null;
+      pendingWorkspaceNavigation.delete(window.id);
+      return navigation;
+    },
+    pendingNavigation: (sender) => { assertSettingsRequester(sender); return settingsNavigation; },
+    ready: (appliedRevision, sender) => {
+      assertSettingsRequester(sender);
+      // An opening command can supersede the bootstrap read. Do not expose
+      // the old scope; return the new intent and wait for its committed frame.
+      if (settingsNavigation !== null && appliedRevision === settingsNavigation.revision) {
+        settingsRendererReady = true;
+        const window = settingsWindow.current();
+        if (window !== null) showSettings(window);
+      }
+      return settingsNavigation;
+    },
+  });
   // Which windows count as open, their draft flush, and the reveal each door
   // that brings one back takes (VC-577).
   const appWindows = createAppWindows({
     all: () => BrowserWindow.getAllWindows(),
+    isWorkspace: (window) => getAppContentsRole(window.webContents) === "main",
     create: createOwnedWindow,
     reveal: (window) => revealWindow(window, nativeWindowPolicy),
     flush: clientStateFlush,
@@ -2788,7 +2925,7 @@ const appStartup = app.whenReady().then(async () => {
     // owns the "downloaded" announcement; the native notification only speaks
     // when no window is left to show it (macOS keeps the app alive).
     hasUpdateSurface: () =>
-      BrowserWindow.getAllWindows().some((window) => !window.webContents.isDestroyed()),
+      mainWindows().some((window) => !window.webContents.isDestroyed()),
     // Settings → Updates' Status row survives a relaunch (VC-294); on a
     // broken db it lives for this run only, like the channel below.
     lastCheck: dbHandle.ok
@@ -3238,7 +3375,7 @@ const appStartup = app.whenReady().then(async () => {
     });
   };
 
-  registerAppMenu(dbHandle, { installAgentTools, uninstallAgentTools });
+  registerAppMenu(dbHandle, { installAgentTools, uninstallAgentTools, openSettings: () => { settingsWindow.open({}); } });
 
   // Settings → CLI (VC-52): the detection surface over the silent install, and
   // the in-app doctor. Registered before the awaited socket work below for the

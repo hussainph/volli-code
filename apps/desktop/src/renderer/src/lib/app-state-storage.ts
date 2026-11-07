@@ -14,8 +14,18 @@ import { errorMessage } from "@volli/shared";
 import type { StateStorage } from "zustand/middleware";
 
 import { toastError } from "@renderer/lib/toast";
+import { isSharedPreferenceKey as isSharedPreference, mergePreferenceSnapshot } from "../../../preference-patch";
 
 const cache = new Map<string, string>();
+// Only shared presentation preferences suppress identical writes. Drafts retain
+// their explicit durability/acknowledgement semantics, even for identical bytes.
+const sharedPreferenceValues = new Map<string, string>();
+const preferenceListeners = new Set<(key: string) => void>();
+/** Accepted merged preferences repaint their writer as well as other windows. */
+export function onPreferenceValueAccepted(listener: (key: string) => void): () => void {
+  preferenceListeners.add(listener);
+  return () => { preferenceListeners.delete(listener); };
+}
 
 /**
  * Fills the cache at boot from the bootstrap payload's raw `app_state` JSON
@@ -28,15 +38,32 @@ export function seedAppStateCache(entries: Record<string, string>): void {
     if (value !== "") {
       cache.set(key, value);
       acknowledgedValues.delete(key);
+      if (isSharedPreference(key)) sharedPreferenceValues.set(key, value);
     }
   }
 }
 
 /** Writes through to main and reports whether SQLite acknowledged the value. */
-async function persist(key: string, value: string, failureVerb: string): Promise<boolean> {
+async function persist(key: string, value: string, failureVerb: string, baseValue?: string): Promise<boolean> {
   try {
-    const result = await window.api.appState.set(key, value);
-    if (result.ok) return true;
+    const result = isSharedPreference(key) && baseValue !== undefined && value !== ""
+      ? await window.api.appState.set(key, value, baseValue)
+      : await window.api.appState.set(key, value);
+    if (result.ok) {
+      if (isSharedPreference(key) && result.value !== undefined) {
+        const accepted = result.value;
+        // Main merged an independent edit from another window. Retain any
+        // newer local intent while adopting that authoritative snapshot.
+        cache.set(key, mergePreferenceSnapshot(accepted, value, cache.get(key) ?? value));
+        const pending = pendingWrites.get(key);
+        if (pending !== undefined) {
+          pending.value = mergePreferenceSnapshot(accepted, value, pending.value);
+          pending.baseValue = mergePreferenceSnapshot(accepted, value, pending.baseValue ?? value);
+        }
+        for (const listener of preferenceListeners) listener(key);
+      }
+      return true;
+    }
     toastError(`Couldn't ${failureVerb} "${key}": ${result.error}`);
   } catch (error: unknown) {
     toastError(`Couldn't ${failureVerb} "${key}": ${errorMessage(error)}`);
@@ -56,6 +83,7 @@ const PERSIST_DEBOUNCE_MS = 200;
 
 interface PendingWrite {
   value: string;
+  baseValue?: string;
   failureVerb: string;
   timer: ReturnType<typeof setTimeout>;
 }
@@ -68,31 +96,39 @@ const acknowledgedValues = new Map<string, string>();
  * Serializes writes to one key, so an older bridge call can never settle after
  * and overwrite a value whose durability a caller already observed.
  */
-function persistInOrder(key: string, value: string, failureVerb: string): Promise<boolean> {
+function persistInOrder(key: string, value: string, failureVerb: string, baseValue?: string): Promise<boolean> {
   acknowledgedValues.delete(key);
   const previous = writesInFlight.get(key);
   const write =
     previous === undefined
-      ? persist(key, value, failureVerb)
-      : previous.then(() => persist(key, value, failureVerb));
+      ? persist(key, value, failureVerb, baseValue)
+      : previous.then(() => persist(key, value, failureVerb, baseValue));
   writesInFlight.set(key, write);
   void write.then((ok) => {
     if (writesInFlight.get(key) !== write) return;
     writesInFlight.delete(key);
-    if (ok && !pendingWrites.has(key)) acknowledgedValues.set(key, value);
+    if (ok && !pendingWrites.has(key)) {
+      const accepted = isSharedPreference(key) ? cache.get(key) ?? value : value;
+      acknowledgedValues.set(key, accepted);
+      if (isSharedPreference(key)) sharedPreferenceValues.set(key, accepted);
+    }
   });
   return write;
 }
 
-function persistDebounced(key: string, value: string, failureVerb: string): void {
+function persistDebounced(key: string, value: string, failureVerb: string, baseValue?: string): void {
+  // Zustand persist runs on transient navigation too. An unchanged preference
+  // must not overwrite another window's newer accepted value.
+  if (isSharedPreference(key) && sharedPreferenceValues.get(key) === value && !pendingWrites.has(key) && !writesInFlight.has(key)) return;
   acknowledgedValues.delete(key);
   const existing = pendingWrites.get(key);
   if (existing !== undefined) clearTimeout(existing.timer);
   const timer = setTimeout(() => {
+    const pending = pendingWrites.get(key);
     pendingWrites.delete(key);
-    void persistInOrder(key, value, failureVerb);
+    if (pending !== undefined) void persistInOrder(key, pending.value, pending.failureVerb, pending.baseValue);
   }, PERSIST_DEBOUNCE_MS);
-  pendingWrites.set(key, { value, failureVerb, timer });
+  pendingWrites.set(key, { value, baseValue: existing === undefined ? baseValue : existing.baseValue, failureVerb, timer });
 }
 
 /**
@@ -106,7 +142,7 @@ function persistDebounced(key: string, value: string, failureVerb: string): void
 export function flushPendingAppState(): void {
   for (const [key, pending] of pendingWrites) {
     clearTimeout(pending.timer);
-    void persistInOrder(key, pending.value, pending.failureVerb);
+    void persistInOrder(key, pending.value, pending.failureVerb, pending.baseValue);
   }
   pendingWrites.clear();
 }
@@ -123,7 +159,7 @@ export function flushPendingAppStateKey(key: string): Promise<boolean> {
   if (pending !== undefined) {
     clearTimeout(pending.timer);
     pendingWrites.delete(key);
-    return persistInOrder(key, pending.value, pending.failureVerb);
+    return persistInOrder(key, pending.value, pending.failureVerb, pending.baseValue);
   }
   return (
     writesInFlight.get(key) ??
@@ -151,6 +187,15 @@ export async function flushAllPendingAppState(): Promise<boolean> {
     ok = ok && results.every(Boolean);
   } while (pendingWrites.size > 0);
   return ok;
+}
+
+/** Accept another window's committed preference, but never clobber local pending intent. */
+export function acceptAppStateValue(key: string, value: string): boolean {
+  if (pendingWrites.has(key) || writesInFlight.has(key)) return false;
+  if (value === "") cache.delete(key);
+  else cache.set(key, value);
+  if (isSharedPreference(key)) sharedPreferenceValues.set(key, value);
+  return true;
 }
 
 /** Answers main's flush request through the preload bridge, when there is one. */
@@ -196,12 +241,14 @@ export interface SyncStateStorage {
 export const appStateStorage: StateStorage & SyncStateStorage = {
   getItem: (key) => cache.get(key) ?? null,
   setItem: (key, value) => {
+    const baseValue = cache.get(key);
     cache.set(key, value);
-    persistDebounced(key, value, "save");
+    persistDebounced(key, value, "save", isSharedPreference(key) ? baseValue : undefined);
   },
   removeItem: (key) => {
+    const baseValue = cache.get(key);
     cache.delete(key);
-    persistDebounced(key, "", "clear");
+    persistDebounced(key, "", "clear", isSharedPreference(key) ? baseValue : undefined);
   },
   // Fire-and-forget on purpose: the caller wants the write on its way before
   // the window can close, not an ack it would have to await on a synchronous

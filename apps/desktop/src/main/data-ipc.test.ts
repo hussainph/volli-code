@@ -87,11 +87,21 @@ vi.mock("../../../../packages/host-core/src/project-base-branch", async (importO
 // Hoisted above module evaluation, like ipc.test.ts, so the electron mock
 // factory can capture into them. `dataChangedSends` collects every
 // volli:data-changed fan-out so the broadcast-on-mutation assertions can see it.
-const { handlers, dataChangedSends, showItemInFolder, showSaveDialog, worktreeWatch, appMode } =
-  vi.hoisted(() => ({
+const {
+  handlers,
+  dataChangedSends,
+  appStateChangedSends,
+  windowPeers,
+  showItemInFolder,
+  showSaveDialog,
+  worktreeWatch,
+  appMode,
+} = vi.hoisted(() => ({
     appMode: { isPackaged: false },
     handlers: new Map<string, (...args: never[]) => unknown>(),
     dataChangedSends: [] as Array<{ channel: string; payload: unknown }>,
+    appStateChangedSends: [] as Array<{ targetId: number; channel: string; payload: unknown }>,
+    windowPeers: [{ id: 0, destroyed: false }],
     showItemInFolder: vi.fn(),
     showSaveDialog: vi.fn(),
     /**
@@ -128,19 +138,22 @@ vi.mock("electron", () => ({
     },
     getPath: () => "/volli-test-userdata",
   },
-  // The worktree remove/orphan-delete broadcasts fan out over BrowserWindow;
-  // one fake window records each send so tests can assert the re-hydrate fired.
+  // One default peer preserves existing broadcast assertions. Preference tests
+  // install two identified renderers to verify targeted delivery and no echo.
   BrowserWindow: {
-    getAllWindows: () => [
-      {
-        webContents: {
-          isDestroyed: () => false,
-          send: (channel: string, payload: unknown) => {
+    getAllWindows: () => windowPeers.map((peer) => ({
+      webContents: {
+        id: peer.id,
+        isDestroyed: () => peer.destroyed,
+        send: (channel: string, payload: unknown) => {
+          if (channel === "volli:app-state-changed") {
+            appStateChangedSends.push({ targetId: peer.id, channel, payload });
+          } else {
             dataChangedSends.push({ channel, payload });
-          },
+          }
         },
       },
-    ],
+    })),
     getFocusedWindow: () => undefined,
   },
   dialog: { showSaveDialog },
@@ -292,8 +305,8 @@ import type { BlobAttachResult, BlobLinksResult } from "../ipc/contract";
 /** No executor binding is open: these rows rest at not-live. */
 const noOpenBindings = () => [];
 
-/** Fake IPC event; unused by any data-ipc handler, but every handler signature expects one. */
-const fakeEvent = { sender: {} };
+/** Default invoking renderer; sender-scoped tests supply their own identified peer. */
+const fakeEvent = { sender: { id: 0 } };
 
 /** Invokes a captured handler the way `ipcMain.handle` dispatch would. */
 function invoke<T>(channel: VolliIpcChannel, ...args: unknown[]): T {
@@ -341,6 +354,8 @@ beforeEach(() => {
   handlers.clear();
   vi.resetAllMocks();
   dataChangedSends.length = 0;
+  appStateChangedSends.length = 0;
+  windowPeers.splice(0, windowPeers.length, { id: 0, destroyed: false });
   // Each registration builds its own host read service (VC-788), so each test
   // starts with a clean snapshot; only the captured watch hooks need dropping.
   worktreeWatch.options = undefined;
@@ -5003,6 +5018,140 @@ describe("volli:worktree-orphan-delete", () => {
 
     expect(result).toEqual({ ok: true });
     expect(existsSync(target)).toBe(false);
+  });
+});
+
+describe("cross-window preference snapshot writes (VC-1121)", () => {
+  const seed = (key: string, value: string): void => {
+    ctx.db.prepare(
+      "INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+    ).run(key, value, 0);
+  };
+  const stored = (key: string): string | undefined => {
+    const row = ctx.db.prepare("SELECT value FROM app_state WHERE key = ?").get(key) as
+      | { value: string }
+      | undefined;
+    return row?.value;
+  };
+  // Dispatch through the real registered guard and handler into the real DB.
+  // The optional baseline intentionally remains raw so malformed wire inputs
+  // can be checked before either persistence or a peer announcement happens.
+  const writeFrom = (
+    senderId: number,
+    key: string,
+    value: string,
+    ...baseline: unknown[]
+  ): AppStateSetResult => {
+    const handler = handlers.get("volli:app-state-set");
+    if (handler === undefined) throw new Error("No app-state handler registered");
+    return (handler as (...args: unknown[]) => AppStateSetResult)(
+      { sender: { id: senderId } },
+      key,
+      value,
+      ...baseline,
+    );
+  };
+
+  beforeEach(() => {
+    windowPeers.splice(
+      0,
+      windowPeers.length,
+      { id: 101, destroyed: false },
+      { id: 202, destroyed: false },
+      { id: 303, destroyed: true },
+    );
+  });
+
+  it.each(["volli:ui", "volli:style"])(
+    "merges independent stale-baseline edits for %s and sends the accepted value only to live peers",
+    (key) => {
+      const baseline = JSON.stringify({ state: { sidebarWidth: 300, costVisible: true } });
+      const resized = JSON.stringify({ state: { sidebarWidth: 420, costVisible: true } });
+      const toggled = JSON.stringify({ state: { sidebarWidth: 300, costVisible: false } });
+      const accepted = JSON.stringify({ state: { sidebarWidth: 420, costVisible: false } });
+      seed(key, baseline);
+
+      expect(writeFrom(101, key, resized, baseline)).toEqual({ ok: true, value: resized });
+      expect(stored(key)).toBe(resized);
+      expect(appStateChangedSends).toEqual([
+        { targetId: 202, channel: "volli:app-state-changed", payload: { key, value: resized } },
+      ]);
+
+      // Renderer B still holds the old width. Its cost edit must not undo A's
+      // accepted resize, and its reply must contain the merged authoritative row.
+      expect(writeFrom(202, key, toggled, baseline)).toEqual({ ok: true, value: accepted });
+      expect(stored(key)).toBe(accepted);
+      expect(appStateChangedSends).toEqual([
+        { targetId: 202, channel: "volli:app-state-changed", payload: { key, value: resized } },
+        { targetId: 101, channel: "volli:app-state-changed", payload: { key, value: accepted } },
+      ]);
+      expect(dataChangedSends).toEqual([]);
+    },
+  );
+
+  it.each(["volli:ui", "volli:style"])(
+    "preserves the exact legacy acknowledgement and replacement behavior for %s without a baseline",
+    (key) => {
+      const before = JSON.stringify({ state: { sidebarWidth: 300, costVisible: true } });
+      const next = JSON.stringify({ state: { costVisible: false } });
+      seed(key, before);
+      expect(writeFrom(101, key, next)).toEqual({ ok: true });
+      expect(stored(key)).toBe(next);
+      // Explicit undefined is also a valid older/optional positional call;
+      // the registry's trailing sender must not become a false baseline.
+      expect(writeFrom(202, key, before, undefined)).toEqual({ ok: true });
+      expect(stored(key)).toBe(before);
+      expect(appStateChangedSends).toEqual([
+        { targetId: 202, channel: "volli:app-state-changed", payload: { key, value: next } },
+        { targetId: 101, channel: "volli:app-state-changed", payload: { key, value: before } },
+      ]);
+    },
+  );
+
+  it("keeps nonshared keys as opaque replacement strings even when a baseline is supplied", () => {
+    const key = "volli:projects-ui";
+    const baseline = '{"state":{"selectedProjectId":"first"}}';
+    seed(key, '{"state":{"selectedProjectId":"peer"}}');
+    expect(writeFrom(101, key, "legacy opaque value", baseline)).toEqual({ ok: true });
+    expect(stored(key)).toBe("legacy opaque value");
+  });
+
+  it.each([
+    { baseline: null },
+    { baseline: 42 },
+    { baseline: false },
+    { baseline: {} },
+    { baseline: [] },
+  ])("rejects a malformed baseline before persistence or broadcast: %j", ({ baseline }) => {
+    const key = "volli:ui";
+    const before = '{"state":{"costVisible":true}}';
+    seed(key, before);
+    expect(writeFrom(101, key, '{"state":{"costVisible":false}}', baseline)).toEqual({
+      ok: false,
+      error: "Invalid app state",
+    });
+    expect(stored(key)).toBe(before);
+    expect(appStateChangedSends).toEqual([]);
+  });
+
+  it("rolls back a merged write and sends no peer event if its main-side effect refuses", () => {
+    const key = "volli:ui";
+    const baseline = JSON.stringify({ state: { sidebarWidth: 300, costVisible: true } });
+    const current = JSON.stringify({ state: { sidebarWidth: 420, costVisible: true } });
+    const next = JSON.stringify({ state: { sidebarWidth: 300, costVisible: false } });
+    const merged = JSON.stringify({ state: { sidebarWidth: 420, costVisible: false } });
+    seed(key, current);
+    const effect = vi.fn((): AppStateSetResult => ({ ok: false, error: "Preference refused" }));
+    handlers.clear();
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { sessionEngine: fixtureSessionEngine, onAppStateSet: effect },
+    );
+
+    expect(writeFrom(101, key, next, baseline)).toEqual({ ok: false, error: "Preference refused" });
+    expect(effect).toHaveBeenCalledExactlyOnceWith(key, merged);
+    expect(stored(key)).toBe(current);
+    expect(appStateChangedSends).toEqual([]);
   });
 });
 

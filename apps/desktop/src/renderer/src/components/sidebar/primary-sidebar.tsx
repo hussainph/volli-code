@@ -180,7 +180,7 @@ export function PrimarySidebar({ previewProjectId }: { previewProjectId?: string
                 <div className="min-w-0 flex-1">
                   <SettingsMenuButton
                     active={settingsOpen}
-                    onSelect={() => setSettingsOpen(!settingsOpen)}
+                    onSelect={() => setSettingsOpen(true)}
                   />
                 </div>
                 <UpdateButton />

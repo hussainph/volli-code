@@ -7,6 +7,8 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 // it explicitly between tests instead, since the module is only imported once.
 import {
   appStateStorage,
+  acceptAppStateValue,
+  onPreferenceValueAccepted,
   flushAllPendingAppState,
   flushPendingAppState,
   flushPendingAppStateKey,
@@ -18,7 +20,7 @@ import {
   MENU_BAR_FLUSH_OVERDUE_MS,
 } from "../../../main/client-state-flush";
 
-const setMock = vi.fn<(key: string, value: string) => Promise<{ ok: boolean; error?: string }>>();
+const setMock = vi.fn<(key: string, value: string, baseValue?: string) => Promise<{ ok: boolean; error?: string; value?: string }>>();
 
 // setItem/removeItem debounce the write-through (~200ms) before touching the
 // bridge, so tests run on fake timers and advance past the debounce window to
@@ -366,4 +368,51 @@ it("a browser module owns its unload flush and main's acknowledged flush respond
   const browser = await import("./app-state-storage");
   expect(addEventListener).toHaveBeenCalledWith("beforeunload", browser.flushPendingAppState);
   expect(onFlushRequest).toHaveBeenCalledWith(browser.flushAllPendingAppState);
+});
+
+describe("shared preferences in separate windows", () => {
+  const base = '{"state":{"sidebarWidth":300,"costVisible":true}}';
+  const local = '{"state":{"sidebarWidth":300,"costVisible":false}}';
+  const accepted = '{"state":{"sidebarWidth":420,"costVisible":false}}';
+  it("does not write an unchanged boot preference just for transient navigation", async () => {
+    seedAppStateCache({ "volli:ui": base });
+    appStateStorage.setItem("volli:ui", base);
+    await settle();
+    expect(setMock).not.toHaveBeenCalled();
+  });
+  it("sends its original baseline and adopts independent changes accepted by main", async () => {
+    seedAppStateCache({ "volli:ui": base });
+    setMock.mockResolvedValue({ ok: true, value: accepted });
+    const changed = vi.fn();
+    const stop = onPreferenceValueAccepted(changed);
+    appStateStorage.setItem("volli:ui", local);
+    await settle();
+    expect(setMock).toHaveBeenCalledExactlyOnceWith("volli:ui", local, base);
+    expect(appStateStorage.getItem("volli:ui")).toBe(accepted);
+    expect(changed).toHaveBeenCalledWith("volli:ui");
+    stop();
+  });
+  it("retains a newer local edit while an earlier snapshot's merge is acknowledged", async () => {
+    seedAppStateCache({ "volli:ui": base });
+    let finish!: (value: { ok: true; value: string }) => void;
+    setMock.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    appStateStorage.setItem("volli:ui", local);
+    const older = flushPendingAppStateKey("volli:ui");
+    const newest = '{"state":{"sidebarWidth":300,"costVisible":false,"uiScale":1.25}}';
+    appStateStorage.setItem("volli:ui", newest);
+    finish({ ok: true, value: accepted });
+    await older;
+    expect(JSON.parse(appStateStorage.getItem("volli:ui")!)).toEqual({ state: { sidebarWidth: 420, costVisible: false, uiScale: 1.25 } });
+    await flushPendingAppStateKey("volli:ui");
+    expect(setMock).toHaveBeenLastCalledWith("volli:ui", '{"state":{"sidebarWidth":420,"costVisible":false,"uiScale":1.25}}', accepted);
+  });
+  it("never replaces local pending intent with an event; the accepted merge reconciles it", async () => {
+    seedAppStateCache({ "volli:ui": base });
+    appStateStorage.setItem("volli:ui", local);
+    expect(acceptAppStateValue("volli:ui", accepted)).toBe(false);
+    expect(appStateStorage.getItem("volli:ui")).toBe(local);
+    await settle();
+    expect(acceptAppStateValue("volli:ui", accepted)).toBe(true);
+    expect(appStateStorage.getItem("volli:ui")).toBe(accepted);
+  });
 });

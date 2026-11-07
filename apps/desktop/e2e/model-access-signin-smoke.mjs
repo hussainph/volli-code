@@ -42,6 +42,7 @@ import {
   sleep,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
+import { openSettingsWindow } from "./lib/settings-window.mjs";
 
 /**
  * Groq offers an api-key login and no OAuth, so its row shows one plain "Sign
@@ -119,15 +120,16 @@ async function revealAccount(page) {
  * this clicks, so it follows the rename.
  */
 async function openAgentSettings(page) {
-  await page.getByRole("button", { name: "Settings", exact: true }).first().click();
-  await page
+  const settings = await openSettingsWindow(app, page);
+  await settings
     .getByRole("navigation", { name: "Settings categories" })
     .getByRole("button", { name: "Models", exact: true })
     .click();
   // The provider search renders once the catalogue has loaded.
-  await page.getByRole("searchbox", { name: "Search providers", exact: true }).waitFor();
-  await revealAccount(page);
-  await accountName(page).waitFor();
+  await settings.getByRole("searchbox", { name: "Search providers", exact: true }).waitFor();
+  await revealAccount(settings);
+  await accountName(settings).waitFor();
+  return settings;
 }
 
 console.log("scratch:", scratch, "\n");
@@ -168,11 +170,12 @@ try {
     };
   });
 
+  let settings = null;
   await attempt(2, "a signed-out provider offers Sign in rather than a terminal", async () => {
-    await openAgentSettings(page);
-    const row = accountRow(page);
+    settings = await openAgentSettings(page);
+    const row = accountRow(settings);
     const text = (await row.textContent())?.trim() ?? "";
-    const half = await accountHalf(page);
+    const half = await accountHalf(settings);
     const signIn = await row.getByRole("button", { name: "Sign in", exact: true }).count();
     const signOut = await row.getByRole("button", { name: "Sign out", exact: true }).count();
     return {
@@ -182,8 +185,8 @@ try {
   });
 
   await attempt(3, "the provider's own step is what the panel asks", async () => {
-    await accountRow(page).getByRole("button", { name: "Sign in", exact: true }).click();
-    const panel = signInPanel(page);
+    await accountRow(settings).getByRole("button", { name: "Sign in", exact: true }).click();
+    const panel = signInPanel(settings);
     await panel.waitFor();
     const field = panel.locator("input");
     await field.waitFor();
@@ -198,7 +201,7 @@ try {
   });
 
   await attempt(4, "an answered step stores the credential in the scratch profile", async () => {
-    const panel = signInPanel(page);
+    const panel = signInPanel(settings);
     await panel.locator("input").fill(FAKE_KEY);
     await panel.getByRole("button", { name: "Continue", exact: true }).click();
 
@@ -235,16 +238,16 @@ try {
     await waitUntil(
       "the account row offers Sign out",
       async () => {
-        const button = accountRow(page).getByRole("button", { name: "Sign out", exact: true });
+        const button = accountRow(settings).getByRole("button", { name: "Sign out", exact: true });
         return (await button.count()) === 1 ? button : null;
       },
       { timeout: 20_000 },
     );
     // The panel is gone: an ended attempt leaves nothing open, and nothing on
     // screen claims the key was verified, because nothing verified it.
-    const panels = await signInPanel(page).count();
-    const half = await accountHalf(page);
-    const text = (await accountRow(page).textContent()) ?? "";
+    const panels = await signInPanel(settings).count();
+    const half = await accountHalf(settings);
+    const text = (await accountRow(settings).textContent()) ?? "";
     return {
       ok: panels === 0 && half === "connected" && !/connected|verified/i.test(text),
       detail: `panels=${panels} half=${half} row=${JSON.stringify(text.trim())}`,
@@ -252,7 +255,7 @@ try {
   });
 
   await attempt(7, "signing out removes the stored credential", async () => {
-    await accountRow(page).getByRole("button", { name: "Sign out", exact: true }).click();
+    await accountRow(settings).getByRole("button", { name: "Sign out", exact: true }).click();
     const remaining = await waitUntil(
       "auth.json no longer names the provider",
       async () => {
@@ -269,14 +272,14 @@ try {
       "the account row offers Sign in again",
       async () => {
         // Back in "Available to connect", it may be behind the preview again.
-        await revealAccount(page);
-        const button = accountRow(page).getByRole("button", { name: "Sign in", exact: true });
+        await revealAccount(settings);
+        const button = accountRow(settings).getByRole("button", { name: "Sign in", exact: true });
         return (await button.count()) === 1 ? button : null;
       },
       { timeout: 20_000 },
     );
-    const half = await accountHalf(page);
-    const signOut = await accountRow(page)
+    const half = await accountHalf(settings);
+    const signOut = await accountRow(settings)
       .getByRole("button", { name: "Sign out", exact: true })
       .count();
     return {

@@ -61,6 +61,7 @@ import {
   sleep,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
+import { openSettingsWindow } from "./lib/settings-window.mjs";
 
 /**
  * The canvas pipeline's output for the SHIPPED DEFAULT canvas
@@ -383,10 +384,27 @@ const forceThemeSource = (app, source) =>
     return nativeTheme.shouldUseDarkColors;
   }, source);
 
-/** The window's own edge color, as Chromium paints it before/around the document. */
-const readWindowBackground = (app) =>
+/**
+ * One window's own edge color, as Chromium paints it before/around the
+ * document. `role` is explicit because the smoke now has two native windows:
+ * the workbench and the independent Settings BrowserWindow.
+ */
+const readWindowBackground = (app, role = "main") =>
   app
-    .evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getBackgroundColor())
+    .evaluate(({ BrowserWindow }, wanted) => {
+      const isSettings = (window) => {
+        try {
+          return new URL(window.webContents.getURL()).hash === "#settings";
+        } catch {
+          return false;
+        }
+      };
+      const window = BrowserWindow.getAllWindows().find(
+        (candidate) => (wanted === "settings") === isSettings(candidate),
+      );
+      if (window === undefined) throw new Error(`no ${wanted} BrowserWindow`);
+      return window.getBackgroundColor();
+    }, role)
     .then((value) => value.toLowerCase());
 
 /**
@@ -397,12 +415,12 @@ const readWindowBackground = (app) =>
  * than sleeping keeps the check about the value and not about the latency —
  * and it still fails, on the value it settled on, if the write never arrives.
  */
-const settledWindowBackground = (app, expected) =>
+const settledWindowBackground = (app, expected, role = "main") =>
   waitUntil(
-    `the window edge → ${expected}`,
-    async () => ((await readWindowBackground(app)) === expected ? expected : null),
+    `the ${role} window edge → ${expected}`,
+    async () => ((await readWindowBackground(app, role)) === expected ? expected : null),
     { timeout: 6000 },
-  ).catch(() => readWindowBackground(app));
+  ).catch(() => readWindowBackground(app, role));
 
 // ---- navigation -------------------------------------------------------------
 
@@ -412,11 +430,10 @@ const settledWindowBackground = (app, expected) =>
  */
 const settingsRail = (page) => page.getByRole("navigation", { name: "Settings categories" });
 
-/** Opens Settings → Appearance from the sidebar footer. */
+/** Opens Settings → Appearance from the workbench sidebar footer. */
 async function openAppearanceSettings(page) {
-  if (!(await page.getByRole("button", { name: "Close Settings", exact: true }).isVisible()))
-    await page.getByRole("button", { name: "Settings", exact: true }).first().click();
-  const nav = settingsRail(page);
+  const settings = await openSettingsWindow(app, page);
+  const nav = settingsRail(settings);
   // Settings reopens on the last page shown, which can be a project's
   // Appearance; the app-wide one is in the other scope.
   await nav.getByRole("button", { name: "All projects", exact: true }).click();
@@ -424,14 +441,17 @@ async function openAppearanceSettings(page) {
   await nav.getByRole("button", { name: "Appearance", exact: true }).click();
   // Assert on a CONTROL, never on helper copy — the copy is free to be rewritten
   // (and this branch already stripped a pass of it).
-  await page.getByTestId("appearance-mode").waitFor();
+  await settings.getByTestId("appearance-mode").waitFor();
+  return settings;
 }
 
-/** Settings → Project → Appearance for whichever project is selected. */
-async function openProjectAppearance(page) {
-  if (!(await page.getByRole("button", { name: "Close Settings", exact: true }).isVisible()))
-    await page.getByRole("button", { name: "Settings", exact: true }).first().click();
-  const nav = settingsRail(page);
+/** Settings → Project → Appearance for whichever project the workbench selected. */
+async function openProjectAppearance(page, projectName = null) {
+  const settings = await openSettingsWindow(app, page);
+  const nav = settingsRail(settings);
+  // The Settings window follows the workbench selection through its open IPC;
+  // wait for that project to land in the scope switch before choosing it.
+  if (projectName !== null) await nav.getByRole("button", { name: projectName, exact: true }).waitFor();
   await nav
     .locator('[aria-label="Settings scope"] button[aria-pressed]')
     .filter({ hasNotText: "All projects" })
@@ -441,7 +461,8 @@ async function openProjectAppearance(page) {
   // Present in every state of the pane, and only once this project's scope has
   // hydrated (it renders a loading note with a Retry button until then). The
   // mode chip floats on the always-mounted editor pad post-VC-111.
-  await page.getByTestId("project-appearance-mode").waitFor();
+  await settings.getByTestId("project-appearance-mode").waitFor();
+  return settings;
 }
 
 /** One segmented control's button for `choice` (`data-choice` on the segment). */
@@ -877,8 +898,9 @@ const projectTile = (page, project) =>
   page.getByRole("button", { name: project.name, exact: true }).and(page.locator("button"));
 
 const selectProject = async (page, project) => {
-  const close = page.getByRole("button", { name: "Close Settings", exact: true });
-  if (await close.isVisible()) await close.click();
+  // Settings is nonmodal and lives in its own window; selecting a workspace in
+  // the workbench never closes it. The next Settings entry carries the new
+  // project id to that window.
   await projectTile(page, project).click();
 };
 
@@ -906,13 +928,14 @@ await assertProfileIsolated(app, userDataDir);
 await page.waitForLoadState("domcontentloaded");
 await sleep(1200);
 
+let settings = null;
 try {
   // ---- 1. the generated canvas token set, in DARK --------------------------
   // The appearance is pinned explicitly rather than left on `auto`: `auto`
   // resolves against the DEVELOPER'S system, so a table asserted under it would
   // pass or fail depending on whose Mac ran the smoke.
-  await openAppearanceSettings(page);
-  await segment(page, "appearance-mode", "dark").click();
+  settings = await openAppearanceSettings(page);
+  await segment(settings, "appearance-mode", "dark").click();
   await waitForToken(page, "--background", DARK["--background"]);
 
   await attempt(1, "every generated token reaches the live DOM in dark", async () => {
@@ -948,18 +971,23 @@ try {
     // every paint, so this waits on the round trip rather than sampling it —
     // and in doing so also proves that write reaches main.
     const windowBg = await settledWindowBackground(app, fill);
+    const settingsWindowBg = await settledWindowBackground(app, fill, "settings");
     return {
       // Both halves: the window IS the fill, AND the fill is genuinely not the
       // card rung — with a canvas armed those differ deliberately, and a check
       // that only asserted equality would still pass if the canvas collapsed.
-      ok: fill === BASE_FILL.dark && windowBg === fill && windowBg !== background,
-      detail: `window=${windowBg} fill=${fill} --background=${background}`,
+      ok:
+        fill === BASE_FILL.dark &&
+        windowBg === fill &&
+        windowBg !== background &&
+        settingsWindowBg === fill,
+      detail: `main=${windowBg} settings=${settingsWindowBg} fill=${fill} --background=${background}`,
     };
   });
 
   // ---- 2. the other mode ---------------------------------------------------
   await attempt(4, "Light paints the whole window, class and color-scheme with it", async () => {
-    await segment(page, "appearance-mode", "light").click();
+    await segment(settings, "appearance-mode", "light").click();
     const applied = await waitForToken(page, "--background", LIGHT["--background"]);
     const mode = await readMode(page);
     const tokens = await readAppliedTokens(page, Object.keys(LIGHT));
@@ -1013,19 +1041,27 @@ try {
     ]);
     const fill = baseFillOf(canvas);
     const windowBg = await settledWindowBackground(app, fill);
+    const settingsWindowBg = await settledWindowBackground(app, fill, "settings");
     return {
-      ok: fill === BASE_FILL.light && windowBg === fill && windowBg !== background,
-      detail: `window=${windowBg} fill=${fill} --background=${background}`,
+      ok:
+        fill === BASE_FILL.light &&
+        windowBg === fill &&
+        windowBg !== background &&
+        settingsWindowBg === fill,
+      detail: `main=${windowBg} settings=${settingsWindowBg} fill=${fill} --background=${background}`,
     };
   });
 
   // ---- 3. the crossfade ----------------------------------------------------
-  await attempt(7, "a mode flip crossfades once, and cleans up after itself", async () => {
-    await watchScopeRepaint(page);
-    await segment(page, "appearance-mode", "dark").click();
+  await attempt(7, "a mode flip crossfades once in Settings, and the workbench follows", async () => {
+    await watchScopeRepaint(settings);
+    await segment(settings, "appearance-mode", "dark").click();
+    await waitForToken(settings, "--background", DARK["--background"]);
+    const during = await observedScopeRepaint(settings);
+    const after = await settledScopeRepaint(settings);
+    // The product window paints only the committed appearance; the crossfade
+    // assertion stays on the surface whose control made the change.
     await waitForToken(page, "--background", DARK["--background"]);
-    const during = await observedScopeRepaint(page);
-    const after = await settledScopeRepaint(page);
     return {
       ok:
         crossfaded(during) &&
@@ -1043,12 +1079,13 @@ try {
     8,
     "reduced motion repaints immediately without a snapshot or residual animation",
     async () => {
-      await page.emulateMedia({ reducedMotion: "reduce" });
-      await watchScopeRepaint(page);
-      await segment(page, "appearance-mode", "light").click();
+      await settings.emulateMedia({ reducedMotion: "reduce" });
+      await watchScopeRepaint(settings);
+      await segment(settings, "appearance-mode", "light").click();
+      await waitForToken(settings, "--background", LIGHT["--background"]);
+      const after = await settledScopeRepaint(settings, { observeMs: NO_SCOPE_CHANGE_OBSERVE_MS });
+      await settings.emulateMedia({ reducedMotion: null });
       await waitForToken(page, "--background", LIGHT["--background"]);
-      const after = await settledScopeRepaint(page, { observeMs: NO_SCOPE_CHANGE_OBSERVE_MS });
-      await page.emulateMedia({ reducedMotion: null });
       return {
         ok: !crossfaded(after) && after.anims.length === 0 && after.active === false,
         detail: `runs=${JSON.stringify(after.runs)} anims=${JSON.stringify(after.anims)} active=${after.active}`,
@@ -1058,8 +1095,8 @@ try {
 
   // ---- 4. the ghostty surfaces, which were meant to survive untouched -------
   await attempt(9, "committing a terminal setting writes Volli's own overlay", async () => {
-    await openAppearanceSettings(page);
-    await stepTerminalFontSize(page);
+    settings = await openAppearanceSettings(page);
+    await stepTerminalFontSize(settings);
     const written = await waitUntil("overlay written", () => pathExists(overlayPath)).then(
       () => true,
       () => false,
@@ -1087,7 +1124,8 @@ cursor-style = block
     await fs.writeFile(overlayPath, handEdited);
 
     const next = OVERLAY_FONT_SIZE + 1;
-    await stepTerminalFontSize(page);
+    settings = await openAppearanceSettings(page);
+    await stepTerminalFontSize(settings);
     await waitUntil("overlay rewritten", async () =>
       ((await readFileSafe(overlayPath)) ?? "").includes(`font-size = ${next}`),
     );
@@ -1104,22 +1142,26 @@ cursor-style = block
   });
 
   // ---- 5. authoring a canvas through the real editor ------------------------
-  await attempt(12, "the canvas editor repaints live and persists what it painted", async () => {
+  await attempt(12, "the canvas editor repaints live in Settings and persists what it painted", async () => {
+    settings = await openAppearanceSettings(page);
     const before = await readAppliedTokens(page, ["--canvas", "--primary", "--background"]);
-    await authorCanvas(page, {
+    const beforeSettings = await readAppliedTokens(settings, ["--canvas", "--primary", "--background"]);
+    await authorCanvas(settings, {
       hex: AUTHORED_HEX,
       vibrancy: AUTHORED_VIBRANCY,
       grain: AUTHORED_GRAIN,
     });
     const beforeDrag = await storedGlobalCanvas(page);
     const originX = beforeDrag.stops[beforeDrag.primaryIndex].x;
-    await dragPrimaryStop(page, { dx: -90, dy: 40 });
+    await dragPrimaryStop(settings, { dx: -90, dy: 40 });
 
     const stored = await waitUntil("the dragged stop to persist", async () => {
       const canvas = await storedGlobalCanvas(page);
       const stop = canvas?.stops[canvas.primaryIndex];
       return stop !== undefined && Math.abs(stop.x - originX) > 0.02 ? canvas : null;
     });
+    const afterSettings = await readAppliedTokens(settings, ["--canvas", "--primary", "--background"]);
+    await waitForToken(page, "--canvas", afterSettings["--canvas"], { timeout: 10000 });
     const after = await readAppliedTokens(page, ["--canvas", "--primary", "--background"]);
 
     return {
@@ -1127,10 +1169,12 @@ cursor-style = block
         stored.stops[stored.primaryIndex].hex === AUTHORED_HEX &&
         Math.abs(stored.vibrancy - Number(AUTHORED_VIBRANCY)) < 0.005 &&
         Math.abs(stored.grain - Number(AUTHORED_GRAIN)) < 0.005 &&
+        beforeSettings["--canvas"] !== afterSettings["--canvas"] &&
+        afterSettings["--canvas"] === after["--canvas"] &&
         after["--primary"] !== before["--primary"] &&
         after["--canvas"] !== before["--canvas"] &&
         after["--background"] === before["--background"],
-      detail: `stored=${JSON.stringify(stored)} --primary ${before["--primary"]}→${after["--primary"]}`,
+      detail: `stored=${JSON.stringify(stored)} --primary ${before["--primary"]}→${after["--primary"]} settings=${afterSettings["--primary"]}`,
     };
   });
 
@@ -1142,37 +1186,42 @@ cursor-style = block
     // — the window has to return to what is stored, and what is stored must not
     // have moved. Only reachable from the real app: the renderer's unit tests
     // render to static markup and cannot press a key.
-    await openAccentEditor(page);
-    const field = page.getByRole("textbox", { name: "Primary colour hex" });
-    const before = await readAppliedTokens(page, ["--canvas"]);
+    settings = await openAppearanceSettings(page);
+    await openAccentEditor(settings);
+    const field = settings.getByRole("textbox", { name: "Primary colour hex" });
+    const before = await readAppliedTokens(settings, ["--canvas"]);
+    const mainBefore = await readAppliedTokens(page, ["--canvas"]);
     const storedBefore = await storedGlobalCanvas(page);
     const keptHex = storedBefore.stops[storedBefore.primaryIndex].hex;
 
     await field.click();
     await field.fill(ABANDONED_HEX);
-    const previewed = await waitUntil("the typed colour to paint", async () => {
-      const now = await readAppliedTokens(page, ["--canvas"]);
+    const previewed = await waitUntil("the typed colour to paint in Settings", async () => {
+      const now = await readAppliedTokens(settings, ["--canvas"]);
       return now["--canvas"] === before["--canvas"] ? null : now["--canvas"];
     });
 
-    await page.keyboard.press("Escape");
+    await settings.keyboard.press("Escape");
 
     const restored = await waitUntil("the abandoned preview to come off", async () => {
-      const now = await readAppliedTokens(page, ["--canvas"]);
+      const now = await readAppliedTokens(settings, ["--canvas"]);
       return now["--canvas"] === before["--canvas"] ? now["--canvas"] : null;
-    }).catch(async () => (await readAppliedTokens(page, ["--canvas"]))["--canvas"]);
+    }).catch(async () => (await readAppliedTokens(settings, ["--canvas"]))["--canvas"]);
     const storedAfter = await storedGlobalCanvas(page);
     // Escape also dismisses the colour popover. Reopen it to check the
     // restored field rather than waiting on a deliberately unmounted input.
-    await openAccentEditor(page);
+    await openAccentEditor(settings);
+    // The workbench never previews an uncommitted edit in another window.
+    const mainAfter = await readAppliedTokens(page, ["--canvas"]);
 
     return {
       ok:
         previewed !== before["--canvas"] &&
         restored === before["--canvas"] &&
+        mainAfter["--canvas"] === mainBefore["--canvas"] &&
         storedAfter.stops[storedAfter.primaryIndex].hex === keptHex &&
         (await field.inputValue()) === keptHex,
-      detail: `painted ${before["--canvas"]}→${previewed}→${restored} stored=${storedAfter.stops[storedAfter.primaryIndex].hex}`,
+      detail: `painted ${before["--canvas"]}→${previewed}→${restored} main=${mainAfter["--canvas"]} stored=${storedAfter.stops[storedAfter.primaryIndex].hex}`,
     };
   });
 
@@ -1184,6 +1233,7 @@ cursor-style = block
   await app.close();
   app = await launch({ dbPath, userDataDir, extraEnv: env });
   page = await app.firstWindow();
+  settings = null;
   await page.waitForLoadState("domcontentloaded");
 
   await attempt(14, "first paint carries the stored mode, with no dark frame", async () => {
@@ -1286,14 +1336,14 @@ cursor-style = block
   let projectCanvasPaint = null;
   await attempt(17, "Project → Appearance overrides ONE workspace's canvas", async () => {
     await selectProject(page, PROJECT_A);
-    await openProjectAppearance(page);
+    settings = await openProjectAppearance(page, PROJECT_A.name);
     // No Custom gate: the editor is already mounted on the EFFECTIVE canvas,
     // and merely opening the pane must store nothing — only the edit below
     // creates the override.
     const before = await storedTheme(page);
     const untouchedOnOpen = (before.projects[projectAId]?.canvas ?? null) === null;
 
-    await commitPrimaryHex(page, WORKSPACE_HEX);
+    await commitPrimaryHex(settings, WORKSPACE_HEX);
     projectCanvasPaint = await waitUntil(
       "the workspace canvas to repaint",
       async () => {
@@ -1302,6 +1352,8 @@ cursor-style = block
       },
       { timeout: 6000 },
     );
+    const settingsFill = baseFillOf((await readAppliedTokens(settings, ["--canvas"]))["--canvas"]);
+    const settingsWindowBg = await settledWindowBackground(app, settingsFill, "settings");
 
     const stored = await storedTheme(page);
     return {
@@ -1310,9 +1362,10 @@ cursor-style = block
         stored.projects[projectAId]?.canvas?.stops[0]?.hex === WORKSPACE_HEX &&
         // The other workspace was never touched.
         stored.projects[projectBId]?.canvas === null &&
+        settingsWindowBg === settingsFill &&
         // …and neither was the global row.
         JSON.stringify(stored.canvas) === JSON.stringify(beforeRelaunch.stored.canvas),
-      detail: `untouchedOnOpen=${untouchedOnOpen} A=${JSON.stringify(stored.projects[projectAId])} B=${JSON.stringify(stored.projects[projectBId])}`,
+      detail: `untouchedOnOpen=${untouchedOnOpen} settingsEdge=${settingsWindowBg} A=${JSON.stringify(stored.projects[projectAId])} B=${JSON.stringify(stored.projects[projectBId])}`,
     };
   });
 
@@ -1350,6 +1403,7 @@ cursor-style = block
   await app.close();
   app = await launch({ dbPath, userDataDir, extraEnv: env });
   page = await app.firstWindow();
+  settings = null;
   await page.waitForLoadState("domcontentloaded");
 
   await attempt(20, "a restored workspace selection boots INTO its override (#123)", async () => {
@@ -1370,7 +1424,7 @@ cursor-style = block
     21,
     "an app-wide canvas change leaves the overriding workspace alone (#123)",
     async () => {
-      await openAppearanceSettings(page);
+      settings = await openAppearanceSettings(page);
       // Record the paints rather than sampling the end state: the regression was
       // a BOUNCE (main answered a global write with the GLOBAL scope and the
       // store adopts a payload whole), and a final-value check would grade a
@@ -1378,7 +1432,7 @@ cursor-style = block
       await watchCanvasPaints(page);
       await watchScopeRepaint(page);
 
-      await commitPrimaryHex(page, REGLOBAL_HEX);
+      await commitPrimaryHex(settings, REGLOBAL_HEX);
       const globalCanvas = await waitUntil("the global canvas to change", async () => {
         const stored = await storedTheme(page);
         return stored.canvas?.stops[stored.canvas.primaryIndex]?.hex === REGLOBAL_HEX
@@ -1414,8 +1468,8 @@ cursor-style = block
   );
 
   await attempt(22, "Inherit puts the workspace back on the app-wide canvas", async () => {
-    await openProjectAppearance(page);
-    await revertCanvas(page);
+    settings = await openProjectAppearance(page, PROJECT_A.name);
+    await revertCanvas(settings);
     const stored = await waitUntil("the workspace row to clear", async () => {
       const state = await storedTheme(page);
       return state.projects[projectAId]?.canvas === null ? state : null;
@@ -1430,7 +1484,7 @@ cursor-style = block
     );
     // The revert button IS the "overridden" signal now, so its ABSENCE is what
     // says the row went back to inheriting — there is no pressed pill to read.
-    const revertGone = (await canvasRevert(page).count()) === 0;
+    const revertGone = (await canvasRevert(settings).count()) === 0;
     // "Somewhere else" is not the claim — the claim is that A now paints what
     // any inheriting workspace paints. B has never been overridden, so it is the
     // reference: an all-inheriting workspace must read EXACTLY like one that was
@@ -1476,8 +1530,8 @@ cursor-style = block
     // app — so it read back the mode already painted. Picking Auto after an
     // explicit light or dark therefore repainted nothing at all, whatever the
     // system said.
-    await openAppearanceSettings(page);
-    await segment(page, "appearance-mode", "auto").click();
+    settings = await openAppearanceSettings(page);
+    await segment(settings, "appearance-mode", "auto").click();
     const prefersDark = await systemPrefersDark(app);
     const expected = prefersDark ? "dark" : "light";
     const mode = await waitUntil(

@@ -60,6 +60,7 @@ import type {
 } from "@volli/shared";
 import type {
   AppStateSetResult,
+  AppStateChangedEvent,
   ArchivedTicketsResult,
   ArtifactCreateInput,
   ArtifactCreateResult,
@@ -251,6 +252,11 @@ import type {
   UpdateStateResult,
   UpdateUiState,
   VolliInvokeContract,
+  SettingsWindowNavigation,
+  SettingsWindowOpenInput,
+  SettingsWindowPendingNavigationResult,
+  WorkspaceWindowNavigation,
+  WorkspaceWindowPendingNavigationResult,
   WebAccessProvider,
   KeyedWebAccessProvider,
   WebAccessResult,
@@ -423,6 +429,41 @@ const api = {
     electron: process.versions.electron,
     chrome: process.versions.chrome,
     node: process.versions.node,
+  },
+  settingsWindow: {
+    open: (input: SettingsWindowOpenInput = {}): Promise<Result> =>
+      invoke("volli:settings-window-open", input),
+    /** Subscribe before the boot read; accept only a newer navigation.revision. */
+    onNavigate: (callback: (navigation: SettingsWindowNavigation) => void): (() => void) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        navigation: SettingsWindowNavigation,
+      ): void => callback(navigation);
+      const channel = "volli:settings-window-navigate" satisfies VolliIpcEvent;
+      ipcRenderer.on(channel, listener);
+      return () => ipcRenderer.removeListener(channel, listener);
+    },
+    /** Read the parked intent before mounting React, without revealing the window. */
+    pendingNavigation: (): Promise<SettingsWindowPendingNavigationResult> =>
+      invoke("volli:settings-window-pending-navigation"),
+    /** Acknowledge the painted revision; a newer returned intent must be applied and acknowledged. */
+    ready: (appliedRevision: number): Promise<SettingsWindowPendingNavigationResult> =>
+      invoke("volli:settings-window-ready", appliedRevision),
+    openWorkspace: (input: WorkspaceWindowNavigation): Promise<Result> =>
+      invoke("volli:settings-window-open-workspace", input),
+    onWorkspaceNavigate: (
+      callback: (navigation: WorkspaceWindowNavigation) => void,
+    ): (() => void) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        navigation: WorkspaceWindowNavigation,
+      ): void => callback(navigation);
+      const channel = "volli:workspace-window-navigate" satisfies VolliIpcEvent;
+      ipcRenderer.on(channel, listener);
+      return () => ipcRenderer.removeListener(channel, listener);
+    },
+    pendingWorkspaceNavigation: (): Promise<WorkspaceWindowPendingNavigationResult> =>
+      invoke("volli:settings-window-pending-workspace-navigation"),
   },
   databaseRecovery: {
     list: (): Promise<DatabaseRecoveryListResult> => invoke("volli:database-recovery-list"),
@@ -1230,8 +1271,18 @@ const api = {
   },
   appState: {
     /** Upserts one `app_state` key — the async write-through the ui/project-ui persist stores' storage adapter uses. */
-    set: (key: string, value: string): Promise<AppStateSetResult> =>
-      invoke("volli:app-state-set", key, value),
+    set: (key: string, value: string, baseValue?: string): Promise<AppStateSetResult> =>
+      baseValue === undefined
+        ? invoke("volli:app-state-set", key, value)
+        : invoke("volli:app-state-set", key, value, baseValue),
+    /** Accepted preference writes from other windows; the writer already applied its own. */
+    onChanged: (callback: (event: AppStateChangedEvent) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, changed: AppStateChangedEvent): void =>
+        callback(changed);
+      const channel = "volli:app-state-changed" satisfies VolliIpcEvent;
+      ipcRenderer.on(channel, listener);
+      return () => ipcRenderer.removeListener(channel, listener);
+    },
     /**
      * Answers main's `volli:client-state-flush` (VC-577): runs `flush` — which
      * resolves once main has acknowledged every pending write — then acks the

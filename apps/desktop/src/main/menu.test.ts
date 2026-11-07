@@ -98,3 +98,13 @@ describe("export disclosure", () => {
     expect(showErrorBox).toHaveBeenCalledWith("Export Failed", "The database could not be opened.");
   });
 });
+
+it("opens native Settings from the app menu with Command-comma", () => {
+  const openSettings = vi.fn();
+  registerAppMenu({ ok: false, error: "closed" }, { openSettings });
+  const template = menuTemplates.at(-1) as Array<{ submenu?: Array<{ label?: string; accelerator?: string; click?: () => void }> }>;
+  const item = template[0]?.submenu?.find((entry) => entry.label === "Settings…");
+  expect(item?.accelerator).toBe("CmdOrCtrl+,");
+  item?.click?.();
+  expect(openSettings).toHaveBeenCalledOnce();
+});

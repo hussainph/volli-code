@@ -178,6 +178,121 @@ describe("recordUnsavedBoardWrites", () => {
   });
 });
 
+describe("renderer-scoped unsaved work (VC-1121)", () => {
+  const rendererIds = [undefined, 0, 11, 22];
+  const resetReports = (): void => {
+    for (const rendererId of rendererIds) {
+      recordUnsavedDocuments({ names: [] }, rendererId);
+      recordUnsavedBoardWrites(0, rendererId);
+    }
+  };
+  beforeEach(resetReports);
+  afterEach(resetReports);
+
+  it("replaces only the reporting renderer's drafts", () => {
+    recordUnsavedDocuments({ names: ["main.md", "model.py"] }, 11);
+    recordUnsavedDocuments({ names: ["settings.json", "notes.md"] }, 22);
+    recordUnsavedDocuments({ names: ["settings.json"] }, 22);
+    expect(unsavedDocumentNames(11)).toEqual(["main.md", "model.py"]);
+    expect(unsavedDocumentNames(22)).toEqual(["settings.json"]);
+    expect(unsavedDocumentNames()).toEqual(["main.md", "model.py", "settings.json"]);
+  });
+
+  it("closing Settings clears its own drafts and pending writes, not the main window's", () => {
+    let closeSettings!: () => void;
+    clearUnsavedDocumentsOnWindowClosed({
+      webContents: { id: 22 },
+      on(_event, listener) {
+        closeSettings = listener;
+      },
+    });
+    recordUnsavedDocuments({ names: ["main.md"] }, 11);
+    recordUnsavedBoardWrites(2, 11);
+    recordUnsavedDocuments({ names: ["settings.json"] }, 22);
+    recordUnsavedBoardWrites(1, 22);
+
+    closeSettings();
+
+    expect(unsavedDocumentNames(22)).toEqual([]);
+    expect(unsavedDocumentNames(11)).toEqual(["main.md", "Volli Cloud board (2 changes)"]);
+    expect(unsavedDocumentNames()).toEqual(["main.md", "Volli Cloud board (2 changes)"]);
+  });
+
+  it("a Settings zero or malformed board count cannot erase main's unanswered writes", () => {
+    recordUnsavedBoardWrites(3, 11);
+    recordUnsavedBoardWrites(0, 22);
+    expect(unsavedDocumentNames(22)).toEqual([]);
+    expect(unsavedDocumentNames()).toEqual(["Volli Cloud board (3 changes)"]);
+    recordUnsavedBoardWrites(2, 22);
+    expect(unsavedDocumentNames()).toEqual(["Volli Cloud board (5 changes)"]);
+    for (const count of [0, -1, "2", null]) {
+      recordUnsavedBoardWrites(count, 22);
+      expect(unsavedDocumentNames(11)).toEqual(["Volli Cloud board (3 changes)"]);
+      expect(unsavedDocumentNames()).toEqual(["Volli Cloud board (3 changes)"]);
+    }
+  });
+
+  it("a clean Settings close needs no confirm while app quit still protects main's work", () => {
+    recordUnsavedDocuments({ names: ["main.md"] }, 11);
+    recordUnsavedBoardWrites(1, 11);
+    expect(planUnsavedQuit({ names: unsavedDocumentNames(22), skipConfirm: false })).toBe("quit");
+    expect(planUnsavedQuit({ names: unsavedDocumentNames(11), skipConfirm: false })).toBe("confirm");
+    expect(planUnsavedQuit({ names: unsavedDocumentNames(), skipConfirm: false })).toBe("confirm");
+  });
+
+  it("aggregates named and legacy reporters for quit, including one total board count", () => {
+    recordUnsavedDocuments({ names: ["legacy.md"] });
+    recordUnsavedBoardWrites(1);
+    recordUnsavedDocuments({ names: ["main.md"] }, 11);
+    recordUnsavedBoardWrites(2, 11);
+    recordUnsavedDocuments({ names: ["settings.json"] }, 22);
+    recordUnsavedBoardWrites(3, 22);
+    expect(unsavedDocumentNames()).toEqual([
+      "legacy.md",
+      "main.md",
+      "settings.json",
+      "Volli Cloud board (6 changes)",
+    ]);
+    expect(unsavedDocumentNames(11)).toEqual(["main.md", "Volli Cloud board (2 changes)"]);
+    expect(unsavedDocumentNames(22)).toEqual(["settings.json", "Volli Cloud board (3 changes)"]);
+  });
+
+  it("a legacy window close removes only legacy reports", () => {
+    let closeLegacy!: () => void;
+    clearUnsavedDocumentsOnWindowClosed({
+      on(_event, listener) {
+        closeLegacy = listener;
+      },
+    });
+    recordUnsavedDocuments({ names: ["legacy.md"] });
+    recordUnsavedBoardWrites(1);
+    recordUnsavedDocuments({ names: ["main.md"] }, 11);
+    recordUnsavedBoardWrites(2, 11);
+
+    closeLegacy();
+
+    expect(unsavedDocumentNames()).toEqual(["main.md", "Volli Cloud board (2 changes)"]);
+  });
+
+  it("malformed named draft reports fail closed without changing any other renderer", () => {
+    recordUnsavedDocuments({ names: ["main.md"] }, 11);
+    recordUnsavedDocuments({ names: ["settings.json"] }, 22);
+    recordUnsavedDocuments({ names: [42] }, 22);
+    recordUnsavedDocuments(null, 22);
+    expect(unsavedDocumentNames(22)).toEqual(["settings.json"]);
+    recordUnsavedDocuments({ names: [] }, 22);
+    expect(unsavedDocumentNames()).toEqual(["main.md"]);
+  });
+
+  it("treats renderer id zero as a real scope rather than a request to aggregate", () => {
+    recordUnsavedDocuments({ names: ["zero.md"] }, 0);
+    recordUnsavedDocuments({ names: ["main.md"] }, 11);
+    recordUnsavedBoardWrites(1, 0);
+    expect(unsavedDocumentNames(0)).toEqual(["zero.md", "Volli Cloud board (1 change)"]);
+    expect(unsavedDocumentNames(11)).toEqual(["main.md"]);
+  });
+});
+
 describe("registerAcceptedQuitCoordinator", () => {
   for (const reportingThrows of [false, true]) {
     it(`exits through an Immediate after real filesystem settlement (${reportingThrows ? "reporter rejects" : "drained"})`, async () => {

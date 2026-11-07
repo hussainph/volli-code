@@ -27,27 +27,29 @@ import { settleShutdownBeforeDeadline } from "@volli/host-core/maintenance";
 const MAX_NAMED_FILES = 4;
 
 /**
- * The renderer's last word on unsaved work. Starts empty: a renderer that has
- * not reported yet has not opened an editor either, so there is nothing to lose.
+ * Each renderer's last word on unsaved work. An omitted id is the legacy
+ * reporter, not permission to replace another window's report (VC-1121).
  */
-let unsavedNames: readonly string[] = [];
+const unsavedNames = new Map<number | undefined, readonly string[]>();
 
 /**
- * How many board writes the window has sent Volli Cloud and not had answered
- * (VC-889). They are not the backend's yet: quitting loses them, so the
- * unsaved-work confirm names them beside the documents.
+ * Unanswered Volli Cloud board writes per renderer (VC-889). They are not the
+ * backend's yet: quitting loses them, so the confirm names their aggregate
+ * beside documents. A clean Settings window cannot clear the workspace's count.
  */
-let unsavedBoardWrites = 0;
+const unsavedBoardWrites = new Map<number | undefined, number>();
 
 interface WindowClosedLifecycle {
+  webContents?: { id: number };
   on(event: "closed", listener: () => void): void;
 }
 
-/** Bounds the renderer's last unsaved report to the lifetime of its window. */
+/** Bounds only this renderer's reports to its window, preserving every peer. */
 export function clearUnsavedDocumentsOnWindowClosed(window: WindowClosedLifecycle): void {
+  const rendererId = window.webContents?.id;
   window.on("closed", () => {
-    unsavedNames = [];
-    unsavedBoardWrites = 0;
+    unsavedNames.delete(rendererId);
+    unsavedBoardWrites.delete(rendererId);
   });
 }
 
@@ -72,26 +74,33 @@ const refusedQuits = new WeakSet<object>();
  * let a quit through. A report that does not hold up at runtime leaves the
  * previous one standing, which fails toward asking the user.
  */
-export function recordUnsavedDocuments(report: unknown): void {
+export function recordUnsavedDocuments(report: unknown, rendererId?: number): void {
   const names: unknown = (report as { names?: unknown } | null | undefined)?.names;
   if (!Array.isArray(names) || names.some((name) => typeof name !== "string")) return;
-  unsavedNames = names as readonly string[];
+  if (names.length === 0) unsavedNames.delete(rendererId);
+  else unsavedNames.set(rendererId, names as readonly string[]);
 }
 
-/** Accepts the window's count of unanswered Volli Cloud board writes; anything else counts none. */
-export function recordUnsavedBoardWrites(count: unknown): void {
-  unsavedBoardWrites =
-    typeof count === "number" && Number.isInteger(count) && count > 0 ? count : 0;
+/** Accepts this window's unanswered board writes; malformed counts clear only its own report. */
+export function recordUnsavedBoardWrites(count: unknown, rendererId?: number): void {
+  if (typeof count === "number" && Number.isInteger(count) && count > 0) {
+    unsavedBoardWrites.set(rendererId, count);
+  } else {
+    unsavedBoardWrites.delete(rendererId);
+  }
 }
 
-/**
- * The documents the renderer last reported as holding unsaved drafts, and the
- * Volli Cloud board when writes to it are still unanswered (VC-889).
- */
-export function unsavedDocumentNames(): readonly string[] {
-  if (unsavedBoardWrites === 0) return unsavedNames;
-  const board = `Volli Cloud board (${unsavedBoardWrites} ${unsavedBoardWrites === 1 ? "change" : "changes"})`;
-  return [...unsavedNames, board];
+/** A window close reads only its own work; app quit omits the id to aggregate every renderer. */
+export function unsavedDocumentNames(rendererId?: number): readonly string[] {
+  const names = rendererId === undefined
+    ? [...unsavedNames.values()].flat()
+    : (unsavedNames.get(rendererId) ?? []);
+  const boardWrites = rendererId === undefined
+    ? [...unsavedBoardWrites.values()].reduce((sum, count) => sum + count, 0)
+    : (unsavedBoardWrites.get(rendererId) ?? 0);
+  if (boardWrites === 0) return names;
+  const board = `Volli Cloud board (${boardWrites} ${boardWrites === 1 ? "change" : "changes"})`;
+  return [...names, board];
 }
 
 /** What a quit request should do about the unsaved work main knows about. */

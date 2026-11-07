@@ -13,9 +13,9 @@
  * `railWidth` — the ticket-detail right rail's width, resizable via its own
  * left-edge grip (see rail-resize-handle.tsx) — persists app-wide by the same
  * reasoning: it's a global chrome preference, not per-project state.
- * `settingsOpen` is session-only: Settings is app-wide chrome (the sidebar
- * footer entry), not a per-project place, so it stays up across project
- * switches and closes when a nav page is picked. `newTicketOpen` is
+ * `settingsOpen` is renderer-local: only the Settings renderer marks itself
+ * open. Workbench commands use the native opener and never block workspace
+ * shortcuts or close that independent window on navigation. `newTicketOpen` is
  * session-only for the same reason: the global New-ticket dialog (board
  * header button + the "c" hotkey) is app-wide chrome, not per-project
  * state, so it never follows a project into persisted storage.
@@ -136,6 +136,13 @@ import {
   resolvePersistedRailMode,
 } from "@renderer/components/ticket/ticket-rail-model";
 import { appStateStorage } from "@renderer/lib/app-state-storage";
+import type { SettingsWindowOpenInput } from "../../../ipc/settings-window";
+
+let settingsWindowOpener: ((navigation: SettingsWindowOpenInput) => void) | null = null;
+/** Installed by the desktop entry, leaving injected/test stores transport-free. */
+export function setSettingsWindowOpener(opener: ((navigation: SettingsWindowOpenInput) => void) | null): void {
+  settingsWindowOpener = opener;
+}
 
 export const UI_APP_STATE_KEY = "volli:ui";
 
@@ -364,6 +371,12 @@ interface UiState {
   railWidth: number;
   uiScale: number;
   settingsOpen: boolean;
+  /** Addressed native navigation, not a persisted preference. */
+  settingsNavigationRevision: number;
+  settingsProjectId: string | null | undefined;
+  settingsWorkspaceId: string | undefined;
+  settingsNavigationPending: boolean;
+  settingsNavigationError: string | null;
   /**
    * Which category Settings should open on, or null for its own default.
    *
@@ -592,6 +605,11 @@ export function createUiStore(storage?: StateStorage) {
         railWidth: RAIL_DEFAULT_WIDTH,
         uiScale: UI_SCALE_DEFAULT,
         settingsOpen: false,
+        settingsNavigationRevision: 0,
+        settingsProjectId: undefined,
+        settingsWorkspaceId: undefined,
+        settingsNavigationPending: false,
+        settingsNavigationError: null,
         settingsCategory: null,
         settingsSignInProviderId: null,
         configureCategory: null,
@@ -616,20 +634,31 @@ export function createUiStore(storage?: StateStorage) {
         stepUiScale: (delta) => set((state) => ({ uiScale: steppedScale(state.uiScale, delta) })),
         setUiScale: (scale) => set({ uiScale: sanitizeUiScale(scale) }),
         resetUiScale: () => set({ uiScale: UI_SCALE_DEFAULT }),
-        setSettingsOpen: (open, category, signInProviderId) =>
+        setSettingsOpen: (open, category, signInProviderId) => {
+          if (settingsWindowOpener !== null) {
+            // Closing an in-app route must never close an independent native window.
+            if (open) settingsWindowOpener({ category, signInProviderId });
+            return;
+          }
           set({
             settingsOpen: open,
             settingsCategory: category ?? null,
             settingsSignInProviderId: signInProviderId ?? null,
-          }),
+          });
+        },
         consumeSettingsSignIn: () => set({ settingsSignInProviderId: null }),
-        requestConfigureCategory: (key) =>
+        requestConfigureCategory: (key) => {
+          if (settingsWindowOpener !== null) {
+            settingsWindowOpener({ configureCategory: key });
+            return;
+          }
           set({
             configureCategory: key,
             settingsOpen: true,
             settingsCategory: null,
             settingsSignInProviderId: null,
-          }),
+          });
+        },
         consumeConfigureCategory: () => set({ configureCategory: null }),
         setNewTicketOpen: (open) => set({ newTicketOpen: open }),
         openSessionDetail: (projectId, sessionId) =>

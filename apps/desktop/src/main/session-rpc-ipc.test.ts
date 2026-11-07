@@ -58,6 +58,7 @@ import {
 import type { IpcResponse } from "@volli/host-protocol/ipc";
 
 import { LOCAL_DESKTOP_CALLER } from "@volli/session-rpc";
+import { currentRendererId } from "./renderer-call";
 import { captureHostLog } from "@volli/host-core/testing";
 
 import { sessionHandlersFrom, type LegacySessionPorts } from "@volli/session-rpc/testing";
@@ -290,6 +291,76 @@ describe("registerSessionRpcIpcHandlers", () => {
     expect(routerCallers).toEqual([LOCAL_DESKTOP_CALLER, LOCAL_DESKTOP_CALLER]);
     expect(routerCallers.every((caller) => caller === LOCAL_DESKTOP_CALLER)).toBe(true);
     await registration.close();
+  });
+
+  it("keeps concurrent renderer identities independent through real RPC dispatch and async effects", async () => {
+    const fixture = runtimeFixture();
+    let releaseFirst!: () => void;
+    let releaseSecond!: () => void;
+    let firstEntered!: () => void;
+    let secondEntered!: () => void;
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const secondGate = new Promise<void>((resolve) => { releaseSecond = resolve; });
+    const firstStarted = new Promise<void>((resolve) => { firstEntered = resolve; });
+    const secondStarted = new Promise<void>((resolve) => { secondEntered = resolve; });
+    const observed: Array<{ sessionId: string; phase: "start" | "effect"; rendererId: number | undefined }> = [];
+    const runtime: SessionRuntime = {
+      ...fixture.runtime,
+      snapshot: async (input) => {
+        observed.push({ sessionId: input.sessionId, phase: "start", rendererId: currentRendererId() });
+        if (input.sessionId === "session-1") {
+          firstEntered();
+          await firstGate;
+        } else {
+          secondEntered();
+          await secondGate;
+        }
+        // Device-local effects read the transport identity after asynchronous
+        // work too, rather than accepting a renderer id in the request body.
+        observed.push({ sessionId: input.sessionId, phase: "effect", rendererId: currentRendererId() });
+        return fixture.runtime.snapshot(input);
+      },
+    };
+    const registration = registerSessionRpcIpcHandlers({ runtime });
+    expect(currentRendererId()).toBeUndefined();
+    const first = invoke(sender(101), {
+      path: "session.snapshot",
+      type: "query",
+      input: { sessionId: "session-1" },
+    });
+    const second = invoke(sender(202), {
+      path: "session.snapshot",
+      type: "query",
+      input: { sessionId: "session-2" },
+    });
+    try {
+      await Promise.all([firstStarted, secondStarted]);
+      expect(currentRendererId()).toBeUndefined();
+      // Complete the second renderer first while the first call stays parked.
+      releaseSecond();
+      await expect(second).resolves.toMatchObject({ ok: true });
+      expect(currentRendererId()).toBeUndefined();
+      expect(observed.filter((entry) => entry.sessionId === "session-1")).toEqual([
+        { sessionId: "session-1", phase: "start", rendererId: 101 },
+      ]);
+      releaseFirst();
+      await expect(first).resolves.toMatchObject({ ok: true });
+      expect(observed.filter((entry) => entry.sessionId === "session-1")).toEqual([
+        { sessionId: "session-1", phase: "start", rendererId: 101 },
+        { sessionId: "session-1", phase: "effect", rendererId: 101 },
+      ]);
+      expect(observed.filter((entry) => entry.sessionId === "session-2")).toEqual([
+        { sessionId: "session-2", phase: "start", rendererId: 202 },
+        { sessionId: "session-2", phase: "effect", rendererId: 202 },
+      ]);
+      await Promise.resolve();
+      expect(currentRendererId()).toBeUndefined();
+    } finally {
+      releaseFirst();
+      releaseSecond();
+      await Promise.allSettled([first, second]);
+      await registration.close();
+    }
   });
 
   it("routes a query through the Session tRPC router and marks diagnostics as Electron IPC", async () => {

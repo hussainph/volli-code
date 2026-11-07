@@ -1,3 +1,4 @@
+import { isSharedPreferenceKey, mergePreferenceSnapshot } from "../preference-patch";
 import { pageClientEventSink } from "./client-event-sink";
 import { assertRendererAppStateKey } from "./app-state-key-guard";
 import { randomUUID } from "node:crypto";
@@ -182,7 +183,7 @@ import {
   type SessionListingSources,
   type SessionPeekContentPorts,
 } from "@volli/host-core/sessions";
-import { broadcastDataChanged, broadcastSessionActivity, windowEventBus } from "./broadcast";
+import { broadcastAppStateChanged, broadcastDataChanged, broadcastSessionActivity, windowEventBus } from "./broadcast";
 import { deliverNotification } from "./notifications/runtime";
 import { exportDatabase } from "./menu";
 import {
@@ -1134,7 +1135,10 @@ export function registerDataIpcHandlers(
       label: board("board.setLabelColor", input).label,
     }),
 
-    "volli:app-state-set": (key: string, value: string): AppStateSetResult => {
+    "volli:app-state-set": (key: string, value: string, ...rest): AppStateSetResult => {
+      const sender = rest.at(-1);
+      if (typeof sender !== "object" || sender === null) throw new Error("Missing app window.");
+      const baseValue = typeof rest[0] === "string" ? rest[0] : undefined;
       // The schema floor is the migration runner's alone (VC-602): a renderer
       // write could lock older builds out of this database, or let them in.
       if (key === MIN_READER_VERSION_KEY) {
@@ -1142,9 +1146,10 @@ export function registerDataIpcHandlers(
       }
       assertRendererAppStateKey(key);
       const previous = getAppState(db, key);
-      setAppState(db, key, value, Date.now());
+      const accepted = isSharedPreferenceKey(key) ? mergePreferenceSnapshot(previous ?? undefined, baseValue, value) : value;
+      setAppState(db, key, accepted, Date.now());
       try {
-        const acknowledged = options.onAppStateSet?.(key, value);
+        const acknowledged = options.onAppStateSet?.(key, accepted);
         if (acknowledged !== undefined && !acknowledged.ok) {
           restoreAppState(db, key, previous);
           return acknowledged;
@@ -1153,7 +1158,10 @@ export function registerDataIpcHandlers(
         restoreAppState(db, key, previous);
         return { ok: false, error: errorMessage(error) };
       }
-      return { ok: true };
+      // Device preferences are shared; per-window navigation and drafts remain
+      // renderer-owned views. Other pages choose which preference keys to adopt.
+      broadcastAppStateChanged(key, accepted, sender.id);
+      return isSharedPreferenceKey(key) && baseValue !== undefined ? { ok: true, value: accepted } : { ok: true };
     },
 
     "volli:worktree-remove": async (input: WorktreeRemoveInput): Promise<WorktreeRemoveResult> => {

@@ -3,6 +3,7 @@ import { ipcMain } from "electron";
 import type { WebContents } from "electron";
 import { createIpcServer } from "@volli/host-protocol/ipc-server";
 import { onRawIpc } from "./raw-ipc";
+import { withRendererCall } from "./renderer-call";
 import type { IpcPeer, IpcResponse } from "@volli/host-protocol/ipc";
 import {
   createBoardRouter,
@@ -86,7 +87,7 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
   });
 
   ipcMain.handle(SESSION_RPC_IPC_CHANNEL, (event, request: unknown) =>
-    server.request(peerOf(event.sender), request),
+    withRendererCall(event.sender.id, () => server.request(peerOf(event.sender), request)),
   );
   onRawIpc(SESSION_RPC_CANCEL_CHANNEL, (event, subscriptionId: unknown) =>
     server.cancel(peerOf(event.sender), subscriptionId),

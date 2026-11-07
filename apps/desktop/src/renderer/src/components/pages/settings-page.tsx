@@ -19,6 +19,7 @@ import {
   settingsGroups,
 } from "@renderer/components/settings/settings-groups";
 import { useProjectsStore } from "@renderer/stores/projects";
+import { useThemeStore } from "@renderer/stores/theme";
 import { useAddProject } from "@renderer/hooks/use-add-project";
 
 let lastPage = "general";
@@ -39,10 +40,16 @@ export function SettingsPage({
   initialCategoryKey,
   initialSignInProviderId,
   initialScope,
+  navigationRevision,
+  initialProjectId,
+  onScopeReady,
 }: {
   initialCategoryKey?: string;
   initialSignInProviderId?: string;
   initialScope?: "app" | "project";
+  navigationRevision?: number;
+  initialProjectId?: string | null;
+  onScopeReady?: (revision: number, error?: string) => void;
 } = {}) {
   const logs = useLogViewerEnabled();
   const hosts = useCloudEnabled();
@@ -60,13 +67,16 @@ export function SettingsPage({
   const projects = useProjectsStore((s) => s.projects);
   const selectedId = useProjectsStore((s) => s.selectedProjectId);
   const addProject = useAddProject();
-  const [projectId, setProjectId] = React.useState(selectedId);
+  const [projectId, setProjectId] = React.useState(initialProjectId === undefined ? selectedId : initialProjectId);
+  React.useEffect(() => {
+    if (initialProjectId !== undefined) setProjectId(initialProjectId);
+  }, [initialProjectId, navigationRevision]);
   const [previousSelection, setPreviousSelection] = React.useState(selectedId);
   // A scope choice is local to Settings; an explicit workspace switch still
   // follows that workspace, without painting the previous project's controls.
   if (previousSelection !== selectedId) {
     setPreviousSelection(selectedId);
-    setProjectId(selectedId);
+    if (initialProjectId === undefined) setProjectId(selectedId);
   }
   const project = projects.find((p) => p.id === projectId) ?? null;
   const [activeKey, setActiveKey] = React.useState(
@@ -81,6 +91,52 @@ export function SettingsPage({
           : settingsPaneKey(lastPage, runners)),
   );
   const scope = activeKey.startsWith(PROJECT_PREFIX) ? "project" : "app";
+  const readyNavigation = React.useRef<number | null>(null);
+  React.useEffect(() => {
+    if (window.location?.hash !== "#settings") return;
+    let active = true;
+    let completed = false;
+    let frame = 0;
+    let committedFrame = 0;
+    const revision = navigationRevision;
+    const finish = (error?: string) => {
+      if (!active || completed || revision === undefined) return;
+      completed = true;
+      readyNavigation.current = revision;
+      onScopeReady?.(revision, error);
+    };
+    const timeout = setTimeout(() => finish("Couldn't load the theme. Try opening Settings again."), 10_000);
+    // The first requested scope is a hard cut while hidden, not a transition
+    // from App colors. Later user scope changes keep their ordinary motion.
+    void useThemeStore.getState().hydrate(
+      scope === "project" && project !== null
+        ? {
+            projectId: project.id,
+            canvas: project.themeCanvas ?? null,
+            appearance: project.themeAppearance ?? null,
+          }
+        : null,
+      revision !== undefined && readyNavigation.current !== revision ? "keyboard" : undefined,
+    ).then((hydrated: unknown) => {
+      if (!active || completed) return;
+      if (hydrated === false) {
+        finish("Couldn't load the theme. Try opening Settings again.");
+        return;
+      }
+      clearTimeout(timeout);
+      // A completed scope read is not yet a committed native frame. Leave a
+      // rendering opportunity between token adoption and its acknowledgement.
+      frame = requestAnimationFrame(() => {
+        committedFrame = requestAnimationFrame(() => finish());
+      });
+    }).catch(() => finish("Couldn't load the theme. Try opening Settings again."));
+    return () => {
+      active = false;
+      clearTimeout(timeout);
+      cancelAnimationFrame(frame);
+      cancelAnimationFrame(committedFrame);
+    };
+  }, [scope, project, navigationRevision, onScopeReady]);
   const appGroups = React.useMemo(() => {
     const groups = settingsGroups(initialSignInProviderId, {
       logs,
@@ -138,17 +194,17 @@ export function SettingsPage({
       setActiveKey(
         resolveSettingsCategory(settingsPaneKey(initialCategoryKey, runners)) ?? "general",
       );
-  }, [initialCategoryKey, runners]);
+  }, [initialCategoryKey, runners, navigationRevision]);
   const select = React.useCallback((key: string) => {
     setActiveKey(key);
     lastPage = key;
   }, []);
   React.useEffect(() => {
     if (requestedPane === null) return;
-    setProjectId(selectedId);
+    setProjectId(initialProjectId === undefined ? selectedId : initialProjectId);
     select(settingsPaneKey(configurePaneKey(requestedPane), runners));
     useUiStore.getState().consumeConfigureCategory();
-  }, [requestedPane, select, runners, selectedId]);
+  }, [requestedPane, select, runners, selectedId, initialProjectId]);
   const navigation = React.useMemo(
     () => ({
       selectPolicyProject: (id: string) => setProjectId(id),

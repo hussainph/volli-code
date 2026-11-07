@@ -3517,25 +3517,17 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   transition: none;
 }
 
-/* Preferences is one floating glass window: no scrim, no duplicate canvas and
- * no second material boundary around either side of its split interior. */
-[data-slot="dialog-content"].settings-window {
-  width: min(820px, calc(100vw - 32px));
-  max-width: min(820px, calc(100vw - 32px));
-  height: min(600px, calc(100svh - 64px));
-  max-height: calc(100svh - 64px);
-  padding: 0;
-  gap: 0;
+/* Preferences owns a native window, not a floating overlay inside the workspace. */
+.settings-window {
   overflow: hidden;
-  border-radius: var(--radius-floating);
 }
 .settings-window-toolbar {
   display: flex;
   flex: none;
   align-items: center;
   gap: 8px;
-  height: 36px;
-  padding: 6px 12px;
+  height: var(--spacing-titlebar);
+  padding: 6px 16px 6px 88px;
 }
 .settings-window [data-slot="pref-content"] {
   border-radius: var(--radius-container) 0 0 0;
@@ -3670,9 +3662,8 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
 
 /* Preferences has its own authored canvas, a single tinted navigation glass
  * pass, and independent paper content. The frame itself is not another blur. */
-[data-slot="dialog-content"].settings-window {
+.settings-window {
   background: var(--canvas-mesh), var(--canvas);
-  box-shadow: var(--shadow-overlay);
 }
 [data-slot="pref-navigation"].glass {
   border-radius: 0;

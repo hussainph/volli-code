@@ -54,6 +54,11 @@ import {
   seedProjects,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
+import {
+  assertSettingsWindow,
+  closeSettingsWindow,
+  settingsPageOf,
+} from "./lib/settings-window.mjs";
 
 const run = promisify(execFile);
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("volli-automations-page-");
@@ -294,10 +299,15 @@ try {
       await chooser.getByText("Run \u201cReview sweep\u201d on").waitFor({ timeout: 10000 });
       await chooser.getByRole("option", { name: /Probe ticket/ }).click();
       await chooser.getByRole("button", { name: /^Run on PRB-/ }).click();
-      const settings = page.getByRole("navigation", { name: "Settings categories" });
-      await settings.waitFor({ timeout: 20000 });
-      // The floating Settings panel leaves the workspace unchanged underneath.
-      await page.getByRole("button", { name: "Close Settings", exact: true }).click();
+      // The refusal's recovery is Model Access, in its own native window. Do
+      // not click Settings again: this waits for the window the Run opened.
+      const settings = await waitUntil(
+        "the native Settings window for Model Access",
+        () => settingsPageOf(app),
+        { timeout: 20000 },
+      );
+      await assertSettingsWindow(app, page, settings);
+      await closeSettingsWindow(app, settings);
       await chooser.waitFor({ state: "hidden", timeout: 10000 });
       await page
         .locator('[data-slot="automation-editor"]')

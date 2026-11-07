@@ -40,6 +40,8 @@ export interface AppWindow {
 export interface AppWindowsPorts<W extends AppWindow> {
   /** Every window, a hidden one included (`BrowserWindow.getAllWindows`). */
   all(): readonly W[];
+  /** Settings remains flushable, but cannot receive a workbench activation. */
+  isWorkspace?(window: W): boolean;
   /** The app window factory. */
   create(): void;
   /** Shows a window under the native-window policy (`revealWindow`). */
@@ -74,6 +76,7 @@ export function createAppWindows<W extends AppWindow>(ports: AppWindowsPorts<W>)
   const retiring = new WeakSet<W>();
   const live = (): W[] =>
     ports.all().filter((window) => !window.isDestroyed() && !retiring.has(window));
+  const workspaces = (): W[] => live().filter((window) => ports.isWorkspace?.(window) ?? true);
   const flushState = (
     windows: readonly W[],
     timeoutMs: number,
@@ -92,7 +95,7 @@ export function createAppWindows<W extends AppWindow>(ports: AppWindowsPorts<W>)
   return {
     flushAll: (timeoutMs) => flushState(ports.all(), timeoutMs),
     menuBarPort: {
-      count: () => live().length,
+      count: () => workspaces().length,
       // `destroy`, not `close`: the quit's own unsaved-drafts and terminal
       // confirms already answered, and a window `close` would ask again.
       // `destroy` skips `beforeunload`, so each renderer is asked to flush
@@ -131,7 +134,7 @@ export function createAppWindows<W extends AppWindow>(ports: AppWindowsPorts<W>)
       open: () => {
         const retained = ports
           .all()
-          .find((window) => !window.isDestroyed() && retiring.has(window));
+          .find((window) => !window.isDestroyed() && retiring.has(window) && (ports.isWorkspace?.(window) ?? true));
         if (retained === undefined) {
           ports.create();
           return;
@@ -149,11 +152,11 @@ export function createAppWindows<W extends AppWindow>(ports: AppWindowsPorts<W>)
       // leaves menu-bar mode and shows its Dock icon again; otherwise the
       // reveal is exactly this re-creation. A window menu-bar entry hid while
       // its drafts flush does not count as open (flag off: there is none).
-      if (live().length === 0) menuBar.reveal();
+      if (workspaces().length === 0) menuBar.reveal();
     },
     openForNotification: (menuBar) => {
       if (menuBar !== null) menuBar.reveal();
-      else if (ports.all().length === 0) ports.create();
+      else if (workspaces().length === 0) ports.create();
     },
   };
 }
@@ -176,6 +179,7 @@ export function answerSecondInstance<W extends LaunchWindow>(
   window: W | undefined,
   ports: {
     cloudEnabled(): boolean;
+    hasSettingsWindow?(): boolean;
     /** Bound once the window factory exists; until then a second launch has nothing to open. */
     revealForLaunch: (() => void) | null;
     /** `revealWindow`, then `sealQuietAppActivation`, under the native-window policy. */
@@ -185,7 +189,7 @@ export function answerSecondInstance<W extends LaunchWindow>(
   },
 ): void {
   if (window === undefined) {
-    if (ports.cloudEnabled()) ports.revealForLaunch?.();
+    if (ports.cloudEnabled() || ports.hasSettingsWindow?.()) ports.revealForLaunch?.();
     return;
   }
   if (window.isMinimized()) window.restore();

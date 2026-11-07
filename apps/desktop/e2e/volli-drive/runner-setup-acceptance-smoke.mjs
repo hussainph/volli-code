@@ -64,6 +64,7 @@ import {
 } from "./lib/cloud-acceptance.mjs";
 import { createRegistry, instanceLayout, REPO } from "./lib/core.mjs";
 import { request } from "./lib/protocol.mjs";
+import { windowTargeting } from "./lib/window-targeting.mjs";
 import {
   installCommandFromSnapshot,
   redactInstallTokens,
@@ -102,7 +103,8 @@ function record(number, status, assertion, detail = "") {
 
 /** One instance's drive: every action from a fresh tree, and no tree or secret in any error. */
 function driver(label, socket) {
-  const call = (cmd, args = {}) => request(socket, cmd, args, { timeoutMs: 150_000 });
+  const windows = windowTargeting((cmd, args = {}) => request(socket, cmd, args, { timeoutMs: 150_000 }));
+  const call = windows.call;
   const snap = () => call("snapshot");
   const wait = async (text, timeout = 45_000) => (await call("wait", { text, timeout })).snapshot;
   const gone = async (text, timeout = 45_000) =>
@@ -119,6 +121,8 @@ function driver(label, socket) {
   return {
     label,
     call,
+    useMainWindow: windows.useMainWindow,
+    useSettingsWindow: windows.useSettingsWindow,
     snap,
     wait,
     gone,
@@ -172,8 +176,10 @@ async function step(number, body) {
 
 /** Settings → Account → the agreement → Continue with GitHub; the browser double completes it. */
 async function signIn(drive) {
+  drive.useMainWindow();
   await drive.wait("Settings", 60_000);
   await drive.click("button", "Settings", { first: true });
+  await drive.useSettingsWindow();
   await drive.wait("Settings categories");
   await drive.click("button", "Account", { first: true });
   await drive.wait("Accept Preview Agreement");
@@ -329,7 +335,9 @@ async function journey(fixture) {
   });
 
   await step(3, async () => {
+    mac.useMainWindow();
     await mac.click("button", "Settings", { first: true });
+    await mac.useSettingsWindow();
     await mac.wait("Settings categories", 30_000);
     await mac.click("button", "Runners", { first: true });
     // The sheet is only offered when this cloud launch names its own backend
