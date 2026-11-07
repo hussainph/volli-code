@@ -417,6 +417,10 @@ export function useSessionPeek(options: SessionPeekOptions): SessionPeekBinding 
     [dispatch],
   );
 
+  const close = React.useCallback(() => {
+    dispatch({ type: "close", now: Date.now() });
+  }, [dispatch]);
+
   /** The scroller the shown row lives in — the clamp, and what a scroll dismisses. */
   const scrollerOf = React.useCallback((): HTMLElement | null => {
     if (shown === null) return null;
@@ -745,7 +749,7 @@ export function useSessionPeek(options: SessionPeekOptions): SessionPeekBinding 
             }}
             onOpenTicket={() => {
               ports.openTicket(subject.ticketId);
-              dismiss("click-away");
+              close();
             }}
             {...cardProps}
           />
@@ -782,15 +786,15 @@ export function useSessionPeek(options: SessionPeekOptions): SessionPeekBinding 
           // answer: one rule, in `canPinRow`.
           canReply={canAct && via.kind === "row" && canPinRow(rowId, kindOf)}
           onPin={() => dispatch({ type: "pin", target: { rowId, surface: shown.surface } })}
-          onClose={() => dispatch({ type: "escape", now: Date.now() })}
+          onClose={close}
           onOpen={() => {
             ports.openSession(rowId);
-            dismiss("click-away");
+            close();
           }}
           onViewConversation={() => {
             if (answerTo === null) return;
             ports.viewConversation(answerTo);
-            dismiss("click-away");
+            close();
           }}
           onAnswer={(interactionId, submission) =>
             answerTo === null
