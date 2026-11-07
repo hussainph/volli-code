@@ -50,7 +50,7 @@ describe("flat fixed-height Session navigator", () => {
     expect(open[1].key).toBe(closed[1].key);
     expect(navigatorRowDomId("chat:a/b")).toBe("session-nav-chat%3Aa%2Fb");
   });
-  it("omits the external Active heading and keeps standalone Previous rows", () => {
+  it("puts Previous first without reserving empty Active space", () => {
     const row = { id: "session:one" } as PreviousSessionRow;
     expect(
       sessionNavigatorRows({
@@ -61,8 +61,8 @@ describe("flat fixed-height Session navigator", () => {
         reach: false,
       }).map(({ kind, offset }) => ({ kind, offset })),
     ).toEqual([
-      { kind: "band", offset: 16 },
-      { kind: "previous", offset: 50 },
+      { kind: "band", offset: 0 },
+      { kind: "previous", offset: 34 },
     ]);
   });
 });

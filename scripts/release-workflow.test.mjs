@@ -12,6 +12,7 @@ import { parse } from "yaml";
 import "./runner-install.test.mjs";
 import "./runner-release-manifest.test.mjs";
 import "./runner-native-build.test.mjs";
+import "./release-publication.test.mjs";
 
 const workflow = parse(
   readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8"),
@@ -312,7 +313,7 @@ test("peer capture is advisory, resolves the release commit, and exercises dry r
   const publish = workflow.jobs.release.steps.find(
     (step) => step.name === "Publish artifacts to the release",
   );
-  assert.match(publish.run, /\[ "\$name" != canary-peer\.json \] \|\| continue/);
+  assert.match(publish.run, /release-publication\.mjs upload/);
 });
 
 test("dry-run provenance resolution never uses a distributable tag", (t) => {

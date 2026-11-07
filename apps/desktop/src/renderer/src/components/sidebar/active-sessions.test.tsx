@@ -34,6 +34,7 @@ import { PREVIOUS_BAND_LIMIT } from "./active-session-listing";
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { SidebarProvider } from "@renderer/components/ui/sidebar";
 import { useBoardStore } from "@renderer/stores/board";
+import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
 import { useRemoteSessionAvailabilityStore } from "@renderer/stores/remote-session-availability";
@@ -183,6 +184,7 @@ beforeEach(() => {
     rehomedTicketBySession: {},
     starting: {},
   });
+  useChatDraftsStore.setState({ drafts: {} });
   useProjectSessionsStore.setState({ byProject: {}, listingState: {} });
   useSessionOrderStore.setState({ held: {}, holds: 0 });
   useProjectUiStore.setState({ byProject: {} });
@@ -304,6 +306,7 @@ describe("ActiveSessions bands while the listing is read (VC-383)", () => {
     await mount();
 
     expect(loading().length).toBe(2);
+    expect(bandText("active")).toContain("Active");
     expect(container?.querySelector("[data-next-action]")).toBeNull();
     expect(bandText("active")).not.toContain("No active sessions");
     expect(bandText("previous")).not.toContain("Nothing yet");
@@ -316,7 +319,7 @@ describe("ActiveSessions bands while the listing is read (VC-383)", () => {
     expect(bandText("previous")).not.toContain("Nothing yet");
   });
 
-  it("says the bands are empty only once the listing has said so", async () => {
+  it("removes the successfully empty Active group, leaving Previous and its filter first", async () => {
     await mount();
 
     expect(loading().length).toBe(0);
@@ -324,8 +327,17 @@ describe("ActiveSessions bands while the listing is read (VC-383)", () => {
     expect(bandText("previous")).not.toContain("Nothing yet");
     expect(container?.querySelector('[data-next-action="active"]')).toBeNull();
     expect(container?.querySelector('[data-next-action="previous"]')).toBeNull();
-    // A quiet noun, not dashed placeholder rows or an explainer; no zero
-    // beside a band header that the empty state already answers.
+    expect(container?.querySelector('[data-session-band="active"]')).toBeNull();
+    expect(
+      container
+        ?.querySelector("[data-session-bands]")
+        ?.firstElementChild?.getAttribute("data-session-band"),
+    ).toBe("previous");
+    const previous = container?.querySelector<HTMLElement>('[data-session-band="previous"]');
+    expect(previous?.style.marginTop).toBe("0px");
+    expect(previous?.querySelector('[data-nav-offset="0"]')?.textContent).toContain("Previous");
+    expect(previous?.querySelector('[aria-label="Filter"]')).not.toBeNull();
+    // No placeholder rows, explainer or zero count.
     expect(bandText("active")).not.toContain("Start a chat");
     expect(bandText("previous")).not.toContain("Return to earlier sessions");
     expect(container?.querySelector("[data-band-count]")).toBeNull();
@@ -339,6 +351,7 @@ describe("ActiveSessions bands while the listing is read (VC-383)", () => {
     expect(loading().length).toBe(0);
     expect(bandText("active")).not.toContain("No active sessions");
     expect(bandText("previous")).not.toContain("Nothing yet");
+    expect(bandText("active")).toContain("Active");
     expect(bandText("active")).toContain("Couldn't load sessions");
     expect(bandText("previous")).not.toContain("Couldn't load sessions");
     expect(container?.querySelectorAll('[role="alert"]')).toHaveLength(1);
@@ -356,7 +369,7 @@ describe("ActiveSessions bands while the listing is read (VC-383)", () => {
       expect(bandText("previous")).not.toContain("Nothing yet");
       expect(container?.querySelector("[data-next-action]")).toBeNull();
     } finally {
-      useRemoteSessionAvailabilityStore.setState({ unavailable: {} });
+      await act(async () => useRemoteSessionAvailabilityStore.setState({ unavailable: {} }));
     }
   });
 });
@@ -467,6 +480,101 @@ describe("the peek on the left bands (VC-30)", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("shows Active for a new row and removes the group only after its quiet window", async () => {
+    seedSessions([]);
+    await mount();
+    expect(container?.querySelector('[data-session-band="active"]')).toBeNull();
+    seedSessions([
+      listingRow(
+        chatRecord({ ticketId: null, bornTicketless: true, role: "project", lastActivityAt: NOW }),
+      ),
+    ]);
+    await act(async () => {
+      await useProjectSessionsStore.getState().refresh(PROJECT.id);
+    });
+    expect(textOfBand("active")).toContain("Active1");
+    expect(rowElement("chat:c1").getAttribute("data-nav-height")).toBe("46");
+    const previous = container?.querySelector('[data-session-band="previous"]');
+    await tick(31 * 60_000);
+    expect(container?.querySelector('[data-session-band="active"]')).toBeNull();
+    expect(textOfBand("previous")).toContain("Session one");
+    expect(container?.querySelector('[data-session-band="previous"]')).toBe(previous);
+    expect(rowElement("chat:c1").getAttribute("data-nav-offset")).toBe("34");
+  });
+
+  it("moves an exited terminal into Previous without closing its resident tab", async () => {
+    seedSessions([]);
+    await mount();
+    await act(async () => {
+      useSessionsStore
+        .getState()
+        .addSession(projectScope(PROJECT.id), "terminal-one", { ...LAUNCH, createdAt: NOW });
+      useProjectUiStore.setState({
+        byProject: {
+          [PROJECT.id]: { ...DEFAULT_PROJECT_UI, nav: "home", homeActiveTab: "terminal-one" },
+        },
+      });
+    });
+    expect(textOfBand("active")).toContain("Active1");
+    expect(rowElement("session:terminal-one").getAttribute("data-nav-height")).toBe("46");
+    await act(async () => useSessionsStore.getState().markExited("terminal-one", 0));
+    expect(container?.querySelector('[data-session-band="active"]')).toBeNull();
+    expect(textOfBand("previous")).toContain("Shell");
+    expect(rowButton("session:terminal-one").dataset.active).toBe("true");
+    const resident = useSessionsStore.getState().byOwner[PROJECT.id];
+    expect(resident?.tabs).toHaveLength(1);
+    expect(resident?.activeSessionId).toBe("terminal-one");
+  });
+
+  it("keeps a failed refresh with retained rows visible, then recovers to successful empty", async () => {
+    seedSessions([listingRow(chatRecord())]);
+    await mount();
+    listSessions.mockResolvedValueOnce({ ok: false, error: "db locked" });
+    await act(async () => {
+      await useProjectSessionsStore.getState().refresh(PROJECT.id);
+    });
+    expect(textOfBand("active")).toContain("Session one");
+    seedSessions([]);
+    await act(async () => {
+      await useProjectSessionsStore.getState().refresh(PROJECT.id);
+    });
+    expect(container?.querySelector('[data-session-band="active"]')).toBeNull();
+  });
+
+  it("counts provisional Drafts even when the Previous chat filter is off", async () => {
+    seedSessions([]);
+    await mount();
+    await act(async () => {
+      useChatDraftsStore.getState().openProvisional("draft-one", {
+        projectId: PROJECT.id,
+        ticketId: null,
+        operationId: "draft-op",
+        title: "First draft",
+      });
+    });
+    expect(container?.querySelector('[data-session-band="active"]')).toBeNull();
+    await act(async () => {
+      useChatDraftsStore.getState().setDraft("draft-one", "unsent prompt");
+    });
+    expect(textOfBand("active")).toContain("Draft · First draft");
+    const filterButton = container?.querySelector<HTMLElement>('[aria-label="Filter"]');
+    await act(async () => {
+      filterButton?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    const chats = [...document.querySelectorAll<HTMLElement>('[role="menuitemcheckbox"]')].find(
+      (item) => item.textContent === "Chats",
+    )!;
+    expect(chats).toBeDefined();
+    await act(async () => chats.click());
+    expect(chats.getAttribute("aria-checked")).toBe("false");
+    expect(textOfBand("active")).toContain("Active1");
+    expect(textOfBand("active")).toContain("Draft · First draft");
+    await act(async () => {
+      useChatDraftsStore.setState({ drafts: {} });
+    });
+    expect(container?.querySelector('[data-session-band="active"]')).toBeNull();
   });
 
   it("opens a card only once the pointer has rested on a row (350ms), then switches warm (150ms)", async () => {

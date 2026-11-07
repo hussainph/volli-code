@@ -22,6 +22,7 @@ const declaration = {
   mode: "only" as const,
   nudge: true as const,
   descriptionVersion: 2 as const,
+  mcpResultVersion: 1 as const,
 };
 const code: Surface = {
   ...birth,
@@ -94,6 +95,7 @@ describe("minimal durable tool refresh deltas", () => {
       codeMode: {
         ...dynamic.codeMode!,
         descriptionVersion: 2,
+        mcpResultVersion: 1,
         routes: {
           ...dynamic.codeMode!.routes,
           edit: "code",
@@ -107,6 +109,7 @@ describe("minimal durable tool refresh deltas", () => {
       mcpTools: [other],
       routes: { edit: "code", watch: "code", [other.providerName]: "deferred" },
       descriptionVersion: 2,
+      mcpResultVersion: 1,
     });
     expect(JSON.stringify(delta)).not.toContain(mcp.providerName);
     const folded = applyToolRefreshDelta(dynamic, {
@@ -139,6 +142,14 @@ describe("minimal durable tool refresh deltas", () => {
       applyToolRefreshDelta(solo, { added: ["codemode"], delta: { codeMode: declaration } }),
     ).toEqual(acquired);
   });
+  it("upgrades only the MCP result declaration without repeating other frozen metadata", () => {
+    const next: Surface = { ...code, codeMode: { ...code.codeMode!, mcpResultVersion: 1 } };
+    const delta = createToolRefreshDelta(code, next);
+    expect(delta).toEqual({ mcpResultVersion: 1 });
+    expect(applyToolRefreshDelta(code, { added: [], delta })).toEqual(next);
+    expect(createToolRefreshDelta(next, next)).toEqual({});
+    expect(applyToolRefreshDelta(code, { added: [], delta: {} })).toEqual(code);
+  });
   it("keeps unknown future names in both routed and unrouted epochs", () => {
     const unknown = "future_tool";
     expect(applyToolRefreshDelta(birth, { added: [unknown], delta: {} }).tools).toEqual([
@@ -168,6 +179,13 @@ describe("minimal durable tool refresh deltas", () => {
     ],
     [birth, [], { refreshDescriptions: false }],
     [{ ...birth, refreshDescriptions: true }, [], { refreshDescriptions: true }],
+    [birth, [], { mcpResultVersion: 1 }],
+    [code, [], { mcpResultVersion: 2 }],
+    [
+      { ...code, codeMode: { ...code.codeMode!, mcpResultVersion: 1 } },
+      [],
+      { mcpResultVersion: 1 },
+    ],
     [birth, [], { descriptionVersion: 2 }],
     [code, [], { descriptionVersion: 1 }],
     [
