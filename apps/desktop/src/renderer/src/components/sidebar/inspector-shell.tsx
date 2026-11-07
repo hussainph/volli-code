@@ -1,7 +1,7 @@
 import * as React from "react";
 import { ControlShapeProvider } from "../ui/control-shape";
 import { createPortal } from "react-dom";
-import { useInspectorHost } from "./inspector-host";
+import { InspectorVisibleContext, useInspectorHost } from "./inspector-host";
 
 import { RailResizeHandle } from "@renderer/components/ticket/rail-resize-handle";
 import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
@@ -119,7 +119,9 @@ export function InspectorShell({
         style={{ width }}
       >
         <RailResizeHandle />
-        <ControlShapeProvider context="sidebar">{children}</ControlShapeProvider>
+        <InspectorVisibleContext.Provider value={shown}>
+          <ControlShapeProvider context="sidebar">{children}</ControlShapeProvider>
+        </InspectorVisibleContext.Provider>
       </div>
       <div
         ref={zoneRef}
