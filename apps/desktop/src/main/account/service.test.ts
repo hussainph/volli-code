@@ -19,6 +19,15 @@ import { ProviderRefusedError, type AccountProvider, type ProviderTokens } from 
 import { ACCOUNT_CLOUD_OFF, createAccountService, type AccountServiceOptions } from "./service";
 import { ACCOUNT_SESSION_PURPOSE, inventoryAccountSessionStore } from "./session-store";
 import { tempInventory, testKeyPair } from "./test-support";
+import { SourceIconCache } from "../../../../../packages/host-core/src/source-icons/cache";
+import { SourceIconRefiner } from "../../../../../packages/host-core/src/source-icons/refiner";
+import type { StoredSourceIcon } from "../../../../../packages/host-core/src/source-icons/storage";
+
+const ICON_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/6ZkAAAAASUVORK5CYII=",
+  "base64",
+);
+const ICON_ORIGIN = "https://source.example.com";
 
 const VIEWER: BackendViewer = {
   previewAccess: "granted",
@@ -71,6 +80,7 @@ function harness(
     enabled?: () => boolean;
     temp?: ReturnType<typeof tempInventory>;
     marker?: AccountServiceOptions["marker"];
+    now?: () => number;
   } = {},
 ) {
   const temp = options.temp ?? tempInventory();
@@ -94,6 +104,7 @@ function harness(
     store: inventoryAccountSessionStore(temp.inventory, async () => {}),
     openBrowser: options.openBrowser ?? web.open,
     ...(options.marker === undefined ? {} : { marker: options.marker }),
+    ...(options.now === undefined ? {} : { now: options.now }),
   });
   cleanups.push(() => service.dispose());
   const seen: AccountSnapshot[] = [];
@@ -159,6 +170,299 @@ describe("the account service", () => {
     await live.service.signIn("github");
     expect(live.service.sourceIconEpoch()).not.toBe(signedIn);
   });
+  it("keeps source icon ownership unresolved through saved-account/backend restoration without starting it", async () => {
+    const first = harness({ provider: scriptedProvider(), openBrowser: scriptedBrowser });
+    await first.service.signIn("github");
+    await first.service.settled();
+    const owner = first.service.sourceIconOwner();
+    const backendGate = Promise.withResolvers<BackendViewer>();
+    const backend = backendStandIn({ ensureViewer: () => backendGate.promise });
+    const store = inventoryAccountSessionStore(first.temp.inventory, async () => {});
+    const load = vi.spyOn(store, "load");
+    const next = createAccountService({
+      enabled: () => true,
+      provider: scriptedProvider(),
+      backend,
+      store,
+      openBrowser: () => {},
+    });
+    cleanups.push(() => next.dispose());
+    const changed = vi.fn();
+    const stop = next.watchSourceIconAuthority(changed);
+    try {
+      const initialGeneration = next.sourceIconRevocation();
+      expect(next.sourceIconRestoring()).toBe(false); // untouched Account is known local mode
+      expect(next.sourceIconOwner()).not.toBeNull();
+      expect(next.sourceIconEpoch()).not.toBeNull();
+      expect(load).not.toHaveBeenCalled(); // decoration getters/listeners never restore credentials
+      next.snapshot();
+      const savedId = "00000000-0000-4000-8000-000000000003";
+      const cache = new SourceIconCache({
+        authorityForSession: () => next.sourceIconEpoch(),
+        persistentAuthorityForSession: () => next.sourceIconOwner(),
+        restorationPendingForSession: () => next.sourceIconRestoring(),
+        revocationGeneration: () => next.sourceIconRevocation(),
+        persistence: {
+          load: async () => [
+            {
+              id: savedId,
+              sessionId: "session",
+              authority: owner!,
+              origin: ICON_ORIGIN,
+              expiresAt: Date.now() + 60_000,
+              bytes: ICON_PNG,
+            },
+          ],
+          save: () => {},
+        },
+      });
+      const stopCache = next.watchSourceIconAuthority(() => cache.invalidate());
+      cleanups.push(() => {
+        stopCache();
+        cache.close();
+      });
+      await cache.hydrated;
+      expect(cache.picture("session", savedId).data).toBeNull();
+      await vi.waitFor(() => expect(backend.ensureViewer).toHaveBeenCalledOnce());
+      expect(next.sourceIconRestoring()).toBe(true);
+      expect(next.sourceIconOwner()).toBeNull();
+      expect(next.sourceIconEpoch()).toBeNull();
+      backendGate.resolve(VIEWER);
+      await next.settled();
+      expect(next.sourceIconRestoring()).toBe(false);
+      expect(next.sourceIconOwner()).toBe(owner);
+      expect(next.sourceIconEpoch()).not.toBeNull();
+      expect(next.sourceIconRevocation()).toBe(initialGeneration); // initial restore is not a refusal
+      expect(cache.picture("session", savedId).data).not.toBeNull();
+      expect(changed).toHaveBeenCalled();
+      stop();
+      changed.mockClear();
+      await next.signOut();
+      expect(next.sourceIconOwner()).not.toBe(owner);
+      expect(changed).not.toHaveBeenCalled();
+    } finally {
+      backendGate.resolve(VIEWER);
+      stop();
+      await next.settled();
+    }
+  });
+
+  it("resumes a known icon watch across temporary same-grant uncertainty but never across refusal ABA", async () => {
+    let now = Date.now();
+    const provider = scriptedProvider();
+    const refresh = vi.fn(provider.refresh);
+    const h = harness({
+      provider: { ...provider, refresh },
+      now: () => now,
+      openBrowser: scriptedBrowser,
+    });
+    await h.service.signIn("github");
+    await h.service.settled();
+    const grant = h.service.sourceIconEpoch()!;
+    const generation = h.service.sourceIconRevocation();
+    const owner = h.service.sourceIconOwner();
+    const cache = new SourceIconCache({
+      authorityForSession: () => h.service.sourceIconEpoch(),
+      persistentAuthorityForSession: () => h.service.sourceIconOwner(),
+      restorationPendingForSession: () => h.service.sourceIconRestoring(),
+      revocationGeneration: () => h.service.sourceIconRevocation(),
+    });
+    const stopAuthority = h.service.watchSourceIconAuthority(() => cache.invalidate());
+    const emit = vi.fn();
+    const stopWatch = cache.watch({ sessionId: "session", origins: [ICON_ORIGIN] }, emit);
+    cleanups.push(() => {
+      stopAuthority();
+      stopWatch();
+      cache.close();
+    });
+    const id = cache.put("session", grant, ICON_ORIGIN, ICON_PNG)!;
+    expect(emit.mock.calls.at(-1)![0].icons[0].pictureId).toBe(id);
+    now += 20 * 60_000;
+    refresh.mockRejectedValueOnce(new Error("temporarily offline"));
+    await expect(h.service.accessToken()).rejects.toThrow("temporarily offline");
+    expect(h.service.sourceIconRestoring()).toBe(true);
+    expect(h.service.sourceIconRevocation()).toBe(generation);
+    expect(h.service.sourceIconEpoch()).toBeNull();
+    expect(emit.mock.calls.at(-1)![0].icons[0].pictureId).toBeNull();
+    expect(cache.picture("session", id).data).toBeNull();
+    await h.service.cancelDeletion();
+    expect(h.service.sourceIconEpoch()).toBe(grant);
+    expect(h.service.sourceIconOwner()).toBe(owner);
+    expect(h.service.sourceIconRevocation()).toBe(generation);
+    expect(emit.mock.calls.at(-1)![0].icons[0].pictureId).toBe(id); // SAME subscription, SAME grant
+    h.backend.cancelDeletion.mockResolvedValueOnce({ ...VIEWER, previewAccess: "waitlisted" });
+    await h.service.cancelDeletion();
+    expect(h.service.sourceIconRestoring()).toBe(false);
+    expect(h.service.sourceIconEpoch()).toBeNull();
+    const refusedGeneration = h.service.sourceIconRevocation();
+    expect(refusedGeneration).not.toBe(generation);
+    await h.service.cancelDeletion(); // same viewer and provider Session, without auth sign-out/sign-in
+    expect(h.service.sourceIconOwner()).toBe(owner);
+    expect(h.service.sourceIconRevocation()).toBe(refusedGeneration);
+    expect(h.service.sourceIconEpoch()).not.toBe(grant);
+    expect(cache.picture("session", id).data).toBeNull();
+    const count = emit.mock.calls.length;
+    cache.put("session", h.service.sourceIconEpoch()!, ICON_ORIGIN, ICON_PNG);
+    expect(emit).toHaveBeenCalledTimes(count); // definitive refusal terminated the old watch
+    expect(emit.mock.calls.at(-1)![0].icons[0].pictureId).toBeNull();
+  });
+
+  it.each([
+    ["foreground completion", "policy refusal"],
+    ["acquisition", "policy refusal"],
+    ["foreground completion", "backend refusal"],
+    ["acquisition", "backend refusal"],
+  ] as const)(
+    "rejects an icon %s held across %s and same-owner recovery",
+    async (phase, refusal) => {
+      let now = Date.now();
+      const provider = scriptedProvider();
+      const refresh = vi.fn(provider.refresh);
+      const h = harness({
+        provider: { ...provider, refresh },
+        now: () => now,
+        openBrowser: scriptedBrowser,
+      });
+      await h.service.signIn("github");
+      await h.service.settled();
+      const oldGrant = h.service.sourceIconEpoch()!;
+      const owner = h.service.sourceIconOwner();
+      const cache = new SourceIconCache({
+        authorityForSession: () => h.service.sourceIconEpoch(),
+        persistentAuthorityForSession: () => h.service.sourceIconOwner(),
+        restorationPendingForSession: () => h.service.sourceIconRestoring(),
+        revocationGeneration: () => h.service.sourceIconRevocation(),
+      });
+      const stop = h.service.watchSourceIconAuthority(() => cache.invalidate());
+      const gate = Promise.withResolvers<{ bytes: Uint8Array; mime: "image/png" } | null>();
+      // Queue/authority boundary only. Real transport and decoder tests remain separate.
+      const acquire = vi.fn(() => gate.promise);
+      const decode = vi.fn(async () => Uint8Array.from(ICON_PNG));
+      const refiner = new SourceIconRefiner({ cache, acquire, decode, log: () => {} });
+      cleanups.push(async () => {
+        gate.resolve(null);
+        refiner.close();
+        await refiner.settled();
+        stop();
+        cache.close();
+      });
+      const signal = new AbortController().signal;
+      const candidate = { origin: ICON_ORIGIN, url: `${ICON_ORIGIN}/icon` };
+      const completion = refiner.beginRead("session", signal)!;
+      if (phase === "acquisition") {
+        completion(candidate, signal);
+        await vi.waitFor(() => expect(acquire).toHaveBeenCalledOnce());
+      }
+      if (refusal === "backend refusal") {
+        now += 20 * 60_000;
+        refresh.mockRejectedValueOnce(new Error("temporarily offline"));
+        await expect(h.service.accessToken()).rejects.toThrow("temporarily offline");
+        h.backend.ensureViewer.mockRejectedValueOnce(
+          new BackendRefusedError("Sign-in refused", "unauthenticated"),
+        );
+        const stopAccount = h.service.subscribe(() => {}); // real offline-recovery syncViewer path
+        await h.service.settled();
+        stopAccount();
+      } else {
+        h.backend.cancelDeletion.mockResolvedValueOnce({ ...VIEWER, previewAccess: "waitlisted" });
+        await h.service.cancelDeletion();
+      }
+      expect(h.service.sourceIconRestoring()).toBe(false);
+      expect(h.service.sourceIconEpoch()).toBeNull();
+      await h.service.cancelDeletion();
+      expect(h.service.sourceIconOwner()).toBe(owner);
+      expect(h.service.sourceIconEpoch()).not.toBe(oldGrant);
+      if (phase === "foreground completion") completion(candidate, signal);
+      gate.resolve({ bytes: ICON_PNG, mime: "image/png" });
+      await refiner.settled();
+      expect(acquire).toHaveBeenCalledTimes(phase === "acquisition" ? 1 : 0);
+      expect(decode).not.toHaveBeenCalled();
+      expect(cache.has("session", h.service.sourceIconEpoch()!, ICON_ORIGIN)).toBe(false);
+      refiner.beginRead("session", signal)!(candidate, signal);
+      await vi.waitFor(() =>
+        expect(cache.has("session", h.service.sourceIconEpoch()!, ICON_ORIGIN)).toBe(true),
+      );
+      expect(acquire).toHaveBeenCalledTimes(phase === "acquisition" ? 2 : 1);
+    },
+  );
+
+  it("retains refusal evidence during pending icon hydration without discarding unrelated new live writes", async () => {
+    const h = harness({ provider: scriptedProvider(), openBrowser: scriptedBrowser });
+    await h.service.signIn("github");
+    await h.service.settled();
+    const owner = h.service.sourceIconOwner()!;
+    const oldId = "00000000-0000-4000-8000-000000000001";
+    const newId = "00000000-0000-4000-8000-000000000002";
+    const load = Promise.withResolvers<StoredSourceIcon[]>();
+    const save = vi.fn();
+    const cache = new SourceIconCache({
+      createId: () => newId,
+      authorityForSession: () => h.service.sourceIconEpoch(),
+      persistentAuthorityForSession: () => h.service.sourceIconOwner(),
+      restorationPendingForSession: () => h.service.sourceIconRestoring(),
+      revocationGeneration: () => h.service.sourceIconRevocation(),
+      persistence: { load: () => load.promise, save },
+    });
+    const stop = h.service.watchSourceIconAuthority(() => cache.invalidate());
+    cleanups.push(async () => {
+      load.resolve([]);
+      await cache.hydrated;
+      stop();
+      cache.close();
+    });
+    h.backend.cancelDeletion.mockResolvedValueOnce({ ...VIEWER, previewAccess: "waitlisted" });
+    await h.service.cancelDeletion(); // no loaded rows exist to invalidate yet
+    await h.service.cancelDeletion(); // same stable owner is now authorised again
+    expect(h.service.sourceIconOwner()).toBe(owner);
+    const live = cache.put(
+      "other-session",
+      h.service.sourceIconEpoch()!,
+      "https://new.example.com",
+      ICON_PNG,
+    );
+    expect(live).toBe(newId);
+    expect(save).not.toHaveBeenCalled();
+    load.resolve([
+      {
+        id: oldId,
+        sessionId: "session",
+        authority: owner,
+        origin: ICON_ORIGIN,
+        expiresAt: Date.now() + 60_000,
+        bytes: ICON_PNG,
+      },
+    ]);
+    await cache.hydrated;
+    expect(cache.picture("session", oldId).data).toBeNull();
+    expect(cache.picture("other-session", newId).data).not.toBeNull();
+    expect(save).toHaveBeenLastCalledWith([
+      {
+        id: newId,
+        sessionId: "other-session",
+        authority: owner,
+        origin: "https://new.example.com",
+        expiresAt: expect.any(Number),
+        bytes: Uint8Array.from(ICON_PNG),
+      },
+    ]); // no live generation or grant is serialized
+  });
+
+  it("source icon owner hashes distinguish accounts even when their local epochs and provider session ids coincide", async () => {
+    const one = harness({ provider: scriptedProvider(), openBrowser: scriptedBrowser });
+    const two = harness({
+      provider: scriptedProvider(),
+      openBrowser: scriptedBrowser,
+      backend: backendStandIn({
+        ensureViewer: async () => ({ ...VIEWER, userId: "different-account" }),
+      }),
+    });
+    await one.service.signIn("github");
+    await two.service.signIn("github");
+    expect(one.service.sourceIconOwner()).toMatch(/^[a-f0-9]{64}$/);
+    expect(one.service.sourceIconOwner()).not.toBe(two.service.sourceIconOwner());
+    expect(one.service.sourceIconEpoch()).not.toBe(two.service.sourceIconEpoch());
+  });
+
   it("refuses everything while cloud is off, and answers an unconfigured build", async () => {
     const off = harness({ enabled: () => false });
     for (const call of [
@@ -988,6 +1292,9 @@ it("surfaces a team code that cannot be joined with, and never resends it", asyn
       failure: `Refused: ${code}.`,
     });
     expect(service.previewUserId()).toBeNull();
+    expect(service.sourceIconRestoring()).toBe(false); // refusal is not startup uncertainty
+    expect(service.sourceIconOwner()).toBeNull();
+    expect(service.sourceIconEpoch()).toBeNull();
     expect(marker.write).not.toHaveBeenCalled();
     service.subscribe(() => {});
     await service.settled();
