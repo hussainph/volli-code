@@ -39,10 +39,17 @@ async function advance(ms: number) {
   await act(async () => vi.advanceTimersByTime(ms));
 }
 
-function UnsetModel() {
+function UnsetModel({ saveGate }: { saveGate?: Promise<void> }) {
   const [value, setValue] = useState("");
   return (
-    <Select defaultOpen value={value} onValueChange={setValue}>
+    <Select
+      defaultOpen
+      value={value}
+      onValueChange={async (next) => {
+        if (saveGate) await saveGate;
+        setValue(next);
+      }}
+    >
       <SelectTrigger aria-label="Model">
         <SelectValue placeholder="Choose a model" />
       </SelectTrigger>
@@ -59,6 +66,46 @@ function UnsetModel() {
 }
 
 describe("HelpTag", () => {
+  it("ends restoration before a delayed mark mounts on an already refocused trigger", async () => {
+    const scroll = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = vi.fn();
+    let finishSave!: () => void;
+    const saveGate = new Promise<void>((resolve) => {
+      finishSave = resolve;
+    });
+    try {
+      await act(async () => root.render(<UnsetModel saveGate={saveGate} />));
+      await advance(0);
+      const trigger = container.querySelector<HTMLElement>('[role="combobox"]')!;
+      const option = document.querySelector<HTMLElement>('[role="option"]')!;
+      await act(async () => {
+        option.dispatchEvent(
+          new PointerEvent("pointermove", { bubbles: true, pointerType: "mouse" }),
+        );
+        option.dispatchEvent(
+          new PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse" }),
+        );
+        option.dispatchEvent(
+          new PointerEvent("pointerup", { bubbles: true, pointerType: "mouse" }),
+        );
+      });
+      await advance(0);
+      expect(document.querySelector('[role="listbox"]')).toBeNull();
+      expect(document.activeElement).toBe(trigger);
+      expect(trigger.querySelector('[data-slot="help-tag"]')).toBeNull();
+      await act(async () => finishSave());
+      expect(trigger.querySelector('[data-slot="help-tag"]')).not.toBeNull();
+      expect(content()).toBeNull();
+      act(() => {
+        trigger.blur();
+        trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+        trigger.focus();
+      });
+      expect(content()?.textContent).toBe("Provider");
+    } finally {
+      HTMLElement.prototype.scrollIntoView = scroll;
+    }
+  });
   it("preserves deliberate keyboard help when Select restores focus to a newly mounted mark", async () => {
     const scroll = HTMLElement.prototype.scrollIntoView;
     HTMLElement.prototype.scrollIntoView = vi.fn();

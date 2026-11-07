@@ -10,7 +10,9 @@ type HelpModality = "keyboard" | "pointer";
 // one commit. Keep local modality on the existing trigger/composite across
 // that recycling; weak keys never retain an unmounted anchor.
 const anchorModality = new WeakMap<Element, HelpModality>();
-const focusRestoration = new WeakMap<Element, HelpModality>();
+type Restoration = { modality?: HelpModality };
+const focusRestoration = new WeakMap<Element, Restoration>();
+const scopeRestoration = new WeakMap<HTMLElement, Restoration>();
 const COMPOSITE = '[data-slot="command"], [data-slot="select-content"], [role="menu"]';
 type HelpRegistration = (active: boolean) => void;
 type CompositeHelp = {
@@ -32,6 +34,27 @@ function helpForComposite(scope: HTMLElement): CompositeHelp {
         (candidate) => candidate.getAttribute("aria-controls") === scope.id,
       )
     : undefined;
+  let restoration = scopeRestoration.get(scope);
+  if (trigger && !restoration) {
+    const lifecycle: Restoration = {};
+    restoration = lifecycle;
+    scopeRestoration.set(scope, lifecycle);
+    // Radix dispatches this lifecycle event before Select synchronously restores
+    // trigger focus. Keep the hint only for that dispatch, even if the trigger
+    // is disabled or still has no mark. No next-focus latch or expiry timer.
+    // The listener survives mark cleanup: FocusScope restores after unmount.
+    scope.addEventListener(
+      "focusScope.autoFocusOnUnmount",
+      () => {
+        scopeRestoration.delete(scope);
+        focusRestoration.set(trigger, lifecycle);
+        queueMicrotask(() => {
+          if (focusRestoration.get(trigger) === lifecycle) focusRestoration.delete(trigger);
+        });
+      },
+      { once: true },
+    );
+  }
   let modality = anchorModality.get(scope) ?? (trigger ? anchorModality.get(trigger) : undefined);
   let disposed = false;
   const registrations = new Map<HTMLElement, Set<HelpRegistration>>();
@@ -64,11 +87,11 @@ function helpForComposite(scope: HTMLElement): CompositeHelp {
     ) {
       modality = "keyboard";
       anchorModality.set(scope, modality);
-      if (trigger) focusRestoration.set(trigger, modality);
+      if (restoration) restoration.modality = modality;
       // After React/cmdk handles the same key, even if no DOM attribute changed.
       queueMicrotask(sync);
     } else if (event.key === "Escape" || event.key === "Enter") {
-      if (trigger) focusRestoration.set(trigger, "keyboard");
+      if (restoration) restoration.modality = "keyboard";
       modality = undefined;
       anchorModality.delete(scope);
       publish(null);
@@ -77,9 +100,7 @@ function helpForComposite(scope: HTMLElement): CompositeHelp {
   const pointer = () => {
     modality = "pointer";
     anchorModality.set(scope, modality);
-    // An unset Select has no trigger mark yet. Carry this gesture across the
-    // value's mount and Radix's close autofocus, not just across option recycling.
-    if (trigger) focusRestoration.set(trigger, modality);
+    if (restoration) restoration.modality = modality;
     publish(null);
   };
   const blur = (event: FocusEvent) => {
@@ -236,10 +257,7 @@ export function HelpTag({
       }
     });
     const focus = () => {
-      const restoredModality = focusRestoration.get(host);
-      // Spend the restoration hint once: the next deliberate keyboard focus
-      // must still reveal help, even after the preceding pointer selection.
-      focusRestoration.delete(host);
+      const restoredModality = focusRestoration.get(host)?.modality;
       if (pressing || restoredModality === "pointer" || (controller && !controller.keyboard()))
         return;
       anchorModality.set(host, "keyboard");
