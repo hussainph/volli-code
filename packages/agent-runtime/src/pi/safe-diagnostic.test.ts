@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { safeStopMessage } from "./safe-diagnostic";
+import { safeProgramErrorMessage, safeStopMessage } from "./safe-diagnostic";
 import {
   DIAGNOSTIC_SECRET_CASES,
   diagnosticCredentialRedaction,
@@ -7,6 +7,25 @@ import {
 } from "./diagnostic-fixtures";
 
 describe("the common diagnostic redaction boundary", () => {
+  it("redacts typed program exceptions before bounding without parsing JSON punctuation as an envelope", () => {
+    const secret = `dummy-${"s".repeat(100)}`;
+    const raw = `Unexpected token '{' in JSON: ${secret} ${"word ".repeat(200)}`;
+    const result = safeProgramErrorMessage(raw, {
+      redact: (text) => text.replaceAll(secret, "[redacted]"),
+    });
+    expect(result).toMatch(/^Unexpected token '\{' in JSON: \[redacted\]/);
+    expect(result.length).toBeLessThanOrEqual(401);
+    expect(result).not.toContain(secret.slice(0, 20));
+    expect(
+      safeProgramErrorMessage("private", {
+        redact: () => {
+          throw new Error("private");
+        },
+      }),
+    ).toBe("[Text withheld: credential redaction failed.]");
+    expect(safeProgramErrorMessage("Bearer dummy-token")).not.toContain("dummy-token");
+  });
+
   it.each(DIAGNOSTIC_SECRET_CASES)(
     "redacts %s with the same policy as provider stops",
     (_label, raw, secrets) => {

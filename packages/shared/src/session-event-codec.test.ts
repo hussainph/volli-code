@@ -2235,50 +2235,56 @@ describe("the renderer-side parse", () => {
   });
 });
 
-it("keeps Code Mode's birth description version durable but host-only", () => {
-  for (const descriptionVersion of [undefined, 2] as const) {
-    const payload = {
-      kind: "session.input.recorded",
-      input: {
-        kind: "tool-surface",
-        tools: ["read", "codemode"],
-        codeMode: {
-          routes: { read: "both" },
-          limits: { ...DEFAULT_CODE_MODE_LIMITS },
-          ...(descriptionVersion === undefined ? {} : { descriptionVersion }),
+it.each([undefined, 1] as const)(
+  "keeps Code Mode's birth declaration versions durable but host-only (MCP result %s)",
+  (mcpResultVersion) => {
+    for (const descriptionVersion of [undefined, 2] as const) {
+      const payload = {
+        kind: "session.input.recorded",
+        input: {
+          kind: "tool-surface",
+          tools: ["read", "codemode"],
+          codeMode: {
+            routes: { read: "both" },
+            limits: { ...DEFAULT_CODE_MODE_LIMITS },
+            ...(descriptionVersion === undefined ? {} : { descriptionVersion }),
+            ...(mcpResultVersion === undefined ? {} : { mcpResultVersion }),
+          },
         },
-      },
-    } satisfies SessionEventPayload;
-    expect(decodeSessionEventPayload(JSON.parse(encodeSessionJson(payload)), "payload")).toEqual(
-      payload,
-    );
-    const safe = scrubSessionEventPayload(payload);
-    expect(safe).toEqual({
-      kind: "session.input.recorded",
-      input: {
-        ...payload.input,
-        codeMode: { routes: { read: "both" }, limits: DEFAULT_CODE_MODE_LIMITS },
-      },
-    });
-    expect(payload.input.codeMode?.descriptionVersion).toBe(descriptionVersion);
-    const event: SessionEvent = {
-      id: "surface-event",
-      sessionId: "session-1",
-      sequence: 1,
-      occurredAt: 1,
-      recordedAt: 1,
-      provenance,
-      payload,
-    };
-    // Even raw host JSON is scrubbed on renderer decoding; no mutation of
-    // the durable record or attach-time declaration generation is needed.
-    expect(parseRendererSessionEvent(JSON.parse(encodeSessionJson(event)), "event")).toEqual({
-      ok: true,
-      event: scrubSessionEvent(event),
-    });
-    expect(JSON.stringify(scrubSessionEvent(event))).not.toContain("descriptionVersion");
-  }
-});
+      } satisfies SessionEventPayload;
+      expect(decodeSessionEventPayload(JSON.parse(encodeSessionJson(payload)), "payload")).toEqual(
+        payload,
+      );
+      const safe = scrubSessionEventPayload(payload);
+      expect(safe).toEqual({
+        kind: "session.input.recorded",
+        input: {
+          ...payload.input,
+          codeMode: { routes: { read: "both" }, limits: DEFAULT_CODE_MODE_LIMITS },
+        },
+      });
+      expect(payload.input.codeMode?.descriptionVersion).toBe(descriptionVersion);
+      expect(payload.input.codeMode?.mcpResultVersion).toBe(mcpResultVersion);
+      const event: SessionEvent = {
+        id: "surface-event",
+        sessionId: "session-1",
+        sequence: 1,
+        occurredAt: 1,
+        recordedAt: 1,
+        provenance,
+        payload,
+      };
+      // Even raw host JSON is scrubbed on renderer decoding; no mutation of
+      // the durable record or attach-time declaration generation is needed.
+      expect(parseRendererSessionEvent(JSON.parse(encodeSessionJson(event)), "event")).toEqual({
+        ok: true,
+        event: scrubSessionEvent(event),
+      });
+      expect(JSON.stringify(scrubSessionEvent(event))).not.toContain("descriptionVersion");
+      expect(JSON.stringify(scrubSessionEvent(event))).not.toContain("mcpResultVersion");
+    }
+  },
+);
 
 it("round-trips refreshes with future tool names without corrupting birth or dropping their notice", () => {
   const future = "write";
@@ -2292,6 +2298,7 @@ it("round-trips refreshes with future tool names without corrupting birth or dro
       codeMode: {
         limits: DEFAULT_CODE_MODE_LIMITS,
         descriptionVersion: 2,
+        mcpResultVersion: 1,
       },
       mcpTools: [
         {
@@ -2380,13 +2387,25 @@ it("validates refresh deltas independently of the renderer notice", () => {
     decodeSessionEventPayload(
       {
         ...base,
-        delta: { routes: {}, mcpTools: [], descriptionVersion: 2, refreshDescriptions: true },
+        delta: {
+          routes: {},
+          mcpTools: [],
+          descriptionVersion: 2,
+          mcpResultVersion: 1,
+          refreshDescriptions: true,
+        },
       },
       "payload",
     ),
   ).toEqual({
     ...base,
-    delta: { routes: {}, mcpTools: [], descriptionVersion: 2, refreshDescriptions: true },
+    delta: {
+      routes: {},
+      mcpTools: [],
+      descriptionVersion: 2,
+      mcpResultVersion: 1,
+      refreshDescriptions: true,
+    },
   });
   const acquired = {
     ...base,
@@ -2404,6 +2423,9 @@ it("validates refresh deltas independently of the renderer notice", () => {
     { delta: { refreshDescriptions: false } },
     { delta: { askUserQuestions: true } },
     { delta: { descriptionVersion: 1 } },
+    { delta: { mcpResultVersion: 2 } },
+    { delta: { mcpResultVersion: "1" } },
+    { delta: { mcpResultVersion: null } },
     { delta: { routes: [] } },
     { delta: { routes: { codemode: "direct" } } },
     { added: ["write"], delta: { routes: { write: "invalid" } } },
@@ -2415,6 +2437,14 @@ it("validates refresh deltas independently of the renderer notice", () => {
     {
       added: ["codemode"],
       delta: { codeMode: { limits: DEFAULT_CODE_MODE_LIMITS }, descriptionVersion: 2 },
+    },
+    {
+      added: ["codemode"],
+      delta: { codeMode: { limits: DEFAULT_CODE_MODE_LIMITS }, mcpResultVersion: 1 },
+    },
+    {
+      added: ["codemode"],
+      delta: { codeMode: { limits: DEFAULT_CODE_MODE_LIMITS, mcpResultVersion: 2 } },
     },
     { added: ["codemode"], delta: { codeMode: { limits: DEFAULT_CODE_MODE_LIMITS, routes: {} } } },
     { added: ["codemode"], delta: { codeMode: { limits: {} } } },
