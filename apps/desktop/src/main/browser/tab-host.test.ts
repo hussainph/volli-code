@@ -36,6 +36,7 @@ import {
   BROWSER_PREVIEW_TIMEOUT_MS,
   BrowserStageUnavailableError,
   BrowserTabHost,
+  type BrowserPreviewDiagnostic,
   browserRemoteWebPreferences,
   browserSurfaceBounds,
   isAllowedBrowserTarget,
@@ -2717,68 +2718,137 @@ describe("BrowserTabHost pictures (VC-238)", () => {
     expect(pictures.describe("picture-1")).toMatchObject({ tabId: tab.tabId, generation: 0 });
   });
 
-  it("distinguishes empty native capture from an emitted ID without logging page data", async () => {
-    vi.stubEnv("VOLLI_HARNESS", "1");
-    const records: Record<string, unknown>[] = [];
-    const undo = installHostLog({
-      level: "info",
-      sink: { write: (record) => void records.push(record) },
+  /** A host whose composition listens to preview outcomes (VC-1150), as dev diagnostics do. */
+  const observedHost = () => {
+    const seen: BrowserPreviewDiagnostic[] = [];
+    let nextId = 0;
+    host = new BrowserTabHost({
+      createId: () => `opaque-observed-${++nextId}`,
+      createView: () => {
+        const view = new FakeView();
+        views.push(view);
+        return view as unknown as WebContentsView;
+      },
+      fromPartition: () => new FakeSession() as unknown as Session,
+      getWindow: () => fakeWindow as unknown as BrowserWindow,
+      createStageWindow: newStage,
+      publishState: (event) => published.push(event),
+      publishClosed: (tabId) => published.push({ closedTabId: tabId }),
+      pictures,
+      previewDiagnostics: (diagnostic) => void seen.push(diagnostic),
     });
+    return seen;
+  };
+
+  it("reports each camera ending, ids and lookup sizes included, without page data", async () => {
+    const seen = observedHost();
     const tab = agentTab();
     const capture = Promise.withResolvers<Awaited<ReturnType<FakeWebContents["capturePage"]>>>();
     views[0]!.webContents.capturePage.mockReturnValueOnce(capture.promise);
-    try {
-      const pending = host.capturePicture(tab.tabId);
-      expect(records).toEqual([]);
-      capture.resolve({
-        isEmpty: () => true,
-        toJPEG: () => Buffer.from("private pixels"),
-        toDataURL: () => "private image",
-      });
-      expect(await pending).toBeNull();
-      expect(pictures.describe("picture-1")).toBeNull();
-      const id = await host.capturePicture(tab.tabId);
-      expect(id).toBe("picture-1");
-      expect(host.pictureOf(id!)).toMatch(/^data:image\/jpeg;base64,/);
-      const outcomes = records.filter(
-        (record) => record.msg === "browser navigation picture outcome",
+    const pending = host.capturePicture(tab.tabId);
+    expect(seen).toEqual([]);
+    capture.resolve({
+      isEmpty: () => true,
+      toJPEG: () => Buffer.from("private pixels"),
+      toDataURL: () => "private image",
+    });
+    expect(await pending).toBeNull();
+    expect(pictures.describe("picture-1")).toBeNull();
+    const id = await host.capturePicture(tab.tabId);
+    expect(id).toBe("picture-1");
+    expect(seen.map((one) => one.stage === "camera" && [one.outcome, one.picture])).toEqual([
+      ["empty-image", null],
+      ["stored", id],
+    ]);
+    expect(seen.map((one) => one.stage === "camera" && one.lookupSize)).toEqual([
+      0,
+      host.pictureOf(id!)!.length,
+    ]);
+    for (const one of seen) {
+      expect(Object.keys(one).toSorted()).toEqual(
+        [
+          "currentGeneration",
+          "elapsedMs",
+          "generation",
+          "lookupSize",
+          "outcome",
+          "pending",
+          "picture",
+          "stage",
+        ].toSorted(),
       );
-      expect(outcomes.map(({ outcome, picture }) => ({ outcome, picture }))).toEqual([
-        { outcome: "empty-image", picture: null },
-        { outcome: "stored", picture: id },
-      ]);
-      expect(outcomes.map(({ lookupSize }) => lookupSize)).toEqual([
-        0,
-        host.pictureOf(id!)!.length,
-      ]);
-      for (const record of outcomes) {
-        expect(Object.keys(record).toSorted()).toEqual(
-          [
-            "component",
-            "currentGeneration",
-            "elapsedMs",
-            "generation",
-            "level",
-            "lookupSize",
-            "msg",
-            "outcome",
-            "pending",
-            "picture",
-            "ts",
-          ].toSorted(),
-        );
-        expect(record).toMatchObject({
-          generation: 0,
-          currentGeneration: 0,
-          elapsedMs: expect.any(Number),
-        });
-      }
-      expect(JSON.stringify(outcomes)).not.toContain("private");
-      expect(JSON.stringify(outcomes)).not.toContain("agent.example");
-    } finally {
-      undo();
-      vi.unstubAllEnvs();
+      expect(one).toMatchObject({
+        generation: 0,
+        currentGeneration: 0,
+        elapsedMs: expect.any(Number),
+      });
     }
+    expect(JSON.stringify(seen)).not.toContain("private");
+    expect(JSON.stringify(seen)).not.toContain("agent.example");
+  });
+
+  it("keeps every answer when the diagnostic sink fails", async () => {
+    let nextId = 0;
+    host = new BrowserTabHost({
+      createId: () => `opaque-failing-${++nextId}`,
+      createView: () => {
+        const view = new FakeView();
+        views.push(view);
+        return view as unknown as WebContentsView;
+      },
+      fromPartition: () => new FakeSession() as unknown as Session,
+      getWindow: () => fakeWindow as unknown as BrowserWindow,
+      createStageWindow: newStage,
+      publishState: (event) => published.push(event),
+      publishClosed: (tabId) => published.push({ closedTabId: tabId }),
+      pictures,
+      previewDiagnostics: () => {
+        throw new Error("diagnostic sink failed");
+      },
+    });
+    const tab = agentTab();
+    views[0]!.webContents.captureBytes = "after-click";
+    expect(await host.capturePicture(tab.tabId)).toBe("picture-1");
+    expect(await host.capturePicture("never-opened")).toBeNull();
+  });
+
+  it("reports the two early endings without changing what they answer", async () => {
+    const seen = observedHost();
+    const tab = agentTab();
+    expect(await host.capturePicture("never-opened")).toBeNull();
+    const withdrawn = new AbortController();
+    withdrawn.abort();
+    expect(await host.capturePicture(tab.tabId, withdrawn.signal)).toBeNull();
+    expect(views[0]!.webContents.capturePage).not.toHaveBeenCalled();
+    expect(seen).toEqual([
+      expect.objectContaining({
+        stage: "camera",
+        outcome: "missing-entry",
+        picture: null,
+        generation: null,
+        currentGeneration: null,
+        pending: null,
+      }),
+      expect.objectContaining({ stage: "camera", outcome: "withdrawn-early", generation: 0 }),
+    ]);
+  });
+
+  it("forwards only the fixed frame-fence fields, and wires nothing when no one listens", () => {
+    const tabAbsent = agentTab();
+    expect(host.transportFor(tabAbsent.tabId).onPreviewFrame).toBeUndefined();
+    const seen = observedHost();
+    const tab = agentTab();
+    host.transportFor(tab.tabId).onPreviewFrame?.({
+      outcome: "deadline",
+      generation: 2,
+      currentGeneration: 3,
+      elapsedMs: 501,
+      // A future controller field must not ride along.
+      url: "https://agent.example.com/private",
+    } as never);
+    expect(seen).toEqual([
+      { stage: "frame", outcome: "deadline", generation: 2, currentGeneration: 3, elapsedMs: 501 },
+    ]);
   });
 
   it("does not capture while the person is interacting with a shown tab", async () => {

@@ -6,7 +6,6 @@ import { describe, expect, it, vi } from "vite-plus/test";
 
 import { BrowserTabController, type CdpTransport } from "./cdp-controller";
 import { CdpPipeConnection } from "./chromium-pipe";
-import { installHostLog } from "../log/root";
 
 /**
  * A recording CDP wire: every command lands in `sent`, and each method answers
@@ -281,12 +280,7 @@ describe("BrowserTabController", () => {
 
   it("does not certify a late preview frame through the real CDP codec", async () => {
     vi.useFakeTimers();
-    vi.stubEnv("VOLLI_HARNESS", "1");
     const records: Record<string, unknown>[] = [];
-    const undo = installHostLog({
-      level: "info",
-      sink: { write: (record) => void records.push(record) },
-    });
     const toBrowser = new PassThrough();
     const fromBrowser = new PassThrough();
     const connection = new CdpPipeConnection(toBrowser, fromBrowser);
@@ -298,6 +292,12 @@ describe("BrowserTabController", () => {
     });
     const controller = new BrowserTabController({
       send: (method, params) => connection.send(method, params),
+      // The composition's listener (VC-1150); the first call proves a failing
+      // sink cannot change the fence's answer.
+      onPreviewFrame: (diagnostic) => {
+        records.push({ ...diagnostic });
+        if (records.length === 1) throw new Error("diagnostic sink failed");
+      },
     });
     try {
       const preview = controller.preparePreview();
@@ -316,26 +316,41 @@ describe("BrowserTabController", () => {
       expect(records.map(({ outcome }) => outcome)).toEqual(["deadline", "ready"]);
       for (const record of records) {
         expect(Object.keys(record).toSorted()).toEqual(
-          [
-            "component",
-            "currentGeneration",
-            "elapsedMs",
-            "generation",
-            "level",
-            "msg",
-            "outcome",
-            "ts",
-          ].toSorted(),
+          ["currentGeneration", "elapsedMs", "generation", "outcome"].toSorted(),
         );
       }
     } finally {
-      undo();
-      vi.unstubAllEnvs();
       connection.close();
       toBrowser.destroy();
       fromBrowser.destroy();
       vi.useRealTimers();
     }
+  });
+
+  it("names each declined preview frame without changing what the fence answers", async () => {
+    const outcomes: string[] = [];
+    const onPreviewFrame = (diagnostic: { outcome: string }) =>
+      void outcomes.push(diagnostic.outcome);
+    const broken = new BrowserTabController({
+      send: async () => ({ exceptionDetails: { text: "private page error" } }),
+      onPreviewFrame,
+    });
+    expect(await broken.preparePreview()).toBe(false);
+    let generation = 0;
+    const moving = new BrowserTabController({
+      currentGeneration: () => generation,
+      send: async () => {
+        generation = 1;
+        return {};
+      },
+      onPreviewFrame,
+    });
+    expect(await moving.preparePreview()).toBe(false);
+    const withdrawn = new AbortController();
+    withdrawn.abort();
+    const gone = new BrowserTabController({ send: async () => ({}), onPreviewFrame });
+    await expect(gone.preparePreview(withdrawn.signal)).rejects.toBeDefined();
+    expect(outcomes).toEqual(["frame-error", "generation-changed", "withdrawn"]);
   });
 
   it("reports only fixed timeout metadata, even when the diagnostic sink fails", async () => {

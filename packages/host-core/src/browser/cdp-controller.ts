@@ -39,8 +39,6 @@
 import { BrowserRefusal } from "@volli/agent-runtime";
 import type { RuntimeWholeText } from "@volli/shared";
 
-import { hostLogger } from "../log/root";
-
 import {
   axTreeDigest,
   axTreeGaps,
@@ -74,6 +72,20 @@ export interface CdpTransport {
   dispose?: () => void;
   /** Host-only diagnostics: never receives command parameters or page content. */
   onTimeout?: (diagnostic: CdpTimeoutDiagnostic) => void;
+  /**
+   * Diagnostic-only (VC-1150): how one optional preview's frame fence ended.
+   * The composition decides whether anything listens; the controller never
+   * reads its environment, and the fence behaves the same either way.
+   */
+  onPreviewFrame?: (diagnostic: CdpPreviewFrameDiagnostic) => void;
+}
+
+/** One preview frame fence's ending: a fixed outcome, generations and time. Never page data. */
+export interface CdpPreviewFrameDiagnostic {
+  outcome: "ready" | "withdrawn" | "deadline" | "generation-changed" | "frame-error";
+  generation: number;
+  currentGeneration: number;
+  elapsedMs: number;
 }
 
 export interface CdpTimeoutDiagnostic {
@@ -364,6 +376,7 @@ export class BrowserTabController {
   readonly #ensureReady: CdpTransport["ensureReady"];
   readonly #disposeTransport: CdpTransport["dispose"];
   readonly #onTimeout: CdpTransport["onTimeout"];
+  readonly #onPreviewFrame: CdpTransport["onPreviewFrame"];
   readonly #currentGeneration: CdpTransport["currentGeneration"];
   #actingGeneration: number | null = null;
   readonly #limits: Required<ControllerLimits>;
@@ -389,6 +402,7 @@ export class BrowserTabController {
     this.#ensureReady = transport.ensureReady;
     this.#disposeTransport = transport.dispose;
     this.#onTimeout = transport.onTimeout;
+    this.#onPreviewFrame = transport.onPreviewFrame;
     this.#currentGeneration = transport.currentGeneration;
     this.#cursor = cursor;
     this.#limits = {
@@ -655,19 +669,20 @@ export class BrowserTabController {
   async preparePreview(signal?: AbortSignal): Promise<boolean> {
     const startedAt = performance.now();
     const generation = this.#generation;
-    const report = (outcome: string): void => {
-      if (process.env["VOLLI_HARNESS"] !== "1") return;
-      hostLogger("browser").info("browser navigation picture frame", {
-        outcome,
-        generation,
-        currentGeneration: this.#generation,
-        elapsedMs: Math.round(performance.now() - startedAt),
-      });
+    const report = (outcome: CdpPreviewFrameDiagnostic["outcome"]): void => {
+      try {
+        this.#onPreviewFrame?.({
+          outcome,
+          generation,
+          currentGeneration: this.#generation,
+          elapsedMs: Math.round(performance.now() - startedAt),
+        });
+      } catch {
+        // As for timeouts: a diagnostic sink must never change the fence's answer.
+      }
     };
     try {
       await this.#ensureRendered(signal, Math.min(500, this.#limits.maxCommandMs));
-      report("ready");
-      return true;
     } catch (error) {
       report(
         signal?.aborted === true
@@ -681,6 +696,10 @@ export class BrowserTabController {
       signal?.throwIfAborted();
       return false;
     }
+    // Observed after the fence, outside it: a listener cannot turn a ready
+    // frame into a declined one.
+    report("ready");
+    return true;
   }
 
   /**
