@@ -105,8 +105,8 @@ it("distinguishes accepted delegation from completion and resolves authorized na
   );
   expect(model?.label).toBe("Delegated Renamed audit");
   expect(model?.sections).toEqual([
-    { label: "Task", text: "Audit colors" },
-    { label: "Outcome", text: "Accepted" },
+    { label: "Task", text: "Audit colors", format: "prose" },
+    { label: "Outcome", text: "Accepted", format: "note" },
   ]);
   expect(
     presentTranscriptTool(call("session_start", { title: "Audit" }, "unavailable"))?.label,
@@ -128,7 +128,18 @@ it("says Steered only for the recognized mid-turn delivery receipt", () => {
   expect(
     presentTranscriptTool(call("session_send", { session: "child" }, "not sent"), context)?.label,
   ).toBe("Requested Audit");
-  expect(presentTranscriptTool(call("watch", { tickets: "VC-12" }))?.label).toBe("Watching VC-12");
+  expect(presentTranscriptTool(call("watch", { tickets: "VC-12" }))?.label).toBe(
+    "Watch result unavailable",
+  );
+  expect(
+    presentTranscriptTool(
+      call(
+        "watch",
+        { tickets: "VC-12" },
+        { details: { action: "watch", sessions: [], tickets: ["VC-12"], ended: 0 } },
+      ),
+    )?.label,
+  ).toBe("Watching VC-12");
 });
 
 it("keeps Code Mode isError authoritative and reads only the versioned count facet", () => {
@@ -158,7 +169,7 @@ it("keeps Code Mode isError authoritative and reads only the versioned count fac
 it("degrades browser rows to factual human wording without inventing a page identity", () => {
   expect(
     presentTranscriptTool(call("browser_navigate", { url: "https://example.org" }))?.label,
-  ).toBe("Opened example.org");
-  expect(presentTranscriptTool(call("browser_tabs"))?.label).toBe("Listed tabs");
+  ).toBe("Browser result unavailable");
+  expect(presentTranscriptTool(call("browser_tabs"))?.label).toBe("Browser result unavailable");
   expect(presentTranscriptTool(call("unknown_tool"))).toBeNull();
 });

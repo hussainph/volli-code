@@ -675,13 +675,13 @@ describe("ToolRow expanded detail colouring (VC-125)", () => {
 
       // Tokens carry the syntax colour, so the tint moves to a row wash and the
       // marker keeps the old text tint.
-      expect(added?.className).toContain("bg-primary/10");
-      expect(removed?.className).toContain("bg-destructive/10");
-      expect(context?.className).not.toMatch(/bg-(primary|destructive)\/10/);
+      expect(added?.className).toContain("transcript-diff-add");
+      expect(removed?.className).toContain("transcript-diff-remove");
+      expect(context?.className).not.toMatch(/transcript-diff-(add|remove)/);
       expect(added?.querySelector("[data-marker]")?.textContent).toBe("+");
-      expect(added?.querySelector("[data-marker]")?.className).toContain("text-primary-text");
+      expect(added?.querySelector("[data-marker]")?.className).toContain("text-diff-added");
       expect(removed?.querySelector("[data-marker]")?.textContent).toBe("-");
-      expect(removed?.querySelector("[data-marker]")?.className).toContain("text-destructive");
+      expect(removed?.querySelector("[data-marker]")?.className).toContain("text-diff-removed");
       for (const line of [removed, added, context]) {
         expect(line?.querySelectorAll(TOKEN_SELECTOR).length).toBeGreaterThan(1);
         // The marker itself is never a token.

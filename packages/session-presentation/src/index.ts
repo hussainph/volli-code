@@ -44,3 +44,4 @@ export * from "./wire";
 export * from "./work-windows";
 export * from "./tool-presentation";
 export * from "./delivered-answer";
+export * from "./transcript-mcp-metadata";

@@ -9,7 +9,7 @@
  * device drafts and unsent recovery live in `stores/chat-drafts.ts`. This view
  * owns only measurements and which controls have a command in flight.
  */
-import { sessionPictureFor } from "@renderer/chat/transport";
+import { sessionPictureFor, sourceIconsFor } from "@renderer/chat/transport";
 import { CodeModePictureHostContext } from "./activity-ui";
 import { readCodeModePicture } from "./code-mode-output-model";
 import * as React from "react";
@@ -84,6 +84,8 @@ import {
   transcriptMessageTimes,
   deliveredAnswer,
   presentTranscriptTool,
+  activityDescriptor,
+  EMPTY_TRANSCRIPT,
   messageDeliveryLabels,
   type MessageDeliveryLabel,
   type ChatSegment,
@@ -101,13 +103,15 @@ import {
 import { useActivityIsland } from "@renderer/chat/use-activity-island";
 import { useChatBrowserTabs } from "@renderer/chat/use-island-tabs";
 import { ActivityIsland } from "@renderer/components/chat/activity-island-ui";
-import { ActivityBundle, copyText } from "@renderer/components/chat/activity-ui";
+import { ActivityBundle } from "@renderer/components/chat/activity-ui";
+import { copyText, COPY_FEEDBACK_MS } from "./transcript-copy";
 import {
   OriginalOutput,
   TranscriptToolContext,
 } from "@renderer/components/chat/presented-tool-row";
 import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
 import { TranscriptSourceIcons, type TranscriptSourceIconsApi } from "./transcript-source-icons";
+import { useTranscriptMcpNames } from "./use-transcript-mcp-names";
 import { RunningBashProvider } from "@renderer/components/chat/running-bash-control";
 import {
   CompactionBoundary,
@@ -1884,8 +1888,32 @@ function ChatPlaneContent({
     (state) => state.sessions[sessionId]?.transcript.frames,
   );
   const messageTimes = React.useMemo(
-    () => transcriptMessageTimes(transcriptFrames ?? []),
+    () => transcriptMessageTimes(transcriptFrames ?? EMPTY_TRANSCRIPT.frames),
     [transcriptFrames],
+  );
+  const sourceIconsAvailable = sourceIconsFor(projectId) !== null;
+  const mcpToolsKey = React.useMemo(
+    () =>
+      JSON.stringify(
+        [
+          ...new Set(
+            transcriptMessages.flatMap((message) =>
+              message.parts.flatMap((part) => {
+                if (part.type !== "dynamic-tool") return [];
+                const name = activityDescriptor(part).nativeToolName;
+                return name.startsWith("mcp__") ? [name] : [];
+              }),
+            ),
+          ),
+        ].toSorted(),
+      ),
+    [transcriptMessages],
+  );
+  const mcpNames = useTranscriptMcpNames(
+    projectId,
+    transcriptFrames ?? EMPTY_TRANSCRIPT.frames,
+    mcpToolsKey,
+    sourceIconsAvailable,
   );
   const namedSessions = useProjectSessionsStore((state) => state.byProject[projectId]);
   const toolContext = React.useMemo<ToolDisplayContext>(() => {
@@ -1897,14 +1925,34 @@ function ChatPlaneContent({
       })),
       ...(namedSessions?.terminal ?? []),
     ];
-    for (const record of records) names.set(record.id, record.title?.trim() || "Untitled session");
+    const ids = new Map<string, string>();
+    const counts = new Map<string, number>();
+    const ordinals = new Map<string, number>();
+    const shortIds = new Map<string, string | null>();
     for (const record of records) {
-      const short = record.id.slice(0, 8);
-      if (records.filter((candidate) => candidate.id.startsWith(short)).length === 1)
-        names.set(short, names.get(record.id)!);
+      const title = record.title?.trim() || "Untitled session";
+      counts.set(title, (counts.get(title) ?? 0) + 1);
     }
-    return { sessionNames: names };
-  }, [namedSessions]);
+    for (const record of records) {
+      const title = record.title?.trim() || "Untitled session";
+      const ordinal = (ordinals.get(title) ?? 0) + 1;
+      ordinals.set(title, ordinal);
+      names.set(record.id, (counts.get(title) ?? 0) > 1 ? `${title} · ${ordinal}` : title);
+      ids.set(record.id, record.id);
+      const short = record.id.slice(0, 8);
+      shortIds.set(short, shortIds.has(short) ? null : record.id);
+    }
+    for (const [short, id] of shortIds)
+      if (id !== null) {
+        names.set(short, names.get(id)!);
+        ids.set(short, id);
+      }
+    return { sessionNames: names, sessionIds: ids, mcpNames };
+  }, [namedSessions, mcpNames]);
+  const sourceIconsApi = React.useMemo(
+    () => (sourceIconsAvailable ? (sourceIconsFor(projectId) ?? undefined) : undefined),
+    [projectId, sourceIconsAvailable],
+  );
   const sourceMessages = React.useMemo(
     () => new Map(session.durableMessages.map((message) => [message.id, message])),
     [session.durableMessages],
@@ -1920,6 +1968,7 @@ function ChatPlaneContent({
       toolContext,
       sourceMessages,
       sourceIconPicture: pictureApi,
+      sourceIconsApi,
     }),
     [
       deliveryLabels,
@@ -1931,6 +1980,7 @@ function ChatPlaneContent({
       toolContext,
       sourceMessages,
       pictureApi,
+      sourceIconsApi,
     ],
   );
 
@@ -2994,9 +3044,21 @@ function ChatTranscript({
     row.kind === "work"
       ? row.work.rows.flatMap((activity) =>
           activity.kind === "tool"
-            ? (presentTranscriptTool(activity.part, context.toolContext)?.sources ?? []).map(
-                (source) => new URL(source.url).origin,
-              )
+            ? (() => {
+                const presentation = presentTranscriptTool(activity.part, context.toolContext);
+                const urls = [
+                  ...(presentation?.sources ?? []).map((source) => source.url),
+                  presentation?.originUrl,
+                ];
+                return urls.flatMap((url) => {
+                  try {
+                    const parsed = new URL(url ?? "");
+                    return ["http:", "https:"].includes(parsed.protocol) ? [parsed.origin] : [];
+                  } catch {
+                    return [];
+                  }
+                });
+              })()
             : [],
         )
       : [],
@@ -3444,9 +3506,6 @@ function MessageDelivery({ label }: { label: string }) {
     </span>
   );
 }
-
-/** The feed-wide copy verdict holds long enough to be read, then returns to rest. */
-const COPY_FEEDBACK_MS = 1200;
 
 /** A stable action below the response, reachable without crossing a hover gap. */
 function MessageCopyAction({ text, timestamp }: { text: string; timestamp?: number }) {

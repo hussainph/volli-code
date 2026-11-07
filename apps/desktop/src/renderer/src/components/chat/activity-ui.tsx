@@ -77,6 +77,8 @@ import { cn } from "@renderer/lib/utils";
 import { TokenText, useHighlightedLines, useOnScreen } from "./tool-output-highlight";
 import { RunningBashCall, RunningBashControl, RunningBashReason } from "./running-bash-control";
 import { WorkReceipt } from "./work-receipt";
+import { copyText, COPY_FEEDBACK_MS } from "./transcript-copy";
+export { copyText } from "./transcript-copy";
 import {
   OriginalOutput,
   PresentedToolRow,
@@ -477,6 +479,7 @@ export const ToolRow = React.memo(function ToolRow(props: {
           part={props.part}
           presentation={presentation}
           onOpenSession={props.onOpenSession}
+          onOpenFile={props.onOpenFile}
         >
           {images && images.length > 0 ? <CodeModeOutput input={null} content={images} /> : null}
         </PresentedToolRow>
@@ -676,31 +679,6 @@ function RowObject({
       <ObjectText value={object} />
     </button>
   );
-}
-
-/** How long the copy button holds its verdict before going back to offering. */
-const COPY_FEEDBACK_MS = 1200;
-
-type ClipboardWriter = Pick<Clipboard, "writeText">;
-
-/**
- * The browser boundary for copying visible text.
- *
- * Clipboard access can reject for ordinary runtime conditions (permission,
- * focus, or insecure context). Return the result the control must show rather
- * than leaving its caller to guess whether a rejected promise was success.
- */
-export async function copyText(
-  value: string,
-  clipboard: ClipboardWriter | undefined = navigator.clipboard,
-): Promise<"copied" | "failed"> {
-  try {
-    if (!clipboard) return "failed";
-    await clipboard.writeText(value);
-    return "copied";
-  } catch {
-    return "failed";
-  }
 }
 
 /** Kept as the activity row's semantic entry point. */
@@ -1036,16 +1014,16 @@ function DiffDetail({ lines, language }: { lines: DiffLine[]; language: string |
             data-line
             className={cn(
               "whitespace-pre",
-              line.kind === "add" && "bg-primary/10 text-foreground",
-              line.kind === "remove" && "bg-destructive/10 text-foreground",
+              line.kind === "add" && "transcript-diff-add text-foreground",
+              line.kind === "remove" && "transcript-diff-remove text-foreground",
               line.kind === "context" && "text-muted-foreground",
             )}
           >
             <span
               data-marker
               className={cn(
-                line.kind === "add" && "text-primary-text",
-                line.kind === "remove" && "text-destructive",
+                line.kind === "add" && "text-diff-added",
+                line.kind === "remove" && "text-diff-removed",
               )}
             >
               {marker}
@@ -1157,7 +1135,19 @@ export const ActivityBundle = React.memo(
     // Disclosure is reader-owned. Failure is visible in the summary, but an
     // arriving failure must not reveal output, move focus or change the fold.
     const [open, setOpen] = React.useState(false);
-    const summary = React.useMemo(() => bundleSummary(rows), [rows]);
+    const summary = React.useMemo(() => {
+      const segments = bundleSummary(rows);
+      const local = rows.flatMap((row) =>
+        row.kind === "tool" && !["failed", "denied"].includes(activityStatus(row.part))
+          ? [presentTranscriptTool(row.part)?.status]
+          : [],
+      );
+      const failed = local.filter((status) => status === "failed").length;
+      const blocked = local.filter((status) => status === "denied").length;
+      if (failed > 0) segments.push({ text: `${failed} failed`, tone: "danger" });
+      if (blocked > 0) segments.push({ text: `${blocked} blocked`, tone: "danger" });
+      return segments;
+    }, [rows]);
     const thoughts = React.useMemo(
       () =>
         rows.filter(
@@ -1207,7 +1197,7 @@ export const ActivityBundle = React.memo(
           {rows.map((row) =>
             webGroups.has(row.key) ? (
               <Disclosure key={row.key} open={summary.length === 0 || open}>
-                <WebWorkGroup rows={webGroups.get(row.key)!} />
+                <WebWorkGroup rows={webGroups.get(row.key)!} onOpenFile={onOpenFile} />
               </Disclosure>
             ) : groupedWebKeys.has(row.key) ? null : row.kind === "reasoning" ? (
               row.key === firstThought?.key ? (

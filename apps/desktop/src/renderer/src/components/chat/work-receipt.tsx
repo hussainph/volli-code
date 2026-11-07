@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ClockIcon, ChevronRightIcon } from "@renderer/components/ui/icon";
+import { ClockIcon, ChevronRightIcon, ErrorIcon } from "@renderer/components/ui/icon";
 import { Popover, PopoverAnchor, PopoverContent } from "@renderer/components/ui/popover";
 import { TitleReveal } from "@renderer/components/ui/title-reveal";
 import { useStopFollowing } from "@renderer/components/ui/ai-elements/conversation";
@@ -85,7 +85,10 @@ export function WorkReceipt({
             className="min-w-0 truncate"
           />
           {!open && outcomes.length > 0 ? (
-            <span className="shrink-0 text-ui">
+            <span className="inline-flex shrink-0 items-center gap-1 text-ui text-foreground">
+              {outcomes.some((outcome) => outcome.tone === "danger") ? (
+                <ErrorIcon aria-hidden className="size-4 shrink-0 text-destructive" />
+              ) : null}
               {outcomes.map((outcome) => outcome.text).join(" · ")}
             </span>
           ) : null}
