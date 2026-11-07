@@ -138,9 +138,14 @@ it("delivers an authorized icon through the actual bridge and replays only from 
   });
   cleanup.push(() => cache.close());
   await cache.hydrated;
+  const acquisitionStarted = Promise.withResolvers<void>();
+  const acquire = createSourceIconFetch(transport);
   const refiner = new SourceIconRefiner({
     cache,
-    acquire: createSourceIconFetch(transport),
+    acquire: (...args) => {
+      acquisitionStarted.resolve();
+      return acquire(...args);
+    },
     decode: createWorkerSourceIconDecoder(
       new URL("../../../agent-runtime/src/web/source-icon-worker.ts", import.meta.url),
     ),
@@ -181,6 +186,13 @@ it("delivers an authorized icon through the actual bridge and replays only from 
     text: "Readable source document.",
     truncated: false,
   });
+  // drain() has yielded for hydration before entering acquisition, so this
+  // single job's running Promise is installed before the signal resolves.
+  // Do not spend the IPC-only poll on deferred network/codec work, and do not
+  // mistake a genuine producer omission after settlement for delivery lag.
+  await acquisitionStarted.promise;
+  await refiner.settled();
+  expect(cache.has("session", AUTHORITY, ORIGIN)).toBe(true);
   await expect.poll(() => snapshots.at(-1)?.icons[0]?.pictureId).toBeTruthy();
   const id = snapshots.at(-1)!.icons[0]!.pictureId!;
   const picture = await current.pictures.session.picture.query({
