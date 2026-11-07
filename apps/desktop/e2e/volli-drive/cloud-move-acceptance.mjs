@@ -33,7 +33,7 @@ import { createRegistry, instanceLayout, REPO } from "./lib/core.mjs";
 import { MOVE_PROJECT } from "./lib/fixtures.mjs";
 import { request } from "./lib/protocol.mjs";
 import { windowTargeting } from "./lib/window-targeting.mjs";
-import { visibleControls } from "./lib/remote-acceptance.mjs";
+import { hasActionableControl, visibleControls } from "./lib/remote-acceptance.mjs";
 
 const exec = promisify(execFile);
 const cli = fileURLToPath(new URL("./cli.mjs", import.meta.url));
@@ -202,6 +202,24 @@ async function assertNoAutomationWork(read) {
   return { at: new Date().toISOString(), runs: runs.page, arrivals, schedules };
 }
 const send = async (text) => {
+  // Selecting Chat can commit its tab before the closing modal menu unmounts.
+  // Radix's hideOthers still hides background names in that interval; a click's
+  // post-action snapshot is not a guarantee that the named composer is ready.
+  let latest;
+  try {
+    await waitUntil(
+      "the Message box is ready",
+      async () => {
+        latest = await drive("snapshot");
+        return hasActionableControl(latest.text, "textbox", "Message");
+      },
+      { timeout: 30_000, interval: 200 },
+    );
+  } catch (error) {
+    throw new Error(`${error.message}\n${latest?.text ?? "No composer snapshot captured"}`, {
+      cause: error,
+    });
+  }
   await action("type", "textbox", "Message", { text });
   await press("textbox", "Message", "Enter");
   await wait(`fake-agent: ${text}`);

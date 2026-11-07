@@ -178,7 +178,7 @@ export function SessionEnvironmentNotice({
   alert: SessionEnvironmentAlertState;
   /** The repair is running; the button says so and cannot be pressed twice. */
   fixing?: boolean;
-  /** Present only for an app fault — a project's missing dependencies are not Volli's to repair. */
+  /** Present only for an app fault — missing repository git is not repaired by PATH adoption. */
   onFix?: (() => void) | undefined;
   onReview(): void;
   onDismiss(): void;

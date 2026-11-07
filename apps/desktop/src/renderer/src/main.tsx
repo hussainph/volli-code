@@ -20,7 +20,10 @@ import {
 import { interruptToastModel } from "./components/sessions/interrupt-toast";
 import { activateNotificationTarget } from "./lib/notification-activation";
 import { desktopNotificationSurface } from "./lib/notification-surface";
-import { sessionStartToastModel } from "./components/sessions/session-start-toast";
+import {
+  SessionStartToastTitle,
+  sessionStartToastModel,
+} from "./components/sessions/session-start-toast";
 import { chatTabId } from "./components/ticket/ticket-chat-tab";
 import {
   boot,
@@ -47,7 +50,11 @@ import { useUpdateStore } from "./stores/update";
 import { useProjectUiStore } from "./stores/project-ui";
 import { watchSystemAppearance } from "./theme/canvas-paint";
 import { initTerminalAppearance } from "./terminal/appearance";
-import { acceptSettingsNavigation, installSettingsWindowRouting, isSettingsWindow } from "./lib/settings-window";
+import {
+  acceptSettingsNavigation,
+  installSettingsWindowRouting,
+  isSettingsWindow,
+} from "./lib/settings-window";
 import { startWindowPreferenceSync } from "./lib/window-preferences";
 import { acceptWorkspaceNavigation } from "./lib/workspace-window-navigation";
 
@@ -109,7 +116,9 @@ async function main() {
           pending = await window.api.settingsWindow.ready(revision);
           if (!pending.ok || pending.navigation?.revision === revision) break;
         }
-      })().catch((error: unknown) => console.warn("[volli] couldn't show Settings failure:", error));
+      })().catch((error: unknown) =>
+        console.warn("[volli] couldn't show Settings failure:", error),
+      );
     }
     return;
   }
@@ -141,7 +150,8 @@ async function main() {
     });
     const pending = await window.api.settingsWindow.pendingWorkspaceNavigation();
     if (!pending.ok) toastError(`Couldn't open workspace: ${pending.error}`);
-    else if (!received && pending.navigation !== null) acceptWorkspaceNavigation(pending.navigation);
+    else if (!received && pending.navigation !== null)
+      acceptWorkspaceNavigation(pending.navigation);
   }
 
   root.render(
@@ -193,14 +203,15 @@ async function main() {
   });
 
   // Socket-originated Session starts (VC-13): the app must not navigate or
-  // steal focus when a `volli session start` lands — the toast names the actor
-  // and ticket, and its action is the only door into the new session's tab
+  // steal focus when a `volli session start` lands — the toast names the new
+  // Session separately from its starter; only its action opens the new tab
   // (the same adopt + open pair the sidebar's chat rows make).
   window.api.sessions.onStarted((notice) => {
     if (cloudLaunch || settingsWindow) return;
     const model = sessionStartToastModel(notice);
     const target = model.target;
-    toast(model.message, {
+    toast(<SessionStartToastTitle notice={notice} />, {
+      description: model.description,
       icon: <PlayCircleIcon aria-hidden className="size-4" />,
       duration: INTERRUPT_TOAST_DURATION_MS,
       action: {
@@ -227,23 +238,22 @@ async function main() {
   // main ever since. Ordering the other way would drop a push that landed
   // between the read and the listener.
   if (!settingsWindow) {
-  window.api.notifications.onActivated(
-    (target) => void activateNotificationTarget(target, desktopNotificationSurface),
-  );
-  window.api.notifications
-    .pendingActivation()
-    .then((pending) => {
-      if (pending.ok && pending.target !== null)
-        void activateNotificationTarget(pending.target, desktopNotificationSurface);
-    })
-    .catch((error: unknown) => {
-      // A click whose target could not be collected leaves the window open on
-      // whatever it was showing — which is where the click brought it anyway.
-      // There is no route the person can retry, but retain the diagnostic rather
-      // than silently losing the failure.
-      console.warn("[volli] couldn't collect notification activation:", error);
-    });
-
+    window.api.notifications.onActivated(
+      (target) => void activateNotificationTarget(target, desktopNotificationSurface),
+    );
+    window.api.notifications
+      .pendingActivation()
+      .then((pending) => {
+        if (pending.ok && pending.target !== null)
+          void activateNotificationTarget(pending.target, desktopNotificationSurface);
+      })
+      .catch((error: unknown) => {
+        // A click whose target could not be collected leaves the window open on
+        // whatever it was showing — which is where the click brought it anyway.
+        // There is no route the person can retry, but retain the diagnostic rather
+        // than silently losing the failure.
+        console.warn("[volli] couldn't collect notification activation:", error);
+      });
   }
 
   // Self-update state (VC-59): subscribe FIRST, then prime with a one-time

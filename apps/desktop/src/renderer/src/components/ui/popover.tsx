@@ -108,12 +108,15 @@ function PopoverContent({
   tint = false,
   blur = true,
   showArrow = true,
+  bodyClassName,
   children,
   ...props
 }: React.ComponentProps<typeof PopoverPrimitive.Content> & {
   tint?: boolean;
   blur?: boolean;
   showArrow?: boolean;
+  /** A bounded inner list can own scrolling instead of nesting scrollports. */
+  bodyClassName?: string;
 }) {
   const claimWheel = usePopoverWheelClaim();
   const motion = useMotionOriginProps("popover", props, false, true);
@@ -154,7 +157,10 @@ function PopoverContent({
           <ControlShapeProvider context="popover">
             <div
               data-slot="popover-body"
-              className="min-h-0 max-h-[calc(var(--radix-popover-content-available-height)-2rem)] overflow-y-auto overscroll-contain"
+              className={cn(
+                "min-h-0 max-h-[calc(var(--radix-popover-content-available-height)-2rem)] overflow-y-auto overscroll-contain",
+                bodyClassName,
+              )}
             >
               {children}
             </div>

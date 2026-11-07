@@ -982,7 +982,9 @@ function TabShell({
   }, [inventory, inventoryId, label, leading, hint, status, onActivate]);
 
   return (
-    <Tooltip {...reveal}>
+    // Group tabs already reveal a full-title member card. A second clipped-label
+    // tooltip would open over that card (and its action dropdown).
+    <Tooltip {...reveal} open={actionsContent ? false : reveal.open}>
       <TooltipTrigger asChild>
         <div
           {...props}

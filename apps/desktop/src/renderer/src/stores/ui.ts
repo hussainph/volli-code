@@ -22,7 +22,7 @@
  *
  * `projectRailHidden` — whether the Slack-style project switcher is
  * visible — persists app-wide, under the stored key `workspaceRailHidden`.
- * (That key predates "Workspace" naming the team container, CONTEXT.md, and
+ * (That key predates "Workspace" naming the team container, CONTEXT.md#workspace, and
  * stays as wire format so N-1 builds keep reading it.) Hiding it returns its
  * full width to the active project while
  * project keyboard shortcuts remain available.

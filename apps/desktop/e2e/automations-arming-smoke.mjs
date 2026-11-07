@@ -488,7 +488,7 @@ try {
     11,
     "an explicit `volli ticket move` opens the same window — a Deliberate move either way",
     async () => {
-      // CONTEXT.md defines a Deliberate move as a human drag OR an explicit
+      // CONTEXT.md#deliberate-move names a Deliberate move as a human drag OR an explicit
       // `volli` move, with the same semantics. Unattended moves are what this
       // feature is FOR, so the CLI path is exercised through the real socket
       // and the real shim rather than simulated through the bridge.

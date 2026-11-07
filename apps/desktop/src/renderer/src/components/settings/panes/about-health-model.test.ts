@@ -174,6 +174,61 @@ describe("aboutHealth — once both reads are ready", () => {
     expect(result.canFix).toBe(true);
   });
 
+  it.each(["node", "npm", "pnpm", "yarn", "bun", "gh"])(
+    "keeps %s tool failures out of the person-facing fault list without changing evidence",
+    (tool) => {
+      const checks: DoctorCheck[] = [
+        {
+          id: `tool-${tool}`,
+          title: `${tool} is available`,
+          failureTitle: `${tool} is missing from the session PATH`,
+          status: "fail",
+          detail: `${tool} resolves to nothing`,
+          remedy: `Install ${tool}.`,
+        },
+      ];
+      const before = structuredClone(checks);
+      expect(health({ checks })).toMatchObject({ state: "healthy", faults: [], canFix: false });
+      expect(checks).toEqual(before);
+    },
+  );
+
+  it("keeps git and unrelated faults, including wrapper failures, with their recovery actions", () => {
+    const git: DoctorCheck = {
+      id: "tool-git",
+      title: "`git` is available to sessions",
+      failureTitle: "`git` is missing from the session PATH",
+      status: "fail",
+      detail: "`git` resolves to nothing on this PATH",
+      remedy: "Run `xcode-select --install`.",
+    };
+    const wrapper: DoctorCheck = {
+      id: "wrapper-node",
+      title: "Harness wrapper",
+      failureTitle: "Harness wrapper is missing",
+      status: "warn",
+      detail: "wrapper was not generated",
+      remedy: "Select Fix.",
+    };
+    const ignored: DoctorCheck = {
+      id: "tool-node",
+      title: "Node is available",
+      failureTitle: "Node is missing",
+      status: "fail",
+      detail: "node resolves to nothing",
+    };
+    const result = health({ rows: SOCKET_DOWN_ROWS, checks: [...FAILING, git, wrapper, ignored] });
+    expect(result.headline).toBe("4 things need attention");
+    expect(result.canFix).toBe(true);
+    expect(result.faults.map((fault) => fault.id)).toEqual([
+      "shell-init",
+      "tool-git",
+      "wrapper-node",
+      "cli-status:socket",
+    ]);
+    expect(result.faults[1]).toMatchObject({ headline: git.failureTitle, detail: git.remedy });
+  });
+
   it("uses singular wording for one fault", () => {
     expect(health({ checks: FAILING }).headline).toBe("1 thing needs attention");
   });

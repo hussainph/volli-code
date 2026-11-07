@@ -1,90 +1,38 @@
-# Host-scoped connection (VC-722)
+# Host-scoped connection (maintenance)
 
-> **Superseded (VC-869).** Volli Cloud is moving to a design with no host
-> process: the backend is the single authority and Runners execute
-> ([Workspace authority and offline](BOUNDARIES.md#workspace-authority-and-offline)).
-> This document still describes code in this repository. It is kept for
-> maintenance only and goes when that code is deleted or renamed; don't build
-> new work on it.
-
-A host connection is separate from a Workspace connection. Its additive
-hello/welcome never changes the frozen Workspace grammar or feature sets.
+Superseded host transport; do not extend. Current outbound setup is in
+[apps/runner](../apps/runner/README.md). This reference retains the scope,
+resource and recovery boundaries of SSH-installed hostd.
 
 ## Contract
 
-A host hello is `{scope:"host", protocol, client, features, credential, nonce}`.
-It has neither `workspaceId` nor `lastSeen` (even null is invalid). Only a
-host-scoped device grant admits it. Its welcome is
-`{scope:"host", protocolVersion, host, actor, features, proof}`, with actor
-`{kind:"device", deviceId, scope:"host"}`. There is no Workspace authority,
-epoch or fence. Version, feature subset and host-key proof validation still
-apply. A Session or worker cannot get host scope.
-
-The additive `vdc1` claims are `{scope:"host", hostId, deviceId, iat, exp, jti}`,
-with no `workspaceId`, signed identically to Workspace claims. Enrollment,
-revocation, lifetime, single-use jti and restart replay rules are unchanged.
-The enrollment-neutral verifier port accepts both presentations. The current
-SSH enrollment grants every Workspace on the host and hence host scope.
-
-Only host catalog entries are reachable, still under their own actor policy.
-A Workspace operation is `FORBIDDEN` / `workspace-scope-required` before input
-parsing or handler invocation. Host-scope feature grants are restricted to
-`sign-ins`, `auth.callback`, `host.logs`, `host.workspaces` and
-`host.model-defaults` (VC-729). Conversely, `host.workspaces` and
-`host.model-defaults` are never offered/granted to Workspace connections, and
-`workspaces.*` and `hostModels.*` refuse Workspace actors before input parsing. Sign-ins, logs
-and callbacks intentionally remain available on both connection scopes.
-Host bootstrap proof fields alone are bounded to scheme 128 / value 8192 UTF-16
-code units; scheme is an open reserved vocabulary. Workspace proofs are unchanged.
-
-VC-729's `host.model-defaults` grants exactly `hostModels.inspect`, `defaults`,
-`setDefault`, `hiddenModels`, `setHiddenModels`, `compactionPolicy`,
-`setCompactionPolicy`, `codeModePolicy`, `setCodeModePolicy`, `pickerView` and
-`setPickerView`. Each projects the existing `modelAccess.*` schema and handler;
-output enums remain closed, and default writes retain the availability check.
-No provider sign-in operations belong to this feature. An old host omits it;
-a client offers Re-add to update, never probes the missing operations.
-
-The new frozen `host.workspaces` feature grants exactly:
-
-- `workspaces.list()` → `{workspaces, omitted}`. Rows are
-  `{id, name, path, gitRemoteUrl}`; remote URL is sanitized or null. At most
-  500 rows; name 512, path 4096, remote URL 2048 characters. Id is UUIDv4;
-  omitted is a nonnegative safe integer. Whole-row selection also caps the
-  UTF-8 JSON answer at 2 MiB minus 64 KiB of framing headroom; every excluded
-  row counts toward omitted. Equal sort orders use creation time then id.
-  Names reject control and Unicode line/paragraph separators; unsafe catalog
-  names/paths are omitted.
-- `workspaces.create({commandId, source, name?})`, with UUIDv4 command id and
-  strict source `{path}` or `{gitUrl}` → `{ok:true, workspace}` or
-  `{ok:false, failure:{code, message}}`. Message is sanitized and at most
-  512 characters. Every result enum and union is closed. Failure codes are
-  `invalid-source`, `path-unreadable`, `target-exists`, `clone-failed`,
-  `clone-timeout`, `registration-failed`, `still-running`, `interrupted`,
-  `capacity`. A different intent under the same command id is
-  `CONFLICT` / `command-conflict`.
+HOST hello/welcome and device credentials carry `scope: "host"`, no Workspace
+id/epoch/fence. Only host-scoped device grants qualify, never Sessions or workers.
+The additive `protocol.hostWelcome` bootstrap does not widen the frozen
+Workspace `protocol.welcome`. Host operations refuse Workspace actors; Workspace
+operations refuse HOST actors **before parsing input**. Sign-ins/callbacks/logs
+are intentionally available on both scopes. Complete grammar and feature sets:
+[handshake](../packages/host-protocol/src/handshake.ts),
+[features](../packages/host-protocol/src/features.ts),
+[workspaces router](../packages/session-rpc/src/workspaces-router.ts).
 
 ## Bootstrap and retention
 
-- **Bootstrap:** host scope reads `protocol.hostWelcome`, a new door-local
-  query. The existing `protocol.welcome` has a frozen Workspace-only output
-  schema; broadening that output would break the additive gate and its N−1
-  parser. Keep the old operation and Workspace bootstrap set untouched,
-  rather than weaken the gate or introduce a dummy Workspace. A host
-  connection gets the new bootstrap regardless of requested features.
-- **User projects root:** `~/volli`; system installs retain `/srv/volli`.
-- **Listing:** report `omitted` rather than hide a truncated catalog. An
-  unrepresentable locator is omitted, not clipped into a different path.
+A validated HOST welcome determines readiness, independently of opened projects.
+Modern unavailable/ungranted operations fail closed, not through SSH. Only a
+recognized older-peer handshake refusal permits the legacy path; an older user
+install offers Re-add to update. Missing operations, credential failures and
+network loss are not older-peer evidence. The frozen pre-host-scope exchange is
+[recorded separately](../packages/host-protocol/fixtures/pre-vc722-provenance.md).
 
-- **Command outcomes:** a bounded process-owned map; no migration. A running
-  clone reports `still-running`, and a completed retry answers the exact same
-  result. Reusing a command id with another intent is `command-conflict`.
-  Settled outcomes expire one hour after settlement; running commands never
-  expire. Outcomes also do not survive a hostd restart. Outside that retention
-  horizon, an expired/unknown id reruns naturally: retrying a clone finds its
-  existing target and answers `target-exists`; the client re-lists, never
-  silently clones again. Registration of an already tracked path returns its
-  existing Workspace through the shared host-core path.
+Project creation is owned by the process, not the connection: disconnecting does
+not cancel accepted work. Running retries answer `still-running`; settled retries
+replay their answer. Changed intent under one id is `command-conflict`. After
+one hour or host restart outcomes are forgotten: re-list after `target-exists`,
+never assume a retry cloned again. Registering an already tracked path returns
+its existing project. Listing reports `omitted`, never clips a locator into
+another path. Source, bounds and retention:
+[host-workspaces.ts](../apps/hostd/src/host-workspaces.ts).
 
 ## Execution policies
 
@@ -128,70 +76,22 @@ guarantees. No schema migration or persistent outcome map is added.
 
 ## Compatibility and resource bounds
 
-The actual pre-VC-722 main listener at `2323b19dac96eea3a9d77e512c1fadbccdc8f34c`
-returned `BAD_REQUEST / hello-invalid`, then closed 4400 / `hello-invalid`.
-Its unmodified recordings and actual old Workspace-client/new-host evidence
-are documented in `packages/host-protocol/fixtures/pre-vc722-provenance.md`.
-The grammar-only fixture is not an independent peer exchange. Release exchange recordings are captured independently at the canary tag.
-The client classifies the frozen named refusal only while attempting host
-scope. If an old peer does not know `protocol.hostWelcome`, one
-`protocol.welcome` probe obtains that named refusal; a generic missing operation,
-credential failure or network failure is never older-peer evidence. Only this
-classification permits SSH catalog/create and Workspace-borrowed sign-ins/logs.
-An older user install says “Update <host> to create projects from here”, recovered
-through VC-724 Re-add; system installs retain their SSH project path.
-
-One shared client socket pool covers HOST, Workspace and Add links: the desktop
-uses H + W + Add ≤ 24 physical sockets, including retired sockets still closing.
-A permit releases only on physical close, retries cannot overlap their own
-retiring socket, and canceled waiters never ask for credentials. Hostd's 32
-listener-socket cap and worst-case 32 × 17 MiB = 544 MiB queue envelope remain
-unchanged.
+The client shares 24 physical permits across HOST + Workspace + Add links,
+including retiring sockets. Permits release only on physical close; reconnects
+cannot overlap their own retiring socket. Hostd's 32-connection limit and
+544 MiB worst-case queue envelope are unchanged; see
+[Enrollment bounds](host-protocol.md#enrollment-over-ssh-vc-700).
 
 ## Desktop routing
 
-The enrolled host owns a dedicated HOST link while Cloud is enabled, independent
-of open projects. A validated host welcome makes modern health and Add handoff
-ready. Closing the last Workspace cannot close this host link. Forget, disable
-and shutdown retire it; stale identity/key/tunnel continuations cannot reattach
-it. Modern unavailable or ungranted operations fail closed, not through SSH.
+[Main's relay](../apps/desktop/src/main/host-link-relay.ts) addresses `hostId`,
+checks procedure kind, validates source admission before forwarding, and
+validates every public answer/yield before IPC. Invalid output fails whole;
+unsafe names/paths are not truncated into new identities. Sign-ins remain
+connection-owned and outside generic relays. Catalog readiness is not Session
+readiness: chat creation requires the project's Workspace `sessions` grant.
 
-Desktop-only `hostScope.query/mutate/subscribe` IPC calls address `hostId`; no
-Workspace identity or fence is fabricated. They are **client-local** compatibility
-entries, not frozen public features. Main and renderer share the Workspace relay's
-bounded stream/resume machinery, including logs cursors, trace forwarding, owner
-cancellation and stale callbacks. Sign-ins remain main-owned: generic relays refuse
-`sign-ins`/`auth.callback`, while the sign-in service prefers the HOST link and binds
-each flow's lifetime to its physical connection.
-
-`RemoteHost.hostScope` is an optional client projection with a closed status
-vocabulary (`connecting`, `ready`, `older`, `unavailable`) and an open `granted`
-string vocabulary bounded at the IPC schema. Existing consumers may ignore it.
-Modern catalog/create uses `host.workspaces`; absolute remote folder paths and
-repository URLs retain the shared registration/admission rules. The pure shared
-`gitUrlProblem` is used both for renderer feedback and main's pre-forward create
-guard: HTTPS usernames, passwords, query/fragment/percent encodings and invalid
-transports never leave this Mac; SSH/scp usernames remain valid. The renderer
-uses HOST readiness for logs and projects, never a ready Workspace as a proxy.
-
-Main checks every generic HOST route against the public procedure kind before
-transport (`verb-refused` for query/mutation/subscription mismatches). Create-source
-admission also runs for every `workspaces.create` request, including attempted
-subscriptions. Main validates every HOST answer/yield against the actual public
-output schema before IPC. Invalid answers fail whole with client-side `response-invalid`
-/ `BAD_GATEWAY`; this adds to the closed recognized reason vocabulary, not the
-frozen Workspace wire schemas. Diagnostics and nested logs scrub signed `vdc1`
-statements and the held connection credential by exact value through an opaque
-redactor (no credential getter), plus URL secrets (including literal quotes in
-userinfo) and control characters. Unsafe
-catalog names/paths fail whole rather than being clipped into different identities;
-unsafe remote URLs become null. Main-owned sign-in/callback routing is unchanged.
-The renderer catalog adapter has no runtime test/lab setter; lab fixtures go
-through its production IPC route.
-
-Project/ticket chat creation is opened only by that project's ready Workspace
-`sessions` grant, not HOST readiness. Draft promotion and immediate chat creation
-reuse VC-713's remote transport: the box owns Session creation, attachment and
-commands, with its own default model and `host-link` recovery. A missing/unknown
-grant keeps the named “Not available on <host> yet” state. Terminal, automation,
-browser and worktree-removal limits remain unchanged.
+Models/defaults use a separate closed-output `host.model-defaults` feature;
+see [model maintenance](host-model-defaults.md). Public compatibility checks and
+recorded old-peer provenance remain required; these desktop relays are
+bundle-scoped, not frozen public features.
