@@ -20,7 +20,10 @@ import {
 import { interruptToastModel } from "./components/sessions/interrupt-toast";
 import { activateNotificationTarget } from "./lib/notification-activation";
 import { desktopNotificationSurface } from "./lib/notification-surface";
-import { sessionStartToastModel } from "./components/sessions/session-start-toast";
+import {
+  SessionStartToastTitle,
+  sessionStartToastModel,
+} from "./components/sessions/session-start-toast";
 import { chatTabId } from "./components/ticket/ticket-chat-tab";
 import {
   boot,
@@ -155,14 +158,15 @@ async function main() {
   });
 
   // Socket-originated Session starts (VC-13): the app must not navigate or
-  // steal focus when a `volli session start` lands — the toast names the actor
-  // and ticket, and its action is the only door into the new session's tab
+  // steal focus when a `volli session start` lands — the toast names the new
+  // Session separately from its starter; only its action opens the new tab
   // (the same adopt + open pair the sidebar's chat rows make).
   window.api.sessions.onStarted((notice) => {
     if (cloudLaunch) return;
     const model = sessionStartToastModel(notice);
     const target = model.target;
-    toast(model.message, {
+    toast(<SessionStartToastTitle notice={notice} />, {
+      description: model.description,
       icon: <PlayCircleIcon aria-hidden className="size-4" />,
       duration: INTERRUPT_TOAST_DURATION_MS,
       action: {

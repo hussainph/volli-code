@@ -43,7 +43,15 @@ const Toaster = ({ toastOptions, ...props }: ToasterProps) => {
         ...toastOptions,
         classNames: {
           ...toastOptions?.classNames,
-          toast: cn("material-floating", toastOptions?.classNames?.toast),
+          // Sonner's expanded ::after is an invisible hover bridge, not a
+          // stacked rim. The glass rim otherwise paints into its 7px height,
+          // leaving a ghost contour on every expanded toast. Keep the bridge
+          // hit-testable (and unclipped), while Sonner keeps the real border.
+          toast: cn(
+            "material-floating !contain-none",
+            "data-[expanded=true]:after:!bg-none data-[expanded=true]:after:!mask-none data-[expanded=true]:after:!p-0 data-[expanded=true]:after:!rounded-none data-[expanded=true]:after:!top-auto data-[expanded=true]:after:!pointer-events-auto",
+            toastOptions?.classNames?.toast,
+          ),
           description: cn("!text-muted-foreground", toastOptions?.classNames?.description),
           actionButton: cn(
             "!cursor-default !bg-(--accent-selected) !text-primary-text",

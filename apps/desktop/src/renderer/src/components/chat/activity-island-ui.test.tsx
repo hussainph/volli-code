@@ -196,6 +196,28 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
+it("gives a long plan one bounded row scrollport, not a second scrolling popover", async () => {
+  const steps = Array.from({ length: 60 }, (_, i) => ({
+    id: `step-${i}`,
+    title: `${i}: ${"Long plan title / 日本語 / مرحبا ".repeat(4)}`,
+    state: "pending" as const,
+  }));
+  await render({ ...EMPTY_ACTIVITY_ISLAND, plan: { id: "long-plan", steps, done: 0 } });
+  click(cluster("plan"));
+  const panel = card("plan")!;
+  const body = panel.querySelector<HTMLElement>('[data-slot="popover-body"]')!;
+  expect(panel.classList.contains("flex-col")).toBe(true);
+  expect(body.classList.contains("overflow-hidden")).toBe(true);
+  expect(body.classList.contains("overflow-y-auto")).toBe(false);
+  expect(body.className).toContain("available-height)-0.5rem");
+  const rows = panel.querySelector<HTMLElement>("[data-island-rows]")!;
+  expect(rows.classList.contains("overflow-y-auto")).toBe(true);
+  expect(rows.classList.contains("min-h-0")).toBe(true);
+  expect(panel.querySelectorAll("[data-island-row]")).toHaveLength(60);
+  expect(rowIn("plan", "step-59").textContent).toContain("59:");
+  expect(panel.querySelector("h3")?.parentElement?.classList.contains("shrink-0")).toBe(true);
+});
+
 describe("the empty rule", () => {
   it("renders no island when there is nothing to model", async () => {
     await render(EMPTY_ACTIVITY_ISLAND);
