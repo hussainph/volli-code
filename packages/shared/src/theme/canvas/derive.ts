@@ -42,7 +42,13 @@ export function deriveCanvasTokens(canvas: Canvas, resolved: ResolvedAppearance)
   const selected = compositeHex(seed, 0.18, paper);
   const foreground = dark ? "#ededed" : "#272727";
   const editorSelection = compositeHex(neutral(foreground), 0.22, paper);
-  const readingPools = [paper, under, selected, editorSelection, ...writingGlass(popover, resolved).pools];
+  const readingPools = [
+    paper,
+    under,
+    selected,
+    editorSelection,
+    ...writingGlass(popover, resolved).pools,
+  ];
   const ink = oklchToHex(solveLightnessOrCeiling(75, C, h, selected), C, h);
   // Actual glass pools and dark selections can compress the secondary hierarchy.
   const secondaryHex = readingInk(

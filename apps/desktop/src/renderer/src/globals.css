@@ -268,7 +268,7 @@
   --sidebar-veil: rgb(52 36 30 / 0.1);
   --sidebar-accent-veil: rgb(152 86 50 / 0.1);
   --sidebar-border-veil: rgb(255 255 255 / 0.1);
-  /* THE CANVAS ITSELF, and the ten values derived alongside it
+  /* THE CANVAS ITSELF, and the values derived alongside it
    (`CANVAS_TOKEN_NAMES`, renderer/src/theme/canvas-paint.ts). The gradient
    is a `background` value, grain layer included, so the window can paint
    itself before any JS runs. */
@@ -349,11 +349,20 @@
     rgb(255 255 255 / 0.21)
   );
   --glass-ink: #f5f5f5;
-  --glass-secondary: #e1ccc3;
+  --glass-secondary: #e4cfc6;
   --fill-row-selected: color-mix(in oklab, #fff2ed 9%, transparent);
   --fill-row-hover: color-mix(in oklab, #fff2ed 4.7%, transparent);
   --fill-quaternary: rgb(254 232 223 / 0.027);
   --fill-secondary: rgb(254 232 223 / 0.078);
+  /* Opaque objects on neutral paper: composite the 2.7% / 7.8% neutral rung
+   first, then tint its final face. The translucent fill tokens remain
+   separate for glass and overlays on arbitrary underlying colours. */
+  --surface-quaternary: #2f201a;
+  --surface-secondary: #3a2a24;
+  /* Tinted material paint, not text. Navigation substitutes glass-wash-ink
+   to follow its own ink polarity; body foreground remains neutral. */
+  --wash-ink: #fee8df;
+  --glass-wash-ink: #fff2ed;
   --card-face: #362620;
   --card-shadow: 0 1px 2px rgb(0 0 0 / 0.35), 0 0 0 0.5px rgb(255 255 255 / 0.06);
   --paper-shadow: 0 1px 3px rgb(0 0 0 / 0.06), 0 0 0 0.5px var(--glass-edge);
@@ -419,7 +428,7 @@
   --sidebar-veil: rgb(253 228 219 / 0.1);
   --sidebar-accent-veil: rgb(253 255 255 / 0.1);
   --sidebar-border-veil: rgb(3 0 0 / 0.1);
-  /* THE CANVAS ITSELF, and the ten values derived alongside it
+  /* THE CANVAS ITSELF, and the values derived alongside it
    (`CANVAS_TOKEN_NAMES`, renderer/src/theme/canvas-paint.ts). The gradient
    is a `background` value, grain layer included, so the window can paint
    itself before any JS runs. */
@@ -500,11 +509,20 @@
     rgb(255 255 255 / 0.17)
   );
   --glass-ink: #171717;
-  --glass-secondary: #65514a;
+  --glass-secondary: #645049;
   --fill-row-selected: color-mix(in oklab, #22120c 9%, transparent);
   --fill-row-hover: color-mix(in oklab, #22120c 4.7%, transparent);
   --fill-quaternary: rgb(52 34 28 / 0.027);
   --fill-secondary: rgb(52 34 28 / 0.078);
+  /* Opaque objects on neutral paper: composite the 2.7% / 7.8% neutral rung
+   first, then tint its final face. The translucent fill tokens remain
+   separate for glass and overlays on arbitrary underlying colours. */
+  --surface-quaternary: #fff7f4;
+  --surface-secondary: #ffe9e0;
+  /* Tinted material paint, not text. Navigation substitutes glass-wash-ink
+   to follow its own ink polarity; body foreground remains neutral. */
+  --wash-ink: #34221c;
+  --glass-wash-ink: #22120c;
   --card-face: #fff9f6;
   --card-shadow: 0 1px 2px rgb(0 0 0 / 0.05), 0 0 0 0.5px rgb(0 0 0 / 0.07);
   --paper-shadow: 0 1px 3px rgb(0 0 0 / 0.06), 0 0 0 0.5px var(--glass-edge);

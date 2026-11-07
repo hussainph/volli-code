@@ -211,7 +211,11 @@ export function deriveCanvasPaint(
   // both accent selection and the editor's material wash alongside actual glass.
   const readingPools = [
     compositeHex(resolved === "light" ? "#000000" : "#ffffff", 0.18, tokens["--card"]),
-    compositeHex(tintCanvasNeutral(tokens["--foreground"], canvas, resolved), 0.22, tokens["--card"]),
+    compositeHex(
+      tintCanvasNeutral(tokens["--foreground"], canvas, resolved),
+      0.22,
+      tokens["--card"],
+    ),
     ...writingGlass(tokens["--popover"], resolved).pools,
   ];
   const diffInk = (status: string): string => readingInk(status, readingPools, resolved, 4.5);
