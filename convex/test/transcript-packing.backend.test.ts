@@ -14,14 +14,25 @@ import { makeFunctionReference } from "convex/server";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vite-plus/test";
 
 import { sqliteDrainCursorStore } from "@volli/host-core/cloud-runner";
-import { canonicalJson, type SessionTranscriptArtifact } from "@volli/session-engine";
-import { LOCAL_RUNNER, type SessionAttachment, type SessionEventProvenance } from "@volli/shared";
+import {
+  canonicalJson,
+  transcriptReferenceFor,
+  type SessionTranscriptArtifact,
+} from "@volli/session-engine";
+import {
+  LOCAL_RUNNER,
+  type SessionAttachment,
+  type SessionEvent,
+  type SessionEventProvenance,
+} from "@volli/shared";
 import {
   TRANSCRIPT_PACK_INTERVAL_MS,
   piLogSegmentKey,
   transcriptPackKey,
   type SessionClaimFence,
 } from "@volli/shared/cloud";
+
+import * as transcriptPublisher from "../../packages/host-core/src/cloud-store/transcripts";
 
 import { api, internal } from "../functions/_generated/api";
 import type { Doc } from "../functions/_generated/dataModel.js";
@@ -275,6 +286,140 @@ function piObjects(w: HistoryWorld, sessionId: string, attachmentId: string, piF
 }
 
 describe("transcript packing through the production cloud store", () => {
+  test("acknowledges a pipelined birth before presigning its first spilled body", async () => {
+    const bodyCalls: {
+      sequences: number[];
+      firstBody: number;
+      acceptedThrough: number | undefined;
+    }[] = [];
+    const createPublisher = transcriptPublisher.createCloudTranscriptPublisher;
+    // Observe the real publisher entry without replacing its implementation,
+    // so the test proves which batch and cursor actually enter the body path.
+    vi.spyOn(transcriptPublisher, "createCloudTranscriptPublisher").mockImplementation(
+      (options) => {
+        const publish = createPublisher(options);
+        return Object.assign(
+          (...args: Parameters<typeof publish>) => {
+            const events = args[0].events.map((text) => JSON.parse(text) as SessionEvent);
+            const firstBody = events.findIndex((event) => transcriptReferenceFor(event) !== null);
+            if (firstBody >= 0)
+              bodyCalls.push({
+                sequences: events.map((event) => event.sequence),
+                firstBody,
+                acceptedThrough: options.cursors.get(args[0].sessionId)?.acceptedThrough,
+              });
+            return publish(...args);
+          },
+          { pack: publish.pack },
+        );
+      },
+    );
+    const w = (world = await historyWorld());
+    await w.connect();
+    const release = Promise.withResolvers<void>();
+    const order: string[] = [];
+    let births = 0;
+    let next:
+      | { kind: "birth-replay" }
+      | {
+          kind: "presign";
+          code: unknown;
+          acceptedThrough: number | undefined;
+          acknowledged: string[];
+        }
+      | undefined;
+    let presigns = 0;
+    const mutate = w.link!.mutate.bind(w.link);
+    // Hold actual delivery, not just the acknowledgement: the backend must
+    // still have no Session or claim when an early HTTP action reaches it.
+    // Every held call eventually goes through the real link and codec.
+    vi.spyOn(w.link!, "mutate").mockImplementation(async (name, args, options) => {
+      if (name !== "sessions:accept") return mutate(name, args, options);
+      const first = JSON.parse((args.events as string[])[0]!) as SessionEvent;
+      if (first.sequence === 1 && ++births === 2) next = { kind: "birth-replay" };
+      await release.promise;
+      order.push(`accept:${first.sequence}:send`);
+      const result = await mutate(name, args, options);
+      if (first.sequence === 1) order.push("birth:ack");
+      return result;
+    });
+    const realFetch = globalThis.fetch;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      const input = (typeof init?.body === "string" ? JSON.parse(init.body) : null) as {
+        path?: string;
+        args: { sessionId: string };
+      } | null;
+      if (input?.path !== "files:presignPut") return realFetch(url, init);
+      presigns += 1;
+      const beforePresign = {
+        acceptedThrough: cursor(w, input.args.sessionId)?.acceptedThrough,
+        acknowledged: order.filter((step) => step === "birth:ack"),
+      };
+      order.push("presign:send");
+      const response = await realFetch(url, init);
+      const body = (await response.clone().json()) as {
+        status?: unknown;
+        errorData?: { code?: unknown };
+      };
+      // On the unfixed producer this is the originating refusal, before it
+      // is translated to the drain's permanent fence. Retain it in a failing
+      // assertion along with the local acceptance cursor and delivery order.
+      next ??= {
+        kind: "presign",
+        code: body.errorData?.code ?? body.status,
+        ...beforePresign,
+      };
+      return response;
+    });
+    try {
+      const sessionId = await birth(w);
+      const path = join(w.piDirectory, `birth-${randomUUID()}.jsonl`);
+      await writeFile(path, "");
+      const attachment = await attach(w, sessionId, path);
+      const turn = await reply(w, attachment, `First spill ${CANARY} ${"x".repeat(96 * 1024)}`);
+      await until(() => next !== undefined, "registration replay or premature presign");
+      if (next?.kind === "presign") {
+        await until(
+          () => cursor(w, sessionId)?.blocked?.code === "fenced",
+          "premature upload fence",
+        );
+      }
+      expect(bodyCalls).toEqual([{ sequences: [8], firstBody: 0, acceptedThrough: 0 }]);
+      expect({ next, blocked: cursor(w, sessionId)?.blocked?.code, order: [...order] }).toEqual({
+        next: { kind: "birth-replay" },
+        blocked: undefined,
+        order: [],
+      });
+      expect(cursor(w, sessionId)?.acceptedThrough).toBe(0);
+      expect(presigns).toBe(0);
+      release.resolve();
+      await accepted(w, sessionId);
+      expect(cursor(w, sessionId)?.blocked).toBeNull();
+      expect(presigns).toBe(1);
+      expect(order.indexOf("birth:ack")).toBeLessThan(order.indexOf("presign:send"));
+      expect(
+        await w.person.query(api.sessionTranscript.artifacts, {
+          sessionId,
+          digests: [turn.reference.id],
+        }),
+      ).toMatchObject([{ status: "spilled" }]);
+      const grant = await w.person.action(api.sessionTranscript.presignGet, {
+        sessionId,
+        object: { kind: "spill", digest: turn.reference.id },
+      });
+      if (grant.status !== "sign") throw new Error("First body was not spilled");
+      const response = await fetch(grant.request.url, { headers: grant.request.headers });
+      expect(response.status).toBe(200);
+      const body = zstdDecompressSync(Buffer.from(await response.arrayBuffer())).toString("utf8");
+      expect(body).toContain("‹secret:PACKING_CANARY›");
+      expect(body).not.toContain(CANARY);
+      expect(await w.artifacts.read(turn.reference)).toEqual(turn.artifact);
+      expect(s3.failures).toEqual([]);
+    } finally {
+      release.resolve();
+    }
+  }, 60_000);
+
   test("packs multiple finished turns, redacts spills and Pi bytes, and resumes after reconnect and a disk reopen", async () => {
     const w = (world = await historyWorld());
     const sessionId = await birth(w);
