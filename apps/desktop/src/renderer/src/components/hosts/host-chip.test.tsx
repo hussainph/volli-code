@@ -373,7 +373,9 @@ describe("host chip", () => {
     });
     await world.render(<HostChip />);
     const list = await openSwitcher();
-    expect(list.textContent).toContain("Claude sign-in expired");
+    expect(list.textContent).toContain("Sign-in expired");
+    expect(list.textContent).not.toContain("Claude sign-in expired");
+    expect(list.querySelector('[role="img"][aria-label="Claude · anthropic"]')).not.toBeNull();
     await click(list, "Sign in");
     expect(world.remote.calls).toEqual([
       { kind: "signIn", hostId: HETZNER_ID, providerId: "anthropic" },

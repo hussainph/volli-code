@@ -5,8 +5,112 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./tool
 /** Identity help waits deliberately longer than ordinary action labels (400ms).
  * Each mark owns its delay: moving between marks never skips the dwell. */
 const HELP_TAG_DELAY = 1500;
-// Survives windowed option recycling, without retaining unmounted command roots.
-const keyboardCommands = new WeakMap<Element, boolean>();
+type HelpModality = "keyboard" | "pointer";
+// Select content is portalled, and windowed command rows can all recycle in
+// one commit. Keep local modality on the existing trigger/composite across
+// that recycling; weak keys never retain an unmounted anchor.
+const anchorModality = new WeakMap<Element, HelpModality>();
+const COMPOSITE = '[data-slot="command"], [data-slot="select-content"], [role="menu"]';
+type HelpRegistration = (active: boolean) => void;
+type CompositeHelp = {
+  keyboard(): boolean;
+  register(host: HTMLElement, show: HelpRegistration): () => void;
+};
+const compositeHelp = new WeakMap<HTMLElement, CompositeHelp>();
+
+/** One local modality/selection observer per composite, shared by its marks.
+ * cmdk can have NO input; windowed comboboxes can recycle their active option.
+ * Navigation also syncs when the active id does not change (singleton/endpoints).
+ * No document-wide input-device heuristic or additional focus target is needed. */
+function helpForComposite(scope: HTMLElement): CompositeHelp {
+  const existing = compositeHelp.get(scope);
+  if (existing) return existing;
+  const command = scope.matches('[data-slot="command"]');
+  const trigger = scope.id
+    ? [...document.querySelectorAll<HTMLElement>('[role="combobox"][aria-controls]')].find(
+        (candidate) => candidate.getAttribute("aria-controls") === scope.id,
+      )
+    : undefined;
+  let modality = anchorModality.get(scope) ?? (trigger ? anchorModality.get(trigger) : undefined);
+  let disposed = false;
+  const registrations = new Map<HTMLElement, Set<HelpRegistration>>();
+  const publish = (selected: Element | null) => {
+    for (const [host, callbacks] of registrations)
+      for (const show of callbacks) show(host === selected);
+  };
+  const sync = () => {
+    if (disposed || modality !== "keyboard" || !scope.contains(document.activeElement)) return;
+    const input = command ? scope.querySelector<HTMLInputElement>('[role="combobox"]') : null;
+    const activeId = input?.getAttribute("aria-activedescendant");
+    const selected = command
+      ? activeId
+        ? document.getElementById(activeId)
+        : scope.querySelector('[role="option"][aria-selected="true"]')
+      : (document.activeElement?.closest(
+          '[role="option"], [role="menuitem"], [role="menuitemradio"]',
+        ) ?? null);
+    publish(selected);
+  };
+  const key = (event: KeyboardEvent) => {
+    if (event.isComposing || event.keyCode === 229) return;
+    if (["ArrowDown", "ArrowUp", "Home", "End", "PageDown", "PageUp"].includes(event.key)) {
+      modality = "keyboard";
+      anchorModality.set(scope, modality);
+      // After React/cmdk handles the same key, even if no DOM attribute changed.
+      queueMicrotask(sync);
+    } else if (event.key === "Escape" || event.key === "Enter") {
+      modality = undefined;
+      anchorModality.delete(scope);
+      publish(null);
+    }
+  };
+  const pointer = () => {
+    modality = "pointer";
+    anchorModality.set(scope, modality);
+    publish(null);
+  };
+  const blur = (event: FocusEvent) => {
+    if (!(event.relatedTarget instanceof Node) || !scope.contains(event.relatedTarget))
+      publish(null);
+  };
+  const observer = new MutationObserver(sync);
+  observer.observe(scope, {
+    subtree: true,
+    childList: true,
+    attributes: true,
+    attributeFilter: ["aria-activedescendant", "aria-selected", "data-selected"],
+  });
+  scope.addEventListener("keydown", key, true);
+  // Capture precedes Radix's pointermove -> item.focus(), including no press.
+  scope.addEventListener("pointermove", pointer, true);
+  scope.addEventListener("pointerdown", pointer, true);
+  scope.addEventListener("focusin", sync);
+  scope.addEventListener("focusout", blur);
+  const controller: CompositeHelp = {
+    keyboard: () => modality === "keyboard",
+    register(host, show) {
+      const callbacks = registrations.get(host) ?? new Set<HelpRegistration>();
+      registrations.set(host, callbacks);
+      callbacks.add(show);
+      sync();
+      return () => {
+        callbacks.delete(show);
+        if (callbacks.size === 0) registrations.delete(host);
+        if (registrations.size !== 0) return;
+        disposed = true;
+        observer.disconnect();
+        scope.removeEventListener("keydown", key, true);
+        scope.removeEventListener("pointermove", pointer, true);
+        scope.removeEventListener("pointerdown", pointer, true);
+        scope.removeEventListener("focusin", sync);
+        scope.removeEventListener("focusout", blur);
+        compositeHelp.delete(scope);
+      };
+    },
+  };
+  compositeHelp.set(scope, controller);
+  return controller;
+}
 const FOCUS_HOST =
   'button, a[href], [role="option"], [role="menuitem"], [role="radio"], [role="tab"], [role="combobox"]';
 
@@ -105,12 +209,30 @@ export function HelpTag({
     const disabled = new MutationObserver(syncStop);
     disabled.observe(host, { attributes: true, attributeFilter: ["disabled"] });
     let pressing = false;
-    const focus = () => {
-      if (!pressing) setOpen(true);
-    };
+    let keyboardShown = false;
+    const scope = host.closest<HTMLElement>(COMPOSITE);
+    const controller = scope ? helpForComposite(scope) : null;
     const close = () => setOpen(false);
+    const unregister = controller?.register(host, (active) => {
+      if (active) {
+        keyboardShown = true;
+        setOpen(true);
+      } else if (keyboardShown) {
+        keyboardShown = false;
+        close();
+      }
+    });
+    const focus = () => {
+      if (pressing || (controller && !controller.keyboard())) return;
+      anchorModality.set(host, "keyboard");
+      keyboardShown = true;
+      setOpen(true);
+    };
     const blur = (event: FocusEvent) => {
-      if (!(event.relatedTarget instanceof Node) || !host.contains(event.relatedTarget)) close();
+      if (!(event.relatedTarget instanceof Node) || !host.contains(event.relatedTarget)) {
+        keyboardShown = false;
+        close();
+      }
     };
     const up = () => {
       pressing = false;
@@ -119,59 +241,25 @@ export function HelpTag({
     };
     const down = () => {
       pressing = true;
+      anchorModality.set(host, "pointer");
       close();
       window.addEventListener("pointerup", up);
       window.addEventListener("pointercancel", up);
     };
+    const key = () => anchorModality.set(host, "keyboard");
     host.addEventListener("focusin", focus);
     host.addEventListener("focusout", blur);
     host.addEventListener("pointerdown", down);
-
-    // cmdk and the windowed command list keep DOM focus on their input.
-    const command = host.closest('[data-slot="command"]');
-    const input = command?.querySelector<HTMLInputElement>('[role="combobox"]');
-    let keyboardShown = false;
-    const syncActive = () => {
-      if (command && keyboardCommands.get(command) && input && input === document.activeElement) {
-        keyboardShown = input.getAttribute("aria-activedescendant") === host.id;
-        setOpen(keyboardShown);
-      }
-    };
-    const key = (event: KeyboardEvent) => {
-      if (!command) return;
-      if (["ArrowDown", "ArrowUp", "Home", "End", "PageDown", "PageUp"].includes(event.key))
-        keyboardCommands.set(command, true);
-      else if (event.key === "Escape" || event.key === "Enter") {
-        keyboardCommands.set(command, false);
-        close();
-      }
-    };
-    const pointer = () => {
-      if (keyboardShown) close();
-      keyboardShown = false;
-      if (command) keyboardCommands.set(command, false);
-    };
-    const active = new MutationObserver(syncActive);
-    if (input) {
-      syncActive();
-      active.observe(input, { attributes: true, attributeFilter: ["aria-activedescendant"] });
-      input.addEventListener("keydown", key);
-      input.addEventListener("blur", close);
-      command?.addEventListener("pointermove", pointer);
-      command?.addEventListener("pointerdown", pointer);
-    }
+    host.addEventListener("keydown", key, true);
     return () => {
+      unregister?.();
       disabled.disconnect();
-      active.disconnect();
       host.removeEventListener("focusin", focus);
       host.removeEventListener("focusout", blur);
       host.removeEventListener("pointerdown", down);
+      host.removeEventListener("keydown", key, true);
       window.removeEventListener("pointerup", up);
       window.removeEventListener("pointercancel", up);
-      input?.removeEventListener("keydown", key);
-      input?.removeEventListener("blur", close);
-      command?.removeEventListener("pointermove", pointer);
-      command?.removeEventListener("pointerdown", pointer);
     };
   }, []);
   return (

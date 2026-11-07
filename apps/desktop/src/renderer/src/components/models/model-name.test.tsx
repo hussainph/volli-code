@@ -77,7 +77,9 @@ describe("mark-only model identity", () => {
       />,
     );
     expect(html).toContain('aria-label="Custom · custom-a · opus"');
-    expect(html.replace(/<[^>]+>/g, "")).toBe(`C${first.label}`);
+    expect(new DOMParser().parseFromString(html, "text/html").body.textContent).toBe(
+      `C${first.label}`,
+    );
   });
   it("reveals the whole model and provider on host keyboard focus, with no nested stop", () => {
     const trigger = mount();
@@ -102,5 +104,76 @@ describe("mark-only model identity", () => {
     });
     expect(mark.tabIndex).toBe(-1);
     expect(document.activeElement).toBe(trigger);
+  });
+  it("keeps real Select pointer-focused rows quiet, waits on the mark, and reveals keyboard navigation immediately", async () => {
+    vi.useFakeTimers();
+    const scroll = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = vi.fn();
+    try {
+      const models = [MODEL, { ...MODEL, providerId: "openai", modelId: "other" }];
+      await act(async () =>
+        root.render(
+          <Select defaultOpen value="first">
+            <SelectTrigger aria-label="Runtime model">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="first">
+                <ModelName model={models[0]!} models={models} providerLabel="Anthropic" />
+              </SelectItem>
+              <SelectItem value="second">
+                <ModelName model={models[1]!} models={models} providerLabel="OpenAI" />
+              </SelectItem>
+            </SelectContent>
+          </Select>,
+        ),
+      );
+      await act(async () => {
+        vi.advanceTimersByTime(0);
+      });
+      const options = document.querySelectorAll<HTMLElement>('[role="option"]');
+      const second = options[1]!;
+      await act(async () =>
+        second.dispatchEvent(
+          new PointerEvent("pointermove", { bubbles: true, pointerType: "mouse" }),
+        ),
+      );
+      // This is Radix's own pointermove -> focus path, with NO pointer press.
+      expect(document.activeElement).toBe(second);
+      expect(tag()).toBeNull();
+      const mark = second.querySelector<HTMLElement>('[data-slot="help-tag"]')!;
+      expect(mark.hasAttribute("tabindex")).toBe(false);
+      await act(async () =>
+        mark.dispatchEvent(
+          new PointerEvent("pointermove", { bubbles: true, pointerType: "mouse" }),
+        ),
+      );
+      await act(async () => {
+        vi.advanceTimersByTime(1499);
+      });
+      expect(tag()).toBeNull();
+      await act(async () => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(tag()?.textContent).toBe(`${MODEL.label} · OpenAI`);
+      await act(async () =>
+        mark.dispatchEvent(
+          new PointerEvent("pointerout", { bubbles: true, relatedTarget: document.body }),
+        ),
+      );
+      expect(tag()).toBeNull();
+      act(() => second.focus());
+      await act(async () =>
+        second.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true })),
+      );
+      await act(async () => {
+        vi.advanceTimersByTime(0);
+      });
+      expect(document.activeElement).toBe(options[0]);
+      expect(tag()?.textContent).toBe(`${MODEL.label} · Anthropic`);
+    } finally {
+      HTMLElement.prototype.scrollIntoView = scroll;
+      vi.useRealTimers();
+    }
   });
 });

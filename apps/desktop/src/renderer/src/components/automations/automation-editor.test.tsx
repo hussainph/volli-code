@@ -286,8 +286,12 @@ describe("the unavailable Runtime selection's display name", () => {
       await edit("runtime");
       const trigger = document.querySelector('[aria-label="Runtime model"]') as HTMLButtonElement;
       const caption = trigger.querySelector('[data-slot="model-name"]');
-      expect(caption?.textContent).toBe("Claude Opus 4.5 · Anthropic");
+      expect(caption?.textContent).toBe("Claude Opus 4.5");
       expect(caption!.parentElement?.querySelector("svg[aria-hidden] path")).not.toBeNull();
+      expect(
+        caption!.parentElement?.querySelector('[role="img"]')?.getAttribute("aria-label"),
+      ).toBe("Anthropic");
+      expect(trigger.textContent).not.toContain("Anthropic");
       expect(trigger.textContent).not.toContain("claude-opus");
       // The picker has no offerable selection, but display identity can still
       // read it. Both consumers use the actual provider's one held inspection.
@@ -300,9 +304,12 @@ describe("the unavailable Runtime selection's display name", () => {
       });
       const selectedOption = document.querySelector('[role="option"][data-state="checked"]');
       expect(selectedOption?.querySelector('[data-slot="model-name"]')?.textContent).toBe(
-        "Claude Opus 4.5 · Anthropic",
+        "Claude Opus 4.5",
       );
       expect(selectedOption!.querySelector("svg[aria-hidden] path")).not.toBeNull();
+      expect(selectedOption!.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
+        "Anthropic",
+      );
       await act(async () => {
         selectedOption!.dispatchEvent(
           new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
@@ -336,10 +343,12 @@ describe("the unavailable Runtime selection's display name", () => {
 
     await edit("runtime");
     const trigger = document.querySelector('[aria-label="Runtime model"]');
-    expect(trigger?.querySelector('[data-slot="model-name"]')?.textContent).toBe(
-      "claude-opus · other-account",
-    );
+    expect(trigger?.querySelector('[data-slot="model-name"]')?.textContent).toBe("claude-opus");
     expect(trigger?.textContent).not.toContain("Claude Opus 4.5");
+    expect(trigger?.textContent).not.toContain("other-account");
+    expect(trigger?.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
+      "other-account",
+    );
     await typeName("Keep the unknown pin");
     expect(loadEditorDraft("p1", undefined, "automation-1")?.runtime).toEqual(pin);
     await act(async () => buttonContaining("Save name").click());

@@ -235,6 +235,8 @@ async function renderPill(input: {
   defaults: ModelAccessDefaults;
   withTiers?: boolean;
   catalog?: readonly ComposerModel[];
+  tierModels?: readonly ModelAccessModel[];
+  tierProviders?: readonly CatalogProvider[];
   selectionTier?: string | null;
   selectionAuto?: ModelAutoPick | null;
   onChange?: (next: ComposerModelSelection) => void;
@@ -245,7 +247,12 @@ async function renderPill(input: {
 }): Promise<ReturnType<typeof labClient>> {
   const client = labClient(input.view, input.defaults);
   const models = input.catalog ?? offerableModels(MODELS, PROVIDERS, []);
-  const tiers = composerTierRows(input.defaults, MODELS, PROVIDERS, []);
+  const tiers = composerTierRows(
+    input.defaults,
+    input.tierModels ?? MODELS,
+    input.tierProviders ?? PROVIDERS,
+    [],
+  );
   container = document.createElement("div");
   if (input.compactEffort !== undefined) {
     container.dataset.composerContainer = input.containerKind ?? "";
@@ -295,6 +302,57 @@ describe("the model pill's Defaults view", () => {
     await act(async () => toggle.click());
     expect(document.querySelector('[data-slot="command-input"]')).toBeNull();
     expect(document.activeElement).toBe(document.querySelector('[data-choice="defaults"]'));
+  });
+
+  it("reveals provider identity on the actual inputless Defaults keyboard path without moving focus", async () => {
+    const providerIds = ["cloudflare-workers-ai", "cloudflare-ai-gateway"];
+    const providerLabels = ["Cloudflare Workers AI", "Cloudflare AI Gateway"];
+    const tierModels = providerIds.map((providerId) => ({
+      ...MODELS[0]!,
+      providerId,
+      label: "Same model",
+    }));
+    const tierProviders = providerIds.map((id, index) => ({
+      ...PROVIDERS[0]!,
+      id,
+      label: providerLabels[index]!,
+    }));
+    await renderPill({
+      view: "defaults",
+      tierModels,
+      tierProviders,
+      defaults: {
+        ...EMPTY_MODEL_ACCESS_DEFAULTS,
+        fast: {
+          providerId: providerIds[0]!,
+          modelId: tierModels[0]!.modelId,
+          reasoningLevel: "high",
+        },
+        deep: {
+          providerId: providerIds[1]!,
+          modelId: tierModels[1]!.modelId,
+          reasoningLevel: "high",
+        },
+      },
+    });
+    expect(document.querySelector('[data-slot="command-input"]')).toBeNull();
+    const anchor = document.querySelector<HTMLButtonElement>('[data-choice="defaults"]')!;
+    await act(async () => anchor.focus());
+    for (const key of ["ArrowDown", "ArrowUp"]) {
+      await act(async () =>
+        anchor.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true })),
+      );
+      const active = document.querySelector<HTMLElement>(
+        '[data-slot="command-item"][aria-selected="true"]',
+      )!;
+      const mark = active.querySelector('[data-slot="help-tag"]')!;
+      expect(mark.getAttribute("tabindex")).toBeNull();
+      expect(document.activeElement).toBe(anchor);
+      expect(active.textContent).not.toContain("Cloudflare");
+      expect(document.body.querySelector('[data-slot="tooltip-content"]')?.textContent).toBe(
+        `Same model · ${mark.getAttribute("aria-label")}`,
+      );
+    }
   });
 
   it("opens on the list the profile remembered, with no search box over the tiers", async () => {
@@ -642,4 +700,39 @@ it("bounds the full model catalog while reaching and choosing its last provider 
     modelId: "model-999",
     reasoningLevel: "low",
   });
+});
+
+it("reveals singleton filtered and unchanged boundary selections from the actual All models input", async () => {
+  const catalog = offerableModels(MODELS, PROVIDERS, []);
+  await renderPill({
+    view: "all",
+    defaults: EMPTY_MODEL_ACCESS_DEFAULTS,
+    withTiers: false,
+    catalog,
+  });
+  const input = document.querySelector<HTMLInputElement>('[data-slot="command-input"]')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
+      input,
+      "Claude Haiku",
+    );
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  expect(document.querySelectorAll('[role="option"]')).toHaveLength(1);
+  const activeId = input.getAttribute("aria-activedescendant");
+  for (const key of ["Home", "End", "ArrowDown", "ArrowUp"]) {
+    // Pointer takeover closes the keyboard's tag without changing the active id.
+    await act(async () =>
+      input.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerType: "mouse" })),
+    );
+    expect(document.body.querySelector('[data-slot="tooltip-content"]')).toBeNull();
+    await act(async () =>
+      input.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true })),
+    );
+    expect(input.getAttribute("aria-activedescendant")).toBe(activeId);
+    expect(document.body.querySelector('[data-slot="tooltip-content"]')?.textContent).toBe(
+      "Anthropic",
+    );
+    expect(document.activeElement).toBe(input);
+  }
 });

@@ -41,7 +41,7 @@ describe("provider tag identity", () => {
       createElement(ModelMark, { model, providerLabel: "Custom" }),
     );
     expect(markup).toContain('aria-label="Custom · custom-a"');
-    expect(markup.replace(/<[^>]+>/g, "")).toBe("C");
+    expect(markup).toContain(">C</span>");
   });
 });
 
