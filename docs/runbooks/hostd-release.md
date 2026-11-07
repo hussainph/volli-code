@@ -54,10 +54,26 @@ gh workflow run release.yml --ref main -f bump=patch -f dry_run=false
 ```
 
 The button's `prepare` job writes the resolved version into both root and
-desktop `package.json` files in the same commit before tagging. Stable tags
-still create drafts; canaries still publish as
-prereleases. The single desktop publisher uploads the complete Mac + hostd
-asset set, so rerun cleanup does not delete hostd assets. A release containing migration 061 must retain the corresponding database
+desktop `package.json` files in the same commit before tagging. **Every release
+starts as a draft**, invisible to updater clients while building and uploading.
+The single desktop publisher uploads the complete Mac + hostd + runner asset
+set after signing, notarization and stapling. It validates the feed's version,
+filenames, sizes and SHA-512 hashes against the completed DMG/ZIP, then downloads
+every uploaded asset and compares its bytes with the local artifact. Only then
+does it publish a canary as a prerelease. Stable releases stay drafts for manual
+notes review and publication.
+
+Upload or remote-verification failures leave the release as a draft; rerunning
+reuses that draft and replaces its assets, preserving notes and `canary-peer.json`.
+A published-tag rerun is verification-only: differing rebuilt assets fail rather
+than replacing files clients may already be downloading. Use a new version to
+ship different bytes. After publication the job also checks the unauthenticated
+`releases/download/<tag>/latest-mac.yml` URL with a bounded propagation retry.
+Failure of that final public check fails the job but does not unpublish the
+already complete release. Stable drafts cannot be checked through a public URL
+until manually published; their assets are verified through authenticated downloads.
+
+A release containing migration 061 must retain the corresponding database
 compatibility/rollback checks.
 
 ### Release deploy key and main's ruleset
