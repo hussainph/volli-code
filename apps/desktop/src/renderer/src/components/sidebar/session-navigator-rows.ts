@@ -68,7 +68,9 @@ export function sessionNavigatorRows(input: {
   if (input.activeHeader) append({ kind: "band", band: "active", key: "band:active", height: 32 });
   for (const row of input.active)
     append({ kind: "active", band: "active", key: `active:${row.id}`, height: 46, row });
-  offset += 16; // the Previous band's source-list separation, not a sticky header
+  // Separate real groups only. A successful empty Active group leaves no
+  // header, rows or spacer above Previous (the + has a fixed chrome home).
+  if (input.activeHeader || input.active.length > 0) offset += 16;
   append({ kind: "band", band: "previous", key: "band:previous", height: 32 });
   const open = new Set(input.expanded);
   for (const entry of input.previous) {
