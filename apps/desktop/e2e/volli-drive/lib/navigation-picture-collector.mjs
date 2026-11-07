@@ -11,14 +11,12 @@
  *  - text holding `{`/`}` is printed as a YAML double-quoted scalar, so the
  *    metrics JSON arrives with every `"` escaped as `\"`.
  *
- * Disclosures prefer the `codemode` row: opening a browse row mounts its tab
- * card, which reads that call's picture through the same host lookup the
- * discriminator measures afterwards. Any other disclosure is counted, never
- * hidden, so the result says when the measurement could have been touched.
+ * Exactly ONE row disclosure may ever be opened: the `codemode` row's. Opening
+ * any browse row mounts its BrowserTabCard, which reads that call's picture
+ * through the same host lookup the discriminator measures afterwards. So there
+ * is no fallback: no unique codemode row, or no fixed record/failure behind
+ * it, fails closed with counts and an allowlisted phase.
  */
-
-/** <=100 readiness reads plus six Browser operations; one disclosure each at most. */
-export const MAX_TOOL_DISCLOSURES = 108;
 
 /** The program's own fixed failure sentences. Nothing else leaves the tree. */
 const PROGRAM_CAUSES = [
@@ -68,10 +66,23 @@ text("NAVIGATION_METRICS:" + JSON.stringify({
 `;
 }
 
-const GROUP =
-  /^( *)- '?button "Browsed [^"\n]+, used 1 tool"((?: \[(?!ref=)[^\]\n]+\])*) \[ref=([^\]\n]+)\]/;
-const DETAIL = /^( *)- '?button "Show details"(?: \[(?!ref=)[^\]\n]+\])* \[ref=([^\]\n]+)\]/;
-const DISCLOSURE = /^ *- '?button "(?:Show|Hide) details"/;
+/*
+ * The bundle header this one script can produce, from the production rules
+ * (`bundleSummary` in session-presentation/src/activity.ts, joined by `Summary`
+ * in activity-ui.tsx): per-kind phrases joined by ", " with the first letter
+ * capitalised, then " · N failed", " · N denied", " · N not run" in that order.
+ * The script's only non-browse tool is `codemode` ("used 1 tool"); its browse
+ * phrase names <=3 pages, else counts pages, else counts calls ("1 time").
+ * A Code Mode program that throws adds "1 failed"; a nested call that failed
+ * as well adds to it. A bundle with no browse row is "Used 1 tool …".
+ */
+const PAGE = String.raw`[^\s",]+`;
+const BROWSE = String.raw`Browsed (?:\d+ (?:times?|pages)|${PAGE}(?:, ${PAGE})*(?: and ${PAGE})?), used`;
+const SUFFIX = String.raw`(?: · ([1-9]\d*) failed)?(?: · ([1-9]\d*) denied)?(?: · ([1-9]\d*) not run)?`;
+const GROUP = new RegExp(
+  String.raw`^( *)- '?button "(?:(${BROWSE})|Used) 1 tool${SUFFIX}"((?: \[(?!ref=)[^\]\n]+\])*) \[ref=([^\]\n]+)\]`,
+);
+const DETAIL = /^( *)- '?button "(Show|Hide) details"(?: \[(?!ref=)[^\]\n]+\])* \[ref=([^\]\n]+)\]/;
 const METRICS = /NAVIGATION_METRICS:(\{[^\n}]+\})/;
 const FAILED = /Program failed after (\d+) successful calls?\b/;
 
@@ -86,26 +97,40 @@ export class NavigationCollectionError extends Error {
   }
 }
 
-/** The LAST settled bundle header and the lines of the activity block under it. */
+/**
+ * The LAST settled bundle header this script can produce, the counts its
+ * summary states, and the lines of the activity block under it.
+ */
 export function activityGroup(text) {
   const lines = text.split("\n");
   const index = lines.findLastIndex((line) => GROUP.test(line));
   if (index < 0) return null;
-  const [, indent, states, ref] = GROUP.exec(lines[index]);
+  const [, indent, browse, failed, denied, notRun, states, ref] = GROUP.exec(lines[index]);
   const scope = [];
   for (const line of lines.slice(index + 1)) {
     if (line.trim() !== "" && indentOf(line) < indent.length) break;
     scope.push(line);
   }
-  return { ref, expanded: states.includes("[expanded]"), scope };
+  return {
+    ref,
+    expanded: states.includes("[expanded]"),
+    summary: {
+      browse: browse !== undefined,
+      failed: Number(failed ?? 0),
+      denied: Number(denied ?? 0),
+      notRun: Number(notRun ?? 0),
+    },
+    scope,
+  };
 }
 
 /**
- * A closed row disclosure inside the bundle, codemode row first. A row's own
- * words are the lines between its parent and its button, never a sibling row.
+ * Every row disclosure in the bundle, each marked by whether its own row is
+ * the codemode call. A row's own words are the lines between its parent and
+ * its button, never a sibling row's.
  */
-export function nextDisclosure(scope) {
-  const candidates = [];
+export function rowDisclosures(scope) {
+  const rows = [];
   scope.forEach((line, index) => {
     const match = DETAIL.exec(line);
     if (!match) return;
@@ -119,12 +144,12 @@ export function nextDisclosure(scope) {
         codemode ||= /\bcodemode\b/.test(prior);
         break;
       }
-      if (priorDepth === depth && DISCLOSURE.test(prior)) break;
+      if (priorDepth === depth && DETAIL.test(prior)) break;
       codemode ||= /\bcodemode\b/.test(prior);
     }
-    candidates.push({ ref: match[2], codemode });
+    rows.push({ ref: match[3], open: match[2] === "Hide", codemode });
   });
-  return candidates.find((one) => one.codemode) ?? candidates[0] ?? null;
+  return rows;
 }
 
 /** Decode the metrics scalar Playwright printed, plain or double-quoted. */
@@ -149,7 +174,7 @@ function programFailure(scope) {
 }
 
 export async function collectNavigationMetrics({ snapshot, click, checkpoint }) {
-  const fact = { disclosures: 0, codemodeDisclosures: 0, otherDisclosures: 0, groupOpened: false };
+  const fact = { groupOpened: false, summary: null, rows: 0, codemodeRows: 0, disclosures: 0 };
   const fail = (phase, message, extra = {}) => {
     checkpoint(phase);
     throw new NavigationCollectionError(message, { phase, ...fact, ...extra });
@@ -158,6 +183,7 @@ export async function collectNavigationMetrics({ snapshot, click, checkpoint }) 
   let snap = await snapshot();
   let group = activityGroup(snap.text);
   if (!group) fail("collection:activity-group", "activity group missing");
+  fact.summary = group.summary;
   if (!group.expanded) {
     checkpoint("collection:open-activity-group");
     const ref = group.ref;
@@ -168,29 +194,44 @@ export async function collectNavigationMetrics({ snapshot, click, checkpoint }) 
     }
     fact.groupOpened = true;
   }
-  const clicked = new Set();
-  for (;;) {
-    checkpoint("collection:metrics-parse");
-    const metrics = metricsText(group.scope);
-    if (metrics !== null) return { metrics: parseNavigationMetrics(metrics), collection: fact };
-    const failure = programFailure(group.scope);
-    if (failure) fail("collection:program-failed", "tool program failed", { program: failure });
-    checkpoint("collection:tool-details");
-    const next = nextDisclosure(group.scope);
-    if (!next) fail("collection:tool-details", "tool details missing");
-    if (clicked.has(next.ref))
-      fail("collection:tool-details-stuck", "tool disclosure did not open");
-    if (fact.disclosures >= MAX_TOOL_DISCLOSURES) {
-      fail("collection:disclosure-bound", "tool disclosure bound");
-    }
-    clicked.add(next.ref);
-    fact.disclosures++;
-    if (next.codemode) fact.codemodeDisclosures++;
-    else fact.otherDisclosures++;
-    snap = await click(snap.generation, next.ref);
+  checkpoint("collection:codemode-row");
+  let rows = rowDisclosures(group.scope);
+  let codemode = rows.filter((row) => row.codemode);
+  fact.rows = rows.length;
+  fact.codemodeRows = codemode.length;
+  // A browse row already open would have mounted its card: never proceed.
+  if (rows.some((row) => row.open && !row.codemode)) {
+    fail("collection:browse-row-open", "a browse disclosure is already open");
+  }
+  if (codemode.length !== 1) fail("collection:codemode-row", "no unique codemode row");
+  const target = codemode[0].ref;
+  if (!codemode[0].open) {
+    checkpoint("collection:open-codemode-row");
+    snap = await click(snap.generation, target);
+    fact.disclosures = 1;
     group = activityGroup(snap.text);
     if (!group?.expanded) fail("collection:activity-group-closed", "activity group closed");
+    rows = rowDisclosures(group.scope);
+    codemode = rows.filter((row) => row.codemode);
+    if (codemode.length !== 1 || codemode[0].ref !== target || !codemode[0].open) {
+      fail("collection:codemode-row-closed", "codemode disclosure did not open");
+    }
+    if (rows.some((row) => row.open && !row.codemode)) {
+      fail("collection:browse-row-open", "a browse disclosure opened");
+    }
   }
+  checkpoint("collection:metrics-parse");
+  let metrics;
+  try {
+    const text = metricsText(group.scope);
+    if (text !== null) metrics = parseNavigationMetrics(text);
+  } catch {
+    fail("collection:metrics-invalid", "fixed tool metrics invalid");
+  }
+  if (metrics) return { metrics, collection: fact };
+  const failure = programFailure(group.scope);
+  if (failure) fail("collection:program-failed", "tool program failed", { program: failure });
+  fail("collection:codemode-detail", "codemode detail holds no fixed record");
 }
 
 /** Only the script's fixed numeric/boolean/opaque-id record leaves collection. */

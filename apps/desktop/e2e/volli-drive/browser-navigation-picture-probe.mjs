@@ -401,7 +401,8 @@ try {
   await act(snap, 'textbox "Message"', "press", { key: "Enter" });
   await wait("Navigation picture commands complete", 45_000);
   // The settled bundle is collapsed (run-EmUg4N gen-0021): open its header
-  // from a fresh tree, then one row disclosure per fresh tree, codemode first.
+  // from a fresh tree, then ONLY the codemode row's disclosure (never a browse
+  // row: its tab card would read the measured picture). No fallback.
   const collected = await collectNavigationMetrics({
     snapshot: () => call("snapshot"),
     click: async (generation, ref) =>
