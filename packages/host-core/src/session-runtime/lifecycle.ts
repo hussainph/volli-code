@@ -37,6 +37,7 @@ import {
   type BootRecoveryFailure,
   type BootRecoveryReason,
 } from "./boot-recovery";
+import { createBootRecoveryEngine } from "./boot-recovery-reader";
 import { resumeRecoveredTurns, type RestartResumeCloud } from "./restart-resume";
 import { createHostNoticeDelivery } from "./durable-host-notice-delivery";
 import { readSqliteHostNotice, scopeSqliteHostNoticeOutbox } from "./sqlite-host-notice-outbox";
@@ -304,7 +305,11 @@ export function createSessionRuntimeLifecycle<Services>(options: {
       let recoveredTurns = 0;
       try {
         const closedAttachments = await closeStaleAttachments({
-          engine: sessionEngine,
+          engine: createBootRecoveryEngine({
+            db: database.db,
+            engine: sessionEngine,
+            owns: ownsSession,
+          }),
           ...(options.venue === undefined ? {} : { venue: options.venue }),
           ...(options.ownsLegacyRunner === undefined
             ? {}
@@ -326,7 +331,9 @@ export function createSessionRuntimeLifecycle<Services>(options: {
               ?.openNativeBindings()
               .some((binding) => binding.attachmentId === attachmentId) ?? false,
           onError: (attachmentId, error) =>
-            ports.log.error("failed to recover attachment", { attachmentId, error }),
+            attachmentId === null
+              ? ports.log.error("failed to read when the prior process was last alive", { error })
+              : ports.log.error("failed to recover attachment", { attachmentId, error }),
           onFailure: ({ sessionId, attachmentId, reason, outcome, error }) => {
             failures.push({ reason, outcome, error: logErrorSummary(error) });
             const fields = { sessionId, attachmentId, reason, outcome, error };

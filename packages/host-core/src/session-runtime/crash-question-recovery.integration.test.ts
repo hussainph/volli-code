@@ -16,6 +16,7 @@ import { insertProject } from "../db/projects-repo";
 import { openRawDb, openTestDb, testProject, type TestDb } from "../db/test-helpers";
 import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
 import { closeStaleAttachments } from "./boot-recovery";
+import { createBootRecoveryEngine } from "./boot-recovery-reader";
 import { createPiNativeAdapter } from "./pi-adapter";
 import { createFileTranscriptArtifactStore } from "./transcript-artifacts";
 
@@ -221,7 +222,7 @@ describe("crash-recovered model questions (VC-753)", () => {
       const recovered = f.launch([{ text: "Continued without an answer." }]);
       const errors: unknown[] = [];
       await closeStaleAttachments({
-        engine: recovered.engine,
+        engine: createBootRecoveryEngine({ db: db.db, engine: recovered.engine }),
         reconcile: (input) => recovered.host.reconcile(input),
         projectIds: ["project-1"],
         newId: () => `boot-${clock++}`,

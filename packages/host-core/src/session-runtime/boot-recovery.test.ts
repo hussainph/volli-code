@@ -31,6 +31,8 @@ interface Recorder {
   engine: BootRecoveryEngine;
   observed: SessionObservation[];
   queried: string[];
+  /** Every activity read, with the Sessions it was told to leave out. */
+  activityReads: Array<{ projectIds: readonly string[]; excluding: readonly string[] }>;
   reconciled: Array<{ sessionId: string; attachmentId: string }>;
   reconcile(input: { sessionId: string; attachmentId: string }): Promise<void>;
 }
@@ -52,22 +54,44 @@ function recorder(
   reconcile?: (input: { sessionId: string; attachmentId: string }) => Promise<void>,
   /** The ledger as it stands after a reconcile; the listing, by default. */
   current?: (sessionId: string) => Promise<BootRecoverySession | null>,
+  /** Sessions that are not candidates, by project: only their activity is ever read. */
+  history: Record<string, readonly { id: string; lastActivityAt: number }[]> = {},
 ): Recorder {
   const observed: SessionObservation[] = [];
   const queried: string[] = [];
+  const activityReads: Recorder["activityReads"] = [];
   const reconciled: Array<{ sessionId: string; attachmentId: string }> = [];
   return {
     observed,
     queried,
+    activityReads,
     reconciled,
     reconcile: async (input) => {
       reconciled.push(input);
       await reconcile?.(input);
     },
     engine: {
-      listSessions: async ({ projectId }) => {
+      listRecoveryCandidates: async ({ projectId }) => {
         queried.push(projectId);
         return byProject[projectId] ?? [];
+      },
+      latestActivityAt: async ({ projectIds, excluding }) => {
+        activityReads.push({ projectIds, excluding: [...excluding] });
+        let latest: number | null = null;
+        for (const projectId of projectIds) {
+          const sessions = [
+            ...(byProject[projectId] ?? []).map((listed) => ({
+              id: listed.session.id,
+              lastActivityAt: listed.lastActivityAt,
+            })),
+            ...(history[projectId] ?? []),
+          ];
+          for (const { id, lastActivityAt } of sessions) {
+            if (excluding.has(id) || lastActivityAt === undefined) continue;
+            latest = Math.max(latest ?? lastActivityAt, lastActivityAt);
+          }
+        }
+        return latest;
       },
       observe: async (observation) => {
         observed.push(observation);
@@ -906,10 +930,148 @@ describe("closeStaleAttachments → the turns a restart resume may continue (VC-
     });
   });
 
+  it("reads every other Session's activity once, at the end, leaving out the candidates it folded (VC-1095)", async () => {
+    const target = recorder(
+      {
+        p: [{ ...session("rebuilt", [pi("pi-1")], true), lastActivityAt: 500 }],
+        q: [{ ...session("terminal", [attachment({ id: "t-1" })]), lastActivityAt: 600 }],
+      },
+      undefined,
+      undefined,
+      undefined,
+      {
+        // A candidate's own activity is its fold's, read before the sweep
+        // wrote to it; a later read would see the sweep's own facts.
+        p: [{ id: "rebuilt", lastActivityAt: 9_999 }],
+        q: [
+          { id: "history-1", lastActivityAt: 800 },
+          { id: "history-2", lastActivityAt: 300 },
+        ],
+      },
+    );
+    const { result, onRecovered } = recoverySweep(target);
+    await result;
+    expect(target.activityReads).toEqual([
+      { projectIds: ["p", "q"], excluding: ["rebuilt", "terminal"] },
+    ]);
+    expect(onRecovered).toHaveBeenCalledExactlyOnceWith({
+      turns: [{ sessionId: "rebuilt", attachmentId: "pi-1" }],
+      lostAt: 800,
+    });
+
+    // The candidates' folds win when they are newer than everything else.
+    const newer = recorder(
+      { p: [{ ...session("rebuilt", [pi("pi-1")], true), lastActivityAt: 900 }] },
+      undefined,
+      undefined,
+      undefined,
+      { p: [{ id: "history", lastActivityAt: 800 }] },
+    );
+    const second = recoverySweep(newer);
+    await second.result;
+    expect(second.onRecovered).toHaveBeenCalledExactlyOnceWith({
+      turns: [{ sessionId: "rebuilt", attachmentId: "pi-1" }],
+      lostAt: 900,
+    });
+
+    // Only the rest carries a stamp.
+    const unstamped = recorder(
+      { p: [session("rebuilt", [pi("pi-1")], true)] },
+      undefined,
+      undefined,
+      undefined,
+      { p: [{ id: "history", lastActivityAt: 400 }] },
+    );
+    const third = recoverySweep(unstamped);
+    await third.result;
+    expect(third.onRecovered).toHaveBeenCalledExactlyOnceWith({
+      turns: [{ sessionId: "rebuilt", attachmentId: "pi-1" }],
+      lostAt: 400,
+    });
+  });
+
+  it("reads no activity when no turn was recovered: nothing would judge it (VC-1095)", async () => {
+    const target = recorder(
+      { p: [session("terminal", [attachment()])] },
+      undefined,
+      undefined,
+      undefined,
+      { p: [{ id: "history", lastActivityAt: 800 }] },
+    );
+    const { result, onRecovered } = recoverySweep(target);
+    await result;
+    expect(target.activityReads).toEqual([]);
+    expect(onRecovered).toHaveBeenCalledExactlyOnceWith({ turns: [], lostAt: null });
+    // Without a listener there is nothing to tell, and nothing is read.
+    const silent = recorder({ p: [session("rebuilt", [pi("pi-1")], true)] });
+    await sweep(silent, ["p"]).run;
+    expect(silent.activityReads).toEqual([]);
+  });
+
+  it("reports its turns with the moment unknown when the activity read fails, keeping what it did (VC-1095)", async () => {
+    const target = recorder({
+      p: [session("rebuilt", [pi("pi-1")], true), session("terminal", [attachment({ id: "t-1" })])],
+    });
+    const unreadable = new Error("malformed fact in an old Session");
+    target.engine.latestActivityAt = async () => {
+      throw unreadable;
+    };
+    const onError = vi.fn();
+    const onRecovered = vi.fn();
+    let sequence = 0;
+    // The close already made is still counted, and the turn is still told.
+    await expect(
+      closeStaleAttachments({
+        engine: target.engine,
+        reconcile: target.reconcile,
+        projectIds: ["p"],
+        newId: () => `event-${++sequence}`,
+        now: () => 1_700_000_000_000,
+        onError,
+        onRecovered,
+      }),
+    ).resolves.toBe(1);
+    expect(onError).toHaveBeenCalledExactlyOnceWith(null, unreadable);
+    expect(onRecovered).toHaveBeenCalledExactlyOnceWith({
+      turns: [{ sessionId: "rebuilt", attachmentId: "pi-1" }],
+      lostAt: null,
+    });
+
+    // A host closing during the failed read tells nothing.
+    let stop = false;
+    const closing = recorder({ p: [session("rebuilt", [pi("pi-1")], true)] });
+    closing.engine.latestActivityAt = async () => {
+      stop = true;
+      throw unreadable;
+    };
+    const cut = recoverySweep(closing, () => stop);
+    await cut.result;
+    expect(cut.onRecovered).not.toHaveBeenCalled();
+  });
+
+  it("tells nothing when the host closes while it reads the activity", async () => {
+    let stop = false;
+    const target = recorder({ p: [session("rebuilt", [pi("pi-1")], true)] });
+    const read = target.engine.latestActivityAt;
+    target.engine.latestActivityAt = async (query) => {
+      stop = true;
+      return read(query);
+    };
+    const { result, onRecovered } = recoverySweep(target, () => stop);
+    await result;
+    expect(onRecovered).not.toHaveBeenCalled();
+  });
+
   it("knows no moment when nothing was stamped, and tells nothing of a sweep a shutdown cut short", async () => {
     const quiet = recoverySweep(recorder({ p: [session("s", [pi("pi-1", "closed")])] }));
     await quiet.result;
     expect(quiet.onRecovered).toHaveBeenCalledExactlyOnceWith({ turns: [], lostAt: null });
+    const unknown = recoverySweep(recorder({ p: [session("s", [pi("pi-1")], true)] }));
+    await unknown.result;
+    expect(unknown.onRecovered).toHaveBeenCalledExactlyOnceWith({
+      turns: [{ sessionId: "s", attachmentId: "pi-1" }],
+      lostAt: null,
+    });
 
     // Cut short at a reconcile, and at the very last close.
     let stop = false;
