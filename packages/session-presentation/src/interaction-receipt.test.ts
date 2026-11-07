@@ -65,7 +65,6 @@ interface FrameOptions {
   routeAttachmentId?: string | null;
   venue?: RunnerIdentity | null;
 }
-const LOCAL: RunnerIdentity = { id: "local", kind: "local" };
 function decode(
   sequence: number,
   payload: SessionEvent["payload"],
@@ -151,7 +150,11 @@ function frame(
     venue: options.venue,
   });
 }
-function opened(sequence: number, attachmentId = "attachment", venue: RunnerIdentity | null = null) {
+function opened(
+  sequence: number,
+  attachmentId = "attachment",
+  venue: RunnerIdentity | null = null,
+) {
   return decode(
     sequence,
     {
@@ -183,7 +186,12 @@ function resolvedFact(
 ) {
   return decode(
     sequence,
-    { kind: "interaction.resolved", attachmentId, interactionId: "permission:p1", resolution: answer },
+    {
+      kind: "interaction.resolved",
+      attachmentId,
+      interactionId: "permission:p1",
+      resolution: answer,
+    },
     null,
     { source: "adapter", venue, attachmentId, ...(commandId === undefined ? {} : { commandId }) },
   );
@@ -195,7 +203,7 @@ function cancelledFact(sequence: number) {
       kind: "interaction.cancelled",
       attachmentId: "attachment",
       interactionId: "permission:p1",
-      reason: "user",
+      reason: "withdrawn",
     },
     null,
     { source: "user", attachmentId: "attachment" },
@@ -214,8 +222,11 @@ function receiptFrame(
   } = {},
 ) {
   const base = { id: `receipt-${sequence}`, commandId, sequence, recordedAt: sequence };
-  const result = { kind: options.resultKind ?? "interaction.resolved", sessionId: "session" } as const;
-  const receipt: CommandReceipt =
+  const result = {
+    kind: options.resultKind ?? "interaction.resolved",
+    sessionId: "session",
+  } as const;
+  const recorded: CommandReceipt =
     status === "accepted"
       ? { ...base, status, acceptedAt: sequence, result }
       : status === "completed"
@@ -223,7 +234,7 @@ function receiptFrame(
         : status === "rejected"
           ? { ...base, status, code: options.code ?? "PI_INTERACTION_NOT_RECORDED", detail: null }
           : { ...base, status, detail: null };
-  return decode(sequence, { kind: "command.receipt.recorded", receipt }, null, {
+  return decode(sequence, { kind: "command.receipt.recorded", receipt: recorded }, null, {
     source: "adapter",
     venue: options.venue,
     attachmentId: options.attachmentId === undefined ? "attachment" : options.attachmentId,
@@ -238,8 +249,15 @@ function settledAnswer(sequence: number, message = receipt, options: FrameOption
   return [
     opened(sequence, "attachment", options.venue ?? null),
     frame(sequence + 1, message, "resolve", reference, options),
-    resolvedFact(sequence + 2, options.resolution ?? resolution, "attachment", options.venue ?? null),
-    receiptFrame(sequence + 3, options.commandId ?? message.id, "accepted", { venue: options.venue }),
+    resolvedFact(
+      sequence + 2,
+      options.resolution ?? resolution,
+      "attachment",
+      options.venue ?? null,
+    ),
+    receiptFrame(sequence + 3, options.commandId ?? message.id, "accepted", {
+      venue: options.venue,
+    }),
   ];
 }
 function read(frames: readonly ChatSessionFrame[], id = receipt.id) {
@@ -407,7 +425,12 @@ it("requires the question, fact, route and receipt on the command's own attachme
     read([opened(1), command!, resolvedFact(3, resolution, "attachment-old"), accepted!]),
   ).toBeNull();
   expect(
-    read([opened(1), command!, fact!, receiptFrame(4, receipt.id, "accepted", { attachmentId: "x" })]),
+    read([
+      opened(1),
+      command!,
+      fact!,
+      receiptFrame(4, receipt.id, "accepted", { attachmentId: "x" }),
+    ]),
   ).toBeNull();
   expect(
     read([
@@ -448,10 +471,21 @@ it("keeps absent, partial, out-of-order and contradictory settlement neutral", (
       receiptFrame(4, receipt.id, "accepted", { resultKind: "message.submitted" }),
     ]),
   ).toBeNull();
-  expect(read([open!, receiptFrame(2, receipt.id, "accepted"), frame(3, receipt, "resolve"), resolvedFact(4)])).toBeNull();
+  expect(
+    read([
+      open!,
+      receiptFrame(2, receipt.id, "accepted"),
+      frame(3, receipt, "resolve"),
+      resolvedFact(4),
+    ]),
+  ).toBeNull();
   // A fact attributed to this command still settles it; to another, never.
-  expect(read([open!, command!, resolvedFact(3, resolution, "attachment", null, receipt.id), accepted!])).toEqual(ANSWER);
-  expect(read([open!, command!, resolvedFact(3, resolution, "attachment", null, "other"), accepted!])).toBeNull();
+  expect(
+    read([open!, command!, resolvedFact(3, resolution, "attachment", null, receipt.id), accepted!]),
+  ).toEqual(ANSWER);
+  expect(
+    read([open!, command!, resolvedFact(3, resolution, "attachment", null, "other"), accepted!]),
+  ).toBeNull();
   // A receipt with no attachment on its envelope is not a contradiction.
   expect(
     read([open!, command!, fact!, receiptFrame(4, receipt.id, "accepted", { attachmentId: null })]),
@@ -460,7 +494,12 @@ it("keeps absent, partial, out-of-order and contradictory settlement neutral", (
   const future = chatSessionFrame({
     sessionId: "session",
     sequence: 5,
-    event: { ...JSON.parse(JSON.stringify(accepted!.event)), sequence: 5, id: "future", payload: { kind: "future.fact" } },
+    event: {
+      ...JSON.parse(JSON.stringify(accepted!.event)),
+      sequence: 5,
+      id: "future",
+      payload: { kind: "future.fact" },
+    },
     transcript: null,
   });
   expect(future?.event).toBeNull();
@@ -478,10 +517,7 @@ it("keeps absent, partial, out-of-order and contradictory settlement neutral", (
   expect(read(twice, "answer-b")).toBeNull();
   // The same command id recorded with two different answers is corruption.
   expect(
-    read([
-      ...settledAnswer(1),
-      frame(5, receipt, "resolve", reference, { resolution: deny }),
-    ]),
+    read([...settledAnswer(1), frame(5, receipt, "resolve", reference, { resolution: deny })]),
   ).toBeNull();
 });
 
@@ -503,7 +539,9 @@ it("blocks reused/conflicting ids and references instead of choosing an author b
   expect(read([...genuine, frame(5, forged, "observation")])).toBeNull();
   expect(read([frame(1, receipt, "observation"), ...settledAnswer(2)])).toBeNull();
   // A normal submit sharing the artifact is also a conflict, even with another id.
-  expect(read([...genuine, frame(5, { ...receipt, id: "different-message" }, "submit")])).toBeNull();
+  expect(
+    read([...genuine, frame(5, { ...receipt, id: "different-message" }, "submit")]),
+  ).toBeNull();
 });
 
 it("keeps adapter-only tails neutral, recovers a settled command on prepend, and forgets evidence across a gap", () => {
@@ -582,9 +620,11 @@ it("fails closed for unserialisable direct-call content without replacing it", (
   expect(evidence).not.toBeNull();
   expect(readInteractionResolutionMessage(malformed, evidence)).toBeNull();
   expect(
-    indexInteractionResolutionMessages(
-      genuine.map((held) => (held.transcript ? { ...held, transcript: { message: malformed } } : held)),
-    ).get(receipt.id),
+    indexInteractionResolutionMessages([
+      genuine[0]!,
+      { ...genuine[1]!, transcript: { message: malformed } },
+      ...genuine.slice(2),
+    ]).get(receipt.id),
   ).toBeNull();
   expect(malformed.metadata).toBe(cyclic);
 });

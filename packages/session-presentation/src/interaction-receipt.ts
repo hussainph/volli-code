@@ -105,7 +105,10 @@ function settledResolveCommands(frames: readonly ChatSessionFrame[]): ReadonlySe
     // A kind this build does not know settles nothing it could name.
     if (!event) continue;
     const payload = event.payload;
-    if (payload.kind === "command.recorded" && payload.command.intent.kind === "interaction.resolve") {
+    if (
+      payload.kind === "command.recorded" &&
+      payload.command.intent.kind === "interaction.resolve"
+    ) {
       const { command } = payload;
       const intent = payload.command.intent;
       const read: ResolveCommandRead = {

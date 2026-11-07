@@ -123,8 +123,7 @@ function frame(
               id: kind === "resolve" ? held.id : `submit-${sequence}`,
               sessionId: "session",
               createdAt: sequence,
-              route:
-                kind === "resolve" ? { adapterId: "pi", attachmentId: "attachment" } : null,
+              route: kind === "resolve" ? { adapterId: "pi", attachmentId: "attachment" } : null,
               intent:
                 kind === "resolve"
                   ? {
