@@ -372,6 +372,10 @@
   /* Navigation outline press only: 7.8% optical shade/highlight opposite
    the navigation ink. Paper and other control variants retain their fills. */
   --glass-outline-pressed: rgb(0 0 0 / 0.078);
+  /* Outline/secondary buttons in writing popovers: light keeps the opaque
+   control face and shared press; dark shades opposite the body ink. */
+  --writing-control-face: rgb(0 0 0 / 0.14);
+  --writing-control-pressed: rgb(0 0 0 / 0.078);
   --control-bezel-shadow:
     0 0.5px 1.5px rgb(0 0 0 / 0.5), 0 0 0 0.5px rgb(0 0 0 / 0.35),
     inset 0 0.5px 0 rgb(255 255 255 / 0.14);
@@ -536,6 +540,10 @@
   /* Navigation outline press only: 7.8% optical shade/highlight opposite
    the navigation ink. Paper and other control variants retain their fills. */
   --glass-outline-pressed: rgb(255 255 255 / 0.078);
+  /* Outline/secondary buttons in writing popovers: light keeps the opaque
+   control face and shared press; dark shades opposite the body ink. */
+  --writing-control-face: #fff9f6;
+  --writing-control-pressed: rgb(52 34 28 / 0.078);
   --control-bezel-shadow:
     0 0.5px 1.5px rgb(0 0 0 / 0.16), 0 0 0 0.5px rgb(0 0 0 / 0.09),
     inset 0 0.5px 0 rgb(255 255 255 / 1);
@@ -3183,6 +3191,22 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
 [data-control="button"]:is([data-variant="outline"], [data-variant="secondary"]) {
   background-color: var(--control-face);
   border-color: transparent;
+}
+/* Writing popovers: outline/secondary faces and presses use their generated
+ * writing-control pair. Paper descendants, other variants and navigation keep
+ * their own material; the inspector's resting fill is unaffected. */
+[data-slot="popover-content"]
+  [data-control="button"]:is([data-variant="outline"], [data-variant="secondary"]):not(
+    [data-material="paper"] *
+  ) {
+  background-color: var(--writing-control-face);
+}
+[data-slot="popover-content"]
+  [data-control="button"]:is(
+    [data-variant="outline"],
+    [data-variant="secondary"]
+  ).control-material:active:not(:disabled):not([data-material="paper"] *) {
+  background-image: linear-gradient(var(--writing-control-pressed), var(--writing-control-pressed));
 }
 .inspector-popup {
   border-radius: var(--radius-native-control);

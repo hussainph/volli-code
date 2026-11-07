@@ -158,6 +158,9 @@ const NOTES = {
     "Tinted material paint, not text. Navigation substitutes glass-wash-ink\n" +
     "   to follow its own ink polarity; bare canvas substitutes the adaptive\n" +
     "   --canvas-ink. Body foreground remains neutral.",
+  "--writing-control-face":
+    "Outline/secondary buttons in writing popovers: light keeps the opaque\n" +
+    "   control face and shared press; dark shades opposite the body ink.",
   "--glass-outline-pressed":
     "Navigation outline press only: 7.8% optical shade/highlight opposite\n" +
     "   the navigation ink. Paper and other control variants retain their fills.",

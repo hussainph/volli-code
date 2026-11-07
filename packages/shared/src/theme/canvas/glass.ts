@@ -77,9 +77,11 @@ export function regularGlassTone(mode: ResolvedAppearance): string {
 }
 
 /**
- * Coverage of the translucent `--fill-secondary` press/hover wash and of the
- * navigation outline press. The renderer emits it; writing glass bounds its
- * tint under it. Paper's opaque `--surface-secondary` rung is its own value.
+ * Coverage of the translucent `--fill-secondary` wash: an inspector control's
+ * resting face, and the press image on control materials. The navigation
+ * outline press uses the same coverage. The renderer emits it; writing glass
+ * bounds its tint under the inspector's resting face. Paper's opaque
+ * `--surface-secondary` rung is its own value.
  */
 export const SECONDARY_FILL_ALPHA = 0.078;
 

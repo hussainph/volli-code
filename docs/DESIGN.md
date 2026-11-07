@@ -29,8 +29,8 @@ never clips channels to force saturation. These are **pipeline values**, not lit
 into components.
 Body text stays neutral and opaque; semantic hues and vendor artwork do not follow this tint.
 Where a tint and fixed body ink cannot share a surface, the tint yields: writing glass sheds
-only the chroma its body label needs under a 7.8% press fill over saturated backdrops, keeping
-lightness and hue. The painted focus ring is one solve against paper, the selections, writing
+only the chroma its body label needs under an inspector control's 7.8% resting fill over
+saturated backdrops, keeping lightness and hue. The painted focus ring is one solve against paper, the selections, writing
 glass, navigation glass and the rail footer wash together; contrast tests hold it at 3:1 across
 the canvas matrix. `deriveCanvasTokens` alone carries the paper-side ring.
 

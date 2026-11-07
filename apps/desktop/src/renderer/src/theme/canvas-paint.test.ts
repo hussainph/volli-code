@@ -127,6 +127,14 @@ describe("deriveCanvasPaint", () => {
           expect(c["--fill-secondary"]).toBe(
             `rgb(${hexChannels(tintCanvasNeutral(t["--foreground"], canvas, mode)).join(" ")} / ${SECONDARY_FILL_ALPHA})`,
           );
+          // Writing popovers: light keeps the control face and shared press;
+          // dark shades opposite its light body ink at the same coverages.
+          expect(c["--writing-control-face"]).toBe(
+            mode === "light" ? c["--control-face"] : "rgb(0 0 0 / 0.14)",
+          );
+          expect(c["--writing-control-pressed"]).toBe(
+            mode === "light" ? c["--fill-secondary"] : `rgb(0 0 0 / ${SECONDARY_FILL_ALPHA})`,
+          );
           const pools = effectiveStopHexes(canvas, mode).map((peak) =>
             compositeHex(
               mode === "light" ? "#ffffff" : "#1a1a1c",

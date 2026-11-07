@@ -28,6 +28,16 @@ const navigationRule =
     css,
   )!;
 const navigationSelector = navigationRule[1].trim();
+const writingRestRule =
+  /(\[data-slot="popover-content"\]\s*\[data-control="button"\]:is\(\s*\[data-variant="outline"\],\s*\[data-variant="secondary"\]\s*\):not\(\s*\[data-material="paper"\] \*\s*\))\s*\{([^}]+)\}/.exec(
+    css,
+  )!;
+const writingPressedRule =
+  /(\[data-slot="popover-content"\]\s*\[data-control="button"\]:is\(\s*\[data-variant="outline"\],\s*\[data-variant="secondary"\]\s*\)\.control-material:active[^{]*)\{([^}]+)\}/.exec(
+    css,
+  )!;
+const writingRestSelector = writingRestRule[1].trim();
+const writingPressedSelector = writingPressedRule[1].trim();
 const sharedSelector = '[data-control="button"].control-material:active:not(:disabled)';
 const rule = (selector: string) => {
   const start = css.indexOf(`${selector} {`);
@@ -135,15 +145,26 @@ describe("navigation outline pressed material", () => {
       const button = host.querySelector("button")!;
       // Neither pressed selector names :hover, so hover cannot change which
       // pressed image applies; only the active state is substituted here.
-      expect(navigationSelector).not.toContain(":hover");
-      expect(sharedSelector).not.toContain(":hover");
+      for (const selector of [navigationSelector, sharedSelector, writingPressedSelector])
+        expect(selector).not.toContain(":hover");
+      // Writing popovers own outline/secondary presses inside a popover only.
+      const writing =
+        (scope === "portal" || scope === "nested-popover") &&
+        (variant === "outline" || variant === "secondary") &&
+        !disabled;
       button.setAttribute("data-test-active", "false");
       expect(button.matches(stateSelector(navigationSelector))).toBe(false);
+      expect(button.matches(stateSelector(writingPressedSelector))).toBe(false);
       button.setAttribute("data-test-active", "true");
       expect(button.matches(stateSelector(navigationSelector))).toBe(optical);
+      expect(button.matches(stateSelector(writingPressedSelector))).toBe(writing);
       if (optical) {
         expect(button.matches(stateSelector(sharedSelector))).toBe(true);
         expect(imageToken(navigationRule[2])).toBe("--glass-outline-pressed");
+      } else if (writing) {
+        // Later and more specific than the shared press: its image wins.
+        expect(button.matches(stateSelector(sharedSelector))).toBe(true);
+        expect(imageToken(writingPressedRule[2])).toBe("--writing-control-pressed");
       } else if (button.matches(stateSelector(sharedSelector))) {
         expect(imageToken(rule(sharedSelector))).toBe("--fill-secondary");
       }
@@ -294,6 +315,144 @@ describe("navigation outline pressed material", () => {
             wcagContrast(t["--ring"], backing),
             `${mode}/${seed}/v${vibrancy}/primary${primaryIndex}/${role}/${backing}/ring${t["--ring"]}`,
           ).toBeGreaterThanOrEqual(3);
+        }
+      }
+    }
+  });
+});
+
+// Outline and secondary Buttons inside a writing popover take the writing
+// control face and press from their unlayered scoped rules, stacked press OVER
+// face OVER the popover's writing glass over any content.
+const source = (path: string) => readFileSync(resolve(import.meta.dirname, path), "utf8");
+const popoverBlock = (text: string, label: string) => {
+  const at = text.indexOf(label);
+  expect(at).toBeGreaterThanOrEqual(0);
+  const open = text.lastIndexOf("<PopoverContent", at);
+  const close = text.indexOf("</PopoverContent>", at);
+  expect(open).toBeGreaterThanOrEqual(0);
+  expect(text.slice(open, at)).not.toContain("</PopoverContent>");
+  return text.slice(open, close);
+};
+
+describe("writing-popover outline and secondary controls", () => {
+  it("binds the real popover callers to the outline variant", () => {
+    const retry = popoverBlock(
+      source("../components/sidebar/update-button.tsx"),
+      "Retry update check",
+    );
+    expect(retry).toContain('variant="outline"');
+    // Retry sits in an error Notice: its backing is that notice's tint.
+    expect(retry).toContain('tone="error"');
+    expect(source("../components/ui/notice.tsx")).toContain(
+      'error: "border-destructive/30 bg-destructive/10 text-destructive"',
+    );
+    const signOut = popoverBlock(
+      source("../components/rail/cloud-rail.tsx"),
+      "Sign out to open them",
+    );
+    expect(signOut).toContain('variant="outline"');
+  });
+
+  it.each(["portal", "nested-popover"] as const)(
+    "%s outline/secondary take the writing face and press, not shared or navigation's",
+    (scope) => {
+      for (const variant of ["outline", "secondary"] as const) {
+        const host = document.createElement("div");
+        host.innerHTML = renderToStaticMarkup(
+          inScope(scope, <Button variant={variant}>Action</Button>),
+        );
+        const button = host.querySelector("button")!;
+        expect(
+          button.matches(
+            '[data-control="button"]:is([data-variant="outline"], [data-variant="secondary"])',
+          ),
+        ).toBe(true);
+        expect(button.matches(writingRestSelector)).toBe(true);
+        button.setAttribute("data-test-active", "true");
+        expect(button.matches(stateSelector(sharedSelector))).toBe(true);
+        expect(button.matches(stateSelector(writingPressedSelector))).toBe(true);
+        expect(button.matches(stateSelector(navigationSelector))).toBe(false);
+        // A paper descendant keeps the shared face and press.
+        const paper = document.createElement("div");
+        paper.innerHTML = renderToStaticMarkup(
+          inScope(
+            scope,
+            <PaperSurface>
+              <Button variant={variant}>Action</Button>
+            </PaperSurface>,
+          ),
+        );
+        const onPaper = paper.querySelector("button")!;
+        onPaper.setAttribute("data-test-active", "true");
+        expect(onPaper.matches(writingRestSelector)).toBe(false);
+        expect(onPaper.matches(stateSelector(writingPressedSelector))).toBe(false);
+      }
+      // Unlayered, after the shared face and press, with the writing pair.
+      const resting = css.indexOf(
+        '[data-control="button"]:is([data-variant="outline"], [data-variant="secondary"]) {',
+      );
+      for (const found of [writingRestRule, writingPressedRule]) {
+        expect(braceDepthBefore(found.index)).toBe(0);
+        expect(found.index).toBeGreaterThan(resting);
+        expect(found.index).toBeGreaterThan(css.indexOf(sharedSelector));
+      }
+      expect(writingRestRule[2].replace(/\s/g, "")).toBe(
+        "background-color:var(--writing-control-face);",
+      );
+      expect(imageToken(writingPressedRule[2])).toBe("--writing-control-pressed");
+    },
+  );
+
+  it("keeps body ink at AA on resting and pressed faces over every writing-glass backing", () => {
+    // The tokens the winning scoped rules actually paint.
+    const faceToken = /background-color:\s*var\((--[\w-]+)\)/.exec(
+      writingRestRule[2],
+    )![1] as CanvasTokenName;
+    const pressToken = imageToken(writingPressedRule[2]);
+    const corners = [
+      "#000000",
+      "#ffffff",
+      "#ff0000",
+      "#00ff00",
+      "#0000ff",
+      "#ffff00",
+      "#00ffff",
+      "#ff00ff",
+    ];
+    for (const mode of ["light", "dark"] as const) {
+      for (const seed of [
+        "#e8652a",
+        "#18b6a4",
+        "#4653a2",
+        "#a020f0",
+        "#00ff00",
+        "#80817f",
+        "#ffffff",
+        "#000000",
+      ]) {
+        for (const vibrancy of [0, 0.6, 1]) {
+          const canvas = { ...DEFAULT_CANVAS, vibrancy, stops: [{ hex: seed, x: 0.5, y: 0.5 }] };
+          const { tokens: t, canvasTokens: c } = deriveCanvasPaint(canvas, mode);
+          for (const corner of corners) {
+            const popover = emittedOver(c["--glass-veil"], regularGlassBackdrop(corner, mode));
+            for (const [caller, backing] of [
+              ["sign-out", popover],
+              ["retry-in-error-notice", compositeHex(t["--destructive"], 0.1, popover)],
+            ] as const) {
+              const rest = emittedOver(c[faceToken], backing);
+              const pressed = emittedOver(c[pressToken], rest);
+              for (const [state, face] of [
+                ["rest", rest],
+                ["pressed", pressed],
+              ] as const) {
+                expect(
+                  wcagContrast(t["--foreground"], face),
+                  `${mode}/${seed}/v${vibrancy}/corner${corner}/${caller}/${state}/face${face}/ink${t["--foreground"]}`,
+                ).toBeGreaterThanOrEqual(4.5);
+              }
+            }
+          }
         }
       }
     }

@@ -30,7 +30,7 @@ export function tintCanvasNeutral(
 /**
  * Writing glass is translucent, so its tint adds to whatever the backdrop
  * shows. Over a saturated green corner a green-tinted veil, under the 7.8%
- * press/hover fill an inspector control paints, pushes body ink below AA even
+ * resting fill an inspector control paints (`.inspector-popup`), pushes body ink below AA even
  * though neutral glass clears it. Body ink stays fixed; the tint yields only as
  * much chroma as that pair needs, keeping its lightness and hue.
  */

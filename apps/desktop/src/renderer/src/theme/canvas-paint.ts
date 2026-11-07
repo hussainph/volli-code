@@ -149,6 +149,8 @@ export const CANVAS_TOKEN_NAMES = [
   "--tab-selected-face",
   "--control-face",
   "--glass-outline-pressed",
+  "--writing-control-face",
+  "--writing-control-pressed",
   "--control-bezel-shadow",
   "--diff-added",
   "--diff-removed",
@@ -341,6 +343,12 @@ export function deriveCanvasPaint(
         : "0 1px 2px rgb(0 0 0 / .35), 0 0 0 .5px rgb(255 255 255 / .06)",
       "--control-face": light ? raisedFace : translucent(fillInk, controlAlpha),
       "--glass-outline-pressed": translucent(outlinePressedInk, SECONDARY_FILL_ALPHA),
+      // Outline/secondary faces in writing popovers. Light keeps the opaque
+      // control face and shared press. Dark shades toward the pole opposite
+      // the light body ink at the same 14%/7.8% coverage, so neither face can
+      // fall below the bare writing glass the body ink already clears.
+      "--writing-control-face": light ? raisedFace : translucent("#000000", controlAlpha),
+      "--writing-control-pressed": translucent(light ? fillInk : "#000000", SECONDARY_FILL_ALPHA),
       "--control-bezel-shadow": light
         ? "0 .5px 1.5px rgb(0 0 0 / .16), 0 0 0 .5px rgb(0 0 0 / .09), inset 0 .5px 0 rgb(255 255 255 / 1)"
         : "0 .5px 1.5px rgb(0 0 0 / .5), 0 0 0 .5px rgb(0 0 0 / .35), inset 0 .5px 0 rgb(255 255 255 / .14)",

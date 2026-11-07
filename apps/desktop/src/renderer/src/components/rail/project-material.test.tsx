@@ -13,6 +13,7 @@ import {
   compositeHex,
   effectiveStopHexes,
   hexToOklch,
+  PROJECT_COLORS,
   tintCanvasNeutral,
   type Project,
 } from "@volli/shared";
@@ -115,16 +116,30 @@ describe("shell control material", () => {
           // budget or generated token is needed to preserve the material trace.
           expect(hexToOklch(wash).C).toBeGreaterThan(0);
           expect(c["--wash-ink"]).toBe(tintCanvasNeutral(t["--foreground"], canvas, mode));
-          for (const backing of [
-            windowBackground(canvas, mode),
-            ...effectiveStopHexes(canvas, mode),
+          // The overlay paints over its tile, not the canvas: a project tile's
+          // own opaque palette colour, or Add project's unblurred glass-control
+          // veil over the bare canvas pixels beneath it.
+          const veil = /^rgb\((\d+) (\d+) (\d+) \/ ([\d.]+)\)$/.exec(c["--glass-veil"])!;
+          expect(veil).not.toBeNull();
+          const veilHex = `#${veil
+            .slice(1, 4)
+            .map((value) => Number(value).toString(16).padStart(2, "0"))
+            .join("")}`;
+          for (const [role, backing] of [
+            ...PROJECT_COLORS.map((hex) => [`project-tile${hex}`, hex.toLowerCase()] as const),
+            ...[windowBackground(canvas, mode), ...effectiveStopHexes(canvas, mode)].map(
+              (pixel) =>
+                [`add-project${pixel}`, compositeHex(veilHex, Number(veil[4]), pixel)] as const,
+            ),
           ]) {
             const hover = compositeHex(wash, 0.1, backing);
-            expect(hover).toBe(compositeHex(c["--canvas-ink"], 0.1, backing));
+            expect(hover, role).toBe(compositeHex(c["--canvas-ink"], 0.1, backing));
             const baseL = hexToOklch(backing).L;
-            // The hover moves toward the adaptive ink at either pole;
-            // arbitrary authored canvases do not imply a universal AA promise.
-            expect((hexToOklch(hover).L - baseL) * (inkL - baseL)).toBeGreaterThan(0);
+            // The hover moves toward the adaptive ink at either pole; arbitrary
+            // authored canvases do not imply a universal AA promise. A tile
+            // within 0.1 L of the ink has no byte-visible direction at 10%.
+            if (Math.abs(inkL - baseL) > 0.1)
+              expect((hexToOklch(hover).L - baseL) * (inkL - baseL), role).toBeGreaterThan(0);
           }
         }
       }
