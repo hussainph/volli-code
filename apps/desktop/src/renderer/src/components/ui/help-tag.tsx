@@ -10,6 +10,7 @@ type HelpModality = "keyboard" | "pointer";
 // one commit. Keep local modality on the existing trigger/composite across
 // that recycling; weak keys never retain an unmounted anchor.
 const anchorModality = new WeakMap<Element, HelpModality>();
+const focusRestoration = new WeakMap<Element, HelpModality>();
 const COMPOSITE = '[data-slot="command"], [data-slot="select-content"], [role="menu"]';
 type HelpRegistration = (active: boolean) => void;
 type CompositeHelp = {
@@ -63,9 +64,11 @@ function helpForComposite(scope: HTMLElement): CompositeHelp {
     ) {
       modality = "keyboard";
       anchorModality.set(scope, modality);
+      if (trigger) focusRestoration.set(trigger, modality);
       // After React/cmdk handles the same key, even if no DOM attribute changed.
       queueMicrotask(sync);
     } else if (event.key === "Escape" || event.key === "Enter") {
+      if (trigger) focusRestoration.set(trigger, "keyboard");
       modality = undefined;
       anchorModality.delete(scope);
       publish(null);
@@ -74,6 +77,9 @@ function helpForComposite(scope: HTMLElement): CompositeHelp {
   const pointer = () => {
     modality = "pointer";
     anchorModality.set(scope, modality);
+    // An unset Select has no trigger mark yet. Carry this gesture across the
+    // value's mount and Radix's close autofocus, not just across option recycling.
+    if (trigger) focusRestoration.set(trigger, modality);
     publish(null);
   };
   const blur = (event: FocusEvent) => {
@@ -230,7 +236,12 @@ export function HelpTag({
       }
     });
     const focus = () => {
-      if (pressing || (controller && !controller.keyboard())) return;
+      const restoredModality = focusRestoration.get(host);
+      // Spend the restoration hint once: the next deliberate keyboard focus
+      // must still reveal help, even after the preceding pointer selection.
+      focusRestoration.delete(host);
+      if (pressing || restoredModality === "pointer" || (controller && !controller.keyboard()))
+        return;
       anchorModality.set(host, "keyboard");
       keyboardShown = true;
       setOpen(true);

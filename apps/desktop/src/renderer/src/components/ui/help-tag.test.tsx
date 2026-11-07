@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { HelpTag } from "./help-tag";
 import { TooltipProvider } from "./tooltip";
 import { SearchableCommand } from "./searchable-command";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./select";
 
 let root: Root;
 let container: HTMLDivElement;
@@ -38,7 +39,52 @@ async function advance(ms: number) {
   await act(async () => vi.advanceTimersByTime(ms));
 }
 
+function UnsetModel() {
+  const [value, setValue] = useState("");
+  return (
+    <Select defaultOpen value={value} onValueChange={setValue}>
+      <SelectTrigger aria-label="Model">
+        <SelectValue placeholder="Choose a model" />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="model">
+          <HelpTag label="Provider">
+            <span>P</span>
+          </HelpTag>
+          Model
+        </SelectItem>
+      </SelectContent>
+    </Select>
+  );
+}
+
 describe("HelpTag", () => {
+  it("preserves deliberate keyboard help when Select restores focus to a newly mounted mark", async () => {
+    const scroll = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = vi.fn();
+    try {
+      await act(async () => root.render(<UnsetModel />));
+      await advance(0);
+      const trigger = container.querySelector<HTMLElement>('[role="combobox"]')!;
+      expect(trigger.querySelector('[data-slot="help-tag"]')).toBeNull();
+      const option = document.querySelector<HTMLElement>('[role="option"]')!;
+      await act(async () => {
+        option.focus();
+        option.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
+      });
+      await advance(0);
+      expect(content()?.textContent).toBe("Provider");
+      await act(async () =>
+        option.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+      );
+      await advance(0);
+      expect(document.activeElement).toBe(trigger);
+      expect(trigger.querySelector('[data-slot="help-tag"]')).not.toBeNull();
+      expect(content()?.textContent).toBe("Provider");
+    } finally {
+      HTMLElement.prototype.scrollIntoView = scroll;
+    }
+  });
   it("waits 1500ms even in an instant-tooltip group, dismisses immediately, and waits again", async () => {
     act(() =>
       root.render(
