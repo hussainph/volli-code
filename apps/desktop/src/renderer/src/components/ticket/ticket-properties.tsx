@@ -26,7 +26,11 @@ import {
   newLabelFromQuery,
 } from "@renderer/components/ticket/label-picker-model";
 import { guardWrite, useCanWrite } from "@renderer/components/hosts/use-hosts";
-import { LabelPickerContent, useLabelVocabulary } from "@renderer/components/ticket/label-picker";
+import {
+  LabelPickerContent,
+  LabelPickerSurface,
+  useLabelVocabulary,
+} from "@renderer/components/ticket/label-picker";
 import { Button } from "@renderer/components/ui/button";
 import { RAIL_PANEL_INSET } from "@renderer/components/ticket/rail-panel-parts";
 import { PriorityIndicator } from "@renderer/components/board/priority-indicator";
@@ -39,7 +43,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
-import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
+import { Popover, PopoverTrigger } from "@renderer/components/ui/popover";
 import { resolveLabelColor } from "@renderer/lib/labels";
 import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
@@ -218,7 +222,7 @@ function AddLabelControl({
           <AddIcon strokeWidth={2.25} className="size-3" />
         </button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-56 p-0">
+      <LabelPickerSurface align="start" className="w-56">
         <Command shouldFilter={false} className="bg-transparent">
           <CommandInput autoFocus value={query} onValueChange={setQuery} placeholder="Add label" />
           <CommandList className="max-h-56">
@@ -261,7 +265,7 @@ function AddLabelControl({
             )}
           </CommandList>
         </Command>
-      </PopoverContent>
+      </LabelPickerSurface>
     </Popover>
   );
 }
@@ -352,14 +356,14 @@ function LabelRun({
               +{hiddenCount}
             </Button>
           </PopoverTrigger>
-          <PopoverContent align="start" className="w-64 p-0">
+          <LabelPickerSurface align="start">
             <LabelPickerContent
               projectId={projectId}
               value={labels}
               onChange={onChange}
               readOnly={!canWrite}
             />
-          </PopoverContent>
+          </LabelPickerSurface>
         </Popover>
       ) : null}
       <AddLabelControl

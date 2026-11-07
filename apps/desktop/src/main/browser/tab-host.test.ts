@@ -93,7 +93,13 @@ class FakeWebContents {
     this.emit("devtools-closed");
   });
   setDevToolsWebContents = vi.fn();
-  setBackgroundThrottling = vi.fn();
+  backgroundThrottling = true;
+  setBackgroundThrottling = vi.fn((value: boolean) => {
+    this.backgroundThrottling = value;
+  });
+  getBackgroundThrottling(): boolean {
+    return this.backgroundThrottling;
+  }
   // The host encodes JPEG, so the fake answers the same door: a NativeImage
   // whose `toJPEG` returns the bytes the frame should carry. `isEmpty` is the
   // real one's answer for a view with no surface — the 0x0 image Chromium hands
@@ -170,6 +176,8 @@ class FakeView {
 
 const fakeWindow = {
   isDestroyed: () => false,
+  isVisible: () => true,
+  isMinimized: () => false,
   contentView: {
     addChildView: vi.fn(),
     removeChildView: vi.fn(),
@@ -180,6 +188,8 @@ const fakeWindow = {
 function newAppWindow(): typeof fakeWindow {
   return {
     isDestroyed: () => false,
+    isVisible: () => true,
+    isMinimized: () => false,
     contentView: {
       addChildView: vi.fn(),
       removeChildView: vi.fn(),
@@ -311,6 +321,7 @@ beforeEach(() => {
   });
   host = new BrowserTabHost({
     pictures,
+    appVersion: "0.3.0-test",
     now: () => clock,
     createId: () => `opaque-${++nextId}`,
     createView: (options: WebContentsViewConstructorOptions) => {
@@ -2924,10 +2935,21 @@ describe("BrowserTabHost pictures (VC-238)", () => {
     },
   );
 
+  it("refuses to relabel an older screenshot at the persistence boundary", () => {
+    const tab = agentTab();
+    host.navigate(tab.tabId, "https://example.com/replacement");
+
+    expect(() =>
+      host.keepScreenshot(tab.tabId, Buffer.from("old-pixels").toString("base64"), tab.generation),
+    ).toThrow("changed before its screenshot could be kept");
+    expect(persisted.size).toBe(0);
+    expect(pictures.describe("picture-1")).toBeNull();
+  });
+
   it("refuses to keep a screenshot with no pixels, at the store's door too", () => {
     const tab = agentTab();
 
-    expect(() => host.keepScreenshot(tab.tabId, "")).toThrow(
+    expect(() => host.keepScreenshot(tab.tabId, "", tab.generation)).toThrow(
       "Refusing to keep an empty Browser Tab screenshot",
     );
     expect(persisted.size).toBe(0);
@@ -2937,7 +2959,7 @@ describe("BrowserTabHost pictures (VC-238)", () => {
     const tab = agentTab();
     const png = Buffer.from("png-bytes").toString("base64");
 
-    const pictureId = host.keepScreenshot(tab.tabId, png);
+    const pictureId = host.keepScreenshot(tab.tabId, png, tab.generation);
 
     expect(pictureId).toBe("picture-1");
     expect(persisted.get("picture-1")).toEqual({
@@ -2962,17 +2984,162 @@ describe("BrowserTabHost pictures (VC-238)", () => {
       createdBy: "user",
     });
 
-    host.keepScreenshot(tab.tabId, Buffer.from("x").toString("base64"));
+    host.keepScreenshot(tab.tabId, Buffer.from("x").toString("base64"), tab.generation);
 
     expect(persisted.get("picture-1")?.record.ownerSessionId).toBeNull();
   });
 
   it("resolves a picture for the renderer, or nothing for an id it never minted", () => {
     const tab = agentTab();
-    const id = host.keepScreenshot(tab.tabId, Buffer.from("x").toString("base64"));
+    const id = host.keepScreenshot(tab.tabId, Buffer.from("x").toString("base64"), tab.generation);
 
     expect(host.pictureOf(id)).toMatch(/^data:image\/png;base64,/);
     expect(host.pictureOf("missing")).toBeNull();
+  });
+});
+
+describe("BrowserTabHost agent dispatch and capture boundaries", () => {
+  const tree = {
+    nodes: [
+      {
+        nodeId: "1",
+        role: { value: "button" },
+        name: { value: "Save" },
+        backendDOMNodeId: 77,
+        childIds: [],
+      },
+    ],
+  };
+  const png = "iVBORw0KGgoAAAANSUhEUgAABkAAAASw";
+  const signal = new AbortController().signal;
+  const open = () =>
+    host.open({
+      url: "https://example.com/first",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+  const port = (cursorFor?: Parameters<typeof browserAgentPort>[0]["cursorFor"]) =>
+    browserAgentPort({
+      backend: host,
+      scope: { projectId: "project-1", ticketId: null },
+      session: { sessionId: "boundary-session", attachmentId: "boundary-attachment" },
+      cursorFor,
+    });
+
+  it("sends no input when navigation occurs during the real debugger transport's reinitialization", async () => {
+    const tab = open();
+    const domain = Promise.withResolvers<object>();
+    const initializing = Promise.withResolvers<void>();
+    let attached = false;
+    let reinitializing = false;
+    const sendCommand = vi.fn(async (method: string) => {
+      if (reinitializing && method === "Accessibility.enable") {
+        initializing.resolve();
+        return await domain.promise;
+      }
+      if (method === "Accessibility.getFullAXTree") return tree;
+      if (method === "Page.captureScreenshot") return { data: png };
+      return {};
+    });
+    Object.assign(views[0]!.webContents, {
+      debugger: {
+        isAttached: () => attached,
+        attach: () => {
+          attached = true;
+        },
+        detach: () => {
+          attached = false;
+        },
+        sendCommand,
+      },
+    });
+    const browser = port();
+    try {
+      const read = await browser.snapshot({ tabId: tab.tabId, signal });
+      // Cache the generation's frame first, so it is the INPUT command, not
+      // the frame evaluation, that must await debugger reinitialization.
+      await browser.screenshot({ tabId: tab.tabId, signal });
+      attached = false;
+      reinitializing = true;
+      const acting = browser.act({
+        tabId: tab.tabId,
+        generation: read.generation,
+        kind: "press",
+        key: "Enter",
+        signal,
+      });
+      await initializing.promise;
+      host.navigate(tab.tabId, "https://example.com/replacement");
+      domain.resolve({});
+      await expect(acting).rejects.toMatchObject({ rule: "browser.stale-ref" });
+      expect(sendCommand.mock.calls.filter(([method]) => method.startsWith("Input."))).toEqual([]);
+    } finally {
+      browser.dispose();
+    }
+  });
+
+  it("sends neither a press nor a cleanup release after navigation during the cursor glide", async () => {
+    const tab = open();
+    const sendCommand = vi.fn(async (method: string) => {
+      if (method === "Accessibility.getFullAXTree") return tree;
+      if (method === "DOM.getBoxModel")
+        return { model: { content: [10, 20, 30, 20, 30, 40, 10, 40] } };
+      return {};
+    });
+    Object.assign(views[0]!.webContents, {
+      debugger: { isAttached: () => true, sendCommand, detach: () => undefined },
+    });
+    const browser = port(() => ({
+      moveTo: async () => {
+        host.navigate(tab.tabId, "https://example.com/replacement");
+      },
+      gesture: () => undefined,
+    }));
+    try {
+      const read = await browser.snapshot({ tabId: tab.tabId, signal });
+      await expect(
+        browser.act({
+          tabId: tab.tabId,
+          generation: read.generation,
+          kind: "click",
+          ref: "e1",
+          signal,
+        }),
+      ).rejects.toMatchObject({ rule: "browser.stale-ref" });
+      expect(sendCommand.mock.calls.filter(([method]) => method.startsWith("Input."))).toEqual([]);
+    } finally {
+      browser.dispose();
+    }
+  });
+
+  it("does not return or persist old pixels when navigation occurs during capture", async () => {
+    const tab = open();
+    const capture = Promise.withResolvers<object>();
+    const capturing = Promise.withResolvers<void>();
+    const sendCommand = vi.fn(async (method: string) => {
+      if (method === "Page.captureScreenshot") {
+        capturing.resolve();
+        return await capture.promise;
+      }
+      return {};
+    });
+    Object.assign(views[0]!.webContents, {
+      debugger: { isAttached: () => true, sendCommand, detach: () => undefined },
+    });
+    const keep = vi.spyOn(host, "keepScreenshot");
+    const browser = port();
+    try {
+      const shooting = browser.screenshot({ tabId: tab.tabId, signal });
+      await capturing.promise;
+      host.navigate(tab.tabId, "https://example.com/replacement");
+      capture.resolve({ data: png });
+      await expect(shooting).rejects.toMatchObject({ rule: "browser.stale-ref" });
+      expect(keep).not.toHaveBeenCalled();
+      expect(persisted.size).toBe(0);
+    } finally {
+      browser.dispose();
+    }
   });
 });
 
@@ -3251,6 +3418,125 @@ describe("BrowserTabHost as the desktop's Browser backend (VC-561)", () => {
     wire.dispose?.();
     expect(attached).toBe(false);
     expect(() => host.transportFor("opaque-missing")).toThrow("Unknown Browser Tab");
+  });
+
+  it("logs only safe timeout context, reading current stage and wake state without CDP", () => {
+    const tab = agentTab();
+    const contents = views[0]!.webContents;
+    const sendCommand = vi.fn(async () => ({}));
+    Object.assign(contents, {
+      debugger: { isAttached: () => true, sendCommand },
+    });
+    const wire = host.transportFor(tab.tabId);
+    const records: unknown[] = [];
+    const undo = installHostLog({
+      level: "warn",
+      sink: { write: (record) => void records.push(record) },
+    });
+    const getURL = vi.spyOn(contents, "getURL");
+    const getTitle = vi.spyOn(contents, "getTitle");
+    const diagnostic = {
+      phase: "snapshot" as const,
+      method: "Accessibility.getFullAXTree",
+      elapsedMs: 15_000,
+      generation: 4,
+      params: { text: "private field", url: "https://secret.example/" },
+      error: new Error("private error"),
+    };
+    try {
+      wire.onTimeout?.(diagnostic);
+      expect(records).toEqual([
+        {
+          ts: expect.any(String),
+          level: "warn",
+          component: "browser",
+          msg: "browser CDP command timed out",
+          phase: "snapshot",
+          method: "Accessibility.getFullAXTree",
+          elapsedMs: 15_000,
+          generation: 4,
+          debuggerAttached: true,
+          parent: "stage",
+          windowVisible: null,
+          windowMinimized: null,
+          wakeLeases: 0,
+          backgroundThrottling: true,
+          build: "0.3.0-test",
+          electron: process.versions.electron ?? null,
+          chromium: process.versions.chrome ?? null,
+        },
+      ]);
+      expect(getURL).not.toHaveBeenCalled();
+      expect(getTitle).not.toHaveBeenCalled();
+      const release = host.holdAwake(tab.tabId);
+      host.setPresentation(tab.tabId, "preview");
+      host.show(tab.tabId);
+      wire.onTimeout?.(diagnostic);
+      expect(records[1]).toEqual({
+        ...(records[0] as object),
+        ts: expect.any(String),
+        parent: "window",
+        windowVisible: true,
+        windowMinimized: false,
+        wakeLeases: 1,
+        backgroundThrottling: false,
+      });
+      release();
+      host.hide(tab.tabId);
+      wire.onTimeout?.(diagnostic);
+      expect(records[2]).toEqual({ ...(records[0] as object), ts: expect.any(String) });
+      expect(sendCommand).not.toHaveBeenCalled();
+    } finally {
+      undo();
+    }
+  });
+
+  it.each([
+    { visible: true, minimized: false, destroyed: false },
+    { visible: false, minimized: false, destroyed: false },
+    { visible: true, minimized: true, destroyed: false },
+    { visible: false, minimized: true, destroyed: false },
+    { visible: true, minimized: false, destroyed: true },
+  ])("records the containing window flags without inferring occlusion: %j", (state) => {
+    const tab = agentTab();
+    const containingWindow = newAppWindow();
+    appWindow = containingWindow;
+    host.setPresentation(tab.tabId, "preview");
+    host.show(tab.tabId);
+    // The current app window need not be the one still containing this tab.
+    appWindow = fakeWindow;
+    const visible = vi.spyOn(containingWindow, "isVisible").mockReturnValue(state.visible);
+    const minimized = vi.spyOn(containingWindow, "isMinimized").mockReturnValue(state.minimized);
+    vi.spyOn(containingWindow, "isDestroyed").mockReturnValue(state.destroyed);
+    const sendCommand = vi.fn(async () => ({}));
+    Object.assign(views[0]!.webContents, {
+      debugger: { isAttached: () => true, sendCommand },
+    });
+    const records: unknown[] = [];
+    const undo = installHostLog({
+      level: "warn",
+      sink: { write: (record) => void records.push(record) },
+    });
+    try {
+      host.transportFor(tab.tabId).onTimeout?.({
+        phase: "snapshot",
+        method: "Accessibility.getFullAXTree",
+        elapsedMs: 15_000,
+        generation: 1,
+      });
+      expect(records).toEqual([
+        expect.objectContaining({
+          parent: "window",
+          windowVisible: state.destroyed ? null : state.visible,
+          windowMinimized: state.destroyed ? null : state.minimized,
+        }),
+      ]);
+      expect(visible).toHaveBeenCalledTimes(state.destroyed ? 0 : 1);
+      expect(minimized).toHaveBeenCalledTimes(state.destroyed ? 0 : 1);
+      expect(sendCommand).not.toHaveBeenCalled();
+    } finally {
+      undo();
+    }
   });
 
   it("settles a load wait off the tab's own loading events", async () => {

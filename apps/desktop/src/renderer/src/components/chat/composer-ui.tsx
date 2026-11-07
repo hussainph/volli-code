@@ -134,7 +134,6 @@ import { ContextUsagePill } from "@renderer/components/chat/context-usage-ui";
 import { ComposerPicker } from "@renderer/components/chat/composer-picker-ui";
 import { ModelMark, ModelName } from "@renderer/components/models/model-identity";
 import { Button } from "@renderer/components/ui/button";
-import { ListRow } from "@renderer/components/ui/list-row";
 import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { ValueReveal } from "@renderer/components/ui/value-reveal";
@@ -525,86 +524,61 @@ export const SessionComposer = React.memo(function SessionComposer({
         )}
       >
         {queued.length > 0 ? (
-          // `flex-nowrap`, AND IT IS LOAD-BEARING RATHER THAN TIDY-UP.
-          // `PromptInputHeader` is a wrapping ROW — right for the chip strip it
-          // was written for — and this call site turns it into a column without
-          // retracting the wrap. A wrapping column sizes each flex LINE to its
-          // widest item's max-content and then stretches the item to *that*, so
-          // a queued row measured 460px inside a 263px composer: the message
-          // ran out through the card's right edge and took Steer, Remove and
-          // the actions menu with it, off screen and unclickable. Measured at
-          // every width the app can hand this box, the first failure was 480px
-          // and by 420px all three controls were outside. The row's own
-          // `min-w-0 flex-1 truncate` was already right and could do nothing,
-          // because nothing was applying any pressure to it.
-          //
-          // `px-2`: the ListRow's own 8px inset rides on top of it, so the
-          // queued words start 16px in — the draft's own left edge.
-          // Its own provider, for {@link ComposerHint}'s reason: the reveal is
-          // a Radix tooltip, and the composer can render without the app
-          // shell's provider.
+          // Content owns the full measure. Status and actions share a separate
+          // row, so neither a long message nor a file can displace a control.
+          // The shell owns the gutter; cards add only the shared inner step.
+          // flex-nowrap is load-bearing: a wrapping column sizes flex lines by
+          // max-content and can push the cards/actions outside a narrow pane.
           <TooltipProvider>
-            <PromptInputHeader className="flex-col flex-nowrap items-stretch gap-1 border-b border-border px-2 py-2">
-              {queued.map((entry) => (
-                // The group names the row for assistive tech and holds BOTH the
-                // row's text and its actions; ListRow keeps the actions a
-                // sibling of its (inert) content, so the label lives out here.
-                <div
-                  key={entry.id}
-                  role="group"
-                  aria-label={`Queued message: ${entry.text}`}
-                  className="rounded-card bg-muted"
-                >
-                  <ListRow
-                    onActivate={null}
-                    density="two-line"
-                    // The words get the row's whole measure; the status sits
-                    // beneath them instead of competing for the same line. The
-                    // reveal is how a clipped message is read without editing it.
-                    primary={
+            <PromptInputHeader className="composer-queue flex-col flex-nowrap items-stretch">
+              {queued.map((entry) => {
+                const messageLabel =
+                  entry.text ||
+                  (entry.attachments?.length === 1
+                    ? entry.attachments[0].originalName
+                    : `${entry.attachments?.length ?? 0} attachments`);
+                return (
+                  <div
+                    key={entry.id}
+                    role="group"
+                    aria-label={`Queued message: ${messageLabel}`}
+                    className="composer-queued-item min-w-0 rounded-card bg-muted"
+                  >
+                    {entry.text ? (
                       <ValueReveal
                         term="Queued message"
                         full={entry.text}
                         side="top"
-                        className="block min-w-0 truncate rounded-sm text-left text-ui font-normal text-foreground"
+                        className="block w-full min-w-0 truncate rounded-sm text-left text-ui font-normal text-foreground"
                       >
                         {entry.text}
                       </ValueReveal>
-                    }
-                    secondary={
-                      <>
-                        <span
-                          data-slot="queue-status"
-                          className="block truncate text-ui font-normal text-muted-foreground"
-                        >
-                          <QueuedStatus
-                            label={
-                              steeringMessages?.has(entry.id) || entry.afterCurrentStep
-                                ? "Sends after this step"
-                                : entry.localUnsent
-                                  ? "Not sent"
-                                  : entry.queueState === "releasing"
-                                    ? "Sending"
-                                    : "Queued"
-                            }
-                          />
-                        </span>
-                        {/* Files share the text column rather than competing
-                            with it and the actions at a narrow split width. */}
-                        <AttachmentThumbRow
-                          attachments={entry.attachments ?? []}
-                          className="mt-1"
+                    ) : null}
+                    <AttachmentThumbRow attachments={entry.attachments ?? []} />
+                    <div data-slot="queue-footer" className="flex min-w-0 items-center gap-2">
+                      <span
+                        data-slot="queue-status"
+                        className="min-w-0 flex-1 text-label font-normal text-muted-foreground"
+                      >
+                        <QueuedStatus
+                          label={
+                            steeringMessages?.has(entry.id) || entry.afterCurrentStep
+                              ? "Sends after this step"
+                              : entry.localUnsent
+                                ? "Not sent"
+                                : entry.queueState === "releasing"
+                                  ? "Sending"
+                                  : "Queued"
+                          }
                         />
-                      </>
-                    }
-                    actions={
+                      </span>
                       <span className="flex shrink-0 items-center gap-1">
                         {working ? (
                           <Button
                             type="button"
                             size="xs"
                             variant="ghost"
-                            aria-label={`Steer queued message: ${entry.text}`}
+                            aria-label={`Steer queued message: ${messageLabel}`}
                             // A release already claimed this identity; only the
                             // host's cancel can take it back, so Steer stays off.
                             disabled={
@@ -625,7 +599,7 @@ export const SessionComposer = React.memo(function SessionComposer({
                           type="button"
                           size="icon-xs"
                           variant="ghost"
-                          aria-label={`Remove queued message: ${entry.text}`}
+                          aria-label={`Remove queued message: ${messageLabel}`}
                           // Enabled while releasing: the host cancels a release it has
                           // no proof of delivery for and refuses one in flight. The
                           // row only leaves once the host accepts.
@@ -645,43 +619,29 @@ export const SessionComposer = React.memo(function SessionComposer({
                           type="button"
                           size="icon-xs"
                           variant="ghost"
-                          aria-label={`Edit queued message: ${entry.text}`}
+                          aria-label={`Edit queued message: ${messageLabel}`}
                           title="Edit message"
                           onClick={() => void editQueued(entry.id)}
                         >
                           <EditIcon className="size-3" />
                         </Button>
                       </span>
-                    }
-                  />
-                </div>
-              ))}
+                    </div>
+                  </div>
+                );
+              })}
             </PromptInputHeader>
           </TooltipProvider>
         ) : null}
 
         <PromptInputBody>
-          {/* Above the text, not below it: the strip is part of the message
-              being written, and a person scanning what they are about to send
-              reads top to bottom.
-
-              `w-full`, AND IT IS LOAD-BEARING. `PromptInputBody` is
-              `display:contents`, so this strip is a flex CHILD of the vendored
-              `InputGroup` — which is `items-center` and flips to a COLUMN
-              once the footer's block-end addon mounts. In a column, `center`
-              is the CROSS axis: a shrink-to-fit strip sat mid-composer with
-              its one thumbnail floating over the textarea's centre while
-              everything around it ran edge to edge (VC-137). `w-full` is the
-              same rule the textarea below already follows. */}
+          {/* The bounded attachment token shares the editor's content rail.
+              The manager, not this strip, grows with the number of files. */}
           <AttachmentStrip
             presentation="composer"
             attachments={attachments}
             {...(onRemoveAttachment === undefined ? {} : { onRemove: onRemoveAttachment })}
-            // `px-4`: the tiles' left edge is the text's left edge, one inset
-            // for everything the message is made of. It was `px-3`, a value
-            // off the spacing ladder that put the first tile 4px left of the
-            // first letter.
-            className="w-full px-4 pt-2"
+            className="composer-draft-attachments w-full"
           />
           {/* Reads the caret bindings from the stack above rather than taking
               them as props: the picker card and this input are siblings, one
@@ -699,7 +659,7 @@ export const SessionComposer = React.memo(function SessionComposer({
           />
         </PromptInputBody>
 
-        {/* The tinted tray separates settings from the writing sheet. */}
+        {/* Controls align optically to the same rail as the writing above. */}
         <PromptInputFooter>
           {/* Keep Add outside the wrapping settings: at 265px a live turn
               must not orphan it above the model and effort. The primary

@@ -193,7 +193,6 @@ export function WorktreesPane({ project }: { project: Project }) {
                 setDraft(accepted.current);
               }
             }}
-            placeholder="pnpm install"
             spellCheck={false}
             className="min-h-24 font-mono text-ui"
             disabled={saving}

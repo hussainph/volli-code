@@ -68,7 +68,7 @@ const REFUSED = {
 
 /**
  * The receipt a harness sends when it does not know whether a command ran
- * (CONTEXT.md's `unreconciled`). It is NOT a rejection and NOT an acceptance,
+ * (CONTEXT.md#receipt: `unreconciled`). It is NOT a rejection and NOT an acceptance,
  * so it must never be read as a success: that read latches `working` for a
  * message and clears the error band for an attach, which is the silent success
  * this surface exists to refuse. Its words, when there are any, are the host's

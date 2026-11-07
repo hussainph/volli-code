@@ -312,6 +312,43 @@ describe("AboutPane — once the checks land", () => {
     expect(button(host, "Fix")).toBeNull();
   });
 
+  it("keeps missing git in the health panel with Fix and the measured recovery", async () => {
+    stubApi({
+      doctor: {
+        ok: true,
+        checks: [
+          {
+            id: "tool-git",
+            title: "`git` is available to sessions",
+            failureTitle: "`git` is missing from the session PATH",
+            status: "fail",
+            detail: "`git` resolves to nothing on this PATH",
+            remedy: "Run `xcode-select --install`.",
+          },
+        ],
+        summary: "1 failed of 1 checks.",
+      },
+    });
+    const host = await render();
+    expect(panel(host).dataset["healthState"]).toBe("attention");
+    expect(panel(host).textContent).toContain("`git` is missing from the session PATH");
+    expect(panel(host).textContent).toContain("Run `xcode-select --install`.");
+    expect(button(host, "Fix")?.disabled).toBe(false);
+  });
+
+  it.each(["refused", "rejected"])("surfaces a %s requested repair", async (failure) => {
+    stubApi({ doctor: { ok: true, checks: FAILING, summary: "1 failed of 1 checks." } });
+    const host = await render();
+    const doctor = vi.fn();
+    if (failure === "refused") doctor.mockResolvedValue({ ok: false, error: "Repair refused" });
+    else doctor.mockRejectedValue(new Error("Repair failed"));
+    window.api.cli.doctor = doctor;
+    await act(async () => button(host, "Fix")?.click());
+    expect(toastError).toHaveBeenCalledOnce();
+    expect(panel(host).dataset["healthState"]).toBe("unavailable");
+    expect(button(host, "Retry")?.disabled).toBe(false);
+  });
+
   it("folds a status warning into the same fault list, headed by its state", async () => {
     stubApi({
       status: {
@@ -438,6 +475,32 @@ describe("AboutPane — when the project changes", () => {
 });
 
 describe("AboutPane — the report snapshot", () => {
+  it("omits non-git tool faults from health but keeps their full evidence in preview and clipboard", async () => {
+    const checks = ["node", "npm", "pnpm", "yarn", "bun", "gh"].map((tool) => ({
+      id: `tool-${tool}`,
+      title: `${tool} is available to sessions`,
+      failureTitle: `${tool} is missing from the session PATH`,
+      status: "fail" as const,
+      detail: `${tool} resolves to nothing on this PATH`,
+      remedy: `Repair ${tool}.`,
+    }));
+    stubApi({ doctor: { ok: true, checks, summary: "6 failed of 6 checks." } });
+    const host = await render();
+    expect(panel(host).dataset["healthState"]).toBe("healthy");
+    expect(button(host, "Fix")).toBeNull();
+    for (const check of checks) expect(host.textContent).not.toContain(check.failureTitle);
+
+    await act(async () => button(host, "Copy report…")?.click());
+    const shown = document.querySelector('[aria-label="Report preview"]')?.textContent ?? "";
+    for (const check of checks) {
+      expect(shown).toContain(check.failureTitle);
+      expect(shown).toContain(check.detail);
+      expect(shown).toContain(check.remedy);
+    }
+    await act(async () => exactButton("Copy")?.click());
+    expect(clipboard).toEqual([shown]);
+  });
+
   it("hands the preview and the clipboard one identical report", async () => {
     const host = await render();
 
