@@ -71,10 +71,13 @@ import {
  * together or one of them fails.
  *
  * Since the tinted-neutrals work (VC-1129) the neutral rungs — rail, popover,
- * muted, sidebar, the borders, the secondary and label ink, the veils — carry
- * the canvas's light tint (`tintCanvasNeutral`), so they are no longer flat
+ * muted, sidebar, the borders, the secondary ink, the veils — carry the
+ * canvas's light tint (`tintCanvasNeutral`), so they are no longer flat
  * greys, and the light semantic-foreground poles re-solved to the black pole.
- * Transcribed from the regenerated `globals.css`, as ever.
+ * Label ink is not one of them: `deriveLabelInk` keeps the neutral body
+ * chroma and hue in both modes, so it stays grey — only its lightness moves,
+ * following the re-solved secondary tier. Transcribed from the regenerated
+ * `globals.css`, as ever.
  *
  * Veils are included because `applyThemeTokens` writes them in the same pass —
  * a veil left behind freezes the sidebar on the previous canvas's rung.
