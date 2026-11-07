@@ -25,12 +25,10 @@
  * passes neither handler, and the menu then has nothing to offer but the list.
  */
 import * as React from "react";
-import { PaperclipIcon } from "@phosphor-icons/react/dist/csr/Paperclip";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import { AttachmentIcon, CloseIcon } from "@renderer/components/ui/icon";
 
 import { useFilePicker } from "@renderer/components/attachments/composer-attach-button";
 import { Button } from "@renderer/components/ui/button";
-import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { ListRow } from "@renderer/components/ui/list-row";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 
@@ -77,7 +75,7 @@ export function AttachmentMenuDetail<T extends AttachmentMenuEntry>({
   return (
     <>
       {attachments.length === 0 ? (
-        <p data-testid="rail-attachments-empty" className={EMPTY_INLINE}>
+        <p data-testid="rail-attachments-empty" className="sr-only">
           Nothing attached yet
         </p>
       ) : (
@@ -113,7 +111,7 @@ export function AttachmentMenuDetail<T extends AttachmentMenuEntry>({
                   // rail wears: the glyph says "attachment" beside names that
                   // say "file", and the two lists have to read as one kind of
                   // thing.
-                  <PaperclipIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+                  <AttachmentIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
                 }
                 primary={attachment.label}
                 actions={
@@ -124,7 +122,7 @@ export function AttachmentMenuDetail<T extends AttachmentMenuEntry>({
                       aria-label={`Remove ${attachment.label}`}
                       onClick={() => onRemove(attachment)}
                     >
-                      <XIcon />
+                      <CloseIcon />
                     </Button>
                   )
                 }
@@ -145,7 +143,7 @@ export function AttachmentMenuDetail<T extends AttachmentMenuEntry>({
             // as the same kind of object.
             className="w-full justify-start rounded-lg"
           >
-            <PaperclipIcon />
+            <AttachmentIcon />
             Attach files
           </Button>
           {picker.input}
@@ -190,7 +188,7 @@ export function AttachmentMenu<T extends AttachmentMenuEntry>({
           // and the count keeps the row's height when it does.
           className="gap-1"
         >
-          <PaperclipIcon />
+          <AttachmentIcon />
           {count === 0 ? null : (
             <span aria-hidden className="text-label tabular-nums">
               {count}

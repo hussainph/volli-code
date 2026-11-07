@@ -28,19 +28,16 @@
  * visible name is repeated or added beside the bolt (VC-517).
  *
  * ── WEIGHT ────────────────────────────────────────────────────────────────
- * `bold` at `size-3`, which is the sidebar band's small-glyph tier and a
- * statement about the pen rather than the size: Phosphor draws regular at
- * 16/256 em against bold's 24/256, and at 12px that is 0.75px of ink beside a
- * ~1.1px text stem. A mark drawn lighter than the label it qualifies reads as a
- * smudge. Emphatically not `fill` — a filled bolt at this size is a solid wedge
- * that would out-shout the title it sits beside, and this mark is a
- * qualification rather than an alarm.
+ * At 12px, the shared 2.25 stroke is the small-symbol tier: the mark must
+ * stand beside the label rather than becoming a smudge. It stays outline;
+ * accent ink marks provenance, not a second filled drawing.
  *
  * It is drawn in `text-primary`, the app's one "Volli did this" ink, and never
  * in a status colour: the bolt says WHO started the work, and a status hue here
  * would compete with the dot beside it that says what the work is doing.
  */
-import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
+import { AutomationIcon } from "@renderer/components/ui/icon";
+
 import { automationMarkLabel, type SessionProvenance } from "@volli/shared";
 
 import { cn } from "@renderer/lib/utils";
@@ -64,7 +61,7 @@ export function SessionProvenanceMark({
       // bolt. The full origin stays accessible without printing a second title.
       aria-label={label}
     >
-      <LightningIcon weight="bold" aria-hidden className="size-3 shrink-0" />
+      <AutomationIcon strokeWidth={2.25} aria-hidden className="size-3 shrink-0" />
     </span>
   );
 }

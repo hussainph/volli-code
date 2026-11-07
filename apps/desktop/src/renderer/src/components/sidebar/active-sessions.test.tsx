@@ -304,6 +304,7 @@ describe("ActiveSessions bands while the listing is read (VC-383)", () => {
     await mount();
 
     expect(loading().length).toBe(2);
+    expect(container?.querySelector("[data-next-action]")).toBeNull();
     expect(bandText("active")).not.toContain("No active sessions");
     expect(bandText("previous")).not.toContain("Nothing yet");
 
@@ -311,16 +312,23 @@ describe("ActiveSessions bands while the listing is read (VC-383)", () => {
       answer?.();
     });
     expect(loading().length).toBe(0);
-    expect(bandText("active")).toContain("No active sessions");
-    expect(bandText("previous")).toContain("Nothing yet");
+    expect(bandText("active")).not.toContain("No active sessions");
+    expect(bandText("previous")).not.toContain("Nothing yet");
   });
 
   it("says the bands are empty only once the listing has said so", async () => {
     await mount();
 
     expect(loading().length).toBe(0);
-    expect(bandText("active")).toContain("No active sessions");
-    expect(bandText("previous")).toContain("Nothing yet");
+    expect(bandText("active")).not.toContain("No active sessions");
+    expect(bandText("previous")).not.toContain("Nothing yet");
+    expect(container?.querySelector('[data-next-action="active"]')).toBeNull();
+    expect(container?.querySelector('[data-next-action="previous"]')).toBeNull();
+    // A quiet noun, not dashed placeholder rows or an explainer; no zero
+    // beside a band header that the empty state already answers.
+    expect(bandText("active")).not.toContain("Start a chat");
+    expect(bandText("previous")).not.toContain("Return to earlier sessions");
+    expect(container?.querySelector("[data-band-count]")).toBeNull();
   });
 
   it("stands both skeletons down when the project listing fails, without either false empty", async () => {
@@ -331,8 +339,10 @@ describe("ActiveSessions bands while the listing is read (VC-383)", () => {
     expect(loading().length).toBe(0);
     expect(bandText("active")).not.toContain("No active sessions");
     expect(bandText("previous")).not.toContain("Nothing yet");
-    expect(bandText("active")).toContain("Couldn't load sessions.");
-    expect(bandText("previous")).toContain("Couldn't load sessions.");
+    expect(bandText("active")).toContain("Couldn't load sessions");
+    expect(bandText("previous")).not.toContain("Couldn't load sessions");
+    expect(container?.querySelectorAll('[role="alert"]')).toHaveLength(1);
+    expect(container?.querySelector("[data-next-action]")).toBeNull();
   });
 
   it("names a host that grants no Sessions, once, instead of either empty (VC-713, B3)", async () => {
@@ -344,6 +354,7 @@ describe("ActiveSessions bands while the listing is read (VC-383)", () => {
       expect(bandText("active")).not.toContain("No active sessions");
       expect(bandText("previous")).not.toContain(reason);
       expect(bandText("previous")).not.toContain("Nothing yet");
+      expect(container?.querySelector("[data-next-action]")).toBeNull();
     } finally {
       useRemoteSessionAvailabilityStore.setState({ unavailable: {} });
     }
@@ -702,12 +713,33 @@ describe("the Previous band's cap (VC-116)", () => {
       Array.from({ length: PREVIOUS_BAND_LIMIT }, (_, index) => `chat:c${index}`),
     );
     // The header still counts every Session back there, not the drawn ones.
-    // Its count is the band's first tabular figure; the rows' ages follow it.
     expect(
-      container?.querySelector('[data-session-band="previous"] .tabular-nums')?.textContent,
+      container?.querySelector('[data-session-band="previous"] [data-band-count]')?.textContent,
     ).toBe(String(PREVIOUS_BAND_LIMIT * 2 + 5));
     expect(reachButton("Show more")).not.toBeNull();
     expect(reachButton("Show less")).toBeNull();
+  });
+
+  it("draws its reach actions as the shared ghost sm Button, restating none of its scale", async () => {
+    seedPastChats(PREVIOUS_BAND_LIMIT * 2 + 5);
+    await mount();
+    await pressReach("Show more");
+
+    for (const label of ["Show more", "Show less"] as const) {
+      const button = reachButton(label);
+      expect(button?.dataset.slot).toBe("button");
+      expect(button?.dataset.variant).toBe("ghost");
+      expect(button?.dataset.size).toBe("sm");
+      // The control scale owns height, type and the icon gap; the band only
+      // mutes the ink.
+      const classes = button?.className.split(/\s+/) ?? [];
+      expect(classes).toContain("text-muted-foreground");
+      expect(classes).not.toContain("h-6");
+      expect(classes).not.toContain("gap-1.5");
+      expect(classes).not.toContain("w-auto");
+      expect(classes).not.toContain("text-sm");
+      expect(button?.closest('[data-sidebar="menu-button"]')).toBeNull();
+    }
   });
 
   it("widens a page at a time, and collapses back to the cap, keeping focus in the band", async () => {
@@ -769,4 +801,164 @@ describe("the Previous band's cap (VC-116)", () => {
     expect(rowButton(`chat:c${selected}`).dataset.active).toBe("true");
     expect(reachButton("Show more")).not.toBeNull();
   });
+});
+
+describe("ActiveSessions attention signals (VC-1078)", () => {
+  const withReview = (): Ticket[] => [
+    ticket("t1", "needs_review", 0),
+    ticket("t2", "todo", 1),
+    ticket("t3", "doing", 0),
+  ];
+
+  it("re-reads only for a refresh that could move a shown signal", async () => {
+    useBoardStore.getState().hydrate({ [PROJECT.id]: withReview() }, { [PROJECT.id]: [] });
+    await mount();
+    expect(latestSignals).toHaveBeenCalledTimes(1);
+
+    // A wholesale hydrate that left the Needs Review column as it was.
+    await act(async () => {
+      useBoardStore.getState().hydrate({ [PROJECT.id]: withReview() }, { [PROJECT.id]: [] });
+    });
+    expect(latestSignals).toHaveBeenCalledTimes(1);
+
+    // Changes that provably write no Session signal this band shows.
+    for (const change of [
+      { kind: "comment" as const },
+      { kind: "worktree" as const },
+      { kind: "retention" as const },
+      { projectId: "another-project" },
+      { ticketId: "t2", projectId: PROJECT.id },
+    ]) {
+      await act(async () => {
+        useBoardStore.getState().notePlanningChange(change);
+      });
+    }
+    expect(latestSignals).toHaveBeenCalledTimes(1);
+
+    // Untargeted, or naming the ticket in review: either may have moved one.
+    await act(async () => {
+      useBoardStore.getState().notePlanningChange({});
+    });
+    expect(latestSignals).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      useBoardStore.getState().notePlanningChange({ ticketId: "t1", kind: "ticket" });
+    });
+    expect(latestSignals).toHaveBeenCalledTimes(3);
+  });
+});
+
+it("selects without navigation, ranges, selects all and clears, with existing read commands in bulk", async () => {
+  // Distinct activity times pin the row order (c1, c2, c3); identical timestamps
+  // could straddle a millisecond and reorder the shift-click range.
+  const now = Date.now();
+  seedSessions(
+    ["c1", "c2", "c3"].map((sessionId, index) =>
+      listingRow(
+        chatRecord({
+          sessionId,
+          title: `Session ${sessionId}`,
+          lastActivityAt: now - index * 1_000,
+          createdAt: now - index * 1_000,
+        }),
+      ),
+    ),
+  );
+  await mount();
+  const click = async (id: string, init: MouseEventInit) =>
+    act(async () =>
+      rowButton(id).dispatchEvent(new MouseEvent("click", { bubbles: true, ...init })),
+    );
+  await click("chat:c1", { metaKey: true });
+  await click("chat:c3", { shiftKey: true });
+  expect(setRead).not.toHaveBeenCalled();
+  await act(async () =>
+    rowButton("chat:c1").dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, button: 2, clientX: 30, clientY: 30 }),
+    ),
+  );
+  const bulk = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+    (node) => node.textContent === "Mark 3 sessions as read",
+  );
+  expect(bulk).toBeDefined();
+  await act(async () => bulk!.click());
+  for (const id of ["c1", "c2", "c3"])
+    expect(setRead).toHaveBeenCalledWith({ sessionId: id, unread: false });
+  await act(async () =>
+    rowButton("chat:c1").dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    ),
+  );
+  setRead.mockClear();
+  await act(async () =>
+    rowButton("chat:c1").dispatchEvent(
+      new KeyboardEvent("keydown", { key: "a", metaKey: true, bubbles: true }),
+    ),
+  );
+  await act(async () =>
+    rowButton("chat:c1").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, button: 2 })),
+  );
+  expect(
+    [...document.querySelectorAll('[role="menuitem"]')].some(
+      (node) => node.textContent === "Mark 3 sessions as unread",
+    ),
+  ).toBe(true);
+});
+
+it("mounts only the source-list viewport and moves keyboard focus across its window boundary", async () => {
+  const now = Date.now();
+  seedSessions(
+    Array.from({ length: 1000 }, (_, i) =>
+      listingRow(
+        chatRecord({
+          sessionId: `c${i}`,
+          ticketId: null,
+          role: "project",
+          createdAt: now - i,
+          lastActivityAt: now - i,
+        }),
+      ),
+    ),
+  );
+  const h = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
+  const rect = HTMLElement.prototype.getBoundingClientRect;
+  const bounds = vi
+    .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+    .mockImplementation(function (this: HTMLElement) {
+      if (this.hasAttribute("data-session-bands"))
+        return new DOMRect(
+          0,
+          -(this.closest<HTMLElement>('[data-slot="sidebar-content"]')?.scrollTop ?? 0),
+          240,
+          48000,
+        );
+      return rect.call(this);
+    });
+  try {
+    container = document.body.appendChild(document.createElement("div"));
+    root = createRoot(container);
+    await act(async () =>
+      root!.render(
+        <SidebarProvider>
+          <div data-slot="sidebar-content">
+            <ActiveSessions project={PROJECT} visible />
+          </div>
+        </SidebarProvider>,
+      ),
+    );
+    const ids = activeRowIds();
+    expect(ids.length).toBeLessThan(25);
+    expect(ids.length).toBeGreaterThan(10);
+    const last = ids.at(-1)!;
+    await press(last, "ArrowDown");
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    const focused = document.activeElement?.closest<HTMLElement>("[data-peek-row]");
+    expect(focused).not.toBeNull();
+    expect(focused?.dataset.peekRow).not.toBe(last);
+    expect(activeRowIds().length).toBeLessThan(30);
+  } finally {
+    h.mockRestore();
+    bounds.mockRestore();
+  }
 });

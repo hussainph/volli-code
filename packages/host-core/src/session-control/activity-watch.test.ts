@@ -108,6 +108,45 @@ function stubBus(current: () => SessionProjection | null) {
 }
 
 describe("watchSessionActivity", () => {
+  it("gives the host a turn between the Sessions of one flush (VC-1076)", async () => {
+    const publish = vi.fn();
+    const order: string[] = [];
+    const { bus, commit, getSession } = stubBus(() => projection());
+    getSession.mockImplementation(async (query?: { sessionId: string }) => {
+      order.push(`fold ${query!.sessionId}`);
+      return projection({
+        session: { ...projection().session, id: query!.sessionId },
+      });
+    });
+    const watch = watchSessionActivity(bus, {
+      listOpenNativeBindings: noOpenBindings,
+      publish,
+      yieldToHost: async () => {
+        order.push("yield");
+      },
+    });
+    commit("turn.started", "session-a");
+    commit("turn.started", "session-b");
+    commit("turn.started", "session-c");
+    await watch.flush();
+    expect(order).toEqual(["fold session-a", "yield", "fold session-b", "yield", "fold session-c"]);
+    expect(publish).toHaveBeenCalledTimes(3);
+    watch.stop();
+  });
+
+  it("yields on a macrotask by default, and a stop between Sessions ends the flush", async () => {
+    const { bus, commit, getSession } = stubBus(() => projection());
+    // The stop arrives while the first Session's row is being published —
+    // in the app, a quit landing during the yield that follows it.
+    const publish = vi.fn(() => watch.stop());
+    const watch = watchSessionActivity(bus, { listOpenNativeBindings: noOpenBindings, publish });
+    commit("turn.started", "session-a");
+    commit("turn.started", "session-b");
+    await watch.flush();
+    expect(getSession).toHaveBeenCalledTimes(1);
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
   it("publishes the changed Session's listing row after a committed fact", async () => {
     const publish = vi.fn();
     const { bus, commit } = stubBus(() => projection());

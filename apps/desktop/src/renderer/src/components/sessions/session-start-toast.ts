@@ -30,7 +30,7 @@ export interface SessionStartToastModel {
 function actorPhrase(notice: SessionStartedNotice): string {
   switch (notice.actor) {
     case "session":
-      return notice.actorTicket === null ? "An agent session" : `${notice.actorTicket}'s session`;
+      return notice.actorTicket === null ? "Another Session" : notice.actorTicket;
     case "automation":
       return "Automation";
     case "unauthenticated":
@@ -43,7 +43,7 @@ function actorPhrase(notice: SessionStartedNotice): string {
 /** Shapes one `volli:session-started` push into its toast. */
 export function sessionStartToastModel(notice: SessionStartedNotice): SessionStartToastModel {
   return {
-    message: `${actorPhrase(notice)} started a session on ${notice.ticketDisplayId}`,
+    message: `Session started on ${notice.ticketDisplayId} · ${actorPhrase(notice)}`,
     target: {
       projectId: notice.projectId,
       ticketId: notice.ticketId,

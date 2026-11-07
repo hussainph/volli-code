@@ -33,15 +33,18 @@
  * no main-process half (CLAUDE.md), so nothing here reads git or the ledger.
  */
 import * as React from "react";
-import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
-import { CodeIcon } from "@phosphor-icons/react/dist/csr/Code";
-import { CompassIcon } from "@phosphor-icons/react/dist/csr/Compass";
-import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
-import { GitBranchIcon } from "@phosphor-icons/react/dist/csr/GitBranch";
-import { KanbanIcon } from "@phosphor-icons/react/dist/csr/Kanban";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
-import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
-import { TicketIcon } from "@phosphor-icons/react/dist/csr/Ticket";
+import {
+  ChatIcon,
+  CodeIcon,
+  GlobeIcon,
+  FolderOpenIcon,
+  BranchIcon,
+  BoardIcon,
+  AddIcon,
+  SidebarIcon,
+  TicketIcon,
+} from "@renderer/components/ui/icon";
+
 import { hexToOklch, lerp, oklchToHex } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
@@ -426,7 +429,7 @@ function ScopeChip({
   full,
   children,
 }: {
-  icon: React.ComponentType<{ className?: string; weight?: "bold" }>;
+  icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
   /** The untruncated value — the tooltip's whole reason to exist. */
   full: string;
   children: React.ReactNode;
@@ -435,7 +438,7 @@ function ScopeChip({
     <Tooltip>
       <TooltipTrigger asChild>
         <span className="inline-flex h-7 max-w-48 cursor-default items-center gap-1 rounded-full border border-border bg-card px-2 text-ui text-muted-foreground">
-          <Icon weight="bold" className="size-3 shrink-0" />
+          <Icon strokeWidth={2.25} className="size-3 shrink-0" />
           <span className="min-w-0 truncate">{children}</span>
         </span>
       </TooltipTrigger>
@@ -454,11 +457,11 @@ function Caption({ mode, venue, project }: { mode: CaptionMode; venue: Venue; pr
     return (
       <div className="flex flex-wrap items-center justify-center gap-2 font-mono text-ui text-muted-foreground">
         <span className="flex items-center gap-1" title={venue.path}>
-          <FolderOpenIcon weight="bold" className="size-3" aria-label="Directory" />
+          <FolderOpenIcon strokeWidth={2.25} className="size-3" aria-label="Directory" />
           {venue.path}
         </span>
         <span className="flex items-center gap-1">
-          <GitBranchIcon weight="bold" className="size-3" aria-label="Branch" />
+          <BranchIcon strokeWidth={2.25} className="size-3" aria-label="Branch" />
           {venue.branch}
         </span>
       </div>
@@ -471,7 +474,7 @@ function Caption({ mode, venue, project }: { mode: CaptionMode; venue: Venue; pr
         <ScopeChip icon={FolderOpenIcon} full={venue.path}>
           {venue.kind === "main-checkout" ? "Main checkout" : "Worktree"}
         </ScopeChip>
-        <ScopeChip icon={GitBranchIcon} full={venue.branch}>
+        <ScopeChip icon={BranchIcon} full={venue.branch}>
           {venue.branch}
         </ScopeChip>
       </div>
@@ -1090,7 +1093,7 @@ function InfoRail({ venue }: { venue: Venue }) {
           </p>
           <div className="flex items-center justify-between gap-2">
             <span className="flex min-w-0 items-center gap-1 font-mono text-ui text-muted-foreground">
-              <GitBranchIcon weight="bold" className="size-3 shrink-0" />
+              <BranchIcon strokeWidth={2.25} className="size-3 shrink-0" />
               <span className="truncate">{venue.branch}</span>
             </span>
             <span className="flex shrink-0 items-center gap-1 text-ui text-attention">
@@ -1150,7 +1153,7 @@ function MentionChip({ id }: { id: string }) {
       type="button"
       className="inline-flex h-6 items-center gap-1 rounded-full border border-border bg-card px-2 align-baseline font-mono text-ui text-foreground transition-colors hover:border-primary/40 hover:text-primary-text"
     >
-      <TicketIcon weight="bold" className="size-3 text-muted-foreground" />
+      <TicketIcon strokeWidth={2.25} className="size-3 text-muted-foreground" />
       {id}
     </button>
   );
@@ -1212,8 +1215,8 @@ function Surface({
   transcript: boolean;
 }) {
   const venue = project ? MAIN_CHECKOUT : TICKET_WORKTREE;
-  const Glyph = project ? CompassIcon : ChatCircleIcon;
-  const PermanentGlyph = project ? KanbanIcon : TicketIcon;
+  const Glyph = project ? GlobeIcon : ChatIcon;
+  const PermanentGlyph = project ? BoardIcon : TicketIcon;
   const tabs = project
     ? [
         { id: "board", label: "Board", permanent: true },
@@ -1236,11 +1239,11 @@ function Surface({
         actions={
           <div className="flex items-center gap-1">
             <Button variant="ghost" size="icon-sm" aria-label="New session">
-              <PlusIcon className="size-3.5" />
+              <AddIcon className="size-3.5" />
             </Button>
             {railOn ? (
               <Button variant="ghost" size="icon-sm" aria-label="Hide details rail (⌥⌘B)">
-                <SidebarSimpleIcon className="size-3.5" />
+                <SidebarIcon className="size-3.5" />
               </Button>
             ) : null}
           </div>
@@ -1256,9 +1259,12 @@ function Surface({
             status={index === activeIndex ? "ready" : undefined}
             leading={
               tab.permanent ? (
-                <PermanentGlyph weight="bold" className="size-3 shrink-0 text-muted-foreground" />
+                <PermanentGlyph
+                  strokeWidth={2.25}
+                  className="size-3 shrink-0 text-muted-foreground"
+                />
               ) : (
-                <Glyph weight="bold" className="size-3 shrink-0 text-muted-foreground" />
+                <Glyph strokeWidth={2.25} className="size-3 shrink-0 text-muted-foreground" />
               )
             }
             onActivate={() => {}}

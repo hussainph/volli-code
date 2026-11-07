@@ -1,5 +1,5 @@
 /**
- * volli-drive core: the pure, unit-tested rules every other file leans on.
+ * volli-drive core: the unit-tested rules and helpers every other file leans on.
  *
  *   • where things live    — a per-user registry dir, short scratch roots
  *                            (the app's unix socket must fit sun_path), and
@@ -12,6 +12,8 @@
  *                            mode, isolated HOME/Pi dir/git config, quiet
  *                            windows, no gh, no ssh-agent).
  *   • read-only state      — which SQL the `state sql` door accepts.
+ *   • snapshot capture     — bounded non-empty renderer observations, with
+ *                            literal text/absence waits and rejected-capture evidence.
  *   • snapshot search      — `find`, the same literal, case-insensitive match
  *                            Volli's browser_find makes, with ancestor paths.
  */
@@ -20,6 +22,8 @@ import { randomBytes } from "node:crypto";
 import { mkdirSync, promises as fs, readdirSync, readFileSync, statSync } from "node:fs";
 import os from "node:os";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { performance } from "node:perf_hooks";
+import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
@@ -360,7 +364,82 @@ export function readOnlySql(sql) {
   return { ok: true, sql: body };
 }
 
-// ---- snapshot search -------------------------------------------------------
+// ---- snapshot capture / search ----------------------------------------------
+
+/**
+ * DOMContentLoaded (including after fixture reload) and a live main-process
+ * socket do not prove React's async bootstrap has rendered. Only a non-empty
+ * aria tree is an observation; an empty one is neither "found 0" nor "gone".
+ * Poll that boundary, not a journey's assertions, under one capture/wait budget.
+ * The returned tree is the exact capture that satisfied the condition, so its
+ * refs and any absence check describe the same renderer observation.
+ */
+export async function readSnapshot(
+  page,
+  {
+    depth,
+    timeout = 10_000,
+    waitForText,
+    gone = false,
+    onEmpty = () => {},
+    now = () => performance.now(),
+    pause = sleep,
+  } = {},
+) {
+  const started = now();
+  const elapsed = () => now() - started;
+  const needle = waitForText === undefined ? null : String(waitForText).toLowerCase();
+  let attempts = 0;
+  let emptyAttempts = 0;
+  let lastText;
+  let captureTimeout;
+  while (elapsed() < timeout) {
+    let text;
+    try {
+      text = await page.ariaSnapshot({
+        mode: "ai",
+        ...(depth ? { depth: Number(depth) } : {}),
+        timeout: Math.max(1, timeout - elapsed()),
+      });
+    } catch (error) {
+      if (error?.name !== "TimeoutError") throw error;
+      // This call used the remaining budget. A final CDP timeout must not
+      // replace the readiness/semantic failure with e.g. "Timeout 3ms".
+      // Keep the cause, but do not retry or grant a new capture budget.
+      captureTimeout = error;
+      break;
+    }
+    attempts += 1;
+    lastText = text;
+    if (!text.trim()) {
+      emptyAttempts += 1;
+      onEmpty(text, { attempt: attempts, ms: Math.round(elapsed()) });
+    } else if (
+      elapsed() < timeout &&
+      (needle === null || text.toLowerCase().includes(needle) === !gone)
+    ) {
+      return { text, attempts, emptyAttempts, ms: Math.round(elapsed()) };
+    }
+    const remaining = timeout - elapsed();
+    if (remaining > 0) await pause(Math.min(200, remaining));
+  }
+  if (lastText === undefined) {
+    throw new Error(
+      `snapshot readiness timeout: no aria tree captured within ${timeout}ms; ${page.url()}`,
+      { cause: captureTimeout },
+    );
+  }
+  if (!lastText.trim()) {
+    throw new Error(
+      `empty snapshot: last aria capture was empty after ${timeout}ms (${attempts} captures, ${emptyAttempts} empty); ${page.url()}`,
+      { cause: captureTimeout },
+    );
+  }
+  throw new Error(
+    `timed out waiting for ${needle === null ? "a non-empty snapshot" : `"${waitForText}" to ${gone ? "disappear" : "appear"}`} within ${timeout}ms; ${page.url()}`,
+    { cause: captureTimeout },
+  );
+}
 
 const indentOf = (line) => line.length - line.trimStart().length;
 

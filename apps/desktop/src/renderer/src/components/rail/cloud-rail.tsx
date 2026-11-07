@@ -5,8 +5,7 @@
  * with its one way back: signing out restarts Volli into them.
  */
 import * as React from "react";
-import { LaptopIcon } from "@phosphor-icons/react/dist/csr/Laptop";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
+import { LaptopIcon, AddIcon } from "@renderer/components/ui/icon";
 
 import { SignOutRestartDialog } from "@renderer/components/cloud/sign-out-restart";
 import { Button } from "@renderer/components/ui/button";
@@ -44,7 +43,7 @@ export function LocalProjectsFoot() {
           <button
             type="button"
             aria-label={line}
-            className="app-region-no-drag group/tile relative flex size-9 shrink-0 items-center justify-center rounded-control bg-muted"
+            className="workspace-tile app-region-no-drag group/tile relative flex size-9 shrink-0 items-center justify-center rounded-card"
           >
             <LaptopIcon className="size-[15px] text-muted-foreground" />
             <span
@@ -100,9 +99,9 @@ export function NewCloudProjectTile() {
             type="button"
             aria-label="New project"
             onClick={() => setOpen(true)}
-            className="app-region-no-drag group/tile relative flex size-9 shrink-0 items-center justify-center rounded-control bg-muted"
+            className="workspace-tile app-region-no-drag group/tile relative flex size-9 shrink-0 items-center justify-center rounded-card"
           >
-            <PlusIcon weight="bold" className="size-[15px] text-muted-foreground" />
+            <AddIcon strokeWidth={2.25} className="size-[15px] text-muted-foreground" />
             <span
               aria-hidden
               className="pointer-events-none absolute inset-0 rounded-control bg-foreground/10 opacity-0 group-hover/tile:opacity-100"

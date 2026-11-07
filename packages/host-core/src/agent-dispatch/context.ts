@@ -34,7 +34,7 @@ import type {
   Project,
   PromptResource,
   SessionActivityState,
-  SessionProjection,
+  SessionListingProjection,
   SessionRecord,
   SessionRole,
   SessionEnvRepair,
@@ -299,6 +299,19 @@ export interface AgentCommandServiceOptions {
    * report a baseline it knows is missing a section.
    */
   skillsIndex?: (projectId: string) => Promise<PromptResource | null>;
+  /**
+   * The repository instructions a fresh Session would be born with — the SAME
+   * port a start records through (`SessionSkillPorts.instructions`, VC-1054),
+   * so `prompt baseline` prices the file a real start would record. Absent or
+   * `null` prices no instructions section.
+   */
+  repoInstructions?: (projectId: string, ticketId: string | null) => Promise<PromptResource | null>;
+  /**
+   * This machine's perf store (VC-1092), which `volli perf` reads. Absent
+   * (a host that runs no stall monitor) or a store that failed to open makes
+   * the perf verbs refuse with `DB_UNAVAILABLE` rather than answer empty.
+   */
+  perfStore?: () => import("../perf/store").PerfStore | null;
 }
 
 /** One operator write, as {@link AgentCommandServiceOptions.onOperatorWrite} reports it. */
@@ -405,7 +418,7 @@ export interface AgentVerbContext {
    * verb whose table entry did not opt out — that policy is gone; laziness now
    * makes the opt-out automatic for any verb that never calls this.
    */
-  loadProjections(): Promise<readonly SessionProjection[]>;
+  loadProjections(): Promise<readonly SessionListingProjection[]>;
   /**
    * The terminal half of {@link loadProjections}'s answer: the verbs that need
    * a PTY have nothing a structured-only Session can answer, and dropping it

@@ -138,6 +138,15 @@ export default defineConfig(({ mode, command }) => ({
   // CRITICAL: assets stay relative so the built index and worker chunks resolve
   // beneath volli-app://bundle/ in packaged builds. Plain Vite defaults to "/".
   base: "./",
+  // Public origins only. Dev supplies its explicit launch target; flag-off never mounts runner setup.
+  define: {
+    VOLLI_RUNNER_INSTALL_BACKEND_URL: JSON.stringify(
+      command === "serve" ? null : (packagedCloudConfig(process.env)?.backendUrl ?? null),
+    ),
+    VOLLI_RUNNER_INSTALL_SITE_URL: JSON.stringify(
+      command === "serve" ? null : (packagedCloudConfig(process.env)?.siteUrl ?? null),
+    ),
+  },
   plugins: [
     tailwindcss(),
     react(),
@@ -175,7 +184,7 @@ export default defineConfig(({ mode, command }) => ({
     projects: [
       // Inherits root src/renderer, plugins, @renderer alias — existing store
       // tests keep working under the default include.
-      { extends: true, test: { name: "renderer" } },
+      { extends: true, test: { name: "renderer", setupFiles: ["test-setup.ts"] } },
       // NOT extends: main tests need no plugins; a fresh entry avoids
       // inheriting root src/renderer. It takes the renderer's alias alone
       // (below). @volli/shared resolves via workspace link.
@@ -812,6 +821,10 @@ export default defineConfig(({ mode, command }) => ({
         // The db modules, including export.ts, are protected by
         // @volli/host-core's own gate; see that package's vite.config.ts.
         "**/src/main/session-rpc-ipc.ts",
+        // Renderer stall signals (VC-1091): which interaction a stall is
+        // charged to, how batches are bounded, and what main lets into the log.
+        "src/lib/renderer-stalls.ts",
+        "**/src/main/log/renderer-stall.ts",
         "**/src/main/experiments.ts",
         // Sign-ins on a remote host (VC-702): the relay that binds this Mac's
         // loopback for one request, "Send from this Mac" (a key leaving this
@@ -885,6 +898,9 @@ export default defineConfig(({ mode, command }) => ({
         "automatic-backup-worker": "src/main/automatic-backup-worker.ts",
         "restore-worker": "src/main/restore-worker.ts",
         "migration-export-worker": "src/main/cloud-move/export-worker.ts",
+        // web_fetch's HTML extraction (jsdom → Readability → Turndown), so a
+        // large page is parsed off the thread that serves the app.
+        "web-extract-worker": "src/main/web-extract-worker.ts",
       },
       format: "cjs",
       outDir: "dist-electron",

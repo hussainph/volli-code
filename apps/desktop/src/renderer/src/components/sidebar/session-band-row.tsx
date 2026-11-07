@@ -1,3 +1,5 @@
+import { SessionSelectionContext } from "./session-navigator-selection";
+import { navigatorRowDomId } from "./session-navigator-rows";
 /**
  * The two session-band rows and the small parts they share.
  *
@@ -46,16 +48,19 @@ import { launchStore } from "@renderer/stores/launch";
 import { useSessionPlace } from "@renderer/lib/cloud-places";
 import { useSessionTeam } from "@renderer/lib/cloud-team";
 import { SessionShare, SessionTeamMark } from "@renderer/components/sessions/session-team";
-import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
-import { AsteriskIcon } from "@phosphor-icons/react/dist/csr/Asterisk";
-import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
-import { CodeIcon } from "@phosphor-icons/react/dist/csr/Code";
-import { CursorIcon } from "@phosphor-icons/react/dist/csr/Cursor";
-import { EnvelopeSimpleIcon } from "@phosphor-icons/react/dist/csr/EnvelopeSimple";
-import { EnvelopeSimpleOpenIcon } from "@phosphor-icons/react/dist/csr/EnvelopeSimpleOpen";
-import { GlobeIcon } from "@phosphor-icons/react/dist/csr/Globe";
-import { HexagonIcon } from "@phosphor-icons/react/dist/csr/Hexagon";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
+import {
+  type IconComponent,
+  RequiredIcon,
+  ChevronRightIcon,
+  CodeIcon,
+  PointerIcon,
+  MailIcon,
+  MailOpenIcon,
+  GlobeIcon,
+  HexagonIcon,
+  TerminalIcon,
+} from "@renderer/components/ui/icon";
+
 import {
   displayTicketId,
   harnessLabel,
@@ -81,9 +86,8 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
-import { ListRow, type LoadingBarWidth } from "@renderer/components/ui/list-row";
+import { ListRow } from "@renderer/components/ui/list-row";
 import { SidebarMenuButton, SidebarMenuItem } from "@renderer/components/ui/sidebar";
-import { Skeleton } from "@renderer/components/ui/skeleton";
 import { sessionActivityDotState } from "@renderer/components/ui/session-activity-status";
 import type { StatusDotState } from "@renderer/components/ui/status-dot";
 import { compactAge, relativeTime } from "@renderer/lib/relative-time";
@@ -94,11 +98,8 @@ import { cn } from "@renderer/lib/utils";
  * Session that has none. The globe is not decoration: a ticketless row has no
  * board card or ticket rail, so this list is its only Session 4 listing surface.
  *
- * `bold` at 12px is the sidebar's small-glyph tier, and it is a statement about
- * the PEN rather than the size: Phosphor draws regular at 16/256 em against
- * bold's 24/256, which at 12px is 0.75px of ink against 1.13px next to a ~1.1px
- * text stem. Coverage is scale-invariant, so growing the glyph could never have
- * fixed the hairline that made it read as a smudge beside its own label.
+ * The 2.25 stroke at 12px is the shared small-symbol tier. Changing the pen
+ * lets the mark stand beside its label without enlarging the drawing.
  *
  * A FACE, NOT A LANE. The id has been `font-mono` from the start and it was not
  * enough: it sits inside `text-label`, which bakes in +0.05em of tracking for
@@ -135,7 +136,7 @@ function RowIdentity({ ticket, ticketPrefix }: { ticket: Ticket | null; ticketPr
             clause: this glyph stands in the ID lane at 12px, where regular draws
             lighter than the `text-label` ids it alternates with — so the one
             row without a ticket would read as the faintest row in the band. */}
-        <GlobeIcon weight="bold" aria-label="No ticket" className="size-3" />
+        <GlobeIcon strokeWidth={2.25} aria-label="No ticket" className="size-3" />
       </span>
     );
   }
@@ -155,7 +156,7 @@ function RowIdentity({ ticket, ticketPrefix }: { ticket: Ticket | null; ticketPr
  *
  * MNEMONIC, NOT BRANDING. None of these is a vendor logo — a 12px trace of one
  * would be both worse artwork and a claim we have no licence to make. Each is
- * the Phosphor glyph whose silhouette a reader can already attach to the name:
+ * the shared glyph whose silhouette a reader can already attach to the name:
  * Claude's radial burst, the hexagonal knot Codex's vendor is drawn as, the
  * pointer that IS Cursor's word, and `</>` for OpenCode. What the set is
  * actually chosen for is being four silhouettes nothing else in this band
@@ -169,15 +170,15 @@ function RowIdentity({ ticket, ticketPrefix }: { ticket: Ticket | null; ticketPr
  * {@link TerminalWindowIcon} already says exactly what is true of it, and it is
  * the mark that row draws today.
  */
-const HARNESS_GLYPHS: Record<FirstClassHarnessId, PhosphorIcon> = {
-  "claude-code": AsteriskIcon,
+const HARNESS_GLYPHS: Record<FirstClassHarnessId, IconComponent> = {
+  "claude-code": RequiredIcon,
   codex: HexagonIcon,
-  cursor: CursorIcon,
+  cursor: PointerIcon,
   opencode: CodeIcon,
 };
 
-export function harnessGlyphOf(harnessId: HarnessId): PhosphorIcon {
-  return isFirstClassHarnessId(harnessId) ? HARNESS_GLYPHS[harnessId] : TerminalWindowIcon;
+export function harnessGlyphOf(harnessId: HarnessId): IconComponent {
+  return isFirstClassHarnessId(harnessId) ? HARNESS_GLYPHS[harnessId] : TerminalIcon;
 }
 
 /**
@@ -193,7 +194,7 @@ export interface SessionRowVendor {
   providerId: string | null;
   providerLabel: string;
   /** The glyph standing in where there is no logo — a mnemonic, or the kind's own. */
-  fallback?: PhosphorIcon;
+  fallback?: IconComponent;
 }
 
 /**
@@ -283,6 +284,11 @@ function SessionRowMenu({
   projectId?: string | null;
 }) {
   const team = useSessionTeam(sessionId);
+  const selection = React.useContext(SessionSelectionContext);
+  const bulk =
+    sessionId !== null && selection?.sessionIds.has(sessionId) && selection.sessionIds.size > 1
+      ? selection
+      : null;
   const toggle = launchStore() === "cloud" ? null : onToggle;
   if (toggle === null && !team?.canShare) return children;
   return (
@@ -290,11 +296,17 @@ function SessionRowMenu({
       <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
       <ContextMenuContent>
         <SessionShare sessionId={sessionId} projectId={projectId} />
-        {toggle === null ? null : (
-          <ContextMenuItem
-            icon={unread ? EnvelopeSimpleOpenIcon : EnvelopeSimpleIcon}
-            onSelect={toggle}
-          >
+        {toggle === null ? null : bulk ? (
+          <>
+            <ContextMenuItem icon={MailOpenIcon} onSelect={() => bulk.setRead(false)}>
+              Mark {bulk.sessionIds.size} sessions as read
+            </ContextMenuItem>
+            <ContextMenuItem icon={MailIcon} onSelect={() => bulk.setRead(true)}>
+              Mark {bulk.sessionIds.size} sessions as unread
+            </ContextMenuItem>
+          </>
+        ) : (
+          <ContextMenuItem icon={unread ? MailOpenIcon : MailIcon} onSelect={toggle}>
             {unread ? "Mark as read" : "Mark as unread"}
           </ContextMenuItem>
         )}
@@ -405,8 +417,11 @@ export const ActiveBandRow = React.memo(function ActiveBandRow({
   vendor,
   onSelect,
   onToggleRead,
+  navigatorOffset,
 }: {
   row: ActiveSessionRow;
+  /** Fixed presentation extent in the navigator's flattened model. */
+  navigatorOffset?: number;
   /** Whose project this band belongs to — half of a drag payload's scope. */
   projectId: string;
   ticketPrefix: string;
@@ -446,6 +461,10 @@ export const ActiveBandRow = React.memo(function ActiveBandRow({
 
   return (
     <SidebarMenuItem
+      id={navigatorOffset === undefined ? undefined : navigatorRowDomId(row.id)}
+      data-nav-offset={navigatorOffset}
+      data-nav-height={navigatorOffset === undefined ? undefined : 46}
+      style={navigatorOffset === undefined ? undefined : { height: 46 }}
       data-peek-row={peekable ? row.id : undefined}
       data-peek-surface={peekable ? "nav" : undefined}
       data-unread={unread ? "" : undefined}
@@ -508,8 +527,8 @@ export const ActiveBandRow = React.memo(function ActiveBandRow({
                 className={cn("session-row-dim session-title-sweep min-w-0 flex-1 text-ui", title)}
               >
                 {row.title}
-                <span className="session-title-peak" aria-hidden>
-                  {row.title}
+                <span className="session-title-band" aria-hidden>
+                  <span className="session-title-peak">{row.title}</span>
                 </span>
               </span>
             ) : (
@@ -539,7 +558,7 @@ export const ActiveBandRow = React.memo(function ActiveBandRow({
           // so one line reads at two contrasts down the band and neither of
           // them is the measured one (`globals.css`, the section-heading note).
           secondary={
-            <span className="session-row-meta block truncate text-ui text-muted-foreground transition-colors">
+            <span className="session-row-meta block truncate text-label text-muted-foreground transition-colors">
               {team?.ended ?? activeSubtitle(row, ticketPrefix, now, away)}
             </span>
           }
@@ -580,8 +599,14 @@ export const PreviousBandRow = React.memo(function PreviousBandRow({
   onSelect,
   onToggleRead,
   showIdentity = true,
+  navigatorOffset,
+  folderId,
+  lastInFolder,
 }: {
   row: PreviousSessionRow;
+  navigatorOffset?: number;
+  folderId?: string;
+  lastInFolder?: boolean;
   /** Whose project this band belongs to — half of a drag payload's scope. */
   projectId: string;
   ticketPrefix: string;
@@ -628,6 +653,13 @@ export const PreviousBandRow = React.memo(function PreviousBandRow({
   const sessionId = row.target?.kind === "chat" ? row.target.sessionId : null;
   return (
     <SidebarMenuItem
+      id={navigatorOffset === undefined ? undefined : navigatorRowDomId(row.id)}
+      data-nav-offset={navigatorOffset}
+      data-nav-height={navigatorOffset === undefined ? undefined : 32}
+      data-folder={folderId}
+      data-folder-last={lastInFolder || undefined}
+      className={folderId === undefined ? undefined : "session-navigator-child"}
+      style={navigatorOffset === undefined ? undefined : { height: 32 }}
       data-peek-row={peekable ? row.id : undefined}
       data-peek-surface={peekable ? "nav" : undefined}
       data-unread={unread ? "" : undefined}
@@ -654,7 +686,10 @@ export const PreviousBandRow = React.memo(function PreviousBandRow({
           // NO `title` (D1). What it carried — the untruncated title, the
           // harness's words, the provenance line — the peek's card says, and a
           // native tooltip would open on top of that card.
-          className={cn("h-6 gap-1.5 text-ui text-muted-foreground", row.cleaned && "opacity-80")}
+          className={cn(
+            "h-auto min-h-8 gap-1.5 py-1 text-ui text-muted-foreground",
+            row.cleaned && "text-tertiary-foreground",
+          )}
         >
           {/* No `session-row-dim` here: this band is uniformly muted, with no
               dim/promote pairing to join — and that class also names the Active
@@ -724,10 +759,9 @@ export function sessionGroupPanelId(ticketId: string): string {
  * per ticket, holding its id, its title, how many sessions are behind it and
  * when the newest of them last did anything.
  *
- * **The caller supplies the `SidebarMenuItem`**, unlike the two rows above,
- * which wrap themselves in one. The list this row discloses has to sit inside
- * the same `<li>` to be that row's child, and only the caller holds both. A row
- * dropped straight into a `SidebarMenu` would put a `<button>` in a `<ul>`.
+ * The caller supplies the `SidebarMenuItem`, unlike the two rows above. In
+ * the flat navigator, `controls` addresses its visible sibling rows directly;
+ * another caller may retain the derived group-panel id.
  *
  * **It carries no status dot, and that is structural rather than an omission.**
  * A Session needing a human is pinned to the Active band for as long as it is
@@ -740,22 +774,18 @@ export function sessionGroupPanelId(ticketId: string): string {
  * showed it only when it exceeded one would make the common case unreadable to
  * anybody who had not noticed the rule.
  *
- * **Nothing animates except the caret.** A disclosure in a navigator is opened
- * tens of times a day, which is the frequency where motion should be reduced
- * rather than added, and animating the list's height would be layout and paint
- * inside a scroll container this band can fill. The caret's `transform` is the
- * whole treatment — the same one the sidebar's file tree settled on before it
- * retired (VC-122).
+ * Disclosure is immediate in the fixed-height navigator. Row order and focus
+ * stay with the same keyboard model whether or not a viewport later windows it.
  */
 export const TicketGroupRow = React.memo(function TicketGroupRow({
   ticket,
   ticketPrefix,
   count,
   newestAt,
-  now,
   open,
   selected,
   onToggle,
+  controls,
 }: {
   ticket: Ticket;
   ticketPrefix: string;
@@ -767,41 +797,47 @@ export const TicketGroupRow = React.memo(function TicketGroupRow({
   /**
    * Whether the Session in front of you is one of this ticket's.
    *
-   * The band reveals that group as well as marking it, so the two normally
-   * show together — the child carries the precise highlight, this one says
-   * which stack it came out of. They come apart in the one state that needs
+   * The collapsed group carries the highlight; once open, the selected child
+   * carries it instead. They come apart in the one state that needs
    * this most: collapse the group by hand and the mark is all that is left
    * pointing at where you are.
    */
   selected: boolean;
   onToggle(ticketId: string): void;
+  /** Flattened navigators address the disclosed sibling rows directly. */
+  controls?: string;
 }) {
   return (
     <SidebarMenuButton
       size="sm"
-      isActive={selected}
+      isActive={selected && !open}
       aria-expanded={open}
-      aria-controls={sessionGroupPanelId(ticket.id)}
+      aria-controls={controls ?? sessionGroupPanelId(ticket.id)}
       // The folder's peek hangs off the BUTTON, not off its `<li>`: that
       // element also holds the nested list of its Sessions, and a pointer over
       // a child must resolve to the child (D2, `use-session-peek.tsx`).
       data-peek-row={folderRowId(ticket.id)}
       data-peek-surface="nav"
       onClick={() => onToggle(ticket.id)}
-      // No `title`, for the reason the rows above dropped theirs (D1): this row
-      // peeks its TICKET, and the card says the id and the title in full.
-      className="h-6 gap-1.5 text-ui"
+      title={newestAt > 0 ? new Date(newestAt).toLocaleString() : undefined}
+      aria-description={
+        newestAt > 0 ? `Latest session: ${new Date(newestAt).toLocaleString()}` : undefined
+      }
+      className="h-auto min-h-8 gap-1 rounded-lg py-1 text-ui active:scale-100"
     >
-      {/* `bold` for the same reason every other glyph in this band takes it:
-          at 12px regular draws lighter than the label beside it. */}
-      <CaretRightIcon
-        weight="bold"
-        aria-hidden
-        className={cn("size-3 shrink-0 transition-transform", open && "rotate-90")}
-      />
       <span className={ID_LANE}>{displayTicketId(ticketPrefix, ticket.ticketNumber)}</span>
       <span className="min-w-0 flex-1 truncate text-muted-foreground">{ticket.title}</span>
-      <span className="shrink-0 text-label tabular-nums text-muted-foreground/70">
+      {/* Heavier stroke, for the same reason every other glyph in this band takes it:
+          at 12px regular draws lighter than the label beside it. */}
+      <ChevronRightIcon
+        strokeWidth={2.25}
+        aria-hidden
+        className={cn(
+          "size-3 shrink-0 transition-transform duration-(--duration-menu-in) motion-reduce:transition-none",
+          open && "rotate-90",
+        )}
+      />
+      <span className="shrink-0 text-label tabular-nums text-muted-foreground">
         {count}
         {/* The count and the age are two unlabelled numbers standing next to
             each other, which a screen reader runs into one token — 3 sessions
@@ -809,44 +845,6 @@ export const TicketGroupRow = React.memo(function TicketGroupRow({
             spelled only where there is room for it, which is out of band. */}
         <span className="sr-only">{count === 1 ? " session" : " sessions"}</span>
       </span>
-      {/* The same `3ch` reservation the child rows make, for the same reason:
-          one trailing mark, one right edge, and a ticking age that cannot drag
-          the title's truncation point back and forth as "59m" becomes "1h".
-          And the same 0 sentinel they honour: "nothing durable can date this"
-          drawn as an age would read as the epoch, so the row says nothing. */}
-      {newestAt > 0 ? (
-        <span className="min-w-[3ch] shrink-0 text-right text-label tabular-nums text-muted-foreground">
-          {compactAge(newestAt, now)}
-        </span>
-      ) : null}
     </SidebarMenuButton>
   );
 });
-
-/**
- * The box a band row will take, while the project's listing is being read
- * (VC-383).
- *
- * The same two-line shape at the same `min-h-9` and the same half-step
- * alignments the row above records — the dot on the cap height, the meta line
- * bound to its title — so the rows that replace this land where it stood.
- * VC-383 also records this skeleton's own `pt-0.5` and `gap-1.5`: its shorter
- * 14px/12px bars need the 2px nudge and 6px join to sit in that measured
- * two-line box before real text replaces them. Widths are per row and fixed:
- * the band is waiting, and a placeholder that redraws itself on every mount
- * adds motion to a surface that has none to give. Inert, with no hover fill:
- * there is nothing under it to activate.
- */
-export function SessionBandRowSkeleton({ primaryWidth }: { primaryWidth: LoadingBarWidth }) {
-  return (
-    <SidebarMenuItem aria-hidden>
-      <div className="flex min-h-9 w-full items-start gap-2 rounded-md px-2 py-1">
-        <Skeleton className="mt-1.5 size-2 shrink-0 rounded-full" />
-        <span className="flex min-w-0 flex-1 flex-col gap-1.5 pt-0.5">
-          <Skeleton className={cn("h-3.5", primaryWidth)} />
-          <Skeleton className="h-3 w-1/3" />
-        </span>
-      </div>
-    </SidebarMenuItem>
-  );
-}

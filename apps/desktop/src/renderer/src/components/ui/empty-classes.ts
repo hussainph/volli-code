@@ -12,8 +12,7 @@
  * `py-16`, and six sites with no padding at all — which is not eleven decisions,
  * it is eleven authors. The tell is that the two rail pages ended up
  * byte-identical by coincidence while the two pages that ARE a matched pair
- * (`main-content`'s first-run canvas and `configure-page`'s "nothing to
- * configure") differed in the padding, the heading rung and the icon's shadow.
+ * (`main-content`'s first-run canvas and the project-settings welcome) differed in the padding, the heading rung and the icon's shadow.
  *
  * NEITHER CONSTANT SETS THE BOX. `flex-1`, `min-h-0`, `absolute inset-0` and
  * `size-full` are how a surface fills its parent, and that is the parent's
@@ -45,4 +44,4 @@ export const EMPTY_PAGE =
  * are the same statement at the same scale, and were the same string by
  * accident in four places already.
  */
-export const EMPTY_INLINE = "py-4 text-center text-ui text-muted-foreground";
+export const EMPTY_INLINE = "py-4 text-left text-ui text-muted-foreground";

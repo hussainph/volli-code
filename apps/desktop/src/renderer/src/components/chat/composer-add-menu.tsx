@@ -20,10 +20,7 @@
  * the menu is nothing — a control with no rows is not a control.
  */
 import * as React from "react";
-import { AtIcon } from "@phosphor-icons/react/dist/csr/At";
-import { PaperclipIcon } from "@phosphor-icons/react/dist/csr/Paperclip";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
+import { MentionIcon, AttachmentIcon, AddIcon, TerminalIcon } from "@renderer/components/ui/icon";
 
 import {
   attachTitle,
@@ -31,7 +28,7 @@ import {
 } from "@renderer/components/attachments/composer-attach-button";
 import {
   COMPOSER_CONTROL_ICON_SIZE,
-  COMPOSER_GLYPH_WEIGHT,
+  COMPOSER_GLYPH_STROKE,
 } from "@renderer/components/chat/composer-chrome";
 import { useComposerCaretBinding } from "@renderer/components/chat/composer-caret";
 import { Button } from "@renderer/components/ui/button";
@@ -97,11 +94,11 @@ export function ComposerAddMenu({
             // `ui/button.tsx` records for its press scale.
             className={cn(
               "prompt-add text-muted-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground",
-              "[&>svg]:transition-[rotate] [&>svg]:duration-150 [&>svg]:ease-out data-[state=open]:[&>svg]:rotate-45 motion-reduce:[&>svg]:transition-none",
+              "[&>svg]:transition-[rotate] [&>svg]:duration-(--duration-menu-in) [&>svg]:ease-out data-[state=open]:[&>svg]:rotate-45 motion-reduce:[&>svg]:transition-none",
               className,
             )}
           >
-            <PlusIcon weight={COMPOSER_GLYPH_WEIGHT} />
+            <AddIcon strokeWidth={COMPOSER_GLYPH_STROKE} />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent
@@ -119,7 +116,7 @@ export function ComposerAddMenu({
         >
           {attachUnavailable !== null ? (
             <DropdownMenuItem disabled data-slot="attach-unavailable">
-              <PaperclipIcon />
+              <AttachmentIcon />
               <span className="flex flex-col">
                 Attach files…
                 <span className="text-muted-foreground">{attachUnavailable}</span>
@@ -127,7 +124,7 @@ export function ComposerAddMenu({
             </DropdownMenuItem>
           ) : onFiles === undefined ? null : (
             <DropdownMenuItem onSelect={picker.open}>
-              <PaperclipIcon />
+              <AttachmentIcon />
               Attach files…
             </DropdownMenuItem>
           )}
@@ -135,12 +132,12 @@ export function ComposerAddMenu({
           {insert === undefined ? null : (
             <>
               <DropdownMenuItem onSelect={() => insert("/")}>
-                <TerminalWindowIcon />
+                <TerminalIcon />
                 Commands &amp; skills
                 <DropdownMenuShortcut>/</DropdownMenuShortcut>
               </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => insert("@")}>
-                <AtIcon />
+                <MentionIcon />
                 Mention a file
                 <DropdownMenuShortcut>@</DropdownMenuShortcut>
               </DropdownMenuItem>

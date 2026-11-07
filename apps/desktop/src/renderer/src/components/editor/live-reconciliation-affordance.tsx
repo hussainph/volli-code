@@ -36,7 +36,7 @@ export function LiveReconciliationAffordance(props: LiveReconciliationAffordance
       data-testid="live-reconciliation-conflict"
       data-kind={props.kind}
       className="mx-2 mt-2"
-      title="Your draft and the newer disk version were both preserved."
+      title="Changed on disk · draft kept"
       actions={
         <>
           <Button size="sm" variant="ghost" onClick={props.onUseDisk}>

@@ -54,6 +54,7 @@ import type { AutomationSkipIntent } from "./engine";
 import type { ScheduleCursors } from "./schedule-cursor";
 import type { LogFields } from "../log/logger";
 import { hostLogger } from "../log/root";
+import { withMainSpan } from "../log/context";
 
 const schedulerLog = hostLogger("automation-scheduler");
 
@@ -228,7 +229,7 @@ export function createAutomationScheduler(ports: AutomationSchedulerPorts): Auto
     if (stopped) return;
     timer = ports.setTimer(delayMs, () => {
       timer = null;
-      void run();
+      void withMainSpan({ door: "timer", operation: "automation-schedule" }, run);
     });
   }
 

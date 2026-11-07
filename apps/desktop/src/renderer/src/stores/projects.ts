@@ -43,6 +43,7 @@ import type {
 } from "../../../ipc/contract";
 import { create } from "zustand";
 
+import { markInteraction } from "@renderer/lib/renderer-stalls";
 import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
 import { toastError } from "@renderer/lib/toast";
 import { forgetProjectSessions } from "@renderer/terminal/session-lifecycle";
@@ -55,6 +56,7 @@ import { useProjectUiStore } from "./project-ui";
 import { boardApi } from "@renderer/lib/board-api";
 import { isExperimentOn, useExperimentsStore } from "./experiments";
 import { launchStore } from "./launch";
+import type { ScopeRepaintOrigin } from "@renderer/theme/scope-transition";
 
 /** The `app_state` key `selectedProjectId` is persisted under — also read by lib/boot.ts. */
 export const PROJECTS_UI_APP_STATE_KEY = "volli:projects-ui";
@@ -186,11 +188,14 @@ export interface ProjectsGateway {
  * project removed, boot restoring the persisted choice) is covered by
  * construction rather than by remembering to call something.
  */
-export type SelectedProjectListener = (projectId: string | null) => void;
+export type SelectedProjectListener = (
+  projectId: string | null,
+  origin?: ScopeRepaintOrigin,
+) => void;
 
-const defaultSelectedProjectListener: SelectedProjectListener = (projectId) => {
+const defaultSelectedProjectListener: SelectedProjectListener = (projectId, origin) => {
   if (projectId === null) {
-    void useThemeStore.getState().hydrate();
+    void useThemeStore.getState().hydrate(null, origin);
     return;
   }
   // The workspace's own canvas and appearance are columns on the row this store
@@ -199,11 +204,14 @@ const defaultSelectedProjectListener: SelectedProjectListener = (projectId) => {
   // them up in, and a project that has just been removed has no row to read —
   // hence the null-safe fallback to inheriting.
   const project = useProjectsStore.getState().projects.find(({ id }) => id === projectId);
-  void useThemeStore.getState().hydrate({
-    projectId,
-    canvas: project?.themeCanvas ?? null,
-    appearance: project?.themeAppearance ?? null,
-  });
+  void useThemeStore.getState().hydrate(
+    {
+      projectId,
+      canvas: project?.themeCanvas ?? null,
+      appearance: project?.themeAppearance ?? null,
+    },
+    origin,
+  );
 };
 
 const defaultGateway: ProjectsGateway = {
@@ -339,7 +347,7 @@ interface ProjectsState {
   reorder(activeId: string, overId: string): void;
   /** Persists the rail's current order against `previousOrder` (captured at drag start); reverts + toasts on failure. */
   commitReorder(previousOrder: readonly Project[]): Promise<void>;
-  select(id: string): void;
+  select(id: string, origin?: ScopeRepaintOrigin): void;
   selectByIndex(index: number): void;
 }
 
@@ -490,11 +498,19 @@ export function createProjectsStore(
   /**
    * Announces a selection change to {@link SelectedProjectListener} — and only
    * a real CHANGE: re-selecting the project already showing would otherwise
-   * cost a redundant theme round-trip on every rail click, and boot hydrating
-   * `null` over `null` would race main.tsx's own global-scope read.
+   * cost a redundant theme round-trip on every rail click. Boot hydrating
+   * `null` over `null` leaves the global-scope read to main.tsx, after the
+   * bootstrap's stored appearance has landed.
    */
-  function announceSelection(previous: string | null, next: string | null): void {
-    if (next !== previous) onSelectedProjectChange(next);
+  function announceSelection(
+    previous: string | null,
+    next: string | null,
+    origin?: ScopeRepaintOrigin,
+  ): void {
+    if (next !== previous) {
+      if (origin === undefined) onSelectedProjectChange(next);
+      else onSelectedProjectChange(next, origin);
+    }
   }
 
   return create<ProjectsState>()((set, get) => {
@@ -872,17 +888,18 @@ export function createProjectsStore(
         });
       },
 
-      select(id) {
+      select(id, origin) {
         const { projects, selectedProjectId } = get();
         if (!projects.some((project) => project.id === id)) return;
+        markInteraction("workspace-switch");
         set({ selectedProjectId: id, pendingRemoteSelection: null });
         persistSelection(id);
-        announceSelection(selectedProjectId, id);
+        announceSelection(selectedProjectId, id, origin);
       },
 
       selectByIndex(index) {
         const project = get().projects[index];
-        if (project) get().select(project.id);
+        if (project) get().select(project.id, "keyboard");
       },
     };
   });

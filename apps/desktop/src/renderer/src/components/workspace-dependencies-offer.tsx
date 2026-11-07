@@ -1,7 +1,7 @@
-import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
-import { PackageIcon } from "@phosphor-icons/react/dist/csr/Package";
-import { PlayIcon } from "@phosphor-icons/react/dist/csr/Play";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import { SettingsIcon, PackageIcon, PlayIcon, CloseIcon } from "@renderer/components/ui/icon";
+
+import { Spinner } from "@renderer/components/ui/spinner";
+
 import { errorMessage } from "@volli/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -30,7 +30,7 @@ import { useProjectUiStore } from "@renderer/stores/project-ui";
  * Three ways out, and no fourth. RUN types the workspace's own lockfile-derived
  * command into a real Session terminal, where its output is visible and
  * interruptible, and waits for the sentinel so the offer can withdraw itself
- * the moment the install lands. SET A SETUP COMMAND goes to Configure, where a
+ * the moment the install lands. SET A SETUP COMMAND goes to Settings → Worktrees, where a
  * project's setup command already exists and will run this automatically for
  * every future worktree. IGNORE is a persisted per-project answer — unlike the
  * banner's string-keyed component state, which came back on every relaunch and
@@ -58,7 +58,7 @@ export function WorkspaceDependenciesOffer() {
   );
   const terminalFocused = useUiStore((state) => state.terminalFocusTarget !== null);
   const dismiss = useProjectUiStore((state) => state.dismissDependencyOffer);
-  const setNav = useProjectUiStore((state) => state.setNav);
+  const configure = useUiStore((state) => state.requestConfigureCategory);
   // The answer that lands is the one asked for last, whether the ask came from
   // selection, from refocus, or from an install this surface itself ran.
   const fetchToken = useRef(0);
@@ -127,7 +127,7 @@ export function WorkspaceDependenciesOffer() {
         installCommand={installCommand}
         running={running}
         onRun={() => void runInstall()}
-        onConfigureSetup={() => setNav(projectId, "configure")}
+        onConfigureSetup={() => configure("worktrees")}
         onIgnore={() => dismiss(projectId)}
       />
     </div>
@@ -151,20 +151,27 @@ export function WorkspaceDependenciesNotice({
   return (
     <Notice
       tone="neutral"
-      icon={PackageIcon}
-      title={running ? `Running ${installCommand}…` : "Dependencies aren't installed yet"}
+      icon={running ? Spinner : PackageIcon}
+      className="[&_p]:font-semibold"
+      title={running ? `Running ${installCommand}` : "Dependencies aren't installed yet"}
       actions={
         <>
-          <Button size="xs" variant="outline" disabled={running} onClick={onRun}>
-            <PlayIcon />
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={running}
+            aria-busy={running}
+            onClick={onRun}
+          >
+            {running ? <Spinner aria-label="Running" /> : <PlayIcon />}
             Run {installCommand}
           </Button>
-          <Button size="xs" variant="ghost" disabled={running} onClick={onConfigureSetup}>
-            <GearSixIcon />
+          <Button size="xs" variant="outline" disabled={running} onClick={onConfigureSetup}>
+            <SettingsIcon />
             Set a setup command
           </Button>
           <Button size="xs" variant="ghost" disabled={running} onClick={onIgnore}>
-            <XIcon />
+            <CloseIcon />
             Ignore
           </Button>
         </>

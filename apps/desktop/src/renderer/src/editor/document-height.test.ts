@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { createDocumentHeightSync } from "./document-height";
+import { createDocumentLayout } from "./document-height";
 
 function fixture() {
   let contentHeight = 800;
@@ -10,9 +10,15 @@ function fixture() {
   const onContentHeightChange = vi.fn<(px: number) => void>();
   const getContentHeight = vi.fn(() => contentHeight);
   const cancelFrame = vi.fn((id: number) => frames.delete(id));
-  const sync = createDocumentHeightSync({
+  let hostSize = { width: 600, height: 384 };
+  let resizing = false;
+  const layout = vi.fn<(size: { width: number; height: number }) => void>();
+  const sync = createDocumentLayout({
     getContentHeight,
     setHeight,
+    getHostSize: () => hostSize,
+    layout,
+    isResizeActive: () => resizing,
     onContentHeightChange,
     requestFrame: (callback) => {
       frames.set(++nextId, callback);
@@ -27,6 +33,9 @@ function fixture() {
     setHeight,
     onContentHeightChange,
     cancelFrame,
+    layout,
+    hostSize: (width: number, height: number) => (hostSize = { width, height }),
+    resizing: (value: boolean) => (resizing = value),
     contentHeight: (px: number) => (contentHeight = px),
     flush() {
       const [id, callback] = frames.entries().next().value!;
@@ -36,7 +45,7 @@ function fixture() {
   };
 }
 
-describe("document auto-height (automaticLayout is the sole layout driver)", () => {
+describe("deferred document layout (Monaco automaticLayout is disabled)", () => {
   it("coalesces Monaco's burst and reads the latest height outside its event stack", () => {
     const f = fixture();
     f.sync.schedule(); // mount
@@ -57,7 +66,10 @@ describe("document auto-height (automaticLayout is the sole layout driver)", () 
     const f = fixture();
     const cssCap = 384;
     let actualHostHeight = 0;
-    f.setHeight.mockImplementation((px) => (actualHostHeight = Math.min(cssCap, px)));
+    f.setHeight.mockImplementation((px) => {
+      actualHostHeight = Math.min(cssCap, px);
+      f.hostSize(600, actualHostHeight);
+    });
     for (const height of [800, 1200, 72, 0]) {
       f.contentHeight(height);
       f.sync.schedule();
@@ -72,11 +84,12 @@ describe("document auto-height (automaticLayout is the sole layout driver)", () 
     f.sync.schedule();
     f.flush();
     // A width-only change, a cap toggle or our own height write can notify
-    // again. Monaco's automaticLayout owns those sizes, not this callback.
+    // again. Only a changed CSS box should reach Monaco's layout().
     f.sync.schedule();
     f.flush();
     expect(f.setHeight).toHaveBeenCalledTimes(1);
     expect(f.onContentHeightChange).toHaveBeenCalledTimes(1);
+    expect(f.layout).toHaveBeenCalledTimes(1);
     expect(f.frames.size).toBe(0);
   });
 
@@ -95,6 +108,68 @@ describe("document auto-height (automaticLayout is the sole layout driver)", () 
     expect(f.setHeight.mock.calls).toEqual([[800], [900]]);
     expect(f.onContentHeightChange).toHaveBeenLastCalledWith(900);
     expect(f.frames.size).toBe(0);
+  });
+
+  it("lays out width and cap changes even when content height is unchanged", () => {
+    const f = fixture();
+    f.sync.schedule();
+    f.flush();
+    f.hostSize(500, 384);
+    f.sync.schedule();
+    f.flush();
+    f.hostSize(500, 800); // Expand removes the ticket-body cap
+    f.sync.schedule();
+    f.flush();
+    expect(f.layout.mock.calls).toEqual([
+      [{ width: 600, height: 384 }],
+      [{ width: 500, height: 384 }],
+      [{ width: 500, height: 800 }],
+    ]);
+    expect(f.setHeight).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a re-wrap's new content height settle on the next frame, never recursively", () => {
+    const f = fixture();
+    f.layout.mockImplementationOnce(() => {
+      f.contentHeight(1100);
+      f.sync.schedule();
+      expect(f.layout).toHaveBeenCalledTimes(1);
+    });
+    f.sync.schedule();
+    f.flush();
+    expect(f.frames.size).toBe(1);
+    f.flush();
+    expect(f.setHeight.mock.calls).toEqual([[800], [1100]]);
+    expect(f.layout).toHaveBeenCalledTimes(1); // same clamped box
+    expect(f.onContentHeightChange).toHaveBeenLastCalledWith(1100);
+  });
+
+  it("waits for the pane resize to settle even if a frame was already queued", () => {
+    const f = fixture();
+    f.sync.schedule();
+    f.resizing(true);
+    f.flush();
+    expect(f.getContentHeight).not.toHaveBeenCalled();
+    expect(f.layout).not.toHaveBeenCalled();
+    f.resizing(false);
+    f.sync.schedule(); // observePaneLayout's settled notification
+    f.flush();
+    expect(f.layout).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not lay out a hidden/empty box and recovers when it becomes visible", () => {
+    const f = fixture();
+    f.hostSize(0, 384);
+    f.sync.schedule();
+    f.flush();
+    f.hostSize(600, 0);
+    f.sync.schedule();
+    f.flush();
+    expect(f.layout).not.toHaveBeenCalled();
+    f.hostSize(600, 384);
+    f.sync.schedule();
+    f.flush();
+    expect(f.layout).toHaveBeenCalledExactlyOnceWith({ width: 600, height: 384 });
   });
 
   it("cancels pending mount/work on teardown and ignores even an already queued callback", () => {

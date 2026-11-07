@@ -91,6 +91,7 @@ export default defineConfig({
         "src/log/ring.ts",
         "src/log/steps.ts",
         "src/log/correlation.ts",
+        "src/log/stall.ts",
         "src/session-runtime/correlated-executor.ts",
         // The Session concurrency budget (VC-339). In the gate because every
         // branch of it is a rule about a machine nobody watches: a miscount
@@ -211,6 +212,7 @@ export default defineConfig({
         // cancelled export that reads as complete. `worker-entry.ts` stays
         // out: its one line only ever runs inside a worker thread, which the
         // coverage provider does not instrument; `worker.test.ts` drives it.
+        "src/migration-export/chunk-lines.ts",
         "src/migration-export/errors.ts",
         "src/migration-export/exporter.ts",
         "src/migration-export/file-streams.ts",

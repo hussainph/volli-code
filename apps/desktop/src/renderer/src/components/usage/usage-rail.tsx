@@ -27,6 +27,7 @@ import { HomeUsageFooter } from "@renderer/components/usage/home-usage-block";
 import { TicketUsageBlock } from "@renderer/components/usage/ticket-usage-block";
 import { useUsageModelCatalogue } from "@renderer/components/usage/usage-model-catalogue";
 import { modelRows, ticketSessionRows } from "@renderer/components/usage/usage-rail-model";
+import { selectSettleSignal } from "@renderer/stores/chat-session-selectors";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
@@ -44,15 +45,14 @@ import type { UsageWindow } from "@renderer/usage/usage-format";
  * them all. One signal over every lifecycle is a handful of characters to
  * compare and costs an indexed read only when something genuinely moved.
  *
- * A joined string rather than an object so zustand's `Object.is` comparison
- * actually holds it steady between unrelated renders.
+ * A string rather than an object so zustand's `Object.is` comparison
+ * actually holds it steady between unrelated renders, and so the usage cache
+ * can compare the signal an entry was read under by value.
  */
 function useSettleSignal(): string {
-  return useChatSessionsStore((state) =>
-    Object.values(state.sessions)
-      .map((slice) => slice.lifecycle)
-      .join(","),
-  );
+  // The store counts lifecycle moves as it writes them (VC-515), so this is
+  // O(1) per streamed frame rather than a join over every resident Session.
+  return useChatSessionsStore(selectSettleSignal);
 }
 
 /**
@@ -226,6 +226,7 @@ export function TicketUsageRailFooter({ ticketId }: { ticketId: string }) {
       summary={bySession.total}
       sessions={sessions}
       topModel={topModel}
+      models={byModel === null ? [] : modelRows(byModel, catalogue)}
       open={usageOpen}
       onOpenChange={(open) => useUiStore.getState().setRailFold("usage", open)}
     />

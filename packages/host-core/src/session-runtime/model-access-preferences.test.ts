@@ -610,12 +610,17 @@ describe("the stored Code Mode policy (VC-471)", () => {
     const stored = writeCodeModePolicy(
       ctx.db,
       {
-        enabled: false,
+        enabled: true,
+        defaultMode: "both",
         models: { "openai-codex/gpt-5.5": "only", "anthropic/claude-haiku-4-5": "maybe" as never },
       },
       1,
     );
-    expect(stored).toEqual({ enabled: false, models: { "openai-codex/gpt-5.5": "only" } });
+    expect(stored).toEqual({
+      enabled: true,
+      defaultMode: "both",
+      models: { "openai-codex/gpt-5.5": "only" },
+    });
     expect(readCodeModePolicy(ctx.db)).toEqual(stored);
   });
 });

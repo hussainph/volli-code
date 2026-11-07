@@ -82,7 +82,7 @@ pnpm -C convex exec convex env list --names-only --deployment <ref>
 | `VOLLI_S3_ENDPOINT` | Transcripts, blobs | `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`, no path. |
 | `VOLLI_S3_BUCKET`, `VOLLI_S3_ACCESS_KEY_ID`, `VOLLI_S3_SECRET_ACCESS_KEY` | Transcripts, blobs | `volli-<env>` and that bucket's token (step 5). |
 | `VOLLI_S3_REGION` | Optional | Leave unset for R2; defaults to `auto`. |
-| `GITHUB_APP_*`, `GITHUB_WEBHOOK_SECRETS` | Optional | A GitHub App per environment (`convex/README.md`, "GitHub App"); unset, `github.config` answers `configured: false`. |
+| `GITHUB_APP_ID`, `_SLUG`, `_CLIENT_ID`, `_CLIENT_SECRET`, `_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRETS` | Optional, **all six or none** | A GitHub App per environment (`convex/README.md`, "GitHub App"); none set, `github.config` answers `configured: false`. Read at run time: no push needed after setting them. The self-check names each one a partial set is missing (`incomplete`). |
 
 **Never set on a cloud deployment:** `VOLLI_TEST_JWKS` (it makes the test issuer
 trusted, so anyone who can mint a token for it can act as any user; the test-only
@@ -311,7 +311,8 @@ pnpm -C convex exec convex run health:deploymentChecks '{"mode":"cloud"}' --depl
 Require `{ok:true, mode:"cloud", deployment:"remote", problems:[]}`. An unsafe
 deployment throws `deployment_unsafe` and the CLI exits non-zero; its report
 contains variable names and problem codes, never values. It refuses a test issuer
-or a missing required variable from step 2. Test mode is only for loopback and is
+or a missing required variable from step 2, and a partial GitHub App set
+(`incomplete`, one per unset variable; none set passes). Test mode is only for loopback and is
 refused on a hosted deployment; it cannot replace the cloud check. These are
 presence checks, not proof that the keys, providers or storage actually work.
 If the function is not available yet, this gate remains **blocking**.
@@ -328,6 +329,16 @@ curl -sS -o /dev/null -w '%{http_code}\n' -X POST '<explicit-site-url>/runner/li
 `404` from the probe means the site URL is wrong or the push did not land; a `4xx` from
 the route itself (`/runner/link` takes JSON only) is the good answer: `400` with
 `{"error":{"code":"invalid_request","message":"Send the body as application/json."}}`.
+
+The GitHub webhook probe tells whether the deployment reads its App:
+
+```sh
+curl -sS -o /dev/null -w '%{http_code}\n' -X POST '<explicit-site-url>/github/webhook'
+```
+
+`503` means no App is configured: right before the GitHub App variables are set, wrong after.
+`401` means it is configured and refuses the unsigned delivery: the good answer once all six
+are set. `404` again means the wrong site URL or a push that did not land.
 
 ## 9. The desktop build: inputs, launch, tokens
 
@@ -531,6 +542,7 @@ operator escape hatch. Workspace owners/admins cannot call this internal functio
 | WorkOS sign-in works, backend answers unauthenticated | `WORKOS_CLIENT_ID` missing, or a different WorkOS environment than the build's client id. It is read at push time: set it, push again. |
 | `/runner/token` answers `issuer_unconfigured` | No `VOLLI_RUNNER_SIGNING_KEY`; no credential was spent. |
 | Live text arrives; settled packs fail | Storage: bucket CORS, `VOLLI_BUILD_STORAGE_ORIGIN` or a key mismatch. Live chunks and staged inline bodies never touch the store. |
+| GitHub · Connect is missing, or `/github/webhook` answers `503`, after setting the App's variables | One of the six is unset or blank, which the self-check (step 8) names as `incomplete`; or, if it passes, they were set on another deployment (check the target name). |
 | Deploy targets the wrong deployment | The deploy key decides the target: check the name the CLI prints. |
 
 Widening a credential, bucket, lifecycle rule or CORS origin to chase a symptom is the

@@ -93,7 +93,7 @@ describe("aboutHealth — before the reads land", () => {
     ]) {
       const result = health(loading);
       expect(result.state).toBe("checking");
-      expect(result.headline).toBe("Checking…");
+      expect(result.headline).toBe("Checking");
       expect(result.canFix).toBe(false);
     }
   });
@@ -150,7 +150,7 @@ describe("aboutHealth — a read that could not be completed", () => {
       {
         id: "cli-status:socket",
         headline: "App socket: Not running",
-        detail: "Relaunch Volli, then re-check.",
+        detail: "",
       },
     ]);
   });
@@ -217,9 +217,24 @@ describe("aboutHealth — once both reads are ready", () => {
       {
         id: "cli-status:socket",
         headline: "App socket: Not running",
-        detail: "Relaunch Volli, then re-check.",
+        detail: "Relaunch Volli, then retry.",
       },
     ]);
+  });
+
+  it("never directs an unsupported shell to the retired CLI settings page", () => {
+    const rows = [
+      {
+        key: "path",
+        label: "Volli on login PATH",
+        tone: "warn" as const,
+        value: "Missing",
+        remedy: "Open Settings → CLI and add the listed bin directory.",
+      },
+    ];
+    expect(health({ rows }).faults[0]?.detail).toBe(
+      "Run `volli doctor` in a terminal for repair steps.",
+    );
   });
 
   it("gives an older status warning generic repair guidance when it carries no remedy", () => {
@@ -238,7 +253,7 @@ describe("aboutHealth — once both reads are ready", () => {
         {
           id: "cli-status:shell",
           headline: "Shell chain: Not generated",
-          detail: "Select Re-check for current repair guidance.",
+          detail: "Retry for current repair steps.",
         },
       ],
     );

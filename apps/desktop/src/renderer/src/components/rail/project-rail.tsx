@@ -1,3 +1,8 @@
+import { Button } from "@renderer/components/ui/button";
+import { SearchIcon } from "@renderer/components/ui/icon";
+import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
+import { SearchableCommand } from "@renderer/components/ui/searchable-command";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import * as React from "react";
 import {
   closestCenter,
@@ -30,9 +35,13 @@ import { launchStore } from "@renderer/stores/launch";
  * `useProjectsStore` subscription still updates it normally — memo blocks
  * parent-driven renders, never a hook's own update.
  */
-export const ProjectRail = React.memo(function ProjectRail() {
+export const ProjectRail = React.memo(function ProjectRail({
+  presentation = "rail",
+}: { presentation?: "rail" | "menu" } = {}) {
   const projects = useProjectsStore((state) => state.projects);
   const reorder = useProjectsStore((state) => state.reorder);
+  const [switcherOpen, setSwitcherOpen] = React.useState(false);
+  const [query, setQuery] = React.useState("");
   // Fixed for the window's life: main chose it before the window opened.
   const cloudLaunch = launchStore() === "cloud";
   const [activeDragId, setActiveDragId] = React.useState<string | null>(null);
@@ -74,6 +83,56 @@ export const ProjectRail = React.memo(function ProjectRail() {
 
   return (
     <div className="app-region-drag flex h-full min-h-0 flex-col">
+      {projects.length > 8 ? (
+        <div className="app-region-no-drag flex shrink-0 justify-center py-2">
+          <Popover
+            open={switcherOpen}
+            onOpenChange={(next) => {
+              setSwitcherOpen(next);
+              if (!next) setQuery("");
+            }}
+          >
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <PopoverTrigger asChild>
+                  <Button variant="toolbar" size="icon-sm" aria-label="Switch project">
+                    <SearchIcon />
+                  </Button>
+                </PopoverTrigger>
+              </TooltipTrigger>
+              <TooltipContent>Switch project</TooltipContent>
+            </Tooltip>
+            <PopoverContent side="right" align="start" className="w-80 p-0">
+              <SearchableCommand
+                items={projects.filter(
+                  (project) =>
+                    project.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()) ||
+                    project.ticketPrefix
+                      .toLocaleLowerCase()
+                      .includes(query.trim().toLocaleLowerCase()),
+                )}
+                query={query}
+                onQueryChange={setQuery}
+                placeholder="Search projects"
+                keyOf={(project) => project.id}
+                renderItem={(project) => (
+                  <>
+                    <span className="min-w-0 flex-1 truncate" title={project.name}>
+                      {project.name}
+                    </span>
+                    <span className="text-label text-muted-foreground">{project.ticketPrefix}</span>
+                  </>
+                )}
+                onSelect={(project) => {
+                  useProjectsStore.getState().select(project.id);
+                  setSwitcherOpen(false);
+                  setQuery("");
+                }}
+              />
+            </PopoverContent>
+          </Popover>
+        </div>
+      ) : null}
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
@@ -84,12 +143,19 @@ export const ProjectRail = React.memo(function ProjectRail() {
         onDragCancel={handleDragEnd}
       >
         <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
-          <div className="flex min-h-0 flex-1 flex-col items-center gap-4 overflow-y-auto px-2 pt-4 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div
+            className={
+              presentation === "menu"
+                ? "flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-1"
+                : "flex min-h-0 flex-1 flex-col items-center gap-3 overflow-y-auto px-2 pt-0.5 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            }
+          >
             {cloudLaunch ? <CloudWorkspaceHead /> : null}
             {projects.map((project, index) => (
               <ProjectTile
                 key={project.id}
                 project={project}
+                presentation={presentation}
                 index={index}
                 dimmed={project.id === activeDragId}
               />

@@ -1,7 +1,8 @@
 import * as React from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
+import { AddIcon } from "@renderer/components/ui/icon";
+
 import { TICKET_STATUS_LABELS, type Label, type Ticket, type TicketStatus } from "@volli/shared";
 
 import { columnDroppableId } from "@renderer/components/board/board-dnd";
@@ -27,7 +28,6 @@ import { useBoardSessionActivityMap } from "@renderer/components/board/session-a
 import { TicketCard } from "@renderer/components/board/ticket-card";
 import { useTicketComposer } from "@renderer/components/board/use-ticket-composer";
 import { readOnlyControl } from "@renderer/components/hosts/use-hosts";
-import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
 import { cn } from "@renderer/lib/utils";
 
@@ -48,8 +48,6 @@ interface BoardColumnProps {
   onOpen(ticketId: string): void;
   composerInitiallyOpen: boolean;
   onComposerClose(status: TicketStatus): void;
-  /** Play the enter transition — true for columns appearing on an already-mounted board. */
-  animateEnter: boolean;
   /**
    * A ticket that must be brought into this column's WINDOW so something
    * outside can reach its card (VC-419: keyboard focus returning from the
@@ -76,10 +74,11 @@ interface BoardColumnProps {
    * not allowed to do.
    */
   dragActive?: boolean;
+  instantSort?: boolean;
 }
 
-/** The column list's `gap-2`, in px — the spacers have to account for it. */
-const COLUMN_ROW_GAP = 8;
+/** The column list's `gap-1.5`, in px — the spacers have to account for it. */
+const COLUMN_ROW_GAP = 6;
 
 /**
  * The DOM half of `scrollOffsetInRows` (column-window.ts, VC-451): the
@@ -309,11 +308,11 @@ export const BoardColumn = React.memo(function BoardColumn({
   onOpen,
   composerInitiallyOpen,
   onComposerClose,
-  animateEnter,
   offered,
   dimmed = false,
   aimed = false,
   dragActive = false,
+  instantSort = false,
   revealTicketId = null,
 }: BoardColumnProps) {
   // ticketId → what is running on it; absent means nothing is (VC-100). Read
@@ -371,7 +370,7 @@ export const BoardColumn = React.memo(function BoardColumn({
   });
   const mounted = tickets.slice(mountedRange.first, mountedRange.last);
   // A spacer stands for the rows above or below the window so the scroller's
-  // range describes the whole column. `- gap` because the flex `gap-2` between
+  // range describes the whole column. `- gap` because the flex `gap-1.5` between
   // the spacer and the card beside it already supplies the last row's gap.
   const spacerHeight = (rows: number) => Math.max(0, rows * rowStride - COLUMN_ROW_GAP);
   const leadingRows = mountedRange.first;
@@ -396,28 +395,22 @@ export const BoardColumn = React.memo(function BoardColumn({
         // mouse drag-to-pan (see useBoardCanvasPan). Short columns still hug.
         // cursor-default overrides the canvas's cursor-grab so only empty
         // background reads as a pan surface.
-        "flex min-h-0 max-h-[85%] w-72 flex-none cursor-default flex-col rounded-lg bg-muted/30",
-        // Enter is an opacity fade ONLY, and so is the dim below it. This
-        // column hosts droppables that dnd-kit measures in synchronous layout
-        // effects; a scale mid-flight returns a different rect on every commit
-        // and measureRects loops to React's max update depth (the DndContext
-        // crash). Nothing here may animate anything a rect is read from — the
-        // 0.98 entrance died for that, and the ⌥ picker's own panel floats
-        // over the list rather than growing inside it for the same reason.
-        "transition-[opacity] duration-200 ease-out motion-reduce:transition-none",
-        animateEnter && "starting:opacity-0",
+        "board-column flex min-h-0 max-h-[85%] flex-none cursor-default flex-col rounded-column",
+        // Targets and navigation update immediately, including keyboard drops.
         // Quieted while another column holds the ⌥ picker: one column is being
         // aimed at, and the rest are not the question.
         dimmed && "opacity-50",
         // The board's card order and parentage stay frozen during the gesture
         // to keep dnd-kit measurement stable. This paint-only ring replaces the
         // old reparented-card gap as explicit cross-column landing feedback.
-        aimed && "bg-accent/50 ring-1 ring-inset ring-primary/50",
+        aimed && "bg-(--accent-tint) ring-1 ring-inset ring-primary-text",
       )}
     >
-      <div className="group/column-header flex items-center gap-2 px-4 pt-2 pb-2">
-        <span className="text-ui font-medium text-foreground">{TICKET_STATUS_LABELS[status]}</span>
-        <Badge variant="count">{tickets.length}</Badge>
+      <div className="group/column-header flex h-8 shrink-0 items-center gap-1.5 px-2">
+        <span className="font-display text-ui font-semibold text-foreground">
+          {TICKET_STATUS_LABELS[status]}
+        </span>
+        <span className="text-ui text-muted-foreground">{tickets.length}</span>
         <div className="flex-1" />
         {/* Arming lives on the column because that is what it is a property of
             (VC-112). Always visible so an unarmed column still offers an
@@ -483,12 +476,16 @@ export const BoardColumn = React.memo(function BoardColumn({
               // measurement churn that took this board out once already
               // (VC-221, see the note above the scroller).
               ref={attachList}
-              className="flex min-h-0 flex-1 flex-col gap-2 px-2 pb-2"
+              // Content must keep its intrinsic height. A flex-1/min-h-0 list
+              // shrinks to the viewport and crushes virtual spacers to zero,
+              // changing the scroll range every time the window moves.
+              className="flex min-h-full shrink-0 flex-col gap-1.5"
             >
               {leadingRows > 0 ? (
                 <div
                   aria-hidden
                   data-column-spacer="leading"
+                  className="shrink-0"
                   style={{ height: spacerHeight(leadingRows) }}
                 />
               ) : null}
@@ -501,6 +498,7 @@ export const BoardColumn = React.memo(function BoardColumn({
                   projectLabels={projectLabels}
                   selected={selectedSet.has(ticket.id)}
                   dragHidden={draggingSet.has(ticket.id)}
+                  instantSort={instantSort}
                   dragTicketIds={selectedSet.has(ticket.id) ? groupDragIds : undefined}
                   sessionActivity={sessionActivity[ticket.id] ?? null}
                   onSelect={onSelect}
@@ -511,6 +509,7 @@ export const BoardColumn = React.memo(function BoardColumn({
                 <div
                   aria-hidden
                   data-column-spacer="trailing"
+                  className="shrink-0"
                   style={{ height: spacerHeight(trailingRows) }}
                 />
               ) : null}
@@ -519,7 +518,7 @@ export const BoardColumn = React.memo(function BoardColumn({
         </SortableContext>
       </div>
       {composer.open ? (
-        <div className="mx-2 mb-2 rounded-lg border border-border bg-card px-4 py-2">
+        <div className="mx-2 mb-2 rounded-card border border-border bg-card px-4 py-2">
           <input
             ref={composer.inputRef}
             autoFocus
@@ -539,7 +538,7 @@ export const BoardColumn = React.memo(function BoardColumn({
           onClick={composer.openComposer}
           className="mx-2 mb-2 justify-start gap-1 text-ui text-muted-foreground"
         >
-          <PlusIcon className="size-3.5" />
+          <AddIcon className="size-3.5" />
           New
         </Button>
       )}

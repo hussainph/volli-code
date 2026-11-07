@@ -73,7 +73,11 @@ import {
   systemPrefersDark,
   type PaintCanvasOptions,
 } from "@renderer/theme/canvas-paint";
-import { beginScopeRepaint, shouldEaseScopeRepaint } from "@renderer/theme/scope-transition";
+import {
+  beginScopeRepaint,
+  shouldEaseScopeRepaint,
+  type ScopeRepaintOrigin,
+} from "@renderer/theme/scope-transition";
 import { refreshMonacoEditorTheme } from "@renderer/editor/monaco-theme";
 import { writeThrough } from "@renderer/stores/mutate";
 import { notAvailableOn, remoteHostNow } from "./remote-project";
@@ -162,7 +166,7 @@ export interface ThemeStoreDeps {
    * flip — never for an authoring edit or a preview, where instant is the
    * correct feedback.
    */
-  beginScopeRepaint(applyTokens: () => void): void;
+  beginScopeRepaint(applyTokens: () => void, origin?: ScopeRepaintOrigin): void;
   /**
    * What the system was asking for when this window was built — main's
    * `nativeTheme` reading, handed over on the process arguments. Called exactly
@@ -236,7 +240,7 @@ interface ThemeState {
   /** Seeds the global canvas + appearance from the bootstrap payload's raw `app_state` rows. */
   hydrateGlobal(appState: Record<string, string>): void;
   /** Reads the terminal chain for a scope, adopting the workspace's canvas columns with it. */
-  hydrate(scope?: ThemeProjectScope | null): Promise<void>;
+  hydrate(scope?: ThemeProjectScope | null, origin?: ScopeRepaintOrigin): Promise<void>;
   /** The system flipped light↔dark: re-resolve and repaint every scope on `auto`. */
   noteSystemAppearance(prefersDark: boolean): void;
   acceptTerminal(payload: GhosttyAppearancePayload): void;
@@ -246,11 +250,15 @@ interface ThemeState {
   cancelPreview(): void;
   commitPreview(scope: ThemeScope): Promise<boolean>;
   setGlobalCanvas(canvas: Canvas): Promise<boolean>;
-  setGlobalAppearance(appearance: Appearance): Promise<boolean>;
+  setGlobalAppearance(appearance: Appearance, origin?: ScopeRepaintOrigin): Promise<boolean>;
   /** One workspace's canvas; `null` puts it back to inheriting the global one. */
   setProjectCanvas(projectId: string, canvas: Canvas | null): Promise<boolean>;
   /** One workspace's appearance; `null` puts it back to inheriting. */
-  setProjectAppearance(projectId: string, appearance: Appearance | null): Promise<boolean>;
+  setProjectAppearance(
+    projectId: string,
+    appearance: Appearance | null,
+    origin?: ScopeRepaintOrigin,
+  ): Promise<boolean>;
 }
 
 /** The inputs that decide what is on screen right now. */
@@ -383,7 +391,9 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
      */
     let hydrateGeneration = 0;
 
-    const repaint = (options: { eased?: boolean; transient?: boolean } = {}): void => {
+    const repaint = (
+      options: { eased?: boolean; transient?: boolean; origin?: ScopeRepaintOrigin } = {},
+    ): void => {
       const state = get();
       const active = activeTheme(state);
       // Keyed on the canvas AND the mode, because one canvas paints two
@@ -412,7 +422,7 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
           deps.beginScopeRepaint(() => {
             const current = activeTheme(get());
             deps.paintCanvas(current.canvas.value, current.resolved, { transient });
-          });
+          }, options.origin);
         } else {
           deps.paintCanvas(active.canvas.value, active.resolved, { transient });
         }
@@ -479,7 +489,11 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
      * canvas change — and the eased repaint (#69) is decided here, before the
      * state moves, while the outgoing scope and mode are still readable.
      */
-    const accept = (value: ThemeStatePayload, scope: ThemeProjectScope | null): void => {
+    const accept = (
+      value: ThemeStatePayload,
+      scope: ThemeProjectScope | null,
+      origin?: ScopeRepaintOrigin,
+    ): void => {
       const previous = get();
       const override = surfaceOverride(scope, value.projectOverride);
       const next: ActiveThemeInput = { ...previous, projectOverride: override };
@@ -496,7 +510,7 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
         terminal: value.terminal,
         hydrated: true,
       });
-      repaint({ eased });
+      repaint({ eased, origin });
     };
 
     /**
@@ -567,13 +581,16 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
      * not a transition — see {@link ThemeState.hydrateGlobal}, the only caller
      * that passes it.
      */
-    const setAndRepaint = (patch: Partial<ThemeState>, { ease = true } = {}): void => {
+    const setAndRepaint = (
+      patch: Partial<ThemeState>,
+      { ease = true, origin }: { ease?: boolean; origin?: ScopeRepaintOrigin } = {},
+    ): void => {
       dropPendingPreviewPaint();
       const hadPainted = painted !== null;
       const before = activeTheme(get()).resolved;
       set(patch);
       const after = activeTheme(get()).resolved;
-      repaint({ eased: ease && hadPainted && before !== after });
+      repaint({ eased: ease && hadPainted && before !== after, origin });
     };
 
     /**
@@ -639,7 +656,7 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
         );
       },
 
-      async hydrate(scope) {
+      async hydrate(scope, origin) {
         const generation = ++hydrateGeneration;
         let result: ThemeStateResult;
         try {
@@ -661,7 +678,7 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
           toastError(`Couldn't load the theme: ${result.error}`);
           return;
         }
-        accept(result.value, scope ?? null);
+        accept(result.value, scope ?? null, origin);
       },
 
       noteSystemAppearance(prefersDark) {
@@ -771,9 +788,9 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
         return true;
       },
 
-      async setGlobalAppearance(appearance) {
+      async setGlobalAppearance(appearance, origin) {
         const previous = get().globalAppearance;
-        setAndRepaint({ previewAppearance: null, globalAppearance: appearance });
+        setAndRepaint({ previewAppearance: null, globalAppearance: appearance }, { origin });
         const result = await writeThrough("save the appearance", () =>
           deps.gateway.setGlobalAppearance(appearance),
         );
@@ -815,18 +832,21 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
         return true;
       },
 
-      async setProjectAppearance(projectId, appearance) {
+      async setProjectAppearance(projectId, appearance, origin) {
         const state = get();
         const inScope = state.projectId === projectId;
         const previous = state.projectOverride;
         if (inScope) {
-          setAndRepaint({
-            previewAppearance: null,
-            projectOverride: surfaceOverride(
-              { projectId, canvas: previous?.canvas ?? null, appearance },
-              heldTerminalOverride(),
-            ),
-          });
+          setAndRepaint(
+            {
+              previewAppearance: null,
+              projectOverride: surfaceOverride(
+                { projectId, canvas: previous?.canvas ?? null, appearance },
+                heldTerminalOverride(),
+              ),
+            },
+            { origin },
+          );
         }
         const result = await writeThrough("save the appearance", () =>
           deps.gateway.setProjectAppearance(projectId, appearance),

@@ -40,6 +40,14 @@ export const DOC_SECTIONS: DocSection[] = [
     ],
   },
   {
+    label: "Runners",
+    items: [
+      { label: "Overview", slug: "runners" },
+      { label: "Add a Linux runner", slug: "runners/linux" },
+      { label: "Run a runner on a VPS", slug: "runners/vps" },
+    ],
+  },
+  {
     label: "Automations",
     items: [
       { label: "Overview", slug: "guides/automations" },
@@ -60,7 +68,7 @@ export const DOC_SECTIONS: DocSection[] = [
       { label: "Settings", slug: "guides/settings" },
       { label: "Theming", slug: "guides/theming" },
       { label: "Storage and backups", slug: "guides/storage" },
-      { label: "Local data and network access", slug: "reference/data-and-privacy" },
+      { label: "Local and cloud data and network access", slug: "reference/data-and-privacy" },
     ],
   },
   {

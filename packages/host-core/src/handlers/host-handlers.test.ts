@@ -1920,7 +1920,14 @@ describe("local profile restore commands", () => {
 });
 
 describe("person-only moves to Volli Cloud", () => {
-  const snapshot = { revision: 1, account: null, workspaces: [], moves: [], unavailable: null };
+  const snapshot = {
+    revision: 1,
+    account: null,
+    workspaces: [],
+    moves: [],
+    unavailable: null,
+    preflight: null,
+  };
   const preflight = {
     id: "dry-run",
     projects: [],

@@ -322,10 +322,16 @@ test("durable answer proof uses the real titled trailer and the same question's 
 });
 
 test("log proof requires a real row, not search/filter or other-host names", () => {
-  const header = `- button "volli-acceptance" [pressed]\n- textbox "Search": serving`;
+  const header = `- button "volli-acceptance" [pressed]\n- textbox "Search logs": serving`;
   const row = `- listitem:\n  - generic: volli-acceptance\n  - button "hostd" [ref=e1]\n  - 'button "serving database: /fixture/db" [ref=e2]'`;
   assert.equal(visibleServingRow(header, "volli-acceptance"), false);
   assert.equal(visibleServingRow(`${header}\n${row}`, "volli-acceptance"), true);
+  // A narrow pane: the row folds source and component under the message.
+  const folded = `- listitem:\n  - generic:\n    - generic: 22:41:58.775\n    - generic: info\n    - button "serving" [ref=e2]\n    - generic:\n      - generic:\n        - generic: volli-acceptance\n        - button "hostd" [ref=e1]`;
+  assert.equal(visibleServingRow(`${header}\n${folded}`, "volli-acceptance"), true);
+  // A row that names neither its machine nor its component proves nothing.
+  const bare = `- listitem:\n  - generic:\n    - generic: 22:41:58.775\n    - generic: info\n    - button "serving" [ref=e2]`;
+  assert.equal(visibleServingRow(`${header}\n${bare}`, "volli-acceptance"), false);
   assert.equal(
     visibleServingRow(
       `${header}\n${row.replace("volli-acceptance", "other-host")}`,
@@ -527,13 +533,14 @@ test("step 3 waits for the real Workspace rejoin before clicking the grace-enabl
   let clicks = 0;
   const run = new Function(
     "tools",
-    `const { click, call, snap, waitUntil, hasActionableControl } = tools;
+    `const { click, call, snap, waitUntil, hasActionableControl, snapshotSubtree } = tools;
      return (async () => { ${body} })();`,
   );
   await run({
-    click: async (_role, name) => {
+    click: async (_role, name, options) => {
       if (name === "New ticket") {
         assert.equal(reads, 3, "a grace-enabled button must not be mistaken for rejoin");
+        assert.deepEqual(options, { scope: { role: "group", name: "Board actions" } });
         clicks++;
       }
     },
@@ -543,13 +550,16 @@ test("step 3 waits for the real Workspace rejoin before clicking the grace-enabl
         ready: acceptanceWorkspaceReady(workspaceSnapshot(statuses[reads++])),
       };
     },
-    snap: async () => ({ text: '- button "New ticket" [ref=e2]' }),
+    snap: async () => ({
+      text: '- group "Board actions" [ref=e1]:\n  - button "New ticket" [ref=e2]\n- region "Empty board" [ref=e3]:\n  - button "New ticket" [ref=e4]',
+    }),
     waitUntil: async (_label, check, options) => {
       assert.deepEqual(options, { timeout: 10_000, interval: 100 });
       for (let i = 0; i < 3; i++) if (await check()) return;
       assert.fail("Workspace never became ready");
     },
     hasActionableControl,
+    snapshotSubtree,
   });
   assert.equal(clicks, 1);
   const supervisor = read("../supervisor.mjs");
@@ -581,6 +591,37 @@ function liftedKeepaliveRetirement(started, quitAttempted, tools) {
   `,
   )(tools);
 }
+test("the local keepalive opens Home's scoped tab chooser and waits for its real Message field", async () => {
+  const smoke = read("../remote-acceptance-smoke.mjs");
+  const helper = smoke.slice(
+    smoke.indexOf("async function openHomeChat()"),
+    smoke.indexOf("async function hostChip()"),
+  );
+  const actions = [];
+  const run = new Function(
+    "tools",
+    `const { click, snap, waitUntil, hasActionableControl } = tools; return (${helper})();`,
+  );
+  await run({
+    click: async (...args) => actions.push(args),
+    snap: async () => ({ text: '- textbox "Message" [ref=message]' }),
+    waitUntil: async (_label, check) => assert.equal(await check(), true),
+    hasActionableControl,
+  });
+  assert.deepEqual(actions, [
+    ["button", "Open a tab", { scope: { role: "main", name: null } }],
+    ["menuitem", "Chat ⌘T"],
+  ]);
+  const bothDoors =
+    '- main [ref=main]:\n  - button "Open a tab" [ref=strip]\n- complementary [ref=sidebar]:\n  - button "Open a tab" [ref=nav]';
+  assert.equal(hasActionableControl(bothDoors, "button", "Open a tab"), false);
+  assert.equal(
+    hasActionableControl(snapshotSubtree(bothDoors, "main", null), "button", "Open a tab"),
+    true,
+  );
+  assert.match(smoke, /await openHomeChat\(\);\s*localKeepaliveStarted = true;/u);
+});
+
 test("keepalive retirement reopens normally and stops only the named local synthetic Session", async () => {
   const calls = [];
   const tools = Object.fromEntries(
@@ -669,7 +710,7 @@ test("journey arranges only benign Git state and runs all eight real assertions 
     "Signed in on",
     "Stop turn",
     "Waiting for you",
-    "Search",
+    "Search logs",
   ])
     assert.ok(smoke.includes(label), label);
   assert.doesNotMatch(smoke, /EXPECTED_PROJECT_FAILURE|XFAIL|XPASS|expectedFailure/u);
@@ -724,7 +765,7 @@ test("journey arranges only benign Git state and runs all eight real assertions 
   assert.ok(smoke.includes('call("acceptance-arrange-box")'));
   assert.match(
     smoke,
-    /hasActionableControl\(\(await snap\(\)\)\.text, "button", "New ticket"\)/u,
+    /hasActionableControl\(\s*snapshotSubtree\(\(await snap\(\)\)\.text, "group", "Board actions"\),\s*"button",\s*"New ticket",?\s*\)/u,
     "the daemon's operator restart must rejoin before the first ticket write, not just keep its chip name",
   );
   assert.ok(smoke.includes("can't add projects to it."));

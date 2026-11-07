@@ -47,6 +47,7 @@ import {
   ownedProcesses,
   processIdentity,
   processTable,
+  readSnapshot,
   snapshotRefs,
 } from "./lib/core.mjs";
 import {
@@ -139,6 +140,7 @@ let launchEnv = null;
 const cloud = spec.cloud ? cloudFixtureFromSupervisorEnv(process.env) : null;
 if (spec.cloud && cloud === null) throw new Error("a cloud instance needs the fixture env");
 let generation = 0;
+let captureCounter = 0;
 let current = { generation: 0, window: null, refs: new Set() };
 let shotCounter = 0;
 let lastCommandAt = Date.now();
@@ -193,14 +195,44 @@ function wireWindow(page) {
 
 // ---- snapshot / act ----------------------------------------------------------
 
-async function snapshot({ window, depth } = {}) {
+async function snapshot({ window, depth, timeout, waitForText, gone } = {}) {
   const { page, name } = await pickWindow(window);
-  const text = await page.ariaSnapshot({ mode: "ai", ...(depth ? { depth: Number(depth) } : {}) });
+  // Even a rejected aria capture can replace Playwright's ref registry. Do not
+  // leave the previous generation actionable if this capture fails.
+  current = { generation, window: null, refs: new Set() };
+  const capture = ++captureCounter;
+  const { text, ...readiness } = await readSnapshot(page, {
+    depth,
+    timeout,
+    waitForText,
+    gone,
+    onEmpty: (raw, timing) => {
+      const path = join(L.snapshotsDir, `empty-${capture}-${timing.attempt}-${name}.txt`);
+      writeFileSync(path, raw);
+      transcript({
+        cmd: "snapshot-empty",
+        capture,
+        window: name,
+        path,
+        url: page.url(),
+        ...timing,
+      });
+    },
+  });
   generation += 1;
   current = { generation, window: name, refs: snapshotRefs(text) };
   const path = join(L.snapshotsDir, `gen-${String(generation).padStart(4, "0")}-${name}.txt`);
   writeFileSync(path, text);
-  return { generation, window: name, url: page.url(), title: await page.title(), path, text };
+  transcript({ cmd: "snapshot-ready", capture, generation, window: name, path, ...readiness });
+  return {
+    generation,
+    window: name,
+    url: page.url(),
+    title: await page.title(),
+    path,
+    text,
+    readiness,
+  };
 }
 
 const ACT_KINDS = new Set(["click", "type", "press", "select", "hover", "scroll", "wait"]);
@@ -279,19 +311,9 @@ async function act(args) {
 
 async function waitFor({ text, gone = false, timeout = 15_000, window }) {
   if (!text) throw new Error("wait needs --text");
-  const { page } = await pickWindow(window);
   const started = performance.now();
-  const needle = String(text).toLowerCase();
-  await waitUntil(
-    `"${text}" to ${gone ? "disappear" : "appear"}`,
-    async () => {
-      const tree = (await page.ariaSnapshot({ mode: "ai" })).toLowerCase();
-      return gone ? !tree.includes(needle) : tree.includes(needle);
-    },
-    { timeout: Number(timeout), interval: 200 },
-  );
+  const fresh = await snapshot({ window, waitForText: text, gone, timeout: Number(timeout) });
   const ms = Math.round(performance.now() - started);
-  const fresh = await snapshot({ window });
   transcript({ cmd: "wait", text, gone, ms, nextGeneration: fresh.generation });
   return { waitedMs: ms, snapshot: fresh };
 }
@@ -673,6 +695,33 @@ async function boot() {
           reasoningLevel: provider.reasoningLevel,
         }
       : null,
+    {
+      flushClientState: () =>
+        app.evaluate(async ({ BrowserWindow, ipcMain }) => {
+          const window = BrowserWindow.getAllWindows().find((candidate) =>
+            candidate.webContents.getURL().startsWith("volli-app:"),
+          );
+          if (!window) throw new Error("fixture window disappeared before flush");
+          const requestId = `drive-fixture-${Date.now()}`;
+          await new Promise((resolveFlush, rejectFlush) => {
+            const cleanup = () => {
+              clearTimeout(timer);
+              ipcMain.removeListener("volli:client-state-flushed", acked);
+            };
+            const acked = (event, id) => {
+              if (event.sender.id !== window.webContents.id || id !== requestId) return;
+              cleanup();
+              resolveFlush();
+            };
+            const timer = setTimeout(() => {
+              cleanup();
+              rejectFlush(new Error("fixture client-state flush timed out"));
+            }, 10000);
+            ipcMain.on("volli:client-state-flushed", acked);
+            window.webContents.send("volli:client-state-flush", requestId);
+          });
+        }),
+    },
   );
   mark("fixtureSeeded");
   await waitUntil("the app's agent socket", () => pathExists(L.appSocket), { timeout: 30_000 });

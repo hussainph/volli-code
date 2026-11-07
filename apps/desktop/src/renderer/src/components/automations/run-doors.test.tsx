@@ -36,7 +36,7 @@
 import { createRoot, type Root } from "react-dom/client";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { LOCAL_LAUNCH, NO_AUTOMATION_TRIGGER } from "@volli/shared";
+import { LOCAL_LAUNCH, NO_AUTOMATION_TRIGGER, EMPTY_MODEL_ACCESS_DEFAULTS } from "@volli/shared";
 import { adoptLaunch } from "@renderer/stores/launch";
 import { toast } from "sonner";
 import type {
@@ -229,7 +229,7 @@ const MODEL_ACCESS = {
     ],
   })),
   hiddenModels: vi.fn(async () => []),
-  defaults: vi.fn(),
+  defaults: vi.fn(async () => EMPTY_MODEL_ACCESS_DEFAULTS),
   setDefault: vi.fn(),
   setHiddenModels: vi.fn(),
   compactionPolicy: vi.fn(),
@@ -478,8 +478,10 @@ describe("every renderer hand-Run door reaches the one Run seam (VC-220)", () =>
       control("Run Manual sweep").click();
     });
     await act(async () => {
-      buttonContaining("Calm Stack").click();
+      commandItem("Calm Stack").click();
     });
+
+    await act(async () => buttonContaining("Run on VC-12").click());
 
     // The page has no Ticket of its own, so the chosen one is what must arrive.
     expect(run).toHaveBeenCalledWith(

@@ -182,7 +182,12 @@ describe("Settings → Storage → Running processes", () => {
 
     await act(async () => buttonNamed("Look for processes no Session owns").click());
 
-    expect(document.querySelector("[role='alert']")?.textContent).toContain("lsof refused");
+    expect(document.querySelector('[data-status="failed"]')?.textContent).toContain(
+      "Couldn't load running processes",
+    );
+    await act(async () => document.querySelector<HTMLElement>("details summary")?.click());
+    expect(document.querySelector("details")?.open).toBe(true);
+    expect(document.querySelector("details")?.textContent).toContain("lsof refused");
     expect(buttonNamed("Try again")).not.toBeNull();
   });
 

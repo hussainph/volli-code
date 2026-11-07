@@ -158,7 +158,7 @@ function ContextBreakdown({
           back. Mouse-leave on the container, not per cell — the pointer
           crossing the 2px gutters must not flicker the line off. */}
       <div
-        role="img"
+        role="group"
         aria-label={summary}
         className="mt-2.5 grid grid-cols-10 gap-0.5"
         onMouseLeave={() => setHovered(null)}
@@ -166,9 +166,22 @@ function ContextBreakdown({
         {keyedCells(cells).map((cell) => (
           <div
             key={cell.key}
+            role={cell.key.endsWith(":1") ? "img" : undefined}
+            aria-hidden={cell.key.endsWith(":1") ? undefined : true}
+            aria-label={
+              cell.key.endsWith(":1")
+                ? (() => {
+                    const bucket = hoverDetail(cell.id, byId, free, usage);
+                    return bucket ? `${bucket.label}: ${bucket.amount}` : cell.id;
+                  })()
+                : undefined
+            }
+            tabIndex={cell.key.endsWith(":1") ? 0 : undefined}
             onMouseEnter={() => setHovered(cell.id)}
+            onFocus={() => setHovered(cell.id)}
+            onBlur={() => setHovered(null)}
             className={cn(
-              "aspect-square rounded-[2px] transition-opacity duration-100",
+              "aspect-square rounded-keycap outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
               SEGMENT_CELL[cell.id],
               hovered !== null && hovered !== cell.id && "opacity-40",
             )}
@@ -182,7 +195,7 @@ function ContextBreakdown({
         <div className="mt-2.5 flex h-4 items-center gap-2">
           <span
             aria-hidden
-            className={cn("size-2 shrink-0 rounded-[2px]", SEGMENT_CELL[detail.id])}
+            className={cn("size-2 shrink-0 rounded-keycap", SEGMENT_CELL[detail.id])}
           />
           <span className="min-w-0 flex-1 truncate text-ui text-muted-foreground">
             {detail.label}

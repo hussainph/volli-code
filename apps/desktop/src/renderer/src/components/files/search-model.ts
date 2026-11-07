@@ -100,18 +100,6 @@ export function searchSummary(result: {
   return found;
 }
 
-/**
- * The one line a truncated search owes beyond its count, or `null` when nothing
- * was cut. Said as a consequence ("there may be more") rather than as a limit
- * ("cap: 500"), because the reader's question is whether they have seen
- * everything, not what the constant is.
- */
-export function searchTruncationNote(limit: FileSearchLimit): string | null {
-  if (limit === "matches") return "There may be more matches than these.";
-  if (limit === "time") return "The search stopped early; there may be more matches.";
-  return null;
-}
-
 /** One preview split around its match, so the page can emphasise the hit without re-finding it. */
 export interface SearchHighlight {
   readonly before: string;

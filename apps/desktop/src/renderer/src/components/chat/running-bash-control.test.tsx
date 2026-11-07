@@ -85,6 +85,20 @@ function button() {
     (element) => element.textContent === "Move to background",
   );
 }
+/** Pending is the shared LoadingLabel inside the same xs ghost control, never an ellipsis. */
+function expectMoving() {
+  const control = Array.from(container.querySelectorAll("button")).find(
+    (element) => element.textContent === "Moving",
+  );
+  expect(control?.disabled).toBe(true);
+  expect(control?.dataset.size).toBe("xs");
+  expect(control?.dataset.variant).toBe("ghost");
+  const spinner = control?.querySelector("svg");
+  expect(spinner?.classList.contains("animate-spin")).toBe(true);
+  expect(spinner?.getAttribute("aria-hidden")).toBe("true");
+  expect(spinner?.getAttribute("role")).toBe("presentation");
+  expect(control?.textContent).not.toContain("…");
+}
 function shell(
   shellId: string,
   sessionId = SESSION,
@@ -228,7 +242,7 @@ describe("running bash control", () => {
     });
     await reveal();
     await act(async () => disclosure.click());
-    expect(container.textContent).toContain("Moving…");
+    expectMoving();
     await act(async () => {
       disclosure.click();
       composer.dispatchEvent(shortcut());
@@ -302,7 +316,13 @@ describe("running bash control", () => {
     await mount();
     expect(button()?.disabled).toBe(true);
     expect(button()?.getAttribute("aria-description")).toContain("Stop one first");
-    expect(container.querySelector("p")?.textContent).toContain("Stop one first");
+    const reason = container.querySelector("p");
+    expect(reason?.textContent).toContain("Stop one first");
+    // Prose reads at the UI rung, not the compact-metadata label.
+    expect(reason?.classList.contains("text-ui")).toBe(true);
+    expect(reason?.classList.contains("text-label")).toBe(false);
+    expect(button()?.dataset.size).toBe("xs");
+    expect(button()?.dataset.variant).toBe("ghost");
     await act(async () =>
       button()?.parentElement?.dispatchEvent(
         new KeyboardEvent("keydown", { key: "b", ctrlKey: true, shiftKey: true, bubbles: true }),
@@ -334,7 +354,7 @@ describe("running bash control", () => {
       control.click();
     });
     expect(fixture.move).toHaveBeenCalledTimes(1);
-    expect(container.textContent).toContain("Moving…");
+    expectMoving();
     await act(async () => pending.reject(new Error("This command already exited")));
     expect(fixture.toast).toHaveBeenCalledWith("This command already exited");
     expect(button()?.disabled).toBe(false);

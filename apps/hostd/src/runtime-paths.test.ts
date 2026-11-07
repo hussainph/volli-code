@@ -37,6 +37,7 @@ it("requires executable worker/wasm assets and resolves the bundled CLI and venu
     binDir: resolve(root, "../bin"),
     venue: { id: "/socket", kind: "remote" },
     codeModeSandbox: { workerUrl: worker, wasmPath },
+    webExtractWorker: join(root, "hostd", "web-extract-worker.cjs"),
   });
   expect(assets).toHaveBeenLastCalledWith(root);
 });
@@ -51,6 +52,7 @@ it("boots from the workspace build with the installed sandbox and the dev launch
     binDir: join(root, "dev-bin"),
     venue: { id: "/socket", kind: "remote" },
     codeModeSandbox: { workerUrl: worker, wasmPath },
+    webExtractWorker: join(root, "dist", "web-extract-worker.cjs"),
   });
   expect(assets).toHaveBeenLastCalledWith(join(root, "node_modules/@volli/agent-runtime"));
   assets.mockReturnValue({});

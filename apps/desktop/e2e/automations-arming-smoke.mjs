@@ -76,7 +76,11 @@ const windowFor = (page, ticketId) => page.locator(`[data-armed-run-window="${ti
 function cardById(page, id) {
   return page
     .locator("article")
-    .filter({ has: page.locator("span.font-mono", { hasText: new RegExp(`^${id}$`) }) });
+
+    .filter({
+      visible: true,
+      has: page.locator("span.font-mono", { hasText: new RegExp(`^${id}$`) }),
+    });
 }
 
 /** One ticket's committed column, read from the database rather than the DOM. */
@@ -101,6 +105,23 @@ async function moveViaContextMenu(page, displayId, columnLabel) {
   await moveTo.hover();
   const target = page.getByRole("menuitem", { name: columnLabel, exact: true });
   await target.waitFor();
+  // The glass submenu scales from its anchor. Visibility alone can expose a
+  // row before its final hit box exists; cross into it only after the entrance.
+  await waitUntil("the Move to submenu entrance to finish", () =>
+    target.evaluate((element) =>
+      element
+        .closest('[data-slot="context-menu-sub-content"]')
+        .getAnimations()
+        .every((animation) => animation.playState === "finished"),
+    ),
+  );
+  // A portaled submenu can flip left on a narrow window. Radix's pointer
+  // grace tracks direction *inside* the parent menu: teleporting from the
+  // trigger into the portal leaves its last direction pointing right and
+  // dismisses the submenu. Cross the edge like a real pointer instead.
+  const box = await target.boundingBox();
+  if (box === null) throw new Error("Move to destination has no pointer target");
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 12 });
   await target.click();
 }
 
@@ -112,6 +133,8 @@ let exitCode = 1;
 try {
   const repoDir = await makeGitRepo(scratch);
   app = await launch({ dbPath, userDataDir });
+  // Match the macOS CI work area instead of inheriting the developer display.
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1024, 681));
   const page = await app.firstWindow();
   page.on("pageerror", (error) => console.log("[pageerror]", String(error).slice(0, 400)));
   assertBuiltRendererLoaded(page);

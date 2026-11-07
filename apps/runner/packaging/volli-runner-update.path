@@ -1,0 +1,12 @@
+# Starts volli-runner-update.service when the runner asks for an update.
+# Written by `volli-runner install`; see apps/runner/README.md ("Updates").
+
+[Unit]
+Description=Volli runner update requests
+
+[Path]
+PathChanged=/var/lib/volli-runner/update/request.json
+Unit=volli-runner-update.service
+
+[Install]
+WantedBy=paths.target

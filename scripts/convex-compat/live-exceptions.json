@@ -1,0 +1,13 @@
+[
+  {
+    "tag": "v0.3.0-canary.2",
+    "commit": "39ce723c652933660fbce4c99c265d01fbe1d494",
+    "ticket": "VC-937",
+    "reason": "preview legal text 2026-10-31 requires re-acceptance",
+    "expiresAfterTag": "v0.3.0-canary.2",
+    "fromVersion": "preview-0.3-2026-10-25",
+    "toVersion": "preview-0.3-2026-10-31",
+    "refusalCode": "preview_agreement_required",
+    "moduleSha256": "d04f1727950824657595f421ec0836d2aa5730230fce0c66fbaf12654bb6973d"
+  }
+]

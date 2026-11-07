@@ -3,7 +3,7 @@ import type { LogRecord, SessionEvent, SessionEventPayload } from "@volli/shared
 
 import { withLogContext } from "../log/context";
 import { installHostLog } from "../log/root";
-import { logSessionEvents, sessionEventFields } from "./session-event-log";
+import { logSessionEvents, noteAttachFailureCause, sessionEventFields } from "./session-event-log";
 
 const TRACE = "4bf92f3577b34da6a3ce929d0e0e4736";
 let undo: (() => void) | null = null;
@@ -31,6 +31,19 @@ function event(
     ...extra,
   };
 }
+
+/** A cause for one attachment, nothing else about it of interest. */
+const cause = (attachmentId: string) => ({
+  sessionId: "s-1",
+  commandId: "op:start",
+  attachmentId,
+  phase: "workspace-preparation" as const,
+  code: "location_unavailable",
+  errorName: "Error",
+  timedOut: false,
+  phaseMs: 1,
+  elapsedMs: 1,
+});
 
 describe("a Session's committed facts as log lines (VC-699)", () => {
   it("writes turns, commands and Attention at info inside the operation's trace, and the rest at debug", () => {
@@ -140,5 +153,100 @@ describe("a Session's committed facts as log lines (VC-699)", () => {
       attachmentId: "a-3",
       exitCode: 1,
     });
+  });
+
+  it("files an attach failure's code and cause on its line, never its detail (VC-1099)", () => {
+    const records = capture("info");
+    const failed = (sequence: number, attachmentId: string) =>
+      event(
+        sequence,
+        {
+          kind: "attachment.failed",
+          attachment: { id: attachmentId },
+          failure: {
+            code: "queue_admission_timeout",
+            detail: "queue_admission_timeout: executor attach did not finish in /private/path",
+            diagnostic: null,
+          },
+        },
+        { commandId: "op:start" },
+      );
+    noteAttachFailureCause({
+      sessionId: "s-1",
+      commandId: "op:start",
+      attachmentId: "a-1",
+      phase: "executor-attach",
+      code: "queue_admission_timeout",
+      errorName: "NativeAttachmentError",
+      timedOut: true,
+      phaseMs: 30_004,
+      elapsedMs: 41_059,
+    });
+
+    withLogContext({ traceId: TRACE, operation: "session.start" }, () =>
+      logSessionEvents([
+        failed(1, "a-1"),
+        event(
+          2,
+          {
+            kind: "command.receipt.recorded",
+            receipt: {
+              commandId: "op:start",
+              status: "rejected",
+              code: "queue_admission_timeout",
+              detail: "/private/path",
+            },
+          },
+          { commandId: "op:start" },
+        ),
+        // A second line for the same attachment has no cause left to take.
+        failed(3, "a-1"),
+      ]),
+    );
+
+    expect(records[0]).toMatchObject({
+      msg: "session attachment.failed",
+      traceId: TRACE,
+      operation: "session.start",
+      attachmentId: "a-1",
+      code: "queue_admission_timeout",
+      phase: "executor-attach",
+      errorName: "NativeAttachmentError",
+      timedOut: true,
+      phaseMs: 30_004,
+      elapsedMs: 41_059,
+    });
+    expect(records[1]).toMatchObject({
+      msg: "session command.receipt.recorded",
+      status: "rejected",
+      code: "queue_admission_timeout",
+    });
+    expect(records[2]).toMatchObject({ code: "queue_admission_timeout" });
+    expect(records[2]).not.toHaveProperty("phase");
+    expect(JSON.stringify(records)).not.toContain("/private/path");
+  });
+
+  it("forgets the oldest cause whose fact never committed", () => {
+    const records = capture("info");
+    noteAttachFailureCause(cause("oldest"));
+    // Noted twice: still one entry. Then enough to overflow the bound by one.
+    noteAttachFailureCause(cause("refreshed"));
+    noteAttachFailureCause(cause("refreshed"));
+    for (let index = 0; index < 255; index += 1) noteAttachFailureCause(cause(`filler-${index}`));
+
+    logSessionEvents(
+      ["oldest", "refreshed"].map((id, index) =>
+        event(index + 1, {
+          kind: "attachment.failed",
+          attachment: { id },
+          failure: { code: "location_unavailable", detail: null, diagnostic: null },
+        }),
+      ),
+    );
+
+    expect(records.map(({ attachmentId, phase }) => [attachmentId, phase])).toEqual([
+      ["oldest", undefined],
+      ["refreshed", "workspace-preparation"],
+    ]);
   });
 });

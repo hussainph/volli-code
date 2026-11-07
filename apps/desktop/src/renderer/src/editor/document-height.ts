@@ -1,15 +1,18 @@
 /**
- * Auto-height is not a second Monaco layout driver. Only automaticLayout sizes
- * the view into the CSS-clamped host; we supply its desired (unclamped) height.
+ * One deferred layout driver for the auto-height document editor (whose Monaco
+ * automaticLayout is disabled). Both content-size dispatch and the pane's
+ * ResizeObserver only schedule a frame, never synchronously re-enter Monaco.
  *
- * Content-size events run inside Monaco's view-model dispatch, and can also
- * arrive during ResizeObserver delivery. Defer even the host write to a frame
- * so neither stack can synchronously re-wrap the editor through our callback.
- * The ports keep the scheduling/lifetime contract testable without Monaco/DOM.
+ * The desired host height and VC-99 notification are unclamped; the layout
+ * uses the CSS-clamped box measured AFTER the height write. Ports keep this
+ * scheduling/lifetime contract testable without Monaco or DOM.
  */
-export function createDocumentHeightSync(ports: {
+export function createDocumentLayout(ports: {
   getContentHeight(): number;
   setHeight(px: number): void;
+  getHostSize(): { width: number; height: number };
+  layout(size: { width: number; height: number }): void;
+  isResizeActive(): boolean;
   onContentHeightChange(px: number): void;
   requestFrame(callback: () => void): number;
   cancelFrame(id: number): void;
@@ -17,18 +20,31 @@ export function createDocumentHeightSync(ports: {
   let frame: number | null = null;
   let disposed = false;
   let height: number | null = null;
+  let size: { width: number; height: number } | null = null;
 
   return {
     schedule() {
       if (disposed || frame !== null) return;
       frame = ports.requestFrame(() => {
         frame = null;
-        if (disposed) return;
+        // observePaneLayout schedules again when the resize transaction ends.
+        if (disposed || ports.isResizeActive()) return;
         const next = ports.getContentHeight();
-        if (next === height) return;
-        height = next;
-        ports.setHeight(next);
-        ports.onContentHeightChange(next);
+        const changed = next !== height;
+        if (changed) {
+          height = next;
+          ports.setHeight(next);
+        }
+        const nextSize = ports.getHostSize();
+        if (
+          nextSize.width > 0 &&
+          nextSize.height > 0 &&
+          (nextSize.width !== size?.width || nextSize.height !== size?.height)
+        ) {
+          size = nextSize;
+          ports.layout(nextSize);
+        }
+        if (changed) ports.onContentHeightChange(next);
       });
     },
     dispose() {

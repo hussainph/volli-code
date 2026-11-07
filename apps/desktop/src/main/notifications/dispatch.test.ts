@@ -351,6 +351,7 @@ describe("createNotificationDispatcher", () => {
     // A throw there must not leave it held for the life of the process — a leak
     // whose only symptom is memory nobody can attribute.
     const errors: unknown[] = [];
+    const failure = vi.fn();
     const dispatcher = createNotificationDispatcher({
       preferences: () => DEFAULT_NOTIFICATION_PREFERENCES,
       supported: () => true,
@@ -366,7 +367,7 @@ describe("createNotificationDispatcher", () => {
         close: () => {},
       }),
       activate: () => {},
-      onDeliveryFailure: () => {},
+      onDeliveryFailure: failure,
       onDeliveryShown: () => {},
       onError: (error) => errors.push(error),
     });
@@ -374,7 +375,34 @@ describe("createNotificationDispatcher", () => {
       dispatcher.deliver({ producer: "agent-notify", title: "…", body: "…", target: null }),
     ).toEqual({ delivered: false, reason: "failed" });
     expect(errors).toHaveLength(1);
+    expect(failure).toHaveBeenCalledWith({
+      producer: "agent-notify",
+      message: "notification centre refused",
+    });
     expect(dispatcher.retained()).toBe(0);
+  });
+
+  it("reports a non-Error native refusal to Settings rather than dropping it", () => {
+    const failure = vi.fn();
+    const dispatcher = createNotificationDispatcher({
+      preferences: () => DEFAULT_NOTIFICATION_PREFERENCES,
+      supported: () => true,
+      focusedTargets: () => [],
+      create: () => {
+        throw "refused";
+      },
+      activate: () => {},
+      onDeliveryFailure: failure,
+      onDeliveryShown: () => {},
+      onError: () => {},
+    });
+    expect(
+      dispatcher.deliver({ producer: "agent-notify", title: "Test", body: "Test", target: null }),
+    ).toEqual({ delivered: false, reason: "failed" });
+    expect(failure).toHaveBeenCalledExactlyOnceWith({
+      producer: "agent-notify",
+      message: "The system did not deliver the notification.",
+    });
   });
 
   it("binds each producer to the one kind of target it can have", () => {

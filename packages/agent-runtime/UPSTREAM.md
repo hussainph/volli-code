@@ -68,7 +68,7 @@ path; and record any policy or API divergence here before bumping the pin.
 
 ## Local patches
 
-One Pi patch remains, declared in `pnpm-workspace.yaml` and stored in
+Two Pi patches remain, declared in `pnpm-workspace.yaml` and stored in
 `patches/` at the repo root:
 
 - `@earendil-works/pi-codemode@1.0.0` — rebased unchanged from 0.99.2;
@@ -77,6 +77,16 @@ One Pi patch remains, declared in `pnpm-workspace.yaml` and stored in
   call arguments before an oversized worker message reaches Electron main.
   Defaults and failure text remain identical. `src/codemode/tool.test.ts`
   covers each bound and the host/worker path.
+- `@earendil-works/pi-ai@1.0.0` (VC-1074) — upstream re-parses a tool call's
+  whole accumulated argument JSON on every streamed delta (Anthropic, OpenAI
+  Responses/Completions, Mistral, Bedrock and Pi Messages), which is quadratic
+  in the argument's size and runs on Electron main. A new
+  `parseStreamingToolArguments` in `dist/utils/json-parse.js` keeps that
+  per-delta parse up to 8 KiB of arguments and past it re-parses only after the
+  buffer grows by an eighth. Event sequences, deltas and every `toolcall_end`
+  parse are unchanged. `src/pi/tool-call-streaming.test.ts` drives the real
+  Anthropic adapter through a 100 KB streamed `write`;
+  `bench/main-thread-cost/` measures both arms.
 
 The deleted `pi-agent-core@0.99.2` patch is folded into owned TypeScript:
 

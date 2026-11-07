@@ -93,7 +93,7 @@ describe("the shared conversation overlay's fixture composer", () => {
     await render();
     expect(transcript().textContent).toContain("Source conversation.");
     expect(transcript().textContent).not.toContain("Generated summary");
-    expect(dialog().textContent).toContain("Lab fixture · not a live session");
+    expect(dialog().textContent).toContain("Simulated wiring · lab fixture");
     await type("First draft");
     await render(null);
     expect(document.querySelector("[data-session-peek-dialog]")).toBeNull();

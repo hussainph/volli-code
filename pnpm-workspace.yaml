@@ -8,7 +8,7 @@ packages:
 # Node (a machine's /usr/local/bin/node beside Homebrew's current, say)
 # succeeds and quietly builds native modules against the wrong ABI — the
 # desktop app then boots into a dead database with sign-in greyed out (VC-76).
-# CI installs under the pinned Node (node-version-file: package.json), so this
+# CI installs under the pinned Node (node-version-file: .nvmrc), so this
 # only ever bites the machine it is protecting.
 engineStrict: true
 
@@ -129,11 +129,21 @@ overrides:
   # desktop app already declare 0.35.5 themselves. Remove when a wrangler
   # bump brings a miniflare that declares >=0.35.5.
   "miniflare@5.20260926.1-alpha>sharp": "0.35.5"
+  # One Radix dismissable layer in the renderer. cmdk (the ⌘K and ⌘P overlays)
+  # declares @radix-ui/react-dialog ^1.1.6 and resolved its own older copy
+  # beside radix-ui's. Each copy keeps its own layer stack and saves the body's
+  # pointer-events before disabling it, so ⌘P opened from a still-open menu
+  # ("Open file…" in an empty pane) saved the menu's `none` and restored it on
+  # close: the window stopped taking clicks. Keep this equal to the
+  # react-dialog radix-ui resolves; desktop's overlay-stack test fails on a
+  # second copy.
+  "cmdk@1.1.1>@radix-ui/react-dialog": "1.3.1"
   # One shiki 4 in the tree, ever. streamdown's dist types import bare "shiki"
   # and resolve whatever pnpm's hidden hoist holds — when a transitive range
   # (docs-site expressive-code) re-resolved to 4.4.3 beside the app's then-4.3.1,
   # incrementally-updated checkouts hoisted 4.4.3 and typecheck broke against
-  # @streamdown/code's shiki-3 types while fresh CI installs stayed green.
+  # @streamdown/code's then-shiki-3 types while fresh CI installs stayed green.
+  # The plugin moved to shiki 4 in 2.0; the deduplication rationale still applies.
   #
   # 4.4.3 was the deliberate retake (VC-211, taking over Dependabot #418).
   # The desktop app's shiki/@shikijs/{langs,monaco,themes} pins now move to
@@ -156,6 +166,14 @@ patchedDependencies:
   # main's memory for the length of its deadline. Upstream bounds the VM heap
   # but not what the host accumulates from it. Absent, upstream behavior.
   "@earendil-works/pi-codemode@1.0.0": patches/@earendil-works__pi-codemode@1.0.0.patch
+  # Stops the providers re-parsing a tool call's whole accumulated argument
+  # JSON on every streamed delta (VC-1074). Upstream's per-delta
+  # `parseStreamingJson` is quadratic in the argument's size and runs
+  # synchronously on Electron main: a 100 KB `write` cost seconds of CPU. Past
+  # 8 KiB a block's partial `arguments` refresh only after 1/8 growth, so the
+  # work stays linear; smaller calls and every `toolcall_end` parse exactly as
+  # upstream, and event shapes are unchanged.
+  "@earendil-works/pi-ai@1.0.0": patches/@earendil-works__pi-ai@1.0.0.patch
 
 peerDependencyRules:
   allowAny:
