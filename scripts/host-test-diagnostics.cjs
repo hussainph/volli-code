@@ -108,17 +108,19 @@ function install(root) {
     record(event, { id, file, name, workerThreadId });
     if (event === "test-finished") active.delete(id);
   });
+  let childSequence = 0;
   channel("child_process").subscribe(({ process: child }) => {
+    const childId = ++childSequence;
     let pid;
     child.once("spawn", () => {
       pid = child.pid;
-      record("child-start", { childPid: pid });
+      record("child-start", { childId, childPid: pid });
     });
     child.on(errorMonitor, (error) => {
-      record("child-error", { childPid: pid, ...errorFields(error) });
+      record("child-error", { childId, childPid: pid, ...errorFields(error) });
     });
     child.once("exit", (code, signal) => {
-      record("child-exit", { childPid: pid, code, signal, killed: child.killed });
+      record("child-exit", { childId, childPid: pid, code, signal, killed: child.killed });
     });
   });
   channel("worker_threads").subscribe(({ worker }) => {

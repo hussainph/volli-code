@@ -69,6 +69,7 @@ test("records synchronous active-test breadcrumbs, memory, and a real fork exit 
   const start = events.find((event) => event.event === "child-start");
   const exit = events.find((event) => event.event === "child-exit");
   assert.equal(exit.childPid, start.childPid);
+  assert.equal(exit.childId, start.childId);
   assert.equal(exit.code, null);
   assert.equal(exit.signal, "SIGTERM");
   assert.deepEqual(exit.active, [{ id: "test-1", file: "fixture.test.ts", name: "signal case" }]);
@@ -78,6 +79,44 @@ test("records synchronous active-test breadcrumbs, memory, and a real fork exit 
   assert.ok(events.find((event) => event.event === "process-start").cgroup["memory.events"]);
   assert.deepEqual(events.find((event) => event.event === "process-exit").active, []);
   assert.doesNotMatch(JSON.stringify(events), /not-for-diagnostics|NODE_OPTIONS|setInterval/);
+});
+
+test("attributes distinct spawn failures even when no child PID exists", (t) => {
+  const { result, events } = fixture(
+    t,
+    `
+      import { spawn } from 'node:child_process';
+      import { once } from 'node:events';
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const child = spawn('/volli-diagnostic-fixture-does-not-exist');
+        await once(child, 'error');
+      }
+    `,
+  );
+  assert.equal(result.status, 0, result.stderr);
+  const errors = events.filter((event) => event.event === "child-error");
+  assert.equal(errors.length, 2);
+  assert.ok(errors.every((event) => event.errorCode === "ENOENT" && event.childPid === undefined));
+  assert.notEqual(errors[0].childId, errors[1].childId);
+});
+
+test("every restore lifecycle marker published by the suite reaches the retained JSONL", (t) => {
+  const source = readFileSync(join(host, "src/backup/restore-surface.test.ts"), "utf8");
+  const markers = [...source.matchAll(/event: ["'](restore-[^"']+)["']/gu)].map((match) => match[1]);
+  assert.equal(markers.length, 5, "keep each crash/cancellation boundary observable");
+  const { result, events } = fixture(
+    t,
+    `
+      import { channel } from 'node:diagnostics_channel';
+      const diagnostic = channel('volli.host-core.test');
+      for (const event of ${JSON.stringify(markers)}) diagnostic.publish({ event });
+    `,
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(
+    events.filter((event) => event.event.startsWith("restore-")).map((event) => event.event),
+    markers,
+  );
 });
 
 test("observes real worker termination without changing its exit code", (t) => {

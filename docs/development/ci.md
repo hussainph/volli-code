@@ -45,7 +45,8 @@ files by PID and thread id, independently of Vitest's buffered output:
 - `test-start` / `test-finished` identify the test active through teardown.
 - `child-exit` records the child's PID, raw exit code and signal in its surviving
   parent. Match that PID to the child's event file; nearby suite output is not
-  attribution.
+  attribution. A parent-local `childId` also correlates spawn failures where no
+  PID exists.
 - `worker-start` / `worker-exit` identify nested threads and their resource
   limits. Thread exit code 1 can be the expected result of `terminate()`, not a
   crashed Vitest fork. Restore crash-proof and cancellation markers distinguish
@@ -60,11 +61,14 @@ not enabled: even excluding environment/network data leaves command-line and
 other metadata outside that allowlist. Native CHECKs and uncatchable signals
 cannot run JS exit hooks; use the raw stack in `coverage.log` and the surviving
 parent's signal record. No diagnostics handler consumes errors, changes
-cancellation, or retries tests.
+cancellation, or retries tests. Synchronous writes and memory sampling can
+perturb test timing; this is observation, not a timing-neutral experiment.
+Upload is best-effort: job timeout or cancellation can prevent the artifact
+step from running, so preserve the job's console log while it is available.
 
 For a focused local capture, set `VOLLI_HOST_TEST_DIAGNOSTICS` to an absolute
 workspace-local directory under `.tmp/` and append
 `--require="<workspace>/scripts/host-test-diagnostics.cjs"` to `NODE_OPTIONS`,
-then run only the relevant host-core test file with coverage. The preload is
-inert outside host-core or without that variable. These captures are evidence,
+then run only the relevant test file with coverage **from `packages/host-core`**.
+The preload is inert outside that working directory or without that variable. These captures are evidence,
 not public source; do not commit them.
