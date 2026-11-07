@@ -82,6 +82,8 @@ import {
   projectTranscriptRows,
   projectWorkWindows,
   transcriptMessageTimes,
+  transcriptMessageOrigins,
+  transcriptMessageAttribution,
   deliveredAnswer,
   presentTranscriptTool,
   activityDescriptor,
@@ -1887,8 +1889,23 @@ function ChatPlaneContent({
     sessionsStore,
     (state) => state.sessions[sessionId]?.transcript.frames,
   );
+  const activityFirstOverlaySequence = useStore(
+    sessionsStore,
+    (state) =>
+      state.sessions[sessionId]?.transcript.activityFirstOverlaySequence ??
+      EMPTY_TRANSCRIPT.activityFirstOverlaySequence,
+  );
+  const activityViewKeys = useStore(
+    sessionsStore,
+    (state) =>
+      state.sessions[sessionId]?.transcript.activityViewKeys ?? EMPTY_TRANSCRIPT.activityViewKeys,
+  );
   const messageTimes = React.useMemo(
     () => transcriptMessageTimes(transcriptFrames ?? EMPTY_TRANSCRIPT.frames),
+    [transcriptFrames],
+  );
+  const messageOrigins = React.useMemo(
+    () => transcriptMessageOrigins(transcriptFrames ?? EMPTY_TRANSCRIPT.frames),
     [transcriptFrames],
   );
   const sourceIconsAvailable = sourceIconsFor(projectId) !== null;
@@ -1947,7 +1964,10 @@ function ChatPlaneContent({
         names.set(short, names.get(id)!);
         ids.set(short, id);
       }
-    return { sessionNames: names, sessionIds: ids, mcpNames };
+    const sessionParents = new Map(
+      (namedSessions?.chat ?? []).map((record) => [record.sessionId, record.parentSessionId]),
+    );
+    return { sessionNames: names, sessionIds: ids, sessionParents, mcpNames };
   }, [namedSessions, mcpNames]);
   const sourceIconsApi = React.useMemo(
     () => (sourceIconsAvailable ? (sourceIconsFor(projectId) ?? undefined) : undefined),
@@ -1965,6 +1985,7 @@ function ChatPlaneContent({
       deliveryLabels,
       progressPaused,
       messageTimes,
+      messageOrigins,
       toolContext,
       sourceMessages,
       sourceIconPicture: pictureApi,
@@ -1977,6 +1998,7 @@ function ChatPlaneContent({
       session.openedInteractions,
       progressPaused,
       messageTimes,
+      messageOrigins,
       toolContext,
       sourceMessages,
       pictureApi,
@@ -2004,9 +2026,15 @@ function ChatPlaneContent({
             session.compactions,
             session.reasoningDrops,
             session.toolRefreshes,
+            messageOrigins,
           ),
           messageTimes,
           turnActive,
+          {
+            frames: transcriptFrames ?? EMPTY_TRANSCRIPT.frames,
+            activityFirstOverlaySequence,
+            activityViewKeys,
+          },
         ),
       [
         session.compactions,
@@ -2014,7 +2042,11 @@ function ChatPlaneContent({
         session.toolRefreshes,
         turns,
         messageTimes,
+        messageOrigins,
         turnActive,
+        transcriptFrames,
+        activityFirstOverlaySequence,
+        activityViewKeys,
       ],
     ),
     samePresentedRow,
@@ -2665,6 +2697,7 @@ export interface TurnContext {
   deliveryLabels?: ReadonlyMap<string, MessageDeliveryLabel>;
   progressPaused?: boolean;
   messageTimes?: ReadonlyMap<string, number>;
+  messageOrigins?: ReturnType<typeof transcriptMessageOrigins>;
   toolContext?: ToolDisplayContext;
   sourceMessages?: ReadonlyMap<string, UIMessage>;
   sourceIconsApi?: TranscriptSourceIconsApi;
@@ -3289,7 +3322,9 @@ export function ChatTranscriptRow({
     case "host-notice": {
       const source = context.sourceMessages?.get(row.messageId);
       const answer =
-        source && row.notice.kind === "subagent" ? deliveredAnswer(source, row.notice) : null;
+        source && row.notice.kind === "subagent"
+          ? deliveredAnswer(source, row.notice, context.messageOrigins?.get(row.messageId))
+          : null;
       return (
         <div className="min-w-0">
           <HostNoticeRow
@@ -3348,6 +3383,17 @@ export const ChatTurn = React.memo(function ChatTurn({
 }) {
   const first = messages[0] ?? null;
   const role = first?.role ?? null;
+  const attribution = React.useMemo(
+    () =>
+      first === null
+        ? null
+        : transcriptMessageAttribution(
+            first,
+            context.messageOrigins?.get(first.id),
+            context.toolContext?.sessionNames,
+          ),
+    [first, context.messageOrigins, context.toolContext],
+  );
   // A receipt lands where it happened. Answering an interaction commits a
   // durable message at that point in the conversation, so the transcript draws
   // it there — whether or not a tool row was ever correlated to the question. An
@@ -3420,6 +3466,23 @@ export const ChatTurn = React.memo(function ChatTurn({
   return (
     <Message from={role} className="max-w-full">
       <MessageContent className="gap-0">
+        {attribution?.label ? (
+          <div className="pb-2 text-ui text-muted-foreground">
+            {attribution.sessionId &&
+            context.onOpenSession &&
+            context.toolContext?.sessionNames?.has(attribution.sessionId) ? (
+              <button
+                type="button"
+                className="rounded-sm text-start outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                onClick={() => context.onOpenSession?.(attribution.sessionId!)}
+              >
+                <bdi>{attribution.label}</bdi>
+              </button>
+            ) : (
+              <bdi>{attribution.label}</bdi>
+            )}
+          </div>
+        ) : null}
         {/* Thumbs above the words, matching the composer the message left from. */}
         {attachedFiles.length > 0 ? (
           <AttachmentStrip
@@ -3437,6 +3500,7 @@ export const ChatTurn = React.memo(function ChatTurn({
               ))
             : prose.map((entry) => <GuardedResponse key={entry.key}>{entry.text}</GuardedResponse>)}
         </div>
+        {attribution?.sessionId ? <OriginalOutput part={first} /> : null}
         {skillChips.length > 0 ? (
           // A skill name is a mono outline Badge behind a book icon, wherever
           // it appears. This is the only place the transcript says one: the

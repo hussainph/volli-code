@@ -231,17 +231,13 @@ function RunningBashButton() {
   if (call === null || !call.visible) return null;
   const { pending, reason, move } = call;
   return (
-    <span
-      className="shrink-0"
-      title={reason ?? "Move to background (Ctrl+Shift+B)"}
-      onClick={(event) => event.stopPropagation()}
-    >
+    <span className="shrink-0" onClick={(event) => event.stopPropagation()}>
       <Button
         type="button"
         size="xs"
         variant="ghost"
         disabled={pending || reason !== null}
-        aria-description={reason ?? undefined}
+        aria-description={reason ?? "Move to background (Ctrl+Shift+B)"}
         aria-keyshortcuts="Control+Shift+B"
         onClick={() => void move()}
       >

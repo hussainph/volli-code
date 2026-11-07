@@ -28,6 +28,7 @@ import type {
 import type { UIMessage } from "ai";
 
 import { indexOpenedInteractions } from "./interaction";
+import { EMPTY_WORK_POSITIONS, foldWorkPositions, type WorkPositionState } from "./work-position";
 import {
   layerTranscriptOverlay,
   projectTranscriptMessages,
@@ -121,7 +122,7 @@ export interface TranscriptToolRefresh {
  * is gone now, since a message mid-word arrives as an overlay and commits
  * nothing.
  */
-export interface ChatTranscriptState {
+export interface ChatTranscriptState extends WorkPositionState {
   frames: readonly ChatSessionFrame[];
   throughSequence: number;
   /**
@@ -163,6 +164,13 @@ export interface ChatTranscriptState {
    * first delta and the durable frame that settles it.
    */
   overlay: TranscriptOverlay;
+  /**
+   * First live activity positions relative to the accepted ledger. This is
+   * derived view state, retained through settlement because overlay-only starts
+   * otherwise disappear behind a later durable notice. Replay uses recorded
+   * tool starts when this transient evidence is unavailable.
+   */
+  activityFirstOverlaySequence: ReadonlyMap<string, number>;
   /**
    * The context summary currently running, or null once it finishes. Unlike a
    * boundary, this is never history: an interrupted attachment must not revive
@@ -229,6 +237,7 @@ export const EMPTY_TRANSCRIPT: ChatTranscriptState = {
   turnEpoch: 0,
   durableMessages: [],
   overlay: EMPTY_OVERLAY,
+  ...EMPTY_WORK_POSITIONS,
   liveCompaction: null,
   lastCompactionSequence: 0,
   durableSequences: EMPTY_DURABLE_SEQUENCES,
@@ -381,12 +390,26 @@ export function appendFrames(
       liveCompaction = { throughSequence: emission.throughSequence, reason: emission.reason };
     }
   }
+  const durableMessages = mergeTranscriptMessages(
+    state.durableMessages,
+    projectTranscriptMessages(fresh),
+  );
+  const workPositions = foldWorkPositions(
+    state,
+    state.overlay,
+    overlay,
+    overlays,
+    fresh,
+    durableMessages,
+    last?.sequence ?? state.throughSequence,
+  );
   // A batch of nothing but stale or orphaned transient state folds to the state
   // it was handed, and a fresh object here would repaint the transcript for
   // nothing.
   if (
     !last &&
     overlay === state.overlay &&
+    workPositions === state &&
     liveCompaction === state.liveCompaction &&
     lastCompactionSequence === state.lastCompactionSequence
   ) {
@@ -397,10 +420,6 @@ export function appendFrames(
   // which is the other half of the point: a batch of pure tool traffic must not
   // hand the plane a new message list to re-group and re-segment.
   const opened = indexOpenedInteractions(fresh);
-  const durableMessages = mergeTranscriptMessages(
-    state.durableMessages,
-    projectTranscriptMessages(fresh),
-  );
   return {
     frames: last ? [...state.frames, ...fresh] : state.frames,
     throughSequence: last ? last.sequence : state.throughSequence,
@@ -410,6 +429,9 @@ export function appendFrames(
     turnEpoch,
     durableMessages,
     overlay,
+    activityFirstOverlaySequence: workPositions.activityFirstOverlaySequence,
+    activityViewKeys: workPositions.activityViewKeys,
+    removedReasoning: workPositions.removedReasoning,
     liveCompaction,
     lastCompactionSequence,
     durableSequences,
@@ -525,6 +547,9 @@ export function prependTranscriptHistory(
     turnActive: state.turnActive,
     turnEpoch: state.turnEpoch,
     overlay: state.overlay,
+    activityFirstOverlaySequence: state.activityFirstOverlaySequence,
+    activityViewKeys: state.activityViewKeys,
+    removedReasoning: state.removedReasoning,
     liveCompaction: state.liveCompaction,
     lastCompactionSequence: state.lastCompactionSequence,
     messages: layerTranscriptOverlay(refolded.durableMessages, state.overlay),

@@ -5,6 +5,7 @@ import { TitleReveal } from "@renderer/components/ui/title-reveal";
 import { useStopFollowing } from "@renderer/components/ui/ai-elements/conversation";
 import {
   workDurationLabel,
+  activityStatus,
   type TranscriptWorkWindow,
   type SummarySegment,
 } from "@volli/session-presentation";
@@ -27,7 +28,17 @@ export function WorkReceipt({
   const pointerFocus = React.useRef(false);
   const dismissed = React.useRef(false);
   const stopFollowing = useStopFollowing();
-  const full = summary.map((segment) => segment.text).join(" · ") || "Thinking";
+  const unresolved = work.rows.filter((row) =>
+    row.kind === "reasoning"
+      ? row.streaming
+      : ["running", "pending"].includes(activityStatus(row.part)),
+  ).length;
+  const full = [
+    summary.map((segment) => segment.text).join(" · ") || "Thinking",
+    unresolved > 0 ? `${unresolved} unresolved` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   const short = workDurationLabel(work);
   const label = open ? full : short;
   const outcomes = summary.filter((segment) => segment.tone !== "neutral");
@@ -84,12 +95,15 @@ export function WorkReceipt({
             automatic={revealTarget === label}
             className="min-w-0 truncate"
           />
-          {!open && outcomes.length > 0 ? (
+          {!open && (outcomes.length > 0 || unresolved > 0) ? (
             <span className="inline-flex shrink-0 items-center gap-1 text-ui text-foreground">
               {outcomes.some((outcome) => outcome.tone === "danger") ? (
                 <ErrorIcon aria-hidden className="size-4 shrink-0 text-destructive" />
               ) : null}
-              {outcomes.map((outcome) => outcome.text).join(" · ")}
+              {[
+                ...outcomes.map((outcome) => outcome.text),
+                ...(unresolved > 0 ? [`${unresolved} unresolved`] : []),
+              ].join(" · ")}
             </span>
           ) : null}
           <ChevronRightIcon

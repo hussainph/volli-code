@@ -60,8 +60,66 @@ it("shows a transient preview only over the collapsed receipt and never latches 
   pointer("pointerover");
   expect(preview()).toBeNull();
   act(() => button().click());
-  expect(button().textContent).toContain("Worked for 12s");
+  expect(button().textContent).toContain("Work details");
   expect(preview()).toBeNull();
+});
+
+it("keeps unresolved activity visible in a boundary-frozen collapsed receipt and clears it at settlement", () => {
+  const work = {
+    key: "work",
+    startedAt: 1000,
+    endedAt: 13000,
+    state: "complete" as const,
+    rows: [
+      {
+        kind: "tool" as const,
+        key: "call",
+        part: {
+          type: "dynamic-tool" as const,
+          toolCallId: "call",
+          toolName: "bash",
+          state: "input-available" as const,
+          input: {},
+        },
+      },
+    ],
+  };
+  act(() =>
+    root.render(
+      <WorkReceipt
+        work={work}
+        summary={[
+          { text: "Running command", tone: "neutral" },
+          { text: "1 failed", tone: "danger" },
+        ]}
+        open={false}
+        onToggle={() => {}}
+      />,
+    ),
+  );
+  expect(button().textContent).toContain("Work details");
+  expect(button().textContent).toContain("1 unresolved");
+  expect(button().textContent).toContain("1 failed");
+  act(() =>
+    root.render(
+      <WorkReceipt
+        work={{
+          ...work,
+          rows: [
+            {
+              ...work.rows[0]!,
+              part: { ...work.rows[0]!.part, state: "output-available", output: "done" },
+            },
+          ],
+        }}
+        summary={[{ text: "Ran command", tone: "neutral" }]}
+        open={false}
+        onToggle={() => {}}
+      />,
+    ),
+  );
+  expect(button().textContent).toContain("Work details");
+  expect(button().textContent).not.toContain("unresolved");
 });
 
 it("allows keyboard collapsed focus, dismisses on Escape and blur, and has no tooltip title", () => {

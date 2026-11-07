@@ -297,6 +297,74 @@ function BrowserEvidence({ part }: { part: DynamicToolUIPart }) {
   );
 }
 
+function DelegationRelations({
+  relations,
+  onOpenSession,
+}: {
+  relations: NonNullable<TranscriptToolPresentation["relations"]>;
+  onOpenSession?: (id: string) => void;
+}) {
+  const [expanded, setExpanded] = React.useState(false);
+  const visible = expanded ? relations : relations.slice(0, 5);
+  if (relations.length < 2) return null;
+  return (
+    <section className="transcript-result-section">
+      <h4 className="mb-2 text-ui font-medium">Related Sessions</h4>
+      <div
+        className="max-h-72 overflow-auto"
+        role="region"
+        aria-label="Delegation relations"
+        tabIndex={0}
+      >
+        <ol className="m-0 list-none p-0">
+          {visible.map((relation, index) => (
+            <li key={relation.sessionId} className="flex min-w-0 items-start gap-2 py-1 text-ui">
+              <span dir="ltr" className="shrink-0 tabular-nums">
+                <span>{index + 1}</span>
+                <span>.</span>
+              </span>
+              <div className="min-w-0">
+                {onOpenSession ? (
+                  <button
+                    type="button"
+                    className="block max-w-full rounded-sm text-start underline outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    onClick={() => onOpenSession(relation.sessionId)}
+                  >
+                    <bdi dir="auto" className="line-clamp-2 break-words">
+                      {relation.name}
+                    </bdi>
+                  </button>
+                ) : (
+                  <bdi dir="auto" className="line-clamp-2 break-words">
+                    {relation.name}
+                  </bdi>
+                )}
+                {relation.parentName ? (
+                  <div className="text-muted-foreground">
+                    Delegated by <bdi dir="auto">{relation.parentName}</bdi>
+                  </div>
+                ) : null}
+              </div>
+            </li>
+          ))}
+        </ol>
+      </div>
+      {relations.length > 5 ? (
+        <Button
+          type="button"
+          size="xs"
+          variant="ghost"
+          aria-expanded={expanded}
+          className="mt-2"
+          onClick={() => setExpanded(!expanded)}
+        >
+          {expanded ? "Show fewer Sessions" : `${relations.length - 5} more Sessions`}
+        </Button>
+      ) : null}
+    </section>
+  );
+}
+
 export function PresentedToolRow({
   part,
   presentation,
@@ -418,6 +486,13 @@ export function PresentedToolRow({
                   </div>
                 ))}
               </div>
+            ) : null}
+            {presentation.relations ? (
+              <DelegationRelations
+                key={presentation.sessionId}
+                relations={presentation.relations}
+                onOpenSession={onOpenSession}
+              />
             ) : null}
             {presentation.sections.map((section, index) => (
               <ResultSection key={sectionKeys[index]} section={section} />

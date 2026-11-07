@@ -1,4 +1,4 @@
-import { SESSION_HOST_NOTICE_METADATA_KIND } from "@volli/shared";
+import { SESSION_HOST_NOTICE_METADATA_KIND, type SessionOrigin } from "@volli/shared";
 import type { UIMessage } from "ai";
 import type { SubagentNotice } from "./host-notice";
 
@@ -6,7 +6,9 @@ import type { SubagentNotice } from "./host-notice";
 export function deliveredAnswer(
   message: UIMessage,
   notice: SubagentNotice,
+  origin?: SessionOrigin | null,
 ): { text: string; excerpt: boolean } | null {
+  if (origin?.kind !== "volli" || origin.reason !== "subagent-notice") return null;
   const metadata = message.metadata as { kind?: unknown } | undefined;
   if (message.role !== "user" || metadata?.kind !== SESSION_HOST_NOTICE_METADATA_KIND) return null;
   const raw = message.parts.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");

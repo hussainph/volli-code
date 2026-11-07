@@ -35,6 +35,7 @@ export interface TranscriptToolPresentation {
   sources: readonly TranscriptSource[];
   sections: readonly TranscriptToolSection[];
   sessionId: string | null;
+  relations?: readonly { sessionId: string; name: string; parentName: string | null }[];
   savedOutputs?: readonly { path: string }[];
   picture?: string | null;
   tabId?: string | null;
@@ -44,7 +45,29 @@ export interface TranscriptToolPresentation {
 export interface TranscriptToolContext {
   sessionNames?: ReadonlyMap<string, string>;
   sessionIds?: ReadonlyMap<string, string>;
+  sessionParents?: ReadonlyMap<string, string | null>;
   mcpNames?: ReadonlyMap<string, { server: string; tool: string; url?: string | null }>;
+}
+function sessionRelations(
+  sessionId: string | null,
+  context: TranscriptToolContext,
+): NonNullable<TranscriptToolPresentation["relations"]> {
+  const relations: { sessionId: string; name: string; parentName: string | null }[] = [];
+  const seen = new Set<string>();
+  let id = sessionId;
+  while (id !== null && !seen.has(id)) {
+    seen.add(id);
+    const name = context.sessionNames?.get(id);
+    if (!name || !context.sessionParents?.has(id)) break;
+    const parent = context.sessionParents.get(id) ?? null;
+    relations.push({
+      sessionId: id,
+      name,
+      parentName: parent === null ? null : (context.sessionNames?.get(parent) ?? null),
+    });
+    id = parent;
+  }
+  return relations.toReversed();
 }
 function record(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -510,17 +533,19 @@ export function presentTranscriptTool(
         text: name === "session_send" ? "Delivered" : "Accepted",
         format: "note",
       });
+    const sessionId =
+      resolved && target
+        ? (context.sessionIds?.get(target) ??
+          context.sessionIds?.get(deliveryHeader?.[1] ?? "") ??
+          (target === details?.sessionId ? target : null))
+        : null;
     return {
       ...base,
       category: "session",
       label: `${failed ? (name === "session_delegate" ? "Couldn't delegate" : name === "session_start" ? "Couldn't start" : "Couldn't send to") : running ? waiting : accepted ? verb : "Requested"} ${title}`,
       identity: title,
-      sessionId:
-        resolved && target
-          ? (context.sessionIds?.get(target) ??
-            context.sessionIds?.get(deliveryHeader?.[1] ?? "") ??
-            (target === details?.sessionId ? target : null))
-          : null,
+      sessionId,
+      relations: sessionRelations(sessionId, context),
     };
   }
   if (name === "codemode") {

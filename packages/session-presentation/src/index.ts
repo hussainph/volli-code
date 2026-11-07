@@ -45,3 +45,4 @@ export * from "./work-windows";
 export * from "./tool-presentation";
 export * from "./delivered-answer";
 export * from "./transcript-mcp-metadata";
+export * from "./transcript-message-origin";

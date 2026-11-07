@@ -142,6 +142,37 @@ it("says Steered only for the recognized mid-turn delivery receipt", () => {
   ).toBe("Watching VC-12");
 });
 
+it("projects recorded delegation parents in root-to-target order without UUID or cycle guesses", () => {
+  const ids = Array.from({ length: 10 }, (_, index) => `child-${index + 1}`);
+  const names = new Map(
+    ids.map((sessionId, index) => [
+      sessionId,
+      index === 7 ? "مراجعة التباين" : `Audit ${index + 1}`,
+    ]),
+  );
+  const parents = new Map(ids.map((sessionId, index) => [sessionId, ids[index - 1] ?? null]));
+  const part = call(
+    "session_delegate",
+    { task: "Audit" },
+    { details: { sessionId: ids[9], handle: "child-10" } },
+  );
+  const context = { sessionNames: names, sessionParents: parents };
+  const model = presentTranscriptTool(part, context);
+  expect(model?.relations?.map((relation) => relation.sessionId)).toEqual(ids);
+  expect(model?.relations?.[0]?.parentName).toBeNull();
+  expect(model?.relations?.[9]?.parentName).toBe("Audit 9");
+  const cycle = new Map(parents);
+  cycle.set(ids[0]!, ids[9]!);
+  expect(
+    presentTranscriptTool(part, { ...context, sessionParents: cycle })?.relations,
+  ).toHaveLength(10);
+  const restricted = new Map(names);
+  restricted.delete(ids[6]!);
+  const partial = presentTranscriptTool(part, { ...context, sessionNames: restricted });
+  expect(partial?.relations?.map((relation) => relation.sessionId)).toEqual(ids.slice(7));
+  expect(partial?.relations?.[0]?.parentName).toBeNull();
+});
+
 it("keeps Code Mode isError authoritative and reads only the versioned count facet", () => {
   const successful = call("codemode", { code: "text('caught error')" }, "caught error");
   expect(presentTranscriptTool(successful)?.label).toBe("Ran code");

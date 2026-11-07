@@ -7,8 +7,9 @@ import { projectWorkWindows, workDurationLabel, type TranscriptWorkWindow } from
 
 function tool(
   id: string,
-  start: number,
+  start: number | null,
   state: "input-available" | "output-available" = "output-available",
+  end: number | null = state === "input-available" || start === null ? null : start + 500,
 ): DynamicToolUIPart {
   const metadata = {
     [ACTIVITY_METADATA_KEY]: {
@@ -17,7 +18,7 @@ function tool(
       subject: { label: null, path: null, lineRange: null },
       outcome: null,
       startedAt: start,
-      endedAt: start + 500,
+      endedAt: end,
     },
   };
   return state === "input-available"
@@ -75,7 +76,7 @@ it("owns work before every author boundary, without empty receipts or role chang
   ]);
   expect(
     rows.filter((row) => row.kind === "work").map((row) => workDurationLabel(row.work)),
-  ).toEqual(["Worked for 1s", "Worked for 1s", "Worked for 4s"]);
+  ).toEqual(["Work details", "Work details", "Work details"]);
   expect(
     rows.flatMap((row) =>
       row.kind === "turn" ? row.messages.map((message) => [message.id, message.role]) : [],
@@ -166,22 +167,20 @@ it("does not revive historical progress, invent reasoning clocks, or draw blank 
   expect(live[0]!.kind === "work" && workDurationLabel(live[0]!.work)).toBe("Working");
 });
 
-describe("recorded duration labels", () => {
-  it.each([
-    [0, "<1s"],
-    [12000, "12s"],
-    [68000, "1m 08s"],
-    [3720000, "1h 02m"],
-  ])("formats %i milliseconds", (elapsed, expected) => {
-    const work: TranscriptWorkWindow = {
-      key: "view",
-      rows: [],
-      startedAt: 0,
-      endedAt: elapsed,
-      state: "complete",
-    };
-    expect(workDurationLabel(work)).toBe(`Worked for ${expected}`);
-    expect(workDurationLabel({ ...work, startedAt: null })).toBe("Work details");
-    expect(workDurationLabel({ ...work, endedAt: -1 })).toBe("Work details");
-  });
+describe("honest duration labels without suspension coverage", () => {
+  it.each([[0], [12000], [68000], [3720000]])(
+    "does not call %i milliseconds of wall time active work",
+    (elapsed) => {
+      const work: TranscriptWorkWindow = {
+        key: "view",
+        rows: [],
+        startedAt: 0,
+        endedAt: elapsed,
+        state: "complete",
+      };
+      expect(workDurationLabel(work)).toBe("Work details");
+      expect(workDurationLabel({ ...work, startedAt: null })).toBe("Work details");
+      expect(workDurationLabel({ ...work, endedAt: -1 })).toBe("Work details");
+    },
+  );
 });
