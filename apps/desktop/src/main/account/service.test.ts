@@ -144,6 +144,21 @@ const scriptedBrowser = vi.fn(async (url: string) => {
 });
 
 describe("the account service", () => {
+  it("source icon epochs are non-restoring and change across same-account revocation", async () => {
+    const off = harness({ enabled: () => false });
+    expect(off.service.sourceIconEpoch()).toBe(off.service.sourceIconEpoch());
+    expect(off.backend.ensureViewer).not.toHaveBeenCalled();
+    expect(off.web.open).not.toHaveBeenCalled();
+    const live = harness({ provider: scriptedProvider(), openBrowser: scriptedBrowser });
+    const first = live.service.sourceIconEpoch();
+    await live.service.signIn("github");
+    const signedIn = live.service.sourceIconEpoch();
+    expect(signedIn).not.toBe(first);
+    await live.service.signOut();
+    expect(live.service.sourceIconEpoch()).not.toBe(signedIn);
+    await live.service.signIn("github");
+    expect(live.service.sourceIconEpoch()).not.toBe(signedIn);
+  });
   it("refuses everything while cloud is off, and answers an unconfigured build", async () => {
     const off = harness({ enabled: () => false });
     for (const call of [

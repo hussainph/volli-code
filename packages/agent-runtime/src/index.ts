@@ -95,6 +95,11 @@ export {
 } from "./pi/shell-tools";
 export { createWorkerWebExtractor, type WebExtractor } from "./web/extract-worker";
 export {
+  createWorkerSourceIconDecoder,
+  type SourceIconDecoder,
+  type SourceIconRaster,
+} from "./web/source-icon-decoder";
+export {
   createSafeWebFetch,
   WEB_FETCH_LIMITS,
   WEB_FETCH_RULE_IDS,

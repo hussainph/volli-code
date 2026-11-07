@@ -1088,6 +1088,7 @@ const appStartup = app.whenReady().then(async () => {
     onTransactionViolation: app.isPackaged ? logTransactionViolation : throwTransactionViolation,
     // web_fetch parses HTML in this worker rather than on Electron main.
     webExtractWorker: join(__dirname, "web-extract-worker.cjs"),
+    sourceIconWorker: join(__dirname, "source-icon-worker.cjs"),
     devDiagnostics: isDev,
     secretKey: harnessPorts?.secretKey ?? keychainSecretCodec(keychainUse.keychain),
     webKeySealing: {
@@ -1713,6 +1714,7 @@ const appStartup = app.whenReady().then(async () => {
       requestSecret: true,
       browser: { backend: browserTabs, cursorFor: (tabId) => cursorOverlayRef?.driverFor(tabId) },
       pictures: browserPictures,
+      sourceIconEpoch: () => account.sourceIconEpoch(),
     },
     beforeExecution: () => loginPathBootstrap.apply(),
     shellFeed: {
