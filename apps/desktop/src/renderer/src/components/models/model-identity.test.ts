@@ -3,9 +3,47 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 import { MODEL_MARK_TINTS } from "@volli/shared";
 
-import { ModelMark, modelFamily, needsProvider, providerMark } from "./model-identity";
+import {
+  ModelMark,
+  modelFamily,
+  modelProviderIdentity,
+  providerLabelOf,
+  providerMark,
+} from "./model-identity";
 
 const m = (providerId: string, modelId: string, label: string) => ({ providerId, modelId, label });
+
+describe("provider tag identity", () => {
+  it("keeps real provider names and qualifies duplicate display names with stable ids", () => {
+    const providers = [
+      { id: "openai", label: "OpenAI" },
+      { id: "openai-codex", label: "OpenAI" },
+    ];
+    const model = m("openai-codex", "gpt-5", "GPT-5");
+    expect(providerLabelOf(providers, model.providerId)).toBe("OpenAI");
+    expect(providerLabelOf(providers, "missing")).toBe("missing");
+    expect(modelProviderIdentity(model, [model], "OpenAI", providers)).toBe(
+      "OpenAI · openai-codex",
+    );
+    expect(modelProviderIdentity(model, [model], "OpenAI Codex", providers)).toBe("OpenAI Codex");
+  });
+
+  it("distinguishes unknown providers and same-provider duplicate model labels without inline text", () => {
+    const model = m("custom-a", "first", "Same model");
+    const second = { ...model, modelId: "second" };
+    expect(modelProviderIdentity(model, [model, second], "Custom")).toBe(
+      "Custom · custom-a · first",
+    );
+    expect(modelProviderIdentity(second, [model, second], "Custom")).toBe(
+      "Custom · custom-a · second",
+    );
+    const markup = renderToStaticMarkup(
+      createElement(ModelMark, { model, providerLabel: "Custom" }),
+    );
+    expect(markup).toContain('aria-label="Custom · custom-a"');
+    expect(markup.replace(/<[^>]+>/g, "")).toBe("C");
+  });
+});
 
 describe("modelFamily", () => {
   it("reads the family off the id or the label, not the provider", () => {
@@ -50,7 +88,7 @@ describe("providerMark", () => {
       }),
     );
     expect(markup).toContain(`d="${mark!.paths[0]}"`);
-    expect(markup).not.toContain("<span");
+    expect(markup).toContain('role="img"');
   });
 
   it("gives xAI its real monochrome mark rather than a letter", () => {
@@ -62,7 +100,7 @@ describe("providerMark", () => {
       }),
     );
     expect(markup).toContain("<svg");
-    expect(markup).not.toContain("<span");
+    expect(markup).toContain('role="img"');
   });
 
   it.each([
@@ -88,7 +126,8 @@ describe("providerMark", () => {
         providerLabel: "Meta",
       }),
     );
-    expect(provider).toBe(family);
+    expect(provider).toContain(`d="${providerMark("meta")!.paths[0]}"`);
+    expect(family).toContain(`d="${providerMark("meta")!.paths[0]}"`);
   });
 
   it.each(["radius", "typesafe", "custom"])("keeps %s on the honest lettermark fallback", (id) => {
@@ -123,23 +162,5 @@ describe("providerMark", () => {
     if (id === "cerebras" || id === "fireworks") {
       expect(markup).toContain('clip-rule="evenodd"');
     }
-  });
-});
-
-describe("needsProvider", () => {
-  const list = [
-    m("anthropic", "claude-opus-4-5", "Claude Opus 4.5"),
-    m("github-copilot", "claude-opus-4.5", "Claude Opus 4.5"),
-    m("anthropic", "claude-haiku-4-5", "Claude Haiku 4.5"),
-  ];
-
-  it("is the composer's rule: the provider only where the name alone is ambiguous", () => {
-    expect(needsProvider(list, list[0]!)).toBe(true);
-    expect(needsProvider(list, list[1]!)).toBe(true);
-    expect(needsProvider(list, list[2]!)).toBe(false);
-  });
-
-  it("does not call a model ambiguous with itself", () => {
-    expect(needsProvider([list[0]!], list[0]!)).toBe(false);
   });
 });

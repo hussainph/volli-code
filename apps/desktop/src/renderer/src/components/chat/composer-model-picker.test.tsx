@@ -458,33 +458,27 @@ describe("the compact model and effort control", () => {
  * selection to find out what it had been.
  */
 describe("reading the whole selected model without changing it", () => {
-  it("renders provider group names with sentence-case section-heading type", async () => {
+  it("keeps provider groups accessible without printing their names", async () => {
     await renderPill({ view: "all", defaults: EMPTY_MODEL_ACCESS_DEFAULTS });
-    const heading = Array.from(
-      document.querySelectorAll('[data-slot="command-group-heading"]'),
-    ).find((node) => node.textContent === "Anthropic");
-    expect(heading).toBeDefined();
-    expect(heading?.closest('[role="group"]')?.getAttribute("aria-label")).toBe("Anthropic");
-    const classes = heading?.className ?? "";
-    expect(classes).toContain("text-ui");
-    expect(classes).not.toContain("uppercase");
-    expect(classes).not.toContain("tracking-");
+    expect(document.querySelector('[data-slot="command-group-heading"]')).toBeNull();
+    expect(document.querySelector('[role="group"][aria-label="Anthropic"]')).not.toBeNull();
   });
 
-  it("leads the open list with the tier, the model and the provider, in full", async () => {
+  it("leads the open list with the tier and model, leaving the provider on its mark", async () => {
     await renderPill({
       view: "all",
       defaults: { ...EMPTY_MODEL_ACCESS_DEFAULTS, fast: HAIKU },
       selectionTier: "Fast",
     });
     const identity = document.querySelector('[data-testid="model-pill-identity"]');
-    expect(identity?.textContent).toContain("Fast · Claude Sonnet · Anthropic");
+    expect(identity?.textContent).toContain("Fast · Claude Sonnet");
+    expect(identity?.textContent).not.toContain("Anthropic");
     // Wrapping, not an ellipsis: a reveal that truncates is the thing it was
     // opened to escape, and a popover has a width of its own to spend.
     expect(identity?.innerHTML).not.toContain("truncate");
   });
 
-  it("says the same words the pill itself carries as its name", async () => {
+  it("keeps provider identity accessible while omitting its visible words", async () => {
     // One string, one function (`modelIdentityLabel`): a reveal that composed
     // its own could drift into describing a different selection than the
     // control it was opened from.
@@ -492,7 +486,8 @@ describe("reading the whole selected model without changing it", () => {
     const pill = document.querySelector('[data-slot="popover-trigger"]');
     const identity = document.querySelector('[data-testid="model-pill-identity"]');
     expect(pill?.getAttribute("aria-label")).toBe("Model: Fast · Claude Sonnet · Anthropic");
-    expect(identity?.textContent).toContain(pill?.getAttribute("title") ?? "");
+    expect(identity?.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe("Anthropic");
+    expect(pill?.getAttribute("title")).toBeNull();
   });
 });
 

@@ -278,8 +278,8 @@ describe("UsageLimitsPopover", () => {
     );
 
     await act(async () => button("Usage limits").click());
-    const trigger = [...document.querySelectorAll("button")].find((node) =>
-      node.textContent?.startsWith("Anthropic"),
+    const trigger = [...document.querySelectorAll("button")].find(
+      (node) => node.querySelector('[aria-label="Anthropic"]') !== null,
     );
     await act(async () => trigger?.click());
     await act(async () => button("Pin Session to the window bar").click());

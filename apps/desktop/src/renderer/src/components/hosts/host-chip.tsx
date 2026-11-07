@@ -379,7 +379,7 @@ function DetailBody({ host, detail }: { host: HostRecord; detail: HostDetailMode
       return (
         <DetailLine
           icon={<ProviderMark id={detail.signIn.providerId} name={detail.signIn.name} />}
-          text={`${detail.signIn.name} sign-in expired`}
+          text="Sign-in expired"
           tone="attention"
         >
           <Button

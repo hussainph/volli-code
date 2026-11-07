@@ -1,3 +1,4 @@
+import { HelpTag } from "@renderer/components/ui/help-tag";
 /**
  * The sign-in rows for one host (VC-702), ported from the lab's
  * `#host-sign-ins` "Per sign-in" direction (PR #745): each row chooses where
@@ -253,7 +254,6 @@ export function SignInRow({
       <div className="flex items-center gap-2 px-2 py-2">
         <ProviderMark id={row.id} name={row.label} />
         <div className="min-w-0 flex-1">
-          <div className="truncate text-ui font-medium">{row.label}</div>
           <div
             className={cn(
               "flex items-center gap-1 truncate text-ui",
@@ -529,14 +529,16 @@ const PROVIDER_TINT: Record<string, string> = {
 /** A monogram, not a logo: Volli redistributes no third-party marks. */
 export function ProviderMark({ id, name }: { id: string; name: string }) {
   return (
-    <span
-      aria-hidden
-      className={cn(
-        "grid size-6 shrink-0 place-items-center rounded-sm font-mono text-ui font-semibold",
-        PROVIDER_TINT[id] ?? "bg-muted text-foreground",
-      )}
-    >
-      {name.slice(0, 1).toUpperCase()}
-    </span>
+    <HelpTag label={name === id ? name : `${name} · ${id}`}>
+      <span
+        aria-hidden
+        className={cn(
+          "grid size-6 shrink-0 place-items-center rounded-sm font-mono text-ui font-semibold",
+          PROVIDER_TINT[id] ?? "bg-muted text-foreground",
+        )}
+      >
+        {name.slice(0, 1).toUpperCase()}
+      </span>
+    </HelpTag>
   );
 }

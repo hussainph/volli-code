@@ -869,6 +869,8 @@ function AgentsCard({ agents, reduce }: { agents: readonly IslandAgent[]; reduce
             // A row with no recorded policy draws no second line at all (the
             // component answers null), so the height is spent only by rows that
             // have something to say with it.
+            // Provider names belong to the mark's long-hover/focus tag, not
+            // this panel's policy line. Keep the shared caller for the peek too.
             secondary={<AgentModelLine agent={agent} />}
             onActivate={() => actions.peekAgent(agent.id)}
             actions={

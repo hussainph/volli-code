@@ -132,7 +132,11 @@ import {
 import { EffortPill, EffortSlider } from "@renderer/components/chat/composer-effort-ui";
 import { ContextUsagePill } from "@renderer/components/chat/context-usage-ui";
 import { ComposerPicker } from "@renderer/components/chat/composer-picker-ui";
-import { ModelMark, ModelName } from "@renderer/components/models/model-identity";
+import {
+  ModelMark,
+  ModelName,
+  modelProviderIdentity,
+} from "@renderer/components/models/model-identity";
 import { Button } from "@renderer/components/ui/button";
 import { ListRow } from "@renderer/components/ui/list-row";
 import { LoadingLabel } from "@renderer/components/ui/loading-label";
@@ -1480,62 +1484,25 @@ function selectedModel(
   );
 }
 
-/**
- * `sonnet-4.5`, or `Azure OpenAI · gpt-5.6-luna` where the name alone would not
- * say which model this is.
- *
- * A model name is not unique across providers, and this pill runs into that
- * twice. A selection the list does not hold — the Session is pinned to a
- * provider nobody is signed in to — falls back to its raw id, which is the same
- * id a signed-in provider may also carry; and two listed providers can both
- * ship a model called "GPT-5.6 Luna". Both read as an ordinary pill naming a
- * model that is not the one this Session will send to. Where the name is
- * ambiguous the provider leads it, exactly as Settings' model rows do.
- *
- * The effort level used to ride along as a third term. It does not any more:
- * effort is its own chip beside this one, and a bare level word appended to a
- * model name is read as a claim about the *model* — `gpt-5.6-luna · low` says
- * "a low model" long before it says "thinking set to low". One fact per pill.
- */
+/** The same collision rules as Settings, over the composer's offered models. */
+function modelTagIdentity(models: readonly ComposerModel[], model: ComposerModel): string {
+  return modelProviderIdentity(
+    model,
+    models,
+    model.providerLabel,
+    models.map((candidate) => ({ id: candidate.providerId, label: candidate.providerLabel })),
+  );
+}
+
+/** The resting pill names the model; its mark owns the provider help tag. */
 export function modelPillLabel(
   models: readonly ComposerModel[],
   selection: ComposerModelSelection,
-  /** The Session's provider as the catalog names it, for a model no longer listed. */
-  selectionProviderLabel?: string,
 ): string {
-  const model = selectedModel(models, selection);
-  const name = model?.label ?? selection.modelId;
-  if (!name) return "Model";
-  const ambiguous =
-    model === undefined ||
-    models.some((candidate) => candidate !== model && candidate.label === name);
-  return ambiguous
-    ? `${model?.providerLabel ?? selectionProviderLabel ?? selection.providerId} · ${name}`
-    : name;
+  return selectedModel(models, selection)?.label || selection.modelId || "Model";
 }
 
-/**
- * The whole of what this Session will send to: `Fast · sonnet-4.5 · Anthropic`.
- *
- * {@link modelPillLabel} is the pill's *drawing* and answers a different
- * question — what is the shortest thing that still tells this model from its
- * neighbours — which is why it says the provider only where the name alone
- * would be ambiguous, and why the label it returns is then capped at 56px and
- * truncated. Both of those are right for a chip on a row that has to survive a
- * 313px composer.
- *
- * What they left unanswered is this one (VC-288): at 150% zoom in a split the
- * pill draws eight characters, and the tier, the provider and the rest of the
- * name were unreachable without opening the list and changing the selection to
- * find out what it had been. So the identity is composed once, in full, and
- * spent in the three places a truncated pill cannot reach — the accessible
- * name, the pointer's `title`, and the line the open list stands on.
- *
- * The provider is ALWAYS said here, ambiguity or not. "Which model" is what the
- * pill answers; "which account is about to be billed for it" is what this one
- * does, and a name that happens to be unique among today's signed-in providers
- * is not an answer to that.
- */
+/** Full accessible identity, independent of the mark-only resting face. */
 export function modelIdentityLabel(
   models: readonly ComposerModel[],
   selection: ComposerModelSelection,
@@ -1554,7 +1521,9 @@ export function modelIdentityLabel(
   const model = selectedModel(models, selection);
   const name = model?.label ?? selection.modelId;
   if (!name) return "Model";
-  const provider = model?.providerLabel ?? known.providerLabel ?? selection.providerId;
+  const provider = model
+    ? modelTagIdentity(models, model)
+    : (known.providerLabel ?? selection.providerId);
   return [known.tier ?? null, name, provider || null].filter((term) => term !== null).join(" · ");
 }
 
@@ -1670,6 +1639,7 @@ function ModelPillFace({
   /** Present only where this face can become the narrow combined control. */
   compactEffortValue?: string;
 }) {
+  const listed = selectedModel(models, selection);
   return (
     <>
       {/* The mark leads the name: a family the eye catches before the word is
@@ -1678,6 +1648,10 @@ function ModelPillFace({
           off its id — the mark is about WHAT the model is, and that is known
           even when the account that served it is gone. */}
       <ModelMark
+        identityLabel={listed ? modelTagIdentity(models, listed) : undefined}
+        detail={[selectionTier, modelPillLabel(models, selection), compactEffortValue]
+          .filter(Boolean)
+          .join(" · ")}
         model={
           selectedModel(models, selection) ?? {
             providerId: selection.providerId,
@@ -1731,7 +1705,7 @@ function ModelPillFace({
           </span>
         ) : null}
         <span className="min-w-14 truncate" data-testid="model-pill-name">
-          {modelPillLabel(models, selection, selectionProviderLabel)}
+          {modelPillLabel(models, selection)}
         </span>
       </span>
       {compactEffortValue === undefined ? null : (
@@ -1904,44 +1878,24 @@ export function ModelPill({
   // will not choose anything.
   if (frozen) {
     return (
-      // Its own provider, for the reason `ui/tab-strip.tsx` mounts one: the pill
-      // is drawn by four surfaces and by a good deal of the test suite, some of
-      // them outside the app shell that owns the app-wide provider, and a Radix
-      // tooltip with none above it throws rather than degrading.
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              ref={triggerRef}
-              type="button"
-              size={COMPOSER_CONTROL_SIZE}
-              variant="ghost"
-              data-testid="model-pill"
-              aria-disabled
-              aria-label={controlLabel}
-              className={cn(
-                MODEL_PILL_GIVE,
-                COMPOSER_CONFIG_CHIP,
-                "text-muted-foreground opacity-50",
-              )}
-            >
-              <ModelPillFace
-                models={models}
-                selection={selection}
-                selectionTier={selectionTier}
-                selectionProviderLabel={selectionProviderLabel}
-                compactEffortValue={compactEffort?.value}
-              />
-            </Button>
-          </TooltipTrigger>
-          {/* Wrapping, and wide enough for a real name: the bubble is the
-              reveal, and a reveal that truncates is the thing it was opened to
-              escape. */}
-          <TooltipContent side="top" className="max-w-72 text-wrap">
-            {identity}
-          </TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
+      <Button
+        ref={triggerRef}
+        type="button"
+        size={COMPOSER_CONTROL_SIZE}
+        variant="ghost"
+        data-testid="model-pill"
+        aria-disabled
+        aria-label={controlLabel}
+        className={cn(MODEL_PILL_GIVE, COMPOSER_CONFIG_CHIP, "text-muted-foreground opacity-50")}
+      >
+        <ModelPillFace
+          models={models}
+          selection={selection}
+          selectionTier={selectionTier}
+          selectionProviderLabel={selectionProviderLabel}
+          compactEffortValue={compactEffort?.value}
+        />
+      </Button>
     );
   }
 
@@ -1957,17 +1911,9 @@ export function ModelPill({
           // THE NAME IS THE WHOLE FACT, EVEN WHERE THE DRAWING IS EIGHT
           // CHARACTERS (VC-288). The label below truncates by design; what
           // must not truncate with it is the answer to "what am I sending
-          // to". `aria-label` is that answer for anything reading the control
-          // rather than looking at it, and `title` is the pointer's half.
-          // Neither is the reveal on its own — a `title` is unreachable from a
-          // keyboard, and a name is not readable — which is why the list this
-          // pill opens leads with the same string, in ink, one press away.
+          // to". The accessible name keeps the provider; the mark's long-hover
+          // and keyboard-focus tag reveals the whole identity in ink.
           aria-label={controlLabel}
-          title={
-            compact && compactEffort !== undefined
-              ? `${identity} · ${effortLabel(compactEffort.value)} effort`
-              : identity
-          }
           className={cn(MODEL_PILL_GIVE, COMPOSER_CONFIG_CHIP, "text-muted-foreground")}
         >
           <ModelPillFace
@@ -2003,9 +1949,8 @@ export function ModelPill({
             in. Outside the command root, so cmdk's arrow keys still land on the
             first ROW rather than on a line that is not a choice.
 
-            The same string the pill's accessible name carries, from the same
-            function, so the two cannot drift into saying different things about
-            one selection. */}
+            The model and tier stay on this line; the provider is carried by
+            the mark's accessible name and long-hover/focus tag. */}
         <div
           data-testid="model-pill-identity"
           // `py-1` — the ladder's 4px rung. `py-1.5` was 6px from nowhere on
@@ -2014,6 +1959,11 @@ export function ModelPill({
           className="flex items-center gap-2 border-b px-3 py-2 text-ui text-muted-foreground"
         >
           <ModelMark
+            identityLabel={
+              selectedModel(models, selection)
+                ? modelTagIdentity(models, selectedModel(models, selection)!)
+                : undefined
+            }
             model={
               selectedModel(models, selection) ?? {
                 providerId: selection.providerId,
@@ -2027,7 +1977,9 @@ export function ModelPill({
               selection.providerId
             }
           />
-          <span className="min-w-0 break-words">{identity}</span>
+          <span className="min-w-0 break-words">
+            {[selectionTier, modelPillLabel(models, selection)].filter(Boolean).join(" · ")}
+          </span>
         </div>
         {selectionAuto === null ? null : (
           <AutoPickLine
@@ -2105,6 +2057,7 @@ export function ModelPill({
               items={catalog}
               keyOf={(model) => model.id}
               groupOf={(model) => model.providerLabel}
+              showGroupHeadings={false}
               query={modelQuery}
               onQueryChange={setModelQuery}
               placeholder="Model"
@@ -2130,7 +2083,11 @@ export function ModelPill({
                     )}
                     strokeWidth={2.25}
                   />
-                  <ModelMark model={model} providerLabel={model.providerLabel} />
+                  <ModelMark
+                    model={model}
+                    providerLabel={model.providerLabel}
+                    identityLabel={modelTagIdentity(models, model)}
+                  />
                   <span className="min-w-0 flex-1 truncate tabular-nums">{model.label}</span>
                 </>
               )}
