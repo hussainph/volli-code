@@ -225,8 +225,9 @@ test("both capture generations stay byte-bounded and retain a marked useful tail
   assert.ok(current.endsWith("LAST\n"));
   assert.doesNotMatch(current + previous, /FIRST/);
   append(Buffer.from(`${"y".repeat(4096)}TAIL`));
-  assert.ok(statSync(path).size <= 128);
-  assert.ok(readFileSync(path, "utf8").endsWith("TAIL"));
+  const tail = readFileSync(path);
+  assert.ok(tail.byteLength <= 128);
+  assert.ok(tail.toString("utf8").endsWith("TAIL"));
   assert.throws(() => createBoundedCapture(path, { maxBytes: 1, marker }), /Capture bound/);
 });
 
