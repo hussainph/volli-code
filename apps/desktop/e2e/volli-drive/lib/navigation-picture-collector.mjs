@@ -98,13 +98,17 @@ export class NavigationCollectionError extends Error {
 }
 
 /**
- * The LAST settled bundle header this script can produce, the counts its
- * summary states, and the lines of the activity block under it.
+ * The LAST settled bundle header this script can produce, how many such
+ * headers the tree holds, the counts its summary states, and the lines of the
+ * activity block under it. Refs are NOT identity: React remounts the header's
+ * wrapper and a row's disclosure when they open (retained run-2uJsc9
+ * gen-0023 -> gen-0024), so each fresh tree is matched by meaning.
  */
 export function activityGroup(text) {
   const lines = text.split("\n");
   const index = lines.findLastIndex((line) => GROUP.test(line));
   if (index < 0) return null;
+  const headers = lines.filter((line) => GROUP.test(line)).length;
   const [, indent, browse, failed, denied, notRun, states, ref] = GROUP.exec(lines[index]);
   const scope = [];
   for (const line of lines.slice(index + 1)) {
@@ -113,6 +117,7 @@ export function activityGroup(text) {
   }
   return {
     ref,
+    headers,
     expanded: states.includes("[expanded]"),
     summary: {
       browse: browse !== undefined,
@@ -174,51 +179,69 @@ function programFailure(scope) {
 }
 
 export async function collectNavigationMetrics({ snapshot, click, checkpoint }) {
-  const fact = { groupOpened: false, summary: null, rows: 0, codemodeRows: 0, disclosures: 0 };
+  const fact = {
+    groupOpened: false,
+    summary: null,
+    rows: 0,
+    codemodeRows: 0,
+    disclosures: 0,
+    headerRefChanged: null,
+    codemodeRefChanged: null,
+  };
   const fail = (phase, message, extra = {}) => {
     checkpoint(phase);
     throw new NavigationCollectionError(message, { phase, ...fact, ...extra });
   };
+  /** This fresh tree's one group, by meaning; never by a ref an older tree minted. */
+  const groupOf = (snap, closedPhase) => {
+    const group = activityGroup(snap.text);
+    if (!group) fail(closedPhase ?? "collection:activity-group", "activity group missing");
+    if (group.headers !== 1) fail("collection:activity-group-ambiguous", "several activity groups");
+    if (closedPhase && !group.expanded) fail(closedPhase, "activity group not open");
+    return group;
+  };
+  /** The unique codemode row and every other row closed, in this fresh tree. */
+  const codemodeOf = (group, phase) => {
+    const rows = rowDisclosures(group.scope);
+    const codemode = rows.filter((row) => row.codemode);
+    if (phase === "collection:codemode-row") {
+      fact.rows = rows.length;
+      fact.codemodeRows = codemode.length;
+    }
+    // An open browse row would have mounted its card: never proceed past one.
+    if (rows.some((row) => row.open && !row.codemode)) {
+      fail("collection:browse-row-open", "a browse disclosure is open");
+    }
+    if (codemode.length !== 1)
+      fail(phase, "no unique codemode row", { seenCodemodeRows: codemode.length });
+    return { rows, row: codemode[0] };
+  };
   checkpoint("collection:activity-snapshot");
   let snap = await snapshot();
-  let group = activityGroup(snap.text);
-  if (!group) fail("collection:activity-group", "activity group missing");
+  let group = groupOf(snap);
   fact.summary = group.summary;
   if (!group.expanded) {
     checkpoint("collection:open-activity-group");
-    const ref = group.ref;
-    snap = await click(snap.generation, ref);
-    group = activityGroup(snap.text);
-    if (!group?.expanded || group.ref !== ref) {
-      fail("collection:activity-group-closed", "activity group did not open");
-    }
+    const clicked = group.ref;
+    snap = await click(snap.generation, clicked);
+    group = groupOf(snap, "collection:activity-group-closed");
     fact.groupOpened = true;
+    fact.headerRefChanged = group.ref !== clicked;
   }
   checkpoint("collection:codemode-row");
-  let rows = rowDisclosures(group.scope);
-  let codemode = rows.filter((row) => row.codemode);
-  fact.rows = rows.length;
-  fact.codemodeRows = codemode.length;
-  // A browse row already open would have mounted its card: never proceed.
-  if (rows.some((row) => row.open && !row.codemode)) {
-    fail("collection:browse-row-open", "a browse disclosure is already open");
-  }
-  if (codemode.length !== 1) fail("collection:codemode-row", "no unique codemode row");
-  const target = codemode[0].ref;
-  if (!codemode[0].open) {
+  let { rows, row } = codemodeOf(group, "collection:codemode-row");
+  if (!row.open) {
     checkpoint("collection:open-codemode-row");
-    snap = await click(snap.generation, target);
+    const clicked = row.ref;
+    snap = await click(snap.generation, clicked);
     fact.disclosures = 1;
-    group = activityGroup(snap.text);
-    if (!group?.expanded) fail("collection:activity-group-closed", "activity group closed");
-    rows = rowDisclosures(group.scope);
-    codemode = rows.filter((row) => row.codemode);
-    if (codemode.length !== 1 || codemode[0].ref !== target || !codemode[0].open) {
-      fail("collection:codemode-row-closed", "codemode disclosure did not open");
+    group = groupOf(snap, "collection:activity-group-closed");
+    ({ rows, row } = codemodeOf(group, "collection:codemode-row-ambiguous"));
+    if (rows.length !== fact.rows) {
+      fail("collection:codemode-row-ambiguous", "row set changed", { seenRows: rows.length });
     }
-    if (rows.some((row) => row.open && !row.codemode)) {
-      fail("collection:browse-row-open", "a browse disclosure opened");
-    }
+    if (!row.open) fail("collection:codemode-row-closed", "codemode disclosure did not open");
+    fact.codemodeRefChanged = row.ref !== clicked;
   }
   checkpoint("collection:metrics-parse");
   let metrics;

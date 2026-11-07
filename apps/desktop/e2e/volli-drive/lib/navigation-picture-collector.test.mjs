@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { test } from "node:test";
 import { Script } from "node:vm";
@@ -76,6 +77,7 @@ const row = (ref, verb, open, body) => ({
  */
 function tree({
   header = SUCCESS,
+  headerRef = "f2e1092",
   open = true,
   browseOpen = false,
   codeOpen = false,
@@ -88,7 +90,7 @@ function tree({
       role: "generic",
       ref: "f2e1015",
       children: [
-        { role: "button", name: header, expanded: open, ref: "f2e1092" },
+        { role: "button", name: header, expanded: open, ref: headerRef },
         ...(open ? rows : []),
         { role: "paragraph", ref: "f2e1097", children: ["Navigation picture commands complete"] },
       ],
@@ -97,28 +99,48 @@ function tree({
   ]);
 }
 
-const BROWSE_REFS = new Set(["f2e2d", "f2e494", "f2e1057"]);
+// Synthetic browse/rail/worktree refs, and every browse row disclosure the
+// retained run-2uJsc9 trees show: none of them may ever be clicked.
+const BROWSE_REFS = new Set([
+  "f2e2d",
+  "f2e494",
+  "f2e1057",
+  "f2e1132",
+  "f2e1143",
+  "f2e1153",
+  "f2e1165",
+  "f2e1177",
+  "f2e1189",
+]);
 
-function driver(states) {
+/** Verbatim lines 34.. of a retained run-2uJsc9 tree (the a26b206f native run). */
+const retained = (generation) =>
+  readFileSync(
+    new URL(`./navigation-picture-fixtures/run-2uJsc9-gen-${generation}.txt`, import.meta.url),
+    "utf8",
+  );
+
+function driver(states, base = 21) {
   const clicks = [];
   const phases = [];
   let position = 0;
   return {
     clicks,
     phases,
-    snapshot: async () => ({ generation: 21, text: states[0] }),
+    snapshot: async () => ({ generation: base, text: states[0] }),
     click: async (generation, ref) => {
       assert.ok(!BROWSE_REFS.has(ref), `opened a forbidden disclosure ${ref}`);
+      assert.equal(generation, base + position, "click used a stale generation");
       clicks.push({ generation, ref });
       position++;
-      return { generation: 21 + position, text: states[position] };
+      return { generation: base + position, text: states[position] };
     },
     checkpoint: (phase) => phases.push(phase),
   };
 }
 
-async function failure(states, phase) {
-  const drive = driver(states);
+async function failure(states, phase, base) {
+  const drive = driver(states, base);
   const error = await collectNavigationMetrics(drive).catch((caught) => caught);
   assert.ok(error instanceof NavigationCollectionError, String(error));
   assert.equal(error.collection.phase, phase);
@@ -149,6 +171,8 @@ test("retained collapsed shape: fresh header ref, fresh tree, ONLY the codemode 
     rows: 2,
     codemodeRows: 1,
     disclosures: 1,
+    headerRefChanged: false,
+    codemodeRefChanged: false,
   });
   assert.deepEqual(drive.clicks, [
     { generation: 21, ref: "f2e1092" },
@@ -161,6 +185,80 @@ test("retained collapsed shape: fresh header ref, fresh tree, ONLY the codemode 
     "collection:open-codemode-row",
     "collection:metrics-parse",
   ]);
+});
+
+test("retained run-2uJsc9 gen-0022 -> 0023 -> 0024: a remounted disclosure ref still opens", async () => {
+  // The a26b206f native run failed closed here: opening the codemode row
+  // remounted its button (f2e1199 -> f2e1206). Identity is semantic now.
+  const drive = driver([retained("0022"), retained("0023"), retained("0024")], 22);
+  const value = await collectNavigationMetrics(drive);
+  assert.deepEqual(drive.clicks, [
+    { generation: 22, ref: "f2e1087" },
+    { generation: 23, ref: "f2e1199" },
+  ]);
+  assert.deepEqual(value.collection, {
+    groupOpened: true,
+    summary: { browse: true, failed: 0, denied: 0, notRun: 0 },
+    rows: 7,
+    codemodeRows: 1,
+    disclosures: 1,
+    headerRefChanged: false,
+    codemodeRefChanged: true,
+  });
+  assert.equal(value.metrics.tabId, "55916e7a-fa6a-4ae1-8323-13b1052b5edc");
+  // Real device pixels, as the tool reported them; not forced to 1280x720.
+  assert.deepEqual([value.metrics.width, value.metrics.height], [2560, 1440]);
+  // Code Mode pins Date per run (codemode/journal.ts determinismPrelude): the
+  // in-program clock fields are one constant, never a measurement.
+  const m = value.metrics;
+  assert.equal(
+    new Set([m.requestedAt, m.answeredAt, m.clickRequestedAt, m.clickAnsweredAt]).size,
+    1,
+  );
+  assert.equal(m.screenshotMs, 0);
+});
+
+test("refs are not identity: a remounted header still opens, ambiguity fails closed", async () => {
+  // Header remount: the fresh tree's one expanded group is the group.
+  const drive = driver([
+    tree({ open: false }),
+    tree({ headerRef: "f2e9999" }),
+    tree({ headerRef: "f2e9999", codeOpen: true, body: OUTPUT }),
+  ]);
+  const value = await collectNavigationMetrics(drive);
+  assert.equal(value.collection.headerRefChanged, true);
+  assert.deepEqual(drive.clicks, [
+    { generation: 21, ref: "f2e1092" },
+    { generation: 22, ref: "f2e3d" },
+  ]);
+  // Two matching groups: no guess which one is ours.
+  await failure([tree() + "\n" + tree()], "collection:activity-group-ambiguous");
+  // After the click: two codemode rows, or a different row set.
+  const twoCode = [
+    row("f2e2", "Opened", false),
+    row("f2e3", "codemode", true, OUTPUT),
+    row("f2e4", "codemode", false),
+  ];
+  let result = await failure(
+    [tree(), tree({ rows: twoCode })],
+    "collection:codemode-row-ambiguous",
+  );
+  assert.equal(result.collection.seenCodemodeRows, 2);
+  const fewer = [row("f2e3", "codemode", true, OUTPUT)];
+  result = await failure([tree(), tree({ rows: fewer })], "collection:codemode-row-ambiguous");
+  assert.equal(result.collection.seenRows, 1);
+  // After the click: another row open as well as the codemode row.
+  await failure(
+    [
+      retained("0023"),
+      retained("0024").replace(
+        'button "Show details" [ref=f2e1153]',
+        'button "Hide details" [expanded] [ref=f2e1300]',
+      ),
+    ],
+    "collection:browse-row-open",
+    23,
+  );
 });
 
 test("production failure summaries keep the program's fixed cause", async () => {

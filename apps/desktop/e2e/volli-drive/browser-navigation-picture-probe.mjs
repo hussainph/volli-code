@@ -12,12 +12,20 @@
  * root Session stays attached until stop. The original smoke retains its own
  * immediate/before/after-disposal checkpoints for CI.
  *
- * Main work is bounded to 180 s, then <=80 s cleanup (including CLI stop). No automatic retries or
+ * Times: Code Mode pins the program's clock (codemode/journal.ts), so every
+ * elapsed, ordering and presentation decision uses host records instead: the
+ * nested call spans in this Session's referenced transcript artifacts and
+ * this tab's trace (lib/navigation-host-evidence.mjs). The program's own
+ * clock fields are only a pinned-clock witness.
+ *
+ * Main work is bounded to 180 s, then <=80 s cleanup (a <=10 s failure-path
+ * live doctor, then the CLI stop's 60 s). No automatic retries or
  * builds. The 12 s delayed module is the original cold-load fixture, not an
  * extra readiness sleep. Failure evidence survives before assertions fail.
  */
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -35,6 +43,14 @@ import {
   NavigationCollectionError,
   navigationToolProgram,
 } from "./lib/navigation-picture-collector.mjs";
+import {
+  HostEvidenceError,
+  navigationTiming,
+  readTranscriptArtifact,
+  settledSpans,
+  transcriptReferences,
+  transcriptReferenceSql,
+} from "./lib/navigation-host-evidence.mjs";
 import { request } from "./lib/protocol.mjs";
 
 const exec = promisify(execFile);
@@ -429,9 +445,10 @@ try {
         if (!tab) throw new Error("Session tab missing");
         const traces = await window.api.browser.traces({ sessionId: tab.ownerSessionId });
         if (!traces.ok) throw new Error("trace read failed");
+        // Steps carry no tab id: the TRACE is per (Session, tab).
         const steps = traces.traces
-          .flatMap((trace) => trace.steps)
-          .filter((step) => step.tabId === tabId);
+          .filter((trace) => trace.tabId === tabId)
+          .flatMap((trace) => trace.steps);
         const open = steps.find((step) => step.action === "open");
         const shot = steps.find((step) => step.action === "screenshot");
         const sizeOf = async (pictureId) => {
@@ -447,6 +464,14 @@ try {
           clicked: tab.title.includes("clicked=1"),
           nodes: Number(/nodes=(\d+)/.exec(tab.title)?.[1]),
           ownerMatches: tab.ownerSessionId !== null && tab.createdBy === "session",
+          ownerSessionId: tab.ownerSessionId,
+          // Host settle times for the timing evidence: facts only, no page text.
+          traceSteps: steps.map(({ action, generation, at, outcome }) => ({
+            action,
+            generation,
+            at,
+            outcome,
+          })),
           navigationRecorded: Boolean(open),
           screenshotRecorded: Boolean(shot),
           navigationPicture: open?.pictureId ?? null,
@@ -459,6 +484,23 @@ try {
     ),
     10_000,
   );
+  phase = "host timing evidence";
+  // Code Mode pins its program clock, so every time below is the host's own:
+  // the nested call spans in this Session's referenced transcript artifacts,
+  // cross-checked against this tab's trace. Read-only; no picture is read.
+  const references = transcriptReferences(
+    JSON.parse(await drive("state", id, "sql", transcriptReferenceSql(result.host.ownerSessionId))),
+  );
+  const transcripts = join(layout.userDataDir, "session-transcripts");
+  const spans = settledSpans(
+    references.map((reference) => readTranscriptArtifact(transcripts, reference, readFileSync)),
+  );
+  result.hostTiming = navigationTiming({
+    spans,
+    steps: result.host.traceSteps,
+    metrics: result.metrics,
+  });
+  result.hostTiming.references = references.length;
   phase = "real PNG decode";
   assert.match(
     result.host.screenshotPicture ?? "",
@@ -497,14 +539,17 @@ try {
     laterSize: result.host.navigationLaterSize,
   };
   result.timing = timing;
+  // m: the program's fixed record (its clock fields are only the pinned
+  // witness); t: host spans and trace times, the only times decisions use.
   const m = result.metrics,
     h = result.host,
-    p = result.pixels;
+    p = result.pixels,
+    t = result.hostTiming;
   const samples = result.observation.samples.filter((row) => row.tabId === m.tabId);
   const at = (time) => samples.findLast((row) => row.at <= time)?.presentation;
   result.presentations = {
-    before: at(m.requestedAt),
-    after: at(m.answeredAt),
+    before: at(t.requestedAt),
+    after: at(t.answeredAt),
     end: h.presentation,
   };
   // The original four assertions remain positive requirements, including #4.
@@ -515,7 +560,7 @@ try {
         timing.documentResponses === 1 &&
         timing.chunkRequests === 1 &&
         timing.chunkRespondedAt !== null &&
-        m.answeredAt < timing.chunkRespondedAt &&
+        t.answeredAt < timing.chunkRespondedAt &&
         h.ready &&
         h.nodes >= INITIAL_ROWS + CHUNK_ROWS,
     },
@@ -527,7 +572,7 @@ try {
         h.presentation === "headless" &&
         samples.every((row) => row.presentation === "headless") &&
         h.ownerMatches &&
-        m.screenshotMs < SCREENSHOT_BUDGET_MS &&
+        t.screenshotMs < SCREENSHOT_BUDGET_MS &&
         m.hasImage &&
         p.bytes > 2_000 &&
         m.width > 0 &&
@@ -540,8 +585,11 @@ try {
       check: 3,
       ok:
         m.clickedWhileCompiling &&
-        m.clickRequestedAt < timing.chunkRespondedAt &&
-        m.clickAnsweredAt < timing.chunkRespondedAt &&
+        t.clickRequestedAt < timing.chunkRespondedAt &&
+        t.clickAnsweredAt < timing.chunkRespondedAt &&
+        // The tabs read whose title gives clickedWhileCompiling finished
+        // before the chunk answered, so "compiling" is a fact of that window.
+        t.tabsAnsweredAt < timing.chunkRespondedAt &&
         h.clicked,
     },
     {
@@ -564,6 +612,7 @@ try {
   result.failedPhase = phase; // No arbitrary error, page text, CDP params or URL logging.
   // Collection facts are counts, allowlisted phases and fixed program causes.
   if (error instanceof NavigationCollectionError) result.collection = error.collection;
+  if (error instanceof HostEvidenceError) result.timingEvidence = error.evidence;
 } finally {
   clearTimeout(expiry);
   abort.abort();
@@ -576,6 +625,26 @@ try {
         result.diagnostics = await diagnostics();
       } catch {
         result.diagnosticReadFault = true;
+      }
+    }
+    // Failure path only: a LIVE post-run guard proof while the owned instance
+    // still runs, inside this bounded cleanup and never in place of its stop.
+    // A static doctor is not this proof; when it cannot run, say so.
+    if (id && !result.doctorAfter) {
+      try {
+        const { stdout } = await exec(process.execPath, [cli, "doctor", id, "--json"], {
+          cwd: REPO,
+          env,
+          timeout: 10_000,
+          maxBuffer: 4 * 1024 * 1024,
+        }).catch((error) => {
+          if (typeof error?.stdout === "string" && error.stdout.trim()) return error;
+          throw error;
+        });
+        result.doctorAfterFailurePath = health(JSON.parse(stdout));
+        if (!result.doctorAfterFailurePath.ok) result.guardFault = true;
+      } catch {
+        result.doctorAfterFailurePath = { notReached: true };
       }
     }
     if (browser) {
@@ -656,6 +725,10 @@ console.log(
       checks: result.checks,
       discriminator: result.navigationDiscriminator ?? null,
       collection: result.collection ?? null,
+      timingEvidence: result.timingEvidence ?? null,
+      hostTiming: result.hostTiming ?? null,
+      doctorAfter: result.doctorAfter ?? null,
+      doctorAfterFailurePath: result.doctorAfterFailurePath ?? null,
       evidence: run,
       ownLiveInstances: result.ownLiveInstances ?? null,
     },
