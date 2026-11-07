@@ -1187,7 +1187,7 @@ async function main() {
         .getByRole("button")
         .click();
       const transcriptTab = transcriptPane.getByRole("tab", {
-        name: OVERLAY_SESSION.title,
+        name: `${OVERLAY_SESSION.title} · Anthropic`,
         exact: true,
       });
       await waitUntil(
