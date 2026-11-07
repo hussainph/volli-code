@@ -6,6 +6,7 @@ import {
   compositeHex,
   hexToOklch,
   oklchToHex,
+  hexChannels,
   wcagContrast,
 } from "@volli/shared";
 import { deriveCanvasPaint } from "./canvas-paint";
@@ -41,6 +42,29 @@ const seeds = [
 ];
 
 describe("tinted material contrast", () => {
+  it.each([
+    ["#e6f6ff", "#ebedef", "#333639", "#4d5052"],
+    ["#f5eaff", "#eeecef", "#363439", "#504e52"],
+  ])(
+    "%s preserves a pale tint even when its 14% composite quantizes to neutral",
+    (seed, fill, glass, rounded) => {
+      const canvas = { ...DEFAULT_CANVAS, vibrancy: 0, stops: [{ hex: seed, x: 0, y: 1 }] };
+      const { canvasTokens: c } = deriveCanvasPaint(canvas, "dark");
+      const channels = [1, 3, 5].map((offset) => parseInt(fill.slice(offset, offset + 2), 16));
+      expect(c["--control-face"]).toBe(`rgb(${channels.join(" ")} / 0.14)`);
+      const backdrop = regularGlassBackdrop(effectiveStopHexes(canvas, "dark")[0], "dark");
+      expect(over(c["--glass-pane-veil"], backdrop)).toBe(glass);
+      // RGB alpha paint composites in gamma-encoded sRGB channels. Retain
+      // the fractional bytes before the compositor rounds, not an Oklab mix.
+      const under = hexChannels(glass);
+      const unrounded = (hex: string) =>
+        hexChannels(hex).map((channel, index) => under[index] + 0.14 * (channel - under[index]));
+      expect(unrounded(fill)).not.toEqual(unrounded("#ededed"));
+      expect(over(c["--control-face"], glass)).toBe(rounded);
+      expect(compositeHex("#ededed", 0.14, glass)).toBe(rounded);
+    },
+  );
+
   describe.each(["light", "dark"] as const)("%s", (mode) => {
     it.each(["#ef8a4b", "#2a7de8", "#f8f0d8", "#e6f6ff", "#f5eaff", "#ffffff"])(
       "%s: opaque checkout faces preserve the navigation text and icon pairs",
@@ -78,8 +102,19 @@ describe("tinted material contrast", () => {
       },
     );
 
-    it.each(["#ef8a4b", "#2a7de8", "#00ff00", "#a020f0"])(
-      "%s: custom rail placements retain reading contrast on their actual veils",
+    it.each([
+      "#ef8a4b",
+      "#2a7de8",
+      "#00ff00",
+      "#a020f0",
+      "#f8f0d8",
+      "#e6f6ff",
+      "#f5eaff",
+      "#80817f",
+      "#000000",
+      "#ffffff",
+    ])(
+      "%s: custom rail placements retain reading contrast on their actual veils and control faces",
       (seed) => {
         for (const primaryIndex of [0, 1, 2]) {
           for (const vibrancy of [0, 0.6, 1]) {
@@ -94,8 +129,33 @@ describe("tinted material contrast", () => {
               ],
             };
             const { tokens: t, canvasTokens: c } = deriveCanvasPaint(canvas, mode);
+            const neutralControl = deriveCanvasPaint(
+              {
+                ...canvas,
+                stops: canvas.stops.map((stop) => ({ hex: "#808080", x: stop.x, y: stop.y })),
+              },
+              mode,
+            ).canvasTokens["--control-face"];
             for (const peak of effectiveStopHexes(canvas, mode)) {
               const glass = over(c["--glass-pane-veil"], regularGlassBackdrop(peak, mode));
+              const control = over(c["--control-face"], glass);
+              // Hold the backdrop fixed: this proves the winning control material,
+              // not just the canvas behind it, carries authored colour.
+              if (["#ef8a4b", "#2a7de8", "#00ff00", "#a020f0"].includes(seed)) {
+                expect(
+                  control,
+                  `${seed}/${primaryIndex}/${vibrancy}/${mode}/control=${c["--control-face"]}/neutral=${neutralControl}/glass=${glass}`,
+                ).not.toBe(over(neutralControl, glass));
+              }
+              // Browse files / PR use outline text-foreground. Neither has
+              // secondary text; the automation's muted chevron is inspector,
+              // in a portalled writing popover, not on this control face.
+              for (const surface of [control, over(c["--glass-outline-pressed"], control)]) {
+                expect(
+                  wcagContrast(c["--glass-ink"], surface),
+                  `${seed}/primary${primaryIndex}/v${vibrancy}/${mode}/outline-${surface === control ? "rest" : "pressed"}/ink${c["--glass-ink"]}/face${surface}/glass${glass}/black-on-glass${wcagContrast("#000000", glass)}/white-on-glass${wcagContrast("#ffffff", glass)}`,
+                ).toBeGreaterThanOrEqual(4.5);
+              }
               for (const surface of [
                 glass,
                 compositeHex(c["--glass-wash-ink"], 0.1, glass),
@@ -105,7 +165,7 @@ describe("tinted material contrast", () => {
                 for (const ink of [c["--glass-ink"], c["--glass-secondary"]]) {
                   expect(
                     wcagContrast(ink, surface),
-                    `${seed}/${primaryIndex}/${vibrancy}/${mode}/${surface}/${ink}`,
+                    `${seed}/${primaryIndex}/${vibrancy}/${mode}/${surface === control ? "control" : surface === over(c["--fill-secondary"], control) ? "pressed-control" : "navigation"}/${ink === c["--glass-ink"] ? "foreground" : "secondary"}/${surface}/${ink}`,
                   ).toBeGreaterThanOrEqual(4.5);
                 }
               }
@@ -173,11 +233,20 @@ describe("tinted material contrast", () => {
         for (const peak of effectiveStopHexes(canvas, mode)) {
           const glass = over(c["--glass-pane-veil"], regularGlassBackdrop(peak, mode));
           for (const surface of [
+            over(c["--control-face"], glass),
+            over(c["--glass-outline-pressed"], over(c["--control-face"], glass)),
+          ]) {
+            expect(
+              wcagContrast(c["--glass-ink"], surface),
+              `${seed}/v${vibrancy}/${mode}/outline-${surface === over(c["--control-face"], glass) ? "rest" : "pressed"}/ink${c["--glass-ink"]}/face${surface}`,
+            ).toBeGreaterThanOrEqual(4.5);
+          }
+          for (const surface of [
             glass,
             over(c["--fill-row-hover"], glass),
             over(c["--fill-row-selected"], glass),
             compositeHex(c["--glass-wash-ink"], 0.1, glass),
-            // Shared rail footer/control and card frame, including its dark override.
+            // Shared rail footer and card frame, including its dark override.
             compositeHex(t["--popover"], 0.3, glass),
             compositeHex(mode === "dark" ? t["--accent"] : t["--popover"], 0.5, glass),
           ]) {
@@ -188,6 +257,29 @@ describe("tinted material contrast", () => {
               ).toBeGreaterThanOrEqual(4.5);
             }
           }
+        }
+        // Automation Run-on is an inspector Button inside a portalled
+        // writing popover: body label at 4.5, muted chevron (not text) at 3.
+        for (const backing of [
+          "#000000",
+          "#ffffff",
+          "#ff0000",
+          "#00ff00",
+          "#0000ff",
+          "#ffff00",
+          "#00ffff",
+          "#ff00ff",
+        ]) {
+          const popover = over(c["--glass-veil"], regularGlassBackdrop(backing, mode));
+          const inspector = over(c["--fill-secondary"], popover);
+          expect(
+            wcagContrast(t["--foreground"], inspector),
+            `${seed}/v${vibrancy}/${mode}/inspector-label/ink${t["--foreground"]}/face${inspector}/backing${backing}`,
+          ).toBeGreaterThanOrEqual(4.5);
+          expect(
+            wcagContrast(t["--muted-foreground"], inspector),
+            `${seed}/${mode}/inspector-chevron`,
+          ).toBeGreaterThanOrEqual(3);
         }
         expect(c["--glass-writing-veil"]).toBe(c["--glass-veil"]);
         expect(t["--foreground"]).toBe(mode === "light" ? "#272727" : "#ededed");

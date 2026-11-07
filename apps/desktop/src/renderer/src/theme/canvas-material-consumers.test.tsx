@@ -11,6 +11,8 @@ import {
 } from "@volli/shared";
 import { Message, MessageContent } from "@renderer/components/ui/ai-elements/message";
 import { Checkbox } from "@renderer/components/ui/checkbox";
+import { Button } from "@renderer/components/ui/button";
+import { RAIL_CONTROL } from "@renderer/components/ticket/rail-panel-parts";
 import { Select, SelectTrigger, SelectValue } from "@renderer/components/ui/select";
 import { FIELD_SURFACE } from "@renderer/components/ui/field-classes";
 import { deriveCanvasPaint } from "./canvas-paint";
@@ -43,11 +45,68 @@ describe("tinted material consumers", () => {
     ["rail/cloud-rail.tsx", "bg-wash-ink/10", 2],
     ["board/ticket-card.tsx", "border-wash-ink/40", 1],
     ["home/home-rail-footer.tsx", "bg-(--card-face)", 2],
-    ["ticket/rail-panel-parts.tsx", "bg-popover/30", 2],
+    ["ticket/rail-panel-parts.tsx", "bg-popover/30", 1],
     ["ticket/rail-panel-parts.tsx", "bg-popover/50 dark:bg-accent/50", 1],
   ] as const)("%s consumes %s in its production material classes", (file, material, count) => {
     const source = readFileSync(resolve(import.meta.dirname, "../components", file), "utf8");
     expect(source.split(material).length - 1).toBe(count);
+  });
+
+  it("leaves the rail outline control face to the shared material rule, not a shadowed utility", () => {
+    const html = renderToStaticMarkup(
+      <Button variant="outline" size="sm" className={RAIL_CONTROL}>
+        Browse files
+      </Button>,
+    );
+    expect(html).toContain('data-control="button"');
+    expect(html).toContain('data-variant="outline"');
+    expect(html).toContain("control-material");
+    expect(html).toContain("text-foreground");
+    expect(RAIL_CONTROL).not.toMatch(/\bbg-/);
+    const material = rule(
+      css,
+      '[data-control="button"]:is([data-variant="outline"], [data-variant="secondary"])',
+    );
+    expect(material).toContain("background-color: var(--control-face)");
+    expect(rule(css, '[data-control="button"].control-material:active:not(:disabled)')).toContain(
+      "background-image: linear-gradient(var(--fill-secondary), var(--fill-secondary))",
+    );
+    expect(rule(css, "[data-volli-rail].glass")).toContain("--foreground: var(--glass-ink)");
+  });
+
+  it("binds rail control ink probes to the three production callers and their actual variants", () => {
+    for (const [file, variant] of [
+      ["home/home-rail-footer.tsx", "outline"],
+      ["ticket/ticket-repository-summary.tsx", "outline"],
+      ["automations/ticket-rail-automations.tsx", "inspector"],
+    ] as const) {
+      const source = readFileSync(resolve(import.meta.dirname, "../components", file), "utf8");
+      const controls = [...source.matchAll(/<Button\b[\s\S]*?<\/Button>/g)]
+        .map((match) => match[0])
+        .filter((button) => button.includes("RAIL_CONTROL"));
+      expect(controls).toHaveLength(1);
+      expect(controls[0]).toContain(`variant="${variant}"`);
+      if (variant === "outline") {
+        expect(controls[0]).not.toContain("text-muted-foreground");
+        expect(source).toContain("className={RAIL_FOOTER}");
+      } else {
+        expect(controls[0]).toMatch(/<ChevronDownIcon[^>]*text-muted-foreground/);
+        expect(controls[0]).toContain('<span className="min-w-0 truncate">');
+        expect(source).toContain('data-testid="ticket-rail-automation-inspect"');
+      }
+    }
+    const inspector = renderToStaticMarkup(
+      <Button variant="inspector" className={RAIL_CONTROL}>
+        Model
+      </Button>,
+    );
+    expect(inspector).toContain("text-foreground");
+    expect(inspector).toContain("inspector-popup");
+    expect(inspector).not.toContain("control-material");
+    // The later unlayered material rule wins over the component-layer reset.
+    expect(rule(css.slice(css.lastIndexOf(".inspector-popup {")), ".inspector-popup")).toContain(
+      "background: var(--fill-secondary)",
+    );
   });
 
   it("keeps checkout objects opaque and retains their actual inherited text/icon classes", () => {

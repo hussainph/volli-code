@@ -2,7 +2,13 @@ import { describe, expect, it } from "vite-plus/test";
 import { wcagContrast } from "culori";
 import { compositeHex, hexToOklch, isHexColor, oklchToHex } from "../color";
 import { THEME_TOKEN_NAMES } from "../tokens";
-import { deriveCanvasTokens, deriveLabelInk, writingGlass, windowBackground } from "./index";
+import {
+  deriveCanvasTokens,
+  deriveLabelInk,
+  tintCanvasNeutral,
+  writingGlass,
+  windowBackground,
+} from "./index";
 import { baseFillHex } from "./gradient";
 import { DEFAULT_CANVAS } from "./parse";
 
@@ -25,6 +31,27 @@ const hues = [
 ];
 
 describe("neutral paper and canvas-tinted materials", () => {
+  it("bounds a writing-glass tint that would push body ink below AA under its 7.8% fill", () => {
+    const canvas = { ...DEFAULT_CANVAS, vibrancy: 1, stops: [{ hex: "#18b6a4", x: 0.5, y: 0.5 }] };
+    const tokens = deriveCanvasTokens(canvas, "dark");
+    const popover = hexToOklch(tokens["--popover"]);
+    const full = hexToOklch(tintCanvasNeutral("#282828", canvas, "dark"));
+    // Yields chroma only: lightness and hue stay, and it is still tinted.
+    expect(popover.C).toBeLessThan(full.C);
+    expect(popover.C).toBeGreaterThan(0.01);
+    expect(popover.L).toBeCloseTo(full.L, 2);
+    const fill = tintCanvasNeutral(tokens["--foreground"], canvas, "dark");
+    for (const pool of writingGlass(tokens["--popover"], "dark").pools)
+      expect(
+        wcagContrast(tokens["--foreground"], compositeHex(fill, 0.078, pool)),
+        pool,
+      ).toBeGreaterThanOrEqual(4.5);
+    // Ember already clears the pair; its tint is untouched.
+    expect(deriveCanvasTokens(DEFAULT_CANVAS, "dark")["--popover"]).toBe(
+      tintCanvasNeutral("#282828", DEFAULT_CANVAS, "dark"),
+    );
+  });
+
   for (const mode of ["light", "dark"] as const) {
     it.each(hues)(`${mode}/%s: secondary and labels clear AA on reading pools`, (hex) => {
       for (const vibrancy of [0, 0.6, 1]) {

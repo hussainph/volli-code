@@ -1,5 +1,5 @@
 /** Neutral reading paper with canvas-tinted surrounding materials. */
-import { compositeHex, hexToOklch, lerp, oklchToHex } from "../color";
+import { compositeHex, hexToOklch, lerp, oklchToHex, wcagContrast } from "../color";
 import { generateAccentTokens, solveLightnessOrCeiling, solveStatusTokens } from "../generate";
 import type { ThemeTokens } from "../tokens";
 import { baseFillHex } from "./gradient";
@@ -27,6 +27,37 @@ export function tintCanvasNeutral(
   return oklchToHex(hexToOklch(neutral).L, chroma, h);
 }
 
+/**
+ * Writing glass is translucent, so its tint adds to whatever the backdrop
+ * shows. Over a saturated green corner a green-tinted veil, under the 7.8%
+ * press/hover fill an inspector control paints, pushes body ink below AA even
+ * though neutral glass clears it. Body ink stays fixed; the tint yields only as
+ * much chroma as that pair needs, keeping its lightness and hue.
+ */
+function writingGlassFill(
+  tinted: string,
+  foreground: string,
+  fill: string,
+  resolved: ResolvedAppearance,
+): string {
+  const passes = (hex: string) =>
+    writingGlass(hex, resolved).pools.every(
+      (pool) =>
+        wcagContrast(foreground, pool) >= 4.5 &&
+        wcagContrast(foreground, compositeHex(fill, ARC_TUNING.secondaryFillAlpha, pool)) >= 4.5,
+    );
+  if (passes(tinted)) return tinted;
+  const { L, C, h } = hexToOklch(tinted);
+  let low = 0,
+    high = 1;
+  for (let i = 0; i < 20; i++) {
+    const mid = (low + high) / 2;
+    if (passes(oklchToHex(L, C * mid, h))) low = mid;
+    else high = mid;
+  }
+  return oklchToHex(L, C * low, h);
+}
+
 /** Paper stays neutral; cards, controls, fills and secondary ink carry the canvas hue. */
 export function deriveCanvasTokens(canvas: Canvas, resolved: ResolvedAppearance): ThemeTokens {
   const dark = resolved === "dark";
@@ -34,13 +65,19 @@ export function deriveCanvasTokens(canvas: Canvas, resolved: ResolvedAppearance)
   // The reading plane is invariant. Tint belongs to the objects placed on it.
   const paper = dark ? "#1e1e1e" : "#ffffff";
   const under = neutral(dark ? "#282828" : "#eaeaea");
-  const popover = neutral(dark ? "#282828" : "#fafafa");
+  const foreground = dark ? "#ededed" : "#272727";
+  const popover = writingGlassFill(
+    neutral(dark ? "#282828" : "#fafafa"),
+    foreground,
+    // The renderer's --fill-secondary ink: the same tinted foreground.
+    neutral(foreground),
+    resolved,
+  );
   // First stop is the accent. primaryIndex still controls the mesh's dominant pool.
   const seed = canvas.stops[0].hex;
   const accent = generateAccentTokens(seed);
   const { C, h } = hexToOklch(seed);
   const selected = compositeHex(seed, 0.18, paper);
-  const foreground = dark ? "#ededed" : "#272727";
   const editorSelection = compositeHex(neutral(foreground), 0.22, paper);
   const readingPools = [
     paper,

@@ -21,6 +21,12 @@ export const ARC_TUNING = {
   neutralTint: { light: 0.035, dark: 0.032 },
 
   /**
+   * Coverage of the translucent `--fill-secondary` press/hover wash. The
+   * renderer emits the same 7.8%; writing glass bounds its tint under it.
+   */
+  secondaryFillAlpha: 0.078,
+
+  /**
    * Where each stop's hue sits relative to the primary's, in degrees, indexed
    * by (stop count − 1): one color, its complement, then a triad. Rotation
    * happens in OKLCH `h`, where the wheel is perceptually even — a triad there

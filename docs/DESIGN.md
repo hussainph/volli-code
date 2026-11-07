@@ -28,6 +28,10 @@ lightness stays independent of canvas luminance. Gamut mapping reduces chroma wh
 never clips channels to force saturation. These are **pipeline values**, not literals to copy
 into components.
 Body text stays neutral and opaque; semantic hues and vendor artwork do not follow this tint.
+Where a tint and fixed body ink cannot share a surface, the tint yields: writing glass sheds
+only the chroma its body label needs under a 7.8% press fill over saturated backdrops, keeping
+lightness and hue. The focus ring is also solved against navigation glass and the rail footer
+wash, not only paper.
 
 ### Canvas sampling is a surface boolean
 

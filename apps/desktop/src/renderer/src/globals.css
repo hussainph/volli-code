@@ -368,6 +368,9 @@
   --paper-shadow: 0 1px 3px rgb(0 0 0 / 0.06), 0 0 0 0.5px var(--glass-edge);
   --tab-selected-face: rgb(254 232 223 / 0.14);
   --control-face: rgb(254 232 223 / 0.14);
+  /* Navigation outline press only: 7.8% optical shade/highlight opposite
+   the navigation ink. Paper and other control variants retain their fills. */
+  --glass-outline-pressed: rgb(0 0 0 / 0.078);
   --control-bezel-shadow:
     0 0.5px 1.5px rgb(0 0 0 / 0.5), 0 0 0 0.5px rgb(0 0 0 / 0.35),
     inset 0 0.5px 0 rgb(255 255 255 / 0.14);
@@ -528,6 +531,9 @@
   --paper-shadow: 0 1px 3px rgb(0 0 0 / 0.06), 0 0 0 0.5px var(--glass-edge);
   --tab-selected-face: #fff9f6;
   --control-face: #fff9f6;
+  /* Navigation outline press only: 7.8% optical shade/highlight opposite
+   the navigation ink. Paper and other control variants retain their fills. */
+  --glass-outline-pressed: rgb(255 255 255 / 0.078);
   --control-bezel-shadow:
     0 0.5px 1.5px rgb(0 0 0 / 0.16), 0 0 0 0.5px rgb(0 0 0 / 0.09),
     inset 0 0.5px 0 rgb(255 255 255 / 1);
@@ -1001,6 +1007,9 @@
 .app-region-drag {
   --foreground: var(--canvas-ink);
   --muted-foreground: var(--canvas-ink-muted);
+  /* Bare-canvas washes follow the already hue-tinted adaptive ink, not the
+     paper pole. Navigation glass overrides this in its own material scope. */
+  --wash-ink: var(--canvas-ink);
   /* The furniture rung — see the ladder below. Set here rather than there
      because it is the DEFAULT everything on the canvas inherits; those rules
      are the exceptions to it. */
@@ -3146,6 +3155,16 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
 }
 [data-control="button"].control-material:active:not(:disabled) {
   background-image: linear-gradient(var(--fill-secondary), var(--fill-secondary));
+}
+/* Only navigation outline controls need the adaptive optical press. This
+ * unlayered image also wins during hover+press; the shared control face still
+ * wins over the layered hover fill. Paper descendants and portalled reading
+ * surfaces keep their own material, as do secondary/inspector/toolbar buttons. */
+:is([data-volli-sidebar].glass, [data-volli-rail].glass)
+  [data-control="button"][data-variant="outline"].control-material:active:not(:disabled):not(
+    [data-material="paper"] *
+  ):not([data-slot="popover-content"] *) {
+  background-image: linear-gradient(var(--glass-outline-pressed), var(--glass-outline-pressed));
 }
 [data-control="button"].glass-control {
   background-image: none;

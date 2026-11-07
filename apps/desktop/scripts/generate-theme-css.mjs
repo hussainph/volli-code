@@ -157,6 +157,9 @@ const NOTES = {
   "--wash-ink":
     "Tinted material paint, not text. Navigation substitutes glass-wash-ink\n" +
     "   to follow its own ink polarity; body foreground remains neutral.",
+  "--glass-outline-pressed":
+    "Navigation outline press only: 7.8% optical shade/highlight opposite\n" +
+    "   the navigation ink. Paper and other control variants retain their fills.",
   "--shadow-raised": "The three shadow tiers: raised on a surface, the card, and overlays.",
   "--scrim":
     "The overlay wash (dialogs, sheets, the palette): the shadow's own ink\n" +

@@ -4,6 +4,8 @@ import {
   effectiveStopHexes,
   compositeHex,
   regularGlassBackdrop,
+  readingInk,
+  tintCanvasNeutral,
   hexChannels,
   wcagContrast,
   THEME_TOKEN_NAMES,
@@ -97,6 +99,55 @@ describe("deriveCanvasPaint", () => {
           );
           expect(wcagContrast(canvasTokens["--glass-secondary"], surface)).toBeGreaterThanOrEqual(
             4.5,
+          );
+        }
+      }
+    },
+  );
+
+  it.each(["light", "dark"] as const)(
+    "%s keeps the outline foreground solve out of secondary ink and row materials",
+    (mode) => {
+      for (const seed of [
+        "#ef8a4b",
+        "#2a7de8",
+        "#00ff00",
+        "#f8f0d8",
+        "#e6f6ff",
+        "#ffffff",
+        "#000000",
+      ]) {
+        for (const vibrancy of [0, 0.6, 1]) {
+          const canvas = { ...DEFAULT_CANVAS, vibrancy, stops: [{ hex: seed, x: 0.5, y: 0.5 }] };
+          const { canvasTokens: c } = deriveCanvasPaint(canvas, mode);
+          const pools = effectiveStopHexes(canvas, mode).map((peak) =>
+            compositeHex(
+              mode === "light" ? "#ffffff" : "#1a1a1c",
+              mode === "light" ? 0.46 : 0.52,
+              regularGlassBackdrop(peak, mode),
+            ),
+          );
+          const score = (ink: string) =>
+            Math.min(...pools.map((surface) => wcagContrast(ink, surface)));
+          const darkInk = score("#171717") >= score("#f5f5f5");
+          const wash = tintCanvasNeutral(darkInk ? "#171717" : "#f5f5f5", canvas, mode);
+          expect(c["--glass-wash-ink"]).toBe(wash);
+          expect(c["--glass-outline-pressed"]).toBe(
+            darkInk ? "rgb(255 255 255 / 0.078)" : "rgb(0 0 0 / 0.078)",
+          );
+          expect(c["--fill-row-selected"]).toBe(`color-mix(in oklab, ${wash} 9%, transparent)`);
+          expect(c["--fill-row-hover"]).toBe(`color-mix(in oklab, ${wash} 4.7%, transparent)`);
+          expect(c["--glass-secondary"]).toBe(
+            readingInk(
+              tintCanvasNeutral(darkInk ? "#5a5a5a" : "#b9b9b9", canvas, mode),
+              pools.flatMap((surface) => [
+                surface,
+                compositeHex(wash, 0.047, surface),
+                compositeHex(wash, 0.1, surface),
+              ]),
+              darkInk ? "light" : "dark",
+              4.5,
+            ),
           );
         }
       }

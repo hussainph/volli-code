@@ -538,7 +538,9 @@ export const RAIL_CARD_SEAM = "border-t border-sidebar-border/70";
 
 /**
  * The one button recipe a rail page presses: an `outline` Button on the
- * rail's own border, a resting wash, and the raised tier's lift.
+ * rail's own border and the raised tier's lift. Its resting face belongs to
+ * the shared outline primitive's generated `--control-face`; a background
+ * utility here would lose to that unlayered material rule.
  *
  * Spelled here for the reason {@link RAIL_CARD_FRAME} is. The repository
  * card's publish row wrote it three times inline (the primary, its `⋯`, the
@@ -553,7 +555,7 @@ export const RAIL_CARD_SEAM = "border-t border-sidebar-border/70";
  * the toolbar rung), and width is the row's decision: the recipe must work for
  * a control that truncates its own label and for a bare icon beside it.
  */
-export const RAIL_CONTROL = "border-sidebar-border bg-popover/30 text-ui shadow-raised";
+export const RAIL_CONTROL = "border-sidebar-border text-ui shadow-raised";
 
 /**
  * Insertions and deletions as one pair — the repository card's changes row, the

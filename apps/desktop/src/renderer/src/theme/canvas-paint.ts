@@ -145,6 +145,7 @@ export const CANVAS_TOKEN_NAMES = [
   "--paper-shadow",
   "--tab-selected-face",
   "--control-face",
+  "--glass-outline-pressed",
   "--control-bezel-shadow",
   "--diff-added",
   "--diff-removed",
@@ -228,6 +229,8 @@ export function deriveCanvasPaint(
   const paperSurface = (alpha: number) =>
     neutral(compositeHex(tokens["--foreground"], alpha, tokens["--background"]));
   const raisedFace = neutral(light ? "#fafafa" : "#2a2a2a");
+  const controlAlpha = 0.14;
+  const secondaryFillAlpha = 0.078;
   const writingVeil = writingGlass(tokens["--popover"], resolved).veil;
   const tertiaryInk = readingInk(neutral(light ? "#666666" : "#aaaaaa"), readingPools, resolved, 3);
   const paneFill = light ? "#ffffff" : "#1a1a1c";
@@ -240,22 +243,55 @@ export function deriveCanvasPaint(
   const contrast = (hex: string) =>
     Math.min(...glassPools.map((surface) => wcagContrast(hex, surface)));
   const darkInk = contrast("#171717") >= contrast("#f5f5f5");
-  const glassInk = darkInk ? "#171717" : "#f5f5f5";
-  const rowInk = neutral(glassInk);
+  const glassInkBase = darkInk ? "#171717" : "#f5f5f5";
+  // Optical occlusion/highlight, not another authored palette: pressing must
+  // move the face away from its ink. A paper-pole fill moved green glass toward
+  // white text until even white failed AA. Keep the same 7.8% coverage.
+  const outlinePressedInk = darkInk ? "#ffffff" : "#000000";
+  // Material washes and secondary ink retain their existing navigation solve.
+  // A control's foreground constraint must not brighten unrelated row paint.
+  const rowInk = neutral(glassInkBase);
   const glassReadingPools = glassPools.flatMap((surface) => [
     surface,
     compositeHex(rowInk, 0.047, surface),
     // The 10% rail tile wash also bounds the 9% selected source-list row.
     compositeHex(rowInk, 0.1, surface),
   ]);
+  // Outline labels inherit glass foreground at rest and while pressed.
+  // Their actual control/pressed faces belong to this foreground solve only:
+  // no secondary text is drawn on them by the rail's outline callers.
+  const glassForegroundPools = [
+    ...glassReadingPools,
+    ...glassPools.flatMap((surface) => {
+      // Browse files and PR sit on RAIL_FOOTER's 30% popover wash. Also
+      // retain the direct pane backing for other navigation outline controls.
+      const backings = [surface, compositeHex(tokens["--popover"], 0.3, surface)];
+      return backings.flatMap((backing) => {
+        const control = light ? raisedFace : compositeHex(fillInk, controlAlpha, backing);
+        return [control, compositeHex(outlinePressedInk, secondaryFillAlpha, control)];
+      });
+    }),
+  ];
+  // Keep the canvas-chosen polarity and move only as far as contrast needs.
+  // readingInk is bounded at its pole; the actual-composite tests still require
+  // 4.5 there and expose a material constraint if no ink on this arm can pass.
+  const glassInk = readingInk(glassInkBase, glassForegroundPools, darkInk ? "light" : "dark", 4.5);
   const glassSecondary = readingInk(
     neutral(darkInk ? "#5a5a5a" : "#b9b9b9"),
     glassReadingPools,
     darkInk ? "light" : "dark",
     4.5,
   );
+  // Focus rings also draw on navigation glass and on the rail footer's 30%
+  // popover wash, which the paper pools never see. Move only as far as 3:1 needs.
+  const ring = readingInk(
+    tokens["--ring"],
+    glassPools.flatMap((surface) => [surface, compositeHex(tokens["--popover"], 0.3, surface)]),
+    resolved,
+    3,
+  );
   return {
-    tokens,
+    tokens: { ...tokens, "--ring": ring },
     canvasTokens: {
       [CANVAS_VARIABLE]: canvasBackground(canvas, resolved),
       [INK_VARIABLE]: ink,
@@ -293,7 +329,7 @@ export function deriveCanvasPaint(
       "--fill-row-selected": `color-mix(in oklab, ${rowInk} 9%, transparent)`,
       "--fill-row-hover": `color-mix(in oklab, ${rowInk} 4.7%, transparent)`,
       "--fill-quaternary": translucent(fillInk, 0.027),
-      "--fill-secondary": translucent(fillInk, 0.078),
+      "--fill-secondary": translucent(fillInk, secondaryFillAlpha),
       "--surface-quaternary": paperSurface(0.027),
       "--surface-secondary": paperSurface(0.078),
       "--wash-ink": fillInk,
@@ -302,7 +338,8 @@ export function deriveCanvasPaint(
       "--card-shadow": light
         ? "0 1px 2px rgb(0 0 0 / .05), 0 0 0 .5px rgb(0 0 0 / .07)"
         : "0 1px 2px rgb(0 0 0 / .35), 0 0 0 .5px rgb(255 255 255 / .06)",
-      "--control-face": light ? raisedFace : translucent(fillInk, 0.14),
+      "--control-face": light ? raisedFace : translucent(fillInk, controlAlpha),
+      "--glass-outline-pressed": translucent(outlinePressedInk, secondaryFillAlpha),
       "--control-bezel-shadow": light
         ? "0 .5px 1.5px rgb(0 0 0 / .16), 0 0 0 .5px rgb(0 0 0 / .09), inset 0 .5px 0 rgb(255 255 255 / 1)"
         : "0 .5px 1.5px rgb(0 0 0 / .5), 0 0 0 .5px rgb(0 0 0 / .35), inset 0 .5px 0 rgb(255 255 255 / .14)",
