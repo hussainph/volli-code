@@ -8,9 +8,9 @@
  * sibling of the interaction stack. This module is what it READS and what it
  * can SAY; the drawing is the desktop renderer's `activity-island-ui.tsx`.
  *
- * WHY IT LIVES IN THIS PACKAGE. It is a Session Surface Model in CONTEXT.md's
- * sense — "active ephemeral affordances… each client maps it to its own
- * components" — so it belongs on the portable side of the Session Presentation
+ * WHY IT LIVES IN THIS PACKAGE. It is a Session Surface Model
+ * (CONTEXT.md#session-surface-model): active ephemeral affordances each client
+ * maps to its own components, so it belongs on the portable side of the Session Presentation
  * Contract, beside `interaction.ts` and `activity.ts`, not in one client's
  * component folder. This package strips the DOM lib and declares neither React
  * nor Electron, so the purity this file needs is enforced by typecheck rather

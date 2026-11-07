@@ -1,6 +1,5 @@
 /**
- * The chrome band's copy, pinned where it carries CONTEXT.md's VC-57 naming
- * ruling: "project" is the one user-facing word for a rail entry. The rail
+ * The chrome band's copy, pinned where it carries CONTEXT.md#project: "project" is the one user-facing word for a rail entry. The rail
  * toggle's aria-label/title/sr-only were the last surfaces still saying
  * "workspace switcher", and prose alone is how that drifted in the first
  * place. Static markup with the app's own `SidebarProvider` wrapper (it wraps
