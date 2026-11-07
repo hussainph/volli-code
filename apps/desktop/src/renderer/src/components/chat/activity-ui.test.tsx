@@ -46,8 +46,7 @@ const bashRow: DynamicToolUIPart = {
   } as DynamicToolUIPart["toolMetadata"],
 };
 
-// A failed row opens the bundle on its own (`bundleNeedsAttention`), which is
-// how both tests below get the capped window into static markup with no click.
+// Failure is a summary fact, never a request to open the output.
 const failed: DynamicToolUIPart = {
   type: "dynamic-tool",
   toolName: "read",
@@ -58,11 +57,18 @@ const failed: DynamicToolUIPart = {
   toolMetadata: { [ACTIVITY_METADATA_KEY]: descriptor } as DynamicToolUIPart["toolMetadata"],
 };
 
-const openBundle = () =>
-  renderToStaticMarkup(<ActivityBundle rows={[{ kind: "tool", part: failed, key: "read-2" }]} />);
+const openBundle = () => {
+  act(() =>
+    root!.render(<ActivityBundle rows={[{ kind: "tool", part: failed, key: "read-2" }]} />),
+  );
+  act(() =>
+    container!.querySelector<HTMLButtonElement>('[data-slot="activity-bundle-header"]')!.click(),
+  );
+  return container!.innerHTML;
+};
 
 describe("collapsed live bundles", () => {
-  it("keeps thinking visible after a completed tool without duplicating it in an open bundle", () => {
+  it("keeps thinking visible in collapsed bundles even when a tool failed", () => {
     const thought = {
       kind: "reasoning" as const,
       key: "thought",
@@ -78,10 +84,12 @@ describe("collapsed live bundles", () => {
     );
     expect(collapsed).toContain("Checking the result");
     expect(collapsed.match(/animate-spin/g)).toHaveLength(1);
-    const expanded = renderToStaticMarkup(
+    const withFailure = renderToStaticMarkup(
       <ActivityBundle rows={[{ kind: "tool", part: failed, key: "read" }, thought]} />,
     );
-    expect(expanded.match(/Checking the result/g)).toHaveLength(1);
+    expect(withFailure).toContain('aria-expanded="false"');
+    expect(withFailure).toContain("1 failed");
+    expect(withFailure.match(/Checking the result/g)).toHaveLength(1);
     // Visibility arbitration needs browser layout; mounted tests cover the
     // single-indicator handoff once the expanded viewport is measured.
   });
@@ -233,6 +241,70 @@ describe("ActivityBundle scroll window", () => {
     // `pointer-events-none` would match the button primitive's `[&_svg]:` rule.)
     expect(html).not.toContain("pointer-events-none absolute");
     expect(html).not.toContain("gradient");
+  });
+});
+
+describe("reader-owned bundle disclosure", () => {
+  const running: DynamicToolUIPart = {
+    type: "dynamic-tool",
+    toolName: row.toolName,
+    toolCallId: row.toolCallId,
+    toolMetadata: row.toolMetadata,
+    input: null,
+    state: "input-available",
+  };
+  const denied: DynamicToolUIPart = {
+    ...running,
+    state: "output-denied",
+    approval: { id: "denied-call", approved: false },
+  };
+  const header = () =>
+    container!.querySelector<HTMLButtonElement>('[data-slot="activity-bundle-header"]')!;
+  const render = (part: DynamicToolUIPart) => {
+    act(() => root!.render(<ActivityBundle rows={[{ kind: "tool", part, key: "stable-call" }]} />));
+  };
+
+  it.each([row, failed, denied])(
+    "starts collapsed for $state and preserves the original part",
+    (part) => {
+      const original = JSON.stringify(part);
+      render(part);
+      expect(header().getAttribute("aria-expanded")).toBe("false");
+      expect(container!.textContent).not.toContain("boom");
+      if (part.state === "output-error") expect(header().textContent).toContain("1 failed");
+      if (part.state === "output-denied") expect(header().textContent).toContain("1 denied");
+      expect(JSON.stringify(part)).toBe(original);
+    },
+  );
+
+  it("keeps closed on failure arrival without taking focus", () => {
+    render(running);
+    header().focus();
+    const focused = document.activeElement;
+    render(failed);
+    expect(header().getAttribute("aria-expanded")).toBe("false");
+    expect(header().textContent).toContain("1 failed");
+    expect(document.activeElement).toBe(focused);
+    expect(container!.textContent).not.toContain("boom");
+  });
+
+  it("keeps an explicit open choice through failure and a closed choice through recovery", () => {
+    render(running);
+    act(() => header().click());
+    expect(header().getAttribute("aria-expanded")).toBe("true");
+    render(failed);
+    expect(header().getAttribute("aria-expanded")).toBe("true");
+    // The individual call still starts collapsed, even in an explicitly open bundle.
+    expect(container!.textContent).not.toContain("boom");
+    const callDisclosure = container!.querySelector<HTMLButtonElement>(
+      'button[aria-label="Show details"]',
+    )!;
+    act(() => callDisclosure.click());
+    expect(container!.textContent).toContain("boom");
+    act(() => header().click());
+    render(row);
+    expect(header().getAttribute("aria-expanded")).toBe("false");
+    expect(container!.textContent).not.toContain("export {};");
   });
 });
 

@@ -45,7 +45,6 @@ import { ReasoningBody, useElapsed } from "@renderer/components/ui/ai-elements/r
 import {
   activityDescriptor,
   activityStatus,
-  bundleNeedsAttention,
   bundleSummary,
   compactSignature,
   describeActivity,
@@ -1134,9 +1133,10 @@ export const ActivityBundle = React.memo(
     onOpenFile?(path: string): void;
     onOpenSession?(sessionId: string): void;
   }) {
-    const [userOpen, setUserOpen] = React.useState<boolean | null>(null);
+    // Disclosure is reader-owned. Failure is visible in the summary, but an
+    // arriving failure must not reveal output, move focus or change the fold.
+    const [open, setOpen] = React.useState(false);
     const summary = React.useMemo(() => bundleSummary(rows), [rows]);
-    const open = userOpen ?? bundleNeedsAttention(rows);
     const streaming = progressEnabled && isBundleStreaming(rows);
     const viewport = React.useRef<HTMLDivElement>(null);
     const indicatorKeys = JSON.stringify(
@@ -1150,9 +1150,7 @@ export const ActivityBundle = React.memo(
     const liveThought = progressEnabled
       ? rows.findLast((row) => row.kind === "reasoning" && row.streaming)
       : undefined;
-    // Wired to the click and not to `open`, which is derived: a bundle that
-    // opens itself because a row inside it failed is not a reader reaching for
-    // anything, and must not detach them from a live stream.
+    // Only an explicit expansion detaches the reader from the live tail.
     const stopFollowing = useStopFollowing();
 
     const list = (
@@ -1178,7 +1176,7 @@ export const ActivityBundle = React.memo(
     const toggle = () => {
       if (hasTextSelection()) return;
       if (!open) stopFollowing();
-      setUserOpen(!open);
+      setOpen(!open);
     };
 
     return (
@@ -1194,9 +1192,15 @@ export const ActivityBundle = React.memo(
           {/* A closed bundle must not hide its live thought behind a finished
               tool summary. Open, the thought already has its own visible row. */}
           {!open && liveThought?.kind === "reasoning" ? (
-            <span className="min-w-0 truncate">
-              {reasoningStatus(liveThought.part.text, { streaming: true }).verb}
-            </span>
+            <>
+              <span className="min-w-0 truncate">
+                {reasoningStatus(liveThought.part.text, { streaming: true }).verb}
+              </span>
+              {/* A live thought must not hide a failed, denied or unexecuted call. */}
+              <span className="shrink-0">
+                <Summary segments={summary.filter((segment) => segment.tone !== "neutral")} />
+              </span>
+            </>
           ) : (
             <Summary segments={summary} />
           )}
