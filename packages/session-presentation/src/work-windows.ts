@@ -48,6 +48,70 @@ type Activity = {
   slot: number;
 };
 
+/**
+ * One slot's work, in an order that is a function of its entries, not of how
+ * a sort engine happens to pair them. A pairwise comparator that switches
+ * between start, ledger sequence and source order per pair is not transitive
+ * once some entries lack a clock, so a wall-clock step backwards could pull a
+ * later tool above reasoning it followed.
+ *
+ * An entry with neither a recorded start nor an observed position (settled
+ * reasoning, an unreadable tool) is a fixed barrier at its recorded place. The
+ * runs between barriers are ordered by one key each: start, then sequence when
+ * the whole run has one, then view key (parallel calls with the same start have
+ * no serial order, and the key keeps reverse completion from changing owner);
+ * else observed sequence, keeping recorded order at a tie except that timed
+ * calls side by side still order by start; else recorded order.
+ */
+function orderSlot(entries: readonly Activity[] | undefined): readonly Activity[] | undefined {
+  if (!entries) return undefined;
+  const ordered: Activity[] = [];
+  let run: Activity[] = [];
+  for (const entry of entries) {
+    if (entry.start === null && entry.sequence === null) {
+      ordered.push(...orderRun(run), entry);
+      run = [];
+    } else run.push(entry);
+  }
+  ordered.push(...orderRun(run));
+  return ordered;
+}
+
+function orderRun(run: readonly Activity[]): readonly Activity[] {
+  if (run.every((entry) => entry.start !== null)) return byStart(run);
+  if (!run.every((entry) => entry.sequence !== null)) return run;
+  const bySequence = run.toSorted(
+    (left, right) => left.sequence! - right.sequence! || left.order - right.order,
+  );
+  const ordered: Activity[] = [];
+  let timed: Activity[] = [];
+  bySequence.forEach((entry, index) => {
+    if (entry.start === null) {
+      ordered.push(...byStart(timed), entry);
+      timed = [];
+    } else {
+      if (timed.length > 0 && timed[0]!.sequence !== entry.sequence) {
+        ordered.push(...byStart(timed));
+        timed = [];
+      }
+      timed.push(entry);
+    }
+    if (index === bySequence.length - 1) ordered.push(...byStart(timed));
+  });
+  return ordered;
+}
+
+/** Entries that all carry a start: start, then sequence if all have one, then view key. */
+function byStart(run: readonly Activity[]): readonly Activity[] {
+  const sequenced = run.every((entry) => entry.sequence !== null);
+  return run.toSorted(
+    (left, right) =>
+      left.start! - right.start! ||
+      (sequenced ? left.sequence! - right.sequence! : 0) ||
+      left.positionKey.localeCompare(right.positionKey),
+  );
+}
+
 function clock(value: number | null | undefined): number | null {
   return value !== undefined && value !== null && Number.isFinite(value) ? value : null;
 }
@@ -212,17 +276,7 @@ export function projectWorkWindows(
   }
   const result: WorkTranscriptRow[] = [];
   for (let slot = 0; slot <= boundaries.length; slot += 1) {
-    const group = slots.get(slot)?.toSorted((left, right) => {
-      if (left.start !== null && right.start !== null && left.start !== right.start)
-        return left.start - right.start;
-      if (left.sequence !== null && right.sequence !== null && left.sequence !== right.sequence)
-        return left.sequence - right.sequence;
-      // Parallel calls with the same recorded start have no serial order; a
-      // stable view key prevents reverse completion order from changing owner.
-      if (left.start !== null && left.start === right.start)
-        return left.positionKey.localeCompare(right.positionKey);
-      return left.order - right.order;
-    });
+    const group = orderSlot(slots.get(slot));
     if (group?.length) {
       const rows = group.map((entry) => entry.row);
       const previousTime = boundaries[slot - 1]?.time ?? null;
