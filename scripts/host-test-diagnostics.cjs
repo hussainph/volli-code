@@ -3,18 +3,36 @@
 // No monkey-patching, error handlers that consume failures, timers or signals.
 const { channel } = require("node:diagnostics_channel");
 const { errorMonitor } = require("node:events");
-const { appendFileSync, mkdirSync, readFileSync } = require("node:fs");
+const { mkdirSync, readFileSync, writeSync } = require("node:fs");
+const { createBoundedCapture } = require("./bounded-test-capture.cjs");
 const { join, resolve } = require("node:path");
 const { isMainThread, threadId } = require("node:worker_threads");
 
-const directory = process.env.VOLLI_HOST_TEST_DIAGNOSTICS;
-if (directory && process.cwd() === resolve(__dirname, "../packages/host-core")) {
-  install(resolve(directory));
+const directory = process.env.VOLLI_TEST_DIAGNOSTICS;
+const scopes = ["../packages/host-core", "../apps/desktop"].map((path) => resolve(__dirname, path));
+if (directory && scopes.includes(process.cwd())) {
+  try {
+    install(resolve(directory));
+  } catch {
+    unavailable();
+  }
+}
+function unavailable() {
+  try {
+    writeSync(2, "[test-diagnostics] capture unavailable.\n");
+  } catch {
+    // Do not turn an observer's failed warning into a failed test process.
+  }
 }
 
 function install(root) {
   mkdirSync(root, { recursive: true });
   const output = join(root, `events-${process.pid}-${threadId}.jsonl`);
+  let append = createBoundedCapture(output, {
+    maxBytes: 1024 * 1024,
+    wholeRecords: true,
+    marker: `${JSON.stringify({ event: "capture-truncated", reason: "byte-limit", pid: process.pid, threadId })}\n`,
+  });
   const active = new Map();
   // Keep real measurements even in suites that stub clocks or memory APIs.
   const now = Date.now.bind(Date);
@@ -45,9 +63,9 @@ function install(root) {
   });
 
   function record(event, fields = {}) {
+    if (!append) return;
     try {
-      appendFileSync(
-        output,
+      append(
         `${JSON.stringify({
           at: now(),
           pid: process.pid,
@@ -63,9 +81,10 @@ function install(root) {
           ...fields,
         })}\n`,
       );
-    } catch (error) {
+    } catch {
       // An observer must neither mask the original failure nor create one.
-      process.stderr.write(`[host-test-diagnostics] write failed: ${error.code ?? "unknown"}\n`);
+      append = undefined;
+      unavailable();
     }
   }
 
@@ -94,7 +113,7 @@ function install(root) {
     arch: process.arch,
     cgroup: cgroup(),
   });
-  channel("volli.host-core.test").subscribe((message) => {
+  channel("volli.test").subscribe((message) => {
     if (!message || !testEvents.has(message.event)) return;
     const text = (value) => (typeof value === "string" ? value.slice(0, 1024) : undefined);
     const event = message.event;

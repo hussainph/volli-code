@@ -178,7 +178,7 @@ describe("Storage restore staging and restart", () => {
       resourceLimits: { maxOldGenerationSizeMb: 192 },
       execArgv: ARGS,
     });
-    const diagnostics = channel("volli.host-core.test");
+    const diagnostics = channel("volli.test");
     const workerThreadId = worker.threadId;
     const checkpoint = Promise.withResolvers<void>();
     const deadline = setTimeout(
@@ -236,7 +236,7 @@ describe("Storage restore staging and restart", () => {
         { kind: "stage", root: profile.root, bundlePath, projectPaths: paths, now: 1800000000002 },
         abort.signal,
         () => {
-          channel("volli.host-core.test").publish({ event: "restore-cancel-request" });
+          channel("volli.test").publish({ event: "restore-cancel-request" });
           abort.abort();
         },
         ARGS,
