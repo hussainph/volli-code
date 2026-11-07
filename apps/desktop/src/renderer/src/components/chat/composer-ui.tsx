@@ -538,96 +538,96 @@ export const SessionComposer = React.memo(function SessionComposer({
                     ? entry.attachments[0].originalName
                     : `${entry.attachments?.length ?? 0} attachments`);
                 return (
-                <div
-                  key={entry.id}
-                  role="group"
-                  aria-label={`Queued message: ${messageLabel}`}
-                  className="composer-queued-item min-w-0 rounded-card bg-muted"
-                >
-                  {entry.text ? (
-                    <ValueReveal
-                      term="Queued message"
-                      full={entry.text}
-                      side="top"
-                      className="block w-full min-w-0 truncate rounded-sm text-left text-ui font-normal text-foreground"
-                    >
-                      {entry.text}
-                    </ValueReveal>
-                  ) : null}
-                  <AttachmentThumbRow attachments={entry.attachments ?? []} />
-                  <div data-slot="queue-footer" className="flex min-w-0 items-center gap-2">
-                    <span
-                      data-slot="queue-status"
-                      className="min-w-0 flex-1 text-label font-normal text-muted-foreground"
-                    >
-                      <QueuedStatus
-                        label={
-                          steeringMessages?.has(entry.id) || entry.afterCurrentStep
-                            ? "Sends after this step"
-                            : entry.localUnsent
-                              ? "Not sent"
-                              : entry.queueState === "releasing"
-                                ? "Sending"
-                                : "Queued"
-                        }
-                      />
-                    </span>
-                    <span className="flex shrink-0 items-center gap-1">
-                      {working ? (
+                  <div
+                    key={entry.id}
+                    role="group"
+                    aria-label={`Queued message: ${messageLabel}`}
+                    className="composer-queued-item min-w-0 rounded-card bg-muted"
+                  >
+                    {entry.text ? (
+                      <ValueReveal
+                        term="Queued message"
+                        full={entry.text}
+                        side="top"
+                        className="block w-full min-w-0 truncate rounded-sm text-left text-ui font-normal text-foreground"
+                      >
+                        {entry.text}
+                      </ValueReveal>
+                    ) : null}
+                    <AttachmentThumbRow attachments={entry.attachments ?? []} />
+                    <div data-slot="queue-footer" className="flex min-w-0 items-center gap-2">
+                      <span
+                        data-slot="queue-status"
+                        className="min-w-0 flex-1 text-label font-normal text-muted-foreground"
+                      >
+                        <QueuedStatus
+                          label={
+                            steeringMessages?.has(entry.id) || entry.afterCurrentStep
+                              ? "Sends after this step"
+                              : entry.localUnsent
+                                ? "Not sent"
+                                : entry.queueState === "releasing"
+                                  ? "Sending"
+                                  : "Queued"
+                          }
+                        />
+                      </span>
+                      <span className="flex shrink-0 items-center gap-1">
+                        {working ? (
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="ghost"
+                            aria-label={`Steer queued message: ${messageLabel}`}
+                            // A release already claimed this identity; only the
+                            // host's cancel can take it back, so Steer stays off.
+                            disabled={
+                              entry.queueState === "releasing" ||
+                              steeringMessages?.has(entry.id) === true ||
+                              entry.afterCurrentStep === true
+                            }
+                            onClick={() => {
+                              onSteerQueued(entry.id);
+                              onComposerFocusRequest?.();
+                            }}
+                          >
+                            <ReplyIcon className="size-3" />
+                            <span className="composer-steer-label">Steer</span>
+                          </Button>
+                        ) : null}
                         <Button
                           type="button"
-                          size="xs"
+                          size="icon-xs"
                           variant="ghost"
-                          aria-label={`Steer queued message: ${messageLabel}`}
-                          // A release already claimed this identity; only the
-                          // host's cancel can take it back, so Steer stays off.
-                          disabled={
-                            entry.queueState === "releasing" ||
-                            steeringMessages?.has(entry.id) === true ||
-                            entry.afterCurrentStep === true
-                          }
-                          onClick={() => {
-                            onSteerQueued(entry.id);
+                          aria-label={`Remove queued message: ${messageLabel}`}
+                          // Enabled while releasing: the host cancels a release it has
+                          // no proof of delivery for and refuses one in flight. The
+                          // row only leaves once the host accepts.
+                          onClick={async () => {
+                            if (
+                              (await onQueuedChange(
+                                queued.filter((item) => item.id !== entry.id),
+                              )) === false
+                            )
+                              return;
                             onComposerFocusRequest?.();
                           }}
                         >
-                          <ReplyIcon className="size-3" />
-                          <span className="composer-steer-label">Steer</span>
+                          <DeleteIcon className="size-3" />
                         </Button>
-                      ) : null}
-                      <Button
-                        type="button"
-                        size="icon-xs"
-                        variant="ghost"
-                        aria-label={`Remove queued message: ${messageLabel}`}
-                        // Enabled while releasing: the host cancels a release it has
-                        // no proof of delivery for and refuses one in flight. The
-                        // row only leaves once the host accepts.
-                        onClick={async () => {
-                          if (
-                            (await onQueuedChange(
-                              queued.filter((item) => item.id !== entry.id),
-                            )) === false
-                          )
-                            return;
-                          onComposerFocusRequest?.();
-                        }}
-                      >
-                        <DeleteIcon className="size-3" />
-                      </Button>
-                      <Button
-                        type="button"
-                        size="icon-xs"
-                        variant="ghost"
-                        aria-label={`Edit queued message: ${messageLabel}`}
-                        title="Edit message"
-                        onClick={() => void editQueued(entry.id)}
-                      >
-                        <EditIcon className="size-3" />
-                      </Button>
-                    </span>
+                        <Button
+                          type="button"
+                          size="icon-xs"
+                          variant="ghost"
+                          aria-label={`Edit queued message: ${messageLabel}`}
+                          title="Edit message"
+                          onClick={() => void editQueued(entry.id)}
+                        >
+                          <EditIcon className="size-3" />
+                        </Button>
+                      </span>
+                    </div>
                   </div>
-                </div>
                 );
               })}
             </PromptInputHeader>

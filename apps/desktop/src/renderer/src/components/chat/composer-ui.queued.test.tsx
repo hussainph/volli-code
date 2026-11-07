@@ -102,7 +102,9 @@ describe("the queued row's layout", () => {
       const label = text || "50 attachments";
       expect(group.getAttribute("aria-label")).toBe(`Queued message: ${label}`);
       for (const action of ["Steer", "Remove", "Edit"])
-        expect(footer.querySelector(`[aria-label="${action} queued message: ${label}"]`)).not.toBeNull();
+        expect(
+          footer.querySelector(`[aria-label="${action} queued message: ${label}"]`),
+        ).not.toBeNull();
       // An attachment-only payload doesn't create an empty focusable text row.
       expect(group.querySelector('[data-slot="value-reveal"]') === null).toBe(text === "");
     },
@@ -112,18 +114,22 @@ describe("the queued row's layout", () => {
     const group = row({
       id: "q",
       text: "",
-      attachments: [{
-        linkId: "notes",
-        blobHash: "a".repeat(64),
-        label: "Notes",
-        originalName: "release-notes.pdf",
-        mime: "application/pdf",
-        sizeBytes: 1024,
-      }],
+      attachments: [
+        {
+          linkId: "notes",
+          blobHash: "a".repeat(64),
+          label: "Notes",
+          originalName: "release-notes.pdf",
+          mime: "application/pdf",
+          sizeBytes: 1024,
+        },
+      ],
     });
     expect(group.getAttribute("aria-label")).toBe("Queued message: release-notes.pdf");
     for (const action of ["Steer", "Remove", "Edit"])
-      expect(group.querySelector(`[aria-label="${action} queued message: release-notes.pdf"]`)).not.toBeNull();
+      expect(
+        group.querySelector(`[aria-label="${action} queued message: release-notes.pdf"]`),
+      ).not.toBeNull();
   });
 
   it("marks a release in flight with the shared spinner, not punctuation", () => {
