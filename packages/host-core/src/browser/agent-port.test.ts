@@ -1175,16 +1175,29 @@ describe("Browser port concurrent calls and teardown", () => {
         host: shared.host,
         scope: { projectId: "p1", ticketId: null },
         session: ME,
-        transportFor: () => ({ send: async () => ({}), ensureReady: () => new Promise<never>(() => undefined), onTimeout }),
+        transportFor: () => ({
+          send: async () => ({}),
+          ensureReady: () => new Promise<never>(() => undefined),
+          onTimeout,
+        }),
         waitForLoad: async () => undefined,
         holdAwake: () => () => undefined,
       });
-      const reading = expect(browser.snapshot({ tabId: "one", signal })).rejects.toThrow("did not become ready");
+      const reading = expect(browser.snapshot({ tabId: "one", signal })).rejects.toThrow(
+        "did not become ready",
+      );
       await vi.advanceTimersByTimeAsync(CDP_COMMAND_TIMEOUT_MS);
       await reading;
-      expect(onTimeout).toHaveBeenCalledWith({ phase: "readiness", method: null, elapsedMs: CDP_COMMAND_TIMEOUT_MS, generation: 7 });
+      expect(onTimeout).toHaveBeenCalledWith({
+        phase: "readiness",
+        method: null,
+        elapsedMs: CDP_COMMAND_TIMEOUT_MS,
+        generation: 7,
+      });
       browser.dispose();
-    } finally { vi.useRealTimers(); }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("serializes one tab's snapshots through one controller and one ref ledger", async () => {

@@ -1571,7 +1571,11 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
       });
       await attaching;
     };
-    const send = async (method: string, params?: object, beforeDispatch?: () => void): Promise<unknown> => {
+    const send = async (
+      method: string,
+      params?: object,
+      beforeDispatch?: () => void,
+    ): Promise<unknown> => {
       await ensureReady();
       assertLive();
       beforeDispatch?.();

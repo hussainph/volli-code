@@ -61,7 +61,11 @@ export interface CdpTransport {
    * dispatch. Without this member `send` must dispatch synchronously. The guard
    * may throw, in which case no command is sent.
    */
-  sendGuarded?: (method: string, params: object | undefined, beforeDispatch: () => void) => Promise<unknown>;
+  sendGuarded?: (
+    method: string,
+    params: object | undefined,
+    beforeDispatch: () => void,
+  ) => Promise<unknown>;
   ensureReady?: () => Promise<void>;
   /** Host generation, re-read after awaits and before input, never page script. */
   currentGeneration?: () => number;
@@ -1120,23 +1124,28 @@ export class BrowserTabController {
         { type: "mousePressed", x, y, button: "left", clickCount: 1 },
         signal,
         "action",
-        { onDispatch: () => { dispatched = true; } },
+        {
+          onDispatch: () => {
+            dispatched = true;
+          },
+        },
       );
       pressed = true;
     } finally {
       // A dispatched press may only have failed to answer. A pre-dispatch
       // refusal owes no mouse-up: even cleanup would be input on another page.
-      if (dispatched) await this.#releaseHalf(
-        "Input.dispatchMouseEvent",
-        {
-          type: "mouseReleased",
-          x,
-          y,
-          button: "left",
-          clickCount: 1,
-        },
-        !pressed,
-      );
+      if (dispatched)
+        await this.#releaseHalf(
+          "Input.dispatchMouseEvent",
+          {
+            type: "mouseReleased",
+            x,
+            y,
+            button: "left",
+            clickCount: 1,
+          },
+          !pressed,
+        );
     }
   }
 
@@ -1209,7 +1218,11 @@ export class BrowserTabController {
         },
         signal,
         "action",
-        { onDispatch: () => { dispatched = true; } },
+        {
+          onDispatch: () => {
+            dispatched = true;
+          },
+        },
       );
       // A printable single character also produces its char event, so text
       // inputs actually receive it the way a keyboard would deliver it.

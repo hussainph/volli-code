@@ -692,22 +692,29 @@ describe("BrowserTabController", () => {
     try {
       const initialized = Promise.withResolvers<void>();
       const page = wire({ "Accessibility.getFullAXTree": BUTTON_TREE });
-      const controller = new BrowserTabController({
-        ...page.transport,
-        sendGuarded: async (method, params, beforeDispatch) => {
-          if (method.startsWith("Input.")) await initialized.promise;
-          beforeDispatch();
-          return await page.transport.send(method, params);
+      const controller = new BrowserTabController(
+        {
+          ...page.transport,
+          sendGuarded: async (method, params, beforeDispatch) => {
+            if (method.startsWith("Input.")) await initialized.promise;
+            beforeDispatch();
+            return await page.transport.send(method, params);
+          },
         },
-      }, { maxCommandMs: 20 });
+        { maxCommandMs: 20 },
+      );
       await controller.snapshot();
-      const acting = expect(controller.act({ generation: 0, kind: "press", key: "Enter" })).rejects.toThrow("did not finish the requested action");
+      const acting = expect(
+        controller.act({ generation: 0, kind: "press", key: "Enter" }),
+      ).rejects.toThrow("did not finish the requested action");
       await vi.advanceTimersByTimeAsync(20);
       await acting;
       initialized.resolve();
       await vi.advanceTimersByTimeAsync(0);
       expect(page.sent.filter(({ method }) => method.startsWith("Input."))).toEqual([]);
-    } finally { vi.useRealTimers(); }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("withdraws an unanswered command as soon as its call is aborted", async () => {
@@ -722,44 +729,55 @@ describe("BrowserTabController", () => {
     await expect(pending).rejects.toThrow("withdrawn");
   });
 
-  it.each([false, true])("releases the mouse button after an unanswered dispatched press (guarded=%s)", async (guarded) => {
-    // A dispatched press may have applied even when its answer never arrived.
-    const sent: { method: string; params?: object }[] = [];
-    const send: CdpTransport["send"] = async (method, params) => {
-      sent.push({ method, ...(params === undefined ? {} : { params }) });
-      if ((params as { type?: string } | undefined)?.type === "mousePressed") {
-        return await new Promise<never>(() => undefined);
-      }
-      if (method === "Accessibility.getFullAXTree") return BUTTON_TREE;
-      if (method === "DOM.getBoxModel") return BUTTON_BOX;
-      return {};
-    };
-    const controller = new BrowserTabController(
-      {
-        send,
-        ...(guarded ? { sendGuarded: async (method: string, params: object | undefined, beforeDispatch: () => void) => {
-          await Promise.resolve();
-          beforeDispatch();
-          return await send(method, params);
-        } } : {}),
-      },
-      { maxCommandMs: 20 },
-    );
-    const snapshot = await controller.snapshot();
+  it.each([false, true])(
+    "releases the mouse button after an unanswered dispatched press (guarded=%s)",
+    async (guarded) => {
+      // A dispatched press may have applied even when its answer never arrived.
+      const sent: { method: string; params?: object }[] = [];
+      const send: CdpTransport["send"] = async (method, params) => {
+        sent.push({ method, ...(params === undefined ? {} : { params }) });
+        if ((params as { type?: string } | undefined)?.type === "mousePressed") {
+          return await new Promise<never>(() => undefined);
+        }
+        if (method === "Accessibility.getFullAXTree") return BUTTON_TREE;
+        if (method === "DOM.getBoxModel") return BUTTON_BOX;
+        return {};
+      };
+      const controller = new BrowserTabController(
+        {
+          send,
+          ...(guarded
+            ? {
+                sendGuarded: async (
+                  method: string,
+                  params: object | undefined,
+                  beforeDispatch: () => void,
+                ) => {
+                  await Promise.resolve();
+                  beforeDispatch();
+                  return await send(method, params);
+                },
+              }
+            : {}),
+        },
+        { maxCommandMs: 20 },
+      );
+      const snapshot = await controller.snapshot();
 
-    await expect(
-      controller.act({ generation: snapshot.generation, kind: "click", ref: "e1" }),
-    ).rejects.toHaveProperty(
-      "message",
-      "The Browser Tab did not finish the requested action within 20ms. The action may or may not have reached the page; check its current state before trying again.",
-    );
+      await expect(
+        controller.act({ generation: snapshot.generation, kind: "click", ref: "e1" }),
+      ).rejects.toHaveProperty(
+        "message",
+        "The Browser Tab did not finish the requested action within 20ms. The action may or may not have reached the page; check its current state before trying again.",
+      );
 
-    // The caller still hears the press failure, and the page still gets its up.
-    const types = sent
-      .filter((call) => call.method === "Input.dispatchMouseEvent")
-      .map((call) => (call.params as { type?: string }).type);
-    expect(types).toEqual(["mousePressed", "mouseReleased"]);
-  });
+      // The caller still hears the press failure, and the page still gets its up.
+      const types = sent
+        .filter((call) => call.method === "Input.dispatchMouseEvent")
+        .map((call) => (call.params as { type?: string }).type);
+      expect(types).toEqual(["mousePressed", "mouseReleased"]);
+    },
+  );
 
   it("lifts the key even when the turn is withdrawn mid-press", async () => {
     // A key down with no key up latches on the page: every later keystroke
