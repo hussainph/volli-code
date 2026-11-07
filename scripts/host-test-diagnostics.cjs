@@ -25,6 +25,24 @@ function unavailable() {
   }
 }
 
+function errorFields(error) {
+  return {
+    errorCode:
+      typeof error?.code === "string" && /^(?:ERR_[A-Z_]+|E[A-Z0-9]+)$/u.test(error.code)
+        ? error.code
+        : undefined,
+    errorName: ["Error", "TypeError", "RangeError", "SyntaxError", "ReferenceError"].includes(
+      error?.name,
+    )
+      ? error.name
+      : undefined,
+  };
+}
+
+function text(value) {
+  return typeof value === "string" ? value.slice(0, 1024) : undefined;
+}
+
 function install(root) {
   mkdirSync(root, { recursive: true });
   const output = join(root, `events-${process.pid}-${threadId}.jsonl`);
@@ -50,18 +68,6 @@ function install(root) {
     "restore-crash-cleanup",
     "restore-cancel-request",
   ]);
-  const errorFields = (error) => ({
-    errorCode:
-      typeof error?.code === "string" && /^(?:ERR_[A-Z_]+|E[A-Z0-9]+)$/u.test(error.code)
-        ? error.code
-        : undefined,
-    errorName: ["Error", "TypeError", "RangeError", "SyntaxError", "ReferenceError"].includes(
-      error?.name,
-    )
-      ? error.name
-      : undefined,
-  });
-
   function record(event, fields = {}) {
     if (!append) return;
     try {
@@ -115,7 +121,6 @@ function install(root) {
   });
   channel("volli.test").subscribe((message) => {
     if (!message || !testEvents.has(message.event)) return;
-    const text = (value) => (typeof value === "string" ? value.slice(0, 1024) : undefined);
     const event = message.event;
     const id = text(message.id);
     const file = text(message.file);

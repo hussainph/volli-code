@@ -200,8 +200,8 @@ test("metadata is allowlisted; no environment, argv, worker payloads, or full re
   assert.doesNotMatch(JSON.stringify(events), /not-for-diagnostics|unrecognized-sensitive-event/);
   assert.ok(files.every((file) => file === "events" || file.endsWith(".jsonl")));
   const start = events.find((event) => event.event === "process-start");
-  assert.deepEqual(Object.keys(start.versions).sort(), ["modules", "napi", "node", "uv", "v8"]);
-  assert.deepEqual(Object.keys(start.memory).sort(), [
+  assert.deepEqual(Object.keys(start.versions).toSorted(), ["modules", "napi", "node", "uv", "v8"]);
+  assert.deepEqual(Object.keys(start.memory).toSorted(), [
     "arrayBuffers",
     "external",
     "heapTotal",
