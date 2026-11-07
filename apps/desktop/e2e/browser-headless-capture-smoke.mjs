@@ -174,7 +174,10 @@ const PREVIEW_FIELDS = [
   "phase",
   "method",
 ];
-const PREVIEW_ROW_LIMIT = 24;
+// Bounded both ends: the navigation's own rows come first, and the newest
+// (a late timeout, the act's camera) last; the middle is counted, not kept.
+const PREVIEW_HEAD_ROWS = 16;
+const PREVIEW_TAIL_ROWS = 8;
 
 async function previewDiagnostics(userData) {
   try {
@@ -198,7 +201,13 @@ async function previewDiagnostics(userData) {
         );
       }
     }
-    return JSON.stringify({ rows: rows.slice(0, PREVIEW_ROW_LIMIT), total: rows.length });
+    const bounded = rows.length <= PREVIEW_HEAD_ROWS + PREVIEW_TAIL_ROWS;
+    return JSON.stringify({
+      rows: bounded ? rows : rows.slice(0, PREVIEW_HEAD_ROWS),
+      ...(bounded ? {} : { omitted: rows.length - PREVIEW_HEAD_ROWS - PREVIEW_TAIL_ROWS }),
+      ...(bounded ? {} : { tail: rows.slice(-PREVIEW_TAIL_ROWS) }),
+      total: rows.length,
+    });
   } catch {
     return JSON.stringify({ unreadable: true });
   }

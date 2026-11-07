@@ -3161,6 +3161,69 @@ describe("BrowserTabHost agent dispatch and capture boundaries", () => {
       cursorFor,
     });
 
+  it("reports the preview's frame and camera endings through the production port chain (VC-1150)", async () => {
+    // Real chain, nothing hand-wired: BrowserTabHost.transportFor -> the real
+    // debugger transport -> browserAgentPort -> the host-wide coordinator ->
+    // the controller it builds -> the composition's listener; and the camera
+    // through capturePicture. Only Electron's debugger and capture are fakes.
+    const seen: BrowserPreviewDiagnostic[] = [];
+    let nextId = 0;
+    host = new BrowserTabHost({
+      createId: () => `opaque-chain-${++nextId}`,
+      createView: () => {
+        const view = new FakeView();
+        views.push(view);
+        return view as unknown as WebContentsView;
+      },
+      fromPartition: () => new FakeSession() as unknown as Session,
+      getWindow: () => fakeWindow as unknown as BrowserWindow,
+      createStageWindow: newStage,
+      publishState: (event) => published.push(event),
+      publishClosed: (tabId) => published.push({ closedTabId: tabId }),
+      pictures,
+      previewDiagnostics: (diagnostic) => void seen.push(diagnostic),
+    });
+    const tab = open();
+    let attached = false;
+    Object.assign(views.at(-1)!.webContents, {
+      debugger: {
+        isAttached: () => attached,
+        attach: () => {
+          attached = true;
+        },
+        detach: () => {
+          attached = false;
+        },
+        sendCommand: vi.fn(async (method: string) =>
+          method === "Accessibility.getFullAXTree" ? tree : {},
+        ),
+      },
+    });
+    const browser = port();
+    try {
+      const read = await browser.snapshot({ tabId: tab.tabId, signal });
+      const acted = await browser.act({
+        tabId: tab.tabId,
+        generation: read.generation,
+        kind: "press",
+        key: "Enter",
+        signal,
+      });
+      expect(seen.map((one) => [one.stage, one.outcome])).toEqual([
+        ["frame", "ready"],
+        ["camera", "stored"],
+      ]);
+      const camera = seen[1];
+      expect(camera?.stage === "camera" && camera.picture).toBe(acted.picture);
+      expect(acted.picture).not.toBeNull();
+      expect(camera?.stage === "camera" && camera.lookupSize).toBe(
+        host.pictureOf(acted.picture!)!.length,
+      );
+    } finally {
+      browser.dispose();
+    }
+  });
+
   it("sends no input when navigation occurs during the real debugger transport's reinitialization", async () => {
     const tab = open();
     const domain = Promise.withResolvers<object>();
