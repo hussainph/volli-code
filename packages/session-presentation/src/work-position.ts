@@ -60,37 +60,48 @@ export function foldWorkPositions(
     overlays.every(
       (emission) => emission.delta.op === "part.append" || emission.delta.op === "metadata",
     )
-  ) return prior;
+  )
+    return prior;
   const positions = new Map(prior.activityFirstOverlaySequence);
   // Revoke unsupported lineage if an already-resident view predates this fix.
   for (const key of prior.activityViewKeys.keys()) positions.delete(key);
   for (const emission of overlays) {
-    const entries = emission.delta.op === "reset"
-      ? emission.delta.message.parts.map((entry, index) => ({ part: entry.part, index }))
-      : emission.delta.op === "part.upsert"
-        ? [{ part: emission.delta.part, index: emission.delta.index }]
-        : [];
+    const entries =
+      emission.delta.op === "reset"
+        ? emission.delta.message.parts.map((entry, index) => ({ part: entry.part, index }))
+        : emission.delta.op === "part.upsert"
+          ? [{ part: emission.delta.part, index: emission.delta.index }]
+          : [];
     for (const { part, index } of entries) {
       const key = workPositionKey(part, emission.messageId, index);
-      if (key !== null) positions.set(key, Math.min(positions.get(key) ?? emission.throughSequence, emission.throughSequence));
+      if (key !== null)
+        positions.set(
+          key,
+          Math.min(positions.get(key) ?? emission.throughSequence, emission.throughSequence),
+        );
     }
   }
   const reachable = new Set<string>();
-  for (const message of durableMessages) message.parts.forEach((part, index) => {
-    const key = workPositionKey(part, message.id, index);
-    if (key !== null) reachable.add(key);
-  });
-  for (const message of after.values()) message.parts.forEach((entry, index) => {
-    const key = workPositionKey(entry.part, message.id, index);
-    if (key !== null) reachable.add(key);
-  });
+  for (const message of durableMessages)
+    message.parts.forEach((part, index) => {
+      const key = workPositionKey(part, message.id, index);
+      if (key !== null) reachable.add(key);
+    });
+  for (const message of after.values())
+    message.parts.forEach((entry, index) => {
+      const key = workPositionKey(entry.part, message.id, index);
+      if (key !== null) reachable.add(key);
+    });
   for (const key of positions.keys()) if (!reachable.has(key)) positions.delete(key);
-  const samePositions = positions.size === prior.activityFirstOverlaySequence.size &&
+  const samePositions =
+    positions.size === prior.activityFirstOverlaySequence.size &&
     [...positions].every(([key, value]) => prior.activityFirstOverlaySequence.get(key) === value);
   return samePositions && prior.activityViewKeys.size === 0 && prior.removedReasoning.length === 0
     ? prior
     : {
-        activityFirstOverlaySequence: samePositions ? prior.activityFirstOverlaySequence : positions,
+        activityFirstOverlaySequence: samePositions
+          ? prior.activityFirstOverlaySequence
+          : positions,
         activityViewKeys: EMPTY_WORK_POSITIONS.activityViewKeys,
         removedReasoning: EMPTY_WORK_POSITIONS.removedReasoning,
       };

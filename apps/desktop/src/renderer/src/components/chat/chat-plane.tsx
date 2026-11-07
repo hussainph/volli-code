@@ -3408,10 +3408,17 @@ export const ChatTurn = React.memo(function ChatTurn({
   // the interaction is known. Missing history stays neutral, fully inspectable
   // content; a caller's metadata/data part can never erase ordinary prose.
   const answered = React.useMemo(
-    () => (first !== null && role === "user" && messages.length === 1 ? readInteractionResolutionMessage(first, context.interactionReceipts?.get(first.id)) : null),
+    () =>
+      first !== null && role === "user" && messages.length === 1
+        ? readInteractionResolutionMessage(first, context.interactionReceipts?.get(first.id))
+        : null,
     [first, role, messages.length, context.interactionReceipts],
   );
-  const hasResolutionContent = role === "user" && messages.some((message) => message.parts.some((part) => part.type === "data-interaction-resolution"));
+  const hasResolutionContent =
+    role === "user" &&
+    messages.some((message) =>
+      message.parts.some((part) => part.type === "data-interaction-resolution"),
+    );
   const segments = React.useMemo(
     () => (role === "assistant" ? segmentTurn(messages) : null),
     [messages, role],
@@ -3457,11 +3464,16 @@ export const ChatTurn = React.memo(function ChatTurn({
 
   if (first === null || role === null) return null;
 
-  const answeredInteraction = answered ? context.interactions.get(answered.interactionId) : undefined;
+  const answeredInteraction = answered
+    ? context.interactions.get(answered.interactionId)
+    : undefined;
   if (answered && answeredInteraction) {
     return (
       <div>
-        <InteractionReceiptLine interaction={answeredInteraction} resolution={answered.resolution} />
+        <InteractionReceiptLine
+          interaction={answeredInteraction}
+          resolution={answered.resolution}
+        />
         <OriginalOutput part={first} />
       </div>
     );
@@ -3513,7 +3525,9 @@ export const ChatTurn = React.memo(function ChatTurn({
               ))
             : prose.map((entry) => <GuardedResponse key={entry.key}>{entry.text}</GuardedResponse>)}
         </div>
-        {hasResolutionContent && prose.length === 0 ? <span className="text-ui text-muted-foreground">Interaction record</span> : null}
+        {hasResolutionContent && prose.length === 0 ? (
+          <span className="text-ui text-muted-foreground">Interaction record</span>
+        ) : null}
         {attribution?.sessionId || hasResolutionContent ? <OriginalOutput part={first} /> : null}
         {skillChips.length > 0 ? (
           // A skill name is a mono outline Badge behind a book icon, wherever

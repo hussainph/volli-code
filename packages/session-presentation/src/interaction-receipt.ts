@@ -1,4 +1,8 @@
-import type { SessionInteractionAnswer, SessionInteractionResolution, TranscriptReference } from "@volli/shared";
+import type {
+  SessionInteractionAnswer,
+  SessionInteractionResolution,
+  TranscriptReference,
+} from "@volli/shared";
 import type { UIMessage } from "ai";
 import type { ChatSessionFrame } from "./transcript";
 
@@ -12,11 +16,20 @@ export interface InteractionReceiptEvidence {
 }
 
 function bodyKey(message: Pick<UIMessage, "id" | "role" | "metadata" | "parts">): string | null {
-  try { return JSON.stringify([message.id, message.role, message.metadata, message.parts]); }
-  catch { return null; }
+  try {
+    return JSON.stringify([message.id, message.role, message.metadata, message.parts]);
+  } catch {
+    return null;
+  }
 }
 function resolutionKey(resolution: SessionInteractionResolution): string {
-  return JSON.stringify([resolution.optionIds, resolution.response, resolution.answers?.length ? resolution.answers.map((answer) => [answer.promptId, answer.optionIds, answer.response]) : null]);
+  return JSON.stringify([
+    resolution.optionIds,
+    resolution.response,
+    resolution.answers?.length
+      ? resolution.answers.map((answer) => [answer.promptId, answer.optionIds, answer.response])
+      : null,
+  ]);
 }
 function sameReference(left: TranscriptReference, right: TranscriptReference): boolean {
   return left.id === right.id && left.digest === right.digest && left.mediaType === right.mediaType;
@@ -28,12 +41,15 @@ function sameReference(left: TranscriptReference, right: TranscriptReference): b
  * resolve, or an observation with different content/reference makes the id
  * ambiguous. Adapter-only tails cannot prove that this was an answer.
  */
-export function indexInteractionResolutionMessages(frames: readonly ChatSessionFrame[]): ReadonlyMap<string, InteractionReceiptEvidence | null> {
+export function indexInteractionResolutionMessages(
+  frames: readonly ChatSessionFrame[],
+): ReadonlyMap<string, InteractionReceiptEvidence | null> {
   const receipts = new Map<string, InteractionReceiptEvidence | null>();
   const submittedReferences = new Set<string>();
   for (const frame of frames) {
     const payload = frame.event?.payload;
-    if (payload?.kind === "command.recorded" && payload.command.intent.kind === "message.submit") submittedReferences.add(payload.command.intent.reference.id);
+    if (payload?.kind === "command.recorded" && payload.command.intent.kind === "message.submit")
+      submittedReferences.add(payload.command.intent.reference.id);
   }
   for (const frame of frames) {
     const event = frame.event;
@@ -42,15 +58,42 @@ export function indexInteractionResolutionMessages(frames: readonly ChatSessionF
     const command = event.payload.command;
     const intent = command.intent;
     let candidate: InteractionReceiptEvidence | null = null;
-    if (intent.kind === "interaction.resolve" && command.sessionId === frame.sessionId && event.sessionId === frame.sessionId && message.parts.length === 1 && message.parts[0]?.type === "data-interaction-resolution" && !submittedReferences.has(intent.reference.id)) {
+    if (
+      intent.kind === "interaction.resolve" &&
+      command.sessionId === frame.sessionId &&
+      event.sessionId === frame.sessionId &&
+      message.parts.length === 1 &&
+      message.parts[0]?.type === "data-interaction-resolution" &&
+      !submittedReferences.has(intent.reference.id)
+    ) {
       const answer = readInteractionResolutionContent(message);
       const body = bodyKey(message);
-      if (answer && body !== null && answer.interactionId === intent.interactionId && resolutionKey(answer.resolution) === resolutionKey(intent.resolution)) candidate = { commandId: command.id, messageId: message.id, sequence: frame.sequence, reference: intent.reference, body, answer };
+      if (
+        answer &&
+        body !== null &&
+        answer.interactionId === intent.interactionId &&
+        resolutionKey(answer.resolution) === resolutionKey(intent.resolution)
+      )
+        candidate = {
+          commandId: command.id,
+          messageId: message.id,
+          sequence: frame.sequence,
+          reference: intent.reference,
+          body,
+          answer,
+        };
     }
     if (!receipts.has(message.id)) receipts.set(message.id, candidate);
     else {
       const previous = receipts.get(message.id);
-      if (!previous || !candidate || previous.commandId !== candidate.commandId || previous.body !== candidate.body || !sameReference(previous.reference, candidate.reference)) receipts.set(message.id, null);
+      if (
+        !previous ||
+        !candidate ||
+        previous.commandId !== candidate.commandId ||
+        previous.body !== candidate.body ||
+        !sameReference(previous.reference, candidate.reference)
+      )
+        receipts.set(message.id, null);
     }
   }
   for (const frame of frames) {
@@ -58,14 +101,29 @@ export function indexInteractionResolutionMessages(frames: readonly ChatSessionF
     if (message?.role !== "user") continue;
     const evidence = receipts.get(message.id);
     const payload = frame.event?.payload;
-    if (!evidence || frame.sequence < evidence.sequence || bodyKey(message) !== evidence.body || (payload?.kind === "transcript.referenced" && !sameReference(payload.reference, evidence.reference))) receipts.set(message.id, null);
+    if (
+      !evidence ||
+      frame.sequence < evidence.sequence ||
+      bodyKey(message) !== evidence.body ||
+      (payload?.kind === "transcript.referenced" &&
+        !sameReference(payload.reference, evidence.reference))
+    )
+      receipts.set(message.id, null);
   }
   return receipts;
 }
 
 /** Missing producer evidence is neutral content, never a receipt or a dropped message. */
-export function readInteractionResolutionMessage(message: UIMessage, evidence?: InteractionReceiptEvidence | null): InteractionResolutionMessage | null {
-  return message.role === "user" && evidence && message.id === evidence.messageId && bodyKey(message) === evidence.body ? evidence.answer : null;
+export function readInteractionResolutionMessage(
+  message: UIMessage,
+  evidence?: InteractionReceiptEvidence | null,
+): InteractionResolutionMessage | null {
+  return message.role === "user" &&
+    evidence &&
+    message.id === evidence.messageId &&
+    bodyKey(message) === evidence.body
+    ? evidence.answer
+    : null;
 }
 
 /** A durable answer, at the transcript position where it was given. */

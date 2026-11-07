@@ -1164,5 +1164,11 @@ export function indexOpenedInteractions(
 }
 
 // Receipt recognition is producer-evidence gated, separate from answer rules.
-export { indexInteractionResolutionMessages, readInteractionResolutionMessage } from "./interaction-receipt";
-export type { InteractionResolutionMessage, InteractionReceiptEvidence } from "./interaction-receipt";
+export {
+  indexInteractionResolutionMessages,
+  readInteractionResolutionMessage,
+} from "./interaction-receipt";
+export type {
+  InteractionResolutionMessage,
+  InteractionReceiptEvidence,
+} from "./interaction-receipt";
