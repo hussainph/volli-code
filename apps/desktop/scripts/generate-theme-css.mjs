@@ -136,7 +136,7 @@ const NOTES = {
     "   at 10% over the surface named beside it, composites to the opaque token\n" +
     "   above byte-exactly.",
   "--canvas":
-    "THE CANVAS ITSELF, and the ten values derived alongside it\n" +
+    "THE CANVAS ITSELF, and the values derived alongside it\n" +
     "   (`CANVAS_TOKEN_NAMES`, renderer/src/theme/canvas-paint.ts). The gradient\n" +
     "   is a `background` value, grain layer included, so the window can paint\n" +
     "   itself before any JS runs.",
@@ -150,6 +150,13 @@ const NOTES = {
     "   takes a share of zero — the frame reads as a frame only if it is\n" +
     "   uniform — so it is `transparent` by design, not by omission.",
   "--label-ink": "The card's micro-label tier, between body and secondary.",
+  "--surface-quaternary":
+    "Opaque objects on neutral paper: composite the 2.7% / 7.8% neutral rung\n" +
+    "   first, then tint its final face. The translucent fill tokens remain\n" +
+    "   separate for glass and overlays on arbitrary underlying colours.",
+  "--wash-ink":
+    "Tinted material paint, not text. Navigation substitutes glass-wash-ink\n" +
+    "   to follow its own ink polarity; body foreground remains neutral.",
   "--shadow-raised": "The three shadow tiers: raised on a surface, the card, and overlays.",
   "--scrim":
     "The overlay wash (dialogs, sheets, the palette): the shadow's own ink\n" +

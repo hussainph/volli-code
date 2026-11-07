@@ -13,10 +13,12 @@ Those tables describe the production tokens; use the tokens rather than copying 
 - **Paper** holds reading and work: documents, board, transcript, preference forms. Use
   `PaperSurface` or the shared opaque material, not a more opaque version of navigation glass.
   Reading paper stays neutral: `#1e1e1e` dark / white light, emitted by the generator.
-  Raised cards, controls, borders and muted icon ink carry the first canvas stop's
-  generated neutral tint. User bubbles and some existing washes remain neutral; not every
-  consumer has adopted the tint. Put visible theme personality into tinted objects, not
-  the paper; lightness remains a reading ladder, not the canvas's luminance. Body text stays neutral,
+  Raised cards, user bubbles, paper wells, controls, borders and muted icon ink carry the
+  first canvas stop's generated neutral tint. Paper objects use `--surface-secondary` or
+  `--surface-quaternary`: tint the final neutral composite, not ink diluted to near-grey
+  by a low alpha. Keep translucent `--fill-*` overlays for glass and pressed states;
+  `--wash-ink` is material paint, never body text. Put personality into objects, not paper;
+  lightness remains a reading ladder, not the canvas's luminance. Body text stays neutral,
   semantics keep their hues, vendor marks keep their artwork. Primary actions stay tonal.
 - **Pane glass** is the default `GlassSurface`: modest blur/tone, quiet rim and shadow.
   Docked navigation and stationary peeks share this recipe. Tint samples canvas; navigation

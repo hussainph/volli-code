@@ -40,7 +40,9 @@ export function deriveCanvasTokens(canvas: Canvas, resolved: ResolvedAppearance)
   const accent = generateAccentTokens(seed);
   const { C, h } = hexToOklch(seed);
   const selected = compositeHex(seed, 0.18, paper);
-  const readingPools = [paper, under, selected, ...writingGlass(popover, resolved).pools];
+  const foreground = dark ? "#ededed" : "#272727";
+  const editorSelection = compositeHex(neutral(foreground), 0.22, paper);
+  const readingPools = [paper, under, selected, editorSelection, ...writingGlass(popover, resolved).pools];
   const ink = oklchToHex(solveLightnessOrCeiling(75, C, h, selected), C, h);
   // Actual glass pools and dark selections can compress the secondary hierarchy.
   const secondaryHex = readingInk(
@@ -58,7 +60,7 @@ export function deriveCanvasTokens(canvas: Canvas, resolved: ResolvedAppearance)
     // Tint is opaque here for legacy callers and derived from the accent, not grey.
     "--accent": compositeHex(seed, dark ? 0.16 : 0.09, paper),
     "--sidebar": under,
-    "--foreground": dark ? "#ededed" : "#272727",
+    "--foreground": foreground,
     // Paper's opaque secondary tier. Navigation glass solves its own ink pair.
     "--muted-foreground": secondaryHex,
     "--sidebar-foreground": dark ? "#ededed" : "#272727",

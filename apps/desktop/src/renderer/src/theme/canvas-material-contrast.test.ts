@@ -42,19 +42,100 @@ const seeds = [
 
 describe("tinted material contrast", () => {
   describe.each(["light", "dark"] as const)("%s", (mode) => {
+    it.each(["#ef8a4b", "#2a7de8", "#f8f0d8", "#e6f6ff", "#f5eaff", "#ffffff"])(
+      "%s: opaque checkout faces preserve the navigation text and icon pairs",
+      (seed) => {
+        for (const vibrancy of [0, 0.6, 1]) {
+          for (const placement of [
+            { stops: [{ hex: seed, x: 0.5, y: 0.5 }], primaryIndex: 0 },
+            {
+              stops: [
+                { hex: seed, x: 0, y: 1 },
+                { hex: "#ffffff", x: 1, y: 0 },
+                { hex: "#000000", x: 0.5, y: 0.5 },
+              ],
+              primaryIndex: 1,
+            },
+          ]) {
+            const canvas = { ...DEFAULT_CANVAS, ...placement, vibrancy };
+            const { tokens: t, canvasTokens: c } = deriveCanvasPaint(canvas, mode);
+            // These faces are opaque even inside navigation glass. The JSX keeps
+            // its inherited foreground/muted pair and the DriveIcon accent ink.
+            const face = c["--card-face"];
+            for (const [role, ink, floor] of [
+              ["foreground(--glass-ink)", c["--glass-ink"], 4.5],
+              ["path text(--glass-secondary)", c["--glass-secondary"], 4.5],
+              ["folder icon(--glass-secondary)", c["--glass-secondary"], 3],
+              ["drive icon(--primary-text)", t["--primary-text"], 3],
+            ] as const) {
+              expect(
+                wcagContrast(ink, face),
+                `${mode}/${seed}/v${vibrancy}/primary${placement.primaryIndex}/${role}=${ink}/opaque card-face=${face}`,
+              ).toBeGreaterThanOrEqual(floor);
+            }
+          }
+        }
+      },
+    );
+
+    it.each(["#ef8a4b", "#2a7de8", "#00ff00", "#a020f0"])(
+      "%s: custom rail placements retain reading contrast on their actual veils",
+      (seed) => {
+        for (const primaryIndex of [0, 1, 2]) {
+          for (const vibrancy of [0, 0.6, 1]) {
+            const canvas = {
+              ...DEFAULT_CANVAS,
+              primaryIndex,
+              vibrancy,
+              stops: [
+                { hex: seed, x: 0, y: 1 },
+                { hex: "#ffffff", x: 1, y: 0 },
+                { hex: "#000000", x: 0.5, y: 0.5 },
+              ],
+            };
+            const { tokens: t, canvasTokens: c } = deriveCanvasPaint(canvas, mode);
+            for (const peak of effectiveStopHexes(canvas, mode)) {
+              const glass = over(c["--glass-pane-veil"], regularGlassBackdrop(peak, mode));
+              for (const surface of [
+                glass,
+                compositeHex(c["--glass-wash-ink"], 0.1, glass),
+                compositeHex(t["--popover"], 0.3, glass),
+                compositeHex(mode === "dark" ? t["--accent"] : t["--popover"], 0.5, glass),
+              ]) {
+                for (const ink of [c["--glass-ink"], c["--glass-secondary"]]) {
+                  expect(
+                    wcagContrast(ink, surface),
+                    `${seed}/${primaryIndex}/${vibrancy}/${mode}/${surface}/${ink}`,
+                  ).toBeGreaterThanOrEqual(4.5);
+                }
+              }
+            }
+          }
+        }
+      },
+    );
+
     it.each(seeds)("%s: reading ink survives actual material composites", (seed) => {
       for (const vibrancy of [0, 0.3, 0.6, 1]) {
         const canvas = { ...DEFAULT_CANVAS, stops: [{ hex: seed, x: 0.5, y: 0.5 }], vibrancy };
         const { tokens: t, canvasTokens: c } = deriveCanvasPaint(canvas, mode);
-        const opaque = [t["--background"], t["--muted"], t["--popover"], c["--card-face"]];
+        const opaque = [
+          t["--background"],
+          t["--muted"],
+          t["--popover"],
+          c["--card-face"],
+          c["--surface-secondary"],
+          c["--surface-quaternary"],
+        ];
         const surfaces = [
           ...opaque,
           compositeHex(seed, 0.18, t["--card"]),
+          compositeHex(c["--wash-ink"], 0.22, t["--background"]),
           ...opaque.flatMap((base) => [
             over(c["--fill-row-hover"], base),
             over(c["--fill-row-selected"], base),
-            over(c["--fill-secondary"], base), // user bubble and pressed fills
-            over(c["--fill-quaternary"], base), // quiet tool/track fills
+            over(c["--fill-secondary"], base), // translucent pressed/hover overlays
+            over(c["--fill-quaternary"], base), // translucent quiet overlays
             over(c["--control-face"], base),
             over(c["--tab-selected-face"], base),
             over(c["--control-face"], over(c["--fill-secondary"], base)),
@@ -95,6 +176,10 @@ describe("tinted material contrast", () => {
             glass,
             over(c["--fill-row-hover"], glass),
             over(c["--fill-row-selected"], glass),
+            compositeHex(c["--glass-wash-ink"], 0.1, glass),
+            // Shared rail footer/control and card frame, including its dark override.
+            compositeHex(t["--popover"], 0.3, glass),
+            compositeHex(mode === "dark" ? t["--accent"] : t["--popover"], 0.5, glass),
           ]) {
             for (const ink of [c["--glass-ink"], c["--glass-secondary"]]) {
               expect(

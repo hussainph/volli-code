@@ -16,10 +16,12 @@ already follows it.
 
 The reading paper stays **`#1e1e1e` in dark appearance and white in light appearance**,
 independent of the canvas. Colour belongs to the objects around and on that reading plane:
-raised cards, under-page fills, controls, edges and muted icon ink inherit the
-**first authored canvas stop's hue**, like the accent, not the mesh's `primaryIndex`.
-User bubbles and some existing washes remain neutral; this is not a completed tint sweep
-of every consumer.
+raised cards, user bubbles, paper wells, under-page fills, controls, edges and muted icon ink
+inherit the **first authored canvas stop's hue**, like the accent, not the mesh's `primaryIndex`.
+Paper objects use `--surface-secondary` / `--surface-quaternary`: composite the neutral rung
+on paper first, then tint the resulting face. Tinting near-white ink before a low-alpha wash
+loses the object's visible chroma. Translucent `--fill-*` layers remain distinct for glass
+and pressed overlays; they must not be replaced wholesale by opaque paper faces.
 One neutral chroma budget is tuned per appearance (`ARC_TUNING.neutralTint`: .035 light /
 .032 dark). Seed chroma and vibrancy modulate it; near-grey canvases stay near-grey. Rung
 lightness stays independent of canvas luminance. Gamut mapping reduces chroma where needed,
@@ -88,9 +90,10 @@ substitute for making covered text reachable.
   sheen. `--accent-tint` is 10%, `--accent-selected` 18%. The legacy `--primary` opaque pair
   still exists; it is not the tonal label token.
 - Colour earns its place on identity/state icons, selected and hover fills, prominent text
-  and the board Session ring. Raised cards carry the quieter generated neutral tint, not
-  a raw accent fill. User bubbles and some existing washes still use neutral fills;
-  reading paper remains neutral.
+  and the board Session ring. Raised cards, user bubbles and paper wells carry the quieter
+  generated neutral tint, not a raw accent fill. Reading paper and body ink remain neutral.
+  Material washes use `--wash-ink`, with a glass-aware polarity on navigation, rather than
+  borrowing body ink. Optical black occlusion and white specular light remain neutral.
 - `--foreground` is body ink; `--muted-foreground` is opaque secondary;
   `--tertiary-foreground` is the third tier; `--label-ink` sits between body and secondary.
   Do not dilute reading ink with `/50`, `/70` or inherited opacity.

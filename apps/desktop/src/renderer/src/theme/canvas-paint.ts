@@ -136,6 +136,10 @@ export const CANVAS_TOKEN_NAMES = [
   "--fill-row-hover",
   "--fill-quaternary",
   "--fill-secondary",
+  "--surface-quaternary",
+  "--surface-secondary",
+  "--wash-ink",
+  "--glass-wash-ink",
   "--card-face",
   "--card-shadow",
   "--paper-shadow",
@@ -203,17 +207,22 @@ export function deriveCanvasPaint(
   const tokens = deriveCanvasTokens(canvas, resolved);
   const elevation = canvasElevation(canvas, resolved, tokens);
   const { ink, inkLabel, inkMuted } = canvasInk(canvas, resolved, elevation.surfaces);
-  // Diff counts and gutter marks are reading ink, not status fills. Solve
-  // against the worst 18%-selected tinted paper pool (black / white stops),
-  // which also bounds writing glass, rather than diluting the status colour.
+  // Diff counts and gutter marks are reading ink, not status fills. Include
+  // both accent selection and the editor's material wash alongside actual glass.
   const readingPools = [
     compositeHex(resolved === "light" ? "#000000" : "#ffffff", 0.18, tokens["--card"]),
+    compositeHex(tintCanvasNeutral(tokens["--foreground"], canvas, resolved), 0.22, tokens["--card"]),
     ...writingGlass(tokens["--popover"], resolved).pools,
   ];
   const diffInk = (status: string): string => readingInk(status, readingPools, resolved, 4.5);
   const light = resolved === "light";
   const neutral = (hex: string) => tintCanvasNeutral(hex, canvas, resolved);
-  const fillInk = neutral(light ? "#272727" : "#ededed");
+  const fillInk = neutral(tokens["--foreground"]);
+  // An object on paper has a known backing. Tint its final rung, rather than
+  // tinting near-white ink and then losing almost all chroma at 2.7/7.8% alpha.
+  // The alpha recipes remain separate for glass and overlays on arbitrary fills.
+  const paperSurface = (alpha: number) =>
+    neutral(compositeHex(tokens["--foreground"], alpha, tokens["--background"]));
   const raisedFace = neutral(light ? "#fafafa" : "#2a2a2a");
   const writingVeil = writingGlass(tokens["--popover"], resolved).veil;
   const tertiaryInk = readingInk(neutral(light ? "#666666" : "#aaaaaa"), readingPools, resolved, 3);
@@ -232,7 +241,8 @@ export function deriveCanvasPaint(
   const glassReadingPools = glassPools.flatMap((surface) => [
     surface,
     compositeHex(rowInk, 0.047, surface),
-    compositeHex(rowInk, 0.09, surface),
+    // The 10% rail tile wash also bounds the 9% selected source-list row.
+    compositeHex(rowInk, 0.1, surface),
   ]);
   const glassSecondary = readingInk(
     neutral(darkInk ? "#5a5a5a" : "#b9b9b9"),
@@ -280,6 +290,10 @@ export function deriveCanvasPaint(
       "--fill-row-hover": `color-mix(in oklab, ${rowInk} 4.7%, transparent)`,
       "--fill-quaternary": translucent(fillInk, 0.027),
       "--fill-secondary": translucent(fillInk, 0.078),
+      "--surface-quaternary": paperSurface(0.027),
+      "--surface-secondary": paperSurface(0.078),
+      "--wash-ink": fillInk,
+      "--glass-wash-ink": rowInk,
       "--card-face": raisedFace,
       "--card-shadow": light
         ? "0 1px 2px rgb(0 0 0 / .05), 0 0 0 .5px rgb(0 0 0 / .07)"

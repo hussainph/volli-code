@@ -41,7 +41,7 @@
 
   .prompt-add {
     border: 1px solid var(--border-strong);
-    background-color: var(--card);
+    background-color: var(--card-face);
   }
 
   /* A draft file is an object on the chat writing rail, not another footer
@@ -49,7 +49,7 @@
    * Component-layer paint lets the shared button's hover/focus states win. */
   .session-prompt [data-slot="composer-attachments"] > button {
     border: 1px solid var(--border);
-    background-color: var(--card);
+    background-color: var(--card-face);
   }
 
   .prompt-primary {
@@ -529,6 +529,7 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-wash-ink: var(--wash-ink);
   --color-card: var(--card);
   --color-popover: var(--popover);
   --color-primary: var(--primary);
@@ -828,7 +829,7 @@
 
 @layer components {
   .control-material {
-    --control-fill: var(--card);
+    --control-fill: var(--card-face);
   }
   @container not style(--control-sheen: 0%) {
     .control-material {
@@ -2308,15 +2309,13 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   -webkit-app-region: no-drag;
 }
 
-/* A quiet first-run field: neutral on purpose, so the ember accent remains
- * reserved for the single action. The dot layer is static and fades before the
- * canvas edge; it adds depth without turning the empty state into onboarding.
- * Built from the body ink rather than a literal white so it holds in both
- * appearances — a hardcoded `white/N` is invisible on paper. */
+/* A quiet first-run field: the material's low-chroma wash, not raw accent or
+ * body ink. The static dots fade before the canvas edge and work in either
+ * appearance; the primary action keeps the stronger accent. */
 .empty-projects-canvas {
   background-image: radial-gradient(
     ellipse 72% 58% at 50% 48%,
-    color-mix(in srgb, var(--foreground) 3%, transparent),
+    color-mix(in srgb, var(--wash-ink) 3%, transparent),
     transparent 76%
   );
 }
@@ -2327,7 +2326,7 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   pointer-events: none;
   content: "";
   background-image: radial-gradient(
-    color-mix(in srgb, var(--foreground) 10%, transparent) 0.65px,
+    color-mix(in srgb, var(--wash-ink) 10%, transparent) 0.65px,
     transparent 0.8px
   );
   background-position: center;
@@ -2750,6 +2749,7 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   --foreground: var(--glass-ink);
   --muted-foreground: var(--glass-secondary);
   --sidebar-foreground: var(--glass-ink);
+  --wash-ink: var(--glass-wash-ink);
 }
 [data-volli-sidebar].glass .session-row-dim.text-ui {
   --sidebar-foreground: var(--material-foreground);
@@ -2762,8 +2762,8 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   border-radius: var(--radius-row);
 }
 .session-envelope {
-  background: color-mix(in oklab, var(--foreground) 3.5%, transparent);
-  box-shadow: inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 7%, transparent);
+  background: color-mix(in oklab, var(--wash-ink) 3.5%, transparent);
+  box-shadow: inset 0 0 0 0.5px color-mix(in oklab, var(--wash-ink) 7%, transparent);
 }
 /* The inspector is a glass sibling of paper, never another paper column. */
 [data-inspector-dock][data-pinned] {
@@ -3056,7 +3056,7 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
 .board-column {
   width: var(--spacing-board-column);
   padding: 6px;
-  background: var(--fill-quaternary);
+  background: var(--surface-quaternary);
 }
 .board-card {
   padding: 12px 14px;
@@ -3089,7 +3089,7 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   max-width: 420px;
   padding: 7px 13px;
   border-radius: var(--radius-bubble);
-  background: var(--fill-secondary);
+  background: var(--surface-secondary);
   color: var(--foreground);
 }
 
@@ -3170,7 +3170,7 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   background-attachment: scroll;
 }
 .tab-track {
-  background: var(--fill-secondary);
+  background: var(--surface-secondary);
 }
 
 [data-volli-sidebar] [data-slot="sidebar-header"] .font-display {
@@ -3402,7 +3402,7 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   height: 24px;
 }
 .board-card[data-selected="true"] {
-  background: color-mix(in srgb, var(--foreground) 5%, var(--card-face));
+  background: color-mix(in srgb, var(--wash-ink) 5%, var(--card-face));
 }
 
 /* Position belongs to layout, not material. Unlayered `position:relative` here
@@ -3615,8 +3615,12 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   overflow: clip;
 }
 .settings-window [data-slot="pref-group"] {
-  background: var(--fill-quaternary);
+  background: var(--surface-quaternary);
   box-shadow: none;
+}
+/* These tracks sit on preference paper, not navigation glass. */
+.settings-window [data-slot="pref-content"] .segmented:not([data-icon-only="true"]) {
+  background: var(--surface-secondary);
 }
 
 [data-slot="canvas-instrument"] {

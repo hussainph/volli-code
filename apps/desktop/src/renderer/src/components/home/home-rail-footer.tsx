@@ -247,7 +247,7 @@ function CheckoutBody({
   return (
     <>
       <header className="flex items-center gap-2 pb-2">
-        <span className="flex size-8 shrink-0 items-center justify-center rounded-control border border-border bg-card shadow-raised">
+        <span className="flex size-8 shrink-0 items-center justify-center rounded-control border border-border bg-(--card-face) shadow-raised">
           <DriveIcon className="size-4 text-primary-text" />
         </span>
         <div className="min-w-0">
@@ -259,7 +259,7 @@ function CheckoutBody({
           )}
         </div>
       </header>
-      <div className="flex min-w-0 items-center gap-2 rounded-control border border-border bg-card p-2">
+      <div className="flex min-w-0 items-center gap-2 rounded-control border border-border bg-(--card-face) p-2">
         <FolderOpenIcon className="size-4 shrink-0 text-muted-foreground" />
         <ValueReveal
           term={workingCopyKindLabel(workingCopy.workingCopy)}

@@ -47,7 +47,7 @@ export function ProjectFolderBanner({ projectId }: { projectId: string }) {
         expandable={false}
         copyText=""
         detail={
-          <span className="flex min-w-0 items-center gap-2 rounded-control border border-border bg-card px-2 py-1 text-foreground">
+          <span className="flex min-w-0 items-center gap-2 rounded-control border border-border bg-(--card-face) px-2 py-1 text-foreground">
             <FolderOpenIcon aria-hidden className="size-4 shrink-0" />
             <span className="min-w-0 font-mono [overflow-wrap:anywhere]">{project.path}</span>
           </span>
