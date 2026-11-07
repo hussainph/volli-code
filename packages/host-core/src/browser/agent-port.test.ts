@@ -1016,6 +1016,46 @@ describe("createAgentBrowserPort empty pages, timeouts and act evidence (VC-277)
     }
   });
 
+  it("revalidates the live host generation during a frame wait, without manually syncing the controller", async () => {
+    const fake = fakeHost([state({ tabId: "mine", createdBy: "session" })]);
+    const frame = Promise.withResolvers<object>();
+    const waiting = Promise.withResolvers<void>();
+    const input = vi.fn();
+    const browser = createAgentBrowserPort({
+      host: fake.host,
+      scope: { projectId: "p1", ticketId: "t1" },
+      session: ME,
+      transportFor: () => ({
+        send: async (method) => {
+          if (method === "Accessibility.getFullAXTree") return BUTTON_TREE;
+          if (method === "Runtime.evaluate") {
+            waiting.resolve();
+            return await frame.promise;
+          }
+          if (method.startsWith("Input.")) input(method);
+          return {};
+        },
+      }),
+      waitForLoad: async () => undefined,
+      holdAwake: () => () => undefined,
+    });
+    const read = await browser.snapshot({ tabId: "mine", signal });
+    const acting = browser.act({
+      tabId: "mine",
+      generation: read.generation,
+      kind: "press",
+      key: "Enter",
+      signal,
+    });
+    await waiting.promise;
+    const tab = fake.tabs.get("mine")!;
+    fake.tabs.set("mine", { ...tab, generation: tab.generation + 1 });
+    frame.resolve({});
+    await expect(acting).rejects.toMatchObject({ rule: "browser.stale-ref" });
+    expect(input).not.toHaveBeenCalled();
+    expect((await browser.snapshot({ tabId: "mine", signal })).generation).toBe(tab.generation + 1);
+  });
+
   it("returns a structural navigation result without a photo when frames stall", async () => {
     vi.useFakeTimers();
     try {

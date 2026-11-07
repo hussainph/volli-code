@@ -57,6 +57,8 @@ import {
 export interface CdpTransport {
   send: (method: string, params?: object) => Promise<unknown>;
   ensureReady?: () => Promise<void>;
+  /** Host generation, re-read after awaits and before input, never page script. */
+  currentGeneration?: () => number;
   dispose?: () => void;
   /** Host-only diagnostics: never receives command parameters or page content. */
   onTimeout?: (diagnostic: CdpTimeoutDiagnostic) => void;
@@ -349,6 +351,8 @@ export class BrowserTabController {
   readonly #ensureReady: CdpTransport["ensureReady"];
   readonly #disposeTransport: CdpTransport["dispose"];
   readonly #onTimeout: CdpTransport["onTimeout"];
+  readonly #currentGeneration: CdpTransport["currentGeneration"];
+  #actingGeneration: number | null = null;
   readonly #limits: Required<ControllerLimits>;
   readonly #cursor: TabCursorDriver | undefined;
   #generation = 0;
@@ -371,6 +375,7 @@ export class BrowserTabController {
     this.#ensureReady = transport.ensureReady;
     this.#disposeTransport = transport.dispose;
     this.#onTimeout = transport.onTimeout;
+    this.#currentGeneration = transport.currentGeneration;
     this.#cursor = cursor;
     this.#limits = {
       maxSnapshotChars: Math.floor(narrowedLimit(limits.maxSnapshotChars, SNAPSHOT_MAX_CHARS)),
@@ -462,6 +467,15 @@ export class BrowserTabController {
     timeoutMs?: number,
   ): Promise<unknown> {
     signal?.throwIfAborted();
+    if (this.#actingGeneration !== null) {
+      this.#syncCurrentGeneration();
+      if (this.#actingGeneration !== this.#generation) {
+        throw new BrowserRefusal(
+          "browser.stale-ref",
+          "The tab changed before the input could be sent: take a fresh snapshot.",
+        );
+      }
+    }
     return await this.#bounded(this.#send(method, params), operation, signal, method, timeoutMs);
   }
 
@@ -533,6 +547,10 @@ export class BrowserTabController {
     this.#forget();
   }
 
+  #syncCurrentGeneration(): void {
+    if (this.#currentGeneration !== undefined) this.syncGeneration(this.#currentGeneration());
+  }
+
   /** Drop every ref and the whole ledger: nothing printed before names anything now. */
   #forget(): void {
     this.#refs = new Map();
@@ -571,6 +589,7 @@ export class BrowserTabController {
    * A late or older frame never certifies this generation's pixels or hit tests.
    */
   async #ensureRendered(signal?: AbortSignal, timeoutMs?: number): Promise<void> {
+    this.#syncCurrentGeneration();
     if (this.#renderedGeneration === this.#generation) return;
     const generation = this.#generation;
     const rendered = (await this.#command(
@@ -580,6 +599,7 @@ export class BrowserTabController {
       "frame-fence",
       timeoutMs,
     )) as { exceptionDetails?: unknown };
+    this.#syncCurrentGeneration();
     if (rendered.exceptionDetails !== undefined)
       throw new Error("The Browser Tab could not finish rendering its document");
     if (generation !== this.#generation) {
@@ -615,6 +635,7 @@ export class BrowserTabController {
     operation: "snapshot" | "find",
     signal?: AbortSignal,
   ): Promise<{ nodes: AXNodeLike[]; partial: boolean }> {
+    this.#syncCurrentGeneration();
     const generation = this.#generation;
     let read: { nodes: AXNodeLike[]; partial: boolean };
     if (await this.#isLargeDocument(operation, signal)) {
@@ -631,6 +652,7 @@ export class BrowserTabController {
       read = { nodes: answer.nodes, partial: false };
     }
     signal?.throwIfAborted();
+    this.#syncCurrentGeneration();
     if (generation !== this.#generation) {
       throw new BrowserRefusal(
         "browser.stale-ref",
@@ -827,6 +849,7 @@ export class BrowserTabController {
    */
   async act(request: TabActRequest, signal?: AbortSignal): Promise<TabActResult> {
     signal?.throwIfAborted();
+    this.#syncCurrentGeneration();
     if (request.generation !== this.#generation || this.#snapshotGeneration !== this.#generation) {
       throw new BrowserRefusal(
         "browser.stale-ref",
@@ -835,8 +858,13 @@ export class BrowserTabController {
     }
     // Reads mint structural refs without promising pixels are ready. Preserve
     // the old stale-surface/hit-test guard at the point input actually needs it.
-    if (request.kind !== "wait") await this.#ensureRendered(signal);
-    await this.#perform(request, signal);
+    this.#actingGeneration = request.generation;
+    try {
+      if (request.kind !== "wait") await this.#ensureRendered(signal);
+      await this.#perform(request, signal);
+    } finally {
+      this.#actingGeneration = null;
+    }
     // Resolved AFTER the action so a refused ref reports nothing; the maps are
     // untouched by acting, so the name is the one the model was shown.
     const ref = request.ref;

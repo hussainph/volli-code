@@ -99,7 +99,10 @@ describe("BrowserTabController", () => {
     controller.syncGeneration(2);
     expect((await controller.snapshot()).generation).toBe(2);
     expect(page.sent.map((call) => call.method)).toEqual(
-      Array(3).fill("Accessibility.getFullAXTree"),
+      Array.from({ length: 3 }, () => [
+        "Memory.getDOMCounters",
+        "Accessibility.getFullAXTree",
+      ]).flat(),
     );
   });
 
@@ -212,6 +215,7 @@ describe("BrowserTabController", () => {
     rendered.resolve({});
     await Promise.resolve();
     expect(page.sent.map((call) => call.method)).toEqual([
+      "Memory.getDOMCounters",
       "Accessibility.getFullAXTree",
       "Runtime.evaluate",
     ]);
@@ -305,11 +309,11 @@ describe("BrowserTabController", () => {
   });
 
   it("does not mint current refs from an older generation's late AX tree", async () => {
-    const tree = Promise.withResolvers<object>();
-    const controller = new BrowserTabController({ send: () => tree.promise });
+    const lateTree = Promise.withResolvers<object>();
+    const controller = new BrowserTabController({ send: () => lateTree.promise });
     const reading = controller.snapshot();
     controller.syncGeneration(1);
-    tree.resolve(BUTTON_TREE);
+    lateTree.resolve(BUTTON_TREE);
     await expect(reading).rejects.toMatchObject({ rule: "browser.stale-ref" });
     await expect(controller.act({ generation: 1, kind: "click", ref: "e1" })).rejects.toMatchObject(
       { rule: "browser.stale-ref" },

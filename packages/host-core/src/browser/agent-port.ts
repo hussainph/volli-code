@@ -305,6 +305,7 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
       signal,
       factory: {
         transport: () => options.transportFor(tabId),
+        currentGeneration: () => resolve(tabId).generation,
         ...(cursor === undefined ? {} : { cursor }),
       },
       operation: async (context) => await operation(context.controller),
