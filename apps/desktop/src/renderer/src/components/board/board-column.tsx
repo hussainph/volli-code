@@ -396,7 +396,9 @@ export const BoardColumn = React.memo(function BoardColumn({
         // mouse drag-to-pan (see useBoardCanvasPan). Short columns still hug.
         // cursor-default overrides the canvas's cursor-grab so only empty
         // background reads as a pan surface.
-        "flex min-h-0 max-h-[85%] w-72 flex-none cursor-default flex-col rounded-lg bg-muted/30",
+        // Share the canvas, but keep cards readable with few shown columns
+        // and preserve horizontal pan when the 288px floors cannot fit.
+        "flex min-h-0 max-h-[85%] min-w-72 max-w-sm flex-1 basis-72 cursor-default flex-col rounded-lg bg-muted/30",
         // Enter is an opacity fade ONLY, and so is the dim below it. This
         // column hosts droppables that dnd-kit measures in synchronous layout
         // effects; a scale mid-flight returns a different rect on every commit
