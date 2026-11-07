@@ -109,7 +109,7 @@ import { useSessionsStore } from "@renderer/stores/sessions";
 
 /**
  * The `app_state` key this store persists under. The name predates Workspace
- * meaning the team container (CONTEXT.md) and is kept: it is a persisted key
+ * meaning the team container (CONTEXT.md#workspace) and is kept: it is a persisted key
  * that N-1 builds read and write.
  */
 export const PROJECT_UI_APP_STATE_KEY = "volli:workspace";

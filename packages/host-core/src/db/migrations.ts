@@ -1966,7 +1966,7 @@ CREATE INDEX IF NOT EXISTS idx_worktree_cleanup_receipts_command
  *
  * `occurred_at` cannot supply it, for migration 029's reasons verbatim: two
  * commits can share a millisecond and a timestamp is metadata rather than
- * ledger order (CONTEXT.md's Await entry says so in as many words). `rowid`
+ * ledger order (CONTEXT.md#session-event). `rowid`
  * cannot either — it may be reused after a cascading delete, and a Session
  * delete cascades this whole table.
  *
