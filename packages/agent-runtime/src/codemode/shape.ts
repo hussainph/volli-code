@@ -10,7 +10,7 @@
  * | tool            | resolves to                                                   |
  * | --------------- | ------------------------------------------------------------- |
  * | `bash`          | `{ output, exitCode, truncated, fullOutputPath? }`, any exit  |
- * | MCP tools       | `{ text, structuredContent?, isError, omittedImages }`        |
+ * | MCP tools       | `{ text, structuredContent?, isError, images, omittedImages, result }` |
  * | Volli verbs     | `{ text, details? }`                                          |
  * | schema-bearing Session tools | their native `structuredContent`                |
  * | everything else | its text                                                      |
@@ -29,6 +29,7 @@
  */
 
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { McpToolResultDetails } from "../pi/tools";
 import type { ImageHandle } from "./images";
 import { isMcpToolId, MCP_UNTRUSTED_DATA_WARNING_TEXT } from "./trust";
 
@@ -57,9 +58,16 @@ function isSchema(value: unknown): value is JsonSchema {
 /**
  * The declared result type of each kind, for the TypeScript the model reads.
  * `schema` types the part of the result a tool declares for itself: an MCP
- * tool's `structuredContent`, or a Volli verb's `details`.
+ * tool's `structuredContent`, or a Volli verb's `details`. Existing Session
+ * declarations are frozen: only an explicit `mcpResultVersion: 1` advertises the
+ * MCP result facet, independently of the earlier image declaration version.
  */
-export function outputSchemaFor(kind: ToolKind, schema?: unknown, legacy = false): JsonSchema {
+export function outputSchemaFor(
+  kind: ToolKind,
+  schema?: unknown,
+  legacy = false,
+  mcpResultVersion?: 1,
+): JsonSchema {
   switch (kind) {
     case "bash":
       return {
@@ -76,15 +84,27 @@ export function outputSchemaFor(kind: ToolKind, schema?: unknown, legacy = false
       return {
         type: "object",
         properties: {
-          text: { type: "string" },
+          text: {
+            type: "string",
+            ...(mcpResultVersion === 1 && !legacy
+              ? {
+                  description:
+                    "Prefer structuredContent when present. text is display text, not guaranteed JSON; check result.truncated and result.output?.fullOutputPath before parsing text.",
+                }
+              : {}),
+          },
           structuredContent: isSchema(schema) ? schema : {},
           isError: { type: "boolean" },
           ...(legacy ? {} : { images: { type: "array", items: imageHandleSchema } }),
           omittedImages: { type: "number" },
+          ...(mcpResultVersion === 1 && !legacy ? { result: mcpResultSchema } : {}),
         },
-        required: legacy
-          ? ["text", "isError", "omittedImages"]
-          : ["text", "isError", "images", "omittedImages"],
+        required: [
+          ...(legacy
+            ? ["text", "isError", "omittedImages"]
+            : ["text", "isError", "images", "omittedImages"]),
+          ...(mcpResultVersion === 1 && !legacy ? ["result"] : []),
+        ],
       };
     case "verb":
       return {
@@ -130,6 +150,28 @@ const imageResultSchema = {
     omittedImages: { type: "number" },
   },
   required: ["text", "images", "omittedImages"],
+};
+
+/** Host-recorded bounds, not a guess from server text or a truncation marker. */
+const mcpResultSchema = {
+  type: "object",
+  properties: {
+    version: { const: 1 },
+    truncated: { type: "boolean" },
+    output: {
+      type: "object",
+      properties: {
+        totalBytes: { type: "number" },
+        totalLines: { type: "number" },
+        removedChars: { type: "number" },
+        fullOutputPath: { anyOf: [{ type: "string" }, { type: "null" }] },
+        savedBytes: { type: "number" },
+      },
+      required: ["totalBytes", "totalLines", "removedChars", "fullOutputPath", "savedBytes"],
+    },
+    structuredContentOmittedBytes: { type: "number" },
+  },
+  required: ["version", "truncated"],
 };
 
 /** Result-only recovery copy; frozen descriptions and declarations are unchanged. */
@@ -214,6 +256,20 @@ export function shapeResult(
       };
     }
     case "mcp": {
+      const details = (result.details ?? {}) as McpToolResultDetails;
+      const facet = legacy
+        ? {}
+        : {
+            result: {
+              version: 1,
+              truncated:
+                details.output !== undefined || details.structuredContentOmittedBytes !== undefined,
+              ...(details.output === undefined ? {} : { output: details.output }),
+              ...(details.structuredContentOmittedBytes === undefined
+                ? {}
+                : { structuredContentOmittedBytes: details.structuredContentOmittedBytes }),
+            },
+          };
       // An MCP call that reached the server always comes back as a result; one
       // that never did (refused, invalid, aborted) carries no structured half
       // and no trust notice, and is a failure like any other tool's.
@@ -225,7 +281,13 @@ export function shapeResult(
           ? { ok: false, message: text }
           : {
               ok: true,
-              value: { text, isError: false, ...(legacy ? {} : { images }), omittedImages },
+              value: {
+                text,
+                isError: false,
+                ...(legacy ? {} : { images }),
+                omittedImages,
+                ...facet,
+              },
             };
       // Already captured above: strip only the wrapper text, not the images twice.
       const body = {
@@ -243,6 +305,7 @@ export function shapeResult(
           isError,
           ...(legacy ? {} : { images: body.images }),
           omittedImages: body.omittedImages,
+          ...facet,
         },
       };
     }

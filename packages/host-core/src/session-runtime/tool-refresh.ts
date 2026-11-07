@@ -72,7 +72,7 @@ export function declarationToolSurface(events: readonly SessionEvent[]): Surface
   return foldToolRefreshes(events).declared;
 }
 
-/** Existing schemas and routes are retained; only the explicit image capability is widened.
+/** Existing schemas and routes are retained; only compatible versioned declarations are widened.
  * The engine guard independently proves this policy at the durable write door;
  * tool-refresh.test.ts pins their agreement for every trigger and retained MCP copy.
  */
@@ -122,8 +122,12 @@ export function additiveToolRefresh(
         routes[tool] = routeOf(candidate.codeMode, tool);
     }
     codeMode = { ...base, routes };
-    if (cold && current.codeMode !== undefined && current.codeMode.descriptionVersion !== 2) {
-      codeMode = { ...codeMode, descriptionVersion: 2 };
+    if (
+      cold &&
+      current.codeMode !== undefined &&
+      (current.codeMode.descriptionVersion !== 2 || current.codeMode.mcpResultVersion !== 1)
+    ) {
+      codeMode = { ...codeMode, descriptionVersion: 2, mcpResultVersion: 1 };
       changed.push("codemode");
     }
   }

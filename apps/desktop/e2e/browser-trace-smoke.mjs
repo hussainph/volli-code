@@ -153,6 +153,17 @@ async function driveSession(app, input) {
         if (Date.now() > deadline) break;
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
+      // Load completion is not compositor readiness. Warm only the camera
+      // BEFORE the one person action; check 2 must still exclude that action's
+      // own non-null picture, reported through the real trace-recording path.
+      const cameraSignal = AbortSignal.timeout(10_000);
+      out.personCameraAttempts = 0;
+      while (true) {
+        cameraSignal.throwIfAborted();
+        out.personCameraAttempts++;
+        if ((await host.capturePicture(person.tabId, cameraSignal)) !== null) break;
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      }
       const personSnap = await port.snapshot({ tabId: person.tabId, signal });
       const personRef = /button[^\n]*\[ref=(e\d+)\]/.exec(personSnap.snapshotText)?.[1];
       const acted = await port.act({
@@ -543,7 +554,7 @@ async function main() {
           driven.personPicture !== null &&
           !personFrame &&
           !personTrace,
-        detail: `frames=${frames.length} named=${named.length} records=${records.length} personPicture=${driven.personPicture}`,
+        detail: `frames=${frames.length} named=${named.length} records=${records.length} personPicture=${driven.personPicture} personCameraAttempts=${driven.personCameraAttempts}`,
       };
     },
   );

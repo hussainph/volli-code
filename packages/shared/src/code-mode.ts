@@ -157,6 +157,8 @@ export function isCodeModeMode(value: unknown): value is CodeModeMode {
 export interface CodeModeSurface {
   /** Description generation frozen at birth; absent keeps the pre-0.2.2 wording. N−1 ignores this additive field. */
   descriptionVersion?: 2;
+  /** MCP result facets frozen with the declaration; absent keeps the original result contract. N−1 ignores it. */
+  mcpResultVersion?: 1;
   /**
    * The route of every tool in the frozen surface except `codemode` itself,
    * keyed by the durable tool id. Exactly those keys: a missing one or an
@@ -336,6 +338,7 @@ export function codeModeSurfaceFor(input: {
   }
   return {
     descriptionVersion: 2,
+    mcpResultVersion: 1,
     routes,
     limits: { ...(input.limits ?? DEFAULT_CODE_MODE_LIMITS) },
     ...(input.mode === undefined ? {} : { mode }),
@@ -399,6 +402,9 @@ export function parseCodeModeSurface(
   if (row.descriptionVersion !== undefined && row.descriptionVersion !== 2) {
     throw new Error(`${context}.descriptionVersion is 2 or absent`);
   }
+  if (row.mcpResultVersion !== undefined && row.mcpResultVersion !== 1) {
+    throw new Error(`${context}.mcpResultVersion is 1 or absent`);
+  }
   if (row.mode !== undefined && !isCodeModeMode(row.mode)) {
     throw new Error(`${context}.mode is not a Code Mode mode`);
   }
@@ -409,6 +415,7 @@ export function parseCodeModeSurface(
     routes,
     limits,
     ...(row.descriptionVersion === 2 ? { descriptionVersion: 2 as const } : {}),
+    ...(row.mcpResultVersion === 1 ? { mcpResultVersion: 1 as const } : {}),
     ...(row.mode === undefined ? {} : { mode: row.mode }),
     ...(row.nudge === true ? { nudge: true as const } : {}),
   };
