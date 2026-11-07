@@ -76,14 +76,15 @@ Queue intent is durable before delivery, distinct from a device's unsent draft.
 their original reply. Edit refuses a releasing row; withdrawal cannot undo proven
 delivery. Queued Steer claims the canonical payload, never cancel-then-send.
 
-Recovery automatically dispatches at most once. If intent exists without
-conclusive acceptance, the host retains it and asks: **“This follow-up may have
+Queued follow-ups without recorded delivery intent may release automatically.
+If delivery intent exists without conclusive acceptance, recovery does not
+redispatch: the host retains the payload and asks: **“This follow-up may have
 been delivered. Check the transcript before resending.”** Withdrawal after
 inspection never automatically resends. A current-build backup preserves the
 queue; an older guarded writer omits newer tables. Use a current-build backup
 when pending follow-ups matter. Legacy renderer-held messages recover as visible
 unsent rows, never silently sent. The implementation and evidence rules are in
-[session-follow-ups](../packages/session-engine/src/session-follow-ups.ts).
+[queue recovery](../packages/session-engine/src/follow-ups/queue.ts#L522-L684).
 Recovery refuses more than one releasing entry rather than guessing. Pending
 rows can still release after an N−1 downgrade: older writers leave no last-writer
 marker, so timestamps cannot establish that a pending row is unsent.
