@@ -30,6 +30,11 @@ import sharp from "sharp";
 import { ELECTRON } from "../lib/smoke-kit.mjs";
 import { quietSmokeVerdict } from "../../scripts/smoke-quiet-check-logic.mjs";
 import { createRegistry, instanceLayout, REPO } from "./lib/core.mjs";
+import {
+  collectNavigationMetrics,
+  NavigationCollectionError,
+  navigationToolProgram,
+} from "./lib/navigation-picture-collector.mjs";
 import { request } from "./lib/protocol.mjs";
 
 const exec = promisify(execFile);
@@ -286,40 +291,7 @@ try {
     5_000,
   );
   const origin = `http://127.0.0.1:${server.address().port}`;
-  const program = `
-const raw = r => typeof r === "string" ? r : r.text;
-const opened = raw(await tools.browser_navigate({ url: ${JSON.stringify(`${origin}/`)} }));
-const tabId = /Browser Tab (\\S+) at/.exec(opened)?.[1];
-const generation = Number(/generation (\\d+)/.exec(opened)?.[1]);
-if (!tabId || !Number.isFinite(generation)) throw new Error("navigation provenance missing");
-// Bounded readiness observation, no extra wait/capture calls and <=100 reads.
-const busyEnd = Date.now() + 2000;
-let compiling = false;
-for (let reads = 0; reads < 100 && Date.now() < busyEnd; reads++) {
- const tabs = raw(await tools.browser_tabs({}));
- if (tabs.includes("phase=compiling")) { compiling = true; break; }
-}
-if (!compiling) throw new Error("cold module not observed in flight");
-const requestedAt = Date.now();
-const shot = await tools.browser_screenshot({ tabId });
-const answeredAt = Date.now();
-const dimensions = /, (\\d+)×(\\d+)/.exec(raw(shot));
-const snap = raw(await tools.browser_snapshot({ tabId }));
-const ref = /button[^\\n]*\\[ref=(e\\d+)\\]/.exec(snap)?.[1];
-if (!ref) throw new Error("fixture button ref missing");
-const current = Number(/generation (\\d+)/.exec(snap)?.[1]);
-const clickRequestedAt = Date.now();
-await tools.browser_act({ tabId, generation: current, kind: "click", ref });
-const clickAnsweredAt = Date.now();
-// Titles are carried by browser_tabs, not the action's accessibility envelope.
-const clickedTab = raw(await tools.browser_tabs({})).split("\\n").find(line => line.startsWith(tabId + " ")) ?? "";
-text("NAVIGATION_METRICS:" + JSON.stringify({
- tabId, generation, requestedAt, answeredAt, screenshotMs: answeredAt-requestedAt,
- width: Number(dimensions?.[1]), height: Number(dimensions?.[2]),
- hasImage: Boolean(shot.images?.length), clickRequestedAt, clickAnsweredAt,
- clickedWhileCompiling: clickedTab.includes("phase=compiling") && clickedTab.includes("clicked=1")
-}));
-`;
+  const program = navigationToolProgram(`${origin}/`);
   // Parse the generated asynchronous tool body without executing it. Outer
   // node --check alone cannot validate JavaScript inside a template string.
   assert.doesNotThrow(() => new Script(`(async () => {\n${program}\n})`), "tool program syntax");
@@ -427,19 +399,20 @@ text("NAVIGATION_METRICS:" + JSON.stringify({
   });
   phase = "production Browser commands";
   await act(snap, 'textbox "Message"', "press", { key: "Enter" });
-  snap = await wait("Navigation picture commands complete", 45_000);
-  const details = snap.text.split("\n").findLast((line) => line.includes('button "Show details"'));
-  assert.ok(details, "Code Mode details missing");
-  snap = (
-    await call("act", {
-      gen: snap.generation,
-      ref: /\[ref=([^\]]+)\]/.exec(details)[1],
-      kind: "click",
-    })
-  ).snapshot;
-  const metrics = /NAVIGATION_METRICS:(\{[^\n}]+\})/.exec(snap.text)?.[1];
-  assert.ok(metrics, "bounded tool metrics missing");
-  result.metrics = JSON.parse(metrics);
+  await wait("Navigation picture commands complete", 45_000);
+  // The settled bundle is collapsed (run-EmUg4N gen-0021): open its header
+  // from a fresh tree, then one row disclosure per fresh tree, codemode first.
+  const collected = await collectNavigationMetrics({
+    snapshot: () => call("snapshot"),
+    click: async (generation, ref) =>
+      (await call("act", { gen: generation, ref, kind: "click" })).snapshot,
+    checkpoint: (next) => {
+      phase = next;
+    },
+  });
+  result.metrics = collected.metrics;
+  result.collection = collected.collection;
+  phase = "production Browser evidence";
   await bounded(chunkDone, CHUNK_DELAY_MS + 5_000);
   result.observation = await bounded(observed, 5_000);
   assert.ok(!result.observation.incomplete, "registry observation incomplete");
@@ -586,8 +559,10 @@ text("NAVIGATION_METRICS:" + JSON.stringify({
   assert.ok(frame.outcome !== "ready" || camera, "native camera diagnostic missing");
   result.pass = result.checks.every((check) => check.ok);
   phase = "assertions complete";
-} catch {
+} catch (error) {
   result.failedPhase = phase; // No arbitrary error, page text, CDP params or URL logging.
+  // Collection facts are counts, allowlisted phases and fixed program causes.
+  if (error instanceof NavigationCollectionError) result.collection = error.collection;
 } finally {
   clearTimeout(expiry);
   abort.abort();
@@ -679,6 +654,7 @@ console.log(
       phase: result.failedPhase ?? phase,
       checks: result.checks,
       discriminator: result.navigationDiscriminator ?? null,
+      collection: result.collection ?? null,
       evidence: run,
       ownLiveInstances: result.ownLiveInstances ?? null,
     },
