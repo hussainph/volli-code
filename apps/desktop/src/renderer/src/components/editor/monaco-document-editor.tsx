@@ -10,6 +10,7 @@ import {
   type DocumentModeAttachment,
 } from "@renderer/editor/document-mode-contribution";
 import { documentModeOptions } from "@renderer/editor/document-mode";
+import { createDocumentHeightSync } from "@renderer/editor/document-height";
 import type { DocumentLease, DocumentRevision } from "@renderer/editor/document-registry";
 import { activeMonacoEditorThemeId } from "@renderer/editor/monaco-theme";
 import { type FileRefsConfig, refInsertion } from "@renderer/editor/file-refs";
@@ -171,9 +172,9 @@ export function applyDocumentExternalValue({
  * A document grows with its text. Monaco does not do that on its own — it fills
  * whatever box it is given and scrolls inside it, which is right for a file tab
  * and wrong for a ticket body sitting in a scrolling column. So the host's
- * height tracks `getContentHeight()`, and the editor is then laid out into the
- * host's `clientHeight` rather than into that number directly: `clientHeight` is
- * the CSS-CLAMPED box, so a caller's `min-h-*` / `max-h-*` classes — or an
+ * height tracks `getContentHeight()` in an animation frame. Monaco's
+ * `automaticLayout` is the only layout driver and observes the CSS-CLAMPED
+ * host box, so a caller's `min-h-*` / `max-h-*` classes — or an
  * inline `maxHeight` via `style` — keep working (the composer bounds its body
  * at 40vh and scrolls inside; the ticket body clamps over a policy cap and
  * expands on demand, VC-99) without this component knowing anything about them.
@@ -385,14 +386,20 @@ export const MonacoDocumentEditor = React.forwardRef<
         // number the host cannot recover later — the CSS clamp erases it from
         // every measurable box.
         const editorView = view;
-        const fitToContent = (): void => {
-          const contentHeight = editorView.getContentHeight();
-          host.style.height = `${contentHeight}px`;
-          editorView.layout({ width: host.clientWidth, height: host.clientHeight });
-          liveRef.current.onContentHeightChange?.(contentHeight);
-        };
-        subscriptions.push(editorView.onDidContentSizeChange(fitToContent));
-        fitToContent();
+        const heightSync = createDocumentHeightSync({
+          getContentHeight: () => editorView.getContentHeight(),
+          setHeight: (px) => {
+            host.style.height = `${px}px`;
+          },
+          onContentHeightChange: (px) => liveRef.current.onContentHeightChange?.(px),
+          requestFrame: (callback) => requestAnimationFrame(callback),
+          cancelFrame: (id) => cancelAnimationFrame(id),
+        });
+        // Never call layout() from content-size dispatch: it can re-enter a
+        // wrapping rebuild while Monaco's line projections are incomplete.
+        // automaticLayout observes the height write and all width/cap changes.
+        subscriptions.push(heightSync, editorView.onDidContentSizeChange(heightSync.schedule));
+        heightSync.schedule();
 
         const model = lease.model;
         subscriptions.push(
@@ -426,7 +433,7 @@ export const MonacoDocumentEditor = React.forwardRef<
         if (liveRef.current.autoFocus) view.focus();
         // The ticket description is the surface the switch benchmark waits on
         // — the harness's readiness predicate looks for Monaco's own textarea,
-        // so creating and laying out this editor is inside the measured window
+        // so creating this editor's initial view is inside the measured window
         // (VC-385). Only the ticket body stamps it: a file or diff editor
         // opening elsewhere is not what the switch is waiting for.
         if (liveRef.current.identity.kind === "ticket-body") {
@@ -517,10 +524,9 @@ export const MonacoDocumentEditor = React.forwardRef<
   }
 
   // `style` lands on the host because the host IS the editor's layout box: a
-  // caller's `maxHeight` has to clamp THIS element for `clientHeight` (what
-  // `fitToContent` lays the editor into) to read as the clamped box. React only
-  // ever writes the keys it sees here, so the imperative `height` that
-  // `fitToContent` sets is left alone across re-renders.
+  // caller's `maxHeight` has to clamp THIS element for automaticLayout to
+  // observe the clamped box. React only ever writes the keys it sees here, so
+  // the imperative `height` that heightSync sets is left alone across re-renders.
   //
   // `data-monaco-status="loading"` from the FIRST frame, not only from the
   // mount effect that re-stamps it: the effect runs after paint, and the
