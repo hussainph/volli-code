@@ -46,6 +46,7 @@ import {
 import {
   HostEvidenceError,
   navigationTiming,
+  nestedSpanTiming,
   readTranscriptArtifact,
   settledSpans,
   transcriptReferences,
@@ -496,7 +497,7 @@ try {
     references.map((reference) => readTranscriptArtifact(transcripts, reference, readFileSync)),
   );
   result.hostTiming = navigationTiming({
-    spans,
+    timing: nestedSpanTiming({ spans, metrics: result.metrics }),
     steps: result.host.traceSteps,
     metrics: result.metrics,
   });

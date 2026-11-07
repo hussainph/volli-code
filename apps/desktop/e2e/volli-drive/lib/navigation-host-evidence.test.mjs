@@ -13,6 +13,7 @@ import { transcriptCanonicalJson } from "../../../../../packages/shared/src/tran
 import {
   HostEvidenceError,
   navigationTiming,
+  nestedSpanTiming,
   readTranscriptArtifact,
   settledSpans,
   transcriptReferences,
@@ -82,9 +83,11 @@ const CALLS = [
   nested(5, "browser_act", 1320, 1350, TAB),
   nested(6, "browser_tabs", 1350, 1360),
 ];
+// Production trace semantics (host-core browser/trace-steps.ts): a screenshot
+// step records no generation; open, read and click carry the answered one.
 const STEPS = [
   { action: "open", generation: 1, at: 1099, outcome: "ok" },
-  { action: "screenshot", generation: 1, at: 1290, outcome: "ok" },
+  { action: "screenshot", generation: null, at: 1290, outcome: "ok" },
   { action: "read", generation: 1, at: 1319, outcome: "ok" },
   { action: "click", generation: 1, at: 1349, outcome: "ok" },
 ];
@@ -119,8 +122,11 @@ const phaseOf = (run) => {
   assert.fail("expected a fail-closed phase");
 };
 
+const both = (spans, steps = STEPS, metrics = METRICS) =>
+  navigationTiming({ timing: nestedSpanTiming({ spans, metrics }), steps, metrics });
+
 test("host spans and trace replace every program clock read", () => {
-  const timing = navigationTiming({ spans: spansOf(CALLS), steps: STEPS, metrics: METRICS });
+  const timing = both(spansOf(CALLS));
   assert.deepEqual(timing, {
     requestedAt: 1120,
     answeredAt: 1300,
@@ -229,7 +235,7 @@ test("exact correlation: one call per role, this tab, this generation, in order"
   const without = (index) => CALLS.filter((_, at) => at !== index);
   const replace = (index, call) => CALLS.map((one, at) => (at === index ? call : one));
   const timing = (calls, steps = STEPS, metrics = METRICS) =>
-    phaseOf(() => navigationTiming({ spans: spansOf(calls), steps, metrics }));
+    phaseOf(() => both(spansOf(calls), steps, metrics));
   assert.equal(
     timing(CALLS, STEPS, { ...METRICS, answeredAt: 901 }),
     "timing:program-clock-not-pinned",
@@ -265,6 +271,7 @@ test("exact correlation: one call per role, this tab, this generation, in order"
     "timing:span-order",
   );
   assert.equal(timing(replace(0, { ...CALLS[0], endedAt: 1355 })), "timing:outer-span");
+  assert.equal(timing(without(5)), "timing:snapshot-span");
   // A nested call that failed is not a measurement.
   const failedSpans = settledSpans(
     CALLS.map((call, index) => ({
@@ -273,13 +280,26 @@ test("exact correlation: one call per role, this tab, this generation, in order"
     })),
   );
   assert.equal(
-    phaseOf(() => navigationTiming({ spans: failedSpans, steps: STEPS, metrics: METRICS })),
+    phaseOf(() => both(failedSpans)),
     "timing:nested-failed",
   );
   const step = (index, change) =>
     STEPS.map((one, at) => (at === index ? { ...one, ...change } : one));
   assert.equal(timing(CALLS, step(1, { at: 1301 })), "timing:screenshot-trace-span");
-  assert.equal(timing(CALLS, step(1, { generation: 2 })), "timing:screenshot-trace-span");
+  // A screenshot step that claims a generation is not the production shape.
+  assert.equal(timing(CALLS, step(1, { generation: 1 })), "timing:screenshot-trace-span");
+  // Continuity: the open, the read after the screenshot and the click.
+  assert.equal(timing(CALLS, step(0, { generation: 2 })), "timing:open-trace-span");
+  assert.equal(timing(CALLS, step(0, { at: 1101 })), "timing:open-trace-span");
+  assert.equal(timing(CALLS, step(2, { generation: 2 })), "timing:read-trace-span");
+  assert.equal(timing(CALLS, step(3, { generation: 2 })), "timing:click-trace-span");
+  assert.equal(
+    timing(
+      CALLS,
+      STEPS.filter((one) => one.action !== "read"),
+    ),
+    "timing:read-trace",
+  );
   assert.equal(timing(CALLS, step(1, { outcome: "refused" })), "timing:screenshot-trace-span");
   assert.equal(timing(CALLS, step(3, { at: 1319 })), "timing:click-trace-span");
   assert.equal(

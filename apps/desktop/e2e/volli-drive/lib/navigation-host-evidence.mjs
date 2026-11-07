@@ -163,15 +163,14 @@ const one = (rows, phase, fact) => {
 const within = (at, span) => Number.isFinite(at) && span.startedAt <= at && at <= span.endedAt;
 
 /**
- * The discriminator's times, each tied to the one real call it measures:
- * this tab, this generation, this Code Mode invocation, in program order.
+ * Stage 1: the program's calls as host spans, each tied to the one real call
+ * it measures — this Code Mode invocation, this tab, in program order.
  *
- * `metrics` is the program's fixed record; its clock fields must be the
- * pinned constant (a witness that the sandbox clock is still pinned) and are
- * never used. `steps` are this tab's trace steps as {action, generation, at,
- * outcome}.
+ * `metrics` is the program's fixed record. Its clock fields must be the
+ * pinned constant (a witness that the sandbox clock is still pinned); they are
+ * never used as a measurement.
  */
-export function navigationTiming({ spans, steps, metrics }) {
+export function nestedSpanTiming({ spans, metrics }) {
   const m = metrics;
   const pinned =
     m.requestedAt === m.answeredAt &&
@@ -194,72 +193,72 @@ export function navigationTiming({ spans, steps, metrics }) {
   const fact = { nested: nested.length };
   if (nested.length === 0) fail("timing:nested-spans", fact);
   if (new Set(nested.map((span) => span.digest)).size !== 1) fail("timing:nested-digest", fact);
-  if (new Set(nested.map((span) => span.n)).size !== nested.length)
+  if (new Set(nested.map((span) => span.n)).size !== nested.length) {
     fail("timing:nested-order", fact);
+  }
   if (!nested.every((span) => span.ok)) fail("timing:nested-failed", fact);
   nested.sort((a, b) => a.n - b.n);
+  const onTab = (tool) => nested.filter((span) => span.tool === tool && span.tabId === m.tabId);
   const navigate = one(
     nested.filter((span) => span.tool === "browser_navigate"),
     "timing:navigate-span",
     fact,
   );
-  const shot = one(
-    nested.filter((span) => span.tool === "browser_screenshot" && span.tabId === m.tabId),
-    "timing:screenshot-span",
-    fact,
-  );
-  const act = one(
-    nested.filter((span) => span.tool === "browser_act" && span.tabId === m.tabId),
-    "timing:act-span",
-    fact,
-  );
+  const shot = one(onTab("browser_screenshot"), "timing:screenshot-span", fact);
+  const read = one(onTab("browser_snapshot"), "timing:snapshot-span", fact);
+  const act = one(onTab("browser_act"), "timing:act-span", fact);
   const tabs = one(
     nested.filter((span) => span.tool === "browser_tabs" && span.n > act.n),
     "timing:following-tabs-span",
     fact,
   );
-  if (!(navigate.n < shot.n && shot.n < act.n && act.n < tabs.n))
-    fail("timing:program-order", fact);
-  if (
-    !(
-      navigate.endedAt <= shot.startedAt &&
-      shot.endedAt <= act.startedAt &&
-      act.endedAt <= tabs.startedAt
-    )
-  ) {
-    fail("timing:span-order", fact);
+  const order = [navigate, shot, read, act, tabs];
+  for (let index = 1; index < order.length; index++) {
+    if (order[index - 1].n >= order[index].n) fail("timing:program-order", fact);
+    if (order[index - 1].endedAt > order[index].startedAt) fail("timing:span-order", fact);
   }
   if (!(outer.startedAt <= navigate.startedAt && tabs.endedAt <= outer.endedAt)) {
     fail("timing:outer-span", fact);
   }
-  const shotStep = one(
-    steps.filter((step) => step.action === "screenshot"),
-    "timing:screenshot-trace",
-    fact,
-  );
-  const clickStep = one(
-    steps.filter((step) => step.action === "click"),
-    "timing:click-trace",
-    fact,
-  );
-  for (const [step, span, phase] of [
-    [shotStep, shot, "timing:screenshot-trace-span"],
-    [clickStep, act, "timing:click-trace-span"],
-  ]) {
-    if (step.outcome !== "ok" || step.generation !== m.generation || !within(step.at, span)) {
-      fail(phase, fact);
+  return { outerId: outer.id, nested: nested.length, navigate, shot, read, act, tabs };
+}
+
+/**
+ * Stage 2: this tab's trace steps against those spans. Production records
+ * (host-core browser/trace-steps.ts): `open` and `read` carry the generation
+ * their answer reported, `click` its answer's (else the request's), and a
+ * `screenshot` step NONE (`generation: null`). So the screenshot is pinned to
+ * its span by time, and generation continuity by the open, the read just
+ * after the screenshot and the click all reporting the navigation's own
+ * generation. `steps` are {action, generation, at, outcome}.
+ */
+export function navigationTiming({ timing, steps, metrics }) {
+  const fact = { nested: timing.nested, steps: steps.length };
+  const step = (action, span, generation, phase) => {
+    const found = one(
+      steps.filter((row) => row.action === action),
+      `timing:${phase}-trace`,
+      fact,
+    );
+    if (found.outcome !== "ok" || found.generation !== generation || !within(found.at, span)) {
+      fail(`timing:${phase}-trace-span`, fact);
     }
-  }
+    return found;
+  };
+  step("open", timing.navigate, metrics.generation, "open");
+  const shotStep = step("screenshot", timing.shot, null, "screenshot");
+  step("read", timing.read, metrics.generation, "read");
+  const clickStep = step("click", timing.act, metrics.generation, "click");
   return {
-    requestedAt: shot.startedAt,
-    answeredAt: shot.endedAt,
-    screenshotMs: shot.endedAt - shot.startedAt,
+    requestedAt: timing.shot.startedAt,
+    answeredAt: timing.shot.endedAt,
+    screenshotMs: timing.shot.endedAt - timing.shot.startedAt,
     screenshotTraceAt: shotStep.at,
-    clickRequestedAt: act.startedAt,
-    clickAnsweredAt: act.endedAt,
+    clickRequestedAt: timing.act.startedAt,
+    clickAnsweredAt: timing.act.endedAt,
     clickTraceAt: clickStep.at,
-    tabsRequestedAt: tabs.startedAt,
-    tabsAnsweredAt: tabs.endedAt,
-    nestedSpans: nested.length,
+    tabsRequestedAt: timing.tabs.startedAt,
+    tabsAnsweredAt: timing.tabs.endedAt,
+    nestedSpans: timing.nested,
   };
 }
