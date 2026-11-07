@@ -149,6 +149,41 @@ test("project success toast cannot make navigation actionable during dialog exit
   assert.equal(hasActionableControl(`${ready}\n${ready}`, "button", "Home"), false);
   assert.equal(hasActionableControl('- button "Home page" [ref=e1]', "button", "Home"), false);
 });
+test("cloud move waits for the named composer, not the Chat tab or placeholder behind its menu", () => {
+  // The failed app-path capture had already committed Chat, but hideOthers
+  // still suppressed background names while the modal chooser was closing.
+  const exiting = [
+    "- tab [selected] [ref=f2e432]:",
+    "  - generic [ref=f2e440]: Chat",
+    "- textbox [ref=f2e659]:",
+    "  - /placeholder: Ask, plan, or implement…",
+    '- menu "Open a tab" [ref=f2e413]:',
+    '  - menuitem "Chat ⌘T" [active] [ref=f2e414]',
+  ].join("\n");
+  assert.equal(hasActionableControl(exiting, "textbox", "Message"), false);
+  const ready = '- textbox "Message" [ref=f2e701]';
+  assert.equal(hasActionableControl(ready, "textbox", "Message"), true);
+  for (const unavailable of [
+    '- textbox "Message" [disabled] [ref=f2e701]',
+    '- textbox "Message"',
+    `${ready}\n${ready.replace("f2e701", "f2e702")}`,
+    '- textbox "Message preview" [ref=f2e701]',
+  ])
+    assert.equal(hasActionableControl(unavailable, "textbox", "Message"), false);
+
+  // Source wiring only: the full app-path journey remains the live proof.
+  // One gate in send covers both chooser selections and the resumed Session.
+  const move = read("../cloud-move-acceptance.mjs");
+  const sendStart = move.indexOf("const send = async");
+  const send = move.slice(sendStart, move.indexOf("\ntry {", sendStart));
+  assert.match(
+    send,
+    /await waitUntil\([\s\S]*latest = await drive\("snapshot"\);\s*return hasActionableControl\(latest.text, "textbox", "Message"\);[\s\S]*await action\("type", "textbox", "Message", \{ text \}\);/u,
+  );
+  assert.match(send, /await press\("textbox", "Message", "Enter"\)/u);
+  assert.match(send, /latest\?\.text/u);
+  assert.match(send, /cause: error/u);
+});
 test("artifact setting is explicit, absolute and cannot silently fall back to downloads", () => {
   for (const value of ["", undefined, "relative.tar.gz", "/tmp/foo.zip", "/tmp/a.tar.gz:"])
     assert.throws(() => acceptanceTarballs(value));
