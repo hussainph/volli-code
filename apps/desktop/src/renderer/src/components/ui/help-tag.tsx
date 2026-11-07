@@ -53,7 +53,14 @@ function helpForComposite(scope: HTMLElement): CompositeHelp {
   };
   const key = (event: KeyboardEvent) => {
     if (event.isComposing || event.keyCode === 229) return;
-    if (["ArrowDown", "ArrowUp", "Home", "End", "PageDown", "PageUp"].includes(event.key)) {
+    // Radix Select/menu typeahead also moves option focus. It is a keyboard
+    // request even after pointer use; typing in a command input is not one.
+    const typeahead =
+      !command && event.key.length === 1 && !event.ctrlKey && !event.altKey && !event.metaKey;
+    if (
+      typeahead ||
+      ["ArrowDown", "ArrowUp", "Home", "End", "PageDown", "PageUp"].includes(event.key)
+    ) {
       modality = "keyboard";
       anchorModality.set(scope, modality);
       // After React/cmdk handles the same key, even if no DOM attribute changed.
