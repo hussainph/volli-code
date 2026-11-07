@@ -24,8 +24,16 @@
  *   stall's last door call) or `parentDoor`/`parentOperation`.
  * - `renderer-stall` / `renderer stall`: `durationMs`, `kind` (`frame` or
  *   `input`), `operation`, `label` and `window`, under `door: "renderer"`.
+ *   Frames also retain optional script/render breakdown and safe top-script
+ *   attribution; input rows never pick up those frame-only fields.
  */
-import type { LogRecord } from "@volli/shared";
+import {
+  rendererScriptInvoker,
+  rendererStallFile,
+  rendererStallFunction,
+  rendererStallMs,
+  type LogRecord,
+} from "@volli/shared";
 
 import type { LogSink } from "../log/logger";
 import type { PerfStallInput, PerfStore } from "./store";
@@ -67,20 +75,46 @@ export function mainStallRow(record: LogRecord): PerfStallInput | null {
   };
 }
 
+/** Missing or malformed durations stay absent; measured zero stays zero. */
+function optionalMs<K extends string>(key: K, value: unknown): { [P in K]?: number } {
+  const ms = rendererStallMs(value);
+  return (ms === null ? {} : { [key]: ms }) as { [P in K]?: number };
+}
+
+function rendererFrameFields(record: LogRecord) {
+  const fn = rendererStallFunction(record.scriptFunction);
+  return {
+    ...optionalMs("scriptTotalMs", record.scriptTotalMs),
+    ...optionalMs("blockingMs", record.blockingMs),
+    ...optionalMs("renderMs", record.renderMs),
+    ...optionalMs("styleLayoutMs", record.styleLayoutMs),
+    ...optionalMs("scriptMs", record.scriptMs),
+    ...(typeof record.scriptFile === "string"
+      ? { scriptFile: rendererStallFile(record.scriptFile) }
+      : {}),
+    ...(fn === undefined ? {} : { scriptFunction: fn }),
+    ...(typeof record.scriptInvoker === "string"
+      ? { scriptInvoker: rendererScriptInvoker(record.scriptInvoker) }
+      : {}),
+  };
+}
+
 /** A `renderer stall` line as a row, or null when it lacks a duration or a time. */
 export function rendererStallRow(record: LogRecord): PerfStallInput | null {
   const durationMs = number(record, "durationMs");
   const at = Date.parse(record.ts);
   if (durationMs === null || !Number.isFinite(at)) return null;
+  const kind = text(record, "kind") ?? "unknown";
   return {
     at,
     process: "renderer",
-    kind: text(record, "kind") ?? "unknown",
+    kind,
     door: "renderer",
     operation: text(record, "operation") ?? "unknown",
     label: text(record, "label"),
     windowId: number(record, "window"),
     durationMs,
+    ...(kind === "frame" ? rendererFrameFields(record) : {}),
   };
 }
 

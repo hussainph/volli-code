@@ -12,6 +12,7 @@ import {
   PERF_FIELD_MAX,
   PERF_READ_CHUNK,
   PERF_STORE_BOUNDS,
+  PERF_STORE_SCHEMA_VERSION,
   perfStorePath,
   type PerfStallInput,
   type PerfStore,
@@ -69,6 +70,49 @@ function stall(overrides: Partial<PerfStallInput> = {}): PerfStallInput {
     ...overrides,
   };
 }
+
+// Frozen v1 SQL: compatibility must exercise the old reader/writer against
+// SQLite itself, not the current schema constant or a mocked row codec.
+const V1_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS runs (
+    id INTEGER PRIMARY KEY,
+    started_at INTEGER NOT NULL,
+    last_seen_at INTEGER NOT NULL,
+    version TEXT NOT NULL,
+    build TEXT
+  );
+  CREATE TABLE IF NOT EXISTS stalls (
+    id INTEGER PRIMARY KEY,
+    run_id INTEGER NOT NULL,
+    at INTEGER NOT NULL,
+    process TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    door TEXT NOT NULL,
+    operation TEXT NOT NULL,
+    label TEXT,
+    session_id TEXT,
+    window_id INTEGER,
+    duration_ms INTEGER NOT NULL,
+    hint TEXT
+  );
+  CREATE INDEX IF NOT EXISTS stalls_at ON stalls (at);
+`;
+const V1_INSERT = `INSERT INTO stalls
+  (run_id, at, process, kind, door, operation, label, session_id, window_id, duration_ms, hint)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+const V1_SELECT = `SELECT s.at, s.process, s.kind, s.door, s.operation, s.label, s.session_id,
+  s.window_id, s.duration_ms, s.hint, r.version, r.build
+  FROM stalls s JOIN runs r ON r.id = s.run_id ORDER BY s.at DESC, s.id DESC`;
+const BREAKDOWN = {
+  scriptTotalMs: 140,
+  blockingMs: 100,
+  renderMs: 90,
+  styleLayoutMs: 70,
+  scriptFile: "chat-plane.tsx",
+  scriptFunction: "ChatPlaneContent",
+  scriptInvoker: "user-callback",
+  scriptMs: 80,
+};
 
 describe("the perf store", () => {
   it("lives in the profile as perf.db", () => {
@@ -136,6 +180,141 @@ describe("the perf store", () => {
         build: "abc1234",
       },
     ]);
+  });
+
+  it("round-trips optional frame breakdowns through both readers without filling missing values", async () => {
+    const store = open();
+    store.record(stall({ process: "renderer", kind: "frame", ...BREAKDOWN }));
+    store.record(stall({ at: clock + 1, process: "renderer", kind: "frame", scriptTotalMs: 0 }));
+    expect(store.stalls({})).toEqual([
+      expect.objectContaining({ scriptTotalMs: 0 }),
+      expect.objectContaining(BREAKDOWN),
+    ]);
+    const seen: unknown[] = [];
+    await store.scanStalls({}, (page) => seen.push(...page));
+    expect(seen).toEqual(store.stalls({}).toReversed());
+    for (const field of Object.keys(BREAKDOWN).filter((key) => key !== "scriptTotalMs")) {
+      expect(store.stalls({})[0]).not.toHaveProperty(field);
+    }
+  });
+
+  it("creates v2 idempotently and never downgrades a future schema version", () => {
+    open().close();
+    open().close();
+    const db = new Database(perfStorePath(dir));
+    try {
+      expect(db.pragma("user_version", { simple: true })).toBe(PERF_STORE_SCHEMA_VERSION);
+      expect(PERF_STORE_SCHEMA_VERSION).toBe(2);
+      const columns = db.pragma("table_info(stalls)") as { name: string; notnull: number }[];
+      for (const name of [
+        "script_total_ms",
+        "blocking_ms",
+        "render_ms",
+        "style_layout_ms",
+        "script_file",
+        "script_function",
+        "script_invoker",
+        "script_ms",
+      ]) {
+        expect(columns.filter((column) => column.name === name)).toEqual([
+          expect.objectContaining({ notnull: 0 }),
+        ]);
+      }
+      db.exec("ALTER TABLE stalls ADD COLUMN future_field TEXT; PRAGMA user_version = 99");
+      open().close();
+      expect(db.pragma("user_version", { simple: true })).toBe(99);
+      expect(db.prepare("SELECT future_field FROM stalls").all()).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("upgrades v1, supports v1 SQL read/write after upgrade, then reopens v2 losslessly", () => {
+    const legacy = new Database(perfStorePath(dir));
+    try {
+      legacy.exec(`${V1_SCHEMA} PRAGMA user_version = 1;`);
+      const runId = legacy
+        .prepare("INSERT INTO runs (started_at, last_seen_at, version, build) VALUES (?, ?, ?, ?)")
+        .run(clock, clock, "v1", null).lastInsertRowid;
+      const writeV1 = (at: number) =>
+        legacy
+          .prepare(V1_INSERT)
+          .run(
+            runId,
+            at,
+            "renderer",
+            "frame",
+            "renderer",
+            "long-animation-frame",
+            "idle",
+            null,
+            1,
+            250,
+            null,
+          );
+      writeV1(clock - 1);
+      const upgraded = open({ version: "v2" });
+      upgraded.record(stall({ process: "renderer", kind: "frame", ...BREAKDOWN }));
+      upgraded.close();
+      expect(legacy.pragma("user_version", { simple: true })).toBe(2);
+      // An old build executes its create-if-absent SQL and explicit-column
+      // reader/writer unchanged against the expanded layout.
+      legacy.exec(V1_SCHEMA);
+      expect(legacy.prepare(V1_SELECT).all()).toEqual([
+        expect.objectContaining({ at: clock, duration_ms: 250, version: "v2" }),
+        expect.objectContaining({ at: clock - 1, duration_ms: 250, version: "v1" }),
+      ]);
+      writeV1(clock + 1);
+    } finally {
+      legacy.close();
+    }
+    const reopened = open();
+    const rows = reopened.stalls({});
+    expect(rows).toHaveLength(3);
+    expect(rows[1]).toMatchObject(BREAKDOWN);
+    for (const row of [rows[0], rows[2]]) {
+      for (const field of Object.keys(BREAKDOWN)) expect(row).not.toHaveProperty(field);
+    }
+    reopened.close();
+    // A second upgrade/open remains a no-op for both data and schema.
+    expect(open().stalls({})).toEqual(rows);
+  });
+
+  it("sanitizes optional attribution and bounds durations before persisting", () => {
+    const store = open();
+    store.record(
+      stall({
+        process: "renderer",
+        kind: "frame",
+        scriptTotalMs: 140.6,
+        blockingMs: -2,
+        renderMs: Number.POSITIVE_INFINITY,
+        styleLayoutMs: Number.NaN,
+        scriptFile: "file:///Users/private/renderer.js?token=secret#fragment",
+        scriptFunction: "private user content",
+        scriptInvoker: "private user content",
+        scriptMs: 1_000_000,
+      }),
+    );
+    const [row] = store.stalls({});
+    expect(row).toMatchObject({
+      scriptTotalMs: 141,
+      blockingMs: 0,
+      scriptFile: "renderer.js",
+      scriptInvoker: "other",
+      scriptMs: 600_000,
+    });
+    for (const field of ["renderMs", "styleLayoutMs", "scriptFunction"]) {
+      expect(row).not.toHaveProperty(field);
+    }
+    const db = new Database(perfStorePath(dir));
+    try {
+      expect(
+        db.prepare("SELECT script_file, script_function, script_invoker FROM stalls").get(),
+      ).toEqual({ script_file: "renderer.js", script_function: null, script_invoker: "other" });
+    } finally {
+      db.close();
+    }
   });
 
   it("filters by time, process, door, operation, label and build, and limits", () => {

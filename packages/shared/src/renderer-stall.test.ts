@@ -90,6 +90,25 @@ describe("reading a renderer stall off the wire", () => {
     expect(readRendererStall(INPUT)).toEqual(INPUT);
   });
 
+  it("reads additive script totals through the batch codec without inventing missing measurements", () => {
+    expect(
+      readRendererStallBatch({ stalls: [{ ...FRAME, scriptTotalMs: 200.4 }] })?.stalls,
+    ).toEqual([{ ...FRAME, scriptTotalMs: 200 }]);
+    expect(readRendererStall({ ...FRAME, scriptTotalMs: 0 })).toEqual({
+      ...FRAME,
+      scriptTotalMs: 0,
+    });
+    expect(readRendererStall({ ...FRAME, scriptTotalMs: Number.NaN })).toEqual(FRAME);
+    expect(readRendererStall({ ...FRAME, scriptTotalMs: -10 })).toEqual({
+      ...FRAME,
+      scriptTotalMs: 0,
+    });
+    expect(readRendererStall({ ...FRAME, scriptTotalMs: 1e9 })).toEqual({
+      ...FRAME,
+      scriptTotalMs: RENDERER_STALL_BOUNDS.maxDurationMs,
+    });
+  });
+
   it("keeps a frame with none of its optional parts", () => {
     expect(
       readRendererStall({ kind: "frame", operation: "longtask", label: "idle", durationMs: 120 }),
