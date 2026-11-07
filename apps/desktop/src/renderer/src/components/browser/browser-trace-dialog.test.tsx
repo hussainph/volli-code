@@ -49,6 +49,14 @@ function trace(tabId: string, steps: StepInput[], traceId = `trace-${tabId}`): B
   );
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 const THREE = trace("tab-1", [
   step({ action: "open", target: null, at: 1_000, pictureId: "p-1" }),
   step({ at: 3_000, pictureId: "p-2" }),
@@ -201,6 +209,43 @@ describe("BrowserTraceDialog", () => {
     expect(position()).toBe("Step 3 of 3");
   });
 
+  it("hears End as soon as the ready DOM commits, before passive frame effects", async () => {
+    const read = deferred<Awaited<ReturnType<BrowserApi["traces"]>>>();
+    const bridge = api(() => []);
+    vi.mocked(bridge.traces).mockReturnValueOnce(read.promise);
+    await open(bridge, { sessionId: "s1", tabId: null, pictureId: "p-1" });
+    expect(position()).toBe("");
+
+    // Outside act, a MutationObserver runs after the ready commit's layout
+    // effects and before React's scheduled passive effects. A fully flushed
+    // act would hide the gap between the visible controls and their listener.
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", false);
+    const committed = new Promise<{ position: string; pictures: number; prevented: boolean }>(
+      (resolve) => {
+        const observer = new MutationObserver(() => {
+          if (track() === null) return;
+          observer.disconnect();
+          const event = new KeyboardEvent("keydown", { key: "End", cancelable: true });
+          const before = position();
+          const pictures = vi.mocked(bridge.picture).mock.calls.length;
+          window.dispatchEvent(event);
+          resolve({ position: before, pictures, prevented: event.defaultPrevented });
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+      },
+    );
+    read.resolve({ ok: true, traces: [THREE] });
+    const observed = await committed;
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    await act(async () => {});
+
+    expect(observed.position).toBe("Step 1 of 3");
+    expect(observed.pictures).toBe(0);
+    expect(observed.prevented).toBe(true);
+    expect(position()).toBe("Step 3 of 3");
+    expect(caption()).toBe("Clicked e4");
+  });
+
   it("scrubs to the step under the pointer, and keeps scrubbing while it is held", async () => {
     await open(api(() => [THREE]));
     const scrub = track();
@@ -279,7 +324,55 @@ describe("BrowserTraceDialog", () => {
     expect(position()).toBe("Step 1 of 5");
     expect(warn).toHaveBeenCalled();
     expect(toastError).not.toHaveBeenCalled();
+    current = [trace("tab-1", [step(), step(), step(), step(), step(), step()])];
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(position()).toBe("Step 1 of 6");
     warn.mockRestore();
+  });
+
+  it("keeps only one trace read in flight so a slow response cannot overwrite a newer replay", async () => {
+    vi.useFakeTimers();
+    const first = deferred<Awaited<ReturnType<BrowserApi["traces"]>>>();
+    const refresh = deferred<Awaited<ReturnType<BrowserApi["traces"]>>>();
+    const bridge = api(() => [THREE]);
+    vi.mocked(bridge.traces)
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(refresh.promise);
+    await open(bridge, undefined, undefined, 1_000);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    expect(bridge.traces).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      first.resolve({ ok: true, traces: [THREE] });
+    });
+    expect(position()).toBe("Step 3 of 3");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    expect(bridge.traces).toHaveBeenCalledTimes(2);
+    expect(position()).toBe("Step 3 of 3");
+    const grown = appendBrowserTraceStep(
+      THREE,
+      step({ action: "press", target: "Enter", at: 7_000 }),
+    ).trace;
+    await act(async () => {
+      refresh.resolve({ ok: true, traces: [grown] });
+    });
+    expect(position()).toBe("Step 4 of 4");
+    expect(caption()).toBe("Pressed Enter");
+
+    // Once the slow read settles, polling resumes normally.
+    vi.mocked(bridge.traces).mockResolvedValue({ ok: true, traces: [grown] });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(bridge.traces).toHaveBeenCalledTimes(3);
+    expect(position()).toBe("Step 4 of 4");
   });
 
   it("says so when a tab has no picture yet", async () => {

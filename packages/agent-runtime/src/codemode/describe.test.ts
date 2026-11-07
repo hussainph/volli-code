@@ -38,6 +38,21 @@ const nameOf = (id: string): string => (id === "execute" ? "bash" : id.replaceAl
 const limits = { timeoutMs: 300_000, maxNestedCalls: 200, maxOutputBytes: 20 * 1_024 };
 
 describe("describeCodeMode", () => {
+  it("advertises structured MCP results only with the frozen result marker", () => {
+    const input = {
+      tools: [tool("mcp__srv__get", { namespace: "mcp:srv" })],
+      budgetTokens: 3_000,
+      limits,
+    };
+    const retained = describeCodeMode(input).text;
+    expect(describeCodeMode({ ...input, mcpResultVersion: undefined }).text).toBe(retained);
+    expect(retained).not.toContain("Check result.truncated");
+    const upgraded = describeCodeMode({ ...input, mcpResultVersion: 1 }).text;
+    expect(upgraded).toContain("Prefer structuredContent when present");
+    expect(upgraded).toContain("Check result.truncated");
+    expect(upgraded).toContain("does not roll back completed calls");
+  });
+
   it("names a tool it can call directly too, and declares only a code-only one, in full", () => {
     const description = describeCodeMode({
       tools: [tool("read"), tool("grep", { declared: false })],
