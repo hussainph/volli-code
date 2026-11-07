@@ -1077,12 +1077,28 @@ export class BrowserTabHost extends BrowserTabRegistry<
     if (entry === undefined || signal?.aborted) return null;
     const contents = entry.view.webContents;
     const generation = entry.state.generation;
+    const startedAt = performance.now();
+    // Harness-only discrimination, never page data or a public tool field.
+    const finish = (outcome: string, picture: string | null = null): string | null => {
+      if (process.env["VOLLI_HARNESS"] === "1") {
+        log.info("browser navigation picture outcome", {
+          outcome,
+          picture,
+          lookupSize: picture === null ? 0 : (this.pictureOf(picture)?.length ?? 0),
+          generation,
+          currentGeneration: entry.state.generation,
+          pending: entry.pictureCaptures.size,
+          elapsedMs: Math.round(performance.now() - startedAt),
+        });
+      }
+      return picture;
+    };
     let timer: ReturnType<typeof setTimeout> | undefined;
     let abandon: (() => void) | undefined;
     try {
       // Interaction privacy is independent of the final presentation. A tab
       // hidden one moment after the person typed still carries those pixels.
-      if (this.isBeingUsed(entry)) return null;
+      if (this.isBeingUsed(entry)) return finish("privacy");
       const deadline = new Promise<null>((resolve) => {
         abandon = () => resolve(null);
         signal?.addEventListener("abort", abandon, { once: true });
@@ -1100,7 +1116,7 @@ export class BrowserTabHost extends BrowserTabRegistry<
         capture === undefined &&
         entry.pictureCaptures.size >= BROWSER_PREVIEW_MAX_PENDING_CAPTURES
       )
-        return null;
+        return finish("pending-cap");
       if (capture === undefined) {
         capture = contents.capturePage();
         entry.pictureCaptures.set(generation, capture);
@@ -1120,28 +1136,31 @@ export class BrowserTabHost extends BrowserTabRegistry<
       // No late writes: navigation, teardown, withdrawal, or a person starting
       // to type during capture invalidates the frame just as surely as an
       // empty image. Keep the generation from BEFORE capture, never relabel it.
-      if (
-        image === null ||
-        signal?.aborted ||
-        image.isEmpty() ||
-        this.tabs.get(tabId) !== entry ||
-        entry.state.generation !== generation ||
-        this.isBeingUsed(entry)
-      )
-        return null;
+      if (signal?.aborted) return finish("withdrawn");
+      if (image === null) return finish("deadline");
+      if (image.isEmpty()) return finish("empty-image");
+      if (this.tabs.get(tabId) !== entry) return finish("closed");
+      if (entry.state.generation !== generation) return finish("generation-changed");
+      if (this.isBeingUsed(entry)) return finish("privacy-after-capture");
       const bytes = image.toJPEG(BROWSER_CAPTURE_JPEG_QUALITY);
-      if (bytes.length === 0) return null;
-      return this.deps.pictures.put({
-        tabId,
-        generation,
-        mime: "image/jpeg",
-        bytes,
-        ownerSessionId: entry.state.ownerSessionId,
-        persist: false,
-      });
+      if (bytes.length === 0) return finish("empty-jpeg");
+      return finish(
+        "stored",
+        this.deps.pictures.put({
+          tabId,
+          generation,
+          mime: "image/jpeg",
+          bytes,
+          ownerSessionId: entry.state.ownerSessionId,
+          persist: false,
+        }),
+      );
     } catch (error) {
-      log.warn("browser tab preview capture unavailable", { tabId, error });
-      return null;
+      log.warn(
+        "browser tab preview capture unavailable",
+        process.env["VOLLI_HARNESS"] === "1" ? { tabId } : { tabId, error },
+      );
+      return finish("camera-error");
     } finally {
       clearTimeout(timer);
       if (abandon !== undefined) signal?.removeEventListener("abort", abandon);

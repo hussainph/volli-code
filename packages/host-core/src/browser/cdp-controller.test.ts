@@ -1,9 +1,12 @@
 import { runInNewContext } from "node:vm";
+import { PassThrough } from "node:stream";
 
 import { BrowserRefusal } from "@volli/agent-runtime";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { BrowserTabController, type CdpTransport } from "./cdp-controller";
+import { CdpPipeConnection } from "./chromium-pipe";
+import { installHostLog } from "../log/root";
 
 /**
  * A recording CDP wire: every command lands in `sent`, and each method answers
@@ -272,6 +275,65 @@ describe("BrowserTabController", () => {
       expect(await controller.preparePreview()).toBe(true);
       expect(send.mock.calls.filter(([method]) => method === "Runtime.evaluate")).toHaveLength(2);
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not certify a late preview frame through the real CDP codec", async () => {
+    vi.useFakeTimers();
+    vi.stubEnv("VOLLI_HARNESS", "1");
+    const records: Record<string, unknown>[] = [];
+    const undo = installHostLog({
+      level: "info",
+      sink: { write: (record) => void records.push(record) },
+    });
+    const toBrowser = new PassThrough();
+    const fromBrowser = new PassThrough();
+    const connection = new CdpPipeConnection(toBrowser, fromBrowser);
+    const commands: { id: number; method: string }[] = [];
+    toBrowser.on("data", (bytes: Buffer) => {
+      for (const frame of bytes.toString("utf8").split("\0").filter(Boolean)) {
+        commands.push(JSON.parse(frame));
+      }
+    });
+    const controller = new BrowserTabController({
+      send: (method, params) => connection.send(method, params),
+    });
+    try {
+      const preview = controller.preparePreview();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(await preview).toBe(false);
+      expect(commands.map(({ method }) => method)).toEqual(["Runtime.evaluate"]);
+      const first = commands[0]!;
+      fromBrowser.write(`${JSON.stringify({ id: first.id, result: {} })}\0`);
+      await Promise.resolve();
+      const next = controller.preparePreview();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(commands).toHaveLength(2);
+      // A second wire response is required; the abandoned first reply is not readiness.
+      fromBrowser.write(`${JSON.stringify({ id: commands[1]!.id, result: {} })}\0`);
+      expect(await next).toBe(true);
+      expect(records.map(({ outcome }) => outcome)).toEqual(["deadline", "ready"]);
+      for (const record of records) {
+        expect(Object.keys(record).toSorted()).toEqual(
+          [
+            "component",
+            "currentGeneration",
+            "elapsedMs",
+            "generation",
+            "level",
+            "msg",
+            "outcome",
+            "ts",
+          ].toSorted(),
+        );
+      }
+    } finally {
+      undo();
+      vi.unstubAllEnvs();
+      connection.close();
+      toBrowser.destroy();
+      fromBrowser.destroy();
       vi.useRealTimers();
     }
   });

@@ -174,6 +174,8 @@ async function driveHeadlessTab(app, url, projectId) {
         out.tabId = opened.tabId;
         out.generation = opened.generation;
         out.navigationPicture = opened.picture;
+        out.navigationPictureImmediateSize =
+          opened.picture === null ? 0 : (host.pictureOf(opened.picture)?.length ?? 0);
         out.presentationBefore = stateOf(opened.tabId)?.presentation;
 
         // Wait for the deterministic equivalent of an on-demand compile to be in flight.
@@ -229,7 +231,11 @@ async function driveHeadlessTab(app, url, projectId) {
       } catch (error) {
         out.error = String(error?.message ?? error);
       } finally {
+        out.navigationPictureBeforeDisposeSize =
+          out.navigationPicture == null ? 0 : (host.pictureOf(out.navigationPicture)?.length ?? 0);
         port.dispose();
+        out.navigationPictureAfterDisposeSize =
+          out.navigationPicture == null ? 0 : (host.pictureOf(out.navigationPicture)?.length ?? 0);
       }
       return out;
     },
@@ -344,7 +350,12 @@ async function main() {
     );
     return {
       ok: lengths[0] > 2_000 && lengths[1] > 2_000,
-      detail: `navigation=${lengths[0]} chars screenshot=${lengths[1]} chars`,
+      detail:
+        `navigation=${lengths[0]} chars screenshot=${lengths[1]} chars ` +
+        `navigationId=${result.navigationPicture ?? "null"} ` +
+        `immediate=${result.navigationPictureImmediateSize} ` +
+        `beforeDispose=${result.navigationPictureBeforeDisposeSize} ` +
+        `afterDispose=${result.navigationPictureAfterDisposeSize}`,
     };
   });
 

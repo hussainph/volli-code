@@ -39,6 +39,8 @@
 import { BrowserRefusal } from "@volli/agent-runtime";
 import type { RuntimeWholeText } from "@volli/shared";
 
+import { hostLogger } from "../log/root";
+
 import {
   axTreeDigest,
   axTreeGaps,
@@ -651,10 +653,31 @@ export class BrowserTabController {
    * No frame means no photo, not permission to capture an older surface.
    */
   async preparePreview(signal?: AbortSignal): Promise<boolean> {
+    const startedAt = performance.now();
+    const generation = this.#generation;
+    const report = (outcome: string): void => {
+      if (process.env["VOLLI_HARNESS"] !== "1") return;
+      hostLogger("browser").info("browser navigation picture frame", {
+        outcome,
+        generation,
+        currentGeneration: this.#generation,
+        elapsedMs: Math.round(performance.now() - startedAt),
+      });
+    };
     try {
       await this.#ensureRendered(signal, Math.min(500, this.#limits.maxCommandMs));
+      report("ready");
       return true;
-    } catch {
+    } catch (error) {
+      report(
+        signal?.aborted === true
+          ? "withdrawn"
+          : isTimeout(error)
+            ? "deadline"
+            : error instanceof BrowserRefusal && error.rule === "browser.stale-ref"
+              ? "generation-changed"
+              : "frame-error",
+      );
       signal?.throwIfAborted();
       return false;
     }

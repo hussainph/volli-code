@@ -2717,6 +2717,70 @@ describe("BrowserTabHost pictures (VC-238)", () => {
     expect(pictures.describe("picture-1")).toMatchObject({ tabId: tab.tabId, generation: 0 });
   });
 
+  it("distinguishes empty native capture from an emitted ID without logging page data", async () => {
+    vi.stubEnv("VOLLI_HARNESS", "1");
+    const records: Record<string, unknown>[] = [];
+    const undo = installHostLog({
+      level: "info",
+      sink: { write: (record) => void records.push(record) },
+    });
+    const tab = agentTab();
+    const capture = Promise.withResolvers<Awaited<ReturnType<FakeWebContents["capturePage"]>>>();
+    views[0]!.webContents.capturePage.mockReturnValueOnce(capture.promise);
+    try {
+      const pending = host.capturePicture(tab.tabId);
+      expect(records).toEqual([]);
+      capture.resolve({
+        isEmpty: () => true,
+        toJPEG: () => Buffer.from("private pixels"),
+        toDataURL: () => "private image",
+      });
+      expect(await pending).toBeNull();
+      expect(pictures.describe("picture-1")).toBeNull();
+      const id = await host.capturePicture(tab.tabId);
+      expect(id).toBe("picture-1");
+      expect(host.pictureOf(id!)).toMatch(/^data:image\/jpeg;base64,/);
+      const outcomes = records.filter(
+        (record) => record.msg === "browser navigation picture outcome",
+      );
+      expect(outcomes.map(({ outcome, picture }) => ({ outcome, picture }))).toEqual([
+        { outcome: "empty-image", picture: null },
+        { outcome: "stored", picture: id },
+      ]);
+      expect(outcomes.map(({ lookupSize }) => lookupSize)).toEqual([
+        0,
+        host.pictureOf(id!)!.length,
+      ]);
+      for (const record of outcomes) {
+        expect(Object.keys(record).toSorted()).toEqual(
+          [
+            "component",
+            "currentGeneration",
+            "elapsedMs",
+            "generation",
+            "level",
+            "lookupSize",
+            "msg",
+            "outcome",
+            "pending",
+            "picture",
+            "ts",
+          ].toSorted(),
+        );
+        expect(record).toMatchObject({
+          generation: 0,
+          currentGeneration: 0,
+          elapsedMs: expect.any(Number),
+        });
+      }
+      expect(JSON.stringify(outcomes)).not.toContain("private");
+      expect(JSON.stringify(outcomes)).not.toContain("agent.example");
+    } finally {
+      undo();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("does not capture while the person is interacting with a shown tab", async () => {
     const tab = agentTab();
     host.setPresentation(tab.tabId, "preview");
