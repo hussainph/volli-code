@@ -82,6 +82,17 @@ function expected(query: ReportSessionUsageQuery) {
 }
 
 describe("off-thread usage reports", () => {
+  it("loads the configured desktop worker source and matches its bundled launch filename", async () => {
+    stop = installSqliteUsageWorker(
+      ctx.db,
+      new URL("./test-support/desktop-usage-worker-under-node.mjs", import.meta.url),
+    );
+    const query = { scope: { kind: "all" } as const, groupBy: "model" as const };
+    expect(await createSqliteSessionLedger(ctx.db).reportUsage(query)).toEqual(
+      await expected(query),
+    );
+  });
+
   it("matches the existing report exactly for every scope, grouping and half-open window", async () => {
     stop = installSqliteUsageWorker(ctx.db, ENTRY);
     const engine = createSessionEngine({
