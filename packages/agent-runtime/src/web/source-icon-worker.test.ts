@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
-import sharp, { type Metadata, type SharpOptions, type OutputInfo } from "sharp";
+import sharp, { type Metadata, type Sharp, type SharpOptions, type OutputInfo } from "sharp";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 const SOURCE = new URL("./source-icon-worker.ts", import.meta.url);
@@ -192,6 +192,19 @@ describe("source icon raster worker", () => {
   });
 });
 
+/** Keep the complete real encoder operational while faulting only the native
+ * metadata observation. Deliberately impossible fields are explicit boundary
+ * faults, never a truncated object masquerading as a full sharp pipeline. */
+function faultMetadata(pipeline: Sharp, fault: Partial<Metadata>): void {
+  const metadata = pipeline.metadata.bind(pipeline);
+  vi.spyOn(pipeline, "metadata").mockImplementation(async () => {
+    const actual = await metadata();
+    for (const [key, value] of Object.entries(fault))
+      Object.defineProperty(actual, key, { value, configurable: true, writable: true });
+    return actual;
+  });
+}
+
 /** Instrument the same module over a REAL MessageChannel. Native-loaded Worker
  * code is outside Vitest's isolate; the real-thread/libvips cases above remain
  * the process-boundary proof, this drives the actual imported handler too. */
@@ -208,10 +221,8 @@ async function importedHandler(
   if (fault)
     vi.doMock("sharp", () => ({
       default: (encoded: Buffer, options: SharpOptions) => {
-        // These typed fault records model impossible native metadata responses.
-        // No truncated record is asserted to be a real sharp.Metadata.
-        if (fault.metadata) return { metadata: async () => fault.metadata };
         const pipeline = sharp(encoded, options);
+        if (fault.metadata) faultMetadata(pipeline, fault.metadata);
         if (fault.info || fault.data) {
           const original = pipeline.toBuffer.bind(pipeline);
           vi.spyOn(pipeline, "toBuffer").mockImplementation(async () => {
@@ -356,10 +367,24 @@ it("rejects defensive native-metadata faults without exposing them", async () =>
     { ...good, width: 0 },
     { ...good, height: 0 },
     { ...good, width: 1001, height: 1000 },
-  ])
+  ]) {
+    // Mutation control: with this exact metadata fault the full real pipeline
+    // still encodes valid pixels. Removing the production metadata guard
+    // would therefore return ready, not throw/catch a mock method absence.
+    const control = sharp(bytes);
+    faultMetadata(control, metadata);
+    expect(await control.metadata()).toMatchObject(metadata);
+    const encoded = await control
+      .rotate()
+      .resize({ width: 64, height: 64, fit: "inside", withoutEnlargement: true })
+      .png()
+      .timeout({ seconds: 1 })
+      .toBuffer();
+    expect(await sharp(encoded).metadata()).toMatchObject({ format: "png", width: 64, height: 32 });
     expect(await importedHandler({ bytes, mime: "image/png" }, { metadata })).toEqual({
       type: "omitted",
     });
+  }
 });
 it("rejects defensive native-output faults without forwarding pixels", async () => {
   const bytes = await png();
