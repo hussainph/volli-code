@@ -109,7 +109,7 @@ Use tokens and primitives, not a locally measured lookalike.
 | Sheet | `radius-sheet`: 14px |
 | Floating content card | `radius-floating`: 20px; `--glass-gap`: 6px |
 | Sidebar row | `radius-row`: 8px |
-| Board card / column | `radius-card` / `radius-column`: 10 / 16px; 236px columns |
+| Board card / column | `radius-card` / `radius-column`: 10 / 16px; fluid columns with a 288px floor and 384px cap; capped groups centre, overflow stays start-aligned |
 | Session composer / user bubble | 24 / 18px corners; 608px composer column including 24px side gutters (560px face) / 420px bubble maximum |
 | Window toolbar | 46px band; 30px glass controls and search |
 | Sidebar | 236px default; symmetric 10px row-fill inset, then 8px to ink |
