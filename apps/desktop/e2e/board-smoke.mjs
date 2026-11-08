@@ -1341,21 +1341,27 @@ async function main() {
 
     await attempt(
       16.5,
-      "fixed icon navigator sits below feature nav with roving arrow selection",
+      "fixed icon navigator sits above Settings without a divider and keeps roving arrow selection",
       async () => {
         const selector = page.getByRole("tablist", { name: "Sidebar content", exact: true });
         const sessions = selector.getByRole("tab", { name: "Sessions", exact: true });
         const files = selector.getByRole("tab", { name: "Files", exact: true });
-        const geometry = await selector.evaluate((row) => ({
-          height: row.getBoundingClientRect().height,
-          text: row.textContent,
-          inHeader: row.closest('[data-slot="sidebar-header"]') !== null,
-          targets: [...row.querySelectorAll("button")].map((button) => ({
-            height: button.getBoundingClientRect().height,
-            width: button.getBoundingClientRect().width,
-            glyph: button.querySelector("svg").getBoundingClientRect().width,
-          })),
-        }));
+        const geometry = await selector.evaluate((row) => {
+          const chrome = row.closest('[data-slot="navigator-selector"]');
+          return {
+            height: row.getBoundingClientRect().height,
+            text: row.textContent,
+            inHeader: row.closest('[data-slot="sidebar-header"]') !== null,
+            inFooter: chrome?.parentElement?.getAttribute("data-slot") === "sidebar-footer",
+            aboveSettings: chrome?.nextElementSibling?.textContent === "Settings",
+            borderBottom: chrome ? getComputedStyle(chrome).borderBottomWidth : null,
+            targets: [...row.querySelectorAll("button")].map((button) => ({
+              height: button.getBoundingClientRect().height,
+              width: button.getBoundingClientRect().width,
+              glyph: button.querySelector("svg").getBoundingClientRect().width,
+            })),
+          };
+        });
         await sessions.focus();
         await page.keyboard.press("ArrowRight");
         const fileSelected = await files.getAttribute("aria-selected");
@@ -1367,6 +1373,9 @@ async function main() {
             geometry.height === 22 &&
             geometry.text === "" &&
             !geometry.inHeader &&
+            geometry.inFooter &&
+            geometry.aboveSettings &&
+            geometry.borderBottom === "0px" &&
             geometry.targets.every(
               (target) => target.width === 24 && target.height === 24 && target.glyph === 14,
             ) &&

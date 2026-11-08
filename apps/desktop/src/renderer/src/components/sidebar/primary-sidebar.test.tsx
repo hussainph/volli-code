@@ -5,8 +5,17 @@ import { beforeEach, afterEach, describe, it, expect, vi } from "vite-plus/test"
 import { SidebarProvider } from "@renderer/components/ui/sidebar";
 import { PrimarySidebar } from "./primary-sidebar";
 
+const { selection } = vi.hoisted(() => ({
+  selection: {
+    project: { id: "p", name: "Project", ticketPrefix: "VC" } as {
+      id: string;
+      name: string;
+      ticketPrefix: string;
+    } | null,
+  },
+}));
 vi.mock("@renderer/hooks/use-selected-project", () => ({
-  useSelectedProject: () => ({ id: "p", name: "Project", ticketPrefix: "VC" }),
+  useSelectedProject: () => selection.project,
 }));
 vi.mock("@renderer/hooks/use-active-nav", () => ({ useActiveNav: () => ["home", () => {}] }));
 vi.mock("@renderer/components/sidebar/nav-list", () => ({
@@ -64,6 +73,7 @@ describe("primary sidebar content choice", () => {
     }));
     vi.clearAllMocks();
     listing.count = 0;
+    selection.project = { id: "p", name: "Project", ticketPrefix: "VC" };
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
@@ -85,7 +95,7 @@ describe("primary sidebar content choice", () => {
       ),
     );
   }
-  it("places borderless icon-only choices below navigation, outside both scrollports", async () => {
+  it("pins borderless icon-only choices directly above Settings, outside both scrollports", async () => {
     await show();
     const chrome = container.querySelector('[data-slot="navigator-selector"]')!;
     const switcher = chrome.querySelector('[aria-label="Sidebar content"]')!;
@@ -93,7 +103,13 @@ describe("primary sidebar content choice", () => {
     expect(switcher.textContent).toBe("");
     expect(switcher.className).toContain("h-[22px]");
     expect(switcher.className).not.toContain("glass");
-    expect(container.querySelector('[data-testid="feature-nav"]')?.nextElementSibling).toBe(chrome);
+    const footer = container.querySelector('[data-slot="sidebar-footer"]')!;
+    expect(chrome.parentElement).toBe(footer);
+    expect(chrome.nextElementSibling?.textContent).toBe("Settings");
+    expect(chrome.className).not.toMatch(/\bborder(?:-b)?\b/);
+    expect(container.querySelector('[data-testid="feature-nav"]')?.nextElementSibling).not.toBe(
+      chrome,
+    );
     expect(container.querySelector('[data-slot="sidebar-header"]')?.textContent).toBe("ProjectVC");
     for (const tab of switcher.querySelectorAll("button")) {
       expect(tab.className).toContain("size-6");
@@ -121,6 +137,13 @@ describe("primary sidebar content choice", () => {
       files.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true })),
     );
     expect(document.activeElement).toBe(sessions);
+  });
+  it("keeps Settings without offering project content or creation when no project is selected", async () => {
+    selection.project = null;
+    await show();
+    expect(container.querySelector('[data-slot="navigator-selector"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Open a tab"]')).toBeNull();
+    expect(container.querySelector('[data-slot="sidebar-footer"]')?.textContent).toBe("Settings");
   });
   it("remembers Files in this window and suspends hidden session activity", async () => {
     await show();
@@ -180,6 +203,7 @@ describe("primary sidebar content choice", () => {
     const plus = container.querySelector<HTMLButtonElement>('[aria-label="Open a tab"]')!;
     expect(plus.disabled).toBe(false);
     expect(plus.closest('[data-slot="navigator-selector"]')).not.toBeNull();
+    expect(plus.closest('[data-slot="sidebar-footer"]')).not.toBeNull();
     expect(plus.closest('[role="tablist"]')).toBeNull();
     expect(plus.closest('[data-testid="session-scrollport"]')).toBeNull();
     plus.focus();
