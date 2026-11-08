@@ -4,7 +4,8 @@
  */
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cp, lstat, mkdir, readFile, readdir, readlink, rm, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { cp, lstat, mkdir, open, readFile, readdir, readlink, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 const exec = promisify(execFile);
@@ -35,12 +36,28 @@ async function files(root, prefix = "") {
 }
 async function fileDigest(root, path) {
   const absolute = join(root, path);
-  if ((await lstat(absolute)).isSymbolicLink()) {
-    // Git archives preserve links, including links to directories. Hash the
-    // link itself, never follow its target (which may be missing or external).
-    return sha256(JSON.stringify(["symlink", path, await readlink(absolute)]));
+  let handle;
+  try {
+    // Refuse symlink traversal atomically. Nonblocking open also lets the
+    // descriptor check reject a substituted FIFO without waiting for a writer.
+    handle = await open(
+      absolute,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    );
+  } catch (error) {
+    if (error.code !== "ELOOP") throw error;
+    // readlink reads the link itself, including links to directories. If it
+    // was replaced by a regular file after open refused it, readlink fails.
+    return `symlink:${sha256(JSON.stringify([path, await readlink(absolute)]))}`;
   }
-  return sha256(await readFile(absolute));
+  try {
+    // Check and read the SAME open descriptor, never reopen a checked path
+    // (CodeQL js/file-system-race). Replacement cannot redirect this read.
+    if (!(await handle.stat()).isFile()) throw new Error(`unsupported source entry: ${path}`);
+    return sha256(await handle.readFile());
+  } finally {
+    await handle.close();
+  }
 }
 async function digests(root, paths) {
   const result = {};

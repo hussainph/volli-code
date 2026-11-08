@@ -242,7 +242,7 @@ test("source archives preserve exact commits, identical separately hashed driver
         await readlink(join(side.dir, ".claude/skills/verify-volli")),
         "../../.agents/skills/verify-volli",
       );
-      assert.ok(side.metadata.product[".claude/skills/verify-volli"]);
+      assert.match(side.metadata.product[".claude/skills/verify-volli"], /^symlink:/);
       await verifySource(side.dir, side.metadata);
     }
     // Equal target contents do not make two different link identities equal.
@@ -250,8 +250,23 @@ test("source archives preserve exact commits, identical separately hashed driver
     await rm(link);
     await symlink("../../.agents/skills/alternate", link);
     await assert.rejects(verifySource(sides[1].dir, sides[1].metadata), /source changed/);
+    // A regular file cannot impersonate the old serialized symlink identity.
+    await rm(link);
+    await writeFile(
+      link,
+      JSON.stringify([
+        "symlink",
+        ".claude/skills/verify-volli",
+        "../../.agents/skills/verify-volli",
+      ]),
+    );
+    await assert.rejects(verifySource(sides[1].dir, sides[1].metadata), /source changed/);
     await writeFile(join(sides[0].dir, "product.txt"), "unreported change");
     await assert.rejects(verifySource(sides[0].dir, sides[0].metadata), /source changed/);
+    // Reject non-regular descriptors without attempting to read a directory.
+    await rm(join(sides[0].dir, "product.txt"));
+    await mkdir(join(sides[0].dir, "product.txt"));
+    await assert.rejects(verifySource(sides[0].dir, sides[0].metadata), /unsupported source entry/);
   }));
 
 test("no direct Electron entry; supervisor retains gate, fixed recipe, timeout and native quiet policy", async () => {
