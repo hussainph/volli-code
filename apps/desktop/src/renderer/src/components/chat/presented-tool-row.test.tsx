@@ -4,6 +4,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 import type { DynamicToolUIPart } from "ai";
 import { presentTranscriptTool, type BundleRow } from "@volli/session-presentation";
+import { BrowserCardHostContext } from "@renderer/components/browser/browser-tab-card";
+import type { BrowserApi } from "@renderer/components/browser/browser-api";
 import { PresentedToolRow, WebWorkGroup } from "./presented-tool-row";
 
 let container: HTMLDivElement;
@@ -134,4 +136,103 @@ it("the web group counts sources with singular and plural, and omits the count a
 
   render([webRow(one, "Couldn't open the page.", "error")]);
   expect(headerSpans()).toEqual(["Searched the web", "1 failed"]);
+});
+
+const unused = async (): Promise<never> => {
+  throw new Error("unused browser operation");
+};
+
+const api: BrowserApi = {
+  open: unused,
+  close: unused,
+  list: unused,
+  navigate: unused,
+  back: unused,
+  forward: unused,
+  reload: unused,
+  setBounds: unused,
+  capture: unused,
+  show: unused,
+  hide: unused,
+  toggleDevTools: unused,
+  setPresentation: unused,
+  picture: async () => ({ ok: true, dataUrl: null }),
+  traces: unused,
+  takeOver: unused,
+  handBack: unused,
+  askToLeave: unused,
+  onTabState: () => () => {},
+};
+const openTrace = vi.fn();
+const host = { sessionId: "session-exact", api, sessionTitle: () => null, openTrace };
+
+it("opens real browser evidence and replays its exact Session, tab and picture", async () => {
+  const part: DynamicToolUIPart = {
+    type: "dynamic-tool",
+    toolCallId: "browser-call",
+    toolName: "browser_navigate",
+    state: "output-available",
+    input: { url: "https://example.org" },
+    output: "Read page",
+    toolMetadata: {
+      "volli.activity": {
+        kind: "browse",
+        nativeToolName: "browser_navigate",
+        subject: { label: "Example", path: null, lineRange: null },
+        outcome: null,
+        startedAt: 1,
+        endedAt: 2,
+        browse: {
+          action: "open",
+          tabId: "tab-exact",
+          ownerSessionId: "session-exact",
+          url: "https://example.org",
+          title: "Example",
+          target: null,
+          picture: "picture-exact",
+          errorCount: null,
+          error: null,
+          refusal: null,
+        },
+      },
+    },
+  };
+  const presentation = presentTranscriptTool(part);
+  if (!presentation) throw new Error("Expected browser presentation");
+  openTrace.mockClear();
+  await act(async () =>
+    root.render(
+      <BrowserCardHostContext.Provider value={host}>
+        <PresentedToolRow part={part} presentation={presentation} />
+      </BrowserCardHostContext.Provider>,
+    ),
+  );
+  const row = container.querySelector<HTMLElement>('[data-tool-category="browser"]')!;
+  const replay = () =>
+    [...row.querySelectorAll("button")].filter((button) => button.textContent === "Replay");
+  expect(replay()).toHaveLength(0);
+  const header = row.querySelector<HTMLButtonElement>(":scope > button[aria-expanded]")!;
+  expect(header.getAttribute("aria-expanded")).toBe("false");
+  await act(async () => header.click());
+  expect(header.getAttribute("aria-expanded")).toBe("true");
+  const original = [...row.querySelectorAll("button")].find(
+    (button) => button.textContent === "Original output",
+  )!;
+  await act(async () => original.click());
+  const evidence = row.querySelector('pre[aria-label="Original tool evidence"]')!;
+  expect(JSON.parse(evidence.textContent!)).toEqual(part);
+  expect(JSON.parse(evidence.textContent!).toolMetadata["volli.activity"].browse).toMatchObject({
+    tabId: "tab-exact",
+    ownerSessionId: "session-exact",
+    picture: "picture-exact",
+  });
+  await act(async () => original.click());
+  expect(row.querySelector('pre[aria-label="Original tool evidence"]')).toBeNull();
+  expect(replay()).toHaveLength(1);
+  await act(async () => replay()[0]!.click());
+  expect(openTrace).toHaveBeenCalledExactlyOnceWith({
+    sessionId: "session-exact",
+    tabId: "tab-exact",
+    pictureId: "picture-exact",
+  });
 });
