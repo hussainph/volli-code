@@ -48,7 +48,7 @@ export function LocalProjectsFoot() {
             <LaptopIcon className="size-[15px] text-muted-foreground" />
             <span
               aria-hidden
-              className="pointer-events-none absolute inset-0 rounded-control bg-foreground/10 opacity-0 group-hover/tile:opacity-100"
+              className="pointer-events-none absolute inset-0 rounded-control bg-wash-ink/10 opacity-0 group-hover/tile:opacity-100"
             />
           </button>
         </PopoverTrigger>
@@ -104,7 +104,7 @@ export function NewCloudProjectTile() {
             <AddIcon strokeWidth={2.25} className="size-[15px] text-muted-foreground" />
             <span
               aria-hidden
-              className="pointer-events-none absolute inset-0 rounded-control bg-foreground/10 opacity-0 group-hover/tile:opacity-100"
+              className="pointer-events-none absolute inset-0 rounded-control bg-wash-ink/10 opacity-0 group-hover/tile:opacity-100"
             />
           </button>
         </TooltipTrigger>

@@ -36,6 +36,7 @@ import {
   BROWSER_PREVIEW_TIMEOUT_MS,
   BrowserStageUnavailableError,
   BrowserTabHost,
+  type BrowserPreviewDiagnostic,
   browserRemoteWebPreferences,
   browserSurfaceBounds,
   isAllowedBrowserTarget,
@@ -2717,6 +2718,139 @@ describe("BrowserTabHost pictures (VC-238)", () => {
     expect(pictures.describe("picture-1")).toMatchObject({ tabId: tab.tabId, generation: 0 });
   });
 
+  /** A host whose composition listens to preview outcomes (VC-1150), as dev diagnostics do. */
+  const observedHost = () => {
+    const seen: BrowserPreviewDiagnostic[] = [];
+    let nextId = 0;
+    host = new BrowserTabHost({
+      createId: () => `opaque-observed-${++nextId}`,
+      createView: () => {
+        const view = new FakeView();
+        views.push(view);
+        return view as unknown as WebContentsView;
+      },
+      fromPartition: () => new FakeSession() as unknown as Session,
+      getWindow: () => fakeWindow as unknown as BrowserWindow,
+      createStageWindow: newStage,
+      publishState: (event) => published.push(event),
+      publishClosed: (tabId) => published.push({ closedTabId: tabId }),
+      pictures,
+      previewDiagnostics: (diagnostic) => void seen.push(diagnostic),
+    });
+    return seen;
+  };
+
+  it("reports each camera ending, ids and lookup sizes included, without page data", async () => {
+    const seen = observedHost();
+    const tab = agentTab();
+    const capture = Promise.withResolvers<Awaited<ReturnType<FakeWebContents["capturePage"]>>>();
+    views[0]!.webContents.capturePage.mockReturnValueOnce(capture.promise);
+    const pending = host.capturePicture(tab.tabId);
+    expect(seen).toEqual([]);
+    capture.resolve({
+      isEmpty: () => true,
+      toJPEG: () => Buffer.from("private pixels"),
+      toDataURL: () => "private image",
+    });
+    expect(await pending).toBeNull();
+    expect(pictures.describe("picture-1")).toBeNull();
+    const id = await host.capturePicture(tab.tabId);
+    expect(id).toBe("picture-1");
+    expect(seen.map((one) => one.stage === "camera" && [one.outcome, one.picture])).toEqual([
+      ["empty-image", null],
+      ["stored", id],
+    ]);
+    expect(seen.map((one) => one.stage === "camera" && one.lookupSize)).toEqual([
+      0,
+      host.pictureOf(id!)!.length,
+    ]);
+    for (const one of seen) {
+      expect(Object.keys(one).toSorted()).toEqual(
+        [
+          "currentGeneration",
+          "elapsedMs",
+          "generation",
+          "lookupSize",
+          "outcome",
+          "pending",
+          "picture",
+          "stage",
+        ].toSorted(),
+      );
+      expect(one).toMatchObject({
+        generation: 0,
+        currentGeneration: 0,
+        elapsedMs: expect.any(Number),
+      });
+    }
+    expect(JSON.stringify(seen)).not.toContain("private");
+    expect(JSON.stringify(seen)).not.toContain("agent.example");
+  });
+
+  it("keeps every answer when the diagnostic sink fails", async () => {
+    let nextId = 0;
+    host = new BrowserTabHost({
+      createId: () => `opaque-failing-${++nextId}`,
+      createView: () => {
+        const view = new FakeView();
+        views.push(view);
+        return view as unknown as WebContentsView;
+      },
+      fromPartition: () => new FakeSession() as unknown as Session,
+      getWindow: () => fakeWindow as unknown as BrowserWindow,
+      createStageWindow: newStage,
+      publishState: (event) => published.push(event),
+      publishClosed: (tabId) => published.push({ closedTabId: tabId }),
+      pictures,
+      previewDiagnostics: () => {
+        throw new Error("diagnostic sink failed");
+      },
+    });
+    const tab = agentTab();
+    views[0]!.webContents.captureBytes = "after-click";
+    expect(await host.capturePicture(tab.tabId)).toBe("picture-1");
+    expect(await host.capturePicture("never-opened")).toBeNull();
+  });
+
+  it("reports the two early endings without changing what they answer", async () => {
+    const seen = observedHost();
+    const tab = agentTab();
+    expect(await host.capturePicture("never-opened")).toBeNull();
+    const withdrawn = new AbortController();
+    withdrawn.abort();
+    expect(await host.capturePicture(tab.tabId, withdrawn.signal)).toBeNull();
+    expect(views[0]!.webContents.capturePage).not.toHaveBeenCalled();
+    expect(seen).toEqual([
+      expect.objectContaining({
+        stage: "camera",
+        outcome: "missing-entry",
+        picture: null,
+        generation: null,
+        currentGeneration: null,
+        pending: null,
+      }),
+      expect.objectContaining({ stage: "camera", outcome: "withdrawn-early", generation: 0 }),
+    ]);
+  });
+
+  it("forwards only the fixed frame-fence fields, and wires nothing when no one listens", () => {
+    const tabAbsent = agentTab();
+    expect(host.transportFor(tabAbsent.tabId).onPreviewFrame).toBeUndefined();
+    const seen = observedHost();
+    const tab = agentTab();
+    host.transportFor(tab.tabId).onPreviewFrame?.({
+      outcome: "deadline",
+      generation: 2,
+      currentGeneration: 3,
+      elapsedMs: 501,
+      // A future controller field must not ride along.
+      url: "https://agent.example.com/private",
+    } as never);
+    expect(seen).toEqual([
+      { stage: "frame", outcome: "deadline", generation: 2, currentGeneration: 3, elapsedMs: 501 },
+    ]);
+  });
+
   it("does not capture while the person is interacting with a shown tab", async () => {
     const tab = agentTab();
     host.setPresentation(tab.tabId, "preview");
@@ -3026,6 +3160,69 @@ describe("BrowserTabHost agent dispatch and capture boundaries", () => {
       session: { sessionId: "boundary-session", attachmentId: "boundary-attachment" },
       cursorFor,
     });
+
+  it("reports the preview's frame and camera endings through the production port chain (VC-1150)", async () => {
+    // Real chain, nothing hand-wired: BrowserTabHost.transportFor -> the real
+    // debugger transport -> browserAgentPort -> the host-wide coordinator ->
+    // the controller it builds -> the composition's listener; and the camera
+    // through capturePicture. Only Electron's debugger and capture are fakes.
+    const seen: BrowserPreviewDiagnostic[] = [];
+    let nextId = 0;
+    host = new BrowserTabHost({
+      createId: () => `opaque-chain-${++nextId}`,
+      createView: () => {
+        const view = new FakeView();
+        views.push(view);
+        return view as unknown as WebContentsView;
+      },
+      fromPartition: () => new FakeSession() as unknown as Session,
+      getWindow: () => fakeWindow as unknown as BrowserWindow,
+      createStageWindow: newStage,
+      publishState: (event) => published.push(event),
+      publishClosed: (tabId) => published.push({ closedTabId: tabId }),
+      pictures,
+      previewDiagnostics: (diagnostic) => void seen.push(diagnostic),
+    });
+    const tab = open();
+    let attached = false;
+    Object.assign(views.at(-1)!.webContents, {
+      debugger: {
+        isAttached: () => attached,
+        attach: () => {
+          attached = true;
+        },
+        detach: () => {
+          attached = false;
+        },
+        sendCommand: vi.fn(async (method: string) =>
+          method === "Accessibility.getFullAXTree" ? tree : {},
+        ),
+      },
+    });
+    const browser = port();
+    try {
+      const read = await browser.snapshot({ tabId: tab.tabId, signal });
+      const acted = await browser.act({
+        tabId: tab.tabId,
+        generation: read.generation,
+        kind: "press",
+        key: "Enter",
+        signal,
+      });
+      expect(seen.map((one) => [one.stage, one.outcome])).toEqual([
+        ["frame", "ready"],
+        ["camera", "stored"],
+      ]);
+      const camera = seen[1];
+      expect(camera?.stage === "camera" && camera.picture).toBe(acted.picture);
+      expect(acted.picture).not.toBeNull();
+      expect(camera?.stage === "camera" && camera.lookupSize).toBe(
+        host.pictureOf(acted.picture!)!.length,
+      );
+    } finally {
+      browser.dispose();
+    }
+  });
 
   it("sends no input when navigation occurs during the real debugger transport's reinitialization", async () => {
     const tab = open();

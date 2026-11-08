@@ -1,9 +1,11 @@
 import { runInNewContext } from "node:vm";
+import { PassThrough } from "node:stream";
 
 import { BrowserRefusal } from "@volli/agent-runtime";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { BrowserTabController, type CdpTransport } from "./cdp-controller";
+import { CdpPipeConnection } from "./chromium-pipe";
 
 /**
  * A recording CDP wire: every command lands in `sent`, and each method answers
@@ -274,6 +276,81 @@ describe("BrowserTabController", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("does not certify a late preview frame through the real CDP codec", async () => {
+    vi.useFakeTimers();
+    const records: Record<string, unknown>[] = [];
+    const toBrowser = new PassThrough();
+    const fromBrowser = new PassThrough();
+    const connection = new CdpPipeConnection(toBrowser, fromBrowser);
+    const commands: { id: number; method: string }[] = [];
+    toBrowser.on("data", (bytes: Buffer) => {
+      for (const frame of bytes.toString("utf8").split("\0").filter(Boolean)) {
+        commands.push(JSON.parse(frame));
+      }
+    });
+    const controller = new BrowserTabController({
+      send: (method, params) => connection.send(method, params),
+      // The composition's listener (VC-1150); the first call proves a failing
+      // sink cannot change the fence's answer.
+      onPreviewFrame: (diagnostic) => {
+        records.push({ ...diagnostic });
+        if (records.length === 1) throw new Error("diagnostic sink failed");
+      },
+    });
+    try {
+      const preview = controller.preparePreview();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(await preview).toBe(false);
+      expect(commands.map(({ method }) => method)).toEqual(["Runtime.evaluate"]);
+      const first = commands[0]!;
+      fromBrowser.write(`${JSON.stringify({ id: first.id, result: {} })}\0`);
+      await Promise.resolve();
+      const next = controller.preparePreview();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(commands).toHaveLength(2);
+      // A second wire response is required; the abandoned first reply is not readiness.
+      fromBrowser.write(`${JSON.stringify({ id: commands[1]!.id, result: {} })}\0`);
+      expect(await next).toBe(true);
+      expect(records.map(({ outcome }) => outcome)).toEqual(["deadline", "ready"]);
+      for (const record of records) {
+        expect(Object.keys(record).toSorted()).toEqual(
+          ["currentGeneration", "elapsedMs", "generation", "outcome"].toSorted(),
+        );
+      }
+    } finally {
+      connection.close();
+      toBrowser.destroy();
+      fromBrowser.destroy();
+      vi.useRealTimers();
+    }
+  });
+
+  it("names each declined preview frame without changing what the fence answers", async () => {
+    const outcomes: string[] = [];
+    const onPreviewFrame = (diagnostic: { outcome: string }) =>
+      void outcomes.push(diagnostic.outcome);
+    const broken = new BrowserTabController({
+      send: async () => ({ exceptionDetails: { text: "private page error" } }),
+      onPreviewFrame,
+    });
+    expect(await broken.preparePreview()).toBe(false);
+    let generation = 0;
+    const moving = new BrowserTabController({
+      currentGeneration: () => generation,
+      send: async () => {
+        generation = 1;
+        return {};
+      },
+      onPreviewFrame,
+    });
+    expect(await moving.preparePreview()).toBe(false);
+    const withdrawn = new AbortController();
+    withdrawn.abort();
+    const gone = new BrowserTabController({ send: async () => ({}), onPreviewFrame });
+    await expect(gone.preparePreview(withdrawn.signal)).rejects.toBeDefined();
+    expect(outcomes).toEqual(["frame-error", "generation-changed", "withdrawn"]);
   });
 
   it("reports only fixed timeout metadata, even when the diagnostic sink fails", async () => {

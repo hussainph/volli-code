@@ -49,24 +49,23 @@
   --vscode-editorLineNumber-foreground: var(--muted-foreground);
   --vscode-editorLineNumber-activeForeground: var(--foreground);
 
-  /* Ink at low alpha rather than an authored pair per mode: it lands the same
-     perceptual step off the page in both appearances, and follows the canvas.
-     Monaco paints selection UNDER the text, so the wash never dims a glyph. */
-  --vscode-editor-selectionBackground: color-mix(in oklab, var(--foreground) 22%, transparent);
+  /* Material ink at the original alpha; code colours and paper stay unchanged.
+     Monaco paints selection UNDER text, never over the syntax glyphs. */
+  --vscode-editor-selectionBackground: color-mix(in oklab, var(--wash-ink) 22%, transparent);
   --vscode-editor-inactiveSelectionBackground: color-mix(
     in oklab,
-    var(--foreground) 10%,
+    var(--wash-ink) 10%,
     transparent
   );
   --vscode-editor-selectionHighlightBackground: color-mix(
     in oklab,
-    var(--foreground) 10%,
+    var(--wash-ink) 10%,
     transparent
   );
 
   /* The current line, one veil step off the ground — the same barely-there
      lift the app uses for a hovered row, not the theme's flat grey. */
-  --vscode-editor-lineHighlightBackground: color-mix(in oklab, var(--foreground) 5%, transparent);
+  --vscode-editor-lineHighlightBackground: color-mix(in oklab, var(--wash-ink) 5%, transparent);
   --vscode-editor-lineHighlightBorder: transparent;
 
   /* The find widget is a POPOVER that happens to live in an editor. It takes

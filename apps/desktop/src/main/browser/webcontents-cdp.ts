@@ -9,6 +9,7 @@ import type { WebContents } from "electron";
 import { BrowserRefusal } from "@volli/agent-runtime";
 import type {
   BrowserLoadWaitMode,
+  CdpPreviewFrameDiagnostic,
   CdpTimeoutDiagnostic,
   CdpTransport,
 } from "@volli/host-core/browser";
@@ -30,6 +31,8 @@ export type DebuggerTimeoutDiagnostic = Omit<CdpTimeoutDiagnostic, "phase"> & {
 export function debuggerTransport(
   contents: WebContents,
   onTimeout?: (diagnostic: DebuggerTimeoutDiagnostic) => void,
+  /** Diagnostic-only (VC-1150); absent in every ordinary composition. */
+  onPreviewFrame?: (diagnostic: CdpPreviewFrameDiagnostic) => void,
 ): CdpTransport {
   const wire = contents.debugger;
   let initialized = false;
@@ -89,6 +92,18 @@ export function debuggerTransport(
         generation: diagnostic.generation,
       });
     },
+    // The same allowlist rule: only the fixed fields, never anything else.
+    ...(onPreviewFrame === undefined
+      ? {}
+      : {
+          onPreviewFrame: (diagnostic: CdpPreviewFrameDiagnostic) =>
+            onPreviewFrame({
+              outcome: diagnostic.outcome,
+              generation: diagnostic.generation,
+              currentGeneration: diagnostic.currentGeneration,
+              elapsedMs: diagnostic.elapsedMs,
+            }),
+        }),
     send,
     sendGuarded: send,
     dispose: () => {
