@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { EventEmitter } from "node:events";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -196,6 +196,12 @@ test("source archives preserve exact commits, identical separately hashed driver
     await git(["config", "user.name", "Bench Test"]);
     await git(["config", "user.email", "bench@volli.test"]);
     await writeFile(join(source, "product.txt"), "before");
+    await mkdir(join(source, ".agents/skills/verify-volli"), { recursive: true });
+    await mkdir(join(source, ".agents/skills/alternate"), { recursive: true });
+    await mkdir(join(source, ".claude/skills"), { recursive: true });
+    await writeFile(join(source, ".agents/skills/verify-volli/SKILL.md"), "fixture skill");
+    await writeFile(join(source, ".agents/skills/alternate/SKILL.md"), "fixture skill");
+    await symlink("../../.agents/skills/verify-volli", join(source, ".claude/skills/verify-volli"));
     await writeFile(
       join(source, "apps/desktop/e2e/bench/chat-window/electron-main.cjs"),
       "unsafe old host",
@@ -232,8 +238,18 @@ test("source archives preserve exact commits, identical separately hashed driver
         await readFile(join(side.dir, "apps/desktop/e2e/chat-window-bench.mjs"), "utf8"),
         "guarded controller overlay",
       );
+      assert.equal(
+        await readlink(join(side.dir, ".claude/skills/verify-volli")),
+        "../../.agents/skills/verify-volli",
+      );
+      assert.ok(side.metadata.product[".claude/skills/verify-volli"]);
       await verifySource(side.dir, side.metadata);
     }
+    // Equal target contents do not make two different link identities equal.
+    const link = join(sides[1].dir, ".claude/skills/verify-volli");
+    await rm(link);
+    await symlink("../../.agents/skills/alternate", link);
+    await assert.rejects(verifySource(sides[1].dir, sides[1].metadata), /source changed/);
     await writeFile(join(sides[0].dir, "product.txt"), "unreported change");
     await assert.rejects(verifySource(sides[0].dir, sides[0].metadata), /source changed/);
   }));

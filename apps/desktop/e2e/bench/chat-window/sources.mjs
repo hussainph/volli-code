@@ -4,7 +4,7 @@
  */
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdir, readFile, readdir, readlink, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 const exec = promisify(execFile);
@@ -33,9 +33,18 @@ async function files(root, prefix = "") {
   }
   return result.toSorted();
 }
+async function fileDigest(root, path) {
+  const absolute = join(root, path);
+  if ((await lstat(absolute)).isSymbolicLink()) {
+    // Git archives preserve links, including links to directories. Hash the
+    // link itself, never follow its target (which may be missing or external).
+    return sha256(JSON.stringify(["symlink", path, await readlink(absolute)]));
+  }
+  return sha256(await readFile(absolute));
+}
 async function digests(root, paths) {
   const result = {};
-  for (const path of paths) result[path] = sha256(await readFile(join(root, path)));
+  for (const path of paths) result[path] = await fileDigest(root, path);
   return result;
 }
 export async function overlayManifest(repo) {
@@ -94,7 +103,7 @@ export async function prepareSources(repo, refs, root) {
       for (const path of overlayRoots) await rm(join(dir, path), { recursive: true, force: true });
       for (const path of Object.keys(overlay)) {
         await mkdir(join(dir, path, ".."), { recursive: true });
-        await cp(join(repo, path), join(dir, path));
+        await cp(join(repo, path), join(dir, path), { verbatimSymlinks: true });
       }
       // The historical direct host must not survive even in a prepared tree.
       await rm(join(dir, "apps/desktop/e2e/bench/chat-window/electron-main.cjs"), { force: true });
@@ -113,12 +122,12 @@ export async function verifySource(dir, metadata) {
       throw new Error(`unreported product source added: ${path}`);
   }
   for (const [path, digest] of Object.entries({ ...metadata.product, ...metadata.overlay.files })) {
-    if (sha256(await readFile(join(dir, path))) !== digest)
+    if ((await fileDigest(dir, path)) !== digest)
       throw new Error(`source changed since preparation: ${path}`);
   }
   for (const path of metadata.overlay.removed) {
     try {
-      await readFile(join(dir, path));
+      await lstat(join(dir, path));
     } catch (error) {
       if (error.code === "ENOENT") continue;
       throw error;
