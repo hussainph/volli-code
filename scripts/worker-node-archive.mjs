@@ -2,8 +2,18 @@
 // into its uniquely owned work directory before tar ever sees any bytes.
 import { createHash } from "node:crypto";
 import {
-  closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync,
-  mkdtempSync, openSync, readSync, rmSync, writeSync,
+  closeSync,
+  constants,
+  fstatSync,
+  fsyncSync,
+  linkSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readSync,
+  rmSync,
+  writeSync,
 } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,7 +29,11 @@ export function copyVerifiedArchive(source, destination, expected) {
   try {
     const before = fstatSync(input, { bigint: true });
     if (!before.isFile() || before.size > BigInt(limit)) throw failure("archive_download_failed");
-    output = openSync(destination, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    output = openSync(
+      destination,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+      0o600,
+    );
     const hash = createHash("sha256");
     const buffer = Buffer.alloc(64 * 1024);
     let total = 0;
@@ -34,9 +48,14 @@ export function copyVerifiedArchive(source, destination, expected) {
     }
     const after = fstatSync(input, { bigint: true });
     const named = lstatSync(source, { bigint: true });
-    if (!named.isFile() || ["dev", "ino", "size", "mtimeNs", "ctimeNs"].some(
-      (key) => before[key] !== after[key] || after[key] !== named[key],
-    ) || BigInt(total) !== before.size) throw failure("archive_download_failed");
+    if (
+      !named.isFile() ||
+      ["dev", "ino", "size", "mtimeNs", "ctimeNs"].some(
+        (key) => before[key] !== after[key] || after[key] !== named[key],
+      ) ||
+      BigInt(total) !== before.size
+    )
+      throw failure("archive_download_failed");
     const actual = hash.digest("hex");
     console.log(`archive_sha256_actual=${actual}`);
     if (actual !== expected) throw failure("archive_checksum_mismatch");
@@ -50,7 +69,9 @@ export function copyVerifiedArchive(source, destination, expected) {
 export function restoreArchive(cache, destination, expected) {
   // Only absence is a miss. Dangling symlinks, FIFO/device/directory entries,
   // changed files and checksum errors must never fall back to the network.
-  try { lstatSync(cache); } catch (error) {
+  try {
+    lstatSync(cache);
+  } catch (error) {
     if (error.code === "ENOENT") return false;
     throw error;
   }
@@ -78,11 +99,13 @@ export function publishArchive(source, cache, expected) {
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const [operation, cache, archive, expected] = process.argv.slice(2);
   try {
-    if (operation === "restore") process.exitCode = restoreArchive(cache, archive, expected) ? 0 : 2;
+    if (operation === "restore")
+      process.exitCode = restoreArchive(cache, archive, expected) ? 0 : 2;
     else if (operation === "publish") publishArchive(archive, cache, expected);
     else throw failure("archive_download_failed");
   } catch (error) {
-    const reason = error.message === "archive_checksum_mismatch" ? error.message : "archive_download_failed";
+    const reason =
+      error.message === "archive_checksum_mismatch" ? error.message : "archive_download_failed";
     console.log(`diagnostic_failure=${reason}`);
     process.exitCode = 1;
   }
