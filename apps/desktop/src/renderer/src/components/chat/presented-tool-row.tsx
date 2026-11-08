@@ -567,7 +567,11 @@ export function WebWorkGroup({
       >
         <GlobeIcon aria-hidden className="size-4 shrink-0" />
         <span>{running ? "Searching the web" : "Searched the web"}</span>
-        {sources.length > 0 ? <span>{sources.length} sources</span> : null}
+        {sources.length > 0 ? (
+          <span>
+            {sources.length} {sources.length === 1 ? "source" : "sources"}
+          </span>
+        ) : null}
         {failed > 0 ? <span>{failed} failed</span> : null}
         <ChevronRightIcon aria-hidden className="size-3 shrink-0" />
       </button>
