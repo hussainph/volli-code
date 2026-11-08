@@ -107,6 +107,125 @@ describe("the perf arithmetic", () => {
   });
 });
 
+describe("LoAF reporting", () => {
+  const runs = [
+    { startedAt: T0, lastSeenAt: T0 + HOUR, version: "old", build: null },
+    { startedAt: T0 + HOUR, lastSeenAt: T0 + 3 * HOUR, version: "new", build: null },
+  ];
+  const frame = (overrides: Partial<PerfStallRecord> = {}) =>
+    stall({
+      process: "renderer",
+      kind: "frame",
+      door: "renderer",
+      operation: "long-animation-frame",
+      ...overrides,
+    });
+  const window = {
+    since: T0,
+    until: T0 + 3 * HOUR,
+    process: null,
+    by: "operation",
+    limit: 1,
+  } as const;
+
+  it("omits the summary for old history, main stalls and input events", async () => {
+    const answer = await perfTop(
+      reader(
+        [
+          frame(),
+          stall({ scriptTotalMs: 50 }),
+          frame({ kind: "input", renderMs: 20 }),
+          frame({ operation: "longtask", scriptTotalMs: 50, renderMs: 20 }),
+        ],
+        runs,
+      ),
+      window,
+    );
+    expect(answer).not.toHaveProperty("loaf");
+  });
+
+  it("counts independently measured frames, keeping explicit zero and overlapping signals", async () => {
+    const answer = await perfTop(
+      reader(
+        [
+          frame(),
+          frame({ scriptTotalMs: 0, blockingMs: 0, renderMs: 80, styleLayoutMs: 60 }),
+          frame({ scriptTotalMs: 30, renderMs: 100 }),
+          frame({ at: T0 + 4 * HOUR, scriptTotalMs: 900 }),
+          stall({ scriptTotalMs: 900 }),
+        ],
+        runs,
+      ),
+      window,
+    );
+    expect(answer.loaf).toEqual({
+      script: { measuredFrames: 2, totalMs: 30, msPerHour: 10 },
+      blocking: { measuredFrames: 1, totalMs: 0, msPerHour: 0 },
+      render: { measuredFrames: 2, totalMs: 180, msPerHour: 60 },
+      styleLayout: { measuredFrames: 1, totalMs: 60, msPerHour: 20 },
+    });
+    const main = await perfTop(reader([frame({ renderMs: 80 })], runs), {
+      ...window,
+      process: "main",
+    });
+    expect(main).not.toHaveProperty("loaf");
+  });
+
+  it("leaves script unknown when packaged Chromium has no attribution", async () => {
+    const answer = await perfTop(reader([frame({ renderMs: 0 })], []), window);
+    expect(answer.loaf).toEqual({
+      script: { measuredFrames: 0, totalMs: null, msPerHour: null },
+      blocking: { measuredFrames: 0, totalMs: null, msPerHour: null },
+      render: { measuredFrames: 1, totalMs: 0, msPerHour: null },
+      styleLayout: { measuredFrames: 0, totalMs: null, msPerHour: null },
+    });
+  });
+
+  it("compares measured totals using each build's own hours, never converting old history to zero", async () => {
+    const store = reader(
+      [
+        frame({ version: "old" }),
+        frame({
+          version: "new",
+          at: T0 + 2 * HOUR,
+          scriptTotalMs: 0,
+          blockingMs: 0,
+          renderMs: 80,
+          styleLayoutMs: 60,
+        }),
+      ],
+      runs,
+    );
+    const answer = await perfCompare(store, { ...window, versions: ["old", "new"] });
+    expect(answer.a).not.toHaveProperty("loaf");
+    expect(answer.b.loaf).toEqual({
+      script: { measuredFrames: 1, totalMs: 0, msPerHour: 0 },
+      blocking: { measuredFrames: 1, totalMs: 0, msPerHour: 0 },
+      render: { measuredFrames: 1, totalMs: 80, msPerHour: 40 },
+      styleLayout: { measuredFrames: 1, totalMs: 60, msPerHour: 30 },
+    });
+    const overlap = await perfCompare(store, { ...window, versions: ["new", "new"] });
+    expect(overlap.a.loaf).toEqual(overlap.b.loaf);
+  });
+
+  it("mirrors only present flat fields into stall JSON, including measured zero", () => {
+    const fields = {
+      scriptTotalMs: 0,
+      blockingMs: 0,
+      renderMs: 80,
+      styleLayoutMs: 60,
+      scriptFile: "index-abc.js",
+      scriptFunction: "flushWork",
+      scriptInvoker: "user-callback",
+      scriptMs: 0,
+    };
+    expect(perfStallLine(frame(fields))).toMatchObject(fields);
+    expect(JSON.parse(JSON.stringify(perfStallLine(frame(fields))))).toMatchObject(fields);
+    const old = perfStallLine(frame());
+    for (const key of Object.keys(fields)) expect(old).not.toHaveProperty(key);
+  });
+});
+
 describe("perf top", () => {
   const runs = [{ startedAt: T0, lastSeenAt: T0 + 2 * HOUR, version: "0.3.0", build: null }];
 
