@@ -61,7 +61,10 @@ export function restoreArchive(cache, destination, expected) {
 export function publishArchive(source, cache, expected) {
   mkdirSync(dirname(cache), { recursive: true });
   if (!lstatSync(dirname(cache)).isDirectory()) throw failure("archive_download_failed");
-  const staging = mkdtempSync(`${cache}.partial-`);
+  // source is inside the symbolizer's uniquely owned (0700) work directory.
+  // Never stage under the untrusted cache parent: replacing that directory
+  // between descriptor verification and linkSync must not swap our source.
+  const staging = mkdtempSync(`${dirname(source)}/worker-node-publish-`);
   const temporary = `${staging}/archive`;
   try {
     copyVerifiedArchive(source, temporary, expected);

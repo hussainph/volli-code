@@ -132,6 +132,61 @@ test("publication is atomic, immutable and checksum-verified", (t) => {
   assert.equal(restoreArchive(join(directory, "absent"), join(directory, "unused"), digest("bytes")), false);
 });
 
+test("cache parent replacement cannot publish unverified staging bytes", (t) => {
+  const directory = temporary(t);
+  const work = join(directory, "owned-work");
+  const parent = join(directory, "untrusted-cache");
+  fs.mkdirSync(work, { mode: 0o700 });
+  fs.mkdirSync(parent);
+  const source = join(work, "node.tar.gz");
+  const cache = join(parent, "archive.tar.gz");
+  const original = Buffer.from("verified original archive bytes");
+  const poison = Buffer.from("unverified replacement archive bytes");
+  fs.writeFileSync(source, original);
+  const originalLink = fs.linkSync;
+  let replaced = false;
+  const mock = t.mock.method(fs, "linkSync", (from, to) => {
+    // Deterministically replace the cache parent after verification closed
+    // its descriptors, but before the atomic publication resolves paths.
+    replaced = true;
+    const moved = `${parent}.moved`;
+    fs.renameSync(parent, moved);
+    fs.mkdirSync(parent);
+    // Poison any staging paths that the old implementation placed under
+    // that parent. Do not touch the protected work directory or validation.
+    for (const entry of fs.readdirSync(moved, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        const replacement = join(parent, entry.name);
+        fs.mkdirSync(replacement);
+        fs.writeFileSync(join(replacement, "archive"), poison);
+      }
+    }
+    return originalLink(from, to);
+  });
+  syncBuiltinESMExports();
+  let failure;
+  try { publishArchive(source, cache, digest(original)); }
+  catch (error) { failure = error; }
+  finally { mock.mock.restore(); syncBuiltinESMExports(); }
+  assert.equal(replaced, true);
+  if (fs.existsSync(cache)) assert.deepEqual(fs.readFileSync(cache), original);
+  else assert.ok(failure, "publication must either fail or publish the verified original");
+  assert.deepEqual(fs.readdirSync(work), ["node.tar.gz"]);
+});
+
+test("publication rejects symlink and non-directory cache parents", (t) => {
+  const directory = temporary(t);
+  const source = join(directory, "source");
+  fs.writeFileSync(source, "bytes");
+  fs.mkdirSync(join(directory, "target"));
+  fs.symlinkSync(join(directory, "target"), join(directory, "symlink"));
+  fs.writeFileSync(join(directory, "file"), "not a directory");
+  for (const parent of ["symlink", "file"]) {
+    assert.throws(() => publishArchive(source, join(directory, parent, "archive"), digest("bytes")));
+  }
+  assert.deepEqual(fs.readdirSync(join(directory, "target")), []);
+});
+
 test("ordinary CI uses a narrow checksum-keyed cache without weakening diagnostic failure", () => {
   const workflow = fs.readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
   const section = workflow.slice(workflow.indexOf("      # Immutable optimization only:"), workflow.indexOf("      # A diagnostic failure stays red"));
