@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
+import { JSDOM } from "jsdom";
 import { sameOriginIconUrl } from "./source-icon-target";
 import { extractReadableMarkdown } from "./extract";
 
@@ -46,3 +47,42 @@ describe("explicit source icon metadata", () => {
     ).toBeUndefined();
   });
 });
+
+it("refuses malformed final-page URLs and policy-forbidden same-origin links", () => {
+  expect(sameOriginIconUrl("/icon", "not a URL")).toBeNull();
+  expect(sameOriginIconUrl("/icon", "http://127.0.0.1/page")).toBeNull();
+});
+
+it.each(["rel", "href"])(
+  "handles a DOM adapter losing %s after selecting link attributes",
+  (missing) => {
+    // querySelectorAll requires both attributes. Inject the defensive DOM-boundary
+    // fault explicitly rather than weakening that selector or deleting its guard.
+    const windowGetter = Object.getOwnPropertyDescriptor(JSDOM.prototype, "window")!.get!;
+    const patched = new WeakSet<object>();
+    vi.spyOn(JSDOM.prototype, "window", "get").mockImplementation(function (this: JSDOM) {
+      const window: JSDOM["window"] = windowGetter.call(this);
+      if (!patched.has(window)) {
+        patched.add(window);
+        const original = window.Element.prototype.getAttribute;
+        vi.spyOn(window.Element.prototype, "getAttribute").mockImplementation(function (
+          this: Element,
+          name: string,
+        ) {
+          return this.tagName === "LINK" && name === missing ? null : original.call(this, name);
+        });
+      }
+      return window;
+    });
+    try {
+      const result = extractReadableMarkdown(
+        '<head><link rel="icon" href="/icon"></head><body>Readable text.</body>',
+        PAGE,
+      );
+      expect(result.sourceIconUrl).toBeUndefined();
+      expect(result.text).toContain("Readable text.");
+    } finally {
+      vi.restoreAllMocks();
+    }
+  },
+);

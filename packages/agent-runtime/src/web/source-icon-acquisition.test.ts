@@ -12,6 +12,11 @@ import {
 } from "./safe-fetch";
 import { createWorkerSourceIconDecoder } from "./source-icon-decoder";
 
+vi.mock("node:dns/promises", async (original) => ({
+  ...(await original<typeof import("node:dns/promises")>()),
+  lookup: vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]),
+}));
+
 const PUBLIC: WebFetchAddress[] = [{ address: "93.184.216.34", family: 4 }];
 const servers: http.Server[] = [];
 const live = () => new AbortController().signal;
@@ -20,6 +25,7 @@ const page =
   '<html><head><base href="https://unrelated.example/"><link rel="shortcut ICON" href="/icon"></head><body><p>Readable source document.</p></body></html>';
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const server of servers.splice(0)) {
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -307,4 +313,135 @@ describe("successful-read source icon acquisition", () => {
     await f.read.fetch({ url: "http://source.example/doc", signal: live() });
     expect(await f.icons(f.candidates[0]!, live(), allowed)).toBeNull();
   });
+});
+
+it("refuses authorization revoked during DNS before any icon socket", async () => {
+  const f = await fixture((_request, response) => {
+    response.writeHead(200, { "content-type": "text/html" });
+    response.end(page);
+  });
+  await f.read.fetch({ url: "http://source.example/doc", signal: live() });
+  const pending = Promise.withResolvers<WebFetchAddress[]>();
+  let authorized = true;
+  const open = vi.fn((scheme: "http" | "https", options: WebRequestOptions) =>
+    f.transport.open(scheme, options),
+  );
+  const acquire = createSourceIconFetch({ resolve: () => pending.promise, open });
+  const result = acquire(f.candidates[0]!, live(), () => authorized);
+  authorized = false;
+  pending.resolve(PUBLIC);
+  expect(await result).toBeNull();
+  expect(open).not.toHaveBeenCalled();
+});
+
+it("rechecks authorization before a same-origin redirect hop", async () => {
+  let authorized = true;
+  const f = await fixture((request, response) => {
+    if (request.url === "/doc") {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end(page);
+    } else {
+      authorized = false;
+      response.writeHead(302, { location: "/next" });
+      response.end();
+    }
+  });
+  await f.read.fetch({ url: "http://source.example/doc", signal: live() });
+  expect(await f.icons(f.candidates[0]!, live(), () => authorized)).toBeNull();
+  expect(f.sent.map((request) => request.path)).toEqual(["/doc", "/icon"]);
+});
+
+it.each(["expired", "pre-aborted", "aborted-by-authority-check"] as const)(
+  "does not acquire a %s receipt",
+  async (reason) => {
+    const f = await fixture((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end(page);
+    });
+    await f.read.fetch({ url: "http://source.example/doc", signal: live() });
+    const abort = new AbortController();
+    if (reason === "expired") vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_001);
+    if (reason === "pre-aborted") abort.abort();
+    expect(
+      await f.icons(f.candidates[0]!, abort.signal, () => {
+        if (reason === "aborted-by-authority-check") abort.abort();
+        return true;
+      }),
+    ).toBeNull();
+    expect(f.sent).toHaveLength(1);
+  },
+);
+
+it.each(["image/png", "image/jpeg", "image/webp"] as const)(
+  "uses default DNS seam and retains accepted %s bytes",
+  async (mime) => {
+    const bytes = Buffer.from([1, 2, 3]);
+    const f = await fixture((request, response) => {
+      response.writeHead(200, { "content-type": request.url === "/doc" ? "text/html" : mime });
+      response.end(request.url === "/doc" ? page : bytes);
+    });
+    await f.read.fetch({ url: "http://source.example/doc", signal: live() });
+    const acquire = createSourceIconFetch({ open: f.transport.open });
+    expect(await acquire(f.candidates[0]!, live(), allowed)).toEqual({
+      bytes: Uint8Array.from(bytes),
+      mime,
+    });
+  },
+);
+
+it("keeps a successful page when icon enqueue throws or extractor metadata is invalid", async () => {
+  const f = await fixture((_request, response) => {
+    response.writeHead(200, { "content-type": "text/html" });
+    response.end(page);
+  });
+  const callback = vi.fn(() => {
+    throw new Error("queue closed");
+  });
+  const read = createSafeWebFetch({ ...f.transport, onSourceIcon: callback });
+  expect((await read.fetch({ url: "http://source.example/doc", signal: live() })).text).toContain(
+    "Readable source document.",
+  );
+  expect(callback).toHaveBeenCalledTimes(1);
+  callback.mockClear();
+  const invalid = createSafeWebFetch({
+    ...f.transport,
+    onSourceIcon: callback,
+    extract: async () => ({
+      text: "Readable text.",
+      extracted: true,
+      truncated: false,
+      sourceIconUrl: "http://other.example/icon",
+    }),
+  });
+  expect((await invalid.fetch({ url: "http://source.example/doc", signal: live() })).text).toBe(
+    "Readable text.",
+  );
+  expect(callback).not.toHaveBeenCalled();
+});
+
+it("discards a raster whose owner aborts at response EOF before promise delivery", async () => {
+  const f = await fixture((request, response) => {
+    response.writeHead(200, { "content-type": request.url === "/doc" ? "text/html" : "image/png" });
+    response.end(request.url === "/doc" ? page : Buffer.from([1]));
+  });
+  await f.read.fetch({ url: "http://source.example/doc", signal: live() });
+  const abort = new AbortController();
+  const acquire = createSourceIconFetch({
+    resolve: f.transport.resolve,
+    open: (scheme, options) => {
+      const request = f.transport.open(scheme, options);
+      // The reader installs its response handler before calling end(). Add our
+      // EOF observer then, AFTER that handler, with no clock sleeps or retries.
+      const end = request.end.bind(request);
+      vi.spyOn(request, "end").mockImplementation(() => {
+        request.once("response", (response) =>
+          response.once("end", () => queueMicrotask(() => abort.abort())),
+        );
+        return end();
+      });
+      return request;
+    },
+  });
+  expect(await acquire(f.candidates[0]!, abort.signal, allowed)).toBeNull();
+  expect(f.sent).toHaveLength(2);
 });
