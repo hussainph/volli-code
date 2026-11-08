@@ -98,6 +98,35 @@ function host(url: string): string | null {
     return null;
   }
 }
+/** Preserve the legacy first nonempty server/tool split without backtracking.
+ * Dot captures reject all line terminators. The hash check scans only eight
+ * characters, and stripping it must leave a nonempty tool. */
+function legacyMcpName(name: string): { server: string; tool: string } | null {
+  const end = name.length;
+  for (let index = 5; index < end; index += 1) {
+    const code = name.charCodeAt(index);
+    if (code === 10 || code === 13 || code === 0x2028 || code === 0x2029) return null;
+  }
+  // Start after at least one server character, including overlapping `__`.
+  const delimiter = name.indexOf("__", 6);
+  const toolStart = delimiter + 2;
+  if (delimiter < 0 || toolStart >= end) return null;
+  let toolEnd = end;
+  const suffix = end - 10;
+  if (suffix > toolStart && name.startsWith("__", suffix)) {
+    let hex = true;
+    for (let index = end - 8; index < end; index += 1) {
+      const code = name.charCodeAt(index);
+      if (!((code >= 48 && code <= 57) || (code >= 97 && code <= 102))) {
+        hex = false;
+        break;
+      }
+    }
+    if (hex) toolEnd = suffix;
+  }
+  return { server: name.slice(5, delimiter), tool: name.slice(toolStart, toolEnd) };
+}
+
 export function humanToolName(value: string): string {
   return value
     .replace(/([a-z])([A-Z])/g, "$1 $2")
@@ -579,12 +608,12 @@ export function presentTranscriptTool(
   }
   if (name.startsWith("mcp__")) {
     const mapped = context.mcpNames?.get(name);
-    const legacy = /^mcp__(.+?)__(.+?)(?:__[a-f0-9]{8})?$/.exec(name);
-    const server = mapped?.server ?? (legacy ? humanToolName(legacy[1]!) : "MCP server");
+    const legacy = legacyMcpName(name);
+    const server = mapped?.server ?? (legacy ? humanToolName(legacy.server) : "MCP server");
     const title =
       str(part.title) && part.title !== name
         ? part.title
-        : (mapped?.tool ?? (legacy ? humanToolName(legacy[2]!) : "Tool"));
+        : (mapped?.tool ?? (legacy ? humanToolName(legacy.tool) : "Tool"));
     if (input) sections.push({ label: "Arguments", text: JSON.stringify(input, null, 2) });
     // MCP bodies are never passed through a Volli framing scrubber.
     const warning =
