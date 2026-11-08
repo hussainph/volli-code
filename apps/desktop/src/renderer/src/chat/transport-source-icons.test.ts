@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { TRPCClientError } from "@trpc/client";
 import type { IpcEvent, IpcResponse } from "@volli/host-protocol/ipc";
 import type { SourceIconsSnapshot } from "@volli/shared";
 import { createSessionRpcClient, type SessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
@@ -6,12 +7,14 @@ import { sourceIconsFor } from "./transport";
 
 const state = vi.hoisted(() => ({
   client: null as SessionRpcClient | null,
+  subscribe: null as SessionRpcClient["sourceIcons"]["watch"]["subscribe"] | null,
   cloud: false,
   remote: false,
 }));
 vi.mock("@renderer/lib/session-rpc-ipc-link", async (original) => ({
   ...(await original<typeof import("@renderer/lib/session-rpc-ipc-link")>()),
-  sessionRpcClient: () => state.client!,
+  sessionRpcClient: () =>
+    state.subscribe ? { sourceIcons: { watch: { subscribe: state.subscribe } } } : state.client!,
 }));
 vi.mock("@renderer/stores/launch", () => ({
   launchStore: () => (state.cloud ? "cloud" : "local"),
@@ -24,6 +27,7 @@ afterEach(() => {
   state.cloud = false;
   state.remote = false;
   state.client = null;
+  state.subscribe = null;
 });
 const input = { sessionId: "session", origins: ["https://example.com"] };
 const snapshot: SourceIconsSnapshot = {
@@ -117,6 +121,45 @@ describe("source icon subscription adapter through the actual generic IPC client
       icons: [{ origin: "https://example.com", pictureId: null, registrableDomain: null }],
     });
     stop();
+  });
+
+  it("ignores late data and errors after cancellation, and data after ownership changes", async () => {
+    let callbacks: Parameters<SessionRpcClient["sourceIcons"]["watch"]["subscribe"]>[1];
+    const unsubscribe = vi.fn();
+    state.subscribe = (_input, handlers) => {
+      callbacks = handlers;
+      return { unsubscribe };
+    };
+    const receive = vi.fn();
+    const stop = sourceIconsFor(null)!.watch(input, receive);
+    await turn();
+    state.remote = true;
+    callbacks!.onData?.(snapshot);
+    expect(receive).not.toHaveBeenCalled();
+    state.remote = false;
+    callbacks!.onData?.(snapshot);
+    expect(receive).toHaveBeenCalledExactlyOnceWith(snapshot);
+    stop();
+    callbacks!.onData?.(snapshot);
+    callbacks!.onError?.(TRPCClientError.from(new Error("late failure")));
+    expect(receive).toHaveBeenCalledTimes(1);
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes a handle returned after cancellation during subscription construction", async () => {
+    const unsubscribe = vi.fn();
+    let stop = noop;
+    state.subscribe = () => {
+      stop();
+      return { unsubscribe };
+    };
+    const receive = vi.fn();
+    stop = sourceIconsFor(null)!.watch(input, receive);
+    await turn();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    expect(receive).not.toHaveBeenCalled();
+    stop();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 
   it("never falls back to this Mac for cloud or remote Sessions", () => {

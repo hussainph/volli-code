@@ -1993,6 +1993,7 @@ describe("the desktop router's grammar", () => {
     expect(Object.keys(schemas).toSorted()).toEqual(
       [
         "shells.moveToBackground",
+        "sourceIcons.watch",
         "project.reorder",
         "project.remove",
         "backups.status",
