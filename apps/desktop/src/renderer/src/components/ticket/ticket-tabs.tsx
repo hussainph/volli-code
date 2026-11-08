@@ -49,6 +49,8 @@ import { WordWrapContextMenuItem } from "@renderer/components/editor/word-wrap-m
 import { CopyPathContextMenuItems } from "@renderer/components/files/copy-path-menu";
 import { ExternalAppContextMenu } from "@renderer/components/files/external-app-menu";
 import { SessionGlyph } from "@renderer/components/sessions/session-glyph";
+import { providerIdentityOf, providerLabelOf } from "@renderer/components/models/model-identity";
+import { useModelCatalogue } from "@renderer/lib/use-model-catalogue";
 import { TabContextActions, type TabAction } from "@renderer/components/ui/tab-actions";
 import { hidesToIsland, useBrowserTabsStore } from "@renderer/stores/browser-tabs";
 import { browserTabAddress } from "@renderer/chat/use-island-tabs";
@@ -340,6 +342,13 @@ function TicketTab({
     return row?.kind === "chat" ? (row.record.model?.providerId ?? null) : null;
   });
   const providerId = liveProvider ?? savedProvider;
+  const catalogue = useModelCatalogue();
+  const providers = catalogue?.providers ?? [];
+  const providerLabel = providerId === null ? "Chat" : providerLabelOf(providers, providerId);
+  const providerIdentity =
+    tab.kind !== "chat" || providerId === null
+      ? undefined
+      : providerIdentityOf(providers, providerId);
   const provenance = useSessionProvenance(projectId, sessionId);
   const provenanceLine = sessionProvenanceHoverLine(provenance);
   const parked = terminal !== null && terminal.parked && !terminal.exited;
@@ -368,6 +377,7 @@ function TicketTab({
       data-testid={tab.kind === "browser" ? "ticket-browser-tab" : undefined}
       data-preview={preview ? "true" : undefined}
       label={tab.label}
+      identity={providerIdentity}
       active={active}
       tabStop={tabStop}
       dragId={dragId}
@@ -414,10 +424,10 @@ function TicketTab({
         tab.kind === "chat" ? (
           <SessionGlyph
             providerId={providerId}
-            providerLabel={providerId ?? "Chat"}
+            providerLabel={providerLabel}
             state={tab.status ?? null}
             kind="chat"
-            name={`${providerId ?? "Chat"}, ${tab.status ?? "idle"}`}
+            name={`${providerIdentity ?? providerLabel}, ${tab.status ?? "idle"}`}
             size="tab"
           />
         ) : tab.kind === "browser" ? (

@@ -262,7 +262,7 @@ function ProviderAccount({
   return (
     <>
       <ItemRow
-        name={provider.label}
+        name={null}
         leading={
           <IdentityTile>
             <ModelMark
@@ -285,7 +285,13 @@ function ProviderAccount({
         ) : (
           <>
             {provider.hasStoredCredential ? (
-              <Button size="sm" variant="ghost" disabled={busy} onClick={() => void signOut()}>
+              <Button
+                size="sm"
+                variant="ghost"
+                aria-label={`Sign out of ${provider.label}`}
+                disabled={busy}
+                onClick={() => void signOut()}
+              >
                 {signingOut ? <LoadingLabel>Signing out</LoadingLabel> : "Sign out"}
               </Button>
             ) : null}
@@ -328,7 +334,13 @@ function SignInControl({
   if (action === "none") return null;
   if (action === "retry") {
     return (
-      <Button size="sm" variant="secondary" disabled={busy} onClick={onRetry}>
+      <Button
+        size="sm"
+        variant="secondary"
+        aria-label={`Retry ${provider.label}`}
+        disabled={busy}
+        onClick={onRetry}
+      >
         Retry
       </Button>
     );
@@ -336,7 +348,13 @@ function SignInControl({
   const only = provider.signIn[0];
   if (action === "sign-in" && only !== undefined) {
     return (
-      <Button size="sm" variant="secondary" disabled={busy} onClick={() => onSignIn(only.type)}>
+      <Button
+        size="sm"
+        variant="secondary"
+        aria-label={`Sign in to ${provider.label}`}
+        disabled={busy}
+        onClick={() => onSignIn(only.type)}
+      >
         Sign in
       </Button>
     );
@@ -344,7 +362,12 @@ function SignInControl({
   return (
     <DropdownMenu defaultOpen={autoOpenChoice}>
       <DropdownMenuTrigger asChild>
-        <Button size="sm" variant="secondary" disabled={busy}>
+        <Button
+          size="sm"
+          variant="secondary"
+          aria-label={`Sign in to ${provider.label}`}
+          disabled={busy}
+        >
           Sign in
         </Button>
       </DropdownMenuTrigger>
