@@ -159,6 +159,9 @@ it("serves saved Session pictures in bounded chunks and names absence without ch
   expect(
     await handlers()["session.picture"]({ sessionId: "session", pictureId: id }, USER),
   ).toEqual({ data: null, mimeType: null, nextOffset: null });
+  expect(
+    await handlers()["session.picture"]({ sessionId: "session", pictureId: id }, WINDOW),
+  ).toEqual({ data: null, mimeType: null, nextOffset: null });
 });
 
 it("keeps source icon references and pixels local, Session-scoped and revocable", async () => {
