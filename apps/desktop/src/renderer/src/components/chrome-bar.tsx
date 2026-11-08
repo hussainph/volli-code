@@ -56,8 +56,6 @@ export function ChromeBar() {
 
   return (
     <ControlShapeProvider context="toolbar">
-      {/* relative: the command trigger centers itself against the band, not the
-          flex row, so it stays put when the traffic-light spacer collapses. */}
       {/* No fill (#74): the band was already painted in the backdrop's own
           token, so it has nothing of its own to give up — it now sits on the
           canvas layer like the rail does. The ⌘K pill keeps its own material
@@ -65,42 +63,43 @@ export function ChromeBar() {
           fill rather than as a fill of its own. */}
       <div
         data-slot="chrome-bar"
-        className="app-region-drag relative flex h-(--spacing-titlebar) shrink-0 items-center"
+        className="app-region-drag relative grid h-(--spacing-titlebar) shrink-0 grid-cols-[minmax(max-content,1fr)_minmax(0,416px)_minmax(max-content,1fr)] items-center gap-2"
       >
-        {/* Clears the native traffic-light group plus breathing room so the
-          trigger doesn't crowd it.
-          Fullscreen hides the lights, so the spacer collapses and the trigger
-          slides to the left edge — same animation the old rail-top-strip used. */}
-        <div className={cn("shrink-0", fullScreen ? "w-2" : "w-[100px]")} />
+        {/* Equal flexible sides centre search when there is room. Their intrinsic
+            floors protect navigation; the middle track yields instead of painting
+            over the host. 416px is the 380px capsule + 8px gap + 28px usage key. */}
+        <div data-slot="chrome-leading" className="flex items-center">
+          {/* Fullscreen hides the native lights but keeps a small drag inset. */}
+          <div className={cn("shrink-0", fullScreen ? "w-2" : "w-[100px]")} />
+          {terminalFocusTarget === null ? (
+            <>
+              <NavHistoryButtons />
+              <div className="app-region-no-drag ml-px flex items-center gap-px">
+                <SidebarLayoutMenu>
+                  <SidebarTrigger
+                    variant="toolbar"
+                    size="icon"
+                    aria-label="Toggle navigation sidebar"
+                    title="Toggle navigation sidebar (⌘B)"
+                  />
+                </SidebarLayoutMenu>
+                <HiddenProjectsMenu />
+              </div>
+              <HostChip />
+            </>
+          ) : null}
+        </div>
         {terminalFocusTarget !== null ? (
-          <TerminalFocusBreadcrumb />
+          <div>
+            <TerminalFocusBreadcrumb />
+          </div>
         ) : (
-          <>
-            <NavHistoryButtons />
-            <div className="app-region-no-drag ml-px flex items-center gap-px">
-              <SidebarLayoutMenu>
-                <SidebarTrigger
-                  variant="toolbar"
-                  size="icon"
-                  aria-label="Toggle navigation sidebar"
-                  title="Toggle navigation sidebar (⌘B)"
-                />
-              </SidebarLayoutMenu>
-              <HiddenProjectsMenu />
-            </div>
-            {/* Which machine the project in front runs on (VC-576). Nothing
-                with the `cloud` flag off. */}
-            <HostChip />
-            <CommandCluster onCommandPalette={() => setCommandPaletteOpen(true)} />
-            {/* The content-area tab strip (if any) lives below in MainContent, not here. */}
-          </>
+          <CommandCluster onCommandPalette={() => setCommandPaletteOpen(true)} />
         )}
-        {/* Outside the ternary so the spacer keeps its slot in this element's
-            children across the focus transition rather than being reconciled
-            against the breadcrumb. */}
-        <div className="flex-1" />
-        {terminalFocusTarget === null ? <InspectorToolbarToggle /> : null}
-        <TerminalFocusExit />
+        <div className="flex items-center justify-end">
+          {terminalFocusTarget === null ? <InspectorToolbarToggle /> : null}
+          <TerminalFocusExit />
+        </div>
       </div>
       <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} />
       {/* "Add a host…" and "Manage hosts…" (VC-700): the Add-a-host sheet and
@@ -301,7 +300,10 @@ function InspectorToolbarToggle() {
 /** Search and usage form one elastic, window-centred toolbar group. */
 function CommandCluster({ onCommandPalette }: { onCommandPalette(): void }) {
   return (
-    <div className="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center gap-2">
+    <div
+      data-slot="chrome-command-cluster"
+      className="@container/chrome-search flex min-w-0 items-center gap-2"
+    >
       <CommandPaletteTrigger onClick={onCommandPalette} />
       <UsageLimitsPopover />
     </div>
@@ -322,10 +324,12 @@ function CommandPaletteTrigger({ onClick }: { onClick(): void }) {
         aria-haspopup="dialog"
         aria-label="Search tickets, sessions, and commands"
         title="Search tickets, sessions, and commands (⌘K)"
-        className="search-capsule glass-control app-region-no-drag flex h-(--spacing-chrome-control) w-[380px] max-w-[40vw] items-center gap-2 px-3 text-left text-ui text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="search-capsule glass-control app-region-no-drag flex h-(--spacing-chrome-control) min-w-0 flex-1 items-center justify-between gap-2 px-3 text-left text-ui text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <SearchIcon className="size-3.5 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 flex-1 truncate">Search tickets, sessions, and commands</span>
+        <span className="min-w-0 flex-1 truncate @max-[14rem]/chrome-search:hidden">
+          Search tickets, sessions, and commands
+        </span>
         {/* The keycap reads as cut out of the pill, so it goes the other way:
           toward the canvas floor. `--background` is near-black in dark (what
           the literal used to be) and near-white in light, which is what a key
