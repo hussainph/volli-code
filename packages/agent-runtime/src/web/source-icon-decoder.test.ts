@@ -216,27 +216,47 @@ it("contains a synchronous post failure and still joins the actual thread", asyn
 it.each(["throw", "reject"] as const)(
   "retains teardown observation when terminate %s fails",
   async (mode) => {
-    const realTerminate = Worker.prototype.terminate;
-    const workers: Worker[] = [];
-    const originalPost = Worker.prototype.postMessage;
-    vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (this: Worker, ...args) {
-      workers.push(this);
-      return originalPost.apply(this, args);
-    });
-    vi.spyOn(Worker.prototype, "terminate").mockImplementation(() => {
+    const owned = ownWorkers();
+    const terminate = vi.spyOn(Worker.prototype, "terminate").mockImplementation(() => {
       if (mode === "throw") throw new Error("termination refused");
       return Promise.reject(new Error("termination rejected"));
     });
     const decode = createWorkerSourceIconDecoder(SCRIPTED);
     try {
       expect(
-        await decode({ bytes: new Uint8Array([VALID_PNG_REPLY]), mime: "image/png" }, live()),
+        await bounded(
+          decode({ bytes: new Uint8Array([VALID_PNG_REPLY, 1]), mime: "image/png" }, live()),
+          "held worker reply",
+        ),
       ).not.toBeNull();
-      // A late worker error must have an observer even after logical completion.
-      workers[0]!.emit("error", new Error("late worker failure"));
-      await decode.settled!();
+      expect(owned.workers).toHaveLength(1);
+      const worker = owned.workers[0]!;
+      const exited = new Promise<number>((resolve) => worker.once("exit", resolve));
+      let settled = false;
+      const settling = decode.settled!().then(() => {
+        settled = true;
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(terminate).toHaveBeenCalledOnce();
+      expect(worker.threadId).toBeGreaterThan(0);
+      expect(settled).toBe(false);
+      expect(
+        await bounded(
+          decode({ bytes: new Uint8Array([VALID_PNG_REPLY]), mime: "image/png" }, live()),
+          "failed termination retains physical slot",
+        ),
+      ).toBeNull();
+      expect(owned.workers).toHaveLength(1);
+      // Trigger a genuine late error while the real thread is held LIVE. No
+      // test error listener masks the production observer. Emitting manually
+      // after natural exit tests Node's removed listeners, not this contract.
+      worker.postMessage({ action: "throw-after-reply" }, []);
+      expect(await bounded(exited, "controlled late worker error/exit")).toBe(1);
+      await bounded(settling, "settlement after actual worker exit");
+      expect(settled).toBe(true);
+      expect(worker.threadId).toBe(-1);
     } finally {
-      await Promise.all(workers.map((worker) => realTerminate.call(worker)));
+      await owned.close();
     }
   },
 );

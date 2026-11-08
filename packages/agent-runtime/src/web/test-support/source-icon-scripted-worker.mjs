@@ -71,6 +71,9 @@ port.once("message", ({ bytes }) => {
   if (bytes[1] === 1) {
     // A real live thread for the physical-lease ordering test. The parent's
     // independent finally must terminate it even when production teardown fails.
-    port.once("message", () => port.close());
+    port.once("message", (control) => {
+      if (control?.action === "throw-after-reply") throw new Error("scripted late worker failure");
+      port.close();
+    });
   } else port.close();
 });
