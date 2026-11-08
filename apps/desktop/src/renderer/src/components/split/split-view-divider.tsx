@@ -157,7 +157,7 @@ export function SplitViewDivider({
       data-slot="split-view-divider"
       className={cn(
         "group relative z-10 shrink-0 bg-transparent outline-none focus-visible:ring-1 focus-visible:ring-primary",
-        vertical ? "w-1.5 cursor-col-resize" : "h-1.5 cursor-row-resize",
+        vertical ? "w-[5px] cursor-col-resize" : "h-[5px] cursor-row-resize",
       )}
       onPointerDown={(event) => {
         const parent = event.currentTarget.parentElement;
@@ -206,7 +206,7 @@ export function SplitViewDivider({
     >
       <span
         className={cn(
-          "absolute bg-border transition-colors duration-150 group-hover:bg-primary/70 group-focus-visible:bg-primary",
+          "absolute bg-border group-hover:bg-primary-text group-focus-visible:bg-ring",
           vertical
             ? "inset-y-0 left-1/2 w-px -translate-x-1/2"
             : "inset-x-0 top-1/2 h-px -translate-y-1/2",

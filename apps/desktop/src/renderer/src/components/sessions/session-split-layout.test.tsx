@@ -105,6 +105,66 @@ describe("SessionSplitLayout's divider", () => {
     expect(grip.getAttribute("aria-valuemax")).toBe("90");
   });
 
+  it("names both panes in compact headers, preserves the terminal viewport and makes close explicit", () => {
+    const onClose = vi.fn();
+    act(() =>
+      root?.render(
+        <SessionSplitLayout
+          ownerId="project-1"
+          tab={tab("vertical", 0.5)}
+          visible
+          onActivate={noop}
+          onSplit={noop}
+          onClose={onClose}
+          onResize={noop}
+        />,
+      ),
+    );
+    const headers = container?.querySelectorAll('[data-slot="pane-header"]');
+    expect(headers).toHaveLength(2);
+    expect(headers?.[0]?.className).toContain("h-control-default");
+    expect(container?.querySelector('[data-testid="left"]')).not.toBeNull();
+    expect(container?.querySelector('[data-testid="right"]')).not.toBeNull();
+    const close = container?.querySelector<HTMLButtonElement>('button[aria-label="Close pane"]');
+    act(() => close?.click());
+    expect(onClose).toHaveBeenCalledWith("left");
+    expect(container?.querySelectorAll('button[aria-label="Terminal actions"]')).toHaveLength(2);
+  });
+
+  it("keeps all terminal commands in the header menu and routes splitting to its own pane", async () => {
+    const onSplit = vi.fn();
+    act(() =>
+      root?.render(
+        <SessionSplitLayout
+          ownerId="project-1"
+          tab={tab("vertical", 0.5)}
+          visible
+          onActivate={noop}
+          onSplit={onSplit}
+          onClose={noop}
+          onResize={noop}
+        />,
+      ),
+    );
+    const trigger = container?.querySelector<HTMLButtonElement>(
+      'button[aria-label="Terminal actions"]',
+    );
+    await act(async () => {
+      trigger?.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
+    });
+    const items = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')];
+    expect(items.map((item) => item.textContent)).toEqual([
+      "Split Right⌘D",
+      "Split Down⇧⌘D",
+      "Increase Font Size⌘+",
+      "Decrease Font Size⌘−",
+      "Reset Font Size⌘0",
+      "Close pane",
+    ]);
+    act(() => items[1]?.click());
+    expect(onSplit).toHaveBeenCalledWith("left", "horizontal");
+  });
+
   it("routes a keyboard step through onResize, as a drag would", () => {
     const onResize = vi.fn();
     const grip = render(tab("vertical", 0.5), onResize);

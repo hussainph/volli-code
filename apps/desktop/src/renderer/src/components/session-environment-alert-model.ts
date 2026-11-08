@@ -14,7 +14,7 @@ export interface SessionEnvironmentAlertState {
   /**
    * The app fault this notice reports, or `null` for the project-readiness
    * notice — a project's own onboarding shortfall, not a fault of the app, and
-   * dismissed for the view rather than durably.
+   * dismissed by measured identity durably in the project workspace.
    */
   fault: SessionEnvironmentFaultKind | null;
   /**
@@ -56,32 +56,16 @@ type SessionEnvironmentFaultNotice = SessionEnvironmentAlertState & {
 /** The one project fact the shared alert needs; Configure owns future repair UI. */
 export interface ProjectEnvironmentScope {
   name: string;
+  id?: string;
 }
 
 /**
- * The required tools this Session PATH cannot resolve — the one place that is
- * judged. Only what this project implies (VC-157): a Python repo is never
- * short of `node`, a yarn workspace is never short of `pnpm`, and no project
- * is short of `gh` before a PR action asks for it. The wider `tools` record
- * stays measured and reported — in Settings and `volli identify` — without
- * any of it becoming a fault here.
+ * Repository onboarding checks git only. Runtime and package-manager evidence
+ * stays complete for agents and support, but never raises a person-facing notice.
  */
-function missingSessionTools(status: Pick<CliToolStatus, "environment">): string[] {
+function missingRepositoryGit(status: Pick<CliToolStatus, "environment">): boolean {
   const { tools, requiredTools } = status.environment.session;
-  return requiredTools.filter((tool) => tools[tool] === null);
-}
-
-/**
- * "git", "git and gh", "git, gh and node" — a sentence, never a CSV.
- *
- * The readiness notice below renders the SAME list as a plain comma list on
- * purpose, and the difference is not an oversight: it prints under a `Missing
- * from the Session PATH:` label, where a conjunction would read as prose
- * inside a field. This one is spoken mid-sentence, where a CSV would not.
- */
-function plainList(items: readonly string[]): string {
-  if (items.length <= 1) return items.join("");
-  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+  return requiredTools.includes("git") && tools.git === null;
 }
 
 /**
@@ -90,10 +74,8 @@ function plainList(items: readonly string[]): string {
  * Two conditions, both required. BOTH login-shell passes failed — a boot
  * failure the later interactive pass recovered from left Sessions with a
  * working PATH, and a launch-wide banner about a repair that already happened
- * is noise. AND something a Session needs is consequently unresolvable: a
- * short PATH that still resolves every contract tool has cost the user
- * nothing they can see, so it belongs in Settings → CLI with the rest of the
- * evidence, not above their board.
+ * is noise. AND repository git is consequently unresolvable. Other missing
+ * tools belong in the agent environment and support evidence, not above the board.
  *
  * `pending` is not a failure (see `SessionEnvInteractiveProvenance`): the
  * second pass runs after the first window precisely so nothing waits on it.
@@ -107,33 +89,22 @@ function loginPathFault(
 ): SessionEnvironmentFaultNotice | null {
   const { provenance, interactiveProvenance } = status.environment.session;
   if (provenance !== "probe-failed" || interactiveProvenance !== "probe-failed") return null;
-  const missing = missingSessionTools(status);
-  if (missing.length === 0) return null;
+  if (!missingRepositoryGit(status)) return null;
   return {
     fault: "login-path-unreadable",
     key: "login-path-unreadable",
     title: "Volli couldn't read your terminal's PATH",
-    detail: `Sessions can't find ${plainList(missing)}, so some commands may be missing. Fix now asks your terminal again — Sessions you start afterwards get the result.`,
+    detail: "Sessions can't find git.",
   };
 }
 
 /**
- * The project readiness sentence: what was measured, plus the one step it
- * implies. `null` when the project has nothing missing.
- *
- * Missing PATH tools, and NOT missing dependencies (VC-156). A checkout
- * without its `node_modules` is a normal state of the world, not a fault:
- * the agent carries that fact in its own prompt (`RuntimeWorkspaceEnvironment`),
- * with a neutral offer beside the project for whoever would rather run it
- * themselves (`workspace-dependencies-offer.tsx`). What is left here is what
- * the word "fault" still fits: a required tool the Session PATH cannot resolve.
+ * Only missing repository git reaches this notice. Dependency installation and
+ * the rest of the tool census belong to the agent's workspace environment.
  */
 function readinessDetail(status: Pick<CliToolStatus, "environment">): string | null {
-  const missingTools = missingSessionTools(status);
-  if (missingTools.length === 0) return null;
-  // No CLI incantation: a first-run reader is pointed at the door that holds
-  // the evidence and the repair button, not handed a command to type.
-  return `Missing from the Session PATH: ${missingTools.join(", ")}. If they are installed, open Settings → CLI to repair the Session PATH.`;
+  if (!missingRepositoryGit(status)) return null;
+  return "Missing from the Session PATH: git";
 }
 
 /**
@@ -152,8 +123,8 @@ export function projectEnvironmentReadiness(
   if (detail === null) return null;
   return {
     fault: null,
-    // The measured facts, not the sentence built from them.
-    key: `readiness:${project.name}:${missingSessionTools(status).join(",")}`,
+    // Preserve the durable git-only dismissal key, independent of UI wording.
+    key: `readiness:${project.id ?? project.name}:git`,
     title: `Sessions aren't ready for ${project.name}`,
     detail,
   };

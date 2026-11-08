@@ -3,25 +3,39 @@
 import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 
+import {
+  CONTROL_SIZE,
+  FIELD_SURFACE,
+  type ControlSize,
+} from "@renderer/components/ui/field-classes";
+
 import { cn } from "@renderer/lib/utils";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
 import { Textarea } from "@renderer/components/ui/textarea";
 
-function InputGroup({ className, ...props }: React.ComponentProps<"div">) {
+function InputGroup({
+  className,
+  controlSize = "default",
+  ...props
+}: React.ComponentProps<"div"> & { controlSize?: ControlSize }) {
   return (
     <div
       data-slot="input-group"
+      data-size={controlSize}
       role="group"
       className={cn(
-        "group/input-group relative flex w-full items-center rounded-control border border-border shadow-raised transition-[color,border-color,box-shadow] outline-none dark:bg-border/30",
-        "h-7 min-w-0 has-[>textarea]:h-auto",
+        "group/input-group relative flex w-full items-center rounded-control transition-[color,border-color,box-shadow] outline-none",
+        CONTROL_SIZE[controlSize],
+        "[--control-inset:var(--spacing-control-pad-default)] data-[size=xs]:[--control-inset:var(--spacing-control-pad-xs)] data-[size=sm]:[--control-inset:var(--spacing-control-pad-sm)] data-[size=lg]:[--control-inset:var(--spacing-control-pad-lg)] [&>input]:px-(--control-inset)",
+        FIELD_SURFACE,
+        "min-w-0 px-0 has-[>textarea]:h-auto [&>input]:h-full data-[disabled=true]:opacity-50 has-[>input:disabled]:opacity-50 has-[>textarea:disabled]:opacity-50 [&>input:disabled]:opacity-100 [&>textarea:disabled]:opacity-100",
 
         // Variants based on alignment.
         "has-[>[data-align=inline-start]]:[&>input]:pl-2",
         "has-[>[data-align=inline-end]]:[&>input]:pr-2",
-        "has-[>[data-align=block-start]]:h-auto has-[>[data-align=block-start]]:flex-col has-[>[data-align=block-start]]:[&>input]:pb-4",
-        "has-[>[data-align=block-end]]:h-auto has-[>[data-align=block-end]]:flex-col has-[>[data-align=block-end]]:[&>input]:pt-4",
+        "has-[>[data-align=block-start]]:h-auto has-[>[data-align=block-start]]:flex-col ",
+        "has-[>[data-align=block-end]]:h-auto has-[>[data-align=block-end]]:flex-col ",
 
         // Error state.
         "has-[[data-slot][aria-invalid=true]]:border-destructive",
@@ -34,16 +48,15 @@ function InputGroup({ className, ...props }: React.ComponentProps<"div">) {
 }
 
 const inputGroupAddonVariants = cva(
-  "flex h-auto cursor-text items-center justify-center gap-2 py-1 text-ui font-medium text-muted-foreground select-none group-data-[disabled=true]/input-group:opacity-50 [&>kbd]:rounded-sm [&>svg:not([class*='size-'])]:size-3.5",
+  "flex h-auto cursor-text items-center justify-center gap-2 py-1 text-ui font-medium text-muted-foreground select-none [&>kbd]:rounded-sm [&>svg:not([class*='size-'])]:size-3.5",
   {
     variants: {
       align: {
-        "inline-start": "order-first pl-4 has-[>button]:ml-[-0.45rem] has-[>kbd]:ml-[-0.35rem]",
-        "inline-end": "order-last pr-4 has-[>button]:mr-[-0.45rem] has-[>kbd]:mr-[-0.35rem]",
+        "inline-start": "order-first pl-(--control-inset)",
+        "inline-end": "order-last pr-(--control-inset)",
         "block-start":
-          "order-first w-full justify-start px-4 pt-4 group-has-[>input]/input-group:pt-2 [.border-b]:pb-4",
-        "block-end":
-          "order-last w-full justify-start px-4 pb-4 group-has-[>input]/input-group:pb-2 [.border-t]:pt-4",
+          "order-first w-full justify-start px-(--control-inset) pt-2 pb-1 text-foreground [&_[data-slot=input-group-text]]:text-foreground",
+        "block-end": "order-last w-full justify-start px-(--control-inset) pt-1 pb-2 font-normal",
       },
     },
     defaultVariants: {
@@ -82,8 +95,7 @@ function InputGroupAddon({
  * composer shipped a 24px Stop beside a 32px Submit in the same row. Forwarding
  * `size` straight through is what makes that unrepeatable: there is one set of
  * numbers, and this component no longer holds an opinion about them. All it
- * contributes is the group's ghost default and dropping the elevation a button
- * inside a field has no business drawing.
+ * contributes is the group's ghost default.
  */
 function InputGroupButton({
   className,
@@ -92,20 +104,13 @@ function InputGroupButton({
   size = "sm",
   ...props
 }: React.ComponentProps<typeof Button>) {
-  return (
-    <Button
-      type={type}
-      size={size}
-      variant={variant}
-      className={cn("shadow-none", className)}
-      {...props}
-    />
-  );
+  return <Button type={type} size={size} variant={variant} className={className} {...props} />;
 }
 
 function InputGroupText({ className, ...props }: React.ComponentProps<"span">) {
   return (
     <span
+      data-slot="input-group-text"
       className={cn(
         "flex items-center gap-2 text-ui text-muted-foreground [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-3.5",
         className,
@@ -120,7 +125,7 @@ function InputGroupInput({ className, ...props }: React.ComponentProps<"input">)
     <Input
       data-slot="input-group-control"
       className={cn(
-        "flex-1 rounded-none border-0 bg-transparent shadow-none focus-visible:ring-0 dark:bg-transparent",
+        "flex-1 rounded-none border-0 control-flat bg-transparent shadow-none focus-visible:ring-0 dark:bg-transparent",
         className,
       )}
       {...props}
@@ -133,7 +138,7 @@ function InputGroupTextarea({ className, ...props }: React.ComponentProps<"texta
     <Textarea
       data-slot="input-group-control"
       className={cn(
-        "flex-1 resize-none rounded-none border-0 bg-transparent py-4 shadow-none focus-visible:ring-0 dark:bg-transparent",
+        "flex-1 resize-none rounded-none border-0 control-flat bg-transparent py-2 shadow-none focus-visible:ring-0 dark:bg-transparent",
         className,
       )}
       {...props}

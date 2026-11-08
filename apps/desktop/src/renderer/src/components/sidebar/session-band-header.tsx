@@ -9,12 +9,14 @@
  * sessions" is a way of reading the archive, not a way of hiding running work.
  */
 import * as React from "react";
-import { BroomIcon } from "@phosphor-icons/react/dist/csr/Broom";
-import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
-import { FunnelSimpleIcon } from "@phosphor-icons/react/dist/csr/FunnelSimple";
-import { GlobeIcon } from "@phosphor-icons/react/dist/csr/Globe";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import { TicketIcon } from "@phosphor-icons/react/dist/csr/Ticket";
+import {
+  CleanIcon,
+  ChatIcon,
+  FilterIcon,
+  GlobeIcon,
+  TerminalIcon,
+  TicketIcon,
+} from "@renderer/components/ui/icon";
 
 import type {
   SessionRowKind,
@@ -36,7 +38,7 @@ import { cn } from "@renderer/lib/utils";
 
 /** The sidebar's small-glyph tier, and the hit box this header draws around it. */
 const GLYPH_PX = 12;
-const TRIGGER_BOX_PX = 20;
+const TRIGGER_BOX_PX = 24;
 
 /**
  * Half the difference between the trigger's box and its glyph — exactly how far
@@ -56,13 +58,12 @@ const TRIGGER_BOX_PX = 20;
 const FILTER_GLYPH_NUDGE = (TRIGGER_BOX_PX - GLYPH_PX) / 2;
 
 /**
- * The band label and its count. `label` is written in sentence case and
- * uppercased by the sidebar's heading rule in `globals.css`, which is also what
- * puts it on the heading ink tier — the caps are a typographic treatment, not
- * the string.
+ * The band label, in sentence case at the UI tier, and the band's count
+ * where it says something the rows do not.
  *
- * The count rides WITH the heading rather than dropping to the mute: the two
- * bracket the row from opposite edges and read as one unit.
+ * Both bands expose their total next to the label. Previous counts Sessions,
+ * not ticket envelopes; its filters never change Active. Zero is quiet and
+ * Previous retains its filter at zero; a successfully empty Active group hides.
  */
 export function SessionBandHeader({
   label,
@@ -70,13 +71,20 @@ export function SessionBandHeader({
   children,
 }: {
   label: string;
-  count: number;
+  count?: number;
   children?: React.ReactNode;
 }) {
   return (
-    <div className="flex h-6 items-center gap-2 px-2">
-      <SectionHeading as="span">{label}</SectionHeading>
-      <span className="text-label tabular-nums text-muted-foreground/70">{count}</span>
+    <div className="sidebar-band-header flex min-h-control-default items-center px-2">
+      <SectionHeading as="h3">{label}</SectionHeading>
+      {count === undefined || count === 0 ? null : (
+        <span
+          data-band-count=""
+          className="sidebar-band-count text-ui font-medium tabular-nums text-muted-foreground"
+        >
+          {count}
+        </span>
+      )}
       <span className="ml-auto flex items-center">{children}</span>
     </div>
   );
@@ -120,8 +128,8 @@ export function SessionBandFilterMenu({
           // The tint is the sighted half of the same fact.
           style={{ marginRight: -FILTER_GLYPH_NUDGE }}
           className={cn(
-            "flex size-5 items-center justify-center rounded-sm ring-ring outline-hidden transition-colors hover:bg-sidebar-accent-veil hover:text-foreground focus-visible:ring-2",
-            narrowed ? "text-foreground" : "text-muted-foreground",
+            "flex size-6 items-center justify-center rounded-sm ring-ring outline-hidden transition-colors hover:bg-sidebar-accent-veil hover:text-foreground focus-visible:ring-2",
+            narrowed ? "bg-(--accent-selected) text-primary-text" : "text-muted-foreground",
           )}
         >
           {/* `bold` OVERRIDES the audit, which records `regular` for this site
@@ -131,7 +139,7 @@ export function SessionBandFilterMenu({
               regular draws lighter than the label beside it, and coverage is
               scale-invariant so no `size-*` can fix that. Not `fill`, which is
               4.6x here — the widest gap in the app, and a different mark. */}
-          <FunnelSimpleIcon weight="bold" className="size-3" />
+          <FilterIcon strokeWidth={2.25} className="size-3" />
         </button>
       </DropdownMenuTrigger>
       {/* `onSelect` is preventDefault'd on every item so the menu survives a
@@ -142,7 +150,7 @@ export function SessionBandFilterMenu({
           onSelect={(event) => event.preventDefault()}
           onCheckedChange={() => toggleKind("chat")}
         >
-          <ChatCircleIcon />
+          <ChatIcon />
           Chats
         </DropdownMenuCheckboxItem>
         <DropdownMenuCheckboxItem
@@ -150,7 +158,7 @@ export function SessionBandFilterMenu({
           onSelect={(event) => event.preventDefault()}
           onCheckedChange={() => toggleKind("terminal")}
         >
-          <TerminalWindowIcon />
+          <TerminalIcon />
           Terminals
         </DropdownMenuCheckboxItem>
         <DropdownMenuSeparator />
@@ -177,7 +185,7 @@ export function SessionBandFilterMenu({
           onSelect={(event) => event.preventDefault()}
           onCheckedChange={() => onChange({ ...filter, showCleaned: !filter.showCleaned })}
         >
-          <BroomIcon />
+          <CleanIcon />
           Cleaned up
         </DropdownMenuCheckboxItem>
       </DropdownMenuContent>

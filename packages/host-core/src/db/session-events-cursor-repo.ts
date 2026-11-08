@@ -23,7 +23,7 @@
  *
  * `occurred_at` is metadata: two commits can share a millisecond, and a
  * timestamp is what a source claimed rather than when Volli recorded it.
- * CONTEXT.md's Await entry states the rule; this module is where it is kept.
+ * Session Event sequences supply ledger order (CONTEXT.md#session-event).
  */
 
 import type Database from "better-sqlite3";

@@ -24,7 +24,8 @@
  * echoes the card the way it will when the wiring lands.
  */
 import * as React from "react";
-import { PlayIcon } from "@phosphor-icons/react";
+import { PlayIcon } from "@renderer/components/ui/icon";
+
 import {
   ACTIVITY_METADATA_KEY,
   type ActivityDescriptor,

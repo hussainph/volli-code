@@ -1,5 +1,10 @@
 # Hostd release manifest
 
+> **Superseded host architecture; active packaging reference.** This runbook
+> maintains the hostd artifacts still built by the release workflow. It does not
+> define the current cloud backend or Runner deployment; see
+> [Workspace authority and offline](../BOUNDARIES.md#workspace-authority-and-offline).
+
 Hostd and desktop pin the root `package.json` version. Root and desktop versions
 must match, including the canary suffix (`X.Y.Z-canary.N`); the release tag is
 `v<version>`.
@@ -49,11 +54,108 @@ gh workflow run release.yml --ref main -f bump=patch -f dry_run=false
 ```
 
 The button's `prepare` job writes the resolved version into both root and
-desktop `package.json` files in the same commit before tagging. Stable tags
-still create drafts; canaries still publish as
-prereleases. The single desktop publisher uploads the complete Mac + hostd
-asset set, so rerun cleanup does not delete hostd assets. A release containing migration 061 must retain the corresponding database
+desktop `package.json` files in the same commit before tagging. **Every release
+starts as a draft**, invisible to updater clients while building and uploading.
+The single desktop publisher uploads the complete Mac + hostd + runner asset
+set after signing, notarization and stapling. It validates the feed's version,
+filenames, sizes and SHA-512 hashes against the completed DMG/ZIP, then downloads
+every uploaded asset and compares its bytes with the local artifact. Only then
+does it publish a canary as a prerelease. Stable releases stay drafts for manual
+notes review and publication.
+
+Upload or remote-verification failures leave the release as a draft; rerunning
+reuses that draft and replaces its assets, preserving notes and `canary-peer.json`.
+A published-tag rerun is verification-only: differing rebuilt assets fail rather
+than replacing files clients may already be downloading. Use a new version to
+ship different bytes. After publication the job also checks the unauthenticated
+`releases/download/<tag>/latest-mac.yml` URL with a bounded propagation retry.
+Failure of that final public check fails the job but does not unpublish the
+already complete release. Stable drafts cannot be checked through a public URL
+until manually published; their assets are verified through authenticated downloads.
+
+A release containing migration 061 must retain the corresponding database
 compatibility/rollback checks.
+
+### Release deploy key and main's ruleset
+
+`main` is meant to require a green `CI gate` on a branch that is up to date
+with `main` (repository ruleset "Main Protection", id `19737203`). The button's
+`chore(release): <version>` commit is made inside `prepare` and can never have
+that check, and GitHub refuses the GitHub Actions integration as a bypass actor
+on a user-owned repository (HTTP 422). So `prepare` pushes the bump to `main`
+over SSH with a write deploy key from the `RELEASE_DEPLOY_KEY` secret, and the
+ruleset lets deploy keys bypass it. The push is not forced: if `main` moved
+during the run, git rejects the non-fast-forward and nothing is tagged.
+
+The tag is still pushed with `GITHUB_TOKEN`. The ruleset targets only the
+default branch, so the tag needs no bypass, and a tag pushed with
+`GITHUB_TOKEN` does not start the workflow's own tag path; a deploy-key tag
+push would, and would publish the release twice. The deploy-key push to `main`
+does start `ci.yml`, `ci-extended.yml` and `codeql.yml` on the release commit,
+as a merge does (and cancels an older in-progress `ci.yml` push run on `main`).
+
+That key can bypass every rule on `main`, so it lives in a `release`
+environment that only `main` may deploy from, never in repository secrets that
+a workflow on any branch could read. `prepare` declares `environment: release`
+and fails first, before any guard or bump, when `RELEASE_DEPLOY_KEY` is
+missing. Dry runs skip `prepare` and never need the key.
+
+One-time owner setup, in this order:
+
+1. Create the key, the environment and the secret. This changes nothing for
+   the current workflow and can happen before this change merges.
+
+   ```sh
+   dir="$(mktemp -d)"
+   ssh-keygen -t ed25519 -N '' -C 'volli-code release' -f "$dir/release_key"
+   # Deploy key with write access (or Settings → Deploy keys → Add deploy key,
+   # paste release_key.pub, tick "Allow write access"):
+   gh repo deploy-key add "$dir/release_key.pub" --repo hussainph/volli-code --allow-write --title release.yml
+   # Environment "release", deployable from main only:
+   gh api -X PUT repos/hussainph/volli-code/environments/release \
+     -F 'deployment_branch_policy[protected_branches]=false' \
+     -F 'deployment_branch_policy[custom_branch_policies]=true'
+   gh api -X POST repos/hussainph/volli-code/environments/release/deployment-branch-policies \
+     -f name=main -f type=branch
+   gh secret set RELEASE_DEPLOY_KEY --env release --repo hussainph/volli-code < "$dir/release_key"
+   ```
+
+2. Check the key works: `ssh -i "$dir/release_key" -o IdentitiesOnly=yes -T git@github.com`
+   should greet `hussainph/volli-code`.
+3. Delete the local files: `rm -rf "$dir"`.
+4. Merge the release.yml change (VC-1057).
+5. Apply the ruleset: `gh api -X PUT repos/hussainph/volli-code/rulesets/19737203 --input main-protection.json`.
+   Applying it before step 4 breaks button releases.
+6. Confirm with `gh api repos/hussainph/volli-code/rulesets/19737203`.
+
+`main-protection.json` is the complete ruleset (a PUT replaces the rules and
+bypass list wholesale):
+
+```json
+{
+  "name": "Main Protection",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": { "ref_name": { "include": ["~DEFAULT_BRANCH"], "exclude": [] } },
+  "bypass_actors": [{ "actor_id": null, "actor_type": "DeployKey", "bypass_mode": "always" }],
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": true,
+        "required_status_checks": [{ "context": "CI gate", "integration_id": 15368 }]
+      }
+    }
+  ]
+}
+```
+
+`integration_id` 15368 is the GitHub Actions app, which posts `CI gate`.
+`ci.yml` has no path filters, so every pull request reports it. Any deploy key
+with write access can bypass this ruleset, so keep the release key the only
+one.
 
 A `hostd-assets` failure (including provenance signing) deliberately blocks the
 desktop release: the signed desktop pin requires matching assets on that same

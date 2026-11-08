@@ -9,6 +9,7 @@ export default defineConfig({
     ...SHARED_MACHINE_TEST_WORKERS,
     // Plain Node: this package runs in the Linux host lane, never in Electron.
     environment: "node",
+    setupFiles: process.env["VOLLI_TEST_DIAGNOSTICS"] ? ["./src/test-diagnostics-setup.ts"] : [],
     coverage: {
       // The protected surface moved here from apps/desktop's gate with its
       // covering tests, plus the composition entry. project-roots.ts remains
@@ -91,6 +92,7 @@ export default defineConfig({
         "src/log/ring.ts",
         "src/log/steps.ts",
         "src/log/correlation.ts",
+        "src/log/stall.ts",
         "src/session-runtime/correlated-executor.ts",
         // The Session concurrency budget (VC-339). In the gate because every
         // branch of it is a rule about a machine nobody watches: a miscount
@@ -211,6 +213,7 @@ export default defineConfig({
         // cancelled export that reads as complete. `worker-entry.ts` stays
         // out: its one line only ever runs inside a worker thread, which the
         // coverage provider does not instrument; `worker.test.ts` drives it.
+        "src/migration-export/chunk-lines.ts",
         "src/migration-export/errors.ts",
         "src/migration-export/exporter.ts",
         "src/migration-export/file-streams.ts",

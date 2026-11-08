@@ -211,3 +211,29 @@ describe("a Session's birth", () => {
     expect(codeModeSurfaceAtBirth({ birth, tools: surface, mcpTools: [] })).toBeUndefined();
   });
 });
+
+describe("explicit defaults preserve legacy policies", () => {
+  it("round-trips every global mode and applies exceptions before it", () => {
+    for (const mode of ["off", "both", "only"] as const) {
+      const policy = readCodeModePolicy(
+        JSON.parse(
+          JSON.stringify({
+            enabled: true,
+            defaultMode: mode,
+            models: { [codeModeModelKey(GPT)]: "only" },
+          }),
+        ),
+      );
+      expect(policy.defaultMode).toBe(mode);
+      expect(codeModeModeFor(policy, SONNET)).toBe(mode);
+      expect(codeModeModeFor(policy, GPT)).toBe("only");
+    }
+    expect(
+      readCodeModePolicy({ enabled: true, defaultMode: "future", models: {} }),
+    ).not.toHaveProperty("defaultMode");
+    expect(codeModeModeFor(readCodeModePolicy({ enabled: true, models: {} }), SONNET)).toBe("both");
+    expect(
+      codeModeModeFor(readCodeModePolicy({ enabled: false, defaultMode: "only", models: {} }), GPT),
+    ).toBe("off");
+  });
+});

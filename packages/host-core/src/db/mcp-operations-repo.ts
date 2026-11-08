@@ -198,9 +198,16 @@ export function recordMcpOperation(
  */
 export function listMcpOperations(
   db: Database.Database,
-  projectId: string,
+  projectId: string | null,
   limit: number = MCP_OPERATION_HISTORY_LIMIT,
 ): readonly McpOperationRecord[] {
+  if (projectId === null)
+    return prepared<[number], McpOperationRow>(
+      db,
+      "SELECT * FROM mcp_operations ORDER BY created_at DESC, id DESC LIMIT ?",
+    )
+      .all(limit)
+      .map(mapRow);
   return prepared<[string, number], McpOperationRow>(
     db,
     `SELECT * FROM mcp_operations

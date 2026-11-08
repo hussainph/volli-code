@@ -396,10 +396,15 @@ function holdsPersonCredentials(mcp: McpSettingsService, server: McpServerDraft)
     transport.type === "stdio"
       ? (transport.env ?? []).length > 0
       : (transport.headers ?? []).length > 0 || transport.oauth !== undefined;
-  const stored = mcp.credentials.read(server.id);
+  const stored = mcp.identities(server.id).map((id) => mcp.credentials.read(id));
   // A refusal the server gave is recorded beside credentials, but it is not
   // one: only a stored value or a sign-in counts.
-  return configured || stored?.oauth !== undefined || Object.keys(stored?.secrets ?? {}).length > 0;
+  return (
+    configured ||
+    stored.some(
+      (entry) => entry?.oauth !== undefined || Object.keys(entry?.secrets ?? {}).length > 0,
+    )
+  );
 }
 
 /**
@@ -434,7 +439,7 @@ function installPlan(
     return {
       ok: false,
       existing,
-      text: `${existing.name} (id ${existing.id}) holds credentials a person set up, and an agent cannot move them to a different endpoint or command. Nothing was changed. Install it under a new id, or ask the person driving to change it in Settings \u2192 Configure \u2192 MCP Servers.`,
+      text: `${existing.name} (id ${existing.id}) holds credentials a person set up, and an agent cannot move them to a different endpoint or command. Nothing was changed. Install it under a new id, or ask the person driving to change it in Settings \u2192 MCP Servers.`,
     };
   }
   return { ok: true, existing, target: { ...draft, transport: existing.transport }, kept: true };
@@ -470,8 +475,8 @@ async function routeToPerson(
       provided: false,
       text:
         blocked.kind === "sign-in"
-          ? `${server.name} needs a person to sign in before Volli can read its tools, and nobody could be asked from this Session. A person can sign in from Settings \u2192 Configure \u2192 MCP Servers.`
-          : `${server.name} ${verb === "replace" ? "rejected" : "needs"} ${blocked.missing.join(", ")}, which only a person can ${verb}, in Settings \u2192 Configure \u2192 MCP Servers. Nobody could be asked from this Session.`,
+          ? `${server.name} needs a person to sign in before Volli can read its tools, and nobody could be asked from this Session. A person can sign in from Settings \u2192 MCP Servers.`
+          : `${server.name} ${verb === "replace" ? "rejected" : "needs"} ${blocked.missing.join(", ")}, which only a person can ${verb}, in Settings \u2192 MCP Servers. Nobody could be asked from this Session.`,
     };
   }
   // The endpoint is named beside the name the agent chose: allowing a sign-in
@@ -489,7 +494,7 @@ async function routeToPerson(
         reason:
           blocked.kind === "sign-in"
             ? `${server.name}${where} needs you to sign in before Volli can read its tools. Allowing opens its sign-in page in your browser; the agent learns only whether the sign-in worked.`
-            : `${server.name}${where} ${verb === "replace" ? "rejected" : "needs"} ${blocked.missing.join(", ")}. ${verb === "replace" ? "Replace" : "Add"} it in Settings \u2192 Configure \u2192 MCP Servers, then allow to retry. The agent never sees the value.`,
+            : `${server.name}${where} ${verb === "replace" ? "rejected" : "needs"} ${blocked.missing.join(", ")}. ${verb === "replace" ? "Replace" : "Add"} it in Settings \u2192 MCP Servers, then allow to retry. The agent never sees the value.`,
         trip: "confirm",
         overridable: true,
       },
@@ -692,14 +697,16 @@ export async function mcpListTool(
   const found = owner(options, "nothing could be listed");
   if (!found.ok) return refusal(found.text);
   const servers = found.mcp.list(session.projectId);
-  const history = listMcpOperations(options.db, session.projectId, 10);
+  const history = listMcpOperations(options.db, found.mcp.global ? null : session.projectId, 10);
   const lines: string[] = [];
   if (servers.length === 0) {
     lines.push(
-      "This project has no MCP servers configured. Use mcp_preview to look at one, then mcp_install to add it.",
+      `${found.mcp.global ? "This machine" : "This project"} has no MCP servers configured. Use mcp_preview to look at one, then mcp_install to add it.`,
     );
   } else {
-    lines.push(`${servers.length} MCP server${servers.length === 1 ? "" : "s"} in this project:`);
+    lines.push(
+      `${servers.length} MCP server${servers.length === 1 ? "" : "s"} ${found.mcp.global ? "on this machine" : "in this project"}:`,
+    );
     for (const server of servers) {
       const on = server.catalog.filter((tool) => tool.enabled).map((tool) => tool.name);
       const credentials = credentialSummary(server, found.mcp.access(server));
@@ -795,6 +802,7 @@ export async function mcpInstallTool(
   const existing = plan.existing;
   const warning = [
     mcpInstallWarning(plan.target),
+    ...(found.mcp.global ? ["This configuration is shared by every project on this machine."] : []),
     ...(plan.kept
       ? [
           `${existing?.name ?? draft.server.name}'s credentials (set by a person) are kept, because the endpoint or command is unchanged.`,
@@ -1095,10 +1103,13 @@ export async function mcpRemoveTool(
   // Settings, or the agent only disables it.
   if (holdsPersonCredentials(found.mcp, existing)) {
     return refusal(
-      `${existing.name} (id ${existing.id}) holds credentials a person set up, and removing it would delete them, so an agent cannot remove it. Nothing was removed. A person can remove it in Settings \u2192 Configure \u2192 MCP Servers; to keep its tools out of new Sessions, call server_disable instead.`,
+      `${existing.name} (id ${existing.id}) holds credentials a person set up, and removing it would delete them, so an agent cannot remove it. Nothing was removed. A person can remove it in Settings \u2192 MCP Servers; to keep its tools out of new Sessions, call server_disable instead.`,
     );
   }
-  const warning = mcpRemovalWarning(existing.name);
+  const warning = [
+    mcpRemovalWarning(existing.name),
+    ...(found.mcp.global ? ["This removes the server for every project on this machine."] : []),
+  ].join(" ");
 
   if (!isApply(request.input)) {
     const on = existing.catalog.filter((tool) => tool.enabled).map((tool) => tool.name);

@@ -162,10 +162,14 @@ describe("refresh", () => {
     // quietly age as the app stayed open. (A moved signal, so the second read
     // is not skipped as current.)
     vi.setSystemTime(new Date("2026-08-02T00:00:00Z"));
-    await store.getState().refresh({ scope: { kind: "all" }, windowMs: 1000 }, "ready,working");
+    const refreshed = store
+      .getState()
+      .refresh({ scope: { kind: "all" }, windowMs: 1000 }, "ready,working");
+    await vi.advanceTimersByTimeAsync(250);
+    await refreshed;
     expect(read).toHaveBeenLastCalledWith({
       scope: { kind: "all" },
-      sinceMs: Date.parse("2026-08-02T00:00:00Z") - 1000,
+      sinceMs: Date.now() - 1000,
       groupBy: undefined,
     });
   });
@@ -270,6 +274,56 @@ describe("the settle signal", () => {
     await store.getState().refresh({ scope: { kind: "all" } }, SIGNAL);
 
     expect(read).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("refresh coalescing", () => {
+  it("shares one delayed read for a burst, tagged with the latest signal", async () => {
+    vi.useFakeTimers();
+    const read = stubReport({ ok: true, report: report() });
+    const store = createUsageStore();
+    const query = { scope: { kind: "all" } as const };
+    await store.getState().refresh(query, "0");
+    const pending = ["1", "2", "3"].map((signal) => store.getState().refresh(query, signal));
+    expect(pending[0]).toBe(pending[2]);
+    expect(read).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(249);
+    expect(read).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await Promise.all(pending);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(store.getState().byQuery[usageKey(query.scope, undefined, undefined)]).toMatchObject({
+      status: "ready",
+      signal: "3",
+    });
+    // No timer remains to turn this into a poll.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it("drains an invalidation arriving during a read rather than losing the last settle", async () => {
+    vi.useFakeTimers();
+    const held = Promise.withResolvers<unknown>();
+    const read = vi
+      .fn()
+      .mockReturnValueOnce(held.promise)
+      .mockResolvedValue({ ok: true, report: report({ meteredSessionCount: 3 }) });
+    Object.assign(globalThis, { window: { api: { sessions: { usageReport: read } } } });
+    const store = createUsageStore();
+    const query = { scope: { kind: "all" } as const };
+    const first = store.getState().refresh(query, "0");
+    expect(read).toHaveBeenCalledTimes(1);
+    const last = store.getState().refresh(query, "1");
+    expect(last).toBe(first);
+    held.resolve({ ok: true, report: report({ meteredSessionCount: 1 }) });
+    await vi.advanceTimersByTimeAsync(250);
+    await last;
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(store.getState().byQuery[usageKey(query.scope, undefined, undefined)]).toMatchObject({
+      status: "ready",
+      signal: "1",
+      report: { meteredSessionCount: 3 },
+    });
   });
 });
 

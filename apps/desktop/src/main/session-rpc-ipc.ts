@@ -1,7 +1,8 @@
-import { hostLogger, withTrace } from "@volli/host-core/log";
+import { hostLogger, withMainSpan, withTrace } from "@volli/host-core/log";
 import { ipcMain } from "electron";
 import type { WebContents } from "electron";
 import { createIpcServer } from "@volli/host-protocol/ipc-server";
+import { onRawIpc } from "./raw-ipc";
 import type { IpcPeer, IpcResponse } from "@volli/host-protocol/ipc";
 import {
   createBoardRouter,
@@ -87,7 +88,7 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
   ipcMain.handle(SESSION_RPC_IPC_CHANNEL, (event, request: unknown) =>
     server.request(peerOf(event.sender), request),
   );
-  ipcMain.on(SESSION_RPC_CANCEL_CHANNEL, (event, subscriptionId: unknown) =>
+  onRawIpc(SESSION_RPC_CANCEL_CHANNEL, (event, subscriptionId: unknown) =>
     server.cancel(peerOf(event.sender), subscriptionId),
   );
 
@@ -107,7 +108,11 @@ function peerOf(sender: WebContents): IpcPeer {
   return {
     id: sender.id,
     isDestroyed: () => sender.isDestroyed(),
-    send: (event) => sender.send(SESSION_RPC_EVENT_CHANNEL, event),
+    // A subscription's frames, serialized on main per send (VC-1090).
+    send: (event) =>
+      withMainSpan({ door: "broadcast", operation: SESSION_RPC_EVENT_CHANNEL }, () =>
+        sender.send(SESSION_RPC_EVENT_CHANNEL, event),
+      ),
     onDestroyed: (listener) => {
       const navigated = (details: { isMainFrame: boolean; isSameDocument: boolean }) => {
         if (details.isMainFrame && !details.isSameDocument) listener();

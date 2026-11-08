@@ -1,6 +1,7 @@
+import { Spinner } from "@renderer/components/ui/spinner";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 /**
- * The repository card — the Calm Stack's one worktree surface
- * (the retired ticket-right-sidebar lab scratch's `EnvironmentSummary`).
+ * The repository ledger is the Ticket rail's one worktree surface.
  *
  * IT IS THE RAIL'S WORKTREE FOOTER (VC-406, second pass): one pinned row under
  * every rail page, with the card's body folded above it. The row is the
@@ -48,12 +49,9 @@
  * fault while the body is folded. Retention returns the moment a read lands; a
  * ticket can still be archived from the board while it does not.
  *
- * Two deliberate departures from the scratch, both recorded because every other
- * one in this file is:
+ * Publication controls remain available across working-tree states:
  *
- *  - The publish row shows whenever a worktree EXISTS; the scratch draws it only
- *    on a dirty tree (`!clean && !noWorktree`). Decision #44 is button-never-
- *    gate and #45 is one adaptive split button, so the control stays put and
+ *  - The publish row shows whenever a worktree EXISTS. The control stays put and
  *    re-labels itself — a row that vanishes the moment the tree goes clean takes
  *    "Push", "View PR" and the whole archive-ready wrap-up down with it.
  *  - The commit verbs are GATED by a confirmation dialog (`CommitGateDialog`),
@@ -64,19 +62,22 @@
  *    the staging breadth are the user's to choose.
  */
 import * as React from "react";
-import { ArchiveIcon } from "@phosphor-icons/react/dist/csr/Archive";
-import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
-import { BellSlashIcon } from "@phosphor-icons/react/dist/csr/BellSlash";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { DotsThreeIcon } from "@phosphor-icons/react/dist/csr/DotsThree";
-import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
-import { GitBranchIcon } from "@phosphor-icons/react/dist/csr/GitBranch";
-import { GitCommitIcon } from "@phosphor-icons/react/dist/csr/GitCommit";
-import { GitDiffIcon } from "@phosphor-icons/react/dist/csr/GitDiff";
-import { GitPullRequestIcon } from "@phosphor-icons/react/dist/csr/GitPullRequest";
-import { GithubLogoIcon } from "@phosphor-icons/react/dist/csr/GithubLogo";
-import { PushPinIcon } from "@phosphor-icons/react/dist/csr/PushPin";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
+import {
+  ArchiveIcon,
+  ExternalIcon,
+  NotificationOffIcon,
+  ChevronDownIcon,
+  MoreIcon,
+  FolderOpenIcon,
+  BranchIcon,
+  CommitIcon,
+  DiffIcon,
+  PullRequestIcon,
+  PinIcon,
+  WarningIcon,
+} from "@renderer/components/ui/icon";
+import { GithubMark } from "@renderer/components/ui/brand-marks";
+
 import { toast } from "sonner";
 import {
   changeSetToDiffStat,
@@ -105,7 +106,6 @@ import {
   KEEP_WORKTREE_LABEL,
   resolveRetention,
   UNKEEP_LABEL,
-  type RetentionNotice,
 } from "@renderer/components/ticket/worktree-retention-model";
 import { PrChecksRow } from "@renderer/components/ticket/pr-checks-row";
 import { resolvePrChecks } from "@renderer/components/ticket/pr-checks-model";
@@ -126,6 +126,8 @@ import {
 } from "@renderer/components/ticket/rail-panel-parts";
 import { worktreeGlance } from "@renderer/components/ticket/worktree-glance-model";
 import { Button } from "@renderer/components/ui/button";
+import { Badge } from "@renderer/components/ui/badge";
+import { Checkbox } from "@renderer/components/ui/checkbox";
 import { ButtonGroup } from "@renderer/components/ui/button-group";
 import {
   Dialog,
@@ -234,13 +236,13 @@ function CommitGateDialog({
       <DialogContent className="max-w-md gap-4" data-testid="ticket-commit-gate">
         <DialogHeader>
           <DialogTitle className="flex min-w-0 items-center gap-2">
-            <GitBranchIcon className="shrink-0" />
+            <BranchIcon className="shrink-0" />
             <span className="truncate font-mono text-sm">{branch}</span>
           </DialogTitle>
         </DialogHeader>
         <div className="flex flex-col gap-4">
           <div className="flex items-center gap-2 rounded-lg border border-border p-4">
-            <GitDiffIcon className="size-4 shrink-0 text-muted-foreground" />
+            <DiffIcon className="size-4 shrink-0 text-muted-foreground" />
             <span className="min-w-0 flex-1 truncate text-ui font-medium">{changesLabel}</span>
             {diff === null ? null : <DiffTotals diff={diff} />}
           </div>
@@ -252,11 +254,9 @@ function CommitGateDialog({
             placeholder="Commit message (blank generates one)"
           />
           <label className="flex w-fit items-center gap-2 text-ui text-foreground">
-            <input
-              type="checkbox"
+            <Checkbox
               checked={includeUnstaged}
-              onChange={(event) => setIncludeUnstaged(event.target.checked)}
-              className="accent-primary"
+              onCheckedChange={(checked) => setIncludeUnstaged(checked === true)}
             />
             Include unstaged changes
           </label>
@@ -313,7 +313,7 @@ function InlineTextField({
   if (editing) {
     return (
       <InlineRename
-        mono
+        className="font-mono"
         size="field"
         value={value ?? ""}
         onCommit={(next) => {
@@ -360,16 +360,16 @@ export function WorktreeDestinationControl({ ticket }: { ticket: Ticket }) {
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
-          variant="ghost"
+          variant="inspector"
           size="sm"
           data-testid="ticket-worktree-destination"
           disabled={!canWrite}
           aria-label={`Working destination: ${label}`}
-          className="w-fit gap-1 border border-border px-2 text-ui text-foreground"
+          className="w-fit gap-1 px-2 text-ui text-foreground"
         >
-          {ticket.usesWorktree ? <GitBranchIcon /> : <FolderOpenIcon />}
+          {ticket.usesWorktree ? <BranchIcon /> : <FolderOpenIcon />}
           {label}
-          <CaretDownIcon className="size-3 text-muted-foreground" />
+          <ChevronDownIcon className="size-3 text-muted-foreground" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
@@ -431,19 +431,21 @@ function BaseBranchField({ projectId, ticket }: { projectId: string; ticket: Tic
     <DropdownMenu onOpenChange={(open) => open && void loadBranches()}>
       <DropdownMenuTrigger asChild>
         <Button
-          variant="ghost"
+          variant="inspector"
           size="sm"
           disabled={!canWrite}
-          className="w-fit gap-1 border border-border px-2 text-ui text-muted-foreground"
+          className="w-fit gap-1 px-2 text-ui text-muted-foreground"
         >
-          Select branch…
+          Select branch
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
         {loading ? (
-          <div className={EMPTY_INLINE}>Loading…</div>
+          <div className={EMPTY_INLINE}>
+            <LoadingLabel>Loading</LoadingLabel>
+          </div>
         ) : options.length === 0 ? (
-          <div className={EMPTY_INLINE}>No branches found</div>
+          <div className="sr-only">No branches found</div>
         ) : (
           <DropdownMenuRadioGroup
             value={ticket.baseBranch ?? ""}
@@ -547,15 +549,11 @@ function WorktreeMissingNotice({
       layout="stack"
       icon={FolderOpenIcon}
       title="Worktree folder is missing"
-      // The one thing worth saying next to the button: the work is not gone.
-      // What the button then does is on the button (voice.md: no "click Save to
-      // save"), so this states the fact and stops.
-      detail="The branch and its commits are still in git."
       data-testid="ticket-repository-worktree-missing"
       className={RAIL_PANEL_INSET}
       actions={
         <Button variant="outline" size="xs" disabled={recreating} onClick={() => void recreate()}>
-          {recreating ? "Recreating…" : "Recreate worktree"}
+          {recreating ? <LoadingLabel>Recreating</LoadingLabel> : "Recreate worktree"}
         </Button>
       }
     />
@@ -576,12 +574,12 @@ function RepositoryPopoverContent({ projectId, ticket }: { projectId: string; ti
     <PopoverContent align="start" className="flex w-72 flex-col gap-4 p-4">
       {ticket.worktreePath === null ? (
         <div className="flex flex-col gap-1">
-          <SectionHeading as="p">Destination</SectionHeading>
+          <SectionHeading as="span">Destination</SectionHeading>
           <WorktreeDestinationControl ticket={ticket} />
         </div>
       ) : null}
       <div className="flex flex-col gap-1">
-        <SectionHeading as="p">Base branch</SectionHeading>
+        <SectionHeading as="span">Base branch</SectionHeading>
         {ticket.baseBranch ? (
           <span className="block truncate px-2 font-mono text-ui text-foreground">
             {ticket.baseBranch}
@@ -591,7 +589,7 @@ function RepositoryPopoverContent({ projectId, ticket }: { projectId: string; ti
         )}
       </div>
       <div className="flex flex-col gap-1">
-        <SectionHeading as="p">Branch</SectionHeading>
+        <SectionHeading as="span">Branch</SectionHeading>
         {ticket.branch ? (
           <span className="block truncate px-2 font-mono text-ui text-foreground">
             {ticket.branch}
@@ -608,7 +606,7 @@ function RepositoryPopoverContent({ projectId, ticket }: { projectId: string; ti
         )}
       </div>
       <div className="flex flex-col gap-1 border-t border-border pt-4">
-        <SectionHeading as="p">Worktree</SectionHeading>
+        <SectionHeading as="span">Worktree</SectionHeading>
         <div className="flex items-center gap-1">
           <span
             title={ticket.worktreePath ?? undefined}
@@ -630,28 +628,16 @@ function RepositoryPopoverContent({ projectId, ticket }: { projectId: string; ti
   );
 }
 
-/**
- * The Phosphor icon for a primary action, mirroring the verb's menu icon.
- * `filled` renders the fill weight for the chevron-menu treatment (the demoted
- * done-flow primary when Archive & clean takes over the button).
- */
-function PrimaryActionIcon({
-  kind,
-  filled = false,
-}: {
-  kind: PrimaryActionKind;
-  filled?: boolean;
-}) {
-  const weight = filled ? "fill" : undefined;
-  if (kind === "commit-pr" || kind === "commit-push-updates")
-    return <GitCommitIcon weight={weight} />;
-  if (kind === "view-pr") return <ArrowSquareOutIcon weight={weight} />;
-  return <GitPullRequestIcon weight={weight} />;
+/** The action keeps the same outline mark on the button and in its menu. */
+function PrimaryActionIcon({ kind }: { kind: PrimaryActionKind }) {
+  if (kind === "commit-pr" || kind === "commit-push-updates") return <CommitIcon />;
+  if (kind === "view-pr") return <ExternalIcon />;
+  return <PullRequestIcon />;
 }
 
 /**
- * One chevron-menu row: the verb's icon (filled, per the project's menu-icon
- * convention) + label, with the disabled reason shown as trailing muted text
+ * One action-menu row: the verb's outline icon and label, with the disabled
+ * reason shown as trailing muted text
  * (disabled items can't emit hover, so a tooltip wouldn't fire — T3's inline
  * reason instead).
  */
@@ -671,7 +657,9 @@ function DoneFlowMenuItem({
         {action.label}
       </span>
       {action.disabled && action.reason ? (
-        <span className="text-ui text-muted-foreground">{action.reason}</span>
+        <span className="text-ui text-muted-foreground">
+          {action.reason === "Loading" ? <LoadingLabel>Loading</LoadingLabel> : action.reason}
+        </span>
       ) : null}
     </DropdownMenuItem>
   );
@@ -682,34 +670,47 @@ function toastPushResult(isUpdate: boolean, existing: boolean) {
   toast.success(isUpdate ? "Updates pushed" : existing ? "PR already existed" : "Draft PR opened");
 }
 
-/**
- * One non-gating retention notice (issue #76, decision #44 "button-never-gate"):
- * a muted line surfacing a merge conflict. It explains why a PR can't merge
- * yet; it disables nothing.
- *
- * It used to carry a failing-checks line too, with a tooltip listing their
- * names. The CI row above owns that subject now (VC-182) and says it in more
- * detail, so the notice would have been the card's second sentence about the
- * same suite — which is the duplication this file's header spends a paragraph
- * refusing elsewhere.
- */
-function RetentionNoticeLine({ notice }: { notice: RetentionNotice }) {
+/** A thumbnail of the Change Set's known text counts, beside the full numeric reading. */
+export function WorktreeDiffThumbnail({ diff }: { diff: DiffStat }) {
+  const total = diff.insertions + diff.deletions;
   return (
-    <span className="flex w-fit items-center gap-1 text-ui text-muted-foreground">
-      <WarningIcon />
-      {notice.text}
-    </span>
+    <div className={cn("flex items-center gap-2 px-4 py-4", RAIL_CARD_SEAM)}>
+      <div
+        aria-hidden
+        className="flex h-8 w-12 shrink-0 flex-col justify-center gap-1 rounded-control border border-border bg-muted/30 p-1"
+      >
+        {total === 0 ? (
+          <span className="h-1 w-full rounded-sm bg-border" />
+        ) : (
+          <>
+            {diff.insertions > 0 && (
+              <span
+                className="h-1 rounded-sm bg-positive"
+                style={{ width: `${Math.max(12, (diff.insertions / total) * 100)}%` }}
+              />
+            )}
+            {diff.deletions > 0 && (
+              <span
+                className="h-1 rounded-sm bg-destructive"
+                style={{ width: `${Math.max(12, (diff.deletions / total) * 100)}%` }}
+              />
+            )}
+          </>
+        )}
+      </div>
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <span className="text-ui font-medium">
+          {diff.files.length === 0
+            ? "No changes"
+            : `${diff.files.length} changed ${diff.files.length === 1 ? "file" : "files"}`}
+        </span>
+        <DiffTotals diff={diff} />
+      </div>
+    </div>
   );
 }
 
-/**
- * Working tree, local commits, and remote state — the card's one row of counts.
- *
- * It used to be the changes header's own block, a `bg-muted/50` rounded table
- * floating above the list. That put two differently-drawn worktree objects on
- * one page (VC-406), so it is a card row now: same three facts, in the frame
- * that already owns every other thing this page says about the worktree.
- */
+/** Working tree, local commits and remote state share the repository ledger's row grammar. */
 export function WorktreeStateStrip({ status }: { status: WorktreeStatusSnapshot }) {
   const state = formatWorktreeState(status);
   const items = [
@@ -743,12 +744,21 @@ export function WorktreeStateStrip({ status }: { status: WorktreeStatusSnapshot 
     <div
       data-testid="ticket-changes-git-state"
       aria-label={`Working: ${state.working}; Local: ${state.local}; Remote: ${state.remote}`}
-      className={cn("grid grid-cols-3 gap-2 px-4 py-2", RAIL_CARD_SEAM)}
+      className={cn("flex flex-col gap-2 px-4 py-4", RAIL_CARD_SEAM)}
     >
       {items.map((item) => (
-        <span key={item.label} className="flex min-w-0 flex-col">
-          <span className="text-label text-muted-foreground">{item.label}</span>
-          <span className={cn("truncate text-label font-medium", item.ink)}>{item.value}</span>
+        <span key={item.label} className="flex min-w-0 items-center gap-2">
+          {item.label === "Working" ? (
+            <DiffIcon className="size-4 text-muted-foreground" />
+          ) : item.label === "Local" ? (
+            <CommitIcon className="size-4 text-muted-foreground" />
+          ) : (
+            <PullRequestIcon className="size-4 text-muted-foreground" />
+          )}
+          <span className="text-ui font-medium">{item.label}</span>
+          <span className={cn("ml-auto truncate text-ui", item.ink)} title={item.value}>
+            {item.value}
+          </span>
         </span>
       ))}
     </div>
@@ -1110,25 +1120,27 @@ export function TicketRepositorySummary({
   // button that refuses to shrink pushes its own chevron off the card's clipped
   // edge. It truncates and keeps its full label in `title` instead — a control
   // you can read to the end elsewhere beats one you cannot reach.
-  const primaryClassName = cn(RAIL_CONTROL, "min-w-0 shrink px-2 [&>span]:truncate");
+  const primaryClassName = "min-w-0 shrink px-2 text-ui [&>span]:truncate";
 
   const doneFlowPrimaryButton = (
     <Button
-      variant="outline"
       size="sm"
       className={primaryClassName}
       title={view.primary.label}
       disabled={view.primary.disabled}
       onClick={runPrimary}
     >
-      <PrimaryActionIcon kind={view.primary.kind} />
+      {stage !== "idle" ? (
+        <Spinner aria-hidden role="presentation" />
+      ) : (
+        <PrimaryActionIcon kind={view.primary.kind} />
+      )}
       <span>{view.primary.label}</span>
     </Button>
   );
 
   const archivePrimaryButton = (
     <Button
-      variant="outline"
       size="sm"
       className={primaryClassName}
       title={ARCHIVE_CLEAN_LABEL}
@@ -1160,7 +1172,7 @@ export function TicketRepositorySummary({
             aria-label="Open pull request in GitHub"
             onClick={openPr}
           >
-            <GithubLogoIcon weight="fill" />
+            <GithubMark solid />
             PR
           </Button>
         </TooltipTrigger>
@@ -1202,7 +1214,16 @@ export function TicketRepositorySummary({
           still unpushed. Under the identity because it is a fact ABOUT that
           branch, and above CI because CI only has an opinion once something has
           been pushed. */}
-              {status === null ? null : <WorktreeStateStrip status={status} />}
+              {status === null && fault === null ? (
+                <div
+                  role="status"
+                  aria-label="Reading worktree"
+                  className="flex flex-col gap-2 px-4 py-4"
+                ></div>
+              ) : status === null ? null : (
+                <WorktreeStateStrip status={status} />
+              )}
+              {diff !== null && fault === null ? <WorktreeDiffThumbnail diff={diff} /> : null}
 
               {/* Between the state and the buttons, which is where the question sits:
           the rows above say what is being published and where it stands, this
@@ -1245,10 +1266,7 @@ export function TicketRepositorySummary({
                           {retentionView.reasonLine}
                         </span>
                       ) : null}
-                      {/* Non-gating surfacing: conflicts / failing checks (decision #44). */}
-                      {retentionView.notices.map((notice) => (
-                        <RetentionNoticeLine key={notice.text} notice={notice} />
-                      ))}
+
                       <div className="flex w-full items-center justify-between gap-2">
                         <ButtonGroup aria-label="Publish repository changes" className="min-w-0">
                           {retentionView.archiveReady ? (
@@ -1260,7 +1278,13 @@ export function TicketRepositorySummary({
                               <TooltipTrigger asChild>
                                 <span className="inline-flex min-w-0">{doneFlowPrimaryButton}</span>
                               </TooltipTrigger>
-                              <TooltipContent>{view.primary.reason}</TooltipContent>
+                              <TooltipContent>
+                                {view.primary.reason === "Loading" ? (
+                                  <LoadingLabel>Loading</LoadingLabel>
+                                ) : (
+                                  view.primary.reason
+                                )}
+                              </TooltipContent>
                             </Tooltip>
                           ) : (
                             doneFlowPrimaryButton
@@ -1269,13 +1293,8 @@ export function TicketRepositorySummary({
                             <Tooltip>
                               <TooltipTrigger asChild>
                                 <DropdownMenuTrigger asChild>
-                                  <Button
-                                    variant="outline"
-                                    size="icon-sm"
-                                    aria-label="More repository actions"
-                                    className={RAIL_CONTROL}
-                                  >
-                                    <DotsThreeIcon weight="bold" />
+                                  <Button size="icon-sm" aria-label="More repository actions">
+                                    <MoreIcon strokeWidth={2.25} />
                                   </Button>
                                 </DropdownMenuTrigger>
                               </TooltipTrigger>
@@ -1292,12 +1311,20 @@ export function TicketRepositorySummary({
                                     className="justify-between gap-6"
                                   >
                                     <span className="flex items-center gap-2">
-                                      <PrimaryActionIcon kind={view.primary.kind} filled />
+                                      {stage !== "idle" ? (
+                                        <Spinner aria-hidden role="presentation" />
+                                      ) : (
+                                        <PrimaryActionIcon kind={view.primary.kind} />
+                                      )}
                                       {view.primary.label}
                                     </span>
                                     {view.primary.disabled && view.primary.reason ? (
                                       <span className="text-ui text-muted-foreground">
-                                        {view.primary.reason}
+                                        {view.primary.reason === "Loading" ? (
+                                          <LoadingLabel>Loading</LoadingLabel>
+                                        ) : (
+                                          view.primary.reason
+                                        )}
                                       </span>
                                     ) : null}
                                   </DropdownMenuItem>
@@ -1311,21 +1338,21 @@ export function TicketRepositorySummary({
                           inside it, so there is no focus to hand back. */}
                               <DoneFlowMenuItem
                                 action={view.menu.commit}
-                                icon={<GitCommitIcon />}
+                                icon={<CommitIcon />}
                                 onRun={() =>
                                   askToCommit({ kind: "commit-only" }, view.menu.commit.label)
                                 }
                               />
                               <DoneFlowMenuItem
                                 action={view.menu.push}
-                                icon={<GitPullRequestIcon />}
+                                icon={<PullRequestIcon />}
                                 onRun={() =>
                                   void runPushOnly(view.menu.push.kind === "push-updates")
                                 }
                               />
                               <DoneFlowMenuItem
                                 action={view.menu.openPr}
-                                icon={<ArrowSquareOutIcon />}
+                                icon={<ExternalIcon />}
                                 onRun={openPr}
                               />
                               {retentionView.archiveReady ? (
@@ -1335,14 +1362,14 @@ export function TicketRepositorySummary({
                                     disabled={retentionBusy}
                                     onSelect={() => void runSetKeep(true)}
                                   >
-                                    <PushPinIcon />
+                                    <PinIcon />
                                     {KEEP_WORKTREE_LABEL}
                                   </DropdownMenuItem>
                                   <DropdownMenuItem
                                     disabled={retentionBusy}
                                     onSelect={() => void runDismiss()}
                                   >
-                                    <BellSlashIcon />
+                                    <NotificationOffIcon />
                                     {DISMISS_LABEL}
                                   </DropdownMenuItem>
                                 </>
@@ -1355,7 +1382,7 @@ export function TicketRepositorySummary({
                       {/* The quiet "kept" state (Keep exempts the ticket from both paths) with its un-keep path. */}
                       {retentionView.kept ? (
                         <span className="flex items-center gap-1 text-ui text-muted-foreground">
-                          <PushPinIcon />
+                          <PinIcon />
                           Worktree kept
                           <button
                             type="button"
@@ -1387,23 +1414,45 @@ export function TicketRepositorySummary({
             checkout footer so the two scopes draw one row. */}
         <div className={RAIL_CHECKOUT_ROW}>
           <Popover>
-            <PopoverTrigger asChild>
-              <button
-                type="button"
-                data-testid="ticket-repository-branch"
-                aria-label={
-                  ticket.branch === null
-                    ? "Worktree identity"
-                    : `Branch ${ticket.baseBranch ?? "base"} to ${ticket.branch}`
-                }
-                className={RAIL_CHECKOUT_IDENTITY}
-              >
-                <GitBranchIcon className="size-4 shrink-0 text-muted-foreground" />
-                <span className="min-w-0 flex-1 truncate font-mono text-ui text-sidebar-foreground">
-                  {ticket.branch ?? ticket.baseBranch ?? "No branch yet"}
-                </span>
-              </button>
-            </PopoverTrigger>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
+                    data-testid="ticket-repository-branch"
+                    aria-label={
+                      ticket.branch === null
+                        ? "Worktree identity"
+                        : `Branch ${ticket.baseBranch ?? "base"} to ${ticket.branch}`
+                    }
+                    className={RAIL_CHECKOUT_IDENTITY}
+                  >
+                    <BranchIcon className="size-4 shrink-0 text-muted-foreground" />
+                    <span
+                      className="flex min-w-0 flex-1 items-center gap-1 font-mono text-label text-sidebar-foreground"
+                      title={`${ticket.baseBranch ?? "Base unset"} → ${ticket.branch ?? "No branch yet"}`}
+                    >
+                      {ticket.branch && (
+                        <>
+                          <span className="max-w-16 shrink-0 truncate">
+                            {ticket.baseBranch ?? "Base unset"}
+                          </span>
+                          <span aria-hidden className="shrink-0 text-muted-foreground">
+                            →
+                          </span>
+                        </>
+                      )}
+                      <span dir="rtl" className="min-w-0 truncate text-left">
+                        <bdi dir="ltr">{ticket.branch ?? ticket.baseBranch ?? "No branch yet"}</bdi>
+                      </span>
+                    </span>
+                  </button>
+                </PopoverTrigger>
+              </TooltipTrigger>
+              <TooltipContent side="top" className="max-w-96 break-all font-mono">
+                {ticket.baseBranch ?? "Base unset"} → {ticket.branch ?? "No branch yet"}
+              </TooltipContent>
+            </Tooltip>
             <RepositoryPopoverContent projectId={projectId} ticket={ticket} />
           </Popover>
           {hasWorktree ? (
@@ -1411,19 +1460,28 @@ export function TicketRepositorySummary({
               <button
                 type="button"
                 data-testid="ticket-repository-fold"
-                aria-label={`${glance === null ? "Worktree" : `Worktree: ${glance.phrase}`}. ${open ? "Hide" : "Show"} details`}
+                aria-label={`${retention?.hasConflicts ? "Worktree: PR has merge conflicts" : glance === null ? "Worktree" : `Worktree: ${glance.phrase}`}. ${open ? "Hide" : "Show"} details`}
                 className={RAIL_CHECKOUT_FACT}
               >
-                {glance === null ? null : (
+                {retention?.hasConflicts ? (
+                  <Badge variant="destructive" title="PR has merge conflicts">
+                    <WarningIcon className="size-3" />
+                    <span className="group-data-[narrow=true]/rail:hidden">Conflicts</span>
+                  </Badge>
+                ) : glance === null ? (
+                  <Spinner className="size-4" />
+                ) : (
                   <span
                     data-testid="ticket-repository-glance"
                     className="flex shrink-0 items-center gap-1 text-label text-muted-foreground"
                   >
                     <StatusDot state={glance.tone} />
-                    {glance.phrase}
+                    <span className="group-data-[narrow=true]/rail:hidden">{glance.phrase}</span>
                   </span>
                 )}
-                <RailFoldCaret open={open} placement="footer" />
+                {glance !== null || retention?.hasConflicts ? (
+                  <RailFoldCaret open={open} placement="footer" />
+                ) : null}
               </button>
             </RailFoldTrigger>
           ) : null}

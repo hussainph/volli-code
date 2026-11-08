@@ -34,6 +34,11 @@ describe("FilesNavigatorHeader (VC-406)", () => {
 
     // The Files tab has already said the word; the header says the one thing
     // nothing else says — where the listing is.
+    expect(html).toContain("<h3");
+    expect(html).toContain('aria-label="volli/VC-406-rail"');
+    expect(html).toContain('aria-label="Scope · volli/VC-406-rail"');
+    expect(html).toContain('data-variant="ghost"');
+    expect(html).not.toContain("glass-control");
     expect(html).not.toContain("Ticket files");
     expect(html).not.toContain("Project files");
     expect(html.indexOf("volli/VC-406-rail")).toBeLessThan(html.indexOf("New file"));
@@ -83,6 +88,7 @@ describe("FilesNavigatorHeader (VC-406)", () => {
     expect(root).toContain("volli/VC-406-rail");
     expect(root).not.toContain('data-testid="ticket-files-up"');
     expect(inside).toContain('data-testid="ticket-files-up"');
+    expect(inside).toContain('aria-label="src/renderer"');
     expect(inside).not.toContain("volli/VC-406-rail");
   });
 

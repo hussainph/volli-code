@@ -16,13 +16,14 @@
  * send, and the listing holding it drops it on its own next read.
  */
 import type Database from "better-sqlite3";
-import type { SessionListingRow, SessionProjection } from "@volli/shared";
+import type { SessionListingProjection, SessionListingRow } from "@volli/shared";
 
 import { sessionListingNotice } from "./listing-roster";
 
 export interface SessionRowPublishPorts {
   db: Database.Database;
-  getSession: (input: { sessionId: string }) => Promise<SessionProjection | null>;
+  /** The Engine's one-row listing read: see {@link sessionListingNotice}. */
+  getSessionListing: (input: { sessionId: string }) => Promise<SessionListingProjection | null>;
   liveAttachmentIds: () => ReadonlySet<string>;
   /**
    * Where the row goes — `broadcastSessionActivity` in both callers. A port
@@ -40,7 +41,7 @@ export async function publishSessionListingRow(
   const notice = await sessionListingNotice(
     {
       db: ports.db,
-      getSession: ports.getSession,
+      getSessionListing: ports.getSessionListing,
       liveAttachmentIds: ports.liveAttachmentIds,
     },
     sessionId,

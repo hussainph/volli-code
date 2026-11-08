@@ -1,3 +1,6 @@
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, test } from "vite-plus/test";
 
 import { deployChecked } from "../scripts/deploy.ts";
@@ -37,6 +40,22 @@ async function run(
 }
 
 describe("scripts/deploy.ts", () => {
+  test("loads under plain Node, as `deploy:checked` runs it", () => {
+    // Vitest resolves extensionless imports; Node does not. Every module the
+    // script reaches must stay importable without a bundler.
+    const script = fileURLToPath(new URL("../scripts/deploy.ts", import.meta.url));
+    const out = execFileSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `const m = await import(${JSON.stringify(script)}); console.log(typeof m.deployChecked);`,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(out.trim()).toBe("function");
+  });
+
   test("cloud: preflight, push without codegen, check, all on the key's deployment", async () => {
     const { code, steps, lines } = await run([], KEY);
     expect(code).toBe(0);

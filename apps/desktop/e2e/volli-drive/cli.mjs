@@ -53,7 +53,7 @@ const execFileAsync = promisify(execFile);
 
 const HELP = `volli-drive — drive an isolated, keychain-free live Volli build
 
-  launch [--fixture basic|empty|move] [--model fake|env] [--idle-min 20]
+  launch [--fixture basic|empty|move|empty-pane-left|empty-pane-right] [--model fake|env] [--idle-min 20]
          [--fake-script file.json] deterministic fake-provider reply sequence
          [--no-build] [--json]     start an instance (dev build only; packed
                                    apps are refused until VC-705); prints its
@@ -95,7 +95,9 @@ const HELP = `volli-drive — drive an isolated, keychain-free live Volli build
   state <id> sql "<SELECT …>"      read-only query on the instance's database
   state <id> cli <volli args…>     the real volli CLI against the instance socket
   metrics <id>                     memory per Electron process
-  stop <id> [--keep-scratch]       stop what this instance started; evidence stays
+  chat-window-bench <id> --settings <json>
+                                   synthetic renderer bench, empty/fake/local only
+  stop <id> [--keep-scratch] [--json] stop what this instance started; evidence stays
 
 Evidence lives in ${evidenceRoot()}/<id>/ and survives stop.`;
 
@@ -158,6 +160,15 @@ function printSnapshot(snap, find) {
 // ---- launch --------------------------------------------------------------------
 
 async function gitFacts() {
+  // A comparison is an exact git archive plus a separately hashed e2e-only
+  // overlay, not a worktree whose parent checkout's HEAD is its identity.
+  const source = await fs
+    .readFile(join(REPO, ".chat-window-source.json"), "utf8")
+    .catch(() => null);
+  if (source) {
+    const metadata = JSON.parse(source);
+    return { commit: metadata.commit, dirty: false, driverOverlay: metadata.overlay };
+  }
   const run = async (args) =>
     (await execFileAsync("git", args, { cwd: REPO }).catch(() => ({ stdout: "" }))).stdout.trim();
   return {
@@ -695,6 +706,11 @@ async function main() {
       await stateCmd(id, raw.slice(at + 1));
       break;
     }
+    case "chat-window-bench": {
+      const settings = JSON.parse(flags.settings ?? "{}");
+      out(JSON.stringify(await call(id, "chat-window-bench", { settings }, 330_000)));
+      break;
+    }
     case "stop": {
       const entry = await instance(id);
       if (!entry) fail(`no running instance ${id}`);
@@ -718,6 +734,10 @@ async function main() {
         // and descendants — and nothing matched by name or path. The
         // supervisor gets SIGTERM first so it can still write its manifest.
         result = await stopUnreachable(entry, Boolean(flags.keepScratch), error);
+      }
+      if (flags.json) {
+        out(JSON.stringify(result));
+        break;
       }
       out(`stopped ${id}`);
       if (result.note) out(`  ${result.note}`);

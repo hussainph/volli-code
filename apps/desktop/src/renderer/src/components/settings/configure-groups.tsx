@@ -1,27 +1,23 @@
-/**
- * The Configure rail: two groups, seven categories, this project always.
- *
- * AGENT CONFIG LANDS HERE because agent config *is* project-scoped — which
- * skills a repo's agents can reach and which commands it defines. Putting it
- * in Settings was the original surface's central confusion: the same words
- * appeared on both pages with no way to tell which one won.
- *
- * Project is the rest: how this repo's sessions, theming and worktrees behave.
- *
- */
-import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
-import { CommandIcon } from "@phosphor-icons/react/dist/csr/Command";
-import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
-import { KeyIcon } from "@phosphor-icons/react/dist/csr/Key";
-import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
-import { PlugsConnectedIcon } from "@phosphor-icons/react/dist/csr/PlugsConnected";
-import { TreeStructureIcon } from "@phosphor-icons/react/dist/csr/TreeStructure";
+import { OverviewPane } from "./configure/overview-pane";
+import {
+  SettingsIcon,
+  GuideIcon,
+  CommandIcon,
+  ProcessorIcon,
+  KeyIcon,
+  PaletteIcon,
+  ConnectedIcon,
+  TreeIcon,
+} from "@renderer/components/ui/icon";
+
+/** Project-specific settings and the shared agent pane definitions. */
+
 import type { Project } from "@volli/shared";
 import type * as React from "react";
 
 import { LocalOnly } from "@renderer/components/hosts/local-only";
 
-import { ProjectAppearanceSettings } from "@renderer/components/pages/project-appearance-settings";
+import { ProjectAppearanceSettings } from "./panes/project-appearance-pane";
 import type { PrefGroup } from "@renderer/components/settings/kit";
 import { CommandsPane } from "./configure/commands-pane";
 import { McpPane } from "./configure/mcp-pane";
@@ -29,9 +25,62 @@ import { SessionsPane } from "./configure/sessions-pane";
 import { SecretsPane } from "./configure/secrets-pane";
 import { SkillsPane } from "./configure/skills-pane";
 import { WorktreesPane } from "./configure/worktrees-pane";
+import { useAddProject } from "@renderer/hooks/use-add-project";
+import { SettingsProjectWelcome } from "./settings-scope";
+
+function ChooseProject() {
+  const addProject = useAddProject();
+  return <SettingsProjectWelcome hasProjects={false} onOpen={() => void addProject()} />;
+}
+
+/** The one shared Skills/MCP inventory, outside project override navigation. */
+export function globalAgentGroups(project: Project | null): readonly PrefGroup[] {
+  if (project)
+    return [
+      {
+        key: "agent",
+        label: "Agent",
+        categories: configureGroups(project)
+          .flatMap((group) => group.categories)
+          .filter((category) => category.key === "skills" || category.key === "mcp")
+          .map((category) =>
+            Object.assign({}, category, {
+              content:
+                category.key === "mcp" ? (
+                  <McpPane project={{ id: "" }} />
+                ) : (
+                  local(project, <SkillsPane project={project} policyProjectPicker />)
+                ),
+            }),
+          ),
+      },
+    ];
+  return [
+    {
+      key: "agent",
+      label: "Agent",
+      categories: [
+        {
+          key: "skills",
+          label: "Skills",
+          icon: GuideIcon,
+          keywords: ["global", "workspace", "mode", "source", "activation project"],
+          content: <ChooseProject />,
+        },
+        {
+          key: "mcp",
+          label: "MCP Servers",
+          icon: ConnectedIcon,
+          keywords: ["server", "tools", "global"],
+          content: <McpPane project={{ id: "" }} />,
+        },
+      ],
+    },
+  ];
+}
 
 /**
- * Every Configure pane reads or writes this Mac's own config for the project
+ * Project override panes read or write this Mac's own config for the project
  * (its files, MCP servers, secrets, worktrees): for a remote project's, each
  * says "Not available on <host> yet" until its host serves them (VC-711).
  */
@@ -49,7 +98,7 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
           key: "skills",
           fill: true,
           label: "Skills",
-          icon: BookOpenIcon,
+          icon: GuideIcon,
           keywords: [
             "skill",
             "agents",
@@ -59,6 +108,7 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
             "off",
             "index",
             "prompt budget",
+            "activation project",
             "source",
             "description",
             "mode",
@@ -90,7 +140,7 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
           // and a filling section whose content outgrew the leftover height
           // painted straight through both of them.
           label: "MCP Servers",
-          icon: PlugsConnectedIcon,
+          icon: ConnectedIcon,
           keywords: [
             "mcp",
             "server",
@@ -133,9 +183,24 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
       label: "Project",
       categories: [
         {
+          key: "overview",
+          label: "Overview",
+          icon: SettingsIcon,
+          keywords: [
+            "global overrides",
+            "reset",
+            "defaults",
+            "canvas",
+            "mode",
+            "chat model",
+            "decision model",
+          ],
+          content: local(project, <OverviewPane project={project} />),
+        },
+        {
           key: "sessions",
           label: "Sessions",
-          icon: CpuIcon,
+          icon: ProcessorIcon,
           keywords: [
             "chat",
             "model",
@@ -170,7 +235,7 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
         {
           key: "worktrees",
           label: "Worktrees",
-          icon: TreeStructureIcon,
+          icon: TreeIcon,
           keywords: [
             "worktree",
             "branch",
@@ -184,7 +249,7 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
             "branch from",
             "new worktrees",
           ],
-          content: local(project, <WorktreesPane project={project} />),
+          content: local(project, <WorktreesPane key={project.id} project={project} />),
         },
       ],
     },

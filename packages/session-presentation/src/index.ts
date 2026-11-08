@@ -1,7 +1,7 @@
 /**
  * The Session Presentation Contract — the portable consumer boundary that
  * projects Session Semantic Facts into the Session Surface Model a Volli
- * client renders (CONTEXT.md defines both terms).
+ * client renders (CONTEXT.md#session-semantic-fact and #session-surface-model).
  *
  * Everything exported here is framework-neutral by construction, not by
  * discipline: this package's tsconfig strips the DOM lib and its manifest
@@ -41,3 +41,8 @@ export * from "./terminal-history";
 export * from "./transcript";
 export * from "./transcript-rows";
 export * from "./wire";
+export * from "./work-windows";
+export * from "./tool-presentation";
+export * from "./delivered-answer";
+export * from "./transcript-mcp-metadata";
+export * from "./transcript-message-origin";

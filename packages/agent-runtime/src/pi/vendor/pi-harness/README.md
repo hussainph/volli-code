@@ -151,6 +151,16 @@ branch-summary execution. `Agent`/agent loop are **not** vendored.
    Volli's owned `ShellSpillRedactor`, and releases what it held when the command
    ends. Any failure fails the spill with one fixed message; a spill stopped
    that way still closes its stream. Without the option, bytes spill unchanged.
+10. **Bounded edit diff (VC-1074):** `edit` takes its display diff and patch from
+    `generateEditDiff`, one jsdiff line comparison bounded by
+    `EDIT_DIFF_BOUNDS` (100 ms shared wall time, 20,000 changed lines). When the
+    file has no BOM and no CR, the patch is derived from that same comparison
+    and is byte-identical to `generateUnifiedPatch`'s; otherwise the bytes get a
+    second comparison inside the remaining budget. A comparison past the bounds
+    still writes the edit but reports
+    `(diff omitted: the change is too large to compare)` as `diff`, the first
+    changed line, and no `patch`. Upstream ran two unbounded comparisons
+    synchronously, seconds for scattered changes across a large file.
 
 ## Compatibility evidence
 

@@ -1,167 +1,205 @@
-/**
- * The inline notice: a bounded block that reports one thing the surface under
- * it cannot, and offers at most a couple of ways out.
- *
- * Eight surfaces drew this by hand — a stalled watch in the rail, a failed
- * worktree ensure, a reconciliation conflict, a sign-in failure, a truncated
- * file, a paused autosave, a clean branch — in four fills, three radii and two
- * border alphas. None of that was a decision: the alphas were `/30` and `/25`
- * on the same edge, and the radii were `rounded-md` and `rounded-lg` on blocks
- * that sit two panes apart and are never seen together. `ticket/rail-panel-parts.tsx`'s
- * fault banner is the refined one and this is its drawing, generalised.
- *
- * THREE TONES, NOT FOUR. `error` tints the whole block, because a fault has to
- * be legible before it is read. Everything else leaves the block quiet and lets
- * the mark carry the meaning — which is what `positive` is: a neutral surface
- * with a green check, exactly as the Diffs page's "No changes vs base" card
- * already drew it. The audit proposed a fourth, `waiting`, and no site in the
- * app has ever drawn one differently from `neutral`: the chat plane's waiting
- * blocker is a muted block with a clock in it, and the clock is the caller's
- * `icon`. A tone whose drawing is identical to another tone's is not a tone; it
- * is a name that invites the next author to invent a colour for it.
- *
- * THE ANNOUNCEMENT GOES ON THE MESSAGE, NEVER ON ANYTHING THAT HOLDS A CONTROL.
- * `editor/live-reconciliation-affordance.tsx` worked this out first: a live
- * region containing buttons gets the buttons re-announced on every polite
- * update, and some screen readers flatten the region's content into text rather
- * than surfacing the controls as controls. So `announce` marks the paragraphs
- * and nothing else — which is why the message is its own block inside the text
- * column rather than the column itself. `layout="stack"` puts its actions in
- * that column too, under the text, and a live region on the column would have
- * swallowed them exactly as the rail's `role="alert"` banner once swallowed
- * Retry. The stacked actions are the announced block's SIBLING.
- *
- * ACTIONS ARE `Button`s. The slot exists so the notice never draws one itself:
- * the fault banner's Retry was a bare `<button>` with `hover:underline` and no
- * focus ring at all, which is what happens when a component that is not a
- * control primitive starts drawing controls.
- */
-import type * as React from "react";
-import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
+import * as React from "react";
+import {
+  type IconComponent,
+  SuccessIcon,
+  CopyIcon,
+  InfoIcon,
+  WarningIcon,
+  ErrorIcon,
+  CloseIcon,
+} from "@renderer/components/ui/icon";
 
+import { Button } from "@renderer/components/ui/button";
 import { cn } from "@renderer/lib/utils";
+import { toastError } from "@renderer/lib/toast";
 
-export type NoticeTone = "neutral" | "error" | "positive";
+export type NoticeTone = "neutral" | "error" | "positive" | "warning";
 
-/**
- * Surface and ink. Only `error` claims the block; the other two are the same
- * quiet card and differ in nothing but the mark the caller hands them, which is
- * why {@link NOTICE_MARK} is a separate table rather than a fourth column here.
- */
 const NOTICE_TONE: Record<NoticeTone, string> = {
   neutral: "border-border bg-muted/30 text-muted-foreground",
   error: "border-destructive/30 bg-destructive/10 text-destructive",
   positive: "border-border bg-muted/30 text-muted-foreground",
+  warning: "border-border bg-muted/30 text-muted-foreground",
+};
+const NOTICE_ICON = {
+  neutral: InfoIcon,
+  error: ErrorIcon,
+  positive: SuccessIcon,
+  warning: WarningIcon,
 };
 
-/**
- * The mark's ink and weight.
- *
- * `fill` on exactly the two tones that are exceptions on their own surface (the
- * fault's warning, the clean branch's check — both recorded in the audit's icon
- * pass as legitimate fills), and outline on `neutral`, where the block says
- * nothing loud enough to need a heavier drawing. `error` inherits the block's
- * ink; `positive` is the only place a mark is coloured against a quiet card,
- * because being green is the entire message.
- */
-const NOTICE_MARK: Record<NoticeTone, { className: string; fill: boolean }> = {
-  neutral: { className: "", fill: false },
-  error: { className: "", fill: true },
-  positive: { className: "text-positive", fill: true },
-};
+// Retained for this renderer run, across page unmounts. An explicit key names
+// the occurrence and scope; a new occurrence must use a new key. Never hide a
+// required fault just because another surface printed the same words.
+const dismissedNotices = new Set<string>();
 
+/** Required messages stay visible; transient occurrences may opt into durable dismissal. */
 export function Notice({
   tone = "neutral",
-  icon: Icon,
+  icon: Icon = NOTICE_ICON[tone],
   title,
   detail,
   actions,
   layout = "row",
   truncate = false,
+  expandable = tone === "error" || truncate,
+  copyText,
+  onDismiss,
+  dismissalKey,
   announce = false,
   hoverTitle,
   className,
   ...rest
 }: React.HTMLAttributes<HTMLDivElement> & {
   tone?: NoticeTone;
-  icon?: PhosphorIcon;
+  icon?: React.ComponentType<React.ComponentProps<IconComponent>>;
   title: React.ReactNode;
-  /** The second line: the same sentence's specifics, a step quieter. */
   detail?: React.ReactNode;
-  /** `Button`s. Inline at the end of the row, or under the text when stacked. */
   actions?: React.ReactNode;
-  /**
-   * Where the actions sit — and, following from that, how the mark aligns.
-   * `row` parks them at the end of the line and centres the mark on the text;
-   * `stack` puts them under it and hangs the mark from the first line.
-   */
   layout?: "row" | "stack";
-  /**
-   * For a notice in a column the user can drag narrow: hold it to one line and
-   * put the full text on hover. Off by default — a notice that is allowed to
-   * wrap should wrap, and clipping a sentence to save four pixels is how the
-   * rail once reported a fault nobody could read.
-   */
+  /** Legacy narrow-column intent; now clamped with a way to read the whole message. */
   truncate?: boolean;
-  /** Announce the message politely. The actions stay outside the live region. */
+  /** Clamp long messages to two lines, with a disclosure outside the live region. */
+  expandable?: boolean;
+  /** Override for rich messages. String title/detail errors are copyable automatically. */
+  copyText?: string;
+  /** Caller-owned dismissal. Use dismissalKey when the message can remount on navigation. */
+  onDismiss?: () => void;
+  /** Stable, scoped occurrence identity. Opts into dismissal for this app run. */
+  dismissalKey?: string;
   announce?: boolean;
-  /** The untruncated text, where it is not simply the title again. */
   hoverTitle?: string;
 }) {
-  const mark = NOTICE_MARK[tone];
+  const [dismissedKey, setDismissedKey] = React.useState<string>();
+  const [expanded, setExpanded] = React.useState(false);
+  const [overflowing, setOverflowing] = React.useState(false);
+  const [copied, setCopied] = React.useState(false);
+  const messageRef = React.useRef<HTMLDivElement>(null);
+  const messageId = React.useId();
+  const plainText =
+    copyText ?? [title, detail].filter((part) => typeof part === "string").join("\n");
   const stacked = layout === "stack";
-  // A title only outranks the block when something sits under it — and never on
-  // a fault, where the block's own ink IS the message and lifting the first line
-  // out of it would read as two subjects.
-  const headline = detail !== undefined && tone !== "error";
 
-  // The announced block: the sentence, and never a control. Unstyled on
-  // purpose — it is a plain block box in a block flow, so it contributes no
-  // geometry of its own and the paragraphs stack exactly as they did when they
-  // were the text column's direct children.
-  const message = (
-    <div
-      {...(announce ? { role: "status", "aria-live": "polite" as const, "aria-atomic": true } : {})}
-    >
-      <p
-        className={cn("text-ui", headline && "font-medium text-foreground", truncate && "truncate")}
-      >
-        {title}
-      </p>
-      {detail === undefined ? null : (
-        <p className={cn("mt-1 text-ui opacity-70", truncate && "truncate")}>{detail}</p>
-      )}
-    </div>
-  );
+  React.useEffect(() => {
+    setExpanded(false);
+    setCopied(false);
+  }, [title, detail]);
+  React.useLayoutEffect(() => {
+    const node = messageRef.current;
+    if (!expandable || !node || expanded) return;
+    const measure = () => setOverflowing(node.scrollHeight > node.clientHeight + 1);
+    measure();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(node);
+    return () => observer?.disconnect();
+  }, [expandable, expanded, title, detail]);
 
-  const text = (
-    <div className="min-w-0 flex-1" title={hoverTitle}>
-      {message}
-      {stacked && actions !== undefined ? (
-        <div className="flex flex-wrap items-center gap-2 pt-2">{actions}</div>
-      ) : null}
-    </div>
-  );
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(plainText);
+      setCopied(true);
+    } catch {
+      toastError("Couldn't copy the notice");
+    }
+  }
+
+  if (dismissalKey && (dismissedKey === dismissalKey || dismissedNotices.has(dismissalKey))) {
+    return null;
+  }
+  function dismiss() {
+    if (dismissalKey) {
+      // Keep the run-local memory bounded, without storing error details on disk.
+      if (dismissedNotices.size >= 500)
+        dismissedNotices.delete(dismissedNotices.values().next().value!);
+      dismissedNotices.add(dismissalKey);
+      setDismissedKey(dismissalKey);
+    }
+    onDismiss?.();
+  }
 
   return (
     <div
       className={cn(
-        "flex gap-2 rounded-lg border",
-        stacked ? "items-start p-4" : "items-center px-4 py-2",
+        "flex min-w-0 flex-wrap gap-2 rounded-container border",
+        stacked ? "items-start p-4" : "items-start px-4 py-2",
         NOTICE_TONE[tone],
         className,
       )}
       {...rest}
     >
-      {Icon === undefined ? null : (
+      {/* Centre the glyph on the title's line box, not the entire message or
+          its recovery controls. Details and wrapping keep the same first line. */}
+      <span data-slot="notice-icon" className="flex h-5 shrink-0 items-center">
         <Icon
           aria-hidden
-          weight={mark.fill ? "fill" : undefined}
-          className={cn("shrink-0", stacked ? "mt-1 size-4" : "size-3.5", mark.className)}
+
+          className={cn("size-4", tone === "positive" && "text-positive")}
         />
-      )}
-      {text}
-      {stacked ? null : actions}
+      </span>
+      <div className="min-w-0 flex-1" title={hoverTitle}>
+        {/* Only the message is announced: controls must remain siblings. */}
+        <div
+          ref={messageRef}
+          id={messageId}
+          className={cn(
+            "text-ui [overflow-wrap:anywhere]",
+            expandable && !expanded && "line-clamp-2",
+          )}
+          {...(announce
+            ? { role: "status", "aria-live": "polite" as const, "aria-atomic": true }
+            : {})}
+        >
+          <p
+            className={cn(
+              "font-medium",
+              detail !== undefined && tone !== "error" && "text-foreground",
+            )}
+          >
+            {title}
+          </p>
+          {detail === undefined || tone === "error" ? null : (
+            <p className="mt-1 text-ui">{detail}</p>
+          )}
+        </div>
+        {tone === "error" && detail !== undefined ? (
+          <details className="mt-1 text-ui">
+            <summary>Details</summary>
+            <div className="[overflow-wrap:anywhere]">{detail}</div>
+          </details>
+        ) : null}
+        {(expandable && (overflowing || expanded)) || (tone === "error" && plainText) ? (
+          <div className="flex flex-wrap items-center gap-2 pt-2">
+            {expandable && (overflowing || expanded) ? (
+              <Button
+                size="xs"
+                variant="ghost"
+                aria-expanded={expanded}
+                aria-controls={messageId}
+                onClick={() => setExpanded(!expanded)}
+              >
+                {expanded ? "Show less" : "Show more"}
+              </Button>
+            ) : null}
+            {tone === "error" && plainText ? (
+              <Button size="xs" variant="ghost" onClick={() => void copy()}>
+                <CopyIcon />
+                {copied ? "Copied" : "Copy error"}
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+        {stacked && actions !== undefined ? (
+          <div className="flex flex-wrap items-center gap-2 pt-2">{actions}</div>
+        ) : null}
+      </div>
+      {!stacked && actions !== undefined ? (
+        <div className="flex max-w-full flex-wrap items-center gap-2 self-center">{actions}</div>
+      ) : null}
+      {onDismiss || dismissalKey ? (
+        <Button size="icon-xs" variant="ghost" aria-label="Dismiss notice" onClick={dismiss}>
+          <CloseIcon />
+        </Button>
+      ) : null}
     </div>
   );
 }

@@ -197,6 +197,14 @@ async function waitForFileMatching(path, pattern, timeoutMs = 8000) {
 /** `stty size` output: "<rows> <cols>". */
 const GRID_SHAPE = /^\d+\s+\d+$/;
 
+/**
+ * A project's rail tile. Its accessible name is the project's name (the
+ * monogram is only painted text); `.and(a real <button>)` because dnd-kit's
+ * sortable wrapper also carries role="button" and inherits that name.
+ */
+const railTile = (page, name) =>
+  page.getByRole("button", { name, exact: true }).and(page.locator("button"));
+
 /** Number of session tabs the selected workspace shows (close buttons ≙ tabs). */
 async function tabCount(page) {
   return page.locator('[aria-label^="Close Terminal"]').count();
@@ -231,7 +239,7 @@ async function waitForLiveTerminal(page, timeoutMs = 20000) {
  * create rather than a terminal an earlier tab painted.
  */
 async function startTerminalTab(page, expectedTabs) {
-  await page.getByLabel("Other things to open").first().click();
+  await page.getByLabel("Open a tab").first().click();
   await page.getByRole("menuitem", { name: /^Terminal/ }).click();
   await page.waitForFunction(
     (n) => document.querySelectorAll('[aria-label^="Close Terminal"]').length === n,
@@ -297,9 +305,7 @@ async function main() {
     await fs.rm(p, { force: true });
   }
 
-  // Distinct two-word names → distinct monograms "AR" / "BC" (rail tiles carry
-  // a duplicate accessible name from the dnd-kit wrapper, so we click the
-  // monogram TEXT exactly).
+  // Distinct names → distinct rail tiles (see `railTile`).
   const projects = [
     {
       id: "ws-alpha",
@@ -376,7 +382,7 @@ async function main() {
     // Nav and the active Home tab are both remembered per-project and both
     // default to Home's Board tab, so a fresh workspace opens on the board —
     // click Home to be sure of the page, then mint its own terminal.
-    await page.getByText("BC", { exact: true }).click(); // Beta Cove monogram
+    await railTile(page, projects[1].name).click(); // Beta Cove
     await page.getByText("Home", { exact: true }).click();
     await startTerminalTab(page, 1); // beta's first terminal, explicitly
     const bTabs = await tabCount(page);
@@ -394,7 +400,7 @@ async function main() {
 
     // === 3. Isolation/concurrency: back in A, SAME session, no dup tab ======
     // Alpha remembers it was on Sessions, but re-assert to be robust.
-    await page.getByText("AR", { exact: true }).click(); // Alpha Ridge monogram
+    await railTile(page, projects[0].name).click(); // Alpha Ridge
     await page.getByText("Home", { exact: true }).click();
     await waitForLiveTerminal(page);
     const aTabs2 = await tabCount(page);
@@ -592,17 +598,14 @@ async function main() {
     await focusTerminalAt(page, 1);
     await runInTerminal(page, `stty size > ${childGridBeforePath}`);
     const childGridBefore = await waitForFileMatching(childGridBeforePath, GRID_SHAPE, 5000);
-    const chromeBefore = await page.evaluate(() => ({
-      dpr: window.devicePixelRatio,
-      // A chrome label that is NOT inside the terminal, to prove ⌘+ zoomed the
-      // focused pane alone. "Sessions" was that label until VC-54 retired the
-      // nav item; "Configure" is its surviving neighbour on the same row.
-      navFontSize: getComputedStyle(
-        Array.from(document.querySelectorAll("*")).find(
-          (element) => element.textContent === "Configure" && element.children.length === 0,
-        ),
-      ).fontSize,
-    }));
+    // Home stays in the sidebar when Configure moves into Settings. Measure
+    // that live chrome control, outside every terminal, on both sides of ⌘+.
+    const chromeMetrics = () =>
+      page.getByRole("button", { name: "Home", exact: true }).evaluate((element) => ({
+        dpr: window.devicePixelRatio,
+        navFontSize: getComputedStyle(element).fontSize,
+      }));
+    const chromeBefore = await chromeMetrics();
 
     await page.keyboard.press("Meta+Equal");
     await sleep(1000);
@@ -611,17 +614,7 @@ async function main() {
     await focusTerminalAt(page, 0);
     await runInTerminal(page, `stty size > ${rootGridAfterPath}`);
     const rootGridAfter = await waitForFileMatching(rootGridAfterPath, GRID_SHAPE, 5000);
-    const chromeAfter = await page.evaluate(() => ({
-      dpr: window.devicePixelRatio,
-      // A chrome label that is NOT inside the terminal, to prove ⌘+ zoomed the
-      // focused pane alone. "Sessions" was that label until VC-54 retired the
-      // nav item; "Configure" is its surviving neighbour on the same row.
-      navFontSize: getComputedStyle(
-        Array.from(document.querySelectorAll("*")).find(
-          (element) => element.textContent === "Configure" && element.children.length === 0,
-        ),
-      ).fontSize,
-    }));
+    const chromeAfter = await chromeMetrics();
     const [childRowsBefore, childColsBefore] = terminalGrid(childGridBefore);
     const [childRowsAfter, childColsAfter] = terminalGrid(childGridAfter);
     check(

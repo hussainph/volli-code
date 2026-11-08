@@ -14,7 +14,7 @@ describe("LiveReconciliationAffordance", () => {
     );
 
     expect(html).toContain('role="status"');
-    expect(html).toContain("Your draft and the newer disk version were both preserved.");
+    expect(html).toContain("Changed on disk · draft kept");
     expect(html).toContain("Use disk and discard draft");
     expect(html).toContain("Overwrite disk with draft");
     expect(html).not.toContain("Reload");
@@ -37,7 +37,7 @@ describe("LiveReconciliationAffordance", () => {
     // CONTAINS, and `ui/notice.tsx` owns which element carries it.
     const start = html.indexOf('role="status"');
     const liveRegion = html.slice(start, html.indexOf("</div>", start));
-    expect(liveRegion).toContain("Your draft and the newer disk version were both preserved.");
+    expect(liveRegion).toContain("Changed on disk · draft kept");
     expect(liveRegion).not.toContain("<button");
     expect(html).toContain("<button");
   });

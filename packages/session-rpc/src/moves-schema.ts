@@ -2,6 +2,7 @@
 import { z } from "zod";
 import {
   CLOUD_MOVE_ACTIONS,
+  CLOUD_MOVE_PREFLIGHT_PHASES,
   CLOUD_MOVE_STEPS,
   CLOUD_MOVE_VIEW_STATES,
   TICKET_STATUSES,
@@ -91,6 +92,18 @@ export const moveSnapshotSchema = z.object({
   account: z.object({ userId: id, displayName: text }).nullable(),
   workspaces: z.array(z.object({ id, name: text, canMove: z.boolean() })),
   unavailable: text.nullable(),
+  preflight: z
+    .object({
+      phase: z.enum(CLOUD_MOVE_PREFLIGHT_PHASES),
+      projectIndex: count,
+      projectCount: count,
+      projectName: text.nullable(),
+      done: count.nullable(),
+      total: count.nullable(),
+      unit: z.enum(["records", "files"]).nullable(),
+      startedAt: count,
+    })
+    .nullable(),
   moves: z.array(
     z.object({
       moveId: id,

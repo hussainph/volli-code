@@ -4,19 +4,10 @@
  * CLAUDE.md ("UI copy: let controls talk"): no row descriptions, no tutorial
  * tooltips, no contrast lectures.
  *
- * Ported from `lab/scratches/canvas.tsx`, which is where the interaction was
- * designed: the pad is a MINIMAP (a stop's position on it is where its pool
- * lands in the window, so it carries the window's 16:10 proportions or it lies
- * about the one thing it exists to show), pressing an orb promotes it and
- * dragging it moves it, and the swatch page follows the primary rather than
- * being seeded from it once.
- *
- * What did NOT come across is the lab's two-mode `CHROME` table. That editor was
- * a translucent card floating ON the gradient and had to answer light and dark
- * itself; this one lives inside Settings' own opaque card, where the app's
- * tokens already do. Its six tuning dials did not come across either — lift,
- * card tint, surface spread, shadow, text weight and the seam are settled and
- * now live in `ARC_SETTLED`, so they are no longer settings.
+ * The pad is a minimap: each stop's position locates its colour pool in the
+ * window, so it uses the window's 16:10 proportions. Pressing an orb promotes
+ * it, dragging moves it, and the swatch page follows the primary colour.
+ * Settings' semantic tokens provide the surrounding surface in both modes.
  *
  * ## The two faders
  *
@@ -49,16 +40,19 @@
  */
 
 import * as React from "react";
-import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
-import { CaretLeftIcon } from "@phosphor-icons/react/dist/csr/CaretLeft";
-import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
-import { DotsNineIcon } from "@phosphor-icons/react/dist/csr/DotsNine";
-import { DropHalfIcon } from "@phosphor-icons/react/dist/csr/DropHalf";
-import { MinusIcon } from "@phosphor-icons/react/dist/csr/Minus";
-import { MonitorIcon } from "@phosphor-icons/react/dist/csr/Monitor";
-import { MoonStarsIcon } from "@phosphor-icons/react/dist/csr/MoonStars";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
-import { SunIcon } from "@phosphor-icons/react/dist/csr/Sun";
+import {
+  type IconComponent,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  GridIcon,
+  ContrastIcon,
+  MinusIcon,
+  MonitorIcon,
+  NightIcon,
+  AddIcon,
+  SunIcon,
+} from "@renderer/components/ui/icon";
+
 import {
   addStop,
   canvasBackground,
@@ -120,12 +114,8 @@ const FADER_FOOT = 22;
 const PAD_WIDTH = (SLIDER_SQUIGGLE_WIDTH + FADER_FOOT) * PAD_RATIO;
 
 /**
- * The lab's orb sizes, and a promotion that is a 1.6× jump.
- *
- * Kept at the lab's absolute numbers even though this pad is roughly twice its
- * width: an orb is a grab target and a colour sample, and neither of those wants
- * to scale with the container. The first port shrank them to 22/34 and the pad
- * read as a map of pinheads.
+ * Fixed-size grab targets double as colour samples; the primary is 1.6× larger.
+ * Neither target scales with the container.
  */
 const ORB_SIZE = 28;
 const PRIMARY_ORB_SIZE = 44;
@@ -136,7 +126,7 @@ const CLICK_SLOP = 4;
 /** The three modes, in the order the control lists them. */
 const APPEARANCE_OPTIONS = [
   { key: "light", label: "Light", icon: SunIcon },
-  { key: "dark", label: "Dark", icon: MoonStarsIcon },
+  { key: "dark", label: "Dark", icon: NightIcon },
   { key: "auto", label: "Auto", icon: MonitorIcon },
 ] as const satisfies readonly { key: Appearance; label: string; icon: unknown }[];
 
@@ -158,17 +148,31 @@ export function AppearanceModeChoice({
   testId: string;
   /** Sun · moon · monitor with no words — the form it takes floating on the pad. */
   iconOnly?: boolean;
-  onChange(next: Appearance): void;
+  onChange(next: Appearance, origin?: "pointer" | "keyboard"): void;
 }) {
+  const origin = React.useRef<"pointer" | "keyboard">("keyboard");
   return (
-    <Segmented
-      ariaLabel="Appearance"
-      testId={testId}
-      value={value}
-      options={APPEARANCE_OPTIONS}
-      iconOnly={iconOnly}
-      onChange={onChange}
-    />
+    <div
+      className="contents"
+      onPointerDownCapture={() => {
+        origin.current = "pointer";
+      }}
+      onKeyDownCapture={() => {
+        origin.current = "keyboard";
+      }}
+      onClickCapture={(event) => {
+        if (event.detail === 0) origin.current = "keyboard";
+      }}
+    >
+      <Segmented
+        ariaLabel="Appearance"
+        testId={testId}
+        value={value}
+        options={APPEARANCE_OPTIONS}
+        iconOnly={iconOnly}
+        onChange={(next) => onChange(next, origin.current)}
+      />
+    </div>
   );
 }
 
@@ -347,7 +351,7 @@ function PadOrb({
         marginTop: -size / 2,
         background: stop.hex,
       }}
-      className="absolute touch-none rounded-full shadow-raised ring-2 ring-white outline-1 outline-black/30 transition-[width,height,margin] duration-200 ease-out focus-visible:ring-4 focus-visible:outline-2"
+      className="absolute touch-none rounded-full shadow-raised ring-2 ring-white outline-1 outline-black/30 focus-visible:ring-4 focus-visible:outline-2"
     />
   );
 }
@@ -418,6 +422,9 @@ function GradientPad({
 /**
  * A quiet translucent chip for a control FLOATING ON THE PAD.
  *
+ * Only for controls without a fill of their own (the ghost −/+ pair): the
+ * appearance segments are lifted buttons and float bare.
+ *
  * The pad paints the user's own gradient, which can be any colour at all, so
  * a floating control cannot borrow the pad as its surface — white glyphs
  * vanish on a pale canvas, dark ones on a deep canvas (the orbs' two-tone
@@ -427,7 +434,7 @@ function GradientPad({
  */
 function PadChip({ children }: { children: React.ReactNode }) {
   return (
-    <div className="pointer-events-auto flex items-center gap-0.5 rounded-full bg-background/60 p-0.5 backdrop-blur-sm">
+    <div className="pointer-events-auto flex items-center gap-0.5 rounded-full glass-control p-0.5">
       {children}
     </div>
   );
@@ -478,7 +485,7 @@ function StopCountControls({
             : undefined
         }
       >
-        <PlusIcon />
+        <AddIcon />
       </Button>
     </PadChip>
   );
@@ -570,7 +577,7 @@ function PrimaryColourRow({
           aria-label="Previous swatches"
           className={chevron}
         >
-          <CaretLeftIcon />
+          <ChevronLeftIcon />
         </Button>
         {/* FIXED-SIZE chips, not a stretching grid. `flex-1` with
             `aspect-square w-full` squares meant each swatch was a ninth of
@@ -596,7 +603,7 @@ function PrimaryColourRow({
           aria-label="More swatches"
           className={chevron}
         >
-          <CaretRightIcon />
+          <ChevronRightIcon />
         </Button>
       </div>
       <Input
@@ -653,7 +660,7 @@ function Wave({ stand, ink, clip }: { stand: number; ink: string; clip?: string 
       viewBox={`0 ${-WAVE_BAND / 2} ${SLIDER_SQUIGGLE_WIDTH} ${WAVE_BAND}`}
       preserveAspectRatio="none"
       style={{ clipPath: clip }}
-      className="pointer-events-none absolute inset-x-0 top-1/2 h-3.5 -translate-y-1/2 overflow-visible transition-[clip-path] duration-150 ease-out motion-reduce:transition-none!"
+      className="pointer-events-none absolute inset-x-0 top-1/2 h-3.5 -translate-y-1/2 overflow-visible transition-[clip-path] duration-(--duration-menu-in) ease-out motion-reduce:transition-none!"
     >
       <path
         d={sliderSquigglePath(
@@ -670,7 +677,7 @@ function Wave({ stand, ink, clip }: { stand: number; ink: string; clip?: string 
           transformBox: "fill-box",
           transformOrigin: "center",
         }}
-        className={`${ink} transition-transform duration-150 ease-out motion-reduce:transition-none!`}
+        className={`${ink} transition-transform duration-(--duration-menu-in) ease-out motion-reduce:transition-none!`}
       />
     </svg>
   );
@@ -713,7 +720,7 @@ function WaveSlider({
    * and a glyph says it without spending a word (the aria-label still names
    * it for the reader; `title` names it for whoever hovers).
    */
-  icon: PhosphorIcon;
+  icon: IconComponent;
   value: number;
   onInput(next: number): void;
   onSettle(): void;
@@ -744,7 +751,7 @@ function WaveSlider({
           <span
             aria-hidden
             style={{ left: seam }}
-            className="pointer-events-none absolute top-1/2 h-5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary shadow-raised transition-[left] duration-150 ease-out motion-reduce:transition-none!"
+            className="pointer-events-none absolute top-1/2 h-5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary shadow-raised"
           />
           {/* Last, so it takes the pointer: the platform's own control with its
             paint suppressed, which keeps click-to-jump, the keyboard, and the
@@ -771,7 +778,7 @@ function WaveSlider({
             beside it was the control narrating itself. The native input still
             reports its value to the reader. */}
       </span>
-      {/* `title` on a wrapping span — Phosphor's icon props carry no title of
+      {/* `title` on a wrapping span — The shared symbol carries no native title attribute of
           their own, and the input above already names the fader for readers. */}
       <span title={label} className="inline-flex">
         <Icon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
@@ -954,7 +961,7 @@ export function CanvasEditor({ scope, canvas, resolved, mode, onCanvasChange }: 
           <WaveSlider
             id="canvas-vibrancy"
             label="Vibrancy"
-            icon={DropHalfIcon}
+            icon={ContrastIcon}
             value={live.vibrancy}
             onInput={(vibrancy) => edit((current) => ({ ...current, vibrancy }))}
             onSettle={settle}
@@ -971,8 +978,11 @@ export function CanvasEditor({ scope, canvas, resolved, mode, onCanvasChange }: 
             {/* Overlays are SIBLINGS of the pad, absolutely placed, so the
                 pad's own group semantics stay a group of colour stops. */}
             {mode ? (
-              <div className="absolute top-2 left-1/2 -translate-x-1/2">
-                <PadChip>{mode}</PadChip>
+              // No chip: the appearance segments carry their own lifted
+              // fills, so they already read on any canvas. A chip behind
+              // them would be a second surface around controls that have one.
+              <div className="pointer-events-auto absolute top-2 left-1/2 -translate-x-1/2">
+                {mode}
               </div>
             ) : null}
             <div className="absolute bottom-2 left-1/2 -translate-x-1/2">
@@ -986,7 +996,7 @@ export function CanvasEditor({ scope, canvas, resolved, mode, onCanvasChange }: 
 
           <WaveSlider
             label="Grain"
-            icon={DotsNineIcon}
+            icon={GridIcon}
             value={live.grain}
             onInput={(grain) => edit((current) => ({ ...current, grain }))}
             onSettle={settle}

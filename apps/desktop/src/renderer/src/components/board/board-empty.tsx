@@ -1,11 +1,12 @@
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
+import { AddIcon } from "@renderer/components/ui/icon";
 
 import {
   ModelAccessFirstRun,
   useModelAccessReady,
 } from "@renderer/components/sessions/model-access-first-run";
-import { readOnlyControl, useCanWrite } from "@renderer/components/hosts/use-hosts";
-import { Button } from "@renderer/components/ui/button";
+import { useCanWrite } from "@renderer/components/hosts/use-hosts";
+import { EmptyState } from "@renderer/components/ui/empty-state";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { cn } from "@renderer/lib/utils";
 import { useUiStore } from "@renderer/stores/ui";
@@ -19,13 +20,9 @@ import { useUiStore } from "@renderer/stores/ui";
  * one button, and they were the whole of what a new board said (VC-42 audit,
  * finding F6).
  *
- * ONE LINE, AND IT NAMES THE KICKOFF. The thing a first-timer cannot discover
- * is not that a board takes tickets — it is that the second button in the
- * composer turns one into a running agent in the same gesture. So the line
- * carries that clause and nothing else; the button carries the way in, and the
- * chord it announces is the same `c` that works from anywhere in the app
- * (`hooks/use-new-ticket-shortcut.ts`). Everything past those two sentences
- * belongs in the composer, where the controls are.
+ * The heading names the state; the button owns the first move. Kickoff is a
+ * choice inside the composer, not a tutorial on the empty board. The chord
+ * is the same `c` that works from anywhere in the app.
  *
  * ── EXCEPT WHEN THE APP CANNOT KEEP THAT PROMISE (VC-54 scope 6) ──────────
  * "Create & start puts an agent on it" is a lie on a profile with no default
@@ -58,27 +55,25 @@ export function BoardEmpty({ projectId, className }: { projectId: string; classN
 
   return (
     <div className={cn(EMPTY_PAGE, "gap-4", className)}>
-      {modelReady === false ? (
+      {modelReady === null ? (
+        <LoadingLabel>Loading model access</LoadingLabel>
+      ) : modelReady === false ? (
         <ModelAccessFirstRun />
       ) : (
-        <>
-          <p className="text-sm text-muted-foreground">
-            Write the first ticket — Create &amp; start puts an agent on it.
-          </p>
-          <Button
-            className="gap-1 px-2 text-ui"
-            {...readOnlyControl(canWrite)}
-            onClick={() => useUiStore.getState().setNewTicketOpen(true)}
-          >
-            <PlusIcon className="size-3.5" />
-            New ticket
-            {/* The shortcut-chip treatment the primary buttons already use
-                (ticket-activity-feed.tsx, project-tile.tsx). */}
-            <kbd className="rounded-sm bg-primary-foreground/10 px-1 py-px font-sans text-label font-normal text-primary-foreground/70">
-              C
-            </kbd>
-          </Button>
-        </>
+        <EmptyState
+          tier="page"
+          illustration="board"
+          title="No tickets yet"
+          action={{
+            label: "New ticket",
+            icon: <AddIcon className="size-3.5" />,
+            onAction: () => useUiStore.getState().setNewTicketOpen(true),
+            disabled: !canWrite,
+            readOnly: !canWrite,
+            shortcut: "C",
+            keyshortcuts: "C",
+          }}
+        />
       )}
     </div>
   );

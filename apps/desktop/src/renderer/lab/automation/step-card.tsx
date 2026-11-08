@@ -6,10 +6,7 @@
  * faces the studio can toggle between; see {@link RuntimePicker}.
  */
 import * as React from "react";
-import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
-import { LockSimpleIcon } from "@phosphor-icons/react/dist/csr/LockSimple";
-import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
+import { CopyIcon, LockIcon, DeleteIcon, WarningIcon } from "@renderer/components/ui/icon";
 
 import { Button } from "@renderer/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
@@ -38,7 +35,7 @@ function AppendedContext() {
           aria-label="Context appended to every prompt"
           className="text-muted-foreground"
         >
-          <LockSimpleIcon weight="fill" />
+          <LockIcon />
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-[30rem]">
@@ -88,7 +85,7 @@ export function StepCard({
                 onClick={onDuplicate}
                 className="text-muted-foreground"
               >
-                <CopyIcon weight="fill" />
+                <CopyIcon />
               </Button>
             )}
             {onRemove === null ? null : (
@@ -99,7 +96,7 @@ export function StepCard({
                 onClick={onRemove}
                 className="text-muted-foreground hover:text-destructive"
               >
-                <TrashIcon weight="fill" />
+                <DeleteIcon />
               </Button>
             )}
           </div>

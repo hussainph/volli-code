@@ -1,29 +1,23 @@
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 /**
  * What a closed terminal's saved record looks like (VC-290) — the surface a
  * Previous-band row and a ⌘K row now land on, instead of on whatever tab
  * happened to be in front of the Session's ticket.
  *
- * Presentational and store-free on purpose: everything on screen is either a
- * field of {@link TerminalHistoryDetail} or one of two fixed sentences, so the
- * panel can be rendered in a test with no window, no dialog and no fetch around
- * it — which is where the promises this ticket makes are actually checked.
- *
- * THE ABSENCES ARE CONTENT. A closed terminal has no scrollback and no recorded
- * commands, and the failure this replaces was a history entry that silently
- * showed something else. So the two sentences are printed plainly rather than
- * implied by empty space: an empty terminal frame would read as "this session
- * did nothing", which is a stronger and falser claim than "we did not keep it".
- * (CLAUDE.md's "let controls talk" argues against prose under controls; these
- * are not explanations of a control, they are the record's own contents.)
+ * Presentational and store-free: the saved record is a compact icon/value list.
+ * It shows no terminal-shaped empty frame and no tutorial box beneath the facts.
  */
-import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-
 import {
-  TERMINAL_LAST_COMMAND_NOT_RECORDED,
-  TERMINAL_OUTPUT_NOT_SAVED,
-  type TerminalHistoryDetail,
-} from "@volli/session-presentation";
+  RefreshIcon,
+  ClockIcon,
+  FinishedIcon,
+  FolderIcon,
+  SignOutIcon,
+  type IconComponent as Icon,
+  TerminalIcon,
+} from "@renderer/components/ui/icon";
+
+import type { TerminalHistoryDetail } from "@volli/session-presentation";
 
 import { Button } from "@renderer/components/ui/button";
 import { formatStamp } from "@renderer/lib/relative-time";
@@ -44,12 +38,26 @@ export interface SessionDetailPanelProps {
   onResume(): void;
 }
 
-/** One `label: value` line of the record. */
-function DetailRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+/** An icon/value line, retaining its descriptor for assistive technology. */
+function DetailRow({
+  label,
+  value,
+  mono,
+  icon: Icon,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+  icon: Icon;
+}) {
   return (
-    <div className="flex items-baseline gap-2">
-      <dt className="w-24 shrink-0 text-ui text-muted-foreground">{label}</dt>
+    <div className="flex items-center gap-2">
+      <dt title={label} className="shrink-0 text-muted-foreground">
+        <Icon aria-hidden className="size-4" />
+        <span className="sr-only">{label}</span>
+      </dt>
       <dd
+        title={value}
         className={`min-w-0 flex-1 truncate text-ui text-foreground${mono === true ? " font-mono" : ""}`}
       >
         {value}
@@ -79,21 +87,26 @@ export function SessionDetailPanel({
       </div>
 
       <dl className="flex flex-col gap-2">
-        <DetailRow label="Started" value={formatStamp(detail.startedAt, { time: true })} />
+        <DetailRow
+          icon={ClockIcon}
+          label="Started"
+          value={formatStamp(detail.startedAt, { time: true })}
+        />
         {detail.endedAt !== null ? (
-          <DetailRow label="Ended" value={formatStamp(detail.endedAt, { time: true })} />
+          <DetailRow
+            icon={FinishedIcon}
+            label="Ended"
+            value={formatStamp(detail.endedAt, { time: true })}
+          />
         ) : null}
-        <DetailRow label="Exit" value={detail.exitLabel} />
+        <DetailRow icon={SignOutIcon} label="Exit" value={detail.exitLabel} />
         {/* No row rather than an invented one: a record whose native detail no
             longer parses has no folder to name, and "unknown" in a path slot
             reads as a directory. */}
-        {detail.cwd !== null ? <DetailRow label="Folder" value={detail.cwd} mono /> : null}
+        {detail.cwd !== null ? (
+          <DetailRow icon={FolderIcon} label="Folder" value={detail.cwd} mono />
+        ) : null}
       </dl>
-
-      <div className="flex flex-col gap-1 rounded-container border border-border bg-muted/30 p-4">
-        <p className="text-ui text-muted-foreground">{TERMINAL_OUTPUT_NOT_SAVED}</p>
-        <p className="text-ui text-muted-foreground">{TERMINAL_LAST_COMMAND_NOT_RECORDED}</p>
-      </div>
 
       <div className="flex flex-wrap justify-end gap-2">
         {/* Two verbs that must never be mistaken for each other. This one is a
@@ -103,13 +116,13 @@ export function SessionDetailPanel({
             this one and never replaces it. */}
         {detail.actions.recreate !== null ? (
           <Button variant="default" disabled={busy} onClick={onNewTerminal}>
-            <TerminalWindowIcon aria-hidden />
+            <TerminalIcon aria-hidden />
             New terminal here
           </Button>
         ) : null}
         {detail.actions.resume !== null ? (
           <Button variant="outline" disabled={busy} onClick={onResume}>
-            <ArrowClockwiseIcon aria-hidden />
+            <RefreshIcon aria-hidden />
             Resume session
           </Button>
         ) : null}
@@ -126,7 +139,11 @@ export function SessionDetailPanel({
  * baseline fetch in flight must never be reported as a missing record.
  */
 export function SessionDetailPending() {
-  return <p className="text-ui text-muted-foreground">Loading this session’s record…</p>;
+  return (
+    <p className="text-ui text-muted-foreground">
+      <LoadingLabel>Loading this session’s record</LoadingLabel>
+    </p>
+  );
 }
 
 /**

@@ -8,18 +8,20 @@ import { cn } from "@renderer/lib/utils";
  * the *page* (docs/DESIGN.md's two content tiers), not the header.
  *
  * A **workbench** header is Tier B: it sits at the page gutter, holds its
- * title's width against the controls flowing beside it, and reads at the app's
- * body step so an 18px word doesn't shout across a row of 28px controls.
+ * title's width against the controls flowing beside it.
  *
  * A **reading** header is Tier A: it takes its measure and its horizontal
  * inset from the `<ContentColumn>` it is mounted in and adds none of its own,
- * and its identity block takes the column's width so a description wraps on
- * the measure instead of running past it. Its title is the pane's masthead, one
- * step above the `text-sm` section titles underneath it.
+ * and its identity block takes the column's width. Its title is the pane's
+ * masthead. Both tiers share the page-title type step; content sections use
+ * SectionHeading instead.
+ *
+ * There is no subtitle slot: a page is named by its title, and a sentence
+ * under it explaining the page is the copy this app does not draw.
  */
 const TIERS = {
-  workbench: { inset: "px-gutter", identity: "shrink-0", title: "text-sm" },
-  reading: { inset: "px-0", identity: "min-w-0 flex-1", title: "text-heading" },
+  workbench: { inset: "px-gutter", identity: "shrink-0" },
+  reading: { inset: "px-0", identity: "min-w-0 flex-1" },
 } as const;
 
 /**
@@ -46,8 +48,9 @@ const TIERS = {
  */
 export function PageHeader({
   title,
-  description,
   actions,
+  actionsClassName,
+  actionsLabel,
   variant = "workbench",
   titleHidden = false,
   className,
@@ -56,10 +59,12 @@ export function PageHeader({
   title: ReactNode;
   /** Keep the title for the outline, off the screen — see the doc above. */
   titleHidden?: boolean;
-  /** One line under the title. */
-  description?: ReactNode;
   /** The right-parked cluster. */
   actions?: ReactNode;
+  /** Optional geometry for a dense, wrapping toolbar cluster. */
+  actionsClassName?: string;
+  /** Names the page-wide action group independently of in-content actions. */
+  actionsLabel?: string;
   /** Surface controls sharing the title's row. */
   children?: ReactNode;
   variant?: keyof typeof TIERS;
@@ -76,11 +81,18 @@ export function PageHeader({
       )}
     >
       <div className={titleHidden ? "contents" : tier.identity}>
-        <h1 className={titleHidden ? "sr-only" : cn(tier.title, "font-semibold")}>{title}</h1>
-        {description ? <p className="mt-1 text-sm text-muted-foreground">{description}</p> : null}
+        <h1 className={titleHidden ? "sr-only" : "text-title font-semibold"}>{title}</h1>
       </div>
       {children}
-      {actions ? <div className="ml-auto flex shrink-0 items-center gap-2">{actions}</div> : null}
+      {actions ? (
+        <div
+          role={actionsLabel ? "group" : undefined}
+          aria-label={actionsLabel}
+          className={cn("ml-auto flex shrink-0 items-center gap-2", actionsClassName)}
+        >
+          {actions}
+        </div>
+      ) : null}
     </header>
   );
 }

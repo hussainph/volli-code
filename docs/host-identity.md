@@ -1,59 +1,27 @@
-# Host, workspace and execution identity
+# Host, workspace and execution identity (maintenance)
 
-> **Superseded (VC-869).** Volli Cloud is moving to a design with no host
-> process: the backend is the single authority and Runners execute
-> ([Workspace authority and offline](BOUNDARIES.md#workspace-authority-and-offline)).
-> This document still describes code in this repository. It is kept for
-> maintenance only and goes when that code is deleted or renamed; don't build
-> new work on it.
-
-These identity and storage contracts accompany the [host protocol](host-protocol.md).
-They distinguish durable names from local locators, authority generations and
-live execution. Some worker/lease storage is an additive foundation, not an
-operational distributed scheduler. Code and transport tests determine which
-features a host currently serves; absent capabilities grant nothing.
+The host model is superseded, not the Runner architecture. Do not extend it.
+[CONTEXT](../CONTEXT.md#retired-terms) names the replacements;
+[hostd operations](../apps/hostd/README.md) covers the remaining installs.
+In this compatibility code, `workspaceId` means **project id**, not today's
+team Workspace. Persisted names must not be renamed in place.
 
 ## Identity table
 
-Entity ids are UUIDv4 strings allocated once, never derived from hostname, PID,
-address, path or display name. Addresses locate hosts; editable names label them.
-Revocation never makes an id available for reuse.
-
-| Name / wire field | Lifetime and allocation | Storage / role |
-|---|---|---|
-| Host / `hostId` | One install; survives restart, not bundle restore; allocated on host use | `host_identity.host_id`; host-local, excluded from bundles |
-| Workspace / `workspaceId` | One project's board, including moves/restores | Existing `projects.id`, never a second id or checkout path |
-| Workspace epoch / `workspaceEpoch` | Nonnegative safe integer, never decreases | `workspace_epochs`; included in bundles; zero means no recorded authority |
-| Worker / `workerId` | One registration with one host; new after wipe/revoke | `workers.id`; host-local, excluded from bundles |
-| Checkout grant / `leaseEpoch` | Positive safe integer scoped by ticket; raised on each new grant, not renewal | `checkout_leases.epoch`; live grant, excluded from bundles |
-| Device / `deviceId` | One client installation paired to one host; revoked record retained | `devices.id`; attribution, excluded from bundles |
-| Host key / `hostKey` | P-256 key tied to host id; fingerprint is SHA-256 of SPKI DER | Public pin separate from private key; private key never in SQLite/bundles |
-| Device / worker key | P-256 key tied to that registration | Private half remains on its holder |
-| Session / `sessionId` | Durable Session across attachments/moves | Existing `sessions.id` |
-| Attachment / `attachmentId` | One historical executor association | Attachment ledger, not checkout ownership |
-| Ticket / `ticketId` | Durable ticket | Existing `tickets.id`; lease scope |
-| Display number / `ticketNumber` | Permanent positive handle scoped by Workspace | Allocated only by authority; presentation, not identity |
-
-Epochs are scoped generations, never bare durable ids. Compare them only with
-their Workspace/ticket UUIDs. The singleton `host_identity.id = 1` is private,
-never a wire host id. Every wire counter must pass `Number.isSafeInteger`;
-overflow fails closed. SQL `INTEGER` alone does not enforce wire syntax/bounds.
-See [BOUNDARIES rule 1](BOUNDARIES.md#standing-rules-review-criteria).
+[Wire aliases](../packages/host-protocol/src/identity.ts) name ids;
+[the identity migration](../packages/host-core/src/db/cloud-identity-migration.ts)
+defines their storage. Entity ids are allocated UUIDv4s, never hostnames, paths,
+PIDs or display numbers. Epochs are scoped safe integers, not identities.
+The singleton SQLite row id is not the wire host id.
 
 ## Host is not installation, workspace or process
 
-`volli:installation-id` is preserved in `app_state` bundles for provider sign-in
-installation semantics. It is not an authority credential or a host id.
-An update, restart, address change or new worker does not change the host id.
-Moving a Workspace neither changes the source host's id nor copies it to the
-destination. Workspace identity stays; its authority epoch rises, even when
-promotion targets the same host.
-
-A bundle excludes `host_identity`, `workers`, `checkout_leases` and `devices`.
-Restore is a new host: pair/register again before granting execution. Epoch
-history is included. A raw profile copy can duplicate host identity and key;
-copy detection is not supplied by the schema. Never serve both copies as the
-same host or treat successful key proof as exclusive authority.
+An update/restart/address change does not change host identity. Provider
+installation identity (`volli:installation-id`) is separate from authority.
+Bundles exclude host identity, workers, live leases and devices; restore requires
+new pairing/registration. Epoch history travels with the project. A raw profile
+copy can duplicate identity/key: never serve both copies as the same host or
+interpret a matching key as proof of exclusive authority.
 
 ## Workspace authority epoch
 
@@ -88,147 +56,58 @@ the latest fence and quarantines any unreplicated tail, never merges it.
 Restore alone does not authorize promotion or writes. The typed fence helper is
 not a control-plane compare-and-swap or durable conflict store.
 
-## Workers and capabilities
+## Workers and checkout leases
 
-`workers(id, name, kind, capabilities, created_at, revoked_at)` is host-level.
-Reconnect keeps registration only while its local state survives. Registration
-to another host has a different id; the host's co-located executor is also a
-worker, not the host's id. Revoked records remain; re-registration gets a fresh id.
-
-`kind` names process ownership, not client proximity: `local` is this authority's
-co-located worker; `remote` is a user-owned outbound worker; `cloud` is a managed
-sandbox worker. Advertised capabilities describe platform/runtime/git/terminal/
-browser/protocol facilities, not a model registry, authorization or writable
-checkout. Unknown keys grant nothing. JSON storage alone neither validates the
-capability vocabulary nor schedules or authorizes workers.
-
-## Checkout leases: one ticket, one worker
-
-| `checkout_leases` column | Meaning |
-|---|---|
-| `ticket_id` | Ticket UUID / primary key; cascades on ticket deletion |
-| `worker_id` | Registered holder |
-| `epoch` | Per-ticket generation (`leaseEpoch`) |
-| `workspace_epoch` | Authority generation granting it |
-| `granted_at` | Fixed for this generation |
-| `renewed_at` | Last renewal; initially grant time |
-| `expires_at` | Host-clock expiry, strictly after renewal |
-| `released_at` | Null while active, otherwise terminal release time |
-
-First grant is one. Transfer, re-grant after expiry/release/revocation or a
-promoted authority increments it. Renewal changes only renewal/expiry times.
-Release ends it in place; deleting then granting would forget the counter.
-Restore omits leases, so raising Workspace epoch before a new grant fences any
-old per-ticket counter.
-
-A write carries `(workspaceId, ticketId, workspaceEpoch, leaseEpoch)` plus the
-authenticated worker id. Generations compare lexicographically, Workspace first,
-and must exactly equal the live, unexpired grant. A higher claimed token is not
-authorization; a Session/worker id alone grants no checkout ownership.
-
-The UPDATE trigger rejects decreasing either epoch, changing ticket id, or
-changing holder/Workspace epoch/grant time without raising lease epoch. Released
-grants cannot revive in place. DELETE/INSERT and REPLACE bypass this protection
-and are not valid renewal/transfer. Runtime enforcement must additionally
-validate expiry, renewal monotonicity, current authority, registration and
-filesystem effects, serialized through the authority transaction gate.
-
-Execution movement requires stop writes → checkpoint reference → new lease
-→ restore destination. Processes/browser sockets do not migrate. A partitioned
-old worker may alter its private files, but stale publications and host effects
-must be refused. Main-checkout sharing and attachment lease bindings require
-explicit enforcement before worker execution uses them; a path is never a
-durable checkout identity.
+[Migration 058](../packages/host-core/src/db/cloud-identity-migration.ts) retains
+worker/lease tables and monotonic guards for old readers. Those tables are not
+an implemented distributed scheduler, promotion arbiter or filesystem fence.
+Do not revive the retired lease/checkpoint transfer design. A path or Session
+attachment never grants checkout ownership.
 
 ## Session attachment, runner identity and location
 
-Session lifetime belongs to the ledger; at most one live executor attachment
-exists per Session. Several Sessions/subagents on one ticket may share a lease;
-the lease is not per Session or attachment. Attach/resume/publication must be
-bound to the grant recorded for that execution, not whatever grant is current
-when a message arrives. Closing a stale attachment retains Session history.
-
-`RunnerIdentity {id, kind: local | remote | cloud}` identifies the worker.
-Historical `unknown` is a read representation, not a valid new target.
-Replacement execution has a new attachment UUID; historical runner identities are
-immutable. With `cloud` off, `LOCAL_RUNNER` (`{id:"local", kind:"local"}`) stays
-frozen in historical records. The field holding it is still named `venue`.
-
-`WorkingCopyKind` / `WorkingCopyMeasurement` (`main-checkout | worktree`) instead
-describes the checkout plus git measurements. Neither implies a worker kind. `SessionLocation`
-is `{directory, venue}`: directory is a worker-local locator. `prepare` refuses
-materialization failure rather than falling back to the main checkout; `reaffirm`
-checks the already-bound directory. Never execute a new worker against an old
-worker's recovery path. The local start lease serializes materialization versus
-deletion; it is not distributed ownership.
-
-History remains readable when worker registrations were excluded by restore:
-use recorded runner label or unavailable-worker fallback, never a current worker
-row as evidence of historical identity or a live grant.
-
-## Devices and pairing
-
-A device is a client installation paired to one host, not user identity, hardware
-serial, push token or account. Pairing creates a host-assigned UUID and label.
-Reconnect/credential rotation retains it; pairing after revoke/restore or to
-another host creates a new registration. Actors are credential-derived, never
-claimed by a hello. A public device row alone grants no Workspace access.
+[SessionAttachment](../packages/shared/src/session-ledger.ts) records historical
+Runner provenance; its durable field is still `venue`. `LOCAL_RUNNER` stays
+`{id:"local", kind:"local"}` for existing history. Historical unknown provenance
+is readable, not a new execution target. A replacement attachment keeps the
+Session's identity; it does not execute another Runner's recovery path.
+[Session location](../packages/host-core/src/session-runtime/location.ts) refuses
+failed worktree preparation rather than falling back to the main checkout.
 
 ## Keys: proof behind the names
 
-Names remain UUIDs; keys bind names, never replace them. P-256 supports platform
-non-exportable keys. Algorithm ids permit additive alternatives. Host private
-keys are local, excluded from SQLite/bundles; device keys are non-exportable
-where supported; wiping a worker key creates a new identity.
-
-Pairing pins `(hostId, fingerprint)` out of band. Network-only trust-on-first-use
-is not pairing. A welcome signs the client nonce, negotiated version, host id,
-Workspace/epoch, actor and granted features. Verify against the pin first.
-A changed key requires explicit re-pair. A Workspace moved to an unpaired host
-requires pairing before access; credentials bind the issuing host.
-
-Device/worker proof is a host challenge bound to host, principal, Workspace and
-purpose, exchanged for short-lived credentials. Revocation is checked at dispatch.
-Session tokens stay host-issued and attachment-scoped. Rotation needs an old-key
-signed statement; lost private keys require new identity and pairing. Proof binds
-a handshake, not the channel: WSS remains required outside loopback. Network
-routing identity is not authorization, and copied keys do not solve copy detection.
+Keys bind names; they do not replace ids or prove sole authority. SSH pinning,
+short-lived device credentials, their store permissions and the current
+null-welcome-proof limitation are documented under
+[Enrollment over SSH](host-protocol.md#enrollment-over-ssh-vc-700).
+[device-credential.ts](../packages/host-protocol/src/device-credential.ts) defines
+the signed claims; [enrolled-devices.ts](../apps/hostd/src/enrolled-devices.ts)
+defines verification and revocation. A changed host key needs explicit trust
+recovery, never network-only silent replacement.
 
 ## Operator token
 
-No token is unauthenticated, never implicitly the person. Session-token or
-`VOLLI_SESSION` evidence prevents the CLI/door from substituting operator proof.
-Only hostd issues/verifies operator tokens; desktop does neither.
-
-Root issues a 256-bit token into the operator login's own mode-0600 file. Hostd
-holds a root-owned verifier (SHA-256), constant-time compared. A valid token maps
-to user policy; no project policy can extend person-only verbs to a Session.
-The service account cannot read the plaintext, alter the verifier/ancestors or
-run the issuer. CLI sends it only to a socket name controlled by root/operator.
-Removing the verifier revokes at the next request. It is a local-admin bearer
-credential, not a device id. A single-user foreground deployment cannot separate
-operator and Session uids. See `apps/hostd/README.md`, "Operators".
+An operator token is a local-admin bearer credential, not a device id or agent
+grant. Only hostd issues/verifies it. Root owns the verifier; removing it revokes
+at the next request. A Session's token/environment cannot be substituted with
+operator proof. Single-uid foreground installs cannot separate operator from
+agent authority. Provisioning and recovery: [Operators](../apps/hostd/README.md#operators).
 
 ## Ticket display numbers
 
-Only the Workspace authority calls `nextTicketNumberForProject` and creates
-tickets. Clients/workers/replicas do not reserve ranges or mint disconnected
-handles. Promotion advances beyond existing tickets, unreplicated tail and
-`volli/<PREFIX>-<n>[-<slug>]` refs; never recycle an unseen abandoned number.
-Prefix changes alter presentation, not UUID identity.
+Only the project authority allocates numbers with `nextTicketNumberForProject`;
+clients do not reserve disconnected ranges. Promotion must advance beyond
+existing tickets, any unreplicated tail and `volli/<PREFIX>-<n>[-<slug>]` refs;
+never recycle an unseen abandoned number. Prefix changes alter presentation,
+not UUID identity. This is a compatibility rule, not an implemented promotion
+arbiter.
 
 ## Storage compatibility
 
-Migration 058 added five tables and three triggers without changing existing
-rows. Workspace tables are `workspace_epochs` and `checkout_leases`; host tables
-are `host_identity`, `workers` and `devices`. Foreign keys stay within their
-storage scope; cross-scope ids require runtime validation. Storage is not proof
-of implemented promotion, scheduling, key issuance or distributed locking.
-
-Bundles include epoch history and exclude host/live-grant tables. Replicated
-lease rows confer no authority after promotion. Schema-57 backup writers omit
-epoch history while stamping schema 58; readers must refuse those incomplete
-bundles, never infer absent history is empty. Guarded writers instead stamp their
-own supported head/table set. Preserve the minimum reader floor across backup,
-restore and replication; never lower `user_version` or loosen restore validation
-to conceal a missing fence.
+Keep the compatibility floor and shipped schema intact. Schema-57 backup
+writers can omit epoch history while stamping schema 58; readers refuse that
+incomplete bundle rather than infer empty history. Current guarded writers
+stamp their own supported head/table set. Never lower `user_version` or loosen
+restore checks to hide missing fences. Inclusion/exclusion and refusal evidence
+live in [backup decisions](../packages/host-core/src/backup/decisions.ts) and
+[restore](../packages/host-core/src/backup/restore.ts).

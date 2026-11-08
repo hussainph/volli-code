@@ -33,6 +33,10 @@ import type { ProfileBackupStatus } from "@volli/shared";
  */
 import {
   BOARD_RESOURCE_KINDS,
+  SOURCE_ICON_ORIGIN_LIMIT,
+  isCanonicalSourceOrigin,
+  type SourceIconsWatchInput,
+  type SourceIconsSnapshot,
   CLOUD_SNAPSHOT_TEXT_MAX,
   DESKTOP_CATALOG_ENTRIES,
   HOST_LINK_RELAY_EVENT_ID_MAX,
@@ -308,6 +312,11 @@ export interface DesktopRouterHandlers {
   readonly "moves.start": HostHandler<CloudMoveStartInput, null>;
   readonly "moves.command": HostHandler<CloudMoveCommand, null>;
   readonly "moves.report": HostHandler<{ moveId: string }, string>;
+  /** Cached local decoration, scoped to one Session; never acquires icons. */
+  readonly "sourceIcons.watch": DesktopSubscriptionHandler<
+    SourceIconsWatchInput,
+    SourceIconsSnapshot
+  >;
   /** This Mac as one of the person's runners (VC-895): desktop main's Mac runner. */
   readonly "runners.thisMac": HostHandler<void, ThisMacRunnerSnapshot>;
   readonly "runners.subscribeThisMac": DesktopSubscriptionHandler<void, ThisMacRunnerSnapshot>;
@@ -336,6 +345,18 @@ const { hostProcedure, workspaceProcedure, catalogRouter } = createCatalogBuilde
   DesktopRouterContext,
   DesktopCatalogEntry
 >({ entries: DESKTOP_CATALOG_ENTRIES });
+
+const sourceIconsSnapshotSchema = z.object({
+  icons: z
+    .array(
+      z.object({
+        origin: z.string().max(2048),
+        pictureId: z.uuid().nullable(),
+        registrableDomain: z.string().max(253).nullable(),
+      }),
+    )
+    .max(SOURCE_ICON_ORIGIN_LIMIT),
+});
 
 const hostId = z.uuid();
 const providerId = z.string().min(1).max(256);
@@ -965,6 +986,28 @@ export function createDesktopRouter() {
           );
         }),
     },
+    /** Already-cached references only, never an acquisition request. */
+    sourceIcons: {
+      watch: workspaceProcedure(
+        "sourceIcons.watch",
+        z.strictObject({
+          sessionId: z.string().min(1).max(256),
+          origins: z
+            .array(z.string().max(2048).refine(isCanonicalSourceOrigin))
+            .max(SOURCE_ICON_ORIGIN_LIMIT),
+        }),
+        ({ sessionId }) => ({ kind: "session", id: sessionId }),
+      ).subscription(async function* ({ ctx, input, signal }) {
+        for await (const snapshot of desktopStream<SourceIconsSnapshot>(
+          ctx,
+          "sourceIcons.watch",
+          signal,
+          (sink) => ctx.handlers["sourceIcons.watch"](input, ctx.call, sink),
+        )) {
+          yield sourceIconsSnapshotSchema.parse(snapshot);
+        }
+      }),
+    },
     /**
      * App shortcuts out of a focused Browser page (VC-301). No channel
      * preceded them on the bridge's terms: host-placed like `hosts.*`, the
@@ -1176,5 +1219,6 @@ export function desktopProcedureSchemas(router: DesktopRouter = createDesktopRou
     "account.githubSubscribe": accountGithubSnapshotSchema,
     "runners.subscribeThisMac": thisMacRunnerSnapshotSchema,
     "moves.subscribe": z.null(),
+    "sourceIcons.watch": sourceIconsSnapshotSchema,
   });
 }

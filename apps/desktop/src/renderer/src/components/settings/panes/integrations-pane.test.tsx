@@ -2,7 +2,7 @@
 /**
  * Settings → Integrations against the three outcomes of an app scan (VC-287).
  *
- * "Volli found no supported apps on this Mac." is a claim about the Mac, so it
+ * "No supported apps found" is a claim about the Mac, so it
  * belongs to exactly one outcome: a scan that ran to the end and found none.
  * A scan that could not run says something else and offers the one recovery.
  */
@@ -21,7 +21,7 @@ import { IntegrationsPane } from "./integrations-pane";
 
 const TERMINAL: ExternalApp = { id: "terminal", label: "Terminal", kind: "terminal" };
 const SCAN_FAILED = "Couldn't check which apps are installed on this Mac.";
-const NO_APPS = "Volli found no supported apps on this Mac.";
+const NO_APPS = "No supported apps found";
 
 let root: Root | null = null;
 let container: HTMLElement | null = null;
@@ -123,8 +123,8 @@ describe("IntegrationsPane", () => {
     await act(async () => tryAgain().click());
 
     expect(main.listExternalApps.mock.calls.length).toBeGreaterThan(before);
-    expect(text()).toContain("Terminal");
     expect(text()).not.toContain(SCAN_FAILED);
+    expect(container?.querySelector("[data-slot=list-row]")).toBeNull();
   });
 
   it("keeps showing the chosen default while a scan is failing", async () => {
@@ -155,8 +155,8 @@ describe("IntegrationsPane", () => {
 
     await open();
 
-    expect(text()).toContain("Terminal");
-    expect(text()).toContain("Zed");
     expect(text()).not.toContain(NO_APPS);
+    expect(container?.querySelector("[data-slot=list-row]")).toBeNull();
+    expect(container?.querySelector("#open-files-in")).not.toBeNull();
   });
 });

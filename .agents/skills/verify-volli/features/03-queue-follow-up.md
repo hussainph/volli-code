@@ -2,7 +2,7 @@
 
 ## Sub-features
 - While a turn is live, the submit button becomes **Queue**. ↵ queues, ⌘↵ steers, and ⌫ on an empty box takes back the newest queued message (composer-ui.tsx:22-25).
-- Each queued row is a group `Queued message: <text>` with three controls: **Steer queued message: …**, **Remove queued message: …**, and **Queued message actions: …**, which opens a menu with **Edit message** (composer-ui.tsx:510-590).
+- Each queued row is a group `Queued message: <text>` with three direct controls: **Steer queued message: …**, **Remove queued message: …**, and the pencil **Edit queued message: …**. The ownership status sits beneath the message text (`composer-ui.tsx`).
 - Since VC-675 the **host** owns the queue. It is durable in `session_follow_up_queue`. At each idle boundary the host releases *one* entry, as an ordinary `message.submit` (session-engine/src/session-runtime.ts:2117-2141).
 
 ## How to get to it (user POV)
@@ -27,7 +27,7 @@ volli-drive find vd-xxxx "Queued message:"           # → no matches once relea
 ```
 - Optional probes while the row is queued:
   - `Remove queued message: second please` should make the row disappear and leave `pending_count` at 0.
-  - `Queued message actions: …` → `Edit message` should move the text back into `Message`.
+  - `Edit queued message: second please` should move the text back into `Message` and focus the composer. There is no actions menu.
   - `Steer queued message: …` should deliver the message into the live turn instead of waiting for it to end.
 
 ## End state that proves it
@@ -45,7 +45,7 @@ volli-drive state vd-xxxx sql "SELECT COUNT(*) FROM session_events WHERE session
 - CLI: `state cli session answer <short-id>` should print `fake-agent: second please` as the final message.
 
 ## Gotchas
-- Leave plenty of time. Every `act` returns a full snapshot, so typing and queueing take a few seconds. `[slow:5000]` is the documented knob. UNVERIFIED: whether other durations, like `15000`, are honored. If the turn settles before you press ↵, you've *sent* the message, not queued it: check that `Stop turn` is still visible first.
+- Leave plenty of time. Every `act` returns a full snapshot, so typing and queueing take a few seconds. The fake provider honors `[slow:<ms>]`; `30000` and `120000` were verified live. If the turn settles before you press ↵, you've *sent* the message, not queued it: check that `Stop turn` is still visible first.
 - Only one entry is released per idle boundary. With two queued messages, the second releases only after the first one's own turn completes.
 - The queue is in the composer header of the **same** chat. Switching tabs doesn't release it, and closing the app doesn't lose it: the rows are durable.
 - Steer is disabled once a row is `releasing` (composer-ui.tsx:529-531). Remove stays enabled, but the host may refuse it.

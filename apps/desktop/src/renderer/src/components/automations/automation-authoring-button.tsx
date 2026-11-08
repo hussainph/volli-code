@@ -1,5 +1,6 @@
 import * as React from "react";
-import { SparkleIcon } from "@phosphor-icons/react/dist/csr/Sparkle";
+import { SparkleIcon } from "@renderer/components/ui/icon";
+
 import { errorMessage } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
@@ -19,7 +20,7 @@ export function AutomationAuthoringButton({
   const starting = useChatSessionsStore((state) => state.starting[projectId] === true);
   const [pending, setPending] = React.useState(false);
   const pendingRef = React.useRef(false);
-  const empty = context.name.trim() === "" && context.instructions.trim() === "";
+  const empty = context.instructions.trim() === "";
 
   async function start(): Promise<void> {
     if (pendingRef.current || starting || empty) return;
@@ -36,26 +37,26 @@ export function AutomationAuthoringButton({
     }
   }
 
+  const button = (
+    <Button
+      size="sm"
+      variant="ghost"
+      disabled={empty || starting || pending}
+      onClick={() => void start()}
+    >
+      <SparkleIcon />
+      Draft in chat
+    </Button>
+  );
+  // The label names the action; only the blocked state earns a tooltip, and it
+  // names the one thing that unblocks it.
+  if (!empty) return button;
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span>
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={empty || starting || pending}
-            onClick={() => void start()}
-          >
-            <SparkleIcon />
-            Draft in chat
-          </Button>
-        </span>
+        <span>{button}</span>
       </TooltipTrigger>
-      <TooltipContent>
-        {empty
-          ? "Add an idea in Instructions first"
-          : "Opens a Board chat with this draft. Review and copy suggestions back here."}
-      </TooltipContent>
+      <TooltipContent>Add instructions first</TooltipContent>
     </Tooltip>
   );
 }

@@ -33,7 +33,10 @@
  * - when a write got no answer, so it may have landed, `TIMEOUT`: inspect
  *   before retrying (the CLI mints no `commandId` a retry could reuse);
  * - a write that landed answers `ok` even if reading the result back fails,
- *   from what the write itself answered.
+ *   from what the write itself answered;
+ * - a write that kept losing to concurrent writes of the same board (after
+ *   the runner's bounded retries, {@link AgentBackend}) applied nothing:
+ *   `BUSY` (exit 75), safe to send again.
  *
  * A caller with no Session evidence gets `SIGN_IN_REQUIRED`: the board acts
  * for a Session's owner, and the CLI holds no sign-in of its own.
@@ -195,6 +198,10 @@ function actorToken(actor: ActorRow): string {
   }
 }
 
+/** What a write that kept losing to concurrent writes says: that write applied nothing. */
+export const BUSY_MESSAGE =
+  "Volli Cloud was busy with concurrent changes, and this change applied nothing; the same command is safe to send again.";
+
 /** A backend refusal in the socket's vocabulary. */
 export function cloudFunctionRefusal(error: CloudFunctionError): AgentResponse {
   switch (error.code) {
@@ -220,6 +227,8 @@ export function cloudFunctionRefusal(error: CloudFunctionError): AgentResponse {
     }
     case "archived":
       return failure("ARCHIVED_TICKET", error.message);
+    case "contention":
+      return failure("BUSY", BUSY_MESSAGE);
     case "body_match_failed":
       return failure("BODY_MATCH_FAILED", error.message);
     case "invalid_argument":

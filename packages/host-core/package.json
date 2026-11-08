@@ -21,6 +21,10 @@
       "types": "./src/entries/cloud-runner.ts",
       "import": "./src/entries/cloud-runner.ts"
     },
+    "./headless-runner": {
+      "types": "./src/entries/headless-runner.ts",
+      "import": "./src/entries/headless-runner.ts"
+    },
     "./cloud-move": {
       "types": "./src/entries/cloud-move.ts",
       "import": "./src/entries/cloud-move.ts"
@@ -60,6 +64,10 @@
     "./maintenance": {
       "types": "./src/entries/maintenance.ts",
       "import": "./src/entries/maintenance.ts"
+    },
+    "./perf": {
+      "types": "./src/entries/perf.ts",
+      "import": "./src/entries/perf.ts"
     },
     "./ports": {
       "types": "./src/entries/ports.ts",
@@ -111,6 +119,7 @@
     "@vscode/ripgrep": "^1.18.0",
     "better-sqlite3": "^13.0.3",
     "node-pty": "1.1.0",
+    "tldts": "7.4.10",
     "yaml": "2.9.1"
   },
   "devDependencies": {

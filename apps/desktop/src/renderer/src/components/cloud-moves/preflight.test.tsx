@@ -32,7 +32,9 @@ vi.mock("@renderer/stores/project-ui", () => ({
 let root: Root;
 let container: HTMLElement;
 let api: ReturnType<typeof fakeApi>;
+const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
 beforeEach(() => {
+  HTMLElement.prototype.scrollIntoView = vi.fn();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   container = document.createElement("div");
   document.body.append(container);
@@ -41,6 +43,7 @@ beforeEach(() => {
   useCloudMovesStore.setState({ sheet: null });
 });
 afterEach(async () => {
+  HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
   await act(async () => root.unmount());
   container.remove();
   vi.clearAllMocks();
@@ -107,7 +110,7 @@ describe("Move pre-flight", () => {
       projects: [...preflight.projects, { ...preflight.projects[0]!, id: "second", name: "Comet" }],
     });
     await mount();
-    expect(api.preflight).toHaveBeenCalledWith({ workspaceId: "workspace", includeRemoved: false });
+    expect(api.preflight).toHaveBeenCalledWith({ workspaceId: null, includeRemoved: false });
     await act(async () =>
       (container.querySelector('[aria-label="Move Comet"]') as HTMLElement).click(),
     );
@@ -127,7 +130,7 @@ describe("Move pre-flight", () => {
     await mount(snapshot, ["project"]);
     expect(api.preflight).toHaveBeenCalledWith({
       projectIds: ["project"],
-      workspaceId: "workspace",
+      workspaceId: null,
       includeRemoved: false,
     });
     expect(container.textContent).not.toContain("Include removed projects");
@@ -140,8 +143,11 @@ describe("Move pre-flight", () => {
     await mount({ ...snapshot, account: null, workspaces: [], unavailable: "Sign in to move." });
     expect(container.textContent).toContain("Continue with GitHub");
     expect(button("Move").disabled).toBe(true);
-    api.preflight.mockResolvedValue({ ...preflight, disk: { requiredBytes: 20000, freeBytes: 1 } });
+    // Signing in keeps the dry run already answered; only a re-run asks again.
     await mount(snapshot);
+    expect(api.preflight).toHaveBeenCalledOnce();
+    api.preflight.mockResolvedValue({ ...preflight, disk: { requiredBytes: 20000, freeBytes: 1 } });
+    await click("Run a dry run only");
     expect(button("Move").disabled).toBe(true);
     expect(container.querySelector('[role="alert"]')).not.toBeNull();
     api.preflight.mockResolvedValue({ ...preflight, projects: [] });
@@ -149,10 +155,9 @@ describe("Move pre-flight", () => {
     expect(button("Move").disabled).toBe(true);
     expect(container.textContent).toContain("No local projects");
   });
-  it("ignores a stale dry run after the Workspace changes, and keeps Move disabled until the new answer", async () => {
-    const old = deferred<CloudMovePreflight>();
-    const fresh = deferred<CloudMovePreflight>();
-    api.preflight.mockReturnValueOnce(old.promise).mockReturnValueOnce(fresh.promise);
+  it("keeps one dry run across a Workspace change and moves into the Workspace chosen last", async () => {
+    const answer = deferred<CloudMovePreflight>();
+    api.preflight.mockReturnValueOnce(answer.promise);
     const account = {
       ...snapshot,
       workspaces: [...snapshot.workspaces, { id: "another", name: "Another team", canMove: true }],
@@ -160,16 +165,59 @@ describe("Move pre-flight", () => {
     await mount(account);
     expect(button("Move").disabled).toBe(true);
     await act(async () => {
-      const select = container.querySelector("select")!;
-      select.value = "another";
-      select.dispatchEvent(new Event("change", { bubbles: true }));
+      container
+        .querySelector('[role="combobox"]')!
+        .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     });
-    await act(async () => old.resolve(preflight));
-    expect(button("Move").disabled).toBe(true);
-    await act(async () => fresh.resolve({ ...preflight, id: "new-dry-run" }));
+    const option = [...document.querySelectorAll('[role="option"]')].find(
+      (item) => item.textContent === "Another team",
+    )!;
+    await act(async () =>
+      option.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+    );
+    expect(api.preflight).toHaveBeenCalledOnce();
+    await act(async () => answer.resolve({ ...preflight, id: "the-dry-run" }));
     await click("Move");
     expect(api.start).toHaveBeenCalledWith(
-      expect.objectContaining({ preflightId: "new-dry-run", workspaceId: "another" }),
+      expect.objectContaining({ preflightId: "the-dry-run", workspaceId: "another" }),
+    );
+  });
+  it("never restarts a running dry run when the sign-in or the Workspace list blips (VC-1029)", async () => {
+    const answer = deferred<CloudMovePreflight>();
+    api.preflight.mockReturnValueOnce(answer.promise);
+    await mount();
+    // What a long dry run sees: the sign-in briefly without its viewer, the
+    // Workspace list emptied and reloaded, the same person back.
+    for (const blip of [
+      { ...snapshot, account: null },
+      { ...snapshot, account: null, workspaces: [] },
+      { ...snapshot, workspaces: [] },
+      snapshot,
+    ])
+      await mount(blip);
+    expect(api.preflight).toHaveBeenCalledOnce();
+    expect(container.textContent).toContain("Checking projects");
+    await act(async () => answer.resolve(preflight));
+    expect(container.textContent).not.toContain("Checking projects");
+    expect(button("Move").disabled).toBe(false);
+  });
+  it("shows the running dry run's project, phase and counts", async () => {
+    api.preflight.mockReturnValueOnce(deferred<CloudMovePreflight>().promise);
+    await mount({
+      ...snapshot,
+      preflight: {
+        phase: "exporting",
+        projectIndex: 3,
+        projectCount: 8,
+        projectName: "Volli",
+        done: 41200,
+        total: 98000,
+        unit: "records",
+        startedAt: 1,
+      },
+    });
+    expect(container.querySelector('[role="status"]')?.textContent).toContain(
+      "Project 3 of 8 · Volli · Exporting records · 41,200 of 98,000 records",
     );
   });
   it("shows read failures and mutation failures, retaining a retry", async () => {

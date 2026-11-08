@@ -1,3 +1,7 @@
+import { SuccessIcon } from "@renderer/components/ui/icon";
+
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
+import { Notice } from "@renderer/components/ui/notice";
 import * as React from "react";
 
 import { Button } from "@renderer/components/ui/button";
@@ -33,7 +37,7 @@ export async function copyReportToClipboard(
   }
 }
 
-/** The scrollable payload and its honest clipboard verdict, shared with the state gallery. */
+/** The report payload and its clipboard verdict. */
 export function CopyReportPreview({
   report,
   copyState,
@@ -45,30 +49,47 @@ export function CopyReportPreview({
 }) {
   return (
     <>
-      <pre
-        aria-label="Report preview"
-        tabIndex={0}
-        className="max-h-64 overflow-auto rounded-lg border border-border/50 bg-muted/30 p-4 font-mono text-ui whitespace-pre-wrap focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-      >
-        {report}
-      </pre>
+      <div className="space-y-4">
+        <ul aria-label="Report includes" className="space-y-2 text-ui">
+          {[
+            "Build and release channel",
+            "Connection and environment checks",
+            "Local paths and runtime details",
+          ].map((label) => (
+            <li key={label} className="flex items-center gap-2">
+              <SuccessIcon aria-hidden className="size-4 text-muted-foreground" />
+              {label}
+            </li>
+          ))}
+        </ul>
+        <details>
+          <summary className="cursor-default text-ui text-muted-foreground">Preview report</summary>
+          <pre
+            aria-label="Report preview"
+            tabIndex={0}
+            className="mt-2 max-h-64 overflow-auto rounded-container border border-border bg-muted p-4 font-mono text-ui whitespace-pre-wrap focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          >
+            {report}
+          </pre>
+        </details>
+      </div>
 
       {availability === "loading" ? (
         <p role="status" className="text-ui text-muted-foreground">
-          Preparing the complete report…
+          <LoadingLabel>Preparing the complete report</LoadingLabel>
         </p>
       ) : null}
 
       {availability === "unavailable" ? (
-        <p role="alert" className="text-ui text-destructive">
-          Couldn&rsquo;t prepare the complete report. Re-check and try again.
-        </p>
+        <Notice
+          tone="error"
+          announce
+          title="Couldn’t prepare the complete report. Re-check and try again."
+        />
       ) : null}
 
       {availability === "ready" && copyState === "failed" ? (
-        <p role="alert" className="text-ui text-destructive">
-          Couldn&rsquo;t copy the report. Try again.
-        </p>
+        <Notice tone="error" announce copyText="" title="Couldn’t copy the report. Try again." />
       ) : null}
 
       {availability === "ready" && copyState === "copied" ? (
@@ -92,11 +113,11 @@ export function CopyReportCopyButton({
 }) {
   const label =
     availability === "loading"
-      ? "Preparing report…"
+      ? "Preparing report"
       : availability === "unavailable"
         ? "Report unavailable"
         : copyState === "copying"
-          ? "Copying…"
+          ? "Copying"
           : copyState === "copied"
             ? "Copied"
             : copyState === "failed"
@@ -109,7 +130,11 @@ export function CopyReportCopyButton({
       disabled={availability !== "ready" || copyState === "copying"}
       onClick={onCopy}
     >
-      {label}
+      {availability === "loading" || copyState === "copying" ? (
+        <LoadingLabel>{label}</LoadingLabel>
+      ) : (
+        label
+      )}
     </Button>
   );
 }
@@ -166,7 +191,7 @@ export function CopyReportDialog({
 
   const triggerLabel =
     availability === "loading"
-      ? "Preparing report…"
+      ? "Preparing report"
       : availability === "unavailable"
         ? "Report unavailable"
         : "Copy report…";
@@ -175,15 +200,13 @@ export function CopyReportDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogTrigger asChild>
         <Button size="sm" variant="outline" disabled={availability !== "ready"}>
-          {triggerLabel}
+          {availability === "loading" ? <LoadingLabel>{triggerLabel}</LoadingLabel> : triggerLabel}
         </Button>
       </DialogTrigger>
       <DialogContent className="max-w-xl">
         <DialogHeader>
           <DialogTitle>Copy report</DialogTitle>
-          <DialogDescription>
-            This is everything that goes on your clipboard. It includes your home folder path.
-          </DialogDescription>
+          <DialogDescription>Includes your home folder path.</DialogDescription>
         </DialogHeader>
 
         <CopyReportPreview report={report} copyState={copyState} availability={availability} />

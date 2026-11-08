@@ -59,6 +59,7 @@ export const snapshot: CloudMoveSnapshot = {
   workspaces: [{ id: "workspace", name: "My team", canMove: true }],
   moves: [],
   unavailable: null,
+  preflight: null,
 };
 export function fakeApi() {
   return {

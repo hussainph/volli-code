@@ -1,5 +1,7 @@
+import { EmptyState } from "@renderer/components/ui/empty-state";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import * as React from "react";
-import { FileIcon } from "@phosphor-icons/react/dist/csr/File";
+
 import { baseNameOf, errorMessage, fileSavePolicy, type FileSource } from "@volli/shared";
 
 import { LiveReconciliationAffordance } from "@renderer/components/editor/live-reconciliation-affordance";
@@ -704,7 +706,11 @@ function LocalFileView({
   }
 
   if (state.status === "loading") {
-    return <p className="px-gutter py-4 text-ui text-muted-foreground">Loading…</p>;
+    return (
+      <p className="px-gutter py-4 text-ui text-muted-foreground">
+        <LoadingLabel>Loading</LoadingLabel>
+      </p>
+    );
   }
   if (state.status === "error") {
     return <p className="px-gutter py-4 text-ui text-destructive">{state.error}</p>;
@@ -803,9 +809,7 @@ function LocalFileView({
         )}
         <div className="flex min-h-0 flex-1 flex-col gap-2 px-gutter py-4">
           {liveError !== null && <LiveReconciliationAffordance kind="error" message={liveError} />}
-          {state.truncated && (
-            <Notice title="Showing the first 1 MiB. Open in… for the whole file." />
-          )}
+          {state.truncated && <Notice title="First 1 MiB shown" />}
           <div
             className={cn(
               "min-h-0 flex-1 overflow-hidden",
@@ -884,8 +888,12 @@ function LocalFileView({
   // binary
   return (
     <div className={cn("flex-1", EMPTY_PAGE, "gap-4")}>
-      <FileIcon className="size-6 text-muted-foreground" />
-      <p className="text-sm text-muted-foreground">{name} can&apos;t be previewed here.</p>
+      <EmptyState
+        tier="page"
+        illustration="file"
+        status="unavailable"
+        title="No preview available"
+      />
     </div>
   );
 }

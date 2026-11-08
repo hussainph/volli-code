@@ -19,6 +19,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { ModelAccessProvider, UsageLimits, UsageWindow, UsageWindowKind } from "@volli/shared";
 
+import { providerMark } from "@renderer/components/models/model-identity";
+
 import { usageLimitAccounts } from "./accounts";
 import { usageIconReading, type UsageIconInput } from "./icon-reading";
 import type { UsagePin } from "./usage-pin";
@@ -88,7 +90,7 @@ const opencode = (weekly: number): ModelAccessProvider =>
     limits(win("weekly", "weekly", "Weekly", weekly, 4 * DAY, 10_080)),
   );
 
-/** The one metered account with no mark of its own. */
+/** xAI's single weekly window. */
 const xai = (weekly: number): ModelAccessProvider =>
   provider("xai", "xAI", limits(win("weekly", "weekly", "Weekly", weekly, 4 * DAY, 10_080)));
 
@@ -161,7 +163,7 @@ function bars(host: HTMLElement): number[] {
 
 /** The two hairline states: a thin ring, dashed only before the first read. */
 function quietRing(host: HTMLElement): { present: boolean; dashed: boolean } {
-  const ring = host.querySelector("circle.stroke-current.text-muted-foreground\\/45");
+  const ring = host.querySelector("circle.stroke-current.text-muted-foreground");
   return {
     present: ring !== null,
     dashed: ring?.getAttribute("stroke-dasharray") !== null,
@@ -176,10 +178,11 @@ describe("UsageLimitsIcon", () => {
     expect(figures(host)).toEqual([]);
   });
 
-  it("is the same hairline, undashed, when the read failed", async () => {
-    // The popover explains it in words; the icon only has to stay quiet, and
-    // has to be distinguishable from a launch that has not asked yet.
-    expect(quietRing(await draw({ kind: "failed" }))).toEqual({ present: true, dashed: false });
+  it("marks a failed read with a fault glyph, not an empty measurement", async () => {
+    const host = await draw({ kind: "failed" });
+    expect(quietRing(host)).toEqual({ present: true, dashed: false });
+    expect(host.querySelector("[data-usage-fault] path")).not.toBeNull();
+    expect((await draw({ kind: "unread" })).querySelector("[data-usage-fault]")).toBeNull();
   });
 
   it("is the same hairline when nothing is metered", async () => {
@@ -202,9 +205,24 @@ describe("UsageLimitsIcon", () => {
     expect(quietRing(host).present).toBe(false);
   });
 
-  it("falls back to a bare letter for the one provider with no mark", async () => {
+  it("uses the shared registry for xAI, with an initial when no artwork is registered", async () => {
     const host = await read(xai(53));
-    expect(figures(host)).toContain("X");
+    const mark = providerMark("xai");
+    if (mark === null) {
+      expect(figures(host)).toContain("X");
+    } else {
+      expect(figures(host)).toEqual(["47"]);
+      expect(host.querySelector("g.text-muted-foreground path")?.getAttribute("d")).toBe(
+        mark.paths[0],
+      );
+    }
+  });
+
+  it("keeps the bare-letter fallback for custom metered accounts without artwork", async () => {
+    const host = await read(
+      provider("custom", "Custom", limits(win("weekly", "weekly", "Weekly", 53))),
+    );
+    expect(figures(host)).toContain("C");
   });
 
   it("draws OpenCode's own mark, which a round letter could not stand in for", async () => {

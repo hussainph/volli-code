@@ -24,6 +24,8 @@ import type {
 import { useProjectsStore } from "@renderer/stores/projects";
 
 import { AboutPane } from "./about-pane";
+import { toastError } from "@renderer/lib/toast";
+vi.mock("@renderer/lib/toast", () => ({ toastError: vi.fn() }));
 
 function project(id: string, path: string) {
   return {
@@ -210,6 +212,7 @@ function exactButton(label: string): HTMLButtonElement | null {
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.mocked(toastError).mockClear();
   clipboard = [];
   Object.defineProperty(navigator, "clipboard", {
     configurable: true,
@@ -240,7 +243,7 @@ describe("AboutPane — before the checks land", () => {
     const host = renderFirstFrame();
 
     expect(panel(host).dataset["healthState"]).toBe("checking");
-    expect(host.textContent).toContain("Checking…");
+    expect(host.textContent).toContain("Checking");
     expect(host.textContent).not.toContain("Everything's working");
     expect(button(host, "Fix")).toBeNull();
     expect(host.querySelector('[data-slot="status-dot"]')?.getAttribute("data-state")).not.toBe(
@@ -252,7 +255,7 @@ describe("AboutPane — before the checks land", () => {
     // The very first paint, before any effect has run: still no report.
     const html = renderToStaticMarkup(<AboutPane />);
 
-    expect(html).toContain("Preparing report…");
+    expect(html).toContain("Preparing report");
     expect(html).not.toContain("Copy report…");
   });
 });
@@ -262,6 +265,7 @@ describe("AboutPane — once the checks land", () => {
     const host = await render();
 
     expect(panel(host).dataset["healthState"]).toBe("healthy");
+    expect(panel(host).hidden).toBe(true);
     expect(host.textContent).toContain("Everything's working");
     expect(button(host, "Fix")).toBeNull();
     expect(button(host, "Copy report…")?.disabled).toBe(false);
@@ -296,15 +300,53 @@ describe("AboutPane — once the checks land", () => {
 
     expect(panel(host).dataset["healthState"]).toBe("checking");
     expect(host.textContent).not.toContain("Everything's working");
-    expect(button(host, "Fixing…")?.disabled).toBe(true);
+    expect(button(host, "Fixing")?.disabled).toBe(true);
 
     await act(async () => {
       repair.resolve({ ok: true, checks: PASSING, summary: "All 1 checks passed." });
     });
 
     expect(panel(host).dataset["healthState"]).toBe("healthy");
+    expect(panel(host).hidden).toBe(true);
     expect(host.textContent).toContain("Everything's working");
     expect(button(host, "Fix")).toBeNull();
+  });
+
+  it("keeps missing git in the health panel with Fix and the measured recovery", async () => {
+    stubApi({
+      doctor: {
+        ok: true,
+        checks: [
+          {
+            id: "tool-git",
+            title: "`git` is available to sessions",
+            failureTitle: "`git` is missing from the session PATH",
+            status: "fail",
+            detail: "`git` resolves to nothing on this PATH",
+            remedy: "Run `xcode-select --install`.",
+          },
+        ],
+        summary: "1 failed of 1 checks.",
+      },
+    });
+    const host = await render();
+    expect(panel(host).dataset["healthState"]).toBe("attention");
+    expect(panel(host).textContent).toContain("`git` is missing from the session PATH");
+    expect(panel(host).textContent).toContain("Run `xcode-select --install`.");
+    expect(button(host, "Fix")?.disabled).toBe(false);
+  });
+
+  it.each(["refused", "rejected"])("surfaces a %s requested repair", async (failure) => {
+    stubApi({ doctor: { ok: true, checks: FAILING, summary: "1 failed of 1 checks." } });
+    const host = await render();
+    const doctor = vi.fn();
+    if (failure === "refused") doctor.mockResolvedValue({ ok: false, error: "Repair refused" });
+    else doctor.mockRejectedValue(new Error("Repair failed"));
+    window.api.cli.doctor = doctor;
+    await act(async () => button(host, "Fix")?.click());
+    expect(toastError).toHaveBeenCalledOnce();
+    expect(panel(host).dataset["healthState"]).toBe("unavailable");
+    expect(button(host, "Retry")?.disabled).toBe(false);
   });
 
   it("folds a status warning into the same fault list, headed by its state", async () => {
@@ -322,7 +364,7 @@ describe("AboutPane — once the checks land", () => {
 });
 
 describe("AboutPane — a check that could not run", () => {
-  it("says the checks are incomplete, offers Re-check, and never claims health", async () => {
+  it("says the checks are incomplete, offers Retry, and never claims health", async () => {
     stubApi({ doctor: { ok: false, error: "the login shell did not answer" } });
 
     const host = await render();
@@ -331,7 +373,12 @@ describe("AboutPane — a check that could not run", () => {
     expect(host.textContent).toContain("Couldn't complete these checks");
     expect(host.textContent).not.toContain("Everything's working");
     expect(button(host, "Fix")).toBeNull();
-    expect(button(host, "Re-check")?.disabled).toBe(false);
+    expect(button(host, "Retry")?.disabled).toBe(false);
+    expect(host.querySelector("details")?.open).toBe(false);
+    expect(toastError).not.toHaveBeenCalled();
+    await act(async () => button(host, "Retry")?.click());
+    expect(toastError).not.toHaveBeenCalled();
+    expect(panel(host).dataset["healthState"]).toBe("unavailable");
   });
 
   it("refuses the report when the status read failed", async () => {
@@ -340,6 +387,7 @@ describe("AboutPane — a check that could not run", () => {
     const host = await render();
 
     expect(button(host, "Report unavailable")?.disabled).toBe(true);
+    expect(toastError).not.toHaveBeenCalled();
   });
 
   // The metadata is part of the report gate, exactly like the three data sets
@@ -351,7 +399,9 @@ describe("AboutPane — a check that could not run", () => {
 
     // The install itself is fine — only the report is short of an input.
     expect(panel(host).dataset["healthState"]).toBe("healthy");
+    expect(panel(host).hidden).toBe(true);
     expect(button(host, "Report unavailable")?.disabled).toBe(true);
+    expect(toastError).not.toHaveBeenCalled();
   });
 });
 
@@ -368,6 +418,7 @@ describe("AboutPane — when the project changes", () => {
     });
     const host = await render();
     expect(panel(host).dataset["healthState"]).toBe("healthy");
+    expect(panel(host).hidden).toBe(true);
 
     // The second project's reads never answer: whatever is on screen now is
     // what the pane believes with no current measurement at all.
@@ -405,6 +456,7 @@ describe("AboutPane — when the project changes", () => {
       useProjectsStore.setState({ selectedProjectId: "p2" });
     });
     expect(panel(host).dataset["healthState"]).toBe("healthy");
+    expect(panel(host).hidden).toBe(true);
 
     await act(async () => {
       oldStatus.resolve({
@@ -415,6 +467,7 @@ describe("AboutPane — when the project changes", () => {
     });
 
     expect(panel(host).dataset["healthState"]).toBe("healthy");
+    expect(panel(host).hidden).toBe(true);
     expect(host.textContent).toContain("Everything's working");
     expect(host.textContent).not.toContain("App socket: Not running");
     expect(host.textContent).not.toContain("Shell integration files are missing");
@@ -422,6 +475,32 @@ describe("AboutPane — when the project changes", () => {
 });
 
 describe("AboutPane — the report snapshot", () => {
+  it("omits non-git tool faults from health but keeps their full evidence in preview and clipboard", async () => {
+    const checks = ["node", "npm", "pnpm", "yarn", "bun", "gh"].map((tool) => ({
+      id: `tool-${tool}`,
+      title: `${tool} is available to sessions`,
+      failureTitle: `${tool} is missing from the session PATH`,
+      status: "fail" as const,
+      detail: `${tool} resolves to nothing on this PATH`,
+      remedy: `Repair ${tool}.`,
+    }));
+    stubApi({ doctor: { ok: true, checks, summary: "6 failed of 6 checks." } });
+    const host = await render();
+    expect(panel(host).dataset["healthState"]).toBe("healthy");
+    expect(button(host, "Fix")).toBeNull();
+    for (const check of checks) expect(host.textContent).not.toContain(check.failureTitle);
+
+    await act(async () => button(host, "Copy report…")?.click());
+    const shown = document.querySelector('[aria-label="Report preview"]')?.textContent ?? "";
+    for (const check of checks) {
+      expect(shown).toContain(check.failureTitle);
+      expect(shown).toContain(check.detail);
+      expect(shown).toContain(check.remedy);
+    }
+    await act(async () => exactButton("Copy")?.click());
+    expect(clipboard).toEqual([shown]);
+  });
+
   it("hands the preview and the clipboard one identical report", async () => {
     const host = await render();
 
@@ -463,10 +542,11 @@ describe("AboutPane — the report snapshot", () => {
     stubApi({ support: [first.promise, second.promise] });
     const host = await render();
     expect(panel(host).dataset["healthState"]).toBe("healthy");
-    expect(button(host, "Preparing report…")?.disabled).toBe(true);
+    expect(panel(host).hidden).toBe(true);
+    expect(button(host, "Preparing report")?.disabled).toBe(true);
 
     act(() => {
-      button(host, "Re-check")?.click();
+      button(host, "Retry")?.click();
     });
     await act(async () => {
       second.resolve({

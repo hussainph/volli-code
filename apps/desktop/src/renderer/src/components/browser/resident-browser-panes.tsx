@@ -22,18 +22,25 @@ export function BrowserPaneAnchor({
   tabId,
   visible,
   onClose,
+  onHide,
 }: {
   tabId: string;
   visible: boolean;
   onClose(): void;
+  /** Back to the Activity Island; the pane offers it only for a Session's tab. */
+  onHide(): void;
 }) {
   const anchorRef = React.useRef<HTMLDivElement>(null);
-  const closeRef = React.useRef(onClose);
-  closeRef.current = onClose;
+  const surfaceRef = React.useRef({ onClose, onHide });
+  surfaceRef.current = { onClose, onHide };
   React.useLayoutEffect(() => {
     const anchor = anchorRef.current;
     if (!visible || anchor === null) return;
-    return registerBrowserViewport(tabId, { anchor, close: () => closeRef.current() });
+    return registerBrowserViewport(tabId, {
+      anchor,
+      close: () => surfaceRef.current.onClose(),
+      hide: () => surfaceRef.current.onHide(),
+    });
   }, [tabId, visible]);
 
   return <div ref={anchorRef} data-slot="browser-pane-anchor" className="absolute inset-0" />;
@@ -86,6 +93,7 @@ export function ResidentBrowserPanes({ api }: { api: BrowserApi }) {
                   api={api}
                   onTabState={receive}
                   onClose={viewport?.close}
+                  onHide={viewport?.hide}
                   onFocusPane={focusPane}
                 />
               </div>
