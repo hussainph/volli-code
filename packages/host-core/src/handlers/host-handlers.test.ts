@@ -35,6 +35,7 @@ import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-hel
 import { listProjects } from "../db/projects-repo";
 import { getTicketRow, insertTicket } from "../db/tickets-repo";
 import { BrowserPictureStore } from "../browser/picture-store";
+import { SourceIconCache } from "../source-icons/cache";
 import { createBoardChangeFeed } from "../board/change-feed";
 import type { ProjectLiveWork } from "../project-remove";
 import type { RuntimeAutomations } from "../session-runtime/automations";
@@ -158,6 +159,57 @@ it("serves saved Session pictures in bounded chunks and names absence without ch
   expect(
     await handlers()["session.picture"]({ sessionId: "session", pictureId: id }, USER),
   ).toEqual({ data: null, mimeType: null, nextOffset: null });
+  expect(
+    await handlers()["session.picture"]({ sessionId: "session", pictureId: id }, WINDOW),
+  ).toEqual({ data: null, mimeType: null, nextOffset: null });
+});
+
+it("keeps source icon references and pixels local, Session-scoped and revocable", async () => {
+  let epoch: string | null = "person-a/workspace-a/epoch";
+  const sourceIcons = new SourceIconCache({
+    authorityForSession: (id) => (id === "session" ? epoch : null),
+  });
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/6ZkAAAAASUVORK5CYII=",
+    "base64",
+  );
+  const id = sourceIcons.put("session", epoch!, "https://docs.example.com", png)!;
+  const map = handlers({ sourceIcons });
+  const emit = vi.fn();
+  const stop = await map["sourceIcons.watch"](
+    { sessionId: "session", origins: ["https://docs.example.com"] },
+    WINDOW,
+    { emit, fail: vi.fn() },
+  );
+  expect(emit).toHaveBeenCalledWith({
+    icons: [
+      { origin: "https://docs.example.com", pictureId: id, registrableDomain: "example.com" },
+    ],
+  });
+  expect(
+    (await map["session.picture"]({ sessionId: "session", pictureId: id }, WINDOW)).data,
+  ).not.toBeNull();
+  expect(
+    (await map["session.picture"]({ sessionId: "other", pictureId: id }, WINDOW)).data,
+  ).toBeNull();
+  expect(
+    (await map["session.picture"]({ sessionId: "session", pictureId: id }, USER)).data,
+  ).toBeNull();
+  await expect(
+    map["sourceIcons.watch"]({ sessionId: "session", origins: [] }, USER, { emit, fail: vi.fn() }),
+  ).rejects.toThrow("unavailable");
+  epoch = null;
+  expect(
+    (await map["session.picture"]({ sessionId: "session", pictureId: id }, WINDOW)).data,
+  ).toBeNull();
+  sourceIcons.invalidate();
+  expect(emit).toHaveBeenLastCalledWith({
+    icons: [
+      { origin: "https://docs.example.com", pictureId: null, registrableDomain: "example.com" },
+    ],
+  });
+  stop();
+  sourceIcons.close();
 });
 
 async function unavailable(run: () => unknown): Promise<string> {

@@ -100,6 +100,8 @@ export interface HostCoreOptions {
    * off the thread this host serves from. Absent, it parses on that thread.
    */
   readonly webExtractWorker?: string | URL;
+  /** Optional decoration: never decode untrusted icons on this host's main thread. */
+  readonly sourceIconWorker?: string | URL;
   /** Bundled read-only usage reporter; desktop keeps large reports off main. */
   readonly usageReportWorker?: string | URL;
   readonly venue?: (db: Database.Database) => RunnerIdentity;
@@ -319,6 +321,9 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
           ...(options.webExtractWorker === undefined
             ? {}
             : { webExtractWorker: options.webExtractWorker }),
+          ...(options.sourceIconWorker === undefined
+            ? {}
+            : { sourceIconWorker: options.sourceIconWorker }),
           ...(options.venue === undefined ? {} : { venue: options.venue(db) }),
         },
       ));

@@ -9,7 +9,7 @@
  * device drafts and unsent recovery live in `stores/chat-drafts.ts`. This view
  * owns only measurements and which controls have a command in flight.
  */
-import { sessionPictureFor } from "@renderer/chat/transport";
+import { sessionPictureFor, sourceIconsFor } from "@renderer/chat/transport";
 import { CodeModePictureHostContext } from "./activity-ui";
 import { readCodeModePicture } from "./code-mode-output-model";
 import * as React from "react";
@@ -77,9 +77,18 @@ import {
   currentTurnReply,
   isDeliverable,
   readInteractionResolutionMessage,
+  indexInteractionResolutionMessages,
   segmentTurn,
   sessionContextUsage,
   projectTranscriptRows,
+  projectWorkWindows,
+  transcriptMessageTimes,
+  transcriptMessageOrigins,
+  transcriptMessageAttribution,
+  deliveredAnswer,
+  presentTranscriptTool,
+  activityDescriptor,
+  EMPTY_TRANSCRIPT,
   messageDeliveryLabels,
   type MessageDeliveryLabel,
   type ChatSegment,
@@ -87,7 +96,8 @@ import {
   type InteractionSubmission,
   type MessageDelivery,
   type QueuedMessage,
-  type TranscriptRow,
+  type WorkTranscriptRow as TranscriptRow,
+  type TranscriptToolContext as ToolDisplayContext,
 } from "@volli/session-presentation";
 import {
   useSessionController,
@@ -96,7 +106,15 @@ import {
 import { useActivityIsland } from "@renderer/chat/use-activity-island";
 import { useChatBrowserTabs } from "@renderer/chat/use-island-tabs";
 import { ActivityIsland } from "@renderer/components/chat/activity-island-ui";
-import { ActivityBundle, copyText } from "@renderer/components/chat/activity-ui";
+import { ActivityBundle } from "@renderer/components/chat/activity-ui";
+import { copyText, COPY_FEEDBACK_MS } from "./transcript-copy";
+import {
+  OriginalOutput,
+  TranscriptToolContext,
+} from "@renderer/components/chat/presented-tool-row";
+import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
+import { TranscriptSourceIcons, type TranscriptSourceIconsApi } from "./transcript-source-icons";
+import { useTranscriptMcpNames } from "./use-transcript-mcp-names";
 import { RunningBashProvider } from "@renderer/components/chat/running-bash-control";
 import {
   CompactionBoundary,
@@ -1868,6 +1886,97 @@ function ChatPlaneContent({
     session.sessionError !== null ||
     projection?.attention.active.some((attention) => attention.kind === "transport_retrying") ===
       true;
+  const transcriptFrames = useStore(
+    sessionsStore,
+    (state) => state.sessions[sessionId]?.transcript.frames,
+  );
+  const activityFirstOverlaySequence = useStore(
+    sessionsStore,
+    (state) =>
+      state.sessions[sessionId]?.transcript.activityFirstOverlaySequence ??
+      EMPTY_TRANSCRIPT.activityFirstOverlaySequence,
+  );
+  const messageTimes = React.useMemo(
+    () => transcriptMessageTimes(transcriptFrames ?? EMPTY_TRANSCRIPT.frames),
+    [transcriptFrames],
+  );
+  const messageOrigins = React.useMemo(
+    () => transcriptMessageOrigins(transcriptFrames ?? EMPTY_TRANSCRIPT.frames),
+    [transcriptFrames],
+  );
+  const interactionReceipts = React.useMemo(
+    () => indexInteractionResolutionMessages(transcriptFrames ?? EMPTY_TRANSCRIPT.frames),
+    [transcriptFrames],
+  );
+  const sourceIconsAvailable = sourceIconsFor(projectId) !== null;
+  const mcpToolsKey = React.useMemo(
+    () =>
+      JSON.stringify(
+        [
+          ...new Set(
+            transcriptMessages.flatMap((message) =>
+              message.parts.flatMap((part) => {
+                if (part.type !== "dynamic-tool") return [];
+                const name = activityDescriptor(part).nativeToolName;
+                return name.startsWith("mcp__") ? [name] : [];
+              }),
+            ),
+          ),
+        ].toSorted(),
+      ),
+    [transcriptMessages],
+  );
+  const mcpNames = useTranscriptMcpNames(
+    projectId,
+    transcriptFrames ?? EMPTY_TRANSCRIPT.frames,
+    mcpToolsKey,
+    sourceIconsAvailable,
+  );
+  const namedSessions = useProjectSessionsStore((state) => state.byProject[projectId]);
+  const toolContext = React.useMemo<ToolDisplayContext>(() => {
+    const names = new Map<string, string>();
+    const records = [
+      ...(namedSessions?.chat ?? []).map((record) => ({
+        id: record.sessionId,
+        title: record.title,
+      })),
+      ...(namedSessions?.terminal ?? []),
+    ];
+    const ids = new Map<string, string>();
+    const counts = new Map<string, number>();
+    const ordinals = new Map<string, number>();
+    const shortIds = new Map<string, string | null>();
+    for (const record of records) {
+      const title = record.title?.trim() || "Untitled session";
+      counts.set(title, (counts.get(title) ?? 0) + 1);
+    }
+    for (const record of records) {
+      const title = record.title?.trim() || "Untitled session";
+      const ordinal = (ordinals.get(title) ?? 0) + 1;
+      ordinals.set(title, ordinal);
+      names.set(record.id, (counts.get(title) ?? 0) > 1 ? `${title} · ${ordinal}` : title);
+      ids.set(record.id, record.id);
+      const short = record.id.slice(0, 8);
+      shortIds.set(short, shortIds.has(short) ? null : record.id);
+    }
+    for (const [short, id] of shortIds)
+      if (id !== null) {
+        names.set(short, names.get(id)!);
+        ids.set(short, id);
+      }
+    const sessionParents = new Map(
+      (namedSessions?.chat ?? []).map((record) => [record.sessionId, record.parentSessionId]),
+    );
+    return { sessionNames: names, sessionIds: ids, sessionParents, mcpNames };
+  }, [namedSessions, mcpNames]);
+  const sourceIconsApi = React.useMemo(
+    () => (sourceIconsAvailable ? (sourceIconsFor(projectId) ?? undefined) : undefined),
+    [projectId, sourceIconsAvailable],
+  );
+  const sourceMessages = React.useMemo(
+    () => new Map(session.durableMessages.map((message) => [message.id, message])),
+    [session.durableMessages],
+  );
   const turnContext = React.useMemo<TurnContext>(
     () => ({
       onOpenFile,
@@ -1875,8 +1984,28 @@ function ChatPlaneContent({
       interactions: session.openedInteractions,
       deliveryLabels,
       progressPaused,
+      messageTimes,
+      messageOrigins,
+      interactionReceipts,
+      toolContext,
+      sourceMessages,
+      sourceIconPicture: pictureApi,
+      sourceIconsApi,
     }),
-    [deliveryLabels, onOpenFile, onOpenSession, session.openedInteractions, progressPaused],
+    [
+      deliveryLabels,
+      onOpenFile,
+      onOpenSession,
+      session.openedInteractions,
+      progressPaused,
+      messageTimes,
+      messageOrigins,
+      interactionReceipts,
+      toolContext,
+      sourceMessages,
+      pictureApi,
+      sourceIconsApi,
+    ],
   );
 
   // Grouping is O(messages), so it is memoized and then held per turn: a turn
@@ -1890,15 +2019,37 @@ function ChatPlaneContent({
   // and durable context notices in their transcript order. Every input is held
   // to its identity, so this recomputes when the conversation moves and not
   // once per streamed frame.
-  const rows = React.useMemo(
-    () =>
-      projectTranscriptRows(
-        turns,
+  const rows = useStableList(
+    React.useMemo(
+      () =>
+        projectWorkWindows(
+          projectTranscriptRows(
+            turns,
+            session.compactions,
+            session.reasoningDrops,
+            session.toolRefreshes,
+            messageOrigins,
+          ),
+          messageTimes,
+          turnActive,
+          {
+            frames: transcriptFrames ?? EMPTY_TRANSCRIPT.frames,
+            activityFirstOverlaySequence,
+          },
+        ),
+      [
         session.compactions,
         session.reasoningDrops,
         session.toolRefreshes,
-      ),
-    [session.compactions, session.reasoningDrops, session.toolRefreshes, turns],
+        turns,
+        messageTimes,
+        messageOrigins,
+        turnActive,
+        transcriptFrames,
+        activityFirstOverlaySequence,
+      ],
+    ),
+    samePresentedRow,
   );
   // Identity, not an index. A boundary between the turns means a turn's place in
   // `rows` is no longer its place in `turns` — and the last ROW can be a
@@ -1906,9 +2057,7 @@ function ChatPlaneContent({
   // saying so. Stream-owned `turnActive`, rather than the wider Session
   // lifecycle, keeps a transient error from treating incomplete content as
   // settled and an optimistic submit from reopening the previous Turn.
-  const liveTurn = turnActive
-    ? (rows.findLast((row) => row.kind === "turn")?.messages ?? null)
-    : null;
+  const liveTurn = turnActive ? (turns.at(-1) ?? null) : null;
   const turnHasProgress = React.useMemo(() => liveTurnHasProgress(liveTurn), [liveTurn]);
 
   const stopTurn = React.useCallback(() => void interrupt(), [interrupt]);
@@ -2537,6 +2686,8 @@ const SEGMENT_GAP = "space-y-4";
  */
 export const MESSAGE_GAP = "flex flex-col gap-4";
 
+const EMPTY_TOOL_CONTEXT: ToolDisplayContext = {};
+
 export interface TurnContext {
   onOpenFile(path: string): void;
   /** Opens a `delegate` row's child Session (VC-9); absent where no host can. */
@@ -2545,6 +2696,16 @@ export interface TurnContext {
   interactions: ReadonlyMap<string, RendererSessionInteraction>;
   deliveryLabels?: ReadonlyMap<string, MessageDeliveryLabel>;
   progressPaused?: boolean;
+  messageTimes?: ReadonlyMap<string, number>;
+  messageOrigins?: ReturnType<typeof transcriptMessageOrigins>;
+  interactionReceipts?: ReturnType<typeof indexInteractionResolutionMessages>;
+  toolContext?: ToolDisplayContext;
+  sourceMessages?: ReadonlyMap<string, UIMessage>;
+  sourceIconsApi?: TranscriptSourceIconsApi;
+  sourceIconPicture?: Pick<
+    import("@renderer/components/browser/browser-api").BrowserApi,
+    "picture"
+  >;
 }
 
 /**
@@ -2913,32 +3074,70 @@ function ChatTranscript({
     };
   }, [control, sessionId]);
 
+  const sourceOrigins = mounted.flatMap((row) =>
+    row.kind === "work"
+      ? row.work.rows.flatMap((activity) =>
+          activity.kind === "tool"
+            ? (() => {
+                const presentation = presentTranscriptTool(activity.part, context.toolContext);
+                const urls = [
+                  ...(presentation?.sources ?? []).map((source) => source.url),
+                  presentation?.originUrl,
+                ];
+                return urls.flatMap((url) => {
+                  try {
+                    const parsed = new URL(url ?? "");
+                    return ["http:", "https:"].includes(parsed.protocol) ? [parsed.origin] : [];
+                  } catch {
+                    return [];
+                  }
+                });
+              })()
+            : [],
+        )
+      : [],
+  );
   return (
-    <ContentColumn className={cn("max-w-(--container-transcript)", MESSAGE_GAP)}>
-      {hasEarlier ? (
-        <div ref={sentinel} className="flex justify-center">
-          <Button
-            size="xs"
-            variant="ghost"
-            className="text-muted-foreground"
-            onClick={reveal}
-            data-transcript-earlier={shown.earlier}
-          >
-            Show earlier
-          </Button>
-        </div>
-      ) : null}
-      {mounted.map((row, index) => (
-        <ChatTranscriptRow
-          key={mountedKeys[index]}
-          row={row}
-          context={context}
-          live={row.kind === "turn" && row.messages === liveTurn}
-          {...(onOpenSession === undefined ? {} : { onOpenSession })}
-        />
-      ))}
-      {children}
-    </ContentColumn>
+    <TranscriptSourceIcons
+      sessionId={sessionId}
+      origins={sourceOrigins}
+      api={context.sourceIconsApi}
+      picture={context.sourceIconPicture}
+    >
+      <ContentColumn className={cn("max-w-(--container-transcript)", MESSAGE_GAP)}>
+        {hasEarlier ? (
+          <div ref={sentinel} className="flex justify-center">
+            <Button
+              size="xs"
+              variant="ghost"
+              className="text-muted-foreground"
+              onClick={reveal}
+              data-transcript-earlier={shown.earlier}
+            >
+              Show earlier
+            </Button>
+          </div>
+        ) : null}
+        {mounted.map((row, index) => (
+          <ChatTranscriptRow
+            key={mountedKeys[index]}
+            row={row}
+            context={context}
+            live={
+              liveTurn !== null &&
+              (row.kind === "work"
+                ? row.work.state === "open"
+                : row.kind === "turn" &&
+                  row.messages.some((message) =>
+                    liveTurn.some((source) => source.id === message.id),
+                  ))
+            }
+            {...(onOpenSession === undefined ? {} : { onOpenSession })}
+          />
+        ))}
+        {children}
+      </ContentColumn>
+    </TranscriptSourceIcons>
   );
 }
 
@@ -3041,8 +3240,10 @@ function transcriptRowIndex(rows: readonly TranscriptRow[], key: string): number
 
 function transcriptRowKey(row: TranscriptRow): string {
   switch (row.kind) {
+    case "work":
+      return row.work.key;
     case "turn":
-      return row.messages[0]?.id ?? "empty-turn";
+      return row.viewKey ?? row.messages[0]?.id ?? "empty-turn";
     case "host-notice":
       return row.messageId;
     case "compaction":
@@ -3052,6 +3253,44 @@ function transcriptRowKey(row: TranscriptRow): string {
     case "tool-refresh":
       return `tool-refresh:${row.refresh.sequence}`;
   }
+}
+
+function samePresentedRow(left: TranscriptRow, right: TranscriptRow): boolean {
+  if (left === right) return true;
+  if (left.kind === "turn" && right.kind === "turn")
+    return (
+      left.viewKey === right.viewKey &&
+      left.messages.length === right.messages.length &&
+      left.messages.every((message, index) => {
+        const other = right.messages[index]!;
+        return (
+          message.id === other.id &&
+          message.role === other.role &&
+          message.metadata === other.metadata &&
+          message.parts.length === other.parts.length &&
+          message.parts.every((part, partIndex) => part === other.parts[partIndex])
+        );
+      })
+    );
+  if (left.kind === "work" && right.kind === "work")
+    return (
+      left.work.key === right.work.key &&
+      left.work.startedAt === right.work.startedAt &&
+      left.work.endedAt === right.work.endedAt &&
+      left.work.state === right.work.state &&
+      left.work.rows.length === right.work.rows.length &&
+      left.work.rows.every((row, index) => {
+        const other = right.work.rows[index]!;
+        return (
+          row.key === other.key &&
+          row.kind === other.kind &&
+          row.part === other.part &&
+          (row.kind !== "reasoning" ||
+            (other.kind === "reasoning" && row.streaming === other.streaming))
+        );
+      })
+    );
+  return false;
 }
 
 /** The desktop mapping of one portable transcript row; it owns no projection rules. */
@@ -3067,13 +3306,44 @@ export function ChatTranscriptRow({
   onOpenSession?(sessionId: string): void;
 }) {
   switch (row.kind) {
-    case "host-notice":
+    case "work":
       return (
-        <HostNoticeRow
-          notice={row.notice}
-          {...(onOpenSession === undefined ? {} : { onOpenSession })}
-        />
+        <TranscriptToolContext.Provider value={context.toolContext ?? EMPTY_TOOL_CONTEXT}>
+          <div className="is-assistant" data-transcript-anchor={row.work.key}>
+            <ActivityBundle
+              rows={row.work.rows}
+              work={row.work}
+              progressEnabled={live && !context.progressPaused}
+              onOpenFile={context.onOpenFile}
+              onOpenSession={context.onOpenSession}
+            />
+          </div>
+        </TranscriptToolContext.Provider>
       );
+    case "host-notice": {
+      const source = context.sourceMessages?.get(row.messageId);
+      const answer =
+        source && row.notice.kind === "subagent"
+          ? deliveredAnswer(source, row.notice, context.messageOrigins?.get(row.messageId))
+          : null;
+      return (
+        <div className="min-w-0">
+          <HostNoticeRow
+            notice={row.notice}
+            {...(onOpenSession === undefined ? {} : { onOpenSession })}
+          />
+          {answer ? (
+            <div className="my-2">
+              <GuardedResponse>{answer.text}</GuardedResponse>
+              {answer.excerpt ? (
+                <span className="text-ui text-muted-foreground">Excerpt</span>
+              ) : null}
+            </div>
+          ) : null}
+          {source ? <OriginalOutput part={source} /> : null}
+        </div>
+      );
+    }
     case "compaction":
       return <CompactionBoundary compaction={row.compaction} />;
     case "reasoning-drop":
@@ -3081,7 +3351,9 @@ export function ChatTranscriptRow({
     case "tool-refresh":
       return <ToolRefreshNotice refresh={row.refresh} />;
     case "turn":
-      return <ChatTurn messages={row.messages} context={context} live={live} />;
+      return (
+        <ChatTurn messages={row.messages} context={context} live={live} anchorKey={row.viewKey} />
+      );
   }
 }
 
@@ -3100,8 +3372,10 @@ export const ChatTurn = React.memo(function ChatTurn({
   context,
   live,
   deliveryLabel,
+  anchorKey,
 }: {
   messages: readonly UIMessage[];
+  anchorKey?: string;
   context: TurnContext;
   /** This turn is the one the harness is still writing into. Only it animates. */
   live: boolean;
@@ -3110,14 +3384,34 @@ export const ChatTurn = React.memo(function ChatTurn({
 }) {
   const first = messages[0] ?? null;
   const role = first?.role ?? null;
+  const attribution = React.useMemo(
+    () =>
+      first === null
+        ? null
+        : transcriptMessageAttribution(
+            first,
+            context.messageOrigins?.get(first.id),
+            context.toolContext?.sessionNames,
+          ),
+    [first, context.messageOrigins, context.toolContext],
+  );
   // A receipt lands where it happened. Answering an interaction commits a
   // durable message at that point in the conversation, so the transcript draws
-  // it there — whether or not a tool row was ever correlated to the question. An
-  // interaction the log has no record of opening draws nothing rather than an id.
+  // it there only when the recorded resolve command proves its producer and
+  // the interaction is known. Missing history stays neutral, fully inspectable
+  // content; a caller's metadata/data part can never erase ordinary prose.
   const answered = React.useMemo(
-    () => (first !== null && role === "user" ? readInteractionResolutionMessage(first) : null),
-    [first, role],
+    () =>
+      first !== null && role === "user" && messages.length === 1
+        ? readInteractionResolutionMessage(first, context.interactionReceipts?.get(first.id))
+        : null,
+    [first, role, messages.length, context.interactionReceipts],
   );
+  const hasResolutionContent =
+    role === "user" &&
+    messages.some((message) =>
+      message.parts.some((part) => part.type === "data-interaction-resolution"),
+    );
   const segments = React.useMemo(
     () => (role === "assistant" ? segmentTurn(messages) : null),
     [messages, role],
@@ -3163,11 +3457,21 @@ export const ChatTurn = React.memo(function ChatTurn({
 
   if (first === null || role === null) return null;
 
-  if (answered) {
-    const interaction = context.interactions.get(answered.interactionId);
-    return interaction ? (
-      <InteractionReceiptLine interaction={interaction} resolution={answered.resolution} />
-    ) : null;
+  // The cumulative opened map is only the question's wording; the receipt's
+  // own settled attachment must still be the one that asked it.
+  const answeredInteraction = answered
+    ? context.interactions.get(answered.interactionId)
+    : undefined;
+  if (answered && answeredInteraction?.attachmentId === answered.attachmentId) {
+    return (
+      <div>
+        <InteractionReceiptLine
+          interaction={answeredInteraction}
+          resolution={answered.resolution}
+        />
+        <OriginalOutput part={first} />
+      </div>
+    );
   }
 
   // Plan-only projections must not leave an empty bubble.
@@ -3182,6 +3486,23 @@ export const ChatTurn = React.memo(function ChatTurn({
   return (
     <Message from={role} className="max-w-full">
       <MessageContent className="gap-0">
+        {attribution?.label ? (
+          <div className="pb-2 text-ui text-muted-foreground">
+            {attribution.sessionId &&
+            context.onOpenSession &&
+            context.toolContext?.sessionNames?.has(attribution.sessionId) ? (
+              <button
+                type="button"
+                className="rounded-sm text-start outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                onClick={() => context.onOpenSession?.(attribution.sessionId!)}
+              >
+                <bdi>{attribution.label}</bdi>
+              </button>
+            ) : (
+              <bdi>{attribution.label}</bdi>
+            )}
+          </div>
+        ) : null}
         {/* Thumbs above the words, matching the composer the message left from. */}
         {attachedFiles.length > 0 ? (
           <AttachmentStrip
@@ -3193,12 +3514,16 @@ export const ChatTurn = React.memo(function ChatTurn({
           {segments
             ? segments.map((segment) => (
                 // An anchor for the reader's place across a history page (VC-315).
-                <div key={segment.key} data-transcript-anchor={segment.key}>
+                <div key={segment.key} data-transcript-anchor={anchorKey ?? segment.key}>
                   {renderSegment(segment, role, context, live)}
                 </div>
               ))
             : prose.map((entry) => <GuardedResponse key={entry.key}>{entry.text}</GuardedResponse>)}
         </div>
+        {hasResolutionContent && prose.length === 0 ? (
+          <span className="text-ui text-muted-foreground">Interaction record</span>
+        ) : null}
+        {attribution?.sessionId || hasResolutionContent ? <OriginalOutput part={first} /> : null}
         {skillChips.length > 0 ? (
           // A skill name is a mono outline Badge behind a book icon, wherever
           // it appears. This is the only place the transcript says one: the
@@ -3225,14 +3550,19 @@ export const ChatTurn = React.memo(function ChatTurn({
         <div
           data-slot="message-footer"
           className={cn(
-            "flex min-w-0 flex-wrap items-center gap-2 text-muted-foreground",
+            "transcript-message-footer flex min-w-0 flex-wrap items-center gap-2 text-muted-foreground",
             role === "user" && "justify-end",
           )}
         >
           {role === "user" && footer !== undefined ? (
             <MessageDelivery key={first.id} label={footer} />
           ) : null}
-          {copyableText !== null ? <MessageCopyAction text={copyableText} /> : null}
+          {copyableText !== null ? (
+            <MessageCopyAction
+              text={copyableText}
+              timestamp={context.messageTimes?.get(first.id)}
+            />
+          ) : null}
         </div>
       ) : null}
     </Message>
@@ -3264,11 +3594,8 @@ function MessageDelivery({ label }: { label: string }) {
   );
 }
 
-/** The feed-wide copy verdict holds long enough to be read, then returns to rest. */
-const COPY_FEEDBACK_MS = 1200;
-
 /** A stable action below the response, reachable without crossing a hover gap. */
-function MessageCopyAction({ text }: { text: string }) {
+function MessageCopyAction({ text, timestamp }: { text: string; timestamp?: number }) {
   const [copyState, setCopyState] = React.useState<"idle" | "copied" | "failed">("idle");
   React.useEffect(() => {
     if (copyState === "idle") return;
@@ -3278,21 +3605,37 @@ function MessageCopyAction({ text }: { text: string }) {
   const CopyStateIcon =
     copyState === "copied" ? SuccessIcon : copyState === "failed" ? ErrorIcon : CopyIcon;
 
+  const label =
+    copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : "Copy message";
   return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon-sm"
-      data-message-copy=""
+    <span
+      className="transcript-message-meta"
       data-feedback={copyState === "idle" ? undefined : copyState}
-      title={copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : "Copy"}
-      aria-label={
-        copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : "Copy"
-      }
-      onClick={() => void copyText(text).then(setCopyState)}
     >
-      <CopyStateIcon className={cn("size-3.5", copyState === "failed" && "text-destructive")} />
-    </Button>
+      {timestamp !== undefined && Number.isFinite(timestamp) ? (
+        <time className="text-label tabular-nums" dateTime={new Date(timestamp).toISOString()}>
+          {new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+        </time>
+      ) : null}
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        data-message-copy=""
+        data-feedback={copyState === "idle" ? undefined : copyState}
+        aria-label={label}
+        onClick={() => void copyText(text).then(setCopyState)}
+      >
+        <CopyStateIcon className={cn("size-3.5", copyState === "failed" && "text-destructive")} />
+      </Button>
+      <span
+        className="sr-only"
+        aria-live="polite"
+        role={copyState === "idle" ? undefined : "status"}
+      >
+        {copyState === "idle" ? "" : label}
+      </span>
+    </span>
   );
 }
 

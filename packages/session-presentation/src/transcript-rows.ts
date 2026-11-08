@@ -1,4 +1,5 @@
 import type { UIMessage } from "ai";
+import type { SessionOrigin } from "@volli/shared";
 import { readHostNotice, type TranscriptHostNotice } from "./host-notice";
 import type {
   TranscriptCompaction,
@@ -17,10 +18,13 @@ export type TranscriptRow =
   | { kind: "reasoning-drop"; drop: TranscriptReasoningDrop }
   | { kind: "tool-refresh"; refresh: TranscriptToolRefresh };
 
-function rowFor(messages: readonly UIMessage[]): TranscriptRow {
+function rowFor(
+  messages: readonly UIMessage[],
+  origins?: ReadonlyMap<string, SessionOrigin | null>,
+): TranscriptRow {
   const message = messages.length === 1 ? messages[0] : undefined;
   if (message === undefined) return { kind: "turn", messages };
-  const notice = readHostNotice(message);
+  const notice = readHostNotice(message, origins?.get(message.id));
   return notice === null
     ? { kind: "turn", messages }
     : { kind: "host-notice", messageId: message.id, notice };
@@ -71,8 +75,9 @@ export function projectTranscriptRows(
   compactions: readonly TranscriptCompaction[],
   reasoningDrops: readonly TranscriptReasoningDrop[],
   toolRefreshes: readonly TranscriptToolRefresh[] = [],
+  origins?: ReadonlyMap<string, SessionOrigin | null>,
 ): readonly TranscriptRow[] {
-  const turnRows = turns.map(rowFor);
+  const turnRows = turns.map((messages) => rowFor(messages, origins));
   const pending: AnchoredContextNotice[] = [
     ...toolRefreshes.map((value) => ({
       kind: "tool-refresh" as const,
@@ -104,10 +109,18 @@ export function projectTranscriptRows(
   };
 
   takeAnchored((notice) => notice.afterMessageId === null);
-  for (const [index, messages] of turns.entries()) {
-    rows.push(turnRows[index]!);
-    const spoken = new Set(messages.map((message) => message.id));
-    takeAnchored((notice) => notice.afterMessageId !== null && spoken.has(notice.afterMessageId));
+  for (const messages of turns) {
+    let slice: UIMessage[] = [];
+    for (const message of messages) {
+      slice.push(message);
+      if (pending[0]?.afterMessageId !== message.id) continue;
+      // Context facts belong immediately after their actual anchor, not after
+      // later tools/commentary grouped into the same assistant turn.
+      rows.push(rowFor(slice, origins));
+      slice = [];
+      takeAnchored((notice) => notice.afterMessageId === message.id);
+    }
+    if (slice.length > 0) rows.push(rowFor(slice, origins));
   }
   for (const notice of pending) {
     rows.push(noticeRow(notice));

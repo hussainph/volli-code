@@ -59,6 +59,7 @@ describe("the desktop-only tier", () => {
       "project.reorder",
       "worktree.trimSettings",
       "project.remove",
+      "sourceIcons.watch",
     ]);
     for (const entry of DESKTOP_ENTRIES) {
       const clientLocal =

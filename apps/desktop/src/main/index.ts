@@ -1088,6 +1088,7 @@ const appStartup = app.whenReady().then(async () => {
     onTransactionViolation: app.isPackaged ? logTransactionViolation : throwTransactionViolation,
     // web_fetch parses HTML in this worker rather than on Electron main.
     webExtractWorker: join(__dirname, "web-extract-worker.cjs"),
+    sourceIconWorker: join(__dirname, "source-icon-worker.cjs"),
     usageReportWorker: join(__dirname, "usage-report-worker.cjs"),
     devDiagnostics: isDev,
     secretKey: harnessPorts?.secretKey ?? keychainSecretCodec(keychainUse.keychain),
@@ -1665,6 +1666,7 @@ const appStartup = app.whenReady().then(async () => {
    * quit runs.
    */
   let desktopMoves: DesktopMovesService | null = null;
+  let settleSourceIcons: (() => Promise<void>) | undefined;
   const runnerEdge = createDesktopRunnerEdge({
     lifecycle: quittingApp,
     host: hostCore,
@@ -1686,6 +1688,7 @@ const appStartup = app.whenReady().then(async () => {
     settleBackgroundWork: async () => {
       await Promise.all([
         restore?.settled(),
+        settleSourceIcons?.(),
         browserPictureSink.settled(),
         browserTraceSink.settled(),
       ]);
@@ -1731,6 +1734,11 @@ const appStartup = app.whenReady().then(async () => {
       requestSecret: true,
       browser: { backend: browserTabs, cursorFor: (tabId) => cursorOverlayRef?.driverFor(tabId) },
       pictures: browserPictures,
+      sourceIconEpoch: () => account.sourceIconEpoch(),
+      sourceIconOwner: () => account.sourceIconOwner(),
+      sourceIconRestoring: () => account.sourceIconRestoring(),
+      sourceIconRevocation: () => account.sourceIconRevocation(),
+      watchSourceIconAuthority: (listener) => account.watchSourceIconAuthority(listener),
     },
     beforeExecution: () => loginPathBootstrap.apply(),
     shellFeed: {
@@ -1753,6 +1761,7 @@ const appStartup = app.whenReady().then(async () => {
     observability: agentObservability,
     automations: runtimeAutomations,
   } = runner;
+  settleSourceIcons = () => runner.settleSourceIcons();
   runnerEdge.bind({ automations: runtimeAutomations });
   // A local launch registers this Mac only for the move, never connects it to cloud jobs.
   // The exact same sealed identity and registration rules serve a later cloud launch.

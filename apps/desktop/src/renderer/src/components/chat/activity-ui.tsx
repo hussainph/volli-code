@@ -37,20 +37,19 @@ import {
 } from "@renderer/components/ui/icon";
 
 import type { ActivityBrowse, ActivityKind } from "@volli/shared";
-import type { DynamicToolUIPart, ReasoningUIPart } from "ai";
+import type { DynamicToolUIPart } from "ai";
 import * as React from "react";
 
 import { useStopFollowing } from "@renderer/components/ui/ai-elements/conversation";
-import { ReasoningBody, useElapsed } from "@renderer/components/ui/ai-elements/reasoning";
+import { ReasoningBody } from "@renderer/components/ui/ai-elements/reasoning";
 import {
   activityDescriptor,
+  presentTranscriptTool,
   activityStatus,
-  bundleNeedsAttention,
   bundleSummary,
   compactSignature,
   describeActivity,
   isBundleStreaming,
-  reasoningBody,
   reasoningStatus,
   splitPath,
   type ActivityDetail,
@@ -61,6 +60,7 @@ import {
   type NumberedLine,
   type SummarySegment,
   type SummaryTone,
+  type TranscriptWorkWindow,
 } from "@volli/session-presentation";
 import {
   BrowserCardHostContext,
@@ -76,6 +76,15 @@ import { cn } from "@renderer/lib/utils";
 
 import { TokenText, useHighlightedLines, useOnScreen } from "./tool-output-highlight";
 import { RunningBashCall, RunningBashControl, RunningBashReason } from "./running-bash-control";
+import { WorkReceipt } from "./work-receipt";
+import { copyText, COPY_FEEDBACK_MS } from "./transcript-copy";
+export { copyText } from "./transcript-copy";
+import {
+  OriginalOutput,
+  PresentedToolRow,
+  TranscriptToolContext,
+  WebWorkGroup,
+} from "./presented-tool-row";
 import {
   codeModeImageContent,
   codeModeImageDataUrl,
@@ -262,7 +271,6 @@ function RowDisclosure({
       type="button"
       aria-expanded={open}
       aria-label={label}
-      title={label}
       onClick={(event) => {
         event.stopPropagation();
         onToggle();
@@ -458,9 +466,26 @@ export const ToolRow = React.memo(function ToolRow(props: {
   onOpenSession?(sessionId: string): void;
   className?: string;
 }) {
+  const context = React.useContext(TranscriptToolContext);
+  const presentation = presentTranscriptTool(props.part, context);
+  const images =
+    presentation?.category === "code"
+      ? codeModeImageContent(props.part)?.filter((block) => block.type === "image")
+      : null;
   return (
     <RunningBashCall part={props.part}>
-      <ToolRowContent {...props} />
+      {presentation ? (
+        <PresentedToolRow
+          part={props.part}
+          presentation={presentation}
+          onOpenSession={props.onOpenSession}
+          onOpenFile={props.onOpenFile}
+        >
+          {images && images.length > 0 ? <CodeModeOutput input={null} content={images} /> : null}
+        </PresentedToolRow>
+      ) : (
+        <ToolRowContent {...props} />
+      )}
     </RunningBashCall>
   );
 });
@@ -546,6 +571,7 @@ const ToolRowContent = React.memo(function ToolRowContent({
             errorText={errorText}
             openPath={row.openPath}
           />
+          <OriginalOutput part={part} />
         </Disclosure>
       ) : null}
     </div>
@@ -621,7 +647,6 @@ function RowObject({
     return (
       <button
         type="button"
-        title="Open the subagent Session"
         onClick={(event) => {
           event.stopPropagation();
           onOpenSession(openSessionId);
@@ -634,10 +659,7 @@ function RowObject({
   }
   if (!openPath || !onOpenFile) {
     return (
-      <code
-        className="min-w-0 truncate font-mono text-ui text-foreground"
-        title={row.kind === "run-command" ? object : undefined}
-      >
+      <code className="min-w-0 truncate font-mono text-ui text-foreground">
         <ObjectText value={object} />
       </code>
     );
@@ -645,7 +667,7 @@ function RowObject({
   return (
     <button
       type="button"
-      title={openPath}
+      aria-label={openPath}
       onClick={(event) => {
         event.stopPropagation();
         // Tool-input spelling → what Pi actually resolved (leading `@`, Unicode
@@ -657,31 +679,6 @@ function RowObject({
       <ObjectText value={object} />
     </button>
   );
-}
-
-/** How long the copy button holds its verdict before going back to offering. */
-const COPY_FEEDBACK_MS = 1200;
-
-type ClipboardWriter = Pick<Clipboard, "writeText">;
-
-/**
- * The browser boundary for copying visible text.
- *
- * Clipboard access can reject for ordinary runtime conditions (permission,
- * focus, or insecure context). Return the result the control must show rather
- * than leaving its caller to guess whether a rejected promise was success.
- */
-export async function copyText(
-  value: string,
-  clipboard: ClipboardWriter | undefined = navigator.clipboard,
-): Promise<"copied" | "failed"> {
-  try {
-    if (!clipboard) return "failed";
-    await clipboard.writeText(value);
-    return "copied";
-  } catch {
-    return "failed";
-  }
 }
 
 /** Kept as the activity row's semantic entry point. */
@@ -1017,16 +1014,16 @@ function DiffDetail({ lines, language }: { lines: DiffLine[]; language: string |
             data-line
             className={cn(
               "whitespace-pre",
-              line.kind === "add" && "bg-primary/10 text-foreground",
-              line.kind === "remove" && "bg-destructive/10 text-foreground",
+              line.kind === "add" && "transcript-diff-add text-foreground",
+              line.kind === "remove" && "transcript-diff-remove text-foreground",
               line.kind === "context" && "text-muted-foreground",
             )}
           >
             <span
               data-marker
               className={cn(
-                line.kind === "add" && "text-primary-text",
-                line.kind === "remove" && "text-destructive",
+                line.kind === "add" && "text-diff-added",
+                line.kind === "remove" && "text-diff-removed",
               )}
             >
               {marker}
@@ -1116,9 +1113,8 @@ function useVisibleBundleProgress(
  * *at the same left edge*: no indent, no rule, no second column. The list simply
  * got longer, and the caret is what says why.
  *
- * Open state is derived — `userOpen ?? needsAttention` — so restoring a session
- * fires no transitions at boot, and a bundle holding a failure is open before
- * anyone asks. A pending approval never reaches here; it left the bundle
+ * Disclosure state belongs to the reader, including on failure and replay.
+ * A pending approval never reaches here; it left the bundle
  * upstream, because the one thing that blocks the reader must not be behind a
  * disclosure at all.
  */
@@ -1128,15 +1124,57 @@ export const ActivityBundle = React.memo(
     onOpenFile,
     onOpenSession,
     progressEnabled = true,
+    work,
   }: {
     rows: readonly BundleRow[];
+    work?: TranscriptWorkWindow;
     progressEnabled?: boolean;
     onOpenFile?(path: string): void;
     onOpenSession?(sessionId: string): void;
   }) {
-    const [userOpen, setUserOpen] = React.useState<boolean | null>(null);
-    const summary = React.useMemo(() => bundleSummary(rows), [rows]);
-    const open = userOpen ?? bundleNeedsAttention(rows);
+    // Disclosure is reader-owned. Failure is visible in the summary, but an
+    // arriving failure must not reveal output, move focus or change the fold.
+    const [open, setOpen] = React.useState(false);
+    const summary = React.useMemo(() => {
+      const segments = bundleSummary(rows);
+      const local = rows.flatMap((row) =>
+        row.kind === "tool" && !["failed", "denied"].includes(activityStatus(row.part))
+          ? [presentTranscriptTool(row.part)?.status]
+          : [],
+      );
+      const failed = local.filter((status) => status === "failed").length;
+      const blocked = local.filter((status) => status === "denied").length;
+      if (failed > 0) segments.push({ text: `${failed} failed`, tone: "danger" });
+      if (blocked > 0) segments.push({ text: `${blocked} blocked`, tone: "danger" });
+      return segments;
+    }, [rows]);
+    const thoughts = React.useMemo(
+      () =>
+        rows.filter(
+          (row): row is ThinkingPart =>
+            row.kind === "reasoning" && (row.streaming || row.part.text.trim().length > 0),
+        ),
+      [rows],
+    );
+    const firstThought = thoughts[0];
+    const webGroups = React.useMemo(() => {
+      const groups = new Map<string, Extract<BundleRow, { kind: "tool" }>[]>();
+      let group: Extract<BundleRow, { kind: "tool" }>[] | null = null;
+      for (const row of rows) {
+        const name = row.kind === "tool" ? activityDescriptor(row.part).nativeToolName : "";
+        if (row.kind === "tool" && (name === "web_search" || name === "web_fetch")) {
+          if (!group) {
+            group = [];
+            groups.set(row.key, group);
+          }
+          group.push(row);
+        } else group = null;
+      }
+      return groups;
+    }, [rows]);
+    const groupedWebKeys = new Set(
+      [...webGroups.values()].flatMap((group) => group.slice(1).map((row) => row.key)),
+    );
     const streaming = progressEnabled && isBundleStreaming(rows);
     const viewport = React.useRef<HTMLDivElement>(null);
     const indicatorKeys = JSON.stringify(
@@ -1150,23 +1188,33 @@ export const ActivityBundle = React.memo(
     const liveThought = progressEnabled
       ? rows.findLast((row) => row.kind === "reasoning" && row.streaming)
       : undefined;
-    // Wired to the click and not to `open`, which is derived: a bundle that
-    // opens itself because a row inside it failed is not a reader reaching for
-    // anything, and must not detach them from a live stream.
+    // Only an explicit expansion detaches the reader from the live tail.
     const stopFollowing = useStopFollowing();
 
     const list = (
       <ActivityProgressContext.Provider value={progressEnabled}>
         <div className="space-y-1">
-          {rows.map((row) => (
-            <RegisteredBundleRow
-              key={row.key}
-              row={row}
-              open={summary.length === 0 || open}
-              onOpenFile={onOpenFile}
-              onOpenSession={onOpenSession}
-            />
-          ))}
+          {rows.map((row) =>
+            webGroups.has(row.key) ? (
+              <Disclosure key={row.key} open={summary.length === 0 || open}>
+                <WebWorkGroup rows={webGroups.get(row.key)!} onOpenFile={onOpenFile} />
+              </Disclosure>
+            ) : groupedWebKeys.has(row.key) ? null : row.kind === "reasoning" ? (
+              row.key === firstThought?.key ? (
+                <Disclosure key={row.key} open={summary.length === 0 || open}>
+                  <ReasoningRow rows={thoughts} />
+                </Disclosure>
+              ) : null
+            ) : (
+              <RegisteredBundleRow
+                key={row.key}
+                row={row}
+                open={summary.length === 0 || open}
+                onOpenFile={onOpenFile}
+                onOpenSession={onOpenSession}
+              />
+            ),
+          )}
         </div>
       </ActivityProgressContext.Provider>
     );
@@ -1178,30 +1226,38 @@ export const ActivityBundle = React.memo(
     const toggle = () => {
       if (hasTextSelection()) return;
       if (!open) stopFollowing();
-      setUserOpen(!open);
+      setOpen(!open);
     };
 
     return (
       <div className="not-prose">
-        <button
-          type="button"
-          onClick={toggle}
-          aria-expanded={open}
-          data-slot="activity-bundle-header"
-          className={cn(ROW_CLASS, ROW_INTERACTIVE, ROW_FOCUSABLE)}
-        >
-          {streaming && (!open || !rowProgressVisible) ? <ProgressGlyph /> : <BundleGlyph />}
-          {/* A closed bundle must not hide its live thought behind a finished
+        {work ? (
+          <WorkReceipt work={work} summary={summary} open={open} onToggle={toggle} />
+        ) : (
+          <button
+            type="button"
+            onClick={toggle}
+            aria-expanded={open}
+            data-slot="activity-bundle-header"
+            className={cn(ROW_CLASS, ROW_INTERACTIVE, ROW_FOCUSABLE)}
+          >
+            {streaming && (!open || !rowProgressVisible) ? <ProgressGlyph /> : <BundleGlyph />}
+            {/* A closed bundle must not hide its live thought behind a finished
               tool summary. Open, the thought already has its own visible row. */}
-          {!open && liveThought?.kind === "reasoning" ? (
-            <span className="min-w-0 truncate">
-              {reasoningStatus(liveThought.part.text, { streaming: true }).verb}
-            </span>
-          ) : (
-            <Summary segments={summary} />
-          )}
-          <Caret open={open} pinned />
-        </button>
+            {!open && liveThought?.kind === "reasoning" ? (
+              <>
+                <span className="min-w-0 truncate">{thinkingLabel(thoughts, true)}</span>
+                {/* A live thought must not hide a failed, denied or unexecuted call. */}
+                <span className="shrink-0">
+                  <Summary segments={summary.filter((segment) => segment.tone !== "neutral")} />
+                </span>
+              </>
+            ) : (
+              <Summary segments={summary} />
+            )}
+            <Caret open={open} pinned />
+          </button>
+        )}
         {/* Call owners stay mounted; only each row's disclosed UI unmounts.
             No `overscroll-contain`: at the bundle's edges the wheel must chain
               to the transcript, or the feed reads as dead under the cursor for
@@ -1223,6 +1279,9 @@ export const ActivityBundle = React.memo(
     previous.onOpenFile === next.onOpenFile &&
     previous.onOpenSession === next.onOpenSession &&
     previous.progressEnabled === next.progressEnabled &&
+    previous.work?.startedAt === next.work?.startedAt &&
+    previous.work?.endedAt === next.work?.endedAt &&
+    previous.work?.state === next.work?.state &&
     sameBundleRows(previous.rows, next.rows),
 );
 
@@ -1258,21 +1317,17 @@ const RegisteredBundleRow = React.memo(
     onOpenFile,
     onOpenSession,
   }: {
-    row: BundleRow;
+    row: Extract<BundleRow, { kind: "tool" }>;
     open: boolean;
     onOpenFile?(path: string): void;
     onOpenSession?(sessionId: string): void;
   }) {
     const content = (
       <Disclosure open={open}>
-        <BundleRowView row={row} onOpenFile={onOpenFile} onOpenSession={onOpenSession} />
+        <ToolRow part={row.part} onOpenFile={onOpenFile} onOpenSession={onOpenSession} />
       </Disclosure>
     );
-    return row.kind === "tool" ? (
-      <RunningBashCall part={row.part}>{content}</RunningBashCall>
-    ) : (
-      content
-    );
+    return <RunningBashCall part={row.part}>{content}</RunningBashCall>;
   },
   // Segmentation creates fresh row wrappers, not fresh parts. Keep settled call
   // owners from rendering or registering again while another call streams.
@@ -1283,74 +1338,57 @@ const RegisteredBundleRow = React.memo(
     sameBundleRows([previous.row], [next.row]),
 );
 
-const BundleRowView = React.memo(function BundleRowView({
-  row,
-  onOpenFile,
-  onOpenSession,
-}: {
-  row: BundleRow;
-  onOpenFile?(path: string): void;
-  onOpenSession?(sessionId: string): void;
-}) {
-  if (row.kind === "reasoning") {
-    return <ReasoningRow part={row.part} streaming={row.streaming} />;
+type ThinkingPart = Extract<BundleRow, { kind: "reasoning" }>;
+
+/** Only the provider's recognized summary headings can supply a short update. */
+function thinkingLabel(rows: readonly ThinkingPart[], progressing: boolean): string {
+  if (!progressing) return "Thought";
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const summary = reasoningStatus(rows[index]!.part.text, { streaming: true }).verb;
+    if (summary !== "Thinking") return `Thinking · ${summary}`;
   }
-  return <ToolRow part={row.part} onOpenFile={onOpenFile} onOpenSession={onOpenSession} />;
-});
+  return "Thinking";
+}
 
 /**
- * Reasoning as an ordinary row.
- *
- * Same shell, same gutter, same caret as a tool call — the only difference is
- * the glyph. The reason is structural rather than aesthetic: a bespoke reasoning
- * block is a second kind of line in the same column, and two kinds of line
- * cannot share one left edge for long.
- *
- * The glyph is a Gauge, and it is the same one the composer's effort chip
- * wears. Reasoning has one vocabulary in this app now: the dial you set before
- * the turn and the row that reports what it bought are the same object seen
- * from two ends. (It was a Brain, which said "thinking" and nothing else — no
- * magnitude, and a lumpy drawing at 14px.)
+ * One view-owned row per work window, anchored at its first reasoning part.
+ * Later summaries replace the label, not the identity or the audit trail.
+ * Reasoning parts carry no recorded clock, so mount time is not a duration.
  */
-const ReasoningRow = React.memo(function ReasoningRow({
-  part,
-  streaming,
-}: {
-  part: ReasoningUIPart;
-  streaming: boolean;
-}) {
+const ReasoningRow = React.memo(function ReasoningRow({ rows }: { rows: readonly ThinkingPart[] }) {
   const progressEnabled = React.useContext(ActivityProgressContext);
-  const progressing = progressEnabled && streaming;
-  const elapsed = useElapsed(progressing);
-  const status = reasoningStatus(part.text, { streaming: progressing, durationMs: elapsed });
-  const body = reasoningBody(part.text);
-  const expandable = body !== null;
+  const progressing = progressEnabled && rows.some((row) => row.streaming);
+  const expandable = rows.some((row) => row.part.text.trim().length > 0);
   const { open, toggle, rowProps } = useRowToggle(expandable);
 
   return (
-    <div className="group/row not-prose">
+    <div className="group/row not-prose" data-slot="thinking-row">
       <div {...rowProps} className={cn(ROW_CLASS, expandable && ROW_INTERACTIVE)}>
         {progressing ? (
           <ProgressGlyph tracked />
         ) : (
           <GaugeIcon aria-hidden className={GLYPH_CLASS} />
         )}
-        <span className="min-w-0 truncate">{status.verb}</span>
+        <span className="min-w-0 truncate">{thinkingLabel(rows, progressing)}</span>
         <RowDisclosure open={open} expandable={expandable} onToggle={toggle} />
-        <span className="ml-auto" />
-        {status.meta ? (
-          <span className="shrink-0 font-mono tabular-nums text-muted-foreground/70">
-            {status.meta}
-          </span>
-        ) : null}
       </div>
-      {body !== null ? (
-        <Disclosure open={open}>
-          <ReasoningBody className="my-1 rounded-md border border-border/50 bg-muted/30 p-2 text-ui leading-5">
-            {body}
-          </ReasoningBody>
-        </Disclosure>
-      ) : null}
+      <Disclosure open={open}>
+        <div
+          className="max-h-72 overflow-auto"
+          role="region"
+          aria-label="Reasoning history"
+          tabIndex={0}
+        >
+          {rows.map((row) => (
+            <ReasoningBody
+              key={row.key}
+              className="my-1 rounded-md border border-border/50 bg-muted/30 p-2 text-ui leading-5"
+            >
+              {row.part.text}
+            </ReasoningBody>
+          ))}
+        </div>
+      </Disclosure>
     </div>
   );
 });

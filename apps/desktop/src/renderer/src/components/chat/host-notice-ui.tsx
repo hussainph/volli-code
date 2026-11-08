@@ -61,20 +61,17 @@ export const SubagentNoticeRow = React.memo(function SubagentNoticeRow({
 }) {
   const copy = subagentNoticeCopy(notice);
   const childSessionId = notice.childSessionId;
-  // A historical notice has no child id to open, so its handle is the one way
-  // left to answer it — a value, not an explanation.
-  const hover = [
-    `${copy.headline} — ${copy.state}${copy.cause === null ? "" : ` · ${copy.cause}`}`,
-    childSessionId === null ? `Answer: volli session answer ${notice.sessionHandle}` : null,
-  ]
-    .filter((part) => part !== null)
-    .join("\n");
   return (
-    <div className="not-prose flex min-w-0 flex-col gap-1" title={hover}>
+    <div className="not-prose flex min-w-0 flex-col gap-1">
       <div className="flex min-w-0 items-center gap-2 text-ui">
         <SubagentNoticeGlyph state={notice.state} />
-        <span className="min-w-0 truncate font-medium">{copy.headline}</span>
-        <span className="sr-only">{copy.state}</span>
+        <span className="min-w-0 truncate font-medium">
+          <bdi dir="auto">{copy.headline}</bdi>
+        </span>
+        <span className="shrink-0 text-muted-foreground">
+          {copy.state === "done" ? "finished" : copy.state}
+          {copy.cause ? ` · ${copy.cause}` : ""}
+        </span>
         <Separator aria-hidden className="min-w-4 flex-1" />
         {onOpenSession === undefined || childSessionId === null ? null : (
           <Button
@@ -82,7 +79,6 @@ export const SubagentNoticeRow = React.memo(function SubagentNoticeRow({
             variant="ghost"
             size="xs"
             className="shrink-0"
-            title="Open the Subagent Session"
             onClick={() => onOpenSession(childSessionId)}
           >
             <ExternalIcon aria-hidden className="size-3.5" />
@@ -101,10 +97,7 @@ export const BrowserHoldNoticeRow = React.memo(function BrowserHoldNoticeRow({
 }) {
   const copy = browserHoldNoticeCopy(notice);
   return (
-    <div
-      className="not-prose flex min-w-0 items-center gap-2 text-ui text-muted-foreground"
-      title={`Browser Tab ${notice.tabId} — ${copy.headline} — ${copy.state}`}
-    >
+    <div className="not-prose flex min-w-0 items-center gap-2 text-ui text-muted-foreground">
       <BrowserIcon aria-hidden className={GLYPH_CLASS} />
       <span className="min-w-0 truncate font-medium text-foreground">{copy.headline}</span>
       <Separator aria-hidden className="min-w-4 flex-1" />
@@ -120,7 +113,7 @@ export const WatchNoticeRow = React.memo(function WatchNoticeRow({
 }) {
   const copy = watchNoticeCopy(notice);
   return (
-    <div className="not-prose flex min-w-0 flex-col gap-1" title={copy.lines.join("\n")}>
+    <div className="not-prose flex min-w-0 flex-col gap-1">
       <div className="flex min-w-0 items-center gap-2 text-ui">
         <PreviewIcon aria-hidden className={cn(GLYPH_CLASS, "text-muted-foreground")} />
         <span className="min-w-0 truncate font-medium">{copy.headline}</span>
@@ -144,10 +137,7 @@ export const ShellNoticeRow = React.memo(function ShellNoticeRow({
 }) {
   const copy = shellNoticeCopy(notice);
   return (
-    <div
-      className="not-prose flex min-w-0 items-center gap-2 text-ui text-muted-foreground"
-      title={`${copy.headline} — ${copy.state}. ${copy.note}`}
-    >
+    <div className="not-prose flex min-w-0 items-center gap-2 text-ui text-muted-foreground">
       {notice.event === "exited" && notice.byPerson ? (
         <StopCircleIcon aria-hidden className={GLYPH_CLASS} />
       ) : notice.event === "exited" &&
@@ -170,10 +160,7 @@ export const UnknownHostNoticeRow = React.memo(function UnknownHostNoticeRow({
   notice: UnknownHostNotice;
 }) {
   return (
-    <div
-      className="not-prose flex min-w-0 items-center gap-2 text-ui text-muted-foreground"
-      title={notice.text}
-    >
+    <div className="not-prose flex min-w-0 items-center gap-2 text-ui text-muted-foreground">
       <WarningIcon aria-hidden className={cn(GLYPH_CLASS, "text-attention")} />
       <span className="shrink-0 font-medium text-foreground">Volli</span>
       <Separator aria-hidden className="min-w-4 flex-1" />
