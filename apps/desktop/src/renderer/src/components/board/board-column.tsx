@@ -395,7 +395,10 @@ export const BoardColumn = React.memo(function BoardColumn({
         // mouse drag-to-pan (see useBoardCanvasPan). Short columns still hug.
         // cursor-default overrides the canvas's cursor-grab so only empty
         // background reads as a pan surface.
-        "board-column flex min-h-0 max-h-[85%] flex-none cursor-default flex-col rounded-column",
+        // Share the canvas, but keep cards readable with few shown columns
+        // and preserve horizontal pan when the 288px floors cannot fit.
+        // The explicit flex basis supersedes the skin's fixed column width.
+        "board-column flex min-h-0 max-h-[85%] min-w-72 max-w-sm flex-1 basis-72 cursor-default flex-col rounded-column",
         // Targets and navigation update immediately, including keyboard drops.
         // Quieted while another column holds the ⌥ picker: one column is being
         // aimed at, and the rest are not the question.
