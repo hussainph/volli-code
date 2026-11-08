@@ -1435,6 +1435,23 @@ function perfMore(data: Record<string, unknown>, shown: number, noun: string): s
     : [];
 }
 
+/** LoAF signals overlap; coverage is per metric, never inferred from the stall count. */
+function perfLoaf(value: unknown, prefix = "  LoAF"): string[] {
+  if (!isRecord(value)) return [];
+  const labels = [
+    ["script", "script (attributed)"],
+    ["blocking", "blocking"],
+    ["render", "render (inclusive)"],
+    ["styleLayout", "style/layout (render subset)"],
+  ] as const;
+  return labels.map(([key, label]) => {
+    const metric = value[key];
+    if (!isRecord(metric)) return `${prefix} ${label}  unknown`;
+    const total = metric["measuredFrames"] === 0 ? "unknown" : perfNumber(metric["totalMs"], " ms");
+    return `${prefix} ${label}  ${total}  ${perfNumber(metric["msPerHour"], " ms/h")}  measured ${perfNumber(metric["measuredFrames"])} frames`;
+  });
+}
+
 /**
  * `volli perf top` (VC-1092): the window and how long the app was watched in
  * it, the totals with their per-hour rates, then one row per group.
@@ -1453,7 +1470,12 @@ function renderPerfTop(data: Record<string, unknown>): string | null {
     (group) =>
       `  ${perfKey(group["key"])}  ×${perfNumber(group["count"])}  total ${perfNumber(group["totalMs"], " ms")}  p50 ${perfNumber(group["p50Ms"])}  p95 ${perfNumber(group["p95Ms"])}  max ${perfNumber(group["maxMs"])}  ${perfNumber(group["stallMsPerHour"], " ms/h")}`,
   );
-  return [header, ...rows, ...perfMore(data, groups.length, "groups")].join("\n");
+  return [
+    header,
+    ...perfLoaf(data["loaf"]),
+    ...rows,
+    ...perfMore(data, groups.length, "groups"),
+  ].join("\n");
 }
 
 /** `volli perf stalls`: one stall per line, newest first. */
@@ -1469,6 +1491,26 @@ function renderPerfStalls(data: Record<string, unknown>): string | null {
         `${terminalSafeInline(stall["door"])}/${terminalSafeInline(stall["operation"])}`,
         perfNumber(stall["durationMs"], " ms"),
         terminalSafeInline(stall["kind"]),
+        ...(
+          [
+            ["scriptTotalMs", "script (attributed)"],
+            ["blockingMs", "blocking"],
+            ["renderMs", "render (inclusive)"],
+            ["styleLayoutMs", "style/layout (render subset)"],
+            ["scriptMs", "top script"],
+          ] as const
+        ).flatMap(([key, label]) =>
+          typeof stall[key] === "number" ? [`${label} ${perfNumber(stall[key], " ms")}`] : [],
+        ),
+        ...(
+          [
+            ["scriptFile", "file"],
+            ["scriptFunction", "function"],
+            ["scriptInvoker", "invoker"],
+          ] as const
+        ).flatMap(([key, label]) =>
+          typeof stall[key] === "string" ? [`${label} ${terminalSafeInline(stall[key])}`] : [],
+        ),
         ...(typeof stall["label"] === "string"
           ? [`label ${terminalSafeInline(stall["label"])}`]
           : []),
@@ -1509,7 +1551,9 @@ function renderPerfCompare(data: Record<string, unknown>): string | null {
   });
   return [
     perfSide("a", data["a"]),
+    ...perfLoaf(isRecord(data["a"]) ? data["a"]["loaf"] : undefined, "  a LoAF"),
     perfSide("b", data["b"]),
+    ...perfLoaf(isRecord(data["b"]) ? data["b"]["loaf"] : undefined, "  b LoAF"),
     ...rows,
     ...perfMore(data, groups.length, "groups"),
   ].join("\n");

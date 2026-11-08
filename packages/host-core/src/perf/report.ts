@@ -28,6 +28,18 @@ export interface PerfStallRecord {
   readonly sessionId: string | null;
   readonly windowId: number | null;
   readonly durationMs: number;
+  /** Sum of attributed scripts; absent when Chromium supplies no attribution. */
+  readonly scriptTotalMs?: number;
+  readonly blockingMs?: number;
+  /** Inclusive renderStart → frame end, not a phase to add to styleLayoutMs. */
+  readonly renderMs?: number;
+  /** styleAndLayoutStart → frame end: a subset of renderMs. */
+  readonly styleLayoutMs?: number;
+  /** Top script's sanitized basename, function and closed invoker category. */
+  readonly scriptFile?: string;
+  readonly scriptFunction?: string;
+  readonly scriptInvoker?: string;
+  readonly scriptMs?: number;
   /** An unattributed main stall's last door operation before it: a hint, never a claim. */
   readonly hint: string | null;
   readonly version: string;
@@ -127,6 +139,72 @@ export class DurationGroups {
     else list.push(stall.durationMs);
     this.count += 1;
     this.totalMs += stall.durationMs;
+  }
+}
+
+/** One LoAF metric's coverage and total; unknown is never a measured zero. */
+export interface PerfLoafMetric {
+  readonly measuredFrames: number;
+  readonly totalMs: number | null;
+  /** Per hour of the answer's observed runtime, not an estimate of unmeasured frames. */
+  readonly msPerHour: number | null;
+}
+
+/** Overlapping signals, not additive phases. Render includes the style/layout subset. */
+export interface PerfLoafSummary {
+  readonly script: PerfLoafMetric;
+  readonly blocking: PerfLoafMetric;
+  readonly render: PerfLoafMetric;
+  readonly styleLayout: PerfLoafMetric;
+}
+
+/** Fold only measured renderer frames, retaining independent coverage for each signal. */
+export class LoafTotals {
+  private readonly metrics = {
+    script: { measuredFrames: 0, totalMs: 0 },
+    blocking: { measuredFrames: 0, totalMs: 0 },
+    render: { measuredFrames: 0, totalMs: 0 },
+    styleLayout: { measuredFrames: 0, totalMs: 0 },
+  };
+
+  add(stall: PerfStallRecord): void {
+    if (
+      stall.process !== "renderer" ||
+      stall.kind !== "frame" ||
+      stall.operation !== "long-animation-frame"
+    ) {
+      return;
+    }
+    const values = {
+      script: stall.scriptTotalMs,
+      blocking: stall.blockingMs,
+      render: stall.renderMs,
+      styleLayout: stall.styleLayoutMs,
+    };
+    for (const key of Object.keys(values) as (keyof typeof values)[]) {
+      const value = values[key];
+      if (value === undefined) continue;
+      this.metrics[key].measuredFrames += 1;
+      this.metrics[key].totalMs += value;
+    }
+  }
+
+  summary(observed: number): PerfLoafSummary | undefined {
+    const metric = (key: keyof PerfLoafSummary): PerfLoafMetric => {
+      const { measuredFrames, totalMs } = this.metrics[key];
+      return {
+        measuredFrames,
+        totalMs: measuredFrames === 0 ? null : totalMs,
+        msPerHour: measuredFrames === 0 ? null : perHour(totalMs, observed),
+      };
+    };
+    if (Object.values(this.metrics).every((value) => value.measuredFrames === 0)) return undefined;
+    return {
+      script: metric("script"),
+      blocking: metric("blocking"),
+      render: metric("render"),
+      styleLayout: metric("styleLayout"),
+    };
   }
 }
 

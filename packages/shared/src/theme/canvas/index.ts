@@ -13,7 +13,9 @@
  * Three groups:
  *
  *  - **Paint** — `deriveCanvasTokens`, `deriveLabelInk`, `canvasBackground`,
- *    `canvasInk`, `canvasElevation`, `grainLayer`, `windowBackground`. Order
+ *    `canvasInk`, `canvasElevation`, `grainLayer`, `windowBackground`, and the
+ *    shared contrast constraints the renderer completes (`readingBackings`,
+ *    `focusRing`, `SECONDARY_FILL_ALPHA`). Order
  *    matters at one joint: elevation before ink, because a lifted tier is a new
  *    surface the on-canvas text sits on and can be the worst case the ink has to
  *    clear.
@@ -29,7 +31,21 @@ export { DEFAULT_CANVAS, parseCanvas } from "./parse";
 export { canvasBackground, effectiveStopHexes, grainLayer } from "./gradient";
 export { addStop, moveStop, removeStop, withPrimaryHex, withPrimaryIndex } from "./edit";
 export { canvasInk } from "./ink";
-export { deriveCanvasTokens, deriveLabelInk, windowBackground } from "./derive";
+export {
+  SECONDARY_FILL_ALPHA,
+  readingInk,
+  regularGlassBackdrop,
+  regularGlassTone,
+  writingGlass,
+} from "./glass";
+export {
+  deriveCanvasTokens,
+  deriveLabelInk,
+  focusRing,
+  readingBackings,
+  tintCanvasNeutral,
+  windowBackground,
+} from "./derive";
 export {
   canvasElevation,
   type CanvasElevation,

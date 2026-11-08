@@ -109,7 +109,13 @@ export interface RendererFrameStall {
   readonly durationMs: number;
   /** The part of the frame that blocked input (LoAF `blockingDuration`). */
   readonly blockingMs?: number;
-  /** Rendering: from the frame's render start to its end. */
+  /**
+   * Total attributed script duration (sum of LoAF `scripts[].duration`).
+   * Absent when attribution is unavailable, not proof that no script ran.
+   * May overlap style/layout (forced layout inside a script).
+   */
+  readonly scriptTotalMs?: number;
+  /** Rendering: from the frame's render start to its end, including style/layout. */
   readonly renderMs?: number;
   /** Style and layout inside rendering. */
   readonly styleLayoutMs?: number;
@@ -268,6 +274,7 @@ export function readRendererStall(value: unknown): RendererStall | null {
       operation,
       label,
       durationMs,
+      ...optionalMs("scriptTotalMs", value["scriptTotalMs"]),
       ...optionalMs("blockingMs", value["blockingMs"]),
       ...optionalMs("renderMs", value["renderMs"]),
       ...optionalMs("styleLayoutMs", value["styleLayoutMs"]),

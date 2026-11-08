@@ -1,4 +1,4 @@
-import { describe, expect, expectTypeOf, it } from "vite-plus/test";
+import { describe, expect, expectTypeOf, it, vi } from "vite-plus/test";
 import {
   SessionEngineCommandConflictError,
   SessionEngineConflictError,
@@ -4275,6 +4275,24 @@ function metered(overrides: Partial<SessionUsage> = {}): SessionUsage {
 }
 
 describe("reportUsage", () => {
+  it("uses a storage-owned report read without opening a transaction on the caller", async () => {
+    const { ledger, plane } = composition();
+    const query = { scope: { kind: "all" } as const, groupBy: "model" as const };
+    const report = await plane.reportUsage(query);
+    const reportUsage = vi.fn(async () => report);
+    const transaction = vi.spyOn(ledger, "transaction");
+    const engine = createSessionEngine({
+      ledger: { transaction: ledger.transaction.bind(ledger), reportUsage },
+      clock: { now: () => 0 },
+      ids: ids(),
+    });
+    expect(await engine.reportUsage(query)).toBe(report);
+    expect(reportUsage).toHaveBeenCalledExactlyOnceWith(query);
+    expect(transaction).not.toHaveBeenCalled();
+    reportUsage.mockRejectedValueOnce(new Error("reader failed"));
+    await expect(engine.reportUsage(query)).rejects.toThrow("reader failed");
+  });
+
   /** A Session in a named project/ticket, with one metered operation on it. */
   async function spend(
     plane: ReturnType<typeof createSessionEngine>,

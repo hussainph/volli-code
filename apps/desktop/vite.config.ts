@@ -908,6 +908,7 @@ export default defineConfig(({ mode, command }) => ({
         "web-extract-worker": "src/main/web-extract-worker.ts",
         // Optional transcript decoration uses a separately terminated decoder.
         "source-icon-worker": "src/main/source-icon-worker.ts",
+        "usage-report-worker": "src/main/usage-report-worker.ts",
       },
       format: "cjs",
       outDir: "dist-electron",

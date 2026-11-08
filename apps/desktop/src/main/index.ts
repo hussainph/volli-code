@@ -343,7 +343,7 @@ import {
   BrowserTraceStore,
 } from "@volli/host-core/browser";
 import { createBrowserShortcutRelay } from "./browser/app-shortcut-relay";
-import { BrowserTabHost } from "./browser/tab-host";
+import { BrowserTabHost, type BrowserPreviewDiagnostic } from "./browser/tab-host";
 import { registerOrphanProcessIpcHandlers } from "./process/ipc";
 import { registerBackgroundShellIpcHandlers } from "./shell/ipc";
 import { registerBrowserTabIpcHandlers } from "./browser/ipc";
@@ -1089,6 +1089,7 @@ const appStartup = app.whenReady().then(async () => {
     // web_fetch parses HTML in this worker rather than on Electron main.
     webExtractWorker: join(__dirname, "web-extract-worker.cjs"),
     sourceIconWorker: join(__dirname, "source-icon-worker.cjs"),
+    usageReportWorker: join(__dirname, "usage-report-worker.cjs"),
     devDiagnostics: isDev,
     secretKey: harnessPorts?.secretKey ?? keychainSecretCodec(keychainUse.keychain),
     webKeySealing: {
@@ -1638,6 +1639,22 @@ const appStartup = app.whenReady().then(async () => {
     // hold a tab, so the placeholder is never what a person sees.
     sessionName: async (sessionId: string) =>
       (await sessionRuntime?.projection({ sessionId }))?.projection.session.title ?? null,
+    // Diagnostic-only (VC-1150), unpackaged builds only, and only behind the
+    // guarded harness or the dev smoke door that already exposes this host:
+    // how each preview's frame fence and camera ended, as fixed outcomes,
+    // counts, generations and times. It enables nothing and decides nothing.
+    ...(isDev &&
+    (process.env["VOLLI_HARNESS"] === "1" || process.env["VOLLI_SMOKE_BROWSER_HOST"] === "1")
+      ? {
+          previewDiagnostics: ({ stage, ...diagnostic }: BrowserPreviewDiagnostic) =>
+            hostLogger("browser").info(
+              stage === "frame"
+                ? "browser navigation picture frame"
+                : "browser navigation picture outcome",
+              diagnostic,
+            ),
+        }
+      : {}),
   });
   /**
    * Everything the runner calls back into on this Mac (VC-671): the

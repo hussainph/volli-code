@@ -148,6 +148,71 @@ async function startFixtureServer() {
   };
 }
 
+/*
+ * VC-1150 diagnostics, read back from this run's own scratch profile: the
+ * dev-only preview outcomes main logs behind VOLLI_SMOKE_BROWSER_HOST (frame
+ * fence and native camera), plus the always-on CDP and capture timeout lines.
+ * Allowlisted fields only — fixed outcomes, opaque picture ids, counts,
+ * generations, times and CDP method names; never URLs, titles, page text or
+ * errors. Observation only: no assertion reads it.
+ */
+const PREVIEW_MESSAGES = new Set([
+  "browser navigation picture frame",
+  "browser navigation picture outcome",
+  "browser CDP command timed out",
+  "browser tab preview capture timed out",
+]);
+const PREVIEW_FIELDS = [
+  "msg",
+  "outcome",
+  "picture",
+  "lookupSize",
+  "generation",
+  "currentGeneration",
+  "pending",
+  "elapsedMs",
+  "phase",
+  "method",
+];
+// Bounded both ends: the navigation's own rows come first, and the newest
+// (a late timeout, the act's camera) last; the middle is counted, not kept.
+const PREVIEW_HEAD_ROWS = 16;
+const PREVIEW_TAIL_ROWS = 8;
+
+async function previewDiagnostics(userData) {
+  try {
+    const dir = join(userData, "logs");
+    const rows = [];
+    for (const name of (await fs.readdir(dir)).toSorted()) {
+      if (!name.endsWith(".jsonl")) continue;
+      for (const line of (await fs.readFile(join(dir, name), "utf8")).split("\n")) {
+        if (line.trim() === "") continue;
+        let row;
+        try {
+          row = JSON.parse(line);
+        } catch {
+          continue; // A line still being written; the after-close read has it whole.
+        }
+        if (row?.component !== "browser" || !PREVIEW_MESSAGES.has(row.msg)) continue;
+        rows.push(
+          Object.fromEntries(
+            PREVIEW_FIELDS.filter((key) => key in row).map((key) => [key, row[key]]),
+          ),
+        );
+      }
+    }
+    const bounded = rows.length <= PREVIEW_HEAD_ROWS + PREVIEW_TAIL_ROWS;
+    return JSON.stringify({
+      rows: bounded ? rows : rows.slice(0, PREVIEW_HEAD_ROWS),
+      ...(bounded ? {} : { omitted: rows.length - PREVIEW_HEAD_ROWS - PREVIEW_TAIL_ROWS }),
+      ...(bounded ? {} : { tail: rows.slice(-PREVIEW_TAIL_ROWS) }),
+      total: rows.length,
+    });
+  } catch {
+    return JSON.stringify({ unreadable: true });
+  }
+}
+
 function factsOf(title) {
   const facts = {};
   for (const [, key, value] of String(title ?? "").matchAll(/([A-Za-z]+)=(\S+)/g)) {
@@ -174,6 +239,8 @@ async function driveHeadlessTab(app, url, projectId) {
         out.tabId = opened.tabId;
         out.generation = opened.generation;
         out.navigationPicture = opened.picture;
+        out.navigationPictureImmediateSize =
+          opened.picture === null ? 0 : (host.pictureOf(opened.picture)?.length ?? 0);
         out.presentationBefore = stateOf(opened.tabId)?.presentation;
 
         // Wait for the deterministic equivalent of an on-demand compile to be in flight.
@@ -229,7 +296,11 @@ async function driveHeadlessTab(app, url, projectId) {
       } catch (error) {
         out.error = String(error?.message ?? error);
       } finally {
+        out.navigationPictureBeforeDisposeSize =
+          out.navigationPicture == null ? 0 : (host.pictureOf(out.navigationPicture)?.length ?? 0);
         port.dispose();
+        out.navigationPictureAfterDisposeSize =
+          out.navigationPicture == null ? 0 : (host.pictureOf(out.navigationPicture)?.length ?? 0);
       }
       return out;
     },
@@ -344,7 +415,13 @@ async function main() {
     );
     return {
       ok: lengths[0] > 2_000 && lengths[1] > 2_000,
-      detail: `navigation=${lengths[0]} chars screenshot=${lengths[1]} chars`,
+      detail:
+        `navigation=${lengths[0]} chars screenshot=${lengths[1]} chars ` +
+        `navigationId=${result.navigationPicture ?? "null"} ` +
+        `immediate=${result.navigationPictureImmediateSize} ` +
+        `beforeDispose=${result.navigationPictureBeforeDisposeSize} ` +
+        `afterDispose=${result.navigationPictureAfterDisposeSize} ` +
+        `outcomes=${await previewDiagnostics(userDataDir)}`,
     };
   });
 
@@ -358,6 +435,8 @@ try {
   code = 1;
 } finally {
   if (app !== null) await app.close().catch(() => undefined);
+  // After close the log's tail is flushed; still before the scratch goes.
+  console.log(`VC-1150 preview diagnostics after close: ${await previewDiagnostics(userDataDir)}`);
   await fixture.close();
   await cleanup();
   process.exit(code);

@@ -38,7 +38,8 @@ describe("attachment tile contract", () => {
     await act(async () => root.render(<AttachmentThumb attachment={pdf} />));
     const tile = host.firstElementChild!;
     expect(tile.classList.contains("max-w-full")).toBe(true);
-    expect(tile.classList.contains("bg-card")).toBe(true);
+    expect(tile.classList.contains("bg-(--card-face)")).toBe(true);
+    expect(tile.classList.contains("bg-card")).toBe(false);
     expect(host.querySelector("svg")).not.toBeNull();
     const name = host.querySelector(`[title="${pdf.originalName}"]`)!;
     expect(name.classList.contains("truncate")).toBe(true);

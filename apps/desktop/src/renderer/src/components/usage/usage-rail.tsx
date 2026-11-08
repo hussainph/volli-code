@@ -23,6 +23,7 @@ import * as React from "react";
 
 import { type SessionUsageReport, type SessionUsageScope } from "@volli/shared";
 
+import { useInspectorVisible } from "@renderer/components/sidebar/inspector-host";
 import { HomeUsageFooter } from "@renderer/components/usage/home-usage-block";
 import { TicketUsageBlock } from "@renderer/components/usage/ticket-usage-block";
 import { useUsageModelCatalogue } from "@renderer/components/usage/usage-model-catalogue";
@@ -72,12 +73,14 @@ function useSettleSignal(): string {
  * absent case travels as a null query that reads nothing and answers null.
  */
 function useUsageReport(query: UsageQuery | null): SessionUsageReport | null {
-  const key = query === null ? null : usageKey(query.scope, query.windowMs, query.groupBy);
+  const visible = useInspectorVisible();
+  const key =
+    query === null || !visible ? null : usageKey(query.scope, query.windowMs, query.groupBy);
   const entry = useUsageStore((state) => (key === null ? undefined : state.byQuery[key]));
   const settleSignal = useSettleSignal();
 
   React.useEffect(() => {
-    if (query === null) return;
+    if (query === null || key === null) return;
     void useUsageStore.getState().refresh(query, settleSignal);
     // `key` stands for the whole query — it is derived from every field of it,
     // so depending on the object as well would re-read on each render.
@@ -130,11 +133,9 @@ export function HomeUsageRailFooter({
     () => ({ kind: "project", projectId }),
     [projectId],
   );
-  const report = useUsageReport({
-    scope,
-    windowMs: USAGE_WINDOW_MS[window],
-    groupBy: "model",
-  });
+  const report = useUsageReport(
+    costVisible ? { scope, windowMs: USAGE_WINDOW_MS[window], groupBy: "model" } : null,
+  );
   // THROUGH THE SAME WINDOW as the project above it, and that is a correctness
   // requirement rather than a preference. The card draws this Session as a row
   // UNDER the project figure, which is a claim that it is part of that figure —
@@ -147,7 +148,9 @@ export function HomeUsageRailFooter({
     [sessionId],
   );
   const sessionReport = useUsageReport(
-    sessionScope === null ? null : { scope: sessionScope, windowMs: USAGE_WINDOW_MS[window] },
+    !costVisible || sessionScope === null
+      ? null
+      : { scope: sessionScope, windowMs: USAGE_WINDOW_MS[window] },
   );
   // THE DURABLE PER-PROJECT LISTING, not the open chat tabs. `38 sessions · 24
   // metered` only means anything if the first number counts this project's
@@ -208,8 +211,8 @@ export function TicketUsageRailFooter({ ticketId }: { ticketId: string }) {
   const usageOpen = useUiStore((state) => state.railFolds.usage);
   const catalogue = useUsageModelCatalogue();
   const scope = React.useMemo<SessionUsageScope>(() => ({ kind: "ticket", ticketId }), [ticketId]);
-  const bySession = useUsageReport({ scope, groupBy: "session" });
-  const byModel = useUsageReport({ scope, groupBy: "model" });
+  const bySession = useUsageReport(costVisible ? { scope, groupBy: "session" } : null);
+  const byModel = useUsageReport(costVisible ? { scope, groupBy: "model" } : null);
   // The DURABLE roster, not the open tabs: a Ticket's breakdown routinely names
   // Sessions that were closed weeks ago, and reading titles off the tab strip
   // would render every one of those as a bare id.

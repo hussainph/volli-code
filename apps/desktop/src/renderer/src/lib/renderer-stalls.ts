@@ -6,8 +6,8 @@
  * code, and a callback only when something already ran long:
  *
  * - **Long Animation Frames** (`long-animation-frame`): a frame whose work
- *   held the page, with the scripts that ran in it. The longest script is
- *   kept as file + function, nothing else. Chromium (152, Electron 44)
+ *   held the page, with the scripts that ran in it. Their total duration and
+ *   the longest script's safe file + function + invoker type are kept. Chromium (152, Electron 44)
  *   attributes only scripts served over http(s) or inline: the dev renderer
  *   on Vite's localhost has it, the bundle on `volli-app://` does not, so a
  *   packaged frame carries its durations and label alone. A build without
@@ -31,8 +31,9 @@
  * past that they are counted, and the count rides the next batch. Main
  * budgets each window again.
  *
- * Logs only: nothing here changes what any code does or when. Nothing is
- * stored, and nothing a person typed or read is ever in a stall.
+ * Diagnostics only: nothing here changes what any code does or when. Main
+ * logs these rows into the bounded local perf store; nothing a person typed
+ * or read is ever in a stall.
  */
 import {
   RENDERER_STALL_BOUNDS,
@@ -194,8 +195,10 @@ function wholeMs(value: number): number {
 
 function topScript(scripts: readonly ScriptTimingLike[]): RendererStallScript | undefined {
   let top: ScriptTimingLike | undefined;
-  for (const script of scripts)
+  for (const script of scripts) {
+    if (!Number.isFinite(script.duration) || script.duration < 0) continue;
     if (top === undefined || script.duration > top.duration) top = script;
+  }
   if (top === undefined) return undefined;
   const fn = rendererStallFunction(top.sourceFunctionName);
   return {
@@ -204,6 +207,20 @@ function topScript(scripts: readonly ScriptTimingLike[]): RendererStallScript | 
     invoker: rendererScriptInvoker(top.invokerType),
     durationMs: wholeMs(top.duration),
   };
+}
+
+/**
+ * Sum before rounding so sub-millisecond scripts are not lost. An empty (or
+ * malformed) attribution list is unknown, not zero: packaged custom-scheme
+ * scripts are invisible to Chromium's LoAF attribution.
+ */
+function scriptTotalMs(scripts: readonly ScriptTimingLike[]): number | undefined {
+  let total: number | undefined;
+  for (const script of scripts) {
+    if (!Number.isFinite(script.duration) || script.duration < 0) continue;
+    total = Math.min(RENDERER_STALL_BOUNDS.maxDurationMs, (total ?? 0) + script.duration);
+  }
+  return total === undefined ? undefined : wholeMs(total);
 }
 
 /** A part from a timestamp to the frame's end, when the timestamp was set. */
@@ -220,11 +237,13 @@ export function frameStall(entry: FrameEntryLike, label: InteractionLabel): Rend
   const renderMs = tailMs(entry, entry.renderStart);
   const styleLayoutMs = tailMs(entry, entry.styleAndLayoutStart);
   const script = entry.scripts === undefined ? undefined : topScript(entry.scripts);
+  const totalScriptMs = entry.scripts === undefined ? undefined : scriptTotalMs(entry.scripts);
   return {
     kind: "frame",
     operation,
     label,
     durationMs: wholeMs(entry.duration),
+    ...(totalScriptMs === undefined ? {} : { scriptTotalMs: totalScriptMs }),
     ...(blockingMs === null ? {} : { blockingMs }),
     ...(renderMs === undefined ? {} : { renderMs }),
     ...(styleLayoutMs === undefined ? {} : { styleLayoutMs }),
