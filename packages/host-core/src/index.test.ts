@@ -713,6 +713,25 @@ describe("createHostCore composition", () => {
     expect(core.worktreeDeps.machinePaths).toBe(core.machinePaths);
   });
 
+  it("passes the source icon worker to the lazy runtime services unchanged", () => {
+    const sourceIconWorker = new URL("file:///source-icon-worker.cjs");
+    const core = live(
+      compose({ log: { error: vi.fn() } }, { ...headlessOptions(dataDir()), sourceIconWorker }),
+    );
+    expect(createHostRuntimeServices).not.toHaveBeenCalled();
+    const services = core.runtimeServices;
+    expect(core.runtimeServices).toBe(services);
+    expect(createHostRuntimeServices).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(createHostRuntimeServices).mock.calls[0]![3]).toStrictEqual({
+      dbPath: core.dbPath,
+      machinePaths: core.machinePaths,
+      sourceIconWorker,
+    });
+    expect(vi.mocked(createHostRuntimeServices).mock.calls[0]![3]?.sourceIconWorker).toBe(
+      sourceIconWorker,
+    );
+  });
+
   it("asks the host for model access and venue only when the runtime services are first read", () => {
     const modelAccess = { models: {}, catalogReady: Promise.resolve() } as unknown as ReturnType<
       NonNullable<Parameters<typeof createHostCore>[1]["modelAccess"]>
