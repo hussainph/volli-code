@@ -40,10 +40,8 @@ async function fileDigest(root, path) {
   try {
     // Refuse symlink traversal atomically. Nonblocking open also lets the
     // descriptor check reject a substituted FIFO without waiting for a writer.
-    handle = await open(
-      absolute,
-      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-    );
+    const flags = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
+    handle = await open(absolute, flags);
   } catch (error) {
     if (error.code !== "ELOOP") throw error;
     // readlink reads the link itself, including links to directories. If it
