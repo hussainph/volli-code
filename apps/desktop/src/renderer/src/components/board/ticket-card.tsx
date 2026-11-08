@@ -83,7 +83,7 @@ export function TicketCardContent({
         // Selection colors the card's own border: a ring draws OUTSIDE the box
         // and the column scroller clips its top edge on the first card.
         selected
-          ? "border-foreground/40 bg-(--fill-row-selected)"
+          ? "border-wash-ink/40 bg-(--fill-row-selected)"
           : "border-transparent hover:border-border-strong",
       )}
     >

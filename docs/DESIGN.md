@@ -11,16 +11,33 @@ already follows it.
 | Layer | Job | Treatment |
 |---|---|---|
 | Canvas | Window frame, title bar, rail and gutters | The person's positioned colour stops, vibrancy and grain |
-| Glass | Navigation, inspectors, controls, menus and popovers | Clear neutral material; optionally samples the canvas |
+| Glass | Navigation, inspectors, controls, menus and popovers | Translucent material; navigation samples canvas, writing glass shares the card-family tint |
 | Paper | Board, transcript, ticket document and preference forms | Opaque neutral reading surface |
 
-Paper does not inherit the canvas hue. The pipeline emits white / `#1e1e1e` paper and
-`#f6f6f6` / `#282828` under-page neutrals in light / dark appearance. These are **pipeline
-values**, not literals to copy into components. Use semantic variables.
+The reading paper stays **`#1e1e1e` in dark appearance and white in light appearance**,
+independent of the canvas. Colour belongs to the objects around and on that reading plane:
+raised cards, user bubbles, paper wells, under-page fills, controls, edges and muted icon ink
+inherit the **first authored canvas stop's hue**, like the accent, not the mesh's `primaryIndex`.
+Paper objects use `--surface-secondary` / `--surface-quaternary`: composite the neutral rung
+on paper first, then tint the resulting face. Tinting near-white ink before a low-alpha wash
+loses the object's visible chroma. Translucent `--fill-*` layers remain distinct for glass
+and pressed overlays; they must not be replaced wholesale by opaque paper faces.
+One neutral chroma budget is tuned per appearance (`ARC_TUNING.neutralTint`: .035 light /
+.032 dark). Seed chroma and vibrancy modulate it; near-grey canvases stay near-grey. Rung
+lightness stays independent of canvas luminance. Gamut mapping reduces chroma where needed,
+never clips channels to force saturation. These are **pipeline values**, not literals to copy
+into components.
+Body text stays neutral and opaque; semantic hues and vendor artwork do not follow this tint.
+Where a tint and fixed body ink cannot share a surface, the tint yields: writing glass sheds
+only the chroma its body label needs under an inspector control's 7.8% resting fill over
+saturated backdrops, keeping lightness and hue. The painted focus ring is one solve against paper, the selections, writing
+glass, navigation glass and the rail footer wash together; contrast tests hold it at 3:1 across
+the canvas matrix. `deriveCanvasTokens` alone carries the paper-side ring.
 
-### Tint is a surface boolean
+### Canvas sampling is a surface boolean
 
-Tint is a design-time material choice, not a user preference or a new theme axis.
+`GlassSurface tint` selects canvas-sampling navigation glass, not whether generated neutrals
+carry colour. It remains a design-time material choice, not a user preference or a new theme axis.
 
 | Surface | Tint | Implementation |
 |---|---|---|
@@ -28,8 +45,8 @@ Tint is a design-time material choice, not a user preference or a new theme axis
 | Stationary pane peek | On | `.glass[data-tint="true"]`, live overlay |
 | Ordinary menu, popover | Off by default | Shared floating primitive; `PopoverContent tint` opts in |
 | Usage popover | On | Existing `PopoverContent tint` caller |
-| Buttons, small controls | Off | `.glass-control`, no backdrop pass |
-| Content paper | Never | `.material-thick` / `.material-solid` |
+| Buttons, small controls | Off | Tinted generated face; `.glass-control`, no backdrop pass |
+| Content paper | No sampling | Neutral opaque `.material-thick` / `.material-solid` |
 
 Navigation glass retains the mock's 46% white / 52% dark neutral veil; ordinary
 glass uses 56%. The pane tier has one measured 5.7px blur/tone chain, a static
@@ -41,9 +58,9 @@ into cached device-resolution displacement plus 0.4px post-lens reconstruction.
 Maps are acquired only on mount/resize, never scroll; oversized overlays stay
 pane-tier. At most 16 unused geometries are retained. Small controls use a cheap
 inset shadow, never a masked gradient rim. No blur value animates. Glass over
-paper, including the composer, uses the untinted regular writing veil, not the
-canvas hue or a duplicate mesh. The composer's legacy `data-tint` marker selects
-that writing veil; it does not paint a canvas behind the transcript.
+paper, including the composer, uses the same tinted colour family as raised cards,
+while the reading paper beneath stays neutral. It is not a duplicate mesh or a raw-accent wash. The composer's legacy `data-tint`
+marker selects that writing veil; it does not paint a canvas behind the transcript.
 
 The canvas retains authored hues in both appearances: default pools are 62% /
 58% opaque over a neutral floor mixed with the primary at 22% / 26%. Vibrancy
@@ -63,7 +80,7 @@ A glass ancestor can establish a fixed-position containing block; raising z-inde
 repair displaced collision geometry or clipped modals. Shared Radix wrappers retain focus,
 scroll-lock, collision and nested Escape behaviour.
 
-Glass over scrolling paper stays untinted. Reuse the bounded source-list/Files edge fade and
+Glass over scrolling paper keeps the writing veil's card-family tint. Reuse the bounded source-list/Files edge fade and
 transcript viewport mask, fading only cut edges. Reserve the composer's measured height in
 content/scroll padding; latest-message controls get a clear band above it. A mask is not a
 substitute for making covered text reachable.
@@ -78,12 +95,18 @@ substitute for making covered text reachable.
   sheen. `--accent-tint` is 10%, `--accent-selected` 18%. The legacy `--primary` opaque pair
   still exists; it is not the tonal label token.
 - Colour earns its place on identity/state icons, selected and hover fills, prominent text
-  and the board Session ring. Reading paper and user message bubbles remain neutral.
+  and the board Session ring. Raised cards, user bubbles and paper wells carry the quieter
+  generated neutral tint, not a raw accent fill. Reading paper and body ink remain neutral.
+  Material washes use `--wash-ink`, with a glass-aware polarity on navigation, rather than
+  borrowing body ink. Optical black occlusion and white specular light remain neutral.
 - `--foreground` is body ink; `--muted-foreground` is opaque secondary;
   `--tertiary-foreground` is the third tier; `--label-ink` sits between body and secondary.
   Do not dilute reading ink with `/50`, `/70` or inherited opacity.
-- Token tests hold secondary at **4.5:1** and tertiary at **3:1** on paper, under-page and
-  neutral material pools across multiple canvases and both appearances. Navigation glass has a separate opaque ink pair solved against its canvas peaks. Small meaningful text
+- Token tests hold secondary at **4.5:1** and tertiary at **3:1** on neutral paper, tinted under-page,
+  raised cards, selected fills, controls and filtered writing-glass composites across the hue
+  spectrum, near-grey/channel extremes, multiple vibrancies and both appearances. Ink yields
+  lightness before contrast: a darker selection or a bright glass backdrop can compress the
+  secondary hierarchy. The glass filter model is shared by the CSS writer and ink solver. Navigation glass has a separate opaque ink pair solved against its canvas peaks. Small meaningful text
   still needs AA 4.5:1: use secondary, not tertiary, for it. Tonal labels are tested against
   their stronger selected tint. Consumer opacity and arbitrary underlying content are not
   covered by a token guarantee.

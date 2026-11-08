@@ -442,7 +442,7 @@ export function RailReadFaultBody({
  * (VC-406), and the row geometry every footer face shares — the mark at the
  * left where every rail row's mark sits, then the face, then the caret.
  */
-export const RAIL_FOOTER = "shrink-0 border-t border-sidebar-border/70 bg-background/30";
+export const RAIL_FOOTER = "shrink-0 border-t border-sidebar-border/70 bg-popover/30";
 export const RAIL_FOOTER_ROW = cn(
   "flex min-h-8 w-full items-center gap-2 py-2 text-left outline-none hover:bg-(--accent-tint) focus-visible:ring-2 focus-visible:ring-ring",
   RAIL_PANEL_INSET,
@@ -531,14 +531,16 @@ export const RAIL_CARD_ROW =
  * is the column scrollbar's job.
  */
 export const RAIL_CARD_FRAME =
-  "shrink-0 overflow-hidden rounded-xl border border-sidebar-border/70 bg-background/50 dark:bg-accent/50";
+  "shrink-0 overflow-hidden rounded-xl border border-sidebar-border/70 bg-popover/50 dark:bg-accent/50";
 
 /** The seam above every card row but the first. */
 export const RAIL_CARD_SEAM = "border-t border-sidebar-border/70";
 
 /**
  * The one button recipe a rail page presses: an `outline` Button on the
- * rail's own border, a resting wash, and the raised tier's lift.
+ * rail's own border and the raised tier's lift. Its resting face belongs to
+ * the shared outline primitive's generated `--control-face`; a background
+ * utility here would lose to that unlayered material rule.
  *
  * Spelled here for the reason {@link RAIL_CARD_FRAME} is. The repository
  * card's publish row wrote it three times inline (the primary, its `⋯`, the
@@ -553,7 +555,7 @@ export const RAIL_CARD_SEAM = "border-t border-sidebar-border/70";
  * the toolbar rung), and width is the row's decision: the recipe must work for
  * a control that truncates its own label and for a bare icon beside it.
  */
-export const RAIL_CONTROL = "border-sidebar-border bg-background/30 text-ui shadow-raised";
+export const RAIL_CONTROL = "border-sidebar-border text-ui shadow-raised";
 
 /**
  * Insertions and deletions as one pair — the repository card's changes row, the

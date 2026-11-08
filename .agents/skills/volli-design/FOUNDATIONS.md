@@ -12,11 +12,21 @@ Those tables describe the production tokens; use the tokens rather than copying 
   large accent areas. Persist canvas/appearance, never resolved paint.
 - **Paper** holds reading and work: documents, board, transcript, preference forms. Use
   `PaperSurface` or the shared opaque material, not a more opaque version of navigation glass.
-  Text and user bubbles stay neutral. Primary actions use the shared tonal treatment.
+  Reading paper stays neutral: `#1e1e1e` dark / white light, emitted by the generator.
+  Raised cards, user bubbles, paper wells, controls, borders and muted icon ink carry the
+  first canvas stop's generated neutral tint. Paper objects use `--surface-secondary` or
+  `--surface-quaternary`: tint the final neutral composite, not ink diluted to near-grey
+  by a low alpha. Keep translucent `--fill-*` overlays for glass and pressed states;
+  `--wash-ink` is material paint, never body text. Put personality into objects, not paper;
+  lightness remains a reading ladder, not the canvas's luminance. Body text stays neutral,
+  semantics keep their hues, vendor marks keep their artwork. Primary actions stay tonal.
 - **Pane glass** is the default `GlassSurface`: modest blur/tone, quiet rim and shadow.
   Docked navigation and stationary peeks share this recipe. Tint samples canvas; navigation
-  over canvas uses `tint`. Glass above paper, including the composer, uses the untinted
-  regular veil. A legacy `data-tint` marker is not a reason to paint a second canvas.
+  over canvas uses `tint`. Glass above paper, including the composer, uses a writing veil
+  from the same tinted card family over neutral paper, never a raw-accent wash or duplicate canvas.
+  The `tint` boolean selects canvas sampling; it does not switch generated neutral colour off.
+  Contrast wins over tint: writing glass yields chroma, never body-ink contrast. The painted
+  ring is solved once against paper, writing-glass and navigation backings; tests hold 3:1.
 - **Full glass** is an explicit bounded-overlay choice: cached device-resolution lensing,
   with post-displacement reconstruction. Menus/popovers and the search capsule have existing
   callers; do not spread refraction to every control or large pane. Read `ui/glass-optics.ts`
@@ -25,6 +35,13 @@ Those tables describe the production tokens; use the tokens rather than copying 
   Nested glass disables sampling; compose surfaces so that this fallback is not an accidental
   substitute for the intended material. Opaque accessibility/unsupported-filter fallbacks
   must preserve readable hierarchy.
+
+Neutral colour is derived in the shared canvas generator with one chroma budget per
+appearance. Never author resolved colours or store new theme axes. Compare warm/cool/purple,
+saturated green, near-grey and extreme custom canvases in both appearances and at low/high
+vibrancy. Test actual filtered/composited glass and selected/hover fills, not opaque paper
+alone. Preserve AA secondary ink (4.5:1), tertiary/non-text ink (3:1), and neutral body ink;
+let the ink hierarchy compress when a difficult backdrop needs it.
 
 Keep one resident glass owner during pane movement. A second decorative blurred shell can
 blur live text twice, double tint, or flash its unanimated base pose when cancelled. Optimise

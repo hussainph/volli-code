@@ -1,55 +1,155 @@
-/** Neutral content paper; the person's canvas supplies chrome and accent only. */
-import { hexToOklch, lerp, oklchToHex } from "../color";
+/** Neutral reading paper with canvas-tinted surrounding materials. */
+import { compositeHex, hexToOklch, lerp, oklchToHex, wcagContrast } from "../color";
 import { generateAccentTokens, solveLightnessOrCeiling, solveStatusTokens } from "../generate";
 import type { ThemeTokens } from "../tokens";
 import { baseFillHex } from "./gradient";
 import { DEFAULT_CANVAS } from "./parse";
 import type { Canvas, ResolvedAppearance } from "./types";
+import { ARC_TUNING } from "./tuning";
+import { SECONDARY_FILL_ALPHA, readingInk, writingGlass } from "./glass";
 
-/** All content surfaces are opaque Apple neutrals, independent of the canvas. */
+/**
+ * One chroma budget for the surrounding neutral family: fills, edges and secondary ink.
+ * Reading paper is exempt. Lightness belongs to the rung, hue to the first authored stop (the accent),
+ * never the mesh's movable primaryIndex. Near-grey canvases stay near-grey.
+ * Vibrancy modulates colour, not reading lightness; gamut mapping may reduce
+ * chroma further at the palest rungs. No resolved colour is stored.
+ * Also consumed by the renderer's glass/card/control material generator.
+ */
+export function tintCanvasNeutral(
+  neutral: string,
+  canvas: Canvas,
+  resolved: ResolvedAppearance,
+): string {
+  const { C, h } = hexToOklch(canvas.stops[0].hex);
+  const chroma =
+    Math.min(C * 0.25, ARC_TUNING.neutralTint[resolved]) * lerp(0.6, 1, canvas.vibrancy);
+  return oklchToHex(hexToOklch(neutral).L, chroma, h);
+}
+
+/**
+ * Writing glass is translucent, so its tint adds to whatever the backdrop
+ * shows. Over a saturated green corner a green-tinted veil, under the 7.8%
+ * resting fill an inspector control paints (`.inspector-popup`), pushes body ink below AA even
+ * though neutral glass clears it. Body ink stays fixed; the tint yields only as
+ * much chroma as that pair needs, keeping its lightness and hue.
+ */
+function writingGlassFill(
+  tinted: string,
+  foreground: string,
+  fill: string,
+  resolved: ResolvedAppearance,
+): string {
+  const passes = (hex: string) =>
+    writingGlass(hex, resolved).pools.every(
+      (pool) =>
+        wcagContrast(foreground, pool) >= 4.5 &&
+        wcagContrast(foreground, compositeHex(fill, SECONDARY_FILL_ALPHA, pool)) >= 4.5,
+    );
+  if (passes(tinted)) return tinted;
+  const { L, C, h } = hexToOklch(tinted);
+  let low = 0,
+    high = 1;
+  for (let i = 0; i < 20; i++) {
+    const mid = (low + high) / 2;
+    if (passes(oklchToHex(L, C * mid, h))) low = mid;
+    else high = mid;
+  }
+  return oklchToHex(L, C * low, h);
+}
+
+/**
+ * The paper-side backings reading ink and the focus ring clear: paper, the
+ * under-page, the accent selection, the editor selection and every filtered
+ * writing-glass corner. The renderer's painted ring adds its navigation
+ * backings to this same set, in one solve.
+ */
+export function readingBackings(
+  canvas: Canvas,
+  resolved: ResolvedAppearance,
+  tokens: Pick<ThemeTokens, "--background" | "--muted" | "--popover" | "--foreground">,
+): string[] {
+  const paper = tokens["--background"];
+  return [
+    paper,
+    tokens["--muted"],
+    compositeHex(canvas.stops[0].hex, 0.18, paper),
+    compositeHex(tintCanvasNeutral(tokens["--foreground"], canvas, resolved), 0.22, paper),
+    ...writingGlass(tokens["--popover"], resolved).pools,
+  ];
+}
+
+/**
+ * Non-text 3:1 focus indication: the accent ink, moved toward the appearance's
+ * pole only as far as every backing needs. Bounded at the pole; the contrast
+ * tests are what establish that a backing set admits it.
+ */
+export function focusRing(
+  ink: string,
+  backings: readonly string[],
+  resolved: ResolvedAppearance,
+): string {
+  return readingInk(ink, backings, resolved, 3);
+}
+
+/** Paper stays neutral; cards, controls, fills and secondary ink carry the canvas hue. */
 export function deriveCanvasTokens(canvas: Canvas, resolved: ResolvedAppearance): ThemeTokens {
   const dark = resolved === "dark";
+  const neutral = (hex: string) => tintCanvasNeutral(hex, canvas, resolved);
+  // The reading plane is invariant. Tint belongs to the objects placed on it.
   const paper = dark ? "#1e1e1e" : "#ffffff";
-  const under = dark ? "#282828" : "#f6f6f6";
+  const under = neutral(dark ? "#282828" : "#eaeaea");
+  const foreground = dark ? "#ededed" : "#272727";
+  const popover = writingGlassFill(
+    neutral(dark ? "#282828" : "#fafafa"),
+    foreground,
+    // The renderer's --fill-secondary ink: the same tinted foreground
+    // (canvas-paint.test pins the emitted fill to it).
+    neutral(foreground),
+    resolved,
+  );
   // First stop is the accent. primaryIndex still controls the mesh's dominant pool.
   const seed = canvas.stops[0].hex;
   const accent = generateAccentTokens(seed);
   const { C, h } = hexToOklch(seed);
-  const ink = oklchToHex(solveLightnessOrCeiling(75, C, h, tint(seed, paper, 0.18)), C, h);
+  const selected = compositeHex(seed, 0.18, paper);
+  const readingPools = readingBackings(canvas, resolved, {
+    "--background": paper,
+    "--muted": under,
+    "--popover": popover,
+    "--foreground": foreground,
+  });
+  const ink = oklchToHex(solveLightnessOrCeiling(75, C, h, selected), C, h);
+  // Actual glass pools and dark selections can compress the secondary hierarchy.
+  const secondaryHex = readingInk(
+    neutral(dark ? "#bdbdbd" : "#555555"),
+    readingPools,
+    resolved,
+    4.5,
+  );
   return {
     "--rail": under,
     "--background": paper,
     "--card": paper,
-    "--popover": dark ? "#282828" : "#fafafa",
+    "--popover": popover,
     "--muted": under,
     // Tint is opaque here for legacy callers and derived from the accent, not grey.
-    "--accent": tint(seed, paper, dark ? 0.16 : 0.09),
-    "--sidebar": dark ? "#282828" : "#f6f6f6",
-    "--foreground": dark ? "#ededed" : "#272727",
+    "--accent": compositeHex(seed, dark ? 0.16 : 0.09, paper),
+    "--sidebar": under,
+    "--foreground": foreground,
     // Paper's opaque secondary tier. Navigation glass solves its own ink pair.
-    "--muted-foreground": dark ? "#bdbdbd" : "#555555",
+    "--muted-foreground": secondaryHex,
     "--sidebar-foreground": dark ? "#ededed" : "#272727",
-    "--border": dark ? "#424242" : "#dfdfdf",
-    "--border-strong": dark ? "#5c5c5c" : "#bcbcbc",
-    "--sidebar-border": dark ? "#424242" : "#dfdfdf",
+    "--border": neutral(dark ? "#424242" : "#d2d2d2"),
+    "--border-strong": neutral(dark ? "#5c5c5c" : "#afafaf"),
+    "--sidebar-border": neutral(dark ? "#424242" : "#d2d2d2"),
     ...accent,
     "--primary-text": ink,
-    "--ring": ink,
+    // The paper-side ring. The app paints deriveCanvasPaint's ring, solved once
+    // from this same ink against these backings plus navigation glass.
+    "--ring": focusRing(ink, readingPools, resolved),
     ...solveStatusTokens(paper),
   };
-}
-
-/** sRGB compositing is also how CSS color-mix(in srgb, …) paints these fills. */
-function tint(foreground: string, background: string, alpha: number): string {
-  const channels = [1, 3, 5].map((at) =>
-    Math.round(
-      parseInt(foreground.slice(at, at + 2), 16) * alpha +
-        parseInt(background.slice(at, at + 2), 16) * (1 - alpha),
-    )
-      .toString(16)
-      .padStart(2, "0"),
-  );
-  return `#${channels.join("")}`;
 }
 
 /** The micro-label tier sits between body and secondary, never below secondary. */

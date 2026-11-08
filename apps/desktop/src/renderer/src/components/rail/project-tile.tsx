@@ -156,7 +156,7 @@ export function ProjectTile({ project, index, dimmed, presentation = "rail" }: P
                   )}
                   <span
                     aria-hidden
-                    className="pointer-events-none absolute inset-0 rounded-control bg-foreground/10 opacity-0 group-hover/tile:opacity-100"
+                    className="pointer-events-none absolute inset-0 rounded-control bg-wash-ink/10 opacity-0 group-hover/tile:opacity-100"
                   />
                 </button>
               </TooltipTrigger>
@@ -173,7 +173,7 @@ export function ProjectTile({ project, index, dimmed, presentation = "rail" }: P
               {remoteHost === null ? null : (
                 <div className="text-background/70">On {remoteHost.name}</div>
               )}
-              <div className="mt-2 flex items-start gap-2 rounded-control border border-background/30 px-2 py-1">
+              <div className="mt-2 flex items-start gap-2 rounded-control border border-border/30 px-2 py-1">
                 <FolderOpenIcon aria-hidden className="mt-1 size-4 shrink-0" />
                 <span className="min-w-0 font-mono [overflow-wrap:anywhere]">{project.path}</span>
               </div>

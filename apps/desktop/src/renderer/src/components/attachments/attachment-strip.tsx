@@ -127,7 +127,7 @@ export function AttachmentThumb({
   return (
     <div
       className={cn(
-        "group relative flex min-h-20 w-56 max-w-full min-w-0 items-center gap-2 rounded-card border border-border bg-card p-2",
+        "group relative flex min-h-20 w-56 max-w-full min-w-0 items-center gap-2 rounded-card border border-border bg-(--card-face) p-2",
         className,
       )}
       title={`${attachment.originalName} · ${metadata}${attachment.state ? ` · ${stateLabels[attachment.state]}` : ""}`}
@@ -194,7 +194,7 @@ export function AttachmentThumbRow({
           <span
             key={attachment.linkId ?? attachment.blobHash}
             title={`${attachment.originalName} · ${detail(attachment)} · ${stateLabels[state]}`}
-            className="flex w-56 min-w-0 items-center gap-2 rounded-control border border-border bg-card p-2"
+            className="flex w-56 min-w-0 items-center gap-2 rounded-control border border-border bg-(--card-face) p-2"
           >
             {thumbKind(attachment.mime) === "image" && state === "queued" ? (
               <AttachmentImage
