@@ -906,6 +906,7 @@ export default defineConfig(({ mode, command }) => ({
         // web_fetch's HTML extraction (jsdom → Readability → Turndown), so a
         // large page is parsed off the thread that serves the app.
         "web-extract-worker": "src/main/web-extract-worker.ts",
+        "usage-report-worker": "src/main/usage-report-worker.ts",
       },
       format: "cjs",
       outDir: "dist-electron",
