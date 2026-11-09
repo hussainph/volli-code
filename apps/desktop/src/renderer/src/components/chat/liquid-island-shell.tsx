@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { middleTruncatePayload, type TurnActivity } from "@renderer/chat/turn-activity";
 import type { IslandFlash } from "@volli/session-presentation";
 import { liquidIslandGeometry } from "./liquid-island-geometry";
+import { GLASS_MOTION } from "@renderer/lib/glass-motion";
 import "./liquid-island.css";
 
 /** The approved lively material: k=130, damping ratio=.66, unit mass. */
@@ -219,13 +220,13 @@ export function LiquidIslandShell({
     });
     root.current?.prepend(ghost);
     const animation = ghost.animate?.([{ opacity: 1 }, { opacity: 0 }], {
-      duration: 200,
+      duration: GLASS_MOTION.menuIn,
       fill: "forwards",
     });
     if (animation) animation.onfinish = () => ghost.remove();
     else ghost.remove();
     const arrivals = [svg.current, clusters.current, label.current].map((node) =>
-      node?.animate?.([{ opacity: 0 }, { opacity: 1 }], { duration: 200 }),
+      node?.animate?.([{ opacity: 0 }, { opacity: 1 }], { duration: GLASS_MOTION.menuIn }),
     );
     return () => {
       animation?.cancel();
@@ -423,6 +424,7 @@ export function LiquidIslandShell({
         <defs>
           <mask
             id={maskId}
+            style={{ maskType: "luminance" }}
             maskUnits="userSpaceOnUse"
             x="-1000"
             y="-500"
@@ -434,6 +436,7 @@ export function LiquidIslandShell({
           </mask>
           <mask
             id={`${maskId}-drop`}
+            style={{ maskType: "luminance" }}
             maskUnits="userSpaceOnUse"
             x="-1000"
             y="-500"
@@ -492,7 +495,9 @@ export function LiquidIslandShell({
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              transition={{ duration: reduce ? 0.1 : 0.12 }}
+              transition={{
+                duration: reduce ? GLASS_MOTION.menuOutSeconds : GLASS_MOTION.inspectorLabelSeconds,
+              }}
             >
               {words(false)}
             </motion.span>

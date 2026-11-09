@@ -290,6 +290,7 @@ Do not add entrances to them because a pointer path happens to animate.
 | Pane peek entrance / exit | `GLASS_MOTION.peekIn` / `peekOut` | 170 / 110ms; short translation and opacity |
 | Pointer ticket-group disclosure | `GLASS_MOTION.disclosureIn` / `disclosureOut` | 200 / 160ms; sole disclosure-height exception |
 | Pointer press | `--duration-press`, `--press-scale` | 120ms, .97 |
+| Activity verb life-sign | `--duration-activity-shimmer`, `--ease-linear` | 1800ms, linear; static with motion off |
 
 The spring tokens are sampled CSS `linear()` curves, not instructions to invent another JS
 spring. Segmented's pointer thumb uses snappy; keyboard changes are immediate. Anchored
@@ -356,6 +357,9 @@ With neither clusters nor a turn, there is no island.
 
 The shell is a drawn union in `--card`, outlined in `--border`, with a shadow
 from the generated shadow hue. No blur/threshold material or blurred text.
+Binary white/black fills on direct `rect`/`path` children of an explicitly
+luminance-typed SVG mask encode coverage, not theme paint. Never replace those
+0/1 values with canvas ink; other raw fills remain disallowed.
 The lively spring is stiffness 130, damping ratio .66. Done drains the bead with
 a small gulp; abort draws a .55s syrup thread, snaps, then pops. Alone, done
 fades to .85 scale; abort fades faster with a 4px drop. Reduced motion resizes

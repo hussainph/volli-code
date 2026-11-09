@@ -2409,6 +2409,9 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   --duration-menu-out: 110ms;
   --duration-sheet: 220ms;
   --duration-press: 120ms;
+  /* Activity life-sign cadence, distinct from navigation/entrance clocks. */
+  --duration-activity-shimmer: 1800ms;
+  --ease-linear: linear;
   --press-scale: 0.97;
   --glass-blur: 5.7px;
   --shadow-glass: 0 4px 14px rgb(0 0 0 / 0.1), 0 0 0.5px rgb(0 0 0 / 0.1);
@@ -2759,6 +2762,7 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   --duration-menu-out: 0ms;
   --duration-sheet: 0ms;
   --duration-press: 0ms;
+  --duration-activity-shimmer: 0ms;
   --press-scale: 1;
 }
 :root[data-motion="off"] *,
@@ -2776,6 +2780,7 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
     --duration-menu-out: 0ms;
     --duration-sheet: 0ms;
     --duration-press: 0ms;
+    --duration-activity-shimmer: 0ms;
     --press-scale: 1;
   }
 }

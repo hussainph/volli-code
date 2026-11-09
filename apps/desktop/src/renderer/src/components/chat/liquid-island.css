@@ -69,7 +69,7 @@
   background-size: 250% 100%;
   background-clip: text;
   color: transparent;
-  animation: liquid-island-shimmer 1.8s linear infinite;
+  animation: liquid-island-shimmer var(--duration-activity-shimmer) var(--ease-linear) infinite;
 }
 @keyframes liquid-island-shimmer {
   from {

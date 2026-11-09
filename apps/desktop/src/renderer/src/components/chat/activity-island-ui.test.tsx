@@ -31,6 +31,7 @@ import { ActivityIsland } from "./activity-island-ui";
 import { selectTurnActivity, type TurnActivity } from "@renderer/chat/turn-activity";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import type { ModelCatalogue } from "@renderer/lib/use-model-catalogue";
+import { GLASS_MOTION } from "@renderer/lib/glass-motion";
 
 const heldCatalogue = vi.hoisted(() => ({ value: null as ModelCatalogue | null }));
 vi.mock("@renderer/lib/use-model-catalogue", () => ({
@@ -289,6 +290,17 @@ describe("the hanging turn", () => {
     expect(container?.textContent).not.toContain("Working");
   });
 
+  it("uses explicit binary luminance masks, not theme-dependent colour ink", async () => {
+    await render(EMPTY_ACTIVITY_ISLAND, actionsSpy(), FEEL, thinking);
+    const masks = container?.querySelectorAll<SVGMaskElement>("mask");
+    expect(masks).toHaveLength(2);
+    for (const mask of masks ?? []) {
+      expect(mask.style.maskType).toBe("luminance");
+      expect(mask.querySelector("rect")?.getAttribute("fill")).toBe("white");
+      expect(mask.querySelector("path")?.getAttribute("fill")).toBe("black");
+    }
+  });
+
   it("keeps one shell as clusters arrive and empty without replacing the turn status", async () => {
     await render(EMPTY_ACTIVITY_ISLAND, actionsSpy(), FEEL, thinking);
     const material = container?.querySelector("[data-liquid-island]");
@@ -353,10 +365,11 @@ describe("the hanging turn", () => {
 
   it("crossfades the outgoing controls too, even after React removes their cluster", async () => {
     const original = Object.getOwnPropertyDescriptor(Element.prototype, "animate");
-    Object.defineProperty(Element.prototype, "animate", {
-      configurable: true,
-      value: () => ({ cancel() {}, onfinish: null }),
-    });
+    const animate = vi.fn((_keyframes: Keyframe[], _options: KeyframeAnimationOptions) => ({
+      cancel() {},
+      onfinish: null,
+    }));
+    Object.defineProperty(Element.prototype, "animate", { configurable: true, value: animate });
     try {
       await render({ ...EMPTY_ACTIVITY_ISLAND, tabs: [tab()] }, actionsSpy(), FEEL, thinking);
       await render(EMPTY_ACTIVITY_ISLAND, actionsSpy(), FEEL, thinking);
@@ -364,6 +377,9 @@ describe("the hanging turn", () => {
       expect(ghost?.querySelector('[data-island-cluster="tabs"]')).not.toBeNull();
       expect(ghost?.getAttribute("aria-hidden")).toBe("true");
       expect((ghost as HTMLElement).inert).toBe(true);
+      expect(
+        animate.mock.calls.some(([, options]) => options.duration === GLASS_MOTION.menuIn),
+      ).toBe(true);
     } finally {
       if (original) Object.defineProperty(Element.prototype, "animate", original);
       else Reflect.deleteProperty(Element.prototype, "animate");

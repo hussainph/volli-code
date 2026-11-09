@@ -125,12 +125,13 @@ import { StatusDot } from "@renderer/components/ui/status-dot";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 import { cn } from "@renderer/lib/utils";
+import { GLASS_MOTION } from "@renderer/lib/glass-motion";
 import type { TurnActivity } from "@renderer/chat/turn-activity";
 import { LiquidIslandShell, LIQUID_SPRING, useLingeringTurn } from "./liquid-island-shell";
 
 /* ------------------------------------------------------------------ motion */
 
-const EASE_OUT = [0.23, 1, 0.32, 1] as const;
+const EASE_OUT = GLASS_MOTION.easeOut;
 
 /* ------------------------------------------------------------------- tone */
 
@@ -161,7 +162,9 @@ function islandTone(id: string): string {
 
 /** The pill's one spring — reduced motion collapses it to a fast fade-scale. */
 function islandSpring(reduce: boolean) {
-  return reduce ? ({ duration: 0.15, ease: EASE_OUT } as const) : LIQUID_SPRING;
+  return reduce
+    ? ({ duration: GLASS_MOTION.menuInSeconds, ease: EASE_OUT } as const)
+    : LIQUID_SPRING;
 }
 
 /**
@@ -1404,7 +1407,9 @@ export function ActivityIsland({
                       ? { opacity: 0 }
                       : { opacity: 0, transform: "translateY(8px) scale(0.97)" }
                   }
-                  transition={reduce ? { duration: 0.15, ease: EASE_OUT } : spring}
+                  transition={
+                    reduce ? { duration: GLASS_MOTION.menuInSeconds, ease: EASE_OUT } : spring
+                  }
                   // A GROUP, not a live region. `role="status"` here made the
                   // whole pill an assertive-ish announcement, so every tab
                   // count, every percent tick and every plan step re-read the
@@ -1467,7 +1472,9 @@ export function ActivityIsland({
                             reduce ? { opacity: 0 } : { opacity: 0, y: -7, filter: "blur(4px)" }
                           }
                           transition={
-                            reduce ? { duration: 0.1 } : { duration: 0.18, ease: EASE_OUT }
+                            reduce
+                              ? { duration: GLASS_MOTION.menuOutSeconds }
+                              : { duration: GLASS_MOTION.menuInSeconds, ease: EASE_OUT }
                           }
                           className="flex max-w-56 items-center text-ui"
                         >

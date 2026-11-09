@@ -47,18 +47,41 @@ const RADIUS_UTILITY = new RegExp(
   `^rounded(?:-(?:t|r|b|l|tl|tr|br|bl|s|e|ss|se|es|ee))?-(?:${RADIUS_NAMES})$`,
 );
 
-function walk(node, visit) {
+function walk(node, visit, ancestors = []) {
   if (
     !node ||
     typeof node.type !== "string" ||
     /^(?:TSType|TSInterface|TSLiteral|TSDeclare)/.test(node.type)
   )
     return;
-  visit(node);
+  visit(node, ancestors);
+  ancestors.push(node);
   for (const value of Object.values(node)) {
-    if (Array.isArray(value)) for (const child of value) walk(child, visit);
-    else if (value && typeof value === "object") walk(value, visit);
+    if (Array.isArray(value)) for (const child of value) walk(child, visit, ancestors);
+    else if (value && typeof value === "object") walk(value, visit, ancestors);
   }
+  ancestors.pop();
+}
+
+/** Binary coverage data, not paint: only direct rect/path fills of an explicitly
+ * luminance-typed SVG mask. Theme ink cannot replace 0/1 luminance without
+ * changing the mask's geometry. Other colours and visible fills remain banned. */
+function isLuminanceMaskFill(node, ancestors) {
+  if (node.type !== "JSXAttribute" || node.name?.name !== "fill") return false;
+  const value = node.value?.expression ?? node.value;
+  if (!["white", "black"].includes(value?.value)) return false;
+  const elements = ancestors.filter((ancestor) => ancestor.type === "JSXElement");
+  const shape = elements.at(-1)?.openingElement;
+  const mask = elements.at(-2)?.openingElement;
+  if (!["rect", "path"].includes(shape?.name?.name) || mask?.name?.name !== "mask") return false;
+  if (mask.attributes.some((attribute) => attribute.type === "JSXSpreadAttribute")) return false;
+  const style = mask.attributes.find((attribute) => attribute.name?.name === "style");
+  const properties = style?.value?.expression?.properties;
+  if (!properties?.every((property) => property.type === "Property")) return false;
+  const maskType = properties.findLast(
+    (property) => (property.key?.name ?? property.key?.value) === "maskType",
+  );
+  return maskType?.value?.value === "luminance";
 }
 
 /** Strip variants without splitting arbitrary values such as [color:var(...)]. */
@@ -187,7 +210,7 @@ export function inspectGlass(path, source) {
     }
   } else {
     const ast = parseAst(source, { lang: path.endsWith("tsx") ? "tsx" : "ts" }, path);
-    walk(ast, (node) => {
+    walk(ast, (node, ancestors) => {
       if (node.type === "Literal" && typeof node.value === "string" && !shapeValues.has(node.start))
         checkString(node.value, node.start);
       if (node.type === "TemplateElement")
@@ -228,7 +251,8 @@ export function inspectGlass(path, source) {
         const value = node.value?.expression ?? node.value;
         if (
           /^(?:color|background|backgroundColor|borderColor|fill|stroke)$/.test(key) &&
-          /^(?:white|black|red|blue|green|orange|purple|gray|grey)$/.test(value?.value)
+          /^(?:white|black|red|blue|green|orange|purple|gray|grey)$/.test(value?.value) &&
+          !isLuminanceMaskFill(node, ancestors)
         )
           add("colour-literal", node.start, source.slice(node.start, node.end));
         if (key === "weight" && source.slice(value?.start, value?.end).includes("duotone"))
