@@ -223,7 +223,7 @@ if (!args.includes("--encode")) {
         "-c:v",
         "libvpx-vp9",
         "-crf",
-        "36",
+        name === "loop" ? "40" : "36",
         "-b:v",
         "0",
         "-row-mt",
