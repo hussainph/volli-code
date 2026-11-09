@@ -14,8 +14,12 @@ import { providerMark } from "@renderer/components/models/model-identity";
 import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
-import { EMPTY_SESSION_USAGE_SUMMARY, type ChatSessionRecord } from "@volli/shared";
-import { seedSlice, type SessionPresentationProjection } from "@volli/session-presentation";
+import {
+  EMPTY_SESSION_USAGE_SUMMARY,
+  type ChatSessionRecord,
+  type SessionPresentationProjection,
+} from "@volli/shared";
+import { seedSlice } from "@volli/session-presentation";
 import { ChatIcon } from "@renderer/components/ui/icon";
 import { Tab, TabStrip } from "@renderer/components/ui/tab-strip";
 import { GroupedTabList, groupTabItems, type TabGroup } from "./grouped-tab-chip";
@@ -422,14 +426,16 @@ function savedChat(providerId: string | null): ChatSessionRecord {
     bornTicketless: true,
     role: "project",
     parentSessionId: null,
-    model: providerId === null ? null : { providerId, modelId: "test", reasoningLevel: null },
+    model: providerId === null ? null : { providerId, modelId: "test", reasoningLevel: "off" },
   };
 }
 
 function saveProvider(providerId: string | null) {
   const record = savedChat(providerId);
   act(() => {
-    useProjectSessionsStore.setState({ byProject: { project: { terminal: [], chat: [record] } } });
+    useProjectSessionsStore.setState({
+      byProject: { project: { terminal: [], chat: [record], provenance: {} } },
+    });
     useTicketSessionRecordsStore.setState({
       byTicket: {
         ticket: [
@@ -437,6 +443,7 @@ function saveProvider(providerId: string | null) {
             kind: "chat",
             record: { ...record, ticketId: "ticket" },
             usage: EMPTY_SESSION_USAGE_SUMMARY,
+            provenance: { kind: "user" },
           },
         ],
       },
@@ -537,7 +544,7 @@ describe.each(["Home", "Ticket"] as const)("%s grouped chat artwork", (surface) 
       interactions: { active: [], resolved: [] },
       signal: null,
       modelTier: null,
-      modelSelection: { providerId: "google", modelId: "test", reasoningLevel: null },
+      modelSelection: { providerId: "google", modelId: "test", reasoningLevel: "off" },
       turnActive: false,
       lastActivityAt: 1,
       bornTicketless: true,

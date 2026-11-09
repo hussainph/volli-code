@@ -293,11 +293,11 @@ describe("HomeRail", () => {
         bornTicketless: true,
         role: "project",
         parentSessionId: null,
-        model: providerId === null ? null : { providerId, modelId: "test", reasoningLevel: null },
+        model: providerId === null ? null : { providerId, modelId: "test", reasoningLevel: "off" },
       };
       useProjectSessionsStore.getInitialState().listingState = { p1: "loaded" };
       useProjectSessionsStore.getInitialState().byProject = {
-        p1: { terminal: [], chat: [record] },
+        p1: { terminal: [], chat: [record], provenance: {} },
       };
       const html = draw(HOME_BOARD_TAB_ID);
       const row = new DOMParser()
