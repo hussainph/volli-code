@@ -27,6 +27,12 @@ import {
 
 import { ActivityIsland } from "./activity-island-ui";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
+import type { ModelCatalogue } from "@renderer/lib/use-model-catalogue";
+
+const heldCatalogue = vi.hoisted(() => ({ value: null as ModelCatalogue | null }));
+vi.mock("@renderer/lib/use-model-catalogue", () => ({
+  useModelCatalogue: () => heldCatalogue.value,
+}));
 
 let root: Root | null = null;
 let container: HTMLElement | null = null;
@@ -172,6 +178,7 @@ function unhover(target: Element, to: Element | null = null): void {
 }
 
 beforeEach(() => {
+  heldCatalogue.value = null;
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   // jsdom ships no `matchMedia`; the island reads it through use-reduced-motion.
   vi.stubGlobal("matchMedia", (query: string) => ({
@@ -194,6 +201,28 @@ afterEach(async () => {
   container = null;
   vi.unstubAllGlobals();
   vi.useRealTimers();
+});
+
+it("gives a long plan one bounded row scrollport, not a second scrolling popover", async () => {
+  const steps = Array.from({ length: 60 }, (_, i) => ({
+    id: `step-${i}`,
+    title: `${i}: ${"Long plan title / 日本語 / مرحبا ".repeat(4)}`,
+    state: "pending" as const,
+  }));
+  await render({ ...EMPTY_ACTIVITY_ISLAND, plan: { id: "long-plan", steps, done: 0 } });
+  click(cluster("plan"));
+  const panel = card("plan")!;
+  const body = panel.querySelector<HTMLElement>('[data-slot="popover-body"]')!;
+  expect(panel.classList.contains("flex-col")).toBe(true);
+  expect(body.classList.contains("overflow-hidden")).toBe(true);
+  expect(body.classList.contains("overflow-y-auto")).toBe(false);
+  expect(body.className).toContain("available-height)-0.5rem");
+  const rows = panel.querySelector<HTMLElement>("[data-island-rows]")!;
+  expect(rows.classList.contains("overflow-y-auto")).toBe(true);
+  expect(rows.classList.contains("min-h-0")).toBe(true);
+  expect(panel.querySelectorAll("[data-island-row]")).toHaveLength(60);
+  expect(rowIn("plan", "step-59").textContent).toContain("59:");
+  expect(panel.querySelector("h3")?.parentElement?.classList.contains("shrink-0")).toBe(true);
 });
 
 describe("the empty rule", () => {
@@ -934,6 +963,94 @@ describe("responsive card width", () => {
     click(cluster("agents"));
 
     expect(card("agents")?.style.width).toBe("320px");
+  });
+
+  it("keeps long provider names out of the narrow subagents panel, but disambiguates its marks on long hover and row focus", async () => {
+    vi.useFakeTimers();
+    stubMeasurement(300);
+    const providers = [
+      { id: "cloudflare-workers-ai", label: "Cloudflare Workers AI" },
+      { id: "cloudflare-ai-gateway", label: "Cloudflare AI Gateway" },
+      { id: "qwen-token-plan-individual", label: "Qwen Token Plan Individual" },
+    ];
+    heldCatalogue.value = {
+      providers: providers.map((provider) => ({
+        ...provider,
+        state: "available",
+        accountLabel: null,
+        billingSource: "unknown",
+        recovery: null,
+        signIn: [],
+        hasStoredCredential: true,
+      })),
+      models: providers.map((provider) => ({
+        providerId: provider.id,
+        modelId: "qwen3-coder",
+        label: "Qwen3 Coder",
+        state: "available",
+        reasoningLevels: ["high"],
+        acceptsImageInput: false,
+      })),
+    };
+    await render({
+      ...EMPTY_ACTIVITY_ISLAND,
+      agents: providers.map((provider, index) =>
+        agent({
+          id: `long-provider-${index}`,
+          label: `Review ${index}`,
+          model: { providerId: provider.id, modelId: "qwen3-coder", reasoningLevel: "high" },
+        }),
+      ),
+    });
+    click(cluster("agents"));
+    await act(async () => {
+      vi.advanceTimersByTime(0);
+    });
+    // Width is a production measurement-path assertion, not jsdom pixel proof.
+    // Live light/dark checks still have to prove the actual 320px panel layout.
+    expect(card("agents")?.style.width).toBe("320px");
+    for (const [index, provider] of providers.entries()) {
+      const policy = rowIn("agents", `long-provider-${index}`).querySelector("[data-agent-model]")!;
+      expect(policy.textContent).toContain("Qwen3 Coder");
+      expect(policy.textContent).toContain("High");
+      expect(policy.textContent).not.toContain(provider.label);
+      expect(policy.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(provider.label);
+      expect(policy.querySelector("[tabindex]")).toBeNull();
+    }
+    // These first two providers deliberately share the exact Cloudflare mark
+    // and model name. Their help tags, not persistent provider text, differ.
+    const first = rowIn("agents", "long-provider-0");
+    const mark = first.querySelector<HTMLElement>('[data-slot="help-tag"]')!;
+    act(() => {
+      (document.activeElement as HTMLElement | null)?.blur();
+    });
+    act(() =>
+      mark.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerType: "mouse" })),
+    );
+    await act(async () => {
+      vi.advanceTimersByTime(1499);
+    });
+    expect(
+      document.body.querySelector('[data-slot="tooltip-content"]')?.textContent ?? "",
+    ).not.toContain(providers[0]!.label);
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(document.body.querySelector('[data-slot="tooltip-content"]')?.textContent).toBe(
+      "Qwen3 Coder · Cloudflare Workers AI",
+    );
+    act(() =>
+      mark.dispatchEvent(
+        new PointerEvent("pointerout", { bubbles: true, relatedTarget: document.body }),
+      ),
+    );
+    expect(document.body.querySelector('[data-slot="tooltip-content"]')).toBeNull();
+    const second = rowIn("agents", "long-provider-1");
+    act(() => second.focus());
+    expect(document.body.querySelector('[data-slot="tooltip-content"]')?.textContent).toBe(
+      "Qwen3 Coder · Cloudflare AI Gateway",
+    );
+    expect(card("agents")?.textContent).not.toContain("Cloudflare AI Gateway");
   });
 
   it("keeps the fallback widths where there is nothing to measure with", async () => {

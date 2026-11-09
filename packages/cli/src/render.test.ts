@@ -3327,6 +3327,74 @@ describe("volli perf rendering (VC-1092)", () => {
     ).toContain("Δ +12 ms/h");
   });
 
+  it("shows LoAF totals, per-hour rates and independent measurement coverage", () => {
+    const loaf = {
+      script: { measuredFrames: 0, totalMs: null, msPerHour: null },
+      blocking: { measuredFrames: 2, totalMs: 0, msPerHour: 0 },
+      render: { measuredFrames: 2, totalMs: 180, msPerHour: 90 },
+      styleLayout: { measuredFrames: 1, totalMs: 60, msPerHour: 30 },
+    };
+    const answer = { ...top, loaf };
+    const text = renderCliSuccess("perf.top", answer, { json: false });
+    expect(text).toContain("LoAF script (attributed)  unknown  -  measured 0 frames");
+    expect(text).toContain("LoAF blocking  0 ms  0 ms/h  measured 2 frames");
+    expect(text).toContain("LoAF render (inclusive)  180 ms  90 ms/h  measured 2 frames");
+    expect(text).toContain("LoAF style/layout (render subset)  60 ms  30 ms/h  measured 1 frames");
+    expect(JSON.parse(renderCliSuccess("perf.top", answer, { json: true }))).toEqual(answer);
+    const compare = {
+      a: perfCompareSide("old"),
+      b: { ...perfCompareSide("new"), loaf },
+      groups: [],
+      groupCount: 0,
+    };
+    const compared = renderCliSuccess("perf.compare", compare, { json: false });
+    expect(compared).not.toContain("a LoAF");
+    expect(compared).toContain("b LoAF script (attributed)  unknown");
+    expect(compared).toContain("b LoAF render (inclusive)  180 ms  90 ms/h");
+    expect(JSON.parse(renderCliSuccess("perf.compare", compare, { json: true }))).toEqual(compare);
+    const partial = renderCliSuccess("perf.top", { ...top, loaf: {} }, { json: false });
+    expect(partial).toContain("LoAF script (attributed)  unknown");
+    expect(renderCliSuccess("perf.compare", { ...compare, b: null }, { json: false })).toContain(
+      "b  -",
+    );
+  });
+
+  it("renders optional stall metrics and top script safely, without filling absent values", () => {
+    const row = {
+      at: Date.UTC(2026, 10, 1, 10),
+      process: "renderer",
+      kind: "frame",
+      door: "renderer",
+      operation: "long-animation-frame",
+      durationMs: 240,
+      version: "0.3.0",
+      scriptTotalMs: 0,
+      blockingMs: 0,
+      renderMs: 80,
+      styleLayoutMs: 60,
+      scriptFile: "index.js",
+      scriptFunction: "flushWork\u001b[2J",
+      scriptInvoker: "user-callback",
+      scriptMs: 0,
+    };
+    const answer = { stalls: [row] };
+    const text = renderCliSuccess("perf.stalls", answer, { json: false });
+    expect(text).toContain(
+      "script (attributed) 0 ms  blocking 0 ms  render (inclusive) 80 ms  style/layout (render subset) 60 ms",
+    );
+    expect(text).toContain(
+      "top script 0 ms  file index.js  function flushWork\\x1b[2J  invoker user-callback",
+    );
+    expect(text).not.toContain("\u001b");
+    expect(JSON.parse(renderCliSuccess("perf.stalls", answer, { json: true }))).toEqual(answer);
+    const unknown = renderCliSuccess(
+      "perf.stalls",
+      { stalls: [{ ...row, scriptTotalMs: undefined }] },
+      { json: false },
+    );
+    expect(unknown).not.toContain("script (attributed)");
+  });
+
   it("falls back to the generic rendering for a shape it does not know", () => {
     for (const command of ["perf.top", "perf.stalls", "perf.compare"]) {
       expect(() => renderCliSuccess(command, { unexpected: true }, { json: false })).not.toThrow();

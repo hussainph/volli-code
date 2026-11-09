@@ -29,6 +29,7 @@ import {
   createWebSearch,
   searxngWebSearchProvider,
   type WebExtractor,
+  type ReadSourceIconCandidate,
   type WebSearchProvider,
 } from "@volli/agent-runtime";
 import type { SessionRuntimeSpec } from "@volli/shared";
@@ -75,13 +76,37 @@ export function webSearchProviderFor(access: ResolvedWebAccess): WebSearchProvid
  * extractor, so a large page is parsed off the thread the host serves from.
  * Absent, it is parsed on that thread.
  */
-export function webPortsFor(access: ResolvedWebAccess, extract?: WebExtractor): SessionWebPorts {
+export function webPortsFor(
+  access: ResolvedWebAccess,
+  extract?: WebExtractor,
+  beginSourceIconRead?: () =>
+    | ((candidate: ReadSourceIconCandidate, signal: AbortSignal) => void)
+    | undefined,
+): SessionWebPorts {
   const provider = webSearchProviderFor(access);
   if (provider === null) return {};
-  const fetcher = createSafeWebFetch(extract === undefined ? {} : { extract });
+  const fetcher =
+    beginSourceIconRead === undefined
+      ? createSafeWebFetch(extract === undefined ? {} : { extract })
+      : undefined;
   const search = createWebSearch({ provider });
   return {
-    webFetch: (input) => fetcher.fetch(input),
+    webFetch: (input) => {
+      if (fetcher !== undefined) return fetcher.fetch(input);
+      // Capture the decoration grant for EACH initiating read, synchronously
+      // before DNS, transport or extraction can yield. It is not attachment state.
+      let onSourceIcon: ReturnType<NonNullable<typeof beginSourceIconRead>>;
+      try {
+        onSourceIcon = beginSourceIconRead?.();
+      } catch {
+        /* Optional decoration. */
+      }
+      const reader = createSafeWebFetch({
+        ...(extract === undefined ? {} : { extract }),
+        ...(onSourceIcon === undefined ? {} : { onSourceIcon }),
+      });
+      return reader.fetch(input);
+    },
     webSearch: (input) => search.search(input),
   };
 }

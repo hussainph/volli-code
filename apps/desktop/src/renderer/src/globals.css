@@ -41,7 +41,15 @@
 
   .prompt-add {
     border: 1px solid var(--border-strong);
-    background-color: var(--card);
+    background-color: var(--card-face);
+  }
+
+  /* A draft file is an object on the chat writing rail, not another footer
+   * action. Keep this face local to chat; ticket capture owns its own layout.
+   * Component-layer paint lets the shared button's hover/focus states win. */
+  .session-prompt [data-slot="composer-attachments"] > button {
+    border: 1px solid var(--border);
+    background-color: var(--card-face);
   }
 
   .prompt-primary {
@@ -213,25 +221,25 @@
 :root.dark {
   color-scheme: dark;
   /* Two-tier sidebar depth: rail darkest, panel between rail and content. */
-  --rail: #282828;
+  --rail: #34241e;
   --background: #1e1e1e;
   --card: #1e1e1e;
-  --popover: #282828;
-  --muted: #282828;
+  --popover: #34241e;
+  --muted: #34241e;
   --accent: #3e2920;
-  --sidebar: #282828;
+  --sidebar: #34241e;
   --foreground: #ededed;
-  --muted-foreground: #bdbdbd;
+  --muted-foreground: #ead5cc;
   --sidebar-foreground: #ededed;
-  --border: #424242;
-  --border-strong: #5c5c5c;
-  --sidebar-border: #424242;
+  --border: #4f3e37;
+  --border-strong: #6a5750;
+  --sidebar-border: #4f3e37;
   /* The canvas accent fill and label solved together for APCA Lc 60 AND
    WCAG AA 4.5:1. Vibrancy still supplies hue/chroma; lightness yields
    to legibility. The pair is shared by both appearances. */
   --primary: #cd4d00;
   --primary-foreground: #ffffff;
-  /* The accent solved to APCA Lc 60 on the card for body-sized accent text. */
+  /* Accent ink solved against the stronger selected paper tint for body-sized text. */
   --primary-text: #ffc8b2;
   /* Opaque surface-legible accent ink, re-solved in each appearance. Do not
    dilute focus indicators: the shipped control surfaces require 3:1. */
@@ -240,9 +248,9 @@
    and gone by convention, so their HUE never follows the canvas — a red
    canvas would otherwise make “delete” indistinguishable from “primary”.
    Everything else about them is solved against the card at APCA Lc 65, so
-   all four read at one weight in either appearance, and each label is
-   whichever of white or a near-black tint of its own hue wins on the fill
-   — which is why they flip polarity between the two blocks. */
+   all four read at one weight in either appearance. Labels prefer the
+   perceptual white/near-black pair, falling back to a neutral ink pole
+   where needed to retain small-text WCAG AA without moving the fill. */
   --destructive: #ffa5a0;
   --destructive-foreground: #290b0b;
   --positive: #29d597;
@@ -257,10 +265,10 @@
    rail, so plain transparency would darken it. Each veil is the color that,
    at 10% over the surface named beside it, composites to the opaque token
    above byte-exactly. */
-  --sidebar-veil: rgb(40 40 40 / 0.1);
-  --sidebar-accent-veil: rgb(255 50 0 / 0.1);
+  --sidebar-veil: rgb(52 36 30 / 0.1);
+  --sidebar-accent-veil: rgb(152 86 50 / 0.1);
   --sidebar-border-veil: rgb(255 255 255 / 0.1);
-  /* THE CANVAS ITSELF, and the ten values derived alongside it
+  /* THE CANVAS ITSELF, and the values derived alongside it
    (`CANVAS_TOKEN_NAMES`, renderer/src/theme/canvas-paint.ts). The gradient
    is a `background` value, grain layer included, so the window can paint
    itself before any JS runs. */
@@ -296,7 +304,7 @@
   --lift-1: transparent;
   --lift-2: rgb(251 241 237 / 0.03);
   /* The card's micro-label tier, between body and secondary. */
-  --label-ink: #cecece;
+  --label-ink: #e0e0e0;
   /* The three shadow tiers: raised on a surface, the card, and overlays. */
   --shadow-raised: 0 1px 2px 0px rgb(2 0 0 / 0.09), 0 2px 7px -1px rgb(2 0 0 / 0.135);
   --shadow-card: 0 1px 3px 0px rgb(2 0 0 / 0.075), 0 10px 30px -6px rgb(2 0 0 / 0.18);
@@ -310,8 +318,8 @@
   --flow: linear-gradient(120deg, #e8652a, #e0457b, #f3a33c);
   --accent-tint: color-mix(in srgb, #e8652a 10%, #1e1e1e);
   --accent-selected: color-mix(in srgb, #e8652a 18%, #1e1e1e);
-  --tertiary-foreground: #aaaaaa;
-  --glass-fill: #282828;
+  --tertiary-foreground: #c3aea5;
+  --glass-fill: #34241e;
   --glass-edge: rgb(0 0 0 / 0.6);
   --canvas-mesh:
     radial-gradient(
@@ -329,9 +337,9 @@
       color-mix(in oklab, #f3a33c 58%, transparent),
       transparent 74%
     );
-  --glass-veil: rgb(40 40 42 / 0.56);
+  --glass-veil: rgb(52 36 30 / 0.56);
   --glass-pane-veil: rgb(26 26 28 / 0.52);
-  --glass-writing-veil: rgb(40 40 42 / 0.56);
+  --glass-writing-veil: rgb(52 36 30 / 0.56);
   --glass-tone: brightness(1.56971) contrast(0.6149) brightness(0.7124) saturate(2.79074);
   --glass-rim: linear-gradient(
     180deg,
@@ -341,21 +349,38 @@
     rgb(255 255 255 / 0.21)
   );
   --glass-ink: #f5f5f5;
-  --glass-secondary: #bababa;
-  --fill-row-selected: color-mix(in oklab, #f5f5f5 9%, transparent);
-  --fill-row-hover: color-mix(in oklab, #f5f5f5 4.7%, transparent);
-  --fill-quaternary: rgb(255 255 255 / 0.027);
-  --fill-secondary: rgb(255 255 255 / 0.078);
-  --card-face: #2a2a2a;
+  --glass-secondary: #e4cfc6;
+  --fill-row-selected: color-mix(in oklab, #fff2ed 9%, transparent);
+  --fill-row-hover: color-mix(in oklab, #fff2ed 4.7%, transparent);
+  --fill-quaternary: rgb(254 232 223 / 0.027);
+  --fill-secondary: rgb(254 232 223 / 0.078);
+  /* Opaque objects on neutral paper: composite the 2.7% / 7.8% neutral rung
+   first, then tint its final face. The translucent fill tokens remain
+   separate for glass and overlays on arbitrary underlying colours. */
+  --surface-quaternary: #2f201a;
+  --surface-secondary: #3a2a24;
+  /* Tinted material paint, not text. Navigation substitutes glass-wash-ink
+   to follow its own ink polarity; bare canvas substitutes the adaptive
+   --canvas-ink. Body foreground remains neutral. */
+  --wash-ink: #fee8df;
+  --glass-wash-ink: #fff2ed;
+  --card-face: #362620;
   --card-shadow: 0 1px 2px rgb(0 0 0 / 0.35), 0 0 0 0.5px rgb(255 255 255 / 0.06);
   --paper-shadow: 0 1px 3px rgb(0 0 0 / 0.06), 0 0 0 0.5px var(--glass-edge);
-  --tab-selected-face: rgb(255 255 255 / 0.14);
-  --control-face: rgb(255 255 255 / 0.14);
+  --tab-selected-face: rgb(254 232 223 / 0.14);
+  --control-face: rgb(254 232 223 / 0.14);
+  /* Navigation outline press only: 7.8% optical shade/highlight opposite
+   the navigation ink. Paper and other control variants retain their fills. */
+  --glass-outline-pressed: rgb(0 0 0 / 0.078);
+  /* Outline/secondary buttons on floating writing glass: light keeps the opaque
+   control face and shared press; dark shades opposite the body ink. */
+  --writing-control-face: rgb(0 0 0 / 0.14);
+  --writing-control-pressed: rgb(0 0 0 / 0.078);
   --control-bezel-shadow:
     0 0.5px 1.5px rgb(0 0 0 / 0.5), 0 0 0 0.5px rgb(0 0 0 / 0.35),
     inset 0 0.5px 0 rgb(255 255 255 / 0.14);
-  --diff-added: #5cf9b8;
-  --diff-removed: #ffd6d2;
+  --diff-added: #55f3b3;
+  --diff-removed: #ffcdc9;
 }
 
 /* Later in the file at equal specificity (0,2,0) to `:root.dark` and higher
@@ -364,25 +389,25 @@
 :root.light {
   color-scheme: light;
   /* Two-tier sidebar depth: rail darkest, panel between rail and content. */
-  --rail: #f6f6f6;
+  --rail: #fde4db;
   --background: #ffffff;
   --card: #ffffff;
-  --popover: #fafafa;
-  --muted: #f6f6f6;
+  --popover: #fff9f6;
+  --muted: #fde4db;
   --accent: #fdf1ec;
-  --sidebar: #f6f6f6;
+  --sidebar: #fde4db;
   --foreground: #272727;
-  --muted-foreground: #555555;
+  --muted-foreground: #5a463f;
   --sidebar-foreground: #272727;
-  --border: #dfdfdf;
-  --border-strong: #bcbcbc;
-  --sidebar-border: #dfdfdf;
+  --border: #e4ccc3;
+  --border-strong: #c0aaa1;
+  --sidebar-border: #e4ccc3;
   /* The canvas accent fill and label solved together for APCA Lc 60 AND
    WCAG AA 4.5:1. Vibrancy still supplies hue/chroma; lightness yields
    to legibility. The pair is shared by both appearances. */
   --primary: #cd4d00;
   --primary-foreground: #ffffff;
-  /* The accent solved to APCA Lc 60 on the card for body-sized accent text. */
+  /* Accent ink solved against the stronger selected paper tint for body-sized text. */
   --primary-text: #862f00;
   /* Opaque surface-legible accent ink, re-solved in each appearance. Do not
    dilute focus indicators: the shipped control surfaces require 3:1. */
@@ -391,27 +416,27 @@
    and gone by convention, so their HUE never follows the canvas — a red
    canvas would otherwise make “delete” indistinguishable from “primary”.
    Everything else about them is solved against the card at APCA Lc 65, so
-   all four read at one weight in either appearance, and each label is
-   whichever of white or a near-black tint of its own hue wins on the fill
-   — which is why they flip polarity between the two blocks. */
+   all four read at one weight in either appearance. Labels prefer the
+   perceptual white/near-black pair, falling back to a neutral ink pole
+   where needed to retain small-text WCAG AA without moving the fill. */
   --destructive: #d85959;
-  --destructive-foreground: #ffffff;
+  --destructive-foreground: #000000;
   --positive: #009567;
-  --positive-foreground: #ffffff;
+  --positive-foreground: #000000;
   --attention: #b77400;
-  --attention-foreground: #ffffff;
+  --attention-foreground: #000000;
   --info: #008bc5;
-  --info-foreground: #ffffff;
+  --info-foreground: #000000;
   --radius: 0.75rem;
   /* Veils (#74). The canvas paints the whole window behind the chrome, so the
    sidebar cannot keep an opaque fill — but it is a LIGHTER rung than the
    rail, so plain transparency would darken it. Each veil is the color that,
    at 10% over the surface named beside it, composites to the opaque token
    above byte-exactly. */
-  --sidebar-veil: rgb(246 246 246 / 0.1);
-  --sidebar-accent-veil: rgb(255 196 146 / 0.1);
-  --sidebar-border-veil: rgb(16 16 16 / 0.1);
-  /* THE CANVAS ITSELF, and the ten values derived alongside it
+  --sidebar-veil: rgb(253 228 219 / 0.1);
+  --sidebar-accent-veil: rgb(253 255 255 / 0.1);
+  --sidebar-border-veil: rgb(3 0 0 / 0.1);
+  /* THE CANVAS ITSELF, and the values derived alongside it
    (`CANVAS_TOKEN_NAMES`, renderer/src/theme/canvas-paint.ts). The gradient
    is a `background` value, grain layer included, so the window can paint
    itself before any JS runs. */
@@ -447,7 +472,7 @@
   --lift-1: transparent;
   --lift-2: rgb(255 255 255 / 0.175);
   /* The card's micro-label tier, between body and secondary. */
-  --label-ink: #444444;
+  --label-ink: #3e3e3e;
   /* The three shadow tiers: raised on a surface, the card, and overlays. */
   --shadow-raised: 0 1px 2px 0px rgb(72 42 30 / 0.09), 0 2px 7px -1px rgb(72 42 30 / 0.135);
   --shadow-card: 0 1px 3px 0px rgb(72 42 30 / 0.075), 0 10px 30px -6px rgb(72 42 30 / 0.18);
@@ -461,8 +486,8 @@
   --flow: linear-gradient(120deg, #e8652a, #e0457b, #f3a33c);
   --accent-tint: color-mix(in srgb, #e8652a 10%, #ffffff);
   --accent-selected: color-mix(in srgb, #e8652a 18%, #ffffff);
-  --tertiary-foreground: #666666;
-  --glass-fill: #fafafa;
+  --tertiary-foreground: #746059;
+  --glass-fill: #fff9f6;
   --glass-edge: rgb(0 0 0 / 0.11);
   --canvas-mesh:
     radial-gradient(
@@ -480,9 +505,9 @@
       color-mix(in oklab, #f3a33c 62%, transparent),
       transparent 74%
     );
-  --glass-veil: rgb(255 255 255 / 0.56);
+  --glass-veil: rgb(255 249 246 / 0.56);
   --glass-pane-veil: rgb(255 255 255 / 0.46);
-  --glass-writing-veil: rgb(255 255 255 / 0.56);
+  --glass-writing-veil: rgb(255 249 246 / 0.56);
   --glass-tone: contrast(0.44174) brightness(1.44847) saturate(1.91139);
   --glass-rim: linear-gradient(
     180deg,
@@ -492,21 +517,38 @@
     rgb(255 255 255 / 0.17)
   );
   --glass-ink: #171717;
-  --glass-secondary: #5a5a5a;
-  --fill-row-selected: color-mix(in oklab, #171717 9%, transparent);
-  --fill-row-hover: color-mix(in oklab, #171717 4.7%, transparent);
-  --fill-quaternary: rgb(0 0 0 / 0.027);
-  --fill-secondary: rgb(0 0 0 / 0.078);
-  --card-face: #ffffff;
+  --glass-secondary: #645049;
+  --fill-row-selected: color-mix(in oklab, #22120c 9%, transparent);
+  --fill-row-hover: color-mix(in oklab, #22120c 4.7%, transparent);
+  --fill-quaternary: rgb(52 34 28 / 0.027);
+  --fill-secondary: rgb(52 34 28 / 0.078);
+  /* Opaque objects on neutral paper: composite the 2.7% / 7.8% neutral rung
+   first, then tint its final face. The translucent fill tokens remain
+   separate for glass and overlays on arbitrary underlying colours. */
+  --surface-quaternary: #fff7f4;
+  --surface-secondary: #ffe9e0;
+  /* Tinted material paint, not text. Navigation substitutes glass-wash-ink
+   to follow its own ink polarity; bare canvas substitutes the adaptive
+   --canvas-ink. Body foreground remains neutral. */
+  --wash-ink: #34221c;
+  --glass-wash-ink: #22120c;
+  --card-face: #fff9f6;
   --card-shadow: 0 1px 2px rgb(0 0 0 / 0.05), 0 0 0 0.5px rgb(0 0 0 / 0.07);
   --paper-shadow: 0 1px 3px rgb(0 0 0 / 0.06), 0 0 0 0.5px var(--glass-edge);
-  --tab-selected-face: #ffffff;
-  --control-face: #ffffff;
+  --tab-selected-face: #fff9f6;
+  --control-face: #fff9f6;
+  /* Navigation outline press only: 7.8% optical shade/highlight opposite
+   the navigation ink. Paper and other control variants retain their fills. */
+  --glass-outline-pressed: rgb(255 255 255 / 0.078);
+  /* Outline/secondary buttons on floating writing glass: light keeps the opaque
+   control face and shared press; dark shades opposite the body ink. */
+  --writing-control-face: #fff9f6;
+  --writing-control-pressed: rgb(52 34 28 / 0.078);
   --control-bezel-shadow:
     0 0.5px 1.5px rgb(0 0 0 / 0.16), 0 0 0 0.5px rgb(0 0 0 / 0.09),
     inset 0 0.5px 0 rgb(255 255 255 / 1);
-  --diff-added: #002c1c;
-  --diff-removed: #4a0009;
+  --diff-added: #005639;
+  --diff-removed: #941522;
 }
 /* GENERATED THEME TOKENS — END */
 
@@ -521,6 +563,7 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-wash-ink: var(--wash-ink);
   --color-card: var(--card);
   --color-popover: var(--popover);
   --color-primary: var(--primary);
@@ -820,7 +863,7 @@
 
 @layer components {
   .control-material {
-    --control-fill: var(--card);
+    --control-fill: var(--card-face);
   }
   @container not style(--control-sheen: 0%) {
     .control-material {
@@ -974,6 +1017,9 @@
 .app-region-drag {
   --foreground: var(--canvas-ink);
   --muted-foreground: var(--canvas-ink-muted);
+  /* Bare-canvas washes follow the already hue-tinted adaptive ink, not the
+     paper pole. Navigation glass overrides this in its own material scope. */
+  --wash-ink: var(--canvas-ink);
   /* The furniture rung — see the ladder below. Set here rather than there
      because it is the DEFAULT everything on the canvas inherits; those rules
      are the exceptions to it. */
@@ -1458,15 +1504,11 @@
  * is affordable for this one mark and nowhere else, are in LIGHT IS SOLVED,
  * NOT THICKENED below.
  *
- * Reduced motion parks the travelling ring rather than dropping it, because
- * here the mark IS the information: a card with an agent on it must still be
- * findable when the travelling is gone. That does collapse `working` and
- * `waiting` onto one drawing separated only by hue — the same thing
- * `status-dot-live` already accepts when its breath stops, and the right trade,
- * since the alternative is a card that stops saying anything at all. The two
- * sweeps above drop themselves instead, and correctly — a frozen highlight
- * halfway along a word reads as a bug, while a still outline reads as an
- * outline. */
+ * Reduced motion keeps the whole perimeter visible, not a travelling arc
+ * frozen in a corner. On the board both states use the canvas accent, so a
+ * dashed working outline and a solid waiting outline preserve state without
+ * motion or a second colour. The two text sweeps above drop themselves instead
+ * — a frozen highlight halfway along a word reads as a bug. */
 @keyframes session-ring-sweep {
   from {
     transform: translate(-50%, -50%) rotate(0turn);
@@ -1646,18 +1688,39 @@
   --session-ring-color: var(--canvas-accent);
 }
 
-/* Motion off freezes a working arc; waiting still fills the whole ring. */
-:root[data-motion="off"] .board-session-ring[data-activity="working"]::before {
-  animation: none;
+/* A parked conic arc looks like a dead animation. Both motion preferences
+ * use complete outlines instead: dashed working, solid waiting. The border
+ * itself owns the static state, so no oversized rotating layer is needed. */
+:root[data-motion="off"] .board-session-ring[data-activity="working"],
+:root[data-motion="off"] .board-session-ring[data-activity="waiting"] {
+  padding: 0;
+  mask: none;
+  -webkit-mask: none;
+  border: 1.5px solid var(--session-ring-color);
+  transition: none;
 }
-:root[data-motion="off"] .board-session-ring[data-activity="waiting"]::before {
+:root[data-motion="off"] .board-session-ring[data-activity="working"] {
+  border-style: dashed;
+}
+:root[data-motion="off"] .board-session-ring::before {
+  content: none;
   animation: none;
-  background: var(--session-ring-color);
 }
 @media (prefers-reduced-motion: reduce) {
-  .session-ring.board-session-ring[data-activity="working"]::before {
-    background: conic-gradient(var(--session-ring-color) 0deg 96deg, transparent 96deg 360deg);
-    opacity: 1;
+  .session-ring.board-session-ring[data-activity="working"],
+  .session-ring.board-session-ring[data-activity="waiting"] {
+    padding: 0;
+    mask: none;
+    -webkit-mask: none;
+    border: 1.5px solid var(--session-ring-color);
+    transition: none;
+  }
+  .session-ring.board-session-ring[data-activity="working"] {
+    border-style: dashed;
+  }
+  .session-ring.board-session-ring::before {
+    content: none;
+    animation: none;
   }
 }
 
@@ -2040,9 +2103,12 @@ section:has(> div > div > [data-slot="pref-section-title"]) > .bg-card {
  * invisible at rest, visible while the scroll container is hovered, bright
  * while the thumb itself is grabbed. Chromium-only app, so the -webkit
  * pseudo-elements are authoritative (no scrollbar-width/color needed). */
+:root {
+  --scrollbar-size: 10px;
+}
 *::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
 }
 *::-webkit-scrollbar-track,
 *::-webkit-scrollbar-corner {
@@ -2280,15 +2346,13 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   -webkit-app-region: no-drag;
 }
 
-/* A quiet first-run field: neutral on purpose, so the ember accent remains
- * reserved for the single action. The dot layer is static and fades before the
- * canvas edge; it adds depth without turning the empty state into onboarding.
- * Built from the body ink rather than a literal white so it holds in both
- * appearances — a hardcoded `white/N` is invisible on paper. */
+/* A quiet first-run field: the material's low-chroma wash, not raw accent or
+ * body ink. The static dots fade before the canvas edge and work in either
+ * appearance; the primary action keeps the stronger accent. */
 .empty-projects-canvas {
   background-image: radial-gradient(
     ellipse 72% 58% at 50% 48%,
-    color-mix(in srgb, var(--foreground) 3%, transparent),
+    color-mix(in srgb, var(--wash-ink) 3%, transparent),
     transparent 76%
   );
 }
@@ -2299,7 +2363,7 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   pointer-events: none;
   content: "";
   background-image: radial-gradient(
-    color-mix(in srgb, var(--foreground) 10%, transparent) 0.65px,
+    color-mix(in srgb, var(--wash-ink) 10%, transparent) 0.65px,
     transparent 0.8px
   );
   background-position: center;
@@ -2722,6 +2786,7 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   --foreground: var(--glass-ink);
   --muted-foreground: var(--glass-secondary);
   --sidebar-foreground: var(--glass-ink);
+  --wash-ink: var(--glass-wash-ink);
 }
 [data-volli-sidebar].glass .session-row-dim.text-ui {
   --sidebar-foreground: var(--material-foreground);
@@ -2734,8 +2799,8 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   border-radius: var(--radius-row);
 }
 .session-envelope {
-  background: color-mix(in oklab, var(--foreground) 3.5%, transparent);
-  box-shadow: inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 7%, transparent);
+  background: color-mix(in oklab, var(--wash-ink) 3.5%, transparent);
+  box-shadow: inset 0 0 0 0.5px color-mix(in oklab, var(--wash-ink) 7%, transparent);
 }
 /* The inspector is a glass sibling of paper, never another paper column. */
 [data-inspector-dock][data-pinned] {
@@ -2847,11 +2912,36 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   transition-duration: var(--duration-menu-out);
 }
 
-/* Detached writing glass. Nested input groups never add a second material. */
+/* One spacing owner for the Session composer. The shell and nested content
+ * each spend one 8px step: draft ink, attachment edges and queued ink share
+ * the 16px rail. Controls hang half a step out for optical glyph alignment;
+ * their targets keep the shared control sizes. No primitive adds a gutter. */
 .session-prompt {
+  --composer-gap: calc(var(--spacing) * 2);
+  --composer-gutter: calc(var(--composer-gap) * 2);
+  --composer-control-outset: var(--spacing);
   border-radius: var(--radius-composer);
   border: 0;
-  padding: 12px 10px 10px 16px;
+  padding: var(--composer-gap);
+}
+.session-prompt .composer-queue {
+  gap: var(--composer-gap);
+  padding: 0;
+}
+.session-prompt .composer-queue::after {
+  content: "";
+  align-self: stretch;
+  margin-inline: var(--composer-gap);
+  border-bottom: 1px solid var(--border);
+}
+.session-prompt .composer-queued-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing);
+  padding: var(--composer-gap);
+}
+.session-prompt .composer-draft-attachments {
+  padding: var(--composer-gap) var(--composer-gap) 0;
 }
 .session-prompt:has(textarea:focus-visible) {
   border-color: var(--ring);
@@ -2955,7 +3045,9 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   box-shadow: none !important;
 }
 
-/* Portaled primitives retain activation provenance through their closing Presence. */
+/* Portaled primitives retain activation provenance through their closing Presence.
+ * A Session ring is a persistent working-state signal, not an entrance: a
+ * keyboard-opened pane must not freeze its descendant card rings in a corner. */
 [data-motion-origin="keyboard"],
 [data-motion-origin="instant"],
 [data-motion-origin="keyboard"] *,
@@ -2964,9 +3056,9 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
 [data-motion-origin="keyboard"]::after,
 [data-motion-origin="instant"]::before,
 [data-motion-origin="instant"]::after,
-[data-motion-origin="keyboard"] *::before,
+[data-motion-origin="keyboard"] *:not(.session-ring)::before,
 [data-motion-origin="keyboard"] *::after,
-[data-motion-origin="instant"] *::before,
+[data-motion-origin="instant"] *:not(.session-ring)::before,
 [data-motion-origin="instant"] *::after {
   animation: none !important;
   transition: none !important;
@@ -3001,7 +3093,7 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
 .board-column {
   width: var(--spacing-board-column);
   padding: 6px;
-  background: var(--fill-quaternary);
+  background: var(--surface-quaternary);
 }
 .board-card {
   padding: 12px 14px;
@@ -3022,19 +3114,19 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   border: 0;
 }
 .session-prompt textarea {
-  min-height: 38px;
-  padding: 0;
+  min-height: calc(var(--spacing) * 10);
+  padding: var(--composer-gap);
   font-size: var(--text-ui);
 }
 .session-prompt .prompt-toolbar {
-  padding: 0;
-  margin-left: -6px;
+  padding: 0 calc(var(--composer-gutter) - var(--composer-gap) - var(--composer-control-outset));
+  margin: 0;
 }
 .is-user > .message-content {
   max-width: 420px;
   padding: 7px 13px;
   border-radius: var(--radius-bubble);
-  background: var(--fill-secondary);
+  background: var(--surface-secondary);
   color: var(--foreground);
 }
 
@@ -3074,6 +3166,16 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
 [data-control="button"].control-material:active:not(:disabled) {
   background-image: linear-gradient(var(--fill-secondary), var(--fill-secondary));
 }
+/* Only navigation outline controls need the adaptive optical press. This
+ * unlayered image also wins during hover+press; the shared control face still
+ * wins over the layered hover fill. Paper descendants and floating writing
+ * surfaces keep their own material, as do secondary/inspector/toolbar buttons. */
+:is([data-volli-sidebar].glass, [data-volli-rail].glass)
+  [data-control="button"][data-variant="outline"].control-material:active:not(:disabled):not(
+    [data-material="paper"] *
+  ):not(.material-floating *):not([cmdk-dialog] *) {
+  background-image: linear-gradient(var(--glass-outline-pressed), var(--glass-outline-pressed));
+}
 [data-control="button"].glass-control {
   background-image: none;
 }
@@ -3089,6 +3191,36 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
 [data-control="button"]:is([data-variant="outline"], [data-variant="secondary"]) {
   background-color: var(--control-face);
   border-color: transparent;
+}
+/* Outline/secondary Buttons inside an untinted .material-floating or
+ * [cmdk-dialog] (popovers, floating dialogs and alerts, the palette) use the
+ * generated writing-control pair. Listed exceptions keep the shared face:
+ * inside a tinted float, a float nested in a float or palette (either order),
+ * or [data-material="paper"], .material-solid, .material-thick or
+ * [data-volli-surface] content. Other materials are not covered by this
+ * rule. The inspector's resting fill is unaffected. */
+:is(.material-floating, [cmdk-dialog]):not([data-tint="true"])
+  [data-control="button"]:is([data-variant="outline"], [data-variant="secondary"]):not(
+    [data-material="paper"] *
+  ):not(.material-solid *):not(.material-thick *):not([data-volli-surface] *):not(
+    .material-floating[data-tint="true"] *
+  ):not(.material-floating .material-floating *):not([cmdk-dialog] .material-floating *):not(
+    .material-floating [cmdk-dialog] *
+  ) {
+  background-color: var(--writing-control-face);
+}
+:is(.material-floating, [cmdk-dialog]):not([data-tint="true"])
+  [data-control="button"]:is(
+    [data-variant="outline"],
+    [data-variant="secondary"]
+  ).control-material:active:not(:disabled):not([data-material="paper"] *):not(
+    .material-solid *
+  ):not(.material-thick *):not([data-volli-surface] *):not(
+    .material-floating[data-tint="true"] *
+  ):not(.material-floating .material-floating *):not([cmdk-dialog] .material-floating *):not(
+    .material-floating [cmdk-dialog] *
+  ) {
+  background-image: linear-gradient(var(--writing-control-pressed), var(--writing-control-pressed));
 }
 .inspector-popup {
   border-radius: var(--radius-native-control);
@@ -3115,7 +3247,7 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   background-attachment: scroll;
 }
 .tab-track {
-  background: var(--fill-secondary);
+  background: var(--surface-secondary);
 }
 
 [data-volli-sidebar] [data-slot="sidebar-header"] .font-display {
@@ -3347,7 +3479,7 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   height: 24px;
 }
 .board-card[data-selected="true"] {
-  background: color-mix(in srgb, var(--foreground) 5%, var(--card-face));
+  background: color-mix(in srgb, var(--wash-ink) 5%, var(--card-face));
 }
 
 /* Position belongs to layout, not material. Unlayered `position:relative` here
@@ -3415,16 +3547,28 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   scroll-padding-bottom: calc(var(--composer-height, 0px) + 16px);
 }
 /* The mask owns a bounded, non-scrolling viewport, never the full scrollback.
- * The detached affordance has its own clear band rather than covering a line. */
+ * The detached affordance has its own clear band rather than covering a line.
+ * A second opaque mask keeps the native scrollbar lane outside the text fade:
+ * masking the whole viewport made the thumb disappear beneath the composer. */
 .chat-transcript [data-conversation-viewport] {
   --scroll-edge-clearance: 8px;
-  mask-image: linear-gradient(
-    to bottom,
-    transparent,
-    black 12px,
-    black calc(100% - var(--composer-height, 0px) - var(--scroll-edge-clearance) - 20px),
-    transparent calc(100% - var(--composer-height, 0px) - var(--scroll-edge-clearance))
-  );
+  mask-image:
+    linear-gradient(
+      to bottom,
+      transparent,
+      black 12px,
+      black calc(100% - var(--composer-height, 0px) - var(--scroll-edge-clearance) - 20px),
+      transparent calc(100% - var(--composer-height, 0px) - var(--scroll-edge-clearance))
+    ),
+    linear-gradient(black, black);
+  mask-size:
+    100% 100%,
+    var(--scrollbar-size) 100%;
+  mask-position:
+    center,
+    right top;
+  mask-repeat: no-repeat;
+  mask-composite: add;
 }
 .chat-transcript:has([data-slot="conversation-scroll-button"]) [data-conversation-viewport] {
   --scroll-edge-clearance: 48px;
@@ -3548,8 +3692,12 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   overflow: clip;
 }
 .settings-window [data-slot="pref-group"] {
-  background: var(--fill-quaternary);
+  background: var(--surface-quaternary);
   box-shadow: none;
+}
+/* These tracks sit on preference paper, not navigation glass. */
+.settings-window [data-slot="pref-content"] .segmented:not([data-icon-only="true"]) {
+  background: var(--surface-secondary);
 }
 
 [data-slot="canvas-instrument"] {

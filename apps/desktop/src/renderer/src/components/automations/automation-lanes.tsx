@@ -312,7 +312,7 @@ function LaneColumn({
 }) {
   const movable = draggableRows(lane);
   return (
-    <div className="flex min-w-0 flex-col gap-1 rounded-container border border-border bg-card p-3">
+    <div className="flex min-w-0 flex-col gap-1 rounded-container border border-border bg-(--surface-quaternary) p-3">
       {/* `group/column-header` is what the bolt's hover reveal reads: the same
           control as the board's, so arming a column from the page and arming it
           from the board are provably one act (and one store door). */}
@@ -450,7 +450,7 @@ function OffBoardLane({
   onSelect?(row: Automation): void;
 }) {
   return (
-    <div className="rounded-container border border-border bg-card p-3">
+    <div className="rounded-container border border-border bg-(--surface-quaternary) p-3">
       <SectionHeading>Other</SectionHeading>
       {automations.map((automation) => (
         <ListRow

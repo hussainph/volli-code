@@ -5,3 +5,9 @@ export const InspectorHostContext = createContext<HTMLElement | null | undefined
 export function useInspectorHost() {
   return useContext(InspectorHostContext);
 }
+
+/** Resident pages stay mounted while hidden; expensive readers follow visibility. */
+export const InspectorVisibleContext = createContext(true);
+export function useInspectorVisible() {
+  return useContext(InspectorVisibleContext);
+}

@@ -235,6 +235,8 @@ async function renderPill(input: {
   defaults: ModelAccessDefaults;
   withTiers?: boolean;
   catalog?: readonly ComposerModel[];
+  tierModels?: readonly ModelAccessModel[];
+  tierProviders?: readonly CatalogProvider[];
   selectionTier?: string | null;
   selectionAuto?: ModelAutoPick | null;
   onChange?: (next: ComposerModelSelection) => void;
@@ -245,7 +247,12 @@ async function renderPill(input: {
 }): Promise<ReturnType<typeof labClient>> {
   const client = labClient(input.view, input.defaults);
   const models = input.catalog ?? offerableModels(MODELS, PROVIDERS, []);
-  const tiers = composerTierRows(input.defaults, MODELS, PROVIDERS, []);
+  const tiers = composerTierRows(
+    input.defaults,
+    input.tierModels ?? MODELS,
+    input.tierProviders ?? PROVIDERS,
+    [],
+  );
   container = document.createElement("div");
   if (input.compactEffort !== undefined) {
     container.dataset.composerContainer = input.containerKind ?? "";
@@ -295,6 +302,57 @@ describe("the model pill's Defaults view", () => {
     await act(async () => toggle.click());
     expect(document.querySelector('[data-slot="command-input"]')).toBeNull();
     expect(document.activeElement).toBe(document.querySelector('[data-choice="defaults"]'));
+  });
+
+  it("reveals provider identity on the actual inputless Defaults keyboard path without moving focus", async () => {
+    const providerIds = ["cloudflare-workers-ai", "cloudflare-ai-gateway"];
+    const providerLabels = ["Cloudflare Workers AI", "Cloudflare AI Gateway"];
+    const tierModels = providerIds.map((providerId) => ({
+      ...MODELS[0]!,
+      providerId,
+      label: "Same model",
+    }));
+    const tierProviders = providerIds.map((id, index) => ({
+      ...PROVIDERS[0]!,
+      id,
+      label: providerLabels[index]!,
+    }));
+    await renderPill({
+      view: "defaults",
+      tierModels,
+      tierProviders,
+      defaults: {
+        ...EMPTY_MODEL_ACCESS_DEFAULTS,
+        fast: {
+          providerId: providerIds[0]!,
+          modelId: tierModels[0]!.modelId,
+          reasoningLevel: "high",
+        },
+        deep: {
+          providerId: providerIds[1]!,
+          modelId: tierModels[1]!.modelId,
+          reasoningLevel: "high",
+        },
+      },
+    });
+    expect(document.querySelector('[data-slot="command-input"]')).toBeNull();
+    const anchor = document.querySelector<HTMLButtonElement>('[data-choice="defaults"]')!;
+    await act(async () => anchor.focus());
+    for (const key of ["ArrowDown", "ArrowUp"]) {
+      await act(async () =>
+        anchor.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true })),
+      );
+      const active = document.querySelector<HTMLElement>(
+        '[data-slot="command-item"][aria-selected="true"]',
+      )!;
+      const mark = active.querySelector('[data-slot="help-tag"]')!;
+      expect(mark.getAttribute("tabindex")).toBeNull();
+      expect(document.activeElement).toBe(anchor);
+      expect(active.textContent).not.toContain("Cloudflare");
+      expect(document.body.querySelector('[data-slot="tooltip-content"]')?.textContent).toBe(
+        `Same model · ${mark.getAttribute("aria-label")}`,
+      );
+    }
   });
 
   it("opens on the list the profile remembered, with no search box over the tiers", async () => {
@@ -458,33 +516,27 @@ describe("the compact model and effort control", () => {
  * selection to find out what it had been.
  */
 describe("reading the whole selected model without changing it", () => {
-  it("renders provider group names with sentence-case section-heading type", async () => {
+  it("keeps provider groups accessible without printing their names", async () => {
     await renderPill({ view: "all", defaults: EMPTY_MODEL_ACCESS_DEFAULTS });
-    const heading = Array.from(
-      document.querySelectorAll('[data-slot="command-group-heading"]'),
-    ).find((node) => node.textContent === "Anthropic");
-    expect(heading).toBeDefined();
-    expect(heading?.closest('[role="group"]')?.getAttribute("aria-label")).toBe("Anthropic");
-    const classes = heading?.className ?? "";
-    expect(classes).toContain("text-ui");
-    expect(classes).not.toContain("uppercase");
-    expect(classes).not.toContain("tracking-");
+    expect(document.querySelector('[data-slot="command-group-heading"]')).toBeNull();
+    expect(document.querySelector('[role="group"][aria-label="Anthropic"]')).not.toBeNull();
   });
 
-  it("leads the open list with the tier, the model and the provider, in full", async () => {
+  it("leads the open list with the tier and model, leaving the provider on its mark", async () => {
     await renderPill({
       view: "all",
       defaults: { ...EMPTY_MODEL_ACCESS_DEFAULTS, fast: HAIKU },
       selectionTier: "Fast",
     });
     const identity = document.querySelector('[data-testid="model-pill-identity"]');
-    expect(identity?.textContent).toContain("Fast · Claude Sonnet · Anthropic");
+    expect(identity?.textContent).toContain("Fast · Claude Sonnet");
+    expect(identity?.textContent).not.toContain("Anthropic");
     // Wrapping, not an ellipsis: a reveal that truncates is the thing it was
     // opened to escape, and a popover has a width of its own to spend.
     expect(identity?.innerHTML).not.toContain("truncate");
   });
 
-  it("says the same words the pill itself carries as its name", async () => {
+  it("keeps provider identity accessible while omitting its visible words", async () => {
     // One string, one function (`modelIdentityLabel`): a reveal that composed
     // its own could drift into describing a different selection than the
     // control it was opened from.
@@ -492,7 +544,8 @@ describe("reading the whole selected model without changing it", () => {
     const pill = document.querySelector('[data-slot="popover-trigger"]');
     const identity = document.querySelector('[data-testid="model-pill-identity"]');
     expect(pill?.getAttribute("aria-label")).toBe("Model: Fast · Claude Sonnet · Anthropic");
-    expect(identity?.textContent).toContain(pill?.getAttribute("title") ?? "");
+    expect(identity?.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe("Anthropic");
+    expect(pill?.getAttribute("title")).toBeNull();
   });
 });
 
@@ -647,4 +700,39 @@ it("bounds the full model catalog while reaching and choosing its last provider 
     modelId: "model-999",
     reasoningLevel: "low",
   });
+});
+
+it("reveals singleton filtered and unchanged boundary selections from the actual All models input", async () => {
+  const catalog = offerableModels(MODELS, PROVIDERS, []);
+  await renderPill({
+    view: "all",
+    defaults: EMPTY_MODEL_ACCESS_DEFAULTS,
+    withTiers: false,
+    catalog,
+  });
+  const input = document.querySelector<HTMLInputElement>('[data-slot="command-input"]')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
+      input,
+      "Claude Haiku",
+    );
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  expect(document.querySelectorAll('[role="option"]')).toHaveLength(1);
+  const activeId = input.getAttribute("aria-activedescendant");
+  for (const key of ["Home", "End", "ArrowDown", "ArrowUp"]) {
+    // Pointer takeover closes the keyboard's tag without changing the active id.
+    await act(async () =>
+      input.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerType: "mouse" })),
+    );
+    expect(document.body.querySelector('[data-slot="tooltip-content"]')).toBeNull();
+    await act(async () =>
+      input.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true })),
+    );
+    expect(input.getAttribute("aria-activedescendant")).toBe(activeId);
+    expect(document.body.querySelector('[data-slot="tooltip-content"]')?.textContent).toBe(
+      "Anthropic",
+    );
+    expect(document.activeElement).toBe(input);
+  }
 });

@@ -47,6 +47,7 @@ const FRAME: RendererStall = {
   blockingMs: 190,
   renderMs: 30,
   styleLayoutMs: 12,
+  scriptTotalMs: 200,
   scripts: 3,
   script: {
     file: "chat-plane.tsx",
@@ -90,6 +91,7 @@ describe("renderer stalls in main's log", () => {
         blockingMs: 190,
         renderMs: 30,
         styleLayoutMs: 12,
+        scriptTotalMs: 200,
         scripts: 3,
         scriptFile: "chat-plane.tsx",
         scriptFunction: "ChatPlaneContent",

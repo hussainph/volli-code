@@ -772,6 +772,12 @@ export const PROFILE_FILE_DECISIONS: readonly ProfileFileDecision[] = [
     decision: "exclude",
     reason: "Bounded capture cache for browser tabs; re-captured, never recovered.",
   },
+  {
+    area: "source-icons",
+    decision: "exclude",
+    reason:
+      "Machine-local network-derived icon cache keyed to account and Session authority; source URLs and transcript artifacts remain portable, and restored transcripts use the existing icon fallback.",
+  },
   // Other profile areas discovered from production host wiring, not a
   // second curated directory list in the test.
   {

@@ -311,10 +311,11 @@ describe("sessionHandlersFrom", () => {
     // last-seen board (VC-889), the account's GitHub half's five (VC-897),
     // this Mac's runner's four (VC-895), a cloud project's folder's two
     // (VC-895 N2-3), the local-profile backup read/run/reveal and seven restore commands,
-    // and the six desktop move commands/projections.
-    expect(Object.keys(context.handlers)).toHaveLength(129);
+    // the six desktop move commands/projections, and the cache-only source-icon watch.
+    expect(Object.keys(context.handlers)).toHaveLength(130);
     expect(Object.keys(context.handlers)).toEqual(
       expect.arrayContaining([
+        "sourceIcons.watch",
         "backups.status",
         "backups.run",
         "backups.reveal",

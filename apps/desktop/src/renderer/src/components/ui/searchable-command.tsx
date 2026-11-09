@@ -15,6 +15,7 @@ export function SearchableCommand<T>({
   keyOf,
   renderItem,
   groupOf,
+  showGroupHeadings = true,
   onSelect,
   query,
   onQueryChange,
@@ -27,6 +28,8 @@ export function SearchableCommand<T>({
   renderItem(item: T): React.ReactNode;
   /** Contiguous groups keep their heading and accessible option ownership. */
   groupOf?(item: T): string;
+  /** Keep accessible grouping without spending a row on a repeated identity. */
+  showGroupHeadings?: boolean;
   onSelect(item: T): void;
   query: string;
   onQueryChange(query: string): void;
@@ -48,14 +51,14 @@ export function SearchableCommand<T>({
       const label = groupOf?.(item) ?? "";
       if (position === 0 || label !== groups.at(-1)?.label) {
         groups.push({ label, top: height, from: position, to: position });
-        if (label) height += ROW;
+        if (label && showGroupHeadings) height += ROW;
       }
       groups.at(-1)!.to = position + 1;
       offsets.push(height);
       height += ROW;
     });
     return { offsets, groups, height };
-  }, [items, groupOf]);
+  }, [items, groupOf, showGroupHeadings]);
   const visibleStart = Math.max(
     0,
     layout.offsets.findIndex((offset) => offset + ROW > top),
@@ -166,7 +169,7 @@ export function SearchableCommand<T>({
                 role={group.label ? "group" : "presentation"}
                 aria-label={group.label || undefined}
               >
-                {group.label ? (
+                {group.label && showGroupHeadings ? (
                   <div
                     aria-hidden
                     data-slot="command-group-heading"

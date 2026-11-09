@@ -57,6 +57,16 @@ it("lets a keyboard inspect each context bucket without a hundred tab stops", as
       ),
     );
     await act(async () => host.querySelector("button")?.click());
+    // A 13/20 UI line must not overflow a forced 16px legend and create a
+    // scrollbar in an otherwise fitting panel. Genuine small-viewport overflow
+    // remains owned by the shared popover body.
+    const legend = document.querySelector<HTMLElement>('[data-slot="context-usage-legend"]')!;
+    expect(legend.classList.contains("min-h-5")).toBe(true);
+    expect(legend.classList.contains("h-4")).toBe(false);
+    const body = document.querySelector<HTMLElement>('[data-slot="popover-body"]')!;
+    expect(body.classList.contains("overflow-y-auto")).toBe(true);
+    expect(body.className).not.toContain("overflow-y-scroll");
+    expect(body.className).not.toContain("scrollbar-gutter");
     const buckets = Array.from(
       document.querySelectorAll<HTMLElement>('[role="img"][tabindex="0"]'),
     );

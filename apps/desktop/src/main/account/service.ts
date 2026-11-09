@@ -42,6 +42,7 @@
  * the backend (`accounts.requestDeletion` / `cancelDeletion`); the window
  * shows the pending date and offers a restore.
  */
+import { createHash } from "node:crypto";
 import {
   ACCOUNT_TEXT_MAX,
   PREVIEW_WAITLIST_MESSAGE,
@@ -106,6 +107,17 @@ const SIGN_IN_REFUSALS: ReadonlySet<string | null> = new Set([
   "suspended",
 ]);
 
+/** Account authorization failures, not deletion business rules or transport errors. */
+const ACCOUNT_AUTH_REFUSALS: ReadonlySet<string | null> = new Set([
+  "unauthenticated",
+  "no_viewer",
+  "account_deleted",
+  "account_deletion_pending",
+  "identity_conflict",
+  "not_a_person",
+  "forbidden",
+]);
+
 export interface AccountLogger {
   info(message: string, fields?: Record<string, unknown>): void;
   warn(message: string, fields?: Record<string, unknown>): void;
@@ -135,6 +147,16 @@ export interface AccountServiceOptions {
 export interface AccountService {
   /** Fresh backend grant only, never a saved profile or launch marker. */
   previewUserId(): string | null;
+  /** Opaque account/sign-in context for local decoration; never restores credentials or performs I/O. */
+  sourceIconEpoch(): string | null;
+  /** Stable only for a known current sign-in (or local signed-out mode); never a token. */
+  sourceIconOwner(): string | null;
+  /** Non-restoring startup status; distinguishes uncertainty from revocation. */
+  sourceIconRestoring(): boolean;
+  /** Decoration-only revocation evidence, including while no live grant exists. */
+  sourceIconRevocation(): string;
+  /** Host-only, non-restoring authority invalidation; no token/profile payload. */
+  watchSourceIconAuthority(listener: () => void): () => void;
   snapshot(): AccountSnapshot;
   subscribe(listener: (snapshot: AccountSnapshot) => void): () => void;
   signIn(
@@ -216,6 +238,16 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
   const listen = options.listen ?? listenForCallback;
   const log = options.log ?? SILENT;
   const listeners = new Set<(snapshot: AccountSnapshot) => void>();
+  const iconAuthorityListeners = new Set<() => void>();
+  const decorationBootId = newState();
+  let decorationRevocation = newState();
+  let decorationDenied = false;
+  const revokeDecoration = (): void => {
+    // Never derive this from current auth state: refusal -> same-owner recovery
+    // must not recreate a foreground read's old grant (or a hydration barrier).
+    decorationRevocation = newState();
+    decorationDenied = true;
+  };
   const disconnected: AccountBackendState = backend === null ? "none" : "unreachable";
 
   let state: Exclude<AccountState, "unconfigured"> = "signed-out";
@@ -232,6 +264,34 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
   let pending: Promise<unknown> = Promise.resolve();
   let refreshing: { epoch: number; token: Promise<string | null> } | null = null;
   let epoch = 0;
+
+  const sourceIconRestoring = (): boolean =>
+    !decorationDenied &&
+    options.enabled() &&
+    provider !== null &&
+    (state === "restoring" ||
+      (state === "signed-in" && (backendState === "unreachable" || backendState === "none")));
+  // An untouched Account is this launch's known local signed-out mode, not an
+  // implicit request to restore credentials. Markerful startup already asks
+  // through previewAtLaunch; markerless stable enrollment deliberately does not.
+
+  const sourceIconOwner = (): string | null => {
+    if (decorationDenied || sourceIconRestoring()) return null;
+    if (state === "signed-out")
+      return createHash("sha256").update("local-signed-out").digest("hex");
+    if (
+      state !== "signed-in" ||
+      backendState !== "synced" ||
+      viewer === null ||
+      session === null ||
+      typeof session.saved.sessionId !== "string" ||
+      session.saved.sessionId.length === 0
+    )
+      return null;
+    return createHash("sha256")
+      .update(JSON.stringify([provider?.kind, viewer.userId, session.saved.sessionId]))
+      .digest("hex");
+  };
 
   const current = (): AccountSnapshot => {
     if (provider === null) return UNCONFIGURED_ACCOUNT;
@@ -258,7 +318,30 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
     };
   };
 
+  const emitIconAuthority = (): void => {
+    for (const listener of iconAuthorityListeners) {
+      try {
+        listener();
+      } catch {
+        /* Decoration must not change account behavior. */
+      }
+    }
+  };
+
+  const refuseDecorationForBackendError = (error: unknown): void => {
+    if (
+      !(error instanceof BackendRefusedError) ||
+      (!SIGN_IN_REFUSALS.has(error.code) && !ACCOUNT_AUTH_REFUSALS.has(error.code))
+    )
+      return;
+    // This boundary is decoration-only. The caller still owns the original
+    // account state transition or mutation failure, including its exact error.
+    revokeDecoration();
+    emitIconAuthority();
+  };
+
   const emit = (): void => {
+    emitIconAuthority();
     const snapshot = current();
     for (const listener of listeners) {
       try {
@@ -288,6 +371,7 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
 
   /** A new epoch: whatever is in flight drops its result. */
   const advance = (): number => {
+    revokeDecoration();
     epoch += 1;
     refreshing = null;
     syncing = null;
@@ -302,11 +386,14 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
     viewer = null;
     backendState = disconnected;
     state = "signed-out";
+    decorationDenied = false; // A new, known local grant; never the revoked sign-in grant.
     failure = reason;
   };
 
   /** Forgets the saved sign-in, then signs out with `reason`, unless the epoch moved meanwhile. */
   const forget = async (reason: string | null, startedIn: number): Promise<void> => {
+    revokeDecoration();
+    emitIconAuthority(); // Close decoration before credential cleanup can yield.
     await store.clear().catch((error: unknown) => {
       log.warn("could not forget the saved sign-in", { error });
     });
@@ -329,6 +416,12 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
   };
 
   const adopt = (tokens: ProviderTokens, saved: SavedAccountSession, ref: SavedSessionRef) => {
+    if (
+      session !== null &&
+      (session.saved.provider !== saved.provider || session.saved.sessionId !== saved.sessionId)
+    ) {
+      decorationRevocation = newState();
+    }
     session = {
       saved,
       ref,
@@ -390,9 +483,12 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
 
   /** Every backend answer follows the same preview gate, including account restoration. */
   const acceptViewer = (answered: BackendViewer): void => {
+    if (viewer !== null && viewer.userId !== answered.userId) decorationRevocation = newState();
     viewer = answered;
     const granted = previewAccountGranted(answered);
     backendState = granted || answered.status === "deletion_pending" ? "synced" : "refused";
+    if (backendState === "refused") revokeDecoration();
+    else decorationDenied = false;
     failure =
       granted || answered.status === "deletion_pending"
         ? null
@@ -426,6 +522,7 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
         acceptViewer(answered);
       } catch (error) {
         if (epoch !== startedIn) return;
+        refuseDecorationForBackendError(error);
         if (error instanceof BackendRefusedError && SIGN_IN_REFUSALS.has(error.code)) {
           pendingInviteCode = undefined;
           pendingAgreementVersion = undefined;
@@ -606,7 +703,14 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
   ): Promise<void> => {
     const startedIn = epoch;
     const { backend: live, token } = await signedInBackend();
-    const answered = await call(live, token);
+    let answered: BackendViewer;
+    try {
+      answered = await call(live, token);
+    } catch (error) {
+      // A late refusal from an ended sign-in cannot revoke its replacement.
+      if (epoch === startedIn) refuseDecorationForBackendError(error);
+      throw error;
+    }
     if (epoch !== startedIn) return;
     acceptViewer(answered);
     emit();
@@ -617,6 +721,33 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
       return backendState === "synced" && viewer !== null && previewAccountGranted(viewer)
         ? viewer.userId
         : null;
+    },
+    sourceIconEpoch() {
+      const owner = sourceIconOwner();
+      if (owner === null) return null;
+      // The disk uses the stable known sign-in owner; live receipts use this
+      // launch's revocable epoch. Neither restores or exposes credentials.
+      return createHash("sha256")
+        .update(
+          JSON.stringify([
+            owner,
+            decorationBootId,
+            decorationRevocation,
+            epoch,
+            state,
+            backendState,
+          ]),
+        )
+        .digest("hex");
+    },
+    sourceIconOwner,
+    sourceIconRestoring,
+    sourceIconRevocation: () => decorationRevocation,
+    watchSourceIconAuthority(listener) {
+      iconAuthorityListeners.add(listener);
+      return () => {
+        iconAuthorityListeners.delete(listener);
+      };
     },
     snapshot() {
       requireCloud();
@@ -749,6 +880,7 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
       advance();
       endFlow();
       listeners.clear();
+      iconAuthorityListeners.clear();
       provider?.dispose?.();
     },
   };

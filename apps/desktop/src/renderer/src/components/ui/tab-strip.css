@@ -1,6 +1,6 @@
 /* Rex-style capsules; tab identity, dragging and content lifetime stay in TS. */
 .tab-track {
-  background: var(--fill-quaternary);
+  background: var(--surface-quaternary);
   box-shadow: inset 0 0 0 0.5px var(--glass-edge);
 }
 .workspace-capsule-tab {

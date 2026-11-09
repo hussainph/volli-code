@@ -10,7 +10,6 @@ import { ConversationsIcon as Chats, FolderIcon, SettingsIcon } from "@renderer/
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { SidebarFiles } from "./sidebar-files";
-import { SessionBandHeader } from "./session-band-header";
 
 import { ActiveSessions } from "@renderer/components/sidebar/active-sessions";
 import { CloudMoveRailRow } from "@renderer/components/cloud-moves/cloud-moves";
@@ -73,16 +72,7 @@ export function PrimarySidebar({ previewProjectId }: { previewProjectId?: string
   const [activeNav] = useActiveNav(selected?.id);
   const settingsOpen = useUiStore((state) => state.settingsOpen);
   const setSettingsOpen = useUiStore((state) => state.setSettingsOpen);
-  const [activeCount, setActiveCount] = React.useState<{ projectId: string; count: number } | null>(
-    null,
-  );
   const selectedId = selected?.id;
-  const reportActiveCount = React.useCallback(
-    (count: number) => {
-      if (selectedId !== undefined) setActiveCount({ projectId: selectedId, count });
-    },
-    [selectedId],
-  );
   const [contents, setContents] = React.useState(() => new Map(rememberedContent));
   const content = contents.get(selectedId ?? "") ?? "sessions";
   const filesVisible = content === "files";
@@ -119,6 +109,7 @@ export function PrimarySidebar({ previewProjectId }: { previewProjectId?: string
               <>
                 <NavList projectId={selected.id} />
                 <NavigatorSelector
+                  projectId={selected.id}
                   active={content}
                   onSelect={(next) => {
                     rememberedContent.set(selected.id, next);
@@ -133,35 +124,12 @@ export function PrimarySidebar({ previewProjectId }: { previewProjectId?: string
                   className={cn("flex min-h-0 flex-1 flex-col", content === "files" && "hidden")}
                 >
                   <SidebarScrollArea>
-                    <div className="sidebar-section-header shrink-0 py-2">
-                      <SessionBandHeader
-                        label="Active"
-                        count={
-                          content === "sessions" && activeCount?.projectId === selected.id
-                            ? activeCount.count
-                            : undefined
-                        }
-                      >
-                        <NewSessionControl
-                          projectId={selected.id}
-                          placement="rail"
-                          disabled={false}
-                          onNewChat={() => void startProjectChat(selected.id)}
-                          onNewTerminal={() => void startProjectTerminal(selected.id)}
-                        />
-                      </SessionBandHeader>
-                    </div>
                     <div className={cn(!sessionsVisible && "hidden")}>
                       {/* Render-hidden, not unmounted — so the section cannot tell it
                     is off screen, and the coarse chat-activity poll it runs
                     would keep firing behind Configure or Settings. `visible`
                     is that fact, handed down from the one place that has it. */}
-                      <ActiveSessions
-                        project={selected}
-                        visible={sessionsVisible}
-                        activeHeader={false}
-                        onActiveCountChange={reportActiveCount}
-                      />
+                      <ActiveSessions project={selected} visible={sessionsVisible} />
                     </div>
                   </SidebarScrollArea>
                 </div>
@@ -200,53 +168,65 @@ const NAVIGATORS = [
 
 /** Fixed navigator selector; the two independent scrollports remain mounted below it. */
 function NavigatorSelector({
+  projectId,
   active,
   onSelect,
 }: {
+  projectId: string;
   active: "sessions" | "files";
   onSelect(next: "sessions" | "files"): void;
 }) {
   const refs = React.useRef<Array<HTMLButtonElement | null>>([]);
   return (
     <div
-      role="tablist"
-      aria-label="Sidebar content"
       data-slot="navigator-selector"
       // 22px drawing, 24px targets. Icon centres share the nav rows' 24px inset.
       className="flex h-[22px] shrink-0 items-center gap-1 border-b border-sidebar-border/50 px-3"
     >
-      {NAVIGATORS.map(({ key, label, icon: Icon }, index) => (
-        <Tooltip key={key}>
-          <TooltipTrigger asChild>
-            <button
-              ref={(node) => {
-                refs.current[index] = node;
-              }}
-              type="button"
-              role="tab"
-              aria-label={label}
-              aria-selected={key === active}
-              tabIndex={key === active ? 0 : -1}
-              data-choice={key}
-              onClick={() => onSelect(key)}
-              onKeyDown={(event) => {
-                if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-                event.preventDefault();
-                const next = event.key === "Home" ? 0 : event.key === "End" ? 1 : 1 - index;
-                onSelect(NAVIGATORS[next]!.key);
-                refs.current[next]?.focus();
-              }}
-              className={cn(
-                "flex size-6 shrink-0 items-center justify-center rounded-control-small outline-none focus-visible:ring-2 focus-visible:ring-ring hover:bg-sidebar-accent-veil",
-                key === active ? "text-primary" : "text-muted-foreground",
-              )}
-            >
-              <Icon className="size-3.5" />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">{label}</TooltipContent>
-        </Tooltip>
-      ))}
+      <div role="tablist" aria-label="Sidebar content" className="flex h-[22px] items-center gap-1">
+        {NAVIGATORS.map(({ key, label, icon: Icon }, index) => (
+          <Tooltip key={key}>
+            <TooltipTrigger asChild>
+              <button
+                ref={(node) => {
+                  refs.current[index] = node;
+                }}
+                type="button"
+                role="tab"
+                aria-label={label}
+                aria-selected={key === active}
+                tabIndex={key === active ? 0 : -1}
+                data-choice={key}
+                onClick={() => onSelect(key)}
+                onKeyDown={(event) => {
+                  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+                  event.preventDefault();
+                  const next = event.key === "Home" ? 0 : event.key === "End" ? 1 : 1 - index;
+                  onSelect(NAVIGATORS[next]!.key);
+                  refs.current[next]?.focus();
+                }}
+                className={cn(
+                  "flex size-6 shrink-0 items-center justify-center rounded-control-small outline-none focus-visible:ring-2 focus-visible:ring-ring hover:bg-sidebar-accent-veil",
+                  key === active ? "text-primary" : "text-muted-foreground",
+                )}
+              >
+                <Icon className="size-3.5" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{label}</TooltipContent>
+          </Tooltip>
+        ))}
+      </div>
+      <div className="ml-auto flex min-w-0 items-center">
+        <NewSessionControl
+          projectId={projectId}
+          placement="rail"
+          align="end"
+          disabled={false}
+          onNewChat={() => void startProjectChat(projectId)}
+          onNewTerminal={() => void startProjectTerminal(projectId)}
+        />
+      </div>
     </div>
   );
 }

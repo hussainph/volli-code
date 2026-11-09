@@ -373,9 +373,8 @@ async function sidebarSessionIds(page, band = "active") {
 
 /**
  * The count a session band's header prints — the built listing's own row count,
- * read back off the rendered heading. `0` when the header draws no count (Active
- * never does, and Previous drops a zero), `null` when that band is not on
- * screen.
+ * read back off the rendered heading. `0` when the header draws no count,
+ * `null` when that band is not on screen (including successfully empty Active).
  *
  * Worth asserting separately from the ids above because the two come from
  * different halves of the seam: the count is `listing.<band>.length` straight
@@ -1285,8 +1284,8 @@ async function main() {
         // This fixture has never run a Session, and the board is full of work
         // in flight — the exact state an earlier rule filled ACTIVE with one
         // synthetic row per Doing/Needs-Review ticket, pushing real Sessions
-        // below them. Both bands must now be empty: a ticket is not a Session,
-        // and the board is where a ticket's status lives.
+        // below them. Active disappears and Previous stays empty: a ticket is
+        // not a Session, and the board is where a ticket's status lives.
         const doingIds = await columnCardIds(page, "Doing");
         const activeIds = await sidebarSessionIds(page, "active");
         const previousIds = await sidebarSessionIds(page, "previous");
@@ -1295,27 +1294,47 @@ async function main() {
         const boardHasWork =
           doingIds.length > 0 &&
           (await columnCardIds(page, "Needs Review")).length > 0 &&
-          Array.isArray(activeIds) &&
           Array.isArray(previousIds);
-        const noTicketRows = activeIds?.length === 0 && previousIds?.length === 0;
+        const noTicketRows = activeIds === null && previousIds?.length === 0;
         // The counts come from the model, the ids from what rendered — a band
         // that counted rows it never drew would read as truthful on either
         // one alone.
         const bandCounts =
-          (await sidebarBandCount(page, "active")) === 0 &&
+          (await sidebarBandCount(page, "active")) === null &&
           (await sidebarBandCount(page, "previous")) === 0;
         // The retired bare row's own words, gone from the app entirely.
         const noBareRows =
           (await page.getByText("No live session", { exact: false }).count()) === 0;
-        // Empty source-list bands are quiet: headings, truthful counts, no
-        // synthetic row or call to action in place of a Session.
+        // Successful empty Active leaves no scaffolding. Previous retains its
+        // filter and begins at the top; creation has an invariant chrome home.
         const emptyCopy =
-          (await page.getByRole("heading", { name: "Active", exact: true }).count()) === 1 &&
+          (await page.getByRole("heading", { name: "Active", exact: true }).count()) === 0 &&
           (await page.getByRole("heading", { name: "Previous", exact: true }).count()) === 1;
-        const ok = boardHasWork && noTicketRows && bandCounts && noBareRows && emptyCopy;
+        const previousFirst = await page.locator("[data-session-bands]").evaluate((bands) => {
+          const previous = bands.firstElementChild;
+          return (
+            previous?.getAttribute("data-session-band") === "previous" &&
+            getComputedStyle(previous).marginTop === "0px" &&
+            previous.querySelector('[data-nav-offset="0"]') !== null
+          );
+        });
+        const creation = page
+          .locator('[data-slot="navigator-selector"]')
+          .getByRole("button", { name: "Open a tab", exact: true });
+        const creationFixed = await creation.evaluate(
+          (button) => button.closest('[data-slot="sidebar-content"], [role="tablist"]') === null,
+        );
+        const ok =
+          boardHasWork &&
+          noTicketRows &&
+          bandCounts &&
+          noBareRows &&
+          emptyCopy &&
+          previousFirst &&
+          creationFixed;
         return {
           ok,
-          detail: `doing=${JSON.stringify(doingIds)} activeIds=${JSON.stringify(activeIds)} previousIds=${JSON.stringify(previousIds)} bandCounts=${bandCounts} noBareRows=${noBareRows} emptyCopy=${emptyCopy}`,
+          detail: `doing=${JSON.stringify(doingIds)} activeIds=${JSON.stringify(activeIds)} previousIds=${JSON.stringify(previousIds)} bandCounts=${bandCounts} noBareRows=${noBareRows} emptyCopy=${emptyCopy} previousFirst=${previousFirst} creationFixed=${creationFixed}`,
         };
       },
     );

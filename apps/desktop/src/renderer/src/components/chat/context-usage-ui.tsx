@@ -189,10 +189,10 @@ function ContextBreakdown({
         ))}
       </div>
 
-      {/* One line, always the same height: the hovered bucket's legend row,
-          or the resting default when the pointer is elsewhere. */}
+      {/* Reserve the UI line's full 20px: a 16px fixed box made its text
+          overflow and gave an otherwise fitting popover a scrollbar. */}
       {detail === null ? null : (
-        <div className="mt-2.5 flex h-4 items-center gap-2">
+        <div data-slot="context-usage-legend" className="mt-2.5 flex min-h-5 items-center gap-2">
           <span
             aria-hidden
             className={cn("size-2 shrink-0 rounded-keycap", SEGMENT_CELL[detail.id])}

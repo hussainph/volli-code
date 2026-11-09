@@ -127,7 +127,7 @@ export function AttachmentThumb({
   return (
     <div
       className={cn(
-        "group relative flex min-h-20 w-56 max-w-full min-w-0 items-center gap-2 rounded-card border border-border bg-card p-2",
+        "group relative flex min-h-20 w-56 max-w-full min-w-0 items-center gap-2 rounded-card border border-border bg-(--card-face) p-2",
         className,
       )}
       title={`${attachment.originalName} · ${metadata}${attachment.state ? ` · ${stateLabels[attachment.state]}` : ""}`}
@@ -169,7 +169,7 @@ export function AttachmentThumb({
   );
 }
 
-/** One named card by default, leaving room for the queued message and its actions. */
+/** One named card plus an overflow count, on the queued payload's own row. */
 export function AttachmentThumbRow({
   attachments,
   max = 1,
@@ -184,7 +184,7 @@ export function AttachmentThumbRow({
   const hidden = attachments.slice(shown.length);
   return (
     <span
-      className={cn("flex max-w-48 min-w-0 shrink items-center gap-1", className)}
+      className={cn("flex w-full min-w-0 items-center gap-2", className)}
       role="group"
       aria-label={`${attachments.length} attachment${attachments.length === 1 ? "" : "s"}`}
     >
@@ -194,7 +194,7 @@ export function AttachmentThumbRow({
           <span
             key={attachment.linkId ?? attachment.blobHash}
             title={`${attachment.originalName} · ${detail(attachment)} · ${stateLabels[state]}`}
-            className="flex w-40 min-w-0 items-center gap-1 rounded-md border border-border bg-card p-1"
+            className="flex w-56 min-w-0 items-center gap-2 rounded-control border border-border bg-(--card-face) p-2"
           >
             {thumbKind(attachment.mime) === "image" && state === "queued" ? (
               <AttachmentImage

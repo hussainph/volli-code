@@ -6,7 +6,7 @@
  *      steps match its calls in order — a refused act included;
  *   2. each step's frame is on disk under userData/browser-traces, and a tab
  *      the PERSON created, driven by the same Session, left nothing there;
- *   3. the replay opens from the durable transcript's BrowserTabCard and steps
+ *   3. the replay opens from the durable transcript's browser tool disclosure and steps
  *      through the frames with the keyboard;
  *   4. after a relaunch the trace and its frames are still there — the live
  *      picture set is empty, so every frame answers from the trace — and a
@@ -152,6 +152,17 @@ async function driveSession(app, input) {
       ) {
         if (Date.now() > deadline) break;
         await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      // Load completion is not compositor readiness. Warm only the camera
+      // BEFORE the one person action; check 2 must still exclude that action's
+      // own non-null picture, reported through the real trace-recording path.
+      const cameraSignal = AbortSignal.timeout(10_000);
+      out.personCameraAttempts = 0;
+      while (true) {
+        cameraSignal.throwIfAborted();
+        out.personCameraAttempts++;
+        if ((await host.capturePicture(person.tabId, cameraSignal)) !== null) break;
+        await new Promise((resolve) => setTimeout(resolve, 150));
       }
       const personSnap = await port.snapshot({ tabId: person.tabId, signal });
       const personRef = /button[^\n]*\[ref=(e\d+)\]/.exec(personSnap.snapshotText)?.[1];
@@ -337,24 +348,41 @@ const replayCaption = (page) => replay(page).locator("[data-trace-caption]");
 async function openReplayFromTranscript(page, sessionId, tabId, expectedTabIds) {
   await chatTab(page, sessionId).click();
   const bundles = page.locator('[data-slot="activity-bundle-header"]');
+  let selected;
   await waitUntil("the persisted browse entries in the transcript", async () => {
-    // Adjacent assistant tool entries share a bundle, even across ledger turns.
-    // Open the real bundle and row disclosures, then count cards, not headers.
     for (const header of await bundles.all()) {
       if ((await header.getAttribute("aria-expanded")) !== "true") await header.click();
-      const details = header
-        .locator("..")
-        .getByRole("button", { name: "Show details", exact: true });
-      while ((await details.count()) > 0) await details.first().click();
     }
-    const actualTabIds = await page
-      .locator("[data-browser-tab-card]")
-      .evaluateAll((cards) => cards.map((card) => card.getAttribute("data-browser-tab-card")));
-    return canonical(actualTabIds.toSorted()) === canonical(expectedTabIds.toSorted());
+    const rows = page.locator('[data-tool-category="browser"]');
+    if ((await rows.count()) !== expectedTabIds.length) return false;
+    const byTab = new Map();
+    for (const row of await rows.all()) {
+      const header = row.locator(":scope > button[aria-expanded]");
+      if ((await header.count()) !== 1) throw new Error("ambiguous browser disclosure");
+      if ((await header.getAttribute("aria-expanded")) !== "true") await header.click();
+      const original = row.getByRole("button", { name: "Original output", exact: true });
+      if ((await original.count()) !== 1) throw new Error("missing unique Original output");
+      if ((await original.getAttribute("aria-expanded")) !== "true") await original.click();
+      const evidence = row.locator('pre[aria-label="Original tool evidence"]');
+      if ((await evidence.count()) !== 1) throw new Error("missing unique browser evidence");
+      const part = JSON.parse(await evidence.textContent());
+      const facet = part.toolMetadata?.["volli.activity"]?.browse;
+      if (!facet?.tabId || facet.ownerSessionId !== sessionId)
+        throw new Error("browser evidence has missing or foreign identity");
+      if (byTab.has(facet.tabId)) throw new Error("duplicate browser tab evidence");
+      byTab.set(facet.tabId, row);
+      await original.click();
+    }
+    if (canonical([...byTab.keys()].toSorted()) !== canonical(expectedTabIds.toSorted()))
+      throw new Error("unexpected browser tab evidence set");
+    selected = byTab.get(tabId);
+    if (!selected) throw new Error("requested tab has no transcript evidence");
+    return true;
   });
-  const card = page.locator(`[data-browser-tab-card="${tabId}"]`);
-  await waitUntil("the transcript's BrowserTabCard", async () => (await card.count()) === 1);
-  await card.getByRole("button", { name: "Replay", exact: true }).click();
+  const button = selected.getByRole("button", { name: "Replay", exact: true });
+  if ((await button.count()) !== 1)
+    throw new Error("missing unique Replay in browser evidence row");
+  await button.click();
   await waitUntil("the replay dialog", async () =>
     (await replay(page).count()) === 1 ? true : null,
   );
@@ -543,7 +571,7 @@ async function main() {
           driven.personPicture !== null &&
           !personFrame &&
           !personTrace,
-        detail: `frames=${frames.length} named=${named.length} records=${records.length} personPicture=${driven.personPicture}`,
+        detail: `frames=${frames.length} named=${named.length} records=${records.length} personPicture=${driven.personPicture} personCameraAttempts=${driven.personCameraAttempts}`,
       };
     },
   );

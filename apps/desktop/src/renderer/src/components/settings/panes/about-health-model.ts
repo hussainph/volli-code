@@ -26,7 +26,12 @@
  * decision is invisible in a screenshot of the happy case, which is exactly
  * how the original defect survived.
  */
-import { doctorCheckHeadline, LEGACY_DOCTOR_REMEDY, type DoctorCheck } from "@volli/shared";
+import {
+  doctorCheckHeadline,
+  LEGACY_DOCTOR_REMEDY,
+  SESSION_ENV_TOOLS,
+  type DoctorCheck,
+} from "@volli/shared";
 
 import {
   cliStatusDisclosure,
@@ -74,6 +79,12 @@ export interface AboutHealthInput {
   checks: readonly DoctorCheck[];
 }
 
+// Filter the UI projection only: About's support report still receives every
+// original check, including runtime and package-manager failures and remedies.
+const AGENT_ONLY_TOOL_CHECK_IDS = new Set(
+  SESSION_ENV_TOOLS.filter((tool) => tool !== "git").map((tool) => `tool-${tool}`),
+);
+
 /**
  * A Doctor finding, headed by what went WRONG rather than by the check's
  * positive claim, and detailed by the remedy the check computed. An older
@@ -82,7 +93,7 @@ export interface AboutHealthInput {
  */
 function doctorFaults(checks: readonly DoctorCheck[]): AboutFault[] {
   return checks
-    .filter((check) => check.status !== "ok")
+    .filter((check) => check.status !== "ok" && !AGENT_ONLY_TOOL_CHECK_IDS.has(check.id))
     .map((check) => ({
       id: check.id,
       headline: doctorCheckHeadline(check),

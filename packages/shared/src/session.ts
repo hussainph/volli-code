@@ -3,7 +3,7 @@ import type { SessionOrigin } from "./session-origin";
  * The terminal-shaped view of a Session: the trace and resume seed for a
  * terminal, distinct from its live in-memory PTY state
  * (`TerminalEngine`/renderer `stores/sessions.ts`). `ticketId: null` means a
- * Board Session (CONTEXT.md's "Board Session") — main
+ * Board Session (CONTEXT.md#board-session) — main
  * checkout, no worktree, no card on the board, still recorded.
  * `harnessSessionId` is reserved for the harness's own resume UUID
  * (claude/codex `--resume` seed) — filled in later by hooks/the volli CLI,
@@ -346,7 +346,7 @@ export type SessionListingIdentity =
 
 /**
  * Whether this Session is a Subagent one — the durable child a parent's
- * `session_delegate` call created (CONTEXT.md "Session Role").
+ * `session_delegate` call created (CONTEXT.md#session-role).
  *
  * **A Subagent Session is never a row in a Session listing** (VC-279): not in
  * the project sidebar's two bands, the ticket rail's roster, Home's Sessions

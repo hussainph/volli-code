@@ -124,7 +124,7 @@ export interface AgentBrowserBackend {
   /** A live picture of the tab for the transcript card, or null when the host declined to look. */
   capturePicture(tabId: string, signal?: AbortSignal): Promise<string | null>;
   /** Keeps a model-requested screenshot for the person; answers the picture's id. */
-  keepScreenshot(tabId: string, base64Png: string): string;
+  keepScreenshot(tabId: string, base64Png: string, generation: number): string;
   /** Closes unheld headless tabs one Session owns, optionally limited to captured ids. */
   closeHeadlessOwnedBy(sessionId: string, tabIds?: readonly string[]): string[];
   /** The hold doors (VC-239); see `BrowserTabRegistry.hold` and its siblings. */
@@ -305,6 +305,7 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
       signal,
       factory: {
         transport: () => options.transportFor(tabId),
+        currentGeneration: () => resolve(tabId).generation,
         ...(cursor === undefined ? {} : { cursor }),
       },
       operation: async (context) => await operation(context.controller),
@@ -419,7 +420,11 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
     tabId: string,
     changed: boolean,
     signal: AbortSignal,
-  ): Promise<string | null> => (changed ? await options.host.capturePicture(tabId, signal) : null);
+    controller: BrowserTabController,
+  ): Promise<string | null> =>
+    changed && (await controller.preparePreview(signal))
+      ? await options.host.capturePicture(tabId, signal)
+      : null;
 
   const snapshotOf = async (
     tabId: string,
@@ -440,7 +445,7 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
     const tab = resolve(tabId);
     const ready = await syncedController(tab, controller, signal);
     const printed = await ready.snapshot(signal);
-    const picture = await pictureAfterChange(tab.tabId, changed, signal);
+    const picture = await pictureAfterChange(tab.tabId, changed, signal, ready);
     signal.throwIfAborted();
     // Re-read after the capture, and without refusing: a load that failed
     // while this call waited is the one fact a successful-looking snapshot
@@ -673,11 +678,20 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
           const tab = resolve(input.tabId);
           keepAwake(tab.tabId);
           const ready = await syncedController(tab, controller, input.signal);
+          const generation = ready.generation;
           const shot = await ready.screenshot(input.signal);
           input.signal.throwIfAborted();
-          // The model's picture is the person's too: kept, not re-captured.
-          const picture = options.host.keepScreenshot(tab.tabId, shot.base64Png);
-          return { ...pageOf(resolve(tab.tabId)), picture, ...shot };
+          const captured = resolve(tab.tabId);
+          if (captured.generation !== generation) {
+            throw new BrowserRefusal(
+              "browser.stale-ref",
+              "The tab changed while its screenshot was being captured: take a new screenshot.",
+            );
+          }
+          // Pin provenance through the store boundary too: never label old
+          // pixels with whatever generation happens to be current at persistence.
+          const picture = options.host.keepScreenshot(tab.tabId, shot.base64Png, generation);
+          return { ...pageOf(captured), picture, ...shot };
         }),
       );
     },

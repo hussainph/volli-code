@@ -190,6 +190,16 @@ describe("host chip", () => {
     expect(badge()).toBe("fail");
   });
 
+  it("uses the compact menu inset instead of the form popover padding", async () => {
+    world = hostWorld({ selected: "local" });
+    await world.render(<HostChip />);
+    const list = await openSwitcher();
+    expect(list.classList.contains("p-1")).toBe(true);
+    expect(list.classList.contains("p-4")).toBe(false);
+    expect(list.querySelector('[aria-current="true"]')?.textContent).toContain("This Mac");
+    expect(list.textContent).toContain("Manage hosts…");
+  });
+
   it("lists This Mac and every host, then Add a host… and Manage hosts…", async () => {
     world = hostWorld();
     await world.render(<HostChip />);
@@ -373,7 +383,9 @@ describe("host chip", () => {
     });
     await world.render(<HostChip />);
     const list = await openSwitcher();
-    expect(list.textContent).toContain("Claude sign-in expired");
+    expect(list.textContent).toContain("Sign-in expired");
+    expect(list.textContent).not.toContain("Claude sign-in expired");
+    expect(list.querySelector('[role="img"][aria-label="Claude · anthropic"]')).not.toBeNull();
     await click(list, "Sign in");
     expect(world.remote.calls).toEqual([
       { kind: "signIn", hostId: HETZNER_ID, providerId: "anthropic" },

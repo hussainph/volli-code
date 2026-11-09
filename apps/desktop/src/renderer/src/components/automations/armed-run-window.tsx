@@ -138,7 +138,7 @@ function ArmedRunCard({ window, now }: { window: PendingArmedRun; now: number })
       {/* The bar rides the card's own bottom edge rather than sitting in the
           layout: it must read as the window draining, not as a third control. */}
       <div
-        className="absolute inset-x-0 bottom-0 h-[2px] bg-foreground/10"
+        className="absolute inset-x-0 bottom-0 h-[2px] bg-wash-ink/10"
         role="progressbar"
         aria-label={`${window.automationName} starts in ${secondsLeft} seconds`}
         aria-valuemin={0}
@@ -149,7 +149,7 @@ function ArmedRunCard({ window, now }: { window: PendingArmedRun; now: number })
             clearly against the `/10` wash behind it without becoming ink. */}
         <div
           data-armed-run-progress
-          className="h-full bg-foreground/50"
+          className="h-full bg-wash-ink/50"
           style={{ width: `${progress * 100}%` }}
         />
       </div>

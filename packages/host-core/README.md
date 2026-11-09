@@ -150,7 +150,7 @@ One convention for what a module asks for and what it is (VC-632):
 - **No file named after another package.** The single-instance profile lock,
   runtime paths and CLI shim are `host-profile.ts`, not `agent-runtime.ts`
   beside `@volli/agent-runtime`.
-- **Door** keeps its glossary meaning (`CONTEXT.md`): one entrance a caller
+- **Door** keeps its glossary meaning ([glossary](../../CONTEXT.md#door)): one entrance a caller
   reaches host behavior through (an IPC handler, a socket verb, an agent
   tool), never the behavior itself.
 

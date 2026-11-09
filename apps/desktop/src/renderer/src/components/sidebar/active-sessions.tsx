@@ -303,15 +303,10 @@ function indexSignalsByTicket(
 export function ActiveSessions({
   project,
   visible,
-  activeHeader = true,
-  onActiveCountChange,
   onProfile,
 }: {
   project: Project;
   visible: boolean;
-  /** The primary sidebar shares this header with its content switcher. */
-  activeHeader?: boolean;
-  onActiveCountChange?(count: number): void;
   /**
    * Optional benchmark instrumentation. Production callers leave this absent,
    * so the Profiler boundaries add no work to the shipped sidebar; the lab's
@@ -769,14 +764,11 @@ export function ActiveSessions({
     [listing.previous],
   );
   const provisionalRows = React.useMemo<readonly ActiveSessionRow[]>(() => {
-    if (!filter.kinds.chat) return [];
     return Object.entries(provisionalDrafts).flatMap(([sessionId, draft]) => {
       const ticket =
         draft.ticketId === null
           ? null
           : (tickets.find((candidate) => candidate.id === draft.ticketId) ?? null);
-      const scope = ticket === null ? "project" : "ticket";
-      if (!filter.scopes[scope]) return [];
       const named = draft.title?.trim();
       return [
         {
@@ -797,7 +789,7 @@ export function ActiveSessions({
         },
       ];
     });
-  }, [filter.kinds.chat, filter.scopes, provisionalDrafts, tickets]);
+  }, [provisionalDrafts, tickets]);
   /**
    * Chat Drafts stay AHEAD of the listing and out of the held order: a Draft is
    * renderer-owned, has no Session to hold a place for, and is never peekable.
@@ -1331,9 +1323,11 @@ export function ActiveSessions({
    */
   const registerRowKeys = peek.registerRowKeys;
 
-  React.useEffect(() => {
-    onActiveCountChange?.(activeRows.length);
-  }, [activeRows.length, onActiveCountChange]);
+  // Only a successful empty listing may remove the group. Drafts count as
+  // rows; pending, failed and unavailable rosters retain their own surface.
+  // Creation lives in fixed navigator chrome, independent of this group.
+  const activeHeader =
+    activeRows.length > 0 || listingPending || listingFailed || sessionsUnavailable !== null;
 
   const canShowMore = previousSlice.hiddenCount > 0;
   const canShowLess =
@@ -1558,7 +1552,7 @@ export function ActiveSessions({
       );
     return output;
   };
-  const activeBand = (
+  const activeBand = activeHeader ? (
     <SidebarGroup data-session-band="active" className="session-navigator gap-0 py-0">
       <SidebarMenu
         style={{ gap: 0 }}
@@ -1588,9 +1582,13 @@ export function ActiveSessions({
         ) : null}
       </SidebarMenu>
     </SidebarGroup>
-  );
+  ) : null;
   const previousBand = (
-    <SidebarGroup data-session-band="previous" className="session-navigator gap-0 py-0">
+    <SidebarGroup
+      data-session-band="previous"
+      className="session-navigator gap-0 py-0"
+      style={activeHeader ? undefined : { marginTop: 0 }}
+    >
       <SidebarMenu
         style={{ gap: 0 }}
         {...(previousEntries.length === 0 && listingPending ? loadingRegionProps("sessions") : {})}

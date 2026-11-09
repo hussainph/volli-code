@@ -3,6 +3,12 @@ import {
   DEFAULT_CANVAS,
   effectiveStopHexes,
   compositeHex,
+  regularGlassBackdrop,
+  readingInk,
+  tintCanvasNeutral,
+  hexChannels,
+  hexToOklch,
+  SECONDARY_FILL_ALPHA,
   wcagContrast,
   THEME_TOKEN_NAMES,
   canvasBackground,
@@ -16,7 +22,6 @@ import {
   CANVAS_TOKEN_NAMES,
   applyResolvedAppearanceClass,
   deriveCanvasPaint,
-  regularGlassBackdrop,
   paintCanvas,
   resetSystemAppearanceWatchForTests,
   systemPrefersDark,
@@ -78,12 +83,12 @@ describe("deriveCanvasPaint", () => {
         TEAL,
         { ...DEFAULT_CANVAS, stops: [{ hex: "#ffffff", x: 0.5, y: 0.5 }] },
       ]) {
-        const { canvasTokens } = deriveCanvasPaint(canvas, mode);
+        const { tokens, canvasTokens } = deriveCanvasPaint(canvas, mode);
         expect(canvasTokens["--glass-pane-veil"]).toBe(
           mode === "light" ? "rgb(255 255 255 / .46)" : "rgb(26 26 28 / .52)",
         );
         expect(canvasTokens["--glass-writing-veil"]).toBe(
-          mode === "light" ? "rgb(255 255 255 / .56)" : "rgb(40 40 42 / .56)",
+          `rgb(${hexChannels(tokens["--popover"]).join(" ")} / 0.56)`,
         );
         expect(canvasTokens["--glass-rim"]).toContain("180deg");
         expect(canvasTokens["--glass-rim"]).toContain("transparent 78%");
@@ -96,6 +101,68 @@ describe("deriveCanvasPaint", () => {
           );
           expect(wcagContrast(canvasTokens["--glass-secondary"], surface)).toBeGreaterThanOrEqual(
             4.5,
+          );
+        }
+      }
+    },
+  );
+
+  it.each(["light", "dark"] as const)(
+    "%s keeps the outline foreground solve out of secondary ink and row materials",
+    (mode) => {
+      for (const seed of [
+        "#ef8a4b",
+        "#2a7de8",
+        "#00ff00",
+        "#f8f0d8",
+        "#e6f6ff",
+        "#ffffff",
+        "#000000",
+      ]) {
+        for (const vibrancy of [0, 0.6, 1]) {
+          const canvas = { ...DEFAULT_CANVAS, vibrancy, stops: [{ hex: seed, x: 0.5, y: 0.5 }] };
+          const { tokens: t, canvasTokens: c } = deriveCanvasPaint(canvas, mode);
+          // The shared writing-glass solve assumes this exact fill: the tinted
+          // foreground at the shared secondary coverage.
+          expect(c["--fill-secondary"]).toBe(
+            `rgb(${hexChannels(tintCanvasNeutral(t["--foreground"], canvas, mode)).join(" ")} / ${SECONDARY_FILL_ALPHA})`,
+          );
+          // Writing popovers: light keeps the control face and shared press;
+          // dark shades opposite its light body ink at the same coverages.
+          expect(c["--writing-control-face"]).toBe(
+            mode === "light" ? c["--control-face"] : "rgb(0 0 0 / 0.14)",
+          );
+          expect(c["--writing-control-pressed"]).toBe(
+            mode === "light" ? c["--fill-secondary"] : `rgb(0 0 0 / ${SECONDARY_FILL_ALPHA})`,
+          );
+          const pools = effectiveStopHexes(canvas, mode).map((peak) =>
+            compositeHex(
+              mode === "light" ? "#ffffff" : "#1a1a1c",
+              mode === "light" ? 0.46 : 0.52,
+              regularGlassBackdrop(peak, mode),
+            ),
+          );
+          const score = (ink: string) =>
+            Math.min(...pools.map((surface) => wcagContrast(ink, surface)));
+          const darkInk = score("#171717") >= score("#f5f5f5");
+          const wash = tintCanvasNeutral(darkInk ? "#171717" : "#f5f5f5", canvas, mode);
+          expect(c["--glass-wash-ink"]).toBe(wash);
+          expect(c["--glass-outline-pressed"]).toBe(
+            darkInk ? "rgb(255 255 255 / 0.078)" : "rgb(0 0 0 / 0.078)",
+          );
+          expect(c["--fill-row-selected"]).toBe(`color-mix(in oklab, ${wash} 9%, transparent)`);
+          expect(c["--fill-row-hover"]).toBe(`color-mix(in oklab, ${wash} 4.7%, transparent)`);
+          expect(c["--glass-secondary"]).toBe(
+            readingInk(
+              tintCanvasNeutral(darkInk ? "#5a5a5a" : "#b9b9b9", canvas, mode),
+              pools.flatMap((surface) => [
+                surface,
+                compositeHex(wash, 0.047, surface),
+                compositeHex(wash, 0.1, surface),
+              ]),
+              darkInk ? "light" : "dark",
+              4.5,
+            ),
           );
         }
       }
@@ -121,14 +188,12 @@ describe("deriveCanvasPaint", () => {
         TEAL,
         { ...TEAL, stops: [...TEAL.stops, { hex: "#e0457b", x: 0.8, y: 0.2 }] },
       ]) {
-        const { canvasTokens } = deriveCanvasPaint(canvas, mode);
+        const { tokens, canvasTokens } = deriveCanvasPaint(canvas, mode);
         expect(canvasTokens["--canvas-accent"]).toBe(canvas.stops[0].hex);
         expect(canvasTokens["--flow"]).toContain(canvas.stops[0].hex);
         expect(canvasTokens["--flow"]).toContain("linear-gradient");
-        expect(canvasTokens["--glass-fill"]).toBe(mode === "light" ? "#fafafa" : "#282828");
-        for (const surface of mode === "light"
-          ? ["#ffffff", "#f6f6f6", "#e1e1e1"]
-          : ["#1e1e1e", "#282828", "#3e3e3e"]) {
+        expect(canvasTokens["--glass-fill"]).toBe(tokens["--popover"]);
+        for (const surface of [tokens["--card"], tokens["--muted"], tokens["--popover"]]) {
           expect(
             wcagContrast(canvasTokens["--tertiary-foreground"], surface),
           ).toBeGreaterThanOrEqual(3);
@@ -163,12 +228,31 @@ describe("deriveCanvasPaint", () => {
     expect(canvasTokens["--canvas"]).toBe(canvasBackground(TEAL, "light"));
   });
 
-  it("returns the same token set the shared derivation does", () => {
-    // Nothing here re-derives; a second opinion about the ladder is the one
-    // thing this module must not have.
+  it("returns the shared token set, completing only the painted focus ring", () => {
+    // No second opinion about the ladder. The ring alone adds navigation
+    // backings to the shared ring's set, in one solve from the same ink, so it
+    // can only sit further toward the appearance's pole.
     const { tokens } = deriveCanvasPaint(TEAL, "dark");
+    const { "--ring": painted, ...rest } = tokens;
+    const { "--ring": shared, ...sharedRest } = deriveCanvasTokens(TEAL, "dark");
+    expect(rest).toEqual(sharedRest);
+    expect(hexToOklch(painted).L).toBeGreaterThanOrEqual(hexToOklch(shared).L - 1e-6);
 
-    expect(tokens).toEqual(deriveCanvasTokens(TEAL, "dark"));
+    // Light green over a black stop: navigation glass binds, so the painted
+    // ring is darker than the paper-side one.
+    const green: Canvas = {
+      ...DEFAULT_CANVAS,
+      vibrancy: 1,
+      primaryIndex: 0,
+      stops: [
+        { hex: "#00ff00", x: 0, y: 1 },
+        { hex: "#ffffff", x: 1, y: 0 },
+        { hex: "#000000", x: 0.5, y: 0.5 },
+      ],
+    };
+    const lightPainted = deriveCanvasPaint(green, "light").tokens["--ring"];
+    const lightShared = deriveCanvasTokens(green, "light")["--ring"];
+    expect(hexToOklch(lightPainted).L).toBeLessThan(hexToOklch(lightShared).L);
   });
 
   it("answers differently per mode — one canvas, two windows", () => {

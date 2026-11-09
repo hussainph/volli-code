@@ -41,6 +41,10 @@ const LONG_SKILL: SkillReference = {
   root: ".agents/skills/review-every-boundary",
 };
 
+function providerHelp(): Element | null {
+  return document.body.querySelector('[data-slot="tooltip-content"]');
+}
+
 function automation(overrides: Partial<Automation> = {}): Automation {
   return {
     id: "automation-1",
@@ -265,6 +269,121 @@ describe("a tier Runtime", () => {
   });
 });
 
+describe("the Runtime model selector's provider help", () => {
+  it("keeps pointer-focused rows quiet and reveals a typeahead-selected provider immediately", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = catalogueClient();
+      const inspect = client.inspect;
+      client.inspect = async (options) => {
+        const snapshot = await inspect(options);
+        return {
+          ...snapshot,
+          providers: [
+            ...snapshot.providers,
+            { ...snapshot.providers[0]!, id: "openai", label: "OpenAI" },
+          ],
+          models: [
+            ...snapshot.models,
+            {
+              ...snapshot.models[0]!,
+              providerId: "openai",
+              modelId: "gpt-4.1-mini",
+              label: "GPT-4.1 mini",
+            },
+          ],
+        };
+      };
+      const pin: ModelSelection = {
+        providerId: "anthropic",
+        modelId: "claude-opus",
+        reasoningLevel: "high",
+      };
+      await mountEditor(automation({ runtime: pin }), client);
+      await edit("runtime");
+      const draftBefore = loadEditorDraft("p1", undefined, "automation-1");
+      const trigger = document.querySelector<HTMLButtonElement>('[aria-label="Runtime model"]')!;
+      await act(async () => trigger.focus());
+      await act(async () =>
+        trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })),
+      );
+      await act(async () => {
+        vi.advanceTimersByTime(0);
+      });
+      const options = [...document.querySelectorAll<HTMLElement>('[role="option"]')];
+      const claude = options.find(
+        (option) =>
+          option.querySelector('[data-slot="model-name"]')?.textContent === "Claude Opus 4.5",
+      )!;
+      const gpt = options.find(
+        (option) =>
+          option.querySelector('[data-slot="model-name"]')?.textContent === "GPT-4.1 mini",
+      )!;
+      const pointerFocus = () =>
+        claude.dispatchEvent(
+          new PointerEvent("pointermove", { bubbles: true, pointerType: "mouse" }),
+        );
+      await act(async () => {
+        pointerFocus();
+      });
+      expect(document.activeElement).toBe(claude);
+      expect(providerHelp()).toBeNull();
+      expect(claude.textContent).not.toContain("Anthropic");
+      expect(gpt.textContent).not.toContain("OpenAI");
+      const mark = claude.querySelector<HTMLElement>('[data-slot="help-tag"]')!;
+      expect(mark.hasAttribute("tabindex")).toBe(false);
+      await act(async () =>
+        mark.dispatchEvent(
+          new PointerEvent("pointermove", { bubbles: true, pointerType: "mouse" }),
+        ),
+      );
+      await act(async () => {
+        vi.advanceTimersByTime(1499);
+      });
+      expect(providerHelp()).toBeNull();
+      await act(async () => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(providerHelp()?.textContent).toBe("Claude Opus 4.5 · Anthropic");
+      await act(async () =>
+        mark.dispatchEvent(
+          new PointerEvent("pointerout", { bubbles: true, relatedTarget: document.body }),
+        ),
+      );
+      expect(providerHelp()).toBeNull();
+      await act(async () => {
+        pointerFocus();
+      });
+      expect(document.activeElement).toBe(claude);
+      // Modifier shortcuts are not Radix's character typeahead.
+      await act(async () =>
+        claude.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "g", ctrlKey: true, bubbles: true }),
+        ),
+      );
+      await act(async () => {
+        vi.advanceTimersByTime(0);
+      });
+      expect(document.activeElement).toBe(claude);
+      expect(providerHelp()).toBeNull();
+      await act(async () =>
+        claude.dispatchEvent(new KeyboardEvent("keydown", { key: "g", bubbles: true })),
+      );
+      await act(async () => {
+        vi.advanceTimersByTime(0);
+      });
+      expect(document.activeElement).toBe(gpt);
+      expect(providerHelp()?.textContent).toBe("GPT-4.1 mini · OpenAI");
+      expect(gpt.querySelector('[data-slot="help-tag"]')?.hasAttribute("tabindex")).toBe(false);
+      // Typeahead reads an option; it does not change the saved Runtime.
+      expect(loadEditorDraft("p1", undefined, "automation-1")).toEqual(draftBefore);
+      expect(useAutomationsStore.getState().editor?.automation?.runtime).toEqual(pin);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("the unavailable Runtime selection's display name", () => {
   it.each(["unavailable", "authentication-required", "hidden"] as const)(
     "names a %s pin from the full catalogue and saves its original ids and effort",
@@ -286,8 +405,12 @@ describe("the unavailable Runtime selection's display name", () => {
       await edit("runtime");
       const trigger = document.querySelector('[aria-label="Runtime model"]') as HTMLButtonElement;
       const caption = trigger.querySelector('[data-slot="model-name"]');
-      expect(caption?.textContent).toBe("Claude Opus 4.5 · Anthropic");
+      expect(caption?.textContent).toBe("Claude Opus 4.5");
       expect(caption!.parentElement?.querySelector("svg[aria-hidden] path")).not.toBeNull();
+      expect(
+        caption!.parentElement?.querySelector('[role="img"]')?.getAttribute("aria-label"),
+      ).toBe("Anthropic");
+      expect(trigger.textContent).not.toContain("Anthropic");
       expect(trigger.textContent).not.toContain("claude-opus");
       // The picker has no offerable selection, but display identity can still
       // read it. Both consumers use the actual provider's one held inspection.
@@ -300,9 +423,12 @@ describe("the unavailable Runtime selection's display name", () => {
       });
       const selectedOption = document.querySelector('[role="option"][data-state="checked"]');
       expect(selectedOption?.querySelector('[data-slot="model-name"]')?.textContent).toBe(
-        "Claude Opus 4.5 · Anthropic",
+        "Claude Opus 4.5",
       );
       expect(selectedOption!.querySelector("svg[aria-hidden] path")).not.toBeNull();
+      expect(selectedOption!.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
+        "Anthropic",
+      );
       await act(async () => {
         selectedOption!.dispatchEvent(
           new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
@@ -336,10 +462,12 @@ describe("the unavailable Runtime selection's display name", () => {
 
     await edit("runtime");
     const trigger = document.querySelector('[aria-label="Runtime model"]');
-    expect(trigger?.querySelector('[data-slot="model-name"]')?.textContent).toBe(
-      "claude-opus · other-account",
-    );
+    expect(trigger?.querySelector('[data-slot="model-name"]')?.textContent).toBe("claude-opus");
     expect(trigger?.textContent).not.toContain("Claude Opus 4.5");
+    expect(trigger?.textContent).not.toContain("other-account");
+    expect(trigger?.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
+      "other-account",
+    );
     await typeName("Keep the unknown pin");
     expect(loadEditorDraft("p1", undefined, "automation-1")?.runtime).toEqual(pin);
     await act(async () => buttonContaining("Save name").click());

@@ -29,7 +29,11 @@ import {
 } from "./session-usage";
 import type { SessionTodoList } from "./session-todo";
 import type { SessionUsage, SessionUsageSummary } from "./session-usage";
-import type { SessionUsageEntry } from "./session-usage-report";
+import type {
+  SessionUsageEntry,
+  SessionUsageReport,
+  SessionUsageReportQuery,
+} from "./session-usage-report";
 
 /**
  * One durable Session row.
@@ -2510,6 +2514,12 @@ export type Synchronous<T> = T extends PromiseLike<unknown> ? never : T;
 /** The composition root guarantees atomicity for every function passed here. */
 export interface SessionLedger {
   transaction<T>(work: (transaction: SessionLedgerTransaction) => Synchronous<T>): Promise<T>;
+  /**
+   * Optional storage-owned read boundary, so a large report can run off the
+   * host thread. It must use the same row codecs and reportSessionUsage fold,
+   * with coverage and rows from one snapshot; it is not a second arithmetic.
+   */
+  reportUsage?(query: ListSessionUsageQuery & SessionUsageReportQuery): Promise<SessionUsageReport>;
 }
 
 /** Injected by the composition root so the domain never imports a runtime clock or UUID library. */

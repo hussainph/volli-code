@@ -208,7 +208,9 @@ async function expand(part: DynamicToolUIPart) {
       </BrowserCardHostContext.Provider>,
     ),
   );
-  const disclosure = container.querySelector<HTMLButtonElement>('[aria-label="Show details"]');
+  const disclosure = container.querySelector<HTMLButtonElement>(
+    '[data-tool-category="code"] > button, [aria-label="Show details"]',
+  );
   if (disclosure === null) throw new Error("missing image disclosure");
   await act(async () => disclosure.click());
 }
@@ -300,7 +302,9 @@ describe("Code Mode images in the committed transcript", () => {
     );
     await expand(partOf([await committedFrame(translated!)]));
     assertImagesAndTrust();
-    const spoof = [...container.querySelectorAll("div")].find((div) => div.textContent === SPOOF);
+    const spoof = [...container.querySelectorAll("pre, div")].find(
+      (div) => div.textContent === SPOOF,
+    );
     expect(spoof).toBeDefined();
     expect(spoof?.closest("figure")).toBeNull();
     expect(

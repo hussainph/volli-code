@@ -309,13 +309,12 @@ export type StatusTokens = Pick<
  * member of this family is now solved — `--destructive` included, which is why
  * the light path no longer copies it out of the dark one.
  *
- * Each label is {@link pickAccentLabel}'s verdict — whichever of white or a
- * near-black tint of the status hue reads better ON the fill. Unlike the accent
- * pair there is no repair step, and there is no room for one: the fill's
- * lightness is already spoken for by {@link STATUS_LC}, so the only axis
- * `solveAccentPair` has to trade is the one axis a status colour cannot give up.
- * The two candidates straddle every lightness a status fill can take, so the
- * better of them is legible by construction — and because the fill is solved per
+ * Prefer {@link pickAccentLabel}'s perceptual verdict, but require WCAG AA
+ * for its small label too. White can win APCA while falling below 4.5:1 on a
+ * status solved against white paper. In that case choose a neutral ink pole;
+ * black or white always clears AA without changing the semantic fill's hue,
+ * chroma or lightness. The fill's lightness remains owned by {@link STATUS_LC}.
+ * Because the fill is solved per
  * appearance, so is the label: a destructive button is white-on-red where the
  * red is light enough to carry white, and dark-on-red where a light ladder
  * pushed it down. That flip is the point, not an inconsistency.
@@ -327,7 +326,10 @@ export function solveStatusTokens(surface: string): StatusTokens {
       STATUS_CHROMA,
       hue,
     );
-    return { fill, label: pickAccentLabel(fill, hue).hex };
+    const label = [pickAccentLabel(fill, hue).hex, "#ffffff", "#000000"].reduce((best, next) =>
+      wcagContrast(best, fill) >= 4.5 ? best : next,
+    );
+    return { fill, label };
   };
   const positive = solve(STATUS_HUES.positive);
   const attention = solve(STATUS_HUES.attention);

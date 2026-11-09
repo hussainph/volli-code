@@ -132,9 +132,12 @@ import {
 import { EffortPill, EffortSlider } from "@renderer/components/chat/composer-effort-ui";
 import { ContextUsagePill } from "@renderer/components/chat/context-usage-ui";
 import { ComposerPicker } from "@renderer/components/chat/composer-picker-ui";
-import { ModelMark, ModelName } from "@renderer/components/models/model-identity";
+import {
+  ModelMark,
+  ModelName,
+  modelProviderIdentity,
+} from "@renderer/components/models/model-identity";
 import { Button } from "@renderer/components/ui/button";
-import { ListRow } from "@renderer/components/ui/list-row";
 import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { ValueReveal } from "@renderer/components/ui/value-reveal";
@@ -525,86 +528,61 @@ export const SessionComposer = React.memo(function SessionComposer({
         )}
       >
         {queued.length > 0 ? (
-          // `flex-nowrap`, AND IT IS LOAD-BEARING RATHER THAN TIDY-UP.
-          // `PromptInputHeader` is a wrapping ROW — right for the chip strip it
-          // was written for — and this call site turns it into a column without
-          // retracting the wrap. A wrapping column sizes each flex LINE to its
-          // widest item's max-content and then stretches the item to *that*, so
-          // a queued row measured 460px inside a 263px composer: the message
-          // ran out through the card's right edge and took Steer, Remove and
-          // the actions menu with it, off screen and unclickable. Measured at
-          // every width the app can hand this box, the first failure was 480px
-          // and by 420px all three controls were outside. The row's own
-          // `min-w-0 flex-1 truncate` was already right and could do nothing,
-          // because nothing was applying any pressure to it.
-          //
-          // `px-2`: the ListRow's own 8px inset rides on top of it, so the
-          // queued words start 16px in — the draft's own left edge.
-          // Its own provider, for {@link ComposerHint}'s reason: the reveal is
-          // a Radix tooltip, and the composer can render without the app
-          // shell's provider.
+          // Content owns the full measure. Status and actions share a separate
+          // row, so neither a long message nor a file can displace a control.
+          // The shell owns the gutter; cards add only the shared inner step.
+          // flex-nowrap is load-bearing: a wrapping column sizes flex lines by
+          // max-content and can push the cards/actions outside a narrow pane.
           <TooltipProvider>
-            <PromptInputHeader className="flex-col flex-nowrap items-stretch gap-1 border-b border-border px-2 py-2">
-              {queued.map((entry) => (
-                // The group names the row for assistive tech and holds BOTH the
-                // row's text and its actions; ListRow keeps the actions a
-                // sibling of its (inert) content, so the label lives out here.
-                <div
-                  key={entry.id}
-                  role="group"
-                  aria-label={`Queued message: ${entry.text}`}
-                  className="rounded-card bg-muted"
-                >
-                  <ListRow
-                    onActivate={null}
-                    density="two-line"
-                    // The words get the row's whole measure; the status sits
-                    // beneath them instead of competing for the same line. The
-                    // reveal is how a clipped message is read without editing it.
-                    primary={
+            <PromptInputHeader className="composer-queue flex-col flex-nowrap items-stretch">
+              {queued.map((entry) => {
+                const messageLabel =
+                  entry.text ||
+                  (entry.attachments?.length === 1
+                    ? entry.attachments[0].originalName
+                    : `${entry.attachments?.length ?? 0} attachments`);
+                return (
+                  <div
+                    key={entry.id}
+                    role="group"
+                    aria-label={`Queued message: ${messageLabel}`}
+                    className="composer-queued-item min-w-0 rounded-card bg-muted"
+                  >
+                    {entry.text ? (
                       <ValueReveal
                         term="Queued message"
                         full={entry.text}
                         side="top"
-                        className="block min-w-0 truncate rounded-sm text-left text-ui font-normal text-foreground"
+                        className="block w-full min-w-0 truncate rounded-sm text-left text-ui font-normal text-foreground"
                       >
                         {entry.text}
                       </ValueReveal>
-                    }
-                    secondary={
-                      <>
-                        <span
-                          data-slot="queue-status"
-                          className="block truncate text-ui font-normal text-muted-foreground"
-                        >
-                          <QueuedStatus
-                            label={
-                              steeringMessages?.has(entry.id) || entry.afterCurrentStep
-                                ? "Sends after this step"
-                                : entry.localUnsent
-                                  ? "Not sent"
-                                  : entry.queueState === "releasing"
-                                    ? "Sending"
-                                    : "Queued"
-                            }
-                          />
-                        </span>
-                        {/* Files share the text column rather than competing
-                            with it and the actions at a narrow split width. */}
-                        <AttachmentThumbRow
-                          attachments={entry.attachments ?? []}
-                          className="mt-1"
+                    ) : null}
+                    <AttachmentThumbRow attachments={entry.attachments ?? []} />
+                    <div data-slot="queue-footer" className="flex min-w-0 items-center gap-2">
+                      <span
+                        data-slot="queue-status"
+                        className="min-w-0 flex-1 text-label font-normal text-muted-foreground"
+                      >
+                        <QueuedStatus
+                          label={
+                            steeringMessages?.has(entry.id) || entry.afterCurrentStep
+                              ? "Sends after this step"
+                              : entry.localUnsent
+                                ? "Not sent"
+                                : entry.queueState === "releasing"
+                                  ? "Sending"
+                                  : "Queued"
+                          }
                         />
-                      </>
-                    }
-                    actions={
+                      </span>
                       <span className="flex shrink-0 items-center gap-1">
                         {working ? (
                           <Button
                             type="button"
                             size="xs"
                             variant="ghost"
-                            aria-label={`Steer queued message: ${entry.text}`}
+                            aria-label={`Steer queued message: ${messageLabel}`}
                             // A release already claimed this identity; only the
                             // host's cancel can take it back, so Steer stays off.
                             disabled={
@@ -625,7 +603,7 @@ export const SessionComposer = React.memo(function SessionComposer({
                           type="button"
                           size="icon-xs"
                           variant="ghost"
-                          aria-label={`Remove queued message: ${entry.text}`}
+                          aria-label={`Remove queued message: ${messageLabel}`}
                           // Enabled while releasing: the host cancels a release it has
                           // no proof of delivery for and refuses one in flight. The
                           // row only leaves once the host accepts.
@@ -645,43 +623,29 @@ export const SessionComposer = React.memo(function SessionComposer({
                           type="button"
                           size="icon-xs"
                           variant="ghost"
-                          aria-label={`Edit queued message: ${entry.text}`}
+                          aria-label={`Edit queued message: ${messageLabel}`}
                           title="Edit message"
                           onClick={() => void editQueued(entry.id)}
                         >
                           <EditIcon className="size-3" />
                         </Button>
                       </span>
-                    }
-                  />
-                </div>
-              ))}
+                    </div>
+                  </div>
+                );
+              })}
             </PromptInputHeader>
           </TooltipProvider>
         ) : null}
 
         <PromptInputBody>
-          {/* Above the text, not below it: the strip is part of the message
-              being written, and a person scanning what they are about to send
-              reads top to bottom.
-
-              `w-full`, AND IT IS LOAD-BEARING. `PromptInputBody` is
-              `display:contents`, so this strip is a flex CHILD of the vendored
-              `InputGroup` — which is `items-center` and flips to a COLUMN
-              once the footer's block-end addon mounts. In a column, `center`
-              is the CROSS axis: a shrink-to-fit strip sat mid-composer with
-              its one thumbnail floating over the textarea's centre while
-              everything around it ran edge to edge (VC-137). `w-full` is the
-              same rule the textarea below already follows. */}
+          {/* The bounded attachment token shares the editor's content rail.
+              The manager, not this strip, grows with the number of files. */}
           <AttachmentStrip
             presentation="composer"
             attachments={attachments}
             {...(onRemoveAttachment === undefined ? {} : { onRemove: onRemoveAttachment })}
-            // `px-4`: the tiles' left edge is the text's left edge, one inset
-            // for everything the message is made of. It was `px-3`, a value
-            // off the spacing ladder that put the first tile 4px left of the
-            // first letter.
-            className="w-full px-4 pt-2"
+            className="composer-draft-attachments w-full"
           />
           {/* Reads the caret bindings from the stack above rather than taking
               them as props: the picker card and this input are siblings, one
@@ -699,7 +663,7 @@ export const SessionComposer = React.memo(function SessionComposer({
           />
         </PromptInputBody>
 
-        {/* The tinted tray separates settings from the writing sheet. */}
+        {/* Controls align optically to the same rail as the writing above. */}
         <PromptInputFooter>
           {/* Keep Add outside the wrapping settings: at 265px a live turn
               must not orphan it above the model and effort. The primary
@@ -1480,62 +1444,25 @@ function selectedModel(
   );
 }
 
-/**
- * `sonnet-4.5`, or `Azure OpenAI · gpt-5.6-luna` where the name alone would not
- * say which model this is.
- *
- * A model name is not unique across providers, and this pill runs into that
- * twice. A selection the list does not hold — the Session is pinned to a
- * provider nobody is signed in to — falls back to its raw id, which is the same
- * id a signed-in provider may also carry; and two listed providers can both
- * ship a model called "GPT-5.6 Luna". Both read as an ordinary pill naming a
- * model that is not the one this Session will send to. Where the name is
- * ambiguous the provider leads it, exactly as Settings' model rows do.
- *
- * The effort level used to ride along as a third term. It does not any more:
- * effort is its own chip beside this one, and a bare level word appended to a
- * model name is read as a claim about the *model* — `gpt-5.6-luna · low` says
- * "a low model" long before it says "thinking set to low". One fact per pill.
- */
+/** The same collision rules as Settings, over the composer's offered models. */
+function modelTagIdentity(models: readonly ComposerModel[], model: ComposerModel): string {
+  return modelProviderIdentity(
+    model,
+    models,
+    model.providerLabel,
+    models.map((candidate) => ({ id: candidate.providerId, label: candidate.providerLabel })),
+  );
+}
+
+/** The resting pill names the model; its mark owns the provider help tag. */
 export function modelPillLabel(
   models: readonly ComposerModel[],
   selection: ComposerModelSelection,
-  /** The Session's provider as the catalog names it, for a model no longer listed. */
-  selectionProviderLabel?: string,
 ): string {
-  const model = selectedModel(models, selection);
-  const name = model?.label ?? selection.modelId;
-  if (!name) return "Model";
-  const ambiguous =
-    model === undefined ||
-    models.some((candidate) => candidate !== model && candidate.label === name);
-  return ambiguous
-    ? `${model?.providerLabel ?? selectionProviderLabel ?? selection.providerId} · ${name}`
-    : name;
+  return selectedModel(models, selection)?.label || selection.modelId || "Model";
 }
 
-/**
- * The whole of what this Session will send to: `Fast · sonnet-4.5 · Anthropic`.
- *
- * {@link modelPillLabel} is the pill's *drawing* and answers a different
- * question — what is the shortest thing that still tells this model from its
- * neighbours — which is why it says the provider only where the name alone
- * would be ambiguous, and why the label it returns is then capped at 56px and
- * truncated. Both of those are right for a chip on a row that has to survive a
- * 313px composer.
- *
- * What they left unanswered is this one (VC-288): at 150% zoom in a split the
- * pill draws eight characters, and the tier, the provider and the rest of the
- * name were unreachable without opening the list and changing the selection to
- * find out what it had been. So the identity is composed once, in full, and
- * spent in the three places a truncated pill cannot reach — the accessible
- * name, the pointer's `title`, and the line the open list stands on.
- *
- * The provider is ALWAYS said here, ambiguity or not. "Which model" is what the
- * pill answers; "which account is about to be billed for it" is what this one
- * does, and a name that happens to be unique among today's signed-in providers
- * is not an answer to that.
- */
+/** Full accessible identity, independent of the mark-only resting face. */
 export function modelIdentityLabel(
   models: readonly ComposerModel[],
   selection: ComposerModelSelection,
@@ -1554,7 +1481,9 @@ export function modelIdentityLabel(
   const model = selectedModel(models, selection);
   const name = model?.label ?? selection.modelId;
   if (!name) return "Model";
-  const provider = model?.providerLabel ?? known.providerLabel ?? selection.providerId;
+  const provider = model
+    ? modelTagIdentity(models, model)
+    : (known.providerLabel ?? selection.providerId);
   return [known.tier ?? null, name, provider || null].filter((term) => term !== null).join(" · ");
 }
 
@@ -1670,6 +1599,7 @@ function ModelPillFace({
   /** Present only where this face can become the narrow combined control. */
   compactEffortValue?: string;
 }) {
+  const listed = selectedModel(models, selection);
   return (
     <>
       {/* The mark leads the name: a family the eye catches before the word is
@@ -1678,6 +1608,10 @@ function ModelPillFace({
           off its id — the mark is about WHAT the model is, and that is known
           even when the account that served it is gone. */}
       <ModelMark
+        identityLabel={listed ? modelTagIdentity(models, listed) : undefined}
+        detail={[selectionTier, modelPillLabel(models, selection), compactEffortValue]
+          .filter(Boolean)
+          .join(" · ")}
         model={
           selectedModel(models, selection) ?? {
             providerId: selection.providerId,
@@ -1731,7 +1665,7 @@ function ModelPillFace({
           </span>
         ) : null}
         <span className="min-w-14 truncate" data-testid="model-pill-name">
-          {modelPillLabel(models, selection, selectionProviderLabel)}
+          {modelPillLabel(models, selection)}
         </span>
       </span>
       {compactEffortValue === undefined ? null : (
@@ -1904,44 +1838,24 @@ export function ModelPill({
   // will not choose anything.
   if (frozen) {
     return (
-      // Its own provider, for the reason `ui/tab-strip.tsx` mounts one: the pill
-      // is drawn by four surfaces and by a good deal of the test suite, some of
-      // them outside the app shell that owns the app-wide provider, and a Radix
-      // tooltip with none above it throws rather than degrading.
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              ref={triggerRef}
-              type="button"
-              size={COMPOSER_CONTROL_SIZE}
-              variant="ghost"
-              data-testid="model-pill"
-              aria-disabled
-              aria-label={controlLabel}
-              className={cn(
-                MODEL_PILL_GIVE,
-                COMPOSER_CONFIG_CHIP,
-                "text-muted-foreground opacity-50",
-              )}
-            >
-              <ModelPillFace
-                models={models}
-                selection={selection}
-                selectionTier={selectionTier}
-                selectionProviderLabel={selectionProviderLabel}
-                compactEffortValue={compactEffort?.value}
-              />
-            </Button>
-          </TooltipTrigger>
-          {/* Wrapping, and wide enough for a real name: the bubble is the
-              reveal, and a reveal that truncates is the thing it was opened to
-              escape. */}
-          <TooltipContent side="top" className="max-w-72 text-wrap">
-            {identity}
-          </TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
+      <Button
+        ref={triggerRef}
+        type="button"
+        size={COMPOSER_CONTROL_SIZE}
+        variant="ghost"
+        data-testid="model-pill"
+        aria-disabled
+        aria-label={controlLabel}
+        className={cn(MODEL_PILL_GIVE, COMPOSER_CONFIG_CHIP, "text-muted-foreground opacity-50")}
+      >
+        <ModelPillFace
+          models={models}
+          selection={selection}
+          selectionTier={selectionTier}
+          selectionProviderLabel={selectionProviderLabel}
+          compactEffortValue={compactEffort?.value}
+        />
+      </Button>
     );
   }
 
@@ -1957,17 +1871,9 @@ export function ModelPill({
           // THE NAME IS THE WHOLE FACT, EVEN WHERE THE DRAWING IS EIGHT
           // CHARACTERS (VC-288). The label below truncates by design; what
           // must not truncate with it is the answer to "what am I sending
-          // to". `aria-label` is that answer for anything reading the control
-          // rather than looking at it, and `title` is the pointer's half.
-          // Neither is the reveal on its own — a `title` is unreachable from a
-          // keyboard, and a name is not readable — which is why the list this
-          // pill opens leads with the same string, in ink, one press away.
+          // to". The accessible name keeps the provider; the mark's long-hover
+          // and keyboard-focus tag reveals the whole identity in ink.
           aria-label={controlLabel}
-          title={
-            compact && compactEffort !== undefined
-              ? `${identity} · ${effortLabel(compactEffort.value)} effort`
-              : identity
-          }
           className={cn(MODEL_PILL_GIVE, COMPOSER_CONFIG_CHIP, "text-muted-foreground")}
         >
           <ModelPillFace
@@ -2003,9 +1909,8 @@ export function ModelPill({
             in. Outside the command root, so cmdk's arrow keys still land on the
             first ROW rather than on a line that is not a choice.
 
-            The same string the pill's accessible name carries, from the same
-            function, so the two cannot drift into saying different things about
-            one selection. */}
+            The model and tier stay on this line; the provider is carried by
+            the mark's accessible name and long-hover/focus tag. */}
         <div
           data-testid="model-pill-identity"
           // `py-1` — the ladder's 4px rung. `py-1.5` was 6px from nowhere on
@@ -2014,6 +1919,11 @@ export function ModelPill({
           className="flex items-center gap-2 border-b px-3 py-2 text-ui text-muted-foreground"
         >
           <ModelMark
+            identityLabel={
+              selectedModel(models, selection)
+                ? modelTagIdentity(models, selectedModel(models, selection)!)
+                : undefined
+            }
             model={
               selectedModel(models, selection) ?? {
                 providerId: selection.providerId,
@@ -2027,7 +1937,9 @@ export function ModelPill({
               selection.providerId
             }
           />
-          <span className="min-w-0 break-words">{identity}</span>
+          <span className="min-w-0 break-words">
+            {[selectionTier, modelPillLabel(models, selection)].filter(Boolean).join(" · ")}
+          </span>
         </div>
         {selectionAuto === null ? null : (
           <AutoPickLine
@@ -2105,6 +2017,7 @@ export function ModelPill({
               items={catalog}
               keyOf={(model) => model.id}
               groupOf={(model) => model.providerLabel}
+              showGroupHeadings={false}
               query={modelQuery}
               onQueryChange={setModelQuery}
               placeholder="Model"
@@ -2130,7 +2043,11 @@ export function ModelPill({
                     )}
                     strokeWidth={2.25}
                   />
-                  <ModelMark model={model} providerLabel={model.providerLabel} />
+                  <ModelMark
+                    model={model}
+                    providerLabel={model.providerLabel}
+                    identityLabel={modelTagIdentity(models, model)}
+                  />
                   <span className="min-w-0 flex-1 truncate tabular-nums">{model.label}</span>
                 </>
               )}

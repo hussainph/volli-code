@@ -259,7 +259,6 @@ function IdentityLine({ row }: { row: SessionPeekRow }) {
           <ResolvedModelName
             selection={row.model}
             providerLabel={row.providerLabel}
-            alwaysProvider
             trailing={started ?? undefined}
           />
         )}

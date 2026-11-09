@@ -1,5 +1,5 @@
 /* One static family. Paint derives from the active generated canvas, never a
- * composition-specific palette. Decorative tiles use a neutral fallback fill;
+ * composition-specific palette. Decorative tiles use the generated card-family fill;
  * their illustration must not create live backdrop work or activity semantics. */
 .empty-state {
   --es-glow-source: color-mix(in oklab, var(--canvas-accent) 55%, var(--canvas-secondary-stop));
@@ -9,11 +9,11 @@
   --es-inner-glow:
     radial-gradient(ellipse at 18% 5%, var(--es-glow-a), transparent 72%),
     radial-gradient(ellipse at 90% 100%, var(--es-glow-b), transparent 72%);
-  --es-seam: color-mix(in srgb, var(--foreground) 64%, var(--background));
-  --es-dot: color-mix(in srgb, var(--foreground) 16%, transparent);
-  --es-edge: color-mix(in srgb, var(--foreground) 19%, transparent);
-  --es-tile: color-mix(in srgb, var(--background) 88%, transparent);
-  --es-tile-back: color-mix(in srgb, var(--background) 70%, transparent);
+  --es-seam: color-mix(in srgb, var(--wash-ink) 64%, var(--card-face));
+  --es-dot: color-mix(in srgb, var(--wash-ink) 16%, transparent);
+  --es-edge: color-mix(in srgb, var(--wash-ink) 19%, transparent);
+  --es-tile: color-mix(in srgb, var(--card-face) 88%, transparent);
+  --es-tile-back: color-mix(in srgb, var(--card-face) 70%, transparent);
   --es-shadow-color: color-mix(in srgb, var(--foreground) 13%, transparent);
   --es-shadow:
     0 8px 20px -7px var(--es-shadow-color), 0 2px 3px var(--es-shadow-color),
@@ -42,7 +42,7 @@
   --es-tile: color-mix(in srgb, var(--muted) 93%, transparent);
   --es-tile-back: color-mix(in srgb, var(--muted) 82%, transparent);
   --es-shadow-color: var(--scrim);
-  --es-dot: color-mix(in srgb, var(--foreground) 19%, transparent);
+  --es-dot: color-mix(in srgb, var(--wash-ink) 19%, transparent);
 }
 .empty-state[data-tier="panel"] {
   --es-w: 180px;
@@ -137,7 +137,7 @@
 }
 .empty-state[data-status="failed"] {
   --es-inner-glow: linear-gradient(transparent, transparent);
-  --es-highlight: color-mix(in srgb, var(--foreground) 12%, var(--background));
+  --es-highlight: color-mix(in srgb, var(--wash-ink) 12%, var(--card-face));
   --es-pop: transparent;
 }
 .empty-state[data-status="failed"] .empty-art::before {

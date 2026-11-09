@@ -1,6 +1,5 @@
 /**
- * The chrome band's copy, pinned where it carries CONTEXT.md's VC-57 naming
- * ruling: "project" is the one user-facing word for a rail entry. The rail
+ * The chrome band's copy, pinned where it carries CONTEXT.md#project: "project" is the one user-facing word for a rail entry. The rail
  * toggle's aria-label/title/sr-only were the last surfaces still saying
  * "workspace switcher", and prose alone is how that drifted in the first
  * place. Static markup with the app's own `SidebarProvider` wrapper (it wraps
@@ -8,11 +7,18 @@
  * shipped defaults.
  */
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { SidebarProvider } from "@renderer/components/ui/sidebar";
 
 import { ChromeBar } from "./chrome-bar";
+import { useUiStore } from "@renderer/stores/ui";
+
+const windowState = vi.hoisted(() => ({ fullScreen: false }));
+vi.mock("@renderer/hooks/use-fullscreen", () => ({ useFullScreen: () => windowState.fullScreen }));
+afterEach(() => {
+  windowState.fullScreen = false;
+});
 
 describe("chrome band copy", () => {
   it("keeps one routine sidebar toggle beside history", () => {
@@ -49,9 +55,47 @@ describe("chrome band copy", () => {
     const offsets = names.map((name) => html.indexOf(`aria-label="${name}"`));
     expect(offsets.every((at) => at >= 0)).toBe(true);
     expect(offsets).toEqual(offsets.toSorted((a, b) => a - b));
-    const cluster = html.slice(html.indexOf("absolute left-1/2 top-1/2"));
+    const cluster = html.slice(html.indexOf('data-slot="chrome-command-cluster"'));
     expect(cluster).not.toContain('aria-label="Toggle navigation sidebar"');
+    expect(cluster).not.toContain("absolute left-1/2");
+    expect(html).toContain(
+      "grid-cols-[minmax(max-content,1fr)_minmax(0,416px)_minmax(max-content,1fr)]",
+    );
+    expect(html).toContain("@container/chrome-search");
+    expect(html).toContain("@max-[14rem]/chrome-search:hidden");
+    expect(html).not.toContain("max-w-[40vw]");
+    expect(html).toContain("app-region-drag relative grid");
+    expect(html).toContain("search-capsule glass-control app-region-no-drag");
     expect(html).toContain('data-inspector-trigger="shell"');
+  });
+  it.each([false, true])("preserves the native-light spacer in fullscreen=%s", (fullScreen) => {
+    windowState.fullScreen = fullScreen;
+    const html = renderToStaticMarkup(
+      <SidebarProvider>
+        <ChromeBar />
+      </SidebarProvider>,
+    );
+    expect(html).toContain(fullScreen ? 'class="shrink-0 w-2"' : 'class="shrink-0 w-[100px]"');
+    expect(html).toContain('aria-label="Search tickets, sessions, and commands"');
+  });
+  it("keeps the terminal-focus breadcrumb and exit while ordinary controls step aside", () => {
+    const initial = useUiStore.getInitialState();
+    const previous = initial.terminalFocusTarget;
+    initial.terminalFocusTarget = { projectId: "project", ticketId: null, sessionId: "terminal" };
+    try {
+      const html = renderToStaticMarkup(
+        <SidebarProvider>
+          <ChromeBar />
+        </SidebarProvider>,
+      );
+      expect(html).toContain('aria-live="polite"');
+      expect(html).toContain('aria-label="Exit terminal focus"');
+      expect(html).not.toContain('data-slot="chrome-command-cluster"');
+      expect(html).not.toContain('aria-label="Toggle navigation sidebar"');
+      expect(html).not.toContain('data-inspector-trigger="shell"');
+    } finally {
+      initial.terminalFocusTarget = previous;
+    }
   });
   it("keeps rail visibility out of the routine toolbar without losing the layout menu", () => {
     const html = renderToStaticMarkup(
