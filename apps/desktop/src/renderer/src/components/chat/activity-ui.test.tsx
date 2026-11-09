@@ -324,6 +324,62 @@ const editTs: DynamicToolUIPart = {
   } as DynamicToolUIPart["toolMetadata"],
 };
 
+describe("expanded reasoning diagram liveness", () => {
+  it("keeps partial diagram errors quiet until the reasoning row settles", async () => {
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+        takeRecords() {
+          return [];
+        }
+      },
+    );
+    const nativeScrollTo = HTMLElement.prototype.scrollTo;
+    HTMLElement.prototype.scrollTo = () => {};
+    const thought = {
+      kind: "reasoning" as const,
+      key: "diagram-thought",
+      streaming: true,
+      part: {
+        type: "reasoning" as const,
+        state: "streaming" as const,
+        text: "**Checking the diagram**\n\n```mermaid\nnot a diagram",
+      },
+    };
+    const draw = (streaming: boolean) => {
+      root?.render(
+        <ActivityBundle
+          rows={[
+            { kind: "tool", part: failed, key: "failed" },
+            { ...thought, streaming },
+          ]}
+        />,
+      );
+    };
+    try {
+      await act(async () => draw(true));
+      // A failed tool opens the bundle; the final disclosure belongs to the
+      // reasoning row, whose body is otherwise deliberately unmounted.
+      const disclosure = [
+        ...(container?.querySelectorAll<HTMLButtonElement>('[aria-label="Show details"]') ?? []),
+      ].at(-1);
+      expect(disclosure).toBeDefined();
+      await act(async () => disclosure?.click());
+      expect(container?.querySelector('[data-streamdown="code-block"]')).toBeNull();
+      expect(container?.textContent).not.toContain("not a diagram");
+
+      await act(async () => draw(false));
+      expect(container?.querySelector('[data-streamdown="code-block"]')).not.toBeNull();
+      expect(container?.textContent).toContain("not a diagram");
+    } finally {
+      HTMLElement.prototype.scrollTo = nativeScrollTo;
+    }
+  });
+});
+
 describe("ToolRow expanded detail colouring (VC-125)", () => {
   it(
     "colours a Read row's lines with the file's grammar and keeps the number column",

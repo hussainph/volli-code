@@ -101,8 +101,8 @@ copy as first committed:
 | ------------------ | ----------------- | -------------- | ----------- |
 | `prompt-input.tsx` | 232               | 199            | required    |
 | `conversation.tsx` | 138               | 15             | required    |
-| `message.tsx`      | 95                | 11             | required    |
-| `reasoning.tsx`    | 82                | 2              | no          |
+| `message.tsx`      | 94                | 10             | required    |
+| `reasoning.tsx`    | 80                | 1              | no          |
 | `shimmer.tsx`      | 46                | 2              | no          |
 
 Those are a snapshot, not an invariant — every edit to these files moves them,
@@ -139,9 +139,11 @@ copied expression, so it is attributed.
 
 `reasoning.tsx` and `shimmer.tsx` are **not** attributed, and the reason is that
 nothing of upstream's is left in them. All that matches is `import { cn } from
-"@renderer/lib/utils";`, `import { mermaid } from "@streamdown/mermaid";`, and
-`export const Shimmer = memo(ShimmerComponent);`. Both were rewritten against
-their own designs — `reasoning.tsx` carries a module comment saying so;
+"@renderer/lib/utils";` and `export const Shimmer = memo(ShimmerComponent);`.
+The copies once also shared upstream's `import { mermaid } from
+"@streamdown/mermaid";` line — replacing Mermaid with Pele as the diagram
+renderer (VC-1157) removed it from `reasoning.tsx`, which now carries only that
+single `cn` import. Both were rewritten against their own designs — `reasoning.tsx` carries a module comment saying so;
 `shimmer.tsx` carries none, and the two upstream lines left in it are an import
 and a `memo` call. Attributing either would be as wrong as failing to attribute
 the three above: it would claim Vercel wrote something they did not.
@@ -153,6 +155,12 @@ a bare "modified" tells a reader nothing.
 
 - **Import paths and icons.** `@repo/shadcn-ui/*` → `@renderer/*`, and
   `lucide-react` → `@phosphor-icons/react` (`fbd3b1ee` retired lucide entirely).
+- **Diagram rendering.** Upstream wires Mermaid into Streamdown
+  (`const streamdownPlugins = { cjk, code, math, mermaid }`); the copies here
+  drop `@streamdown/mermaid` and render `mermaid` fences through the local
+  `pele-diagram` adapter, which calls Pele (`obsidianmd/pele`, MIT) instead.
+  The fence language and plugin name stay `mermaid` — that vocabulary is
+  Streamdown's wire contract, not the rendering engine.
 - **The unused half was deleted** (`a7a79cdb`, 874 lines across the directory).
   `prompt-input.tsx` lost `PromptInputProvider` and its controller hooks,
   `PromptInputAttachment`/`PromptInputAttachments`, the add-attachments and

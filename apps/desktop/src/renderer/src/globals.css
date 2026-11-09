@@ -427,6 +427,39 @@
 }
 /* GENERATED THEME TOKENS — END */
 
+/* Pele reads these at paint time, so a canvas or appearance change recolors
+ * existing SVGs without rebuilding them. Streamdown's inset diagram and its
+ * portalled fullscreen dialog both use bg-background, NOT the assistant's
+ * card or the user's muted bubble. Keep the label knockout opaque and equal
+ * to that surface, or connector strokes show through edge-label text. */
+:root {
+  --pele-bg: var(--background);
+  --pele-fg: var(--foreground);
+  --pele-muted: var(--muted-foreground);
+  --pele-line: var(--muted-foreground);
+  --pele-surface: var(--muted);
+  --pele-surface-alt: var(--accent);
+  --pele-border: var(--border-strong);
+  --pele-accent: var(--primary-text);
+  --pele-font: var(--font-sans);
+  --pele-radius: calc(var(--radius) * 0.5);
+  --pele-series-1: var(--primary-text);
+  --pele-series-2: var(--info);
+  --pele-series-3: var(--positive);
+  --pele-series-4: var(--attention);
+  --pele-series-5: var(--destructive);
+  --pele-series-6: var(--primary);
+  --pele-series-7: var(--foreground);
+  --pele-series-8: var(--muted-foreground);
+}
+
+/* Give the SVG's whole viewport the same opaque surface even inside a muted
+ * user bubble or reasoning card. Fullscreen is portalled outside those hosts. */
+[data-streamdown="mermaid"],
+[data-streamdown="mermaid-fullscreen"] {
+  background-color: var(--pele-bg);
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);

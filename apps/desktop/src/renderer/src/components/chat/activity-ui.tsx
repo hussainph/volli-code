@@ -1330,7 +1330,10 @@ const ReasoningRow = React.memo(function ReasoningRow({
       </div>
       {body !== null ? (
         <Disclosure open={open}>
-          <ReasoningBody className="my-1 rounded-md border border-border/50 bg-muted/30 p-2 text-ui leading-5">
+          <ReasoningBody
+            isAnimating={streaming}
+            className="my-1 rounded-md border border-border/50 bg-muted/30 p-2 text-ui leading-5"
+          >
             {body}
           </ReasoningBody>
         </Disclosure>

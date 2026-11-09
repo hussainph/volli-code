@@ -22,13 +22,13 @@
 import { cn } from "@renderer/lib/utils";
 import { cjk } from "@streamdown/cjk";
 import { code } from "@streamdown/code";
-import { mermaid } from "@streamdown/mermaid";
 import type { UIMessage } from "ai";
 import type { ComponentProps, HTMLAttributes } from "react";
 import { memo, useMemo } from "react";
 import { Streamdown } from "streamdown";
 
 import { chatMarkdownComponents, chatRehypePlugins } from "./chat-markdown";
+import { pele, peleRenderers } from "./pele-diagram";
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
   from: UIMessage["role"];
@@ -71,7 +71,7 @@ export const MessageContent = ({ children, className, ...props }: MessageContent
 );
 
 // Neither `plugins` nor `rehypePlugins` is a prop here: the fixed sets are the
-// decision to ship code and Mermaid without math, and to widen the sanitizer's
+// decision to ship code and Pele diagrams without math, and to widen the sanitizer's
 // `src` allowlist to the app's own Blob scheme. Both are set AFTER `{...props}`
 // in the JSX below, so leaving them in this type would advertise a prop that is
 // silently discarded.
@@ -116,8 +116,8 @@ export type MessageResponseProps = Omit<
  * size. Both maps are module constants because Streamdown's outer memo compares
  * the plugin-map identity.
  */
-const settledStreamdownPlugins = { cjk, code, mermaid };
-const liveStreamdownPlugins = { cjk, mermaid };
+const settledStreamdownPlugins = { cjk, code, mermaid: pele, renderers: peleRenderers };
+const liveStreamdownPlugins = { cjk, mermaid: pele, renderers: peleRenderers };
 
 /**
  * `animated` is not passed, and its absence is the load-bearing part.

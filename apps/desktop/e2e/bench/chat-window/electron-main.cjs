@@ -13,6 +13,7 @@
 const { app, BrowserWindow } = require("electron");
 const http = require("node:http");
 const { readFile } = require("node:fs/promises");
+const { mkdirSync } = require("node:fs");
 const { extname, join, normalize, resolve } = require("node:path");
 
 const args = process.argv.slice(2);
@@ -28,6 +29,14 @@ const LABEL = flag("label", "run");
 const STREAM_SAMPLES = Number(flag("stream-samples", "8"));
 const STREAM_STEPS = Number(flag("stream-steps", "120"));
 const STREAM_TOKEN_RATE = Number(flag("stream-token-rate", "30"));
+const STREAM_CONTENT = flag("stream-content", "code");
+const STREAM_ONLY = args.includes("--stream-only");
+
+// No product profile or app focus: this host owns only its renderer fixture.
+const profile = resolve(flag("user-data-dir", join(DIST, ".profile")));
+mkdirSync(profile, { recursive: true });
+app.setPath("userData", profile);
+if (process.platform === "darwin") app.setActivationPolicy("accessory");
 
 const TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -79,7 +88,7 @@ app.whenReady().then(async () => {
   const window = new BrowserWindow({
     width: 1440,
     height: 900,
-    show: true,
+    show: false,
     webPreferences: { backgroundThrottling: false, sandbox: true },
   });
   const contents = window.webContents;
@@ -121,6 +130,7 @@ app.whenReady().then(async () => {
     steps: [],
     checks: {},
     streamingSamples: [],
+    ...(STREAM_CONTENT === "diagram" ? { streamContent: STREAM_CONTENT } : {}),
     errors,
   };
   try {
@@ -131,29 +141,31 @@ app.whenReady().then(async () => {
     // before anything is called a baseline.
     await sleep(2500);
 
-    report.steps.push(await sample("empty"));
+    if (!STREAM_ONLY) report.steps.push(await sample("empty"));
     await run(`window.chatBench.seed(${SESSIONS}, ${TURNS})`);
     // Every Session's transcript is in the store and no plane is drawn: the
     // floor every later step is measured against.
-    report.steps.push(await sample("seeded, no plane"));
+    if (!STREAM_ONLY) report.steps.push(await sample("seeded, no plane"));
 
     await run("window.chatBench.show(1)");
     report.steps.push(await sample("1 plane"));
 
-    report.checks.firstTurn = await run("window.chatBench.reachFirst(0, 200)");
-    report.checks.tail = await run("window.chatBench.tailProbe(0)");
-    // Back to a fresh mount of the same plane so the scroll probes above cannot
-    // leave revealed pages in the steps that follow.
-    await run("window.chatBench.show(0)");
-    await run(`window.chatBench.show(1)`);
-    report.steps.push(await sample("1 plane, after scrolling"));
+    if (!STREAM_ONLY) {
+      report.checks.firstTurn = await run("window.chatBench.reachFirst(0, 200)");
+      report.checks.tail = await run("window.chatBench.tailProbe(0)");
+      // Back to a fresh mount of the same plane so the scroll probes above cannot
+      // leave revealed pages in the steps that follow.
+      await run("window.chatBench.show(0)");
+      await run(`window.chatBench.show(1)`);
+      report.steps.push(await sample("1 plane, after scrolling"));
+    }
 
     // VC-353's simultaneous stream+scroll interaction. Repeated inside one
     // production renderer so p50/p95 and variance describe the interaction,
     // not Electron process startup.
     for (let index = 0; index < STREAM_SAMPLES; index += 1) {
       const streamingSample = await run(
-        `window.chatBench.streamAndScroll(0, ${STREAM_STEPS}, ${STREAM_TOKEN_RATE})`,
+        `window.chatBench.streamAndScroll(0, ${STREAM_STEPS}, ${STREAM_TOKEN_RATE}, ${JSON.stringify(STREAM_CONTENT)})`,
       );
       report.streamingSamples.push({
         ...streamingSample,
@@ -161,11 +173,13 @@ app.whenReady().then(async () => {
       });
     }
 
-    await run(`window.chatBench.show(${SESSIONS})`);
-    report.steps.push(await sample(`${SESSIONS} planes`));
+    if (!STREAM_ONLY) {
+      await run(`window.chatBench.show(${SESSIONS})`);
+      report.steps.push(await sample(`${SESSIONS} planes`));
 
-    await run("window.chatBench.show(1)");
-    report.steps.push(await sample("back to 1 plane"));
+      await run("window.chatBench.show(1)");
+      report.steps.push(await sample("back to 1 plane"));
+    }
   } catch (error) {
     report.failure = String(error && error.stack ? error.stack : error);
   }
