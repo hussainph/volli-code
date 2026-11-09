@@ -3,8 +3,7 @@ import type { AgentHarnessTool, FileError } from "../types";
 import {
   applyEditsToContent,
   type Edit,
-  generateDiffString,
-  generateUnifiedPatch,
+  generateEditDiff,
   normalizeToLF,
   stripBom,
 } from "./edit-diff";
@@ -46,7 +45,8 @@ function isSingleEditInput(value: unknown): value is SingleEditInput {
 
 export interface EditToolDetails {
   diff: string;
-  patch: string;
+  /** Absent when the file was too large to compare within the diff bounds. */
+  patch?: string;
   firstChangedLine?: number;
 }
 
@@ -142,15 +142,22 @@ export function createEditTool<
           if (context.abortSignal?.aborted) throw new Error("Operation aborted");
 
           // The display diff reads in lines; the patch is byte-faithful, so it
-          // applies to the original text and reproduces what is on disk.
-          const diffResult = generateDiffString(normalizeToLF(content), normalizeToLF(newContent));
+          // applies to the original text and reproduces what is on disk. Both
+          // come from one bounded comparison where the bytes allow (VC-1074).
+          const diffResult = generateEditDiff({
+            path,
+            original: originalText,
+            written: finalContent,
+            oldView: normalizeToLF(content),
+            newView: normalizeToLF(newContent),
+          });
           return {
             content: [
               { type: "text", text: `Successfully replaced ${edits.length} block(s) in ${path}.` },
             ],
             details: {
               diff: diffResult.diff,
-              patch: generateUnifiedPatch(path, originalText, finalContent),
+              ...(diffResult.patch === undefined ? {} : { patch: diffResult.patch }),
               firstChangedLine: diffResult.firstChangedLine,
             },
           };

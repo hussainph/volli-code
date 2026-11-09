@@ -64,13 +64,13 @@ not merge the draft pull request for you.
 From the ticket's terminal companion, merge the available base ref:
 
 ```sh
-volli worktree sync VC-12
+volli worktree sync VLT-12
 ```
 
-Replace `VC-12` with your ticket's ID. Sync uses the refs already on disk; it
+Replace `VLT-12` with your ticket's ID. Sync uses the refs already on disk; it
 does not fetch from the remote or wait for checks. If it reports `conflicted`,
 read the listed paths, then resolve and commit the merge in the terminal. To
-abandon that merge, use `volli worktree sync VC-12 --abort`.
+abandon that merge, use `volli worktree sync VLT-12 --abort`.
 
 After your pull request is merged, follow
 [Clean up worktrees](/guides/clean-up-worktrees/) to remove checkout state.

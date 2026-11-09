@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import type { SettingsWindowOpenInput } from "../../../ipc/settings-window";
 import {
   clampRailWidth,
   clampSidebarWidth,
@@ -6,10 +7,13 @@ import {
   RAIL_DEFAULT_WIDTH,
   RAIL_MAX_WIDTH,
   RAIL_MIN_WIDTH,
+  setSettingsWindowOpener,
   SIDEBAR_DEFAULT_WIDTH,
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,
+  UI_APP_STATE_KEY,
   UI_SCALE_STEPS,
+  useUiStore,
 } from "./ui";
 
 /** Simple in-memory `StateStorage` so each test gets its own isolated backing. */
@@ -302,16 +306,120 @@ describe("configureCategory", () => {
 
     store.getState().requestConfigureCategory("secrets");
     expect(store.getState().configureCategory).toBe("secrets");
+    expect(store.getState().settingsOpen).toBe(true);
 
     store.getState().consumeConfigureCategory();
     expect(store.getState().configureCategory).toBeNull();
   });
 
-  it("is never persisted: a relaunch opens Configure where the page itself would", () => {
+  it("is never persisted: a relaunch opens Settings where the page itself would", () => {
     const storage = createMemoryStorage();
     createUiStore(storage).getState().requestConfigureCategory("secrets");
 
     expect(createUiStore(storage).getState().configureCategory).toBeNull();
+  });
+});
+
+/** An opener seam that records the navigation input, as the preload bridge would receive it. */
+function recordingOpener() {
+  return vi.fn<(navigation: SettingsWindowOpenInput) => void>();
+}
+
+/**
+ * The native Settings window's opener route (VC-1121).
+ *
+ * `setSettingsWindowOpener` installs module-global transport — the desktop entry
+ * points it at the preload bridge, which is why no store instance carries it.
+ * With one installed, the workbench's Settings commands route through it and
+ * never touch this store at all: `settingsOpen` is the SETTINGS renderer's own
+ * fact, and a workspace press must never be able to close the independent
+ * native window.
+ */
+describe("native Settings window opener", () => {
+  // Module-global transport: every test uninstalls, or the fallback describes
+  // around this one would route through the last test's opener.
+  afterEach(() => {
+    setSettingsWindowOpener(null);
+  });
+
+  it("routes an open through the opener and leaves the workspace's settingsOpen closed", () => {
+    const storage = createMemoryStorage();
+    let writes = 0;
+    const counted = {
+      ...storage,
+      setItem: (name: string, value: string) => {
+        writes += 1;
+        storage.setItem(name, value);
+      },
+    };
+    const store = createUiStore(counted);
+    const opener = recordingOpener();
+    setSettingsWindowOpener(opener);
+    writes = 0; // store creation may persist; only the route under test counts
+
+    store.getState().setSettingsOpen(true);
+
+    expect(opener).toHaveBeenCalledExactlyOnceWith({
+      category: undefined,
+      signInProviderId: undefined,
+    });
+    // The workspace never marks Settings open: the native window is the one
+    // that opens, and only the Settings renderer marks itself.
+    expect(store.getState().settingsOpen).toBe(false);
+    // Pure transport: no `set`, so no persist round trip for a fact this store
+    // does not own.
+    expect(writes).toBe(0);
+  });
+
+  it("carries the deep-linked category and sign-in provider in the transport input", () => {
+    const store = createUiStore(createMemoryStorage());
+    const opener = recordingOpener();
+    setSettingsWindowOpener(opener);
+
+    store.getState().setSettingsOpen(true, "model-access", "anthropic");
+
+    expect(opener).toHaveBeenCalledExactlyOnceWith({
+      category: "model-access",
+      signInProviderId: "anthropic",
+    });
+    expect(store.getState().settingsCategory).toBeNull();
+    expect(store.getState().settingsSignInProviderId).toBeNull();
+  });
+
+  it("never routes a close: closing an in-app route must not close the independent native window", () => {
+    const store = createUiStore(createMemoryStorage());
+    const opener = recordingOpener();
+    setSettingsWindowOpener(opener);
+
+    store.getState().setSettingsOpen(false);
+
+    expect(opener).not.toHaveBeenCalled();
+    expect(store.getState().settingsOpen).toBe(false);
+  });
+
+  it("routes a Configure deep link through the opener without touching workspace state", () => {
+    const store = createUiStore(createMemoryStorage());
+    const opener = recordingOpener();
+    setSettingsWindowOpener(opener);
+
+    store.getState().requestConfigureCategory("secrets");
+
+    expect(opener).toHaveBeenCalledExactlyOnceWith({ configureCategory: "secrets" });
+    expect(store.getState().configureCategory).toBeNull();
+    expect(store.getState().settingsOpen).toBe(false);
+  });
+
+  it("falls back to the in-app overlay once the opener is uninstalled", () => {
+    const store = createUiStore(createMemoryStorage());
+    setSettingsWindowOpener(recordingOpener());
+    store.getState().setSettingsOpen(true);
+    expect(store.getState().settingsOpen).toBe(false);
+
+    setSettingsWindowOpener(null);
+    store.getState().requestConfigureCategory("secrets");
+
+    expect(store.getState().settingsOpen).toBe(true);
+    expect(store.getState().configureCategory).toBe("secrets");
   });
 });
 
@@ -467,6 +575,24 @@ describe("terminal focus", () => {
 
     const reloaded = createUiStore(storage);
     expect(reloaded.getState().terminalFocusTarget).toBeNull();
+  });
+});
+
+/**
+ * Module scope registers the app-wide singleton's partialized defaults with
+ * app_state's absent-row baseline (`registerSharedPreferenceDefaults`), so a
+ * first preference write from one window while another has never read the row
+ * still has a base to diff against. That call consumes exactly these persist
+ * options and refuses anything but a shared presentation key — these options
+ * are this module's half of the contract. The registration itself is proven
+ * by this file loading at all: it throws at import otherwise.
+ */
+describe("the app-wide singleton's shared-preference registration", () => {
+  it("carries the persist options the defaults registration reads", () => {
+    const options = useUiStore.persist.getOptions();
+    expect(options.name).toBe(UI_APP_STATE_KEY);
+    expect(options.version).toBe(1);
+    expect(typeof options.partialize).toBe("function");
   });
 });
 

@@ -253,7 +253,7 @@ describe("TicketSessionsPanel rows", () => {
     // right edge on every populated roster.
     const html = panel();
 
-    expect(html).toContain('aria-label="New chat"');
+    expect(html).toContain('aria-label="Open a tab"');
     expect(html).toContain("justify-between");
   });
 

@@ -10,6 +10,9 @@
  * clicks. A static render would prove the markup and none of the promises.
  */
 import { createRoot, type Root } from "react-dom/client";
+import { renderToStaticMarkup } from "react-dom/server";
+import { AutomationOffIcon } from "@renderer/components/ui/icon";
+
 import { act, type ComponentProps } from "react";
 import type { DragEndEvent } from "@dnd-kit/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -222,6 +225,7 @@ function catalogueClient({
 
 async function mount(seed: {
   automations?: Automation[];
+  failList?: boolean;
   runs?: AutomationRun[];
   skips?: AutomationSkippedOccurrence[];
   enabled?: string[];
@@ -235,7 +239,11 @@ async function mount(seed: {
   /** Mount the real model catalogue, even for hidden or unavailable models. */
   catalogue?: CatalogueSeed;
 }) {
-  doors.list.mockResolvedValue({ ok: true, automations: seed.automations ?? [] });
+  doors.list.mockResolvedValue(
+    seed.failList
+      ? { ok: false, error: "Read unavailable" }
+      : { ok: true, automations: seed.automations ?? [] },
+  );
   doors.runsForProject.mockResolvedValue({ ok: true, runs: seed.runs ?? [] });
   doors.skipsForProject.mockResolvedValue({ ok: true, skips: seed.skips ?? [] });
   // The SCOPED doors answer the way main does (`listProjectRunsForAutomation`,
@@ -289,6 +297,8 @@ async function mount(seed: {
       ),
     );
   });
+  if (!seed.automations?.length && (seed.runs !== undefined || seed.skips !== undefined))
+    await act(async () => button("History").click());
 }
 
 function text(): string {
@@ -335,9 +345,7 @@ function railRow(id: string): HTMLElement {
 
 /** The rail's way back to the whole project's work (VC-297). */
 function activityRow(): HTMLElement {
-  const found = document.querySelector<HTMLElement>("[data-automation-rail-activity]");
-  if (found === null) throw new Error("no Project activity row in the rail");
-  return found;
+  return button("History");
 }
 
 function paragraph(copy: string): HTMLParagraphElement {
@@ -375,7 +383,7 @@ function setInputValue(input: HTMLInputElement, value: string): void {
 
 async function openLanes(): Promise<void> {
   const control = [...document.querySelectorAll("button")].find(
-    (candidate) => candidate.textContent === "Lanes",
+    (candidate) => candidate.getAttribute("aria-label") === "Columns",
   );
   if (control === undefined) throw new Error("no Lanes view control");
   await act(async () => {
@@ -397,8 +405,8 @@ beforeEach(() => {
   }));
   for (const door of Object.values(doors)) door.mockReset();
   vi.mocked(openRunSession).mockReset();
-  vi.mocked(runAutomationOnTicket).mockReset();
-  vi.mocked(runAutomationForProject).mockReset();
+  vi.mocked(runAutomationOnTicket).mockReset().mockResolvedValue("started");
+  vi.mocked(runAutomationForProject).mockReset().mockResolvedValue(undefined);
   useProjectsStore.setState({ projects: [PROJECT], selectedProjectId: "p1" });
   useBoardStore.setState({ ticketsByProject: { p1: [TICKET] } });
   useAutomationsStore.setState({
@@ -414,6 +422,8 @@ beforeEach(() => {
     runsByAutomation: {},
     skipsByAutomation: {},
     enabledIds: [],
+    enablementRead: false,
+    railReadAt: {},
     editor: null,
   });
 });
@@ -440,21 +450,21 @@ describe("the page", () => {
 
     expect(text()).toContain("This project");
     expect(text()).toContain("Review sweep");
-    expect(text()).toContain("All projects");
+    expect(document.querySelector('[aria-label="All projects"]')).not.toBeNull();
     expect(text()).toContain("Nightly sweep");
   });
 
   it("states the default Trigger and an inherited Runtime on every row", async () => {
     await mount({ automations: [automation()] });
 
-    expect(text()).toContain("Only when I run it");
-    expect(text()).toContain("Default model");
-    expect(hasUiText("Only when I run it")).toBe(true);
+    expect(text()).toContain("Manual only");
+    expect(text()).toContain("Project default");
+    expect(hasUiText("Manual only")).toBe(true);
   });
 
   it("prints a column Trigger's own columns rather than claiming manual-only", async () => {
     // This is the surface that AUTHORS the Trigger (VC-127), so a row that said
-    // "Only when I run it" over a record naming Doing would be the page
+    // "Manual only" over a record naming Doing would be the page
     // contradicting the form one click away.
     await mount({
       automations: [
@@ -468,9 +478,8 @@ describe("the page", () => {
 
   it("shows a pinned Runtime as the shared model name, and a tier as its row", async () => {
     // No catalogue in this harness, so what a row can prove anyway is the
-    // honest fallback: the stored id, the provider said beside it (the shared
-    // name always says the provider for a model it cannot list), and the
-    // effort carrying its noun. The catalogue-labelled drawing is the
+    // honest fallback: the stored id, the provider on the mark's accessible
+    // help identity rather than in the line, and effort carrying its noun. The catalogue-labelled drawing is the
     // "the model's display name" describe below.
     await mount({
       automations: [
@@ -481,56 +490,77 @@ describe("the page", () => {
       ],
     });
 
-    expect(text()).toContain("claude-opus · anthropic · High effort");
+    expect(text()).toContain("claude-opus · High effort");
+    expect(
+      document
+        .querySelector('[data-slot="model-name"]')
+        ?.parentElement?.querySelector('[role="img"]')
+        ?.getAttribute("aria-label"),
+    ).toBe("anthropic");
     // A tier names a Settings row, not a model, and keeps its sentence — the
     // branch between the two drawings runs on the record's own runtime.
+    await act(async () => railRow("automation-tier").click());
     expect(text()).toContain("Fast");
   });
 
   it("offers the create action and preserves Run history with nothing listed", async () => {
     await mount({});
 
-    expect(text()).toContain("New Automation");
-    expect(text()).toContain("Nothing saved yet");
-    expect(text()).toContain("Nothing has run in this project yet.");
+    expect(text()).toContain("New automation");
+    expect(text()).toContain("No automations yet");
+    expect(document.querySelector("h1")?.textContent).toBe("Automations");
+    expect(document.querySelector("aside")).toBeNull();
+    expect(button("History")).not.toBeNull();
+    expect(doors.runsForProject).not.toHaveBeenCalled();
+    await act(async () => button("History").click());
+    expect(text()).toContain("No runs yet");
   });
 
-  it("keeps both ownership groups visible in the persistent rail", async () => {
+  it("merges ownership into trigger groups while retaining global scope", async () => {
     await mount({ automations: [automation({ projectId: null })] });
 
-    expect(text()).toContain("This project");
-    expect(text()).toContain("All projects");
+    expect(text()).toContain("Manual");
+    expect(document.querySelector('[aria-label="All projects"]')).not.toBeNull();
     expect(document.querySelector('[data-automation-rail-row="automation-1"]')).not.toBeNull();
+    expect(document.querySelector('header button[data-variant="default"]')?.textContent).toContain(
+      "New automation",
+    );
+    expect(document.querySelector("aside")?.className).toContain("automation-master");
   });
 });
 
 describe("enable and disable", () => {
   it("is off until this machine says otherwise, and marks the rail row", async () => {
     // VC-112: a machine fires nothing until someone turns something on there.
-    await mount({ automations: [automation()] });
+    await mount({
+      automations: [automation({ trigger: { kind: "columns", columns: ["doing"] } })],
+    });
 
-    expect(document.querySelector('[aria-label="Manual only"]')).not.toBeNull();
+    expect(text()).toContain("Manual only");
     expect(
-      (button("Automatic triggers on this machine: Review sweep") as HTMLButtonElement).dataset
-        .state,
+      (button("Automatic triggers on this Mac: Review sweep") as HTMLButtonElement).dataset.state,
     ).toBe("unchecked");
   });
 
   it("marks the selected record and rail row once switched on here", async () => {
-    await mount({ automations: [automation()], enabled: ["automation-1"] });
+    await mount({
+      automations: [automation({ trigger: { kind: "columns", columns: ["doing"] } })],
+      enabled: ["automation-1"],
+    });
 
-    expect(document.querySelector('[aria-label="Automatic triggers"]')).not.toBeNull();
+    expect(text()).toContain("Offered in Doing");
     expect(
-      (button("Automatic triggers on this machine: Review sweep") as HTMLButtonElement).dataset
-        .state,
+      (button("Automatic triggers on this Mac: Review sweep") as HTMLButtonElement).dataset.state,
     ).toBe("checked");
   });
 
   it("writes through the command door and adopts the set it answers with", async () => {
-    await mount({ automations: [automation()] });
+    await mount({
+      automations: [automation({ trigger: { kind: "columns", columns: ["doing"] } })],
+    });
 
     await act(async () => {
-      button("Automatic triggers on this machine: Review sweep").click();
+      button("Automatic triggers on this Mac: Review sweep").click();
     });
 
     expect(doors.setEnabled).toHaveBeenCalledWith({
@@ -548,7 +578,7 @@ describe("the row's own actions", () => {
     await mount({ automations: [record] });
 
     const row = [...document.querySelectorAll("button")].find((candidate) =>
-      candidate.textContent?.includes("Only when I run it"),
+      candidate.textContent?.includes("Manual only"),
     );
     await act(async () => {
       row?.click();
@@ -574,12 +604,17 @@ describe("running by hand", () => {
     });
     expect(document.body.textContent).toContain("Run “Review sweep” on");
 
-    const ticketRow = [...document.querySelectorAll("button")].find((candidate) =>
+    const ticketRow = [...document.querySelectorAll<HTMLElement>("[cmdk-item]")].find((candidate) =>
       candidate.textContent?.includes("Ship the page"),
     );
     await act(async () => {
       ticketRow?.click();
     });
+    await act(async () =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")]
+        .find((b) => b.textContent === "Run on VC-12")
+        ?.click(),
+    );
 
     expect(runAutomationOnTicket).toHaveBeenCalledWith({
       target: { kind: "automation", automationId: "automation-1" },
@@ -601,8 +636,8 @@ describe("running by hand", () => {
       setInputValue(find, "nothing like this");
     });
 
-    const ticketNotice = paragraph("No tickets here.");
-    expect(ticketNotice.classList.contains("text-ui")).toBe(true);
+    const ticketNotice = paragraph("No matching tickets");
+    expect(ticketNotice.classList.contains("sr-only")).toBe(true);
     expect(ticketNotice.classList.contains("text-sm")).toBe(false);
   });
 });
@@ -644,10 +679,16 @@ describe("run history", () => {
     await mount({ runs: [run()] });
 
     expect(text()).toContain("Review sweep");
-    // Catalogue-less fallback: the stored id with its provider, the effort as
-    // a noun — `High` alone would read as an adjective on the name beside it.
-    expect(text()).toContain("claude-opus · anthropic · High effort");
-    expect(hasUiText("claude-opus · anthropic · High effort")).toBe(true);
+    // Catalogue-less fallback: the stored model id plus effort as a noun;
+    // the mark retains the provider identity without spending line width.
+    expect(text()).toContain("claude-opus · High effort");
+    expect(
+      document
+        .querySelector('[data-slot="model-name"]')
+        ?.parentElement?.querySelector('[role="img"]')
+        ?.getAttribute("aria-label"),
+    ).toBe("anthropic");
+    expect(hasUiText("claude-opus · High effort")).toBe(true);
   });
 
   it("keeps the order main answered with — newest first", async () => {
@@ -729,6 +770,24 @@ describe("run history", () => {
  * model the catalogue does not list.
  */
 describe("the model's display name", () => {
+  it("omits the effort suffix when a pin and a recorded Run have effort off", async () => {
+    const model: ModelSelection = {
+      providerId: "anthropic",
+      modelId: "claude-opus",
+      reasoningLevel: "off",
+    };
+    await mount({
+      automations: [automation({ runtime: model })],
+      runs: [run({ model })],
+      catalogue: { modelLabel: "Claude Opus 4.5" },
+    });
+    const captions = [...document.querySelectorAll('[data-slot="model-name"]')].filter((node) =>
+      node.textContent?.includes("Claude Opus 4.5"),
+    );
+    expect(captions.length).toBeGreaterThanOrEqual(2);
+    for (const caption of captions) expect(caption.textContent).not.toMatch(/off|effort/i);
+    expect(text()).not.toContain("Off effort");
+  });
   it("resolves a pin and a Run row through the catalogue's label", async () => {
     await mount({
       automations: [
@@ -780,7 +839,9 @@ describe("the model's display name", () => {
 
       // Identity reads the full catalogue, not the editor's offerable slice.
       // Scope each assertion so the editor cannot stand in for either caption.
-      const pinCaption = railRow("automation-1").querySelector('[data-slot="model-name"]');
+      const pinCaption = document.querySelector(
+        '[data-slot="automation-editor"] [data-slot="model-name"]',
+      );
       const runCaption = historyRun("run-1").querySelector('[data-slot="model-name"]');
       expect(pinCaption?.textContent).toBe("Claude Opus 4.5 · Extra high effort");
       expect(runCaption?.textContent).toBe("Claude Opus 4.5 · High effort");
@@ -809,14 +870,24 @@ describe("the model's display name", () => {
       catalogue: { modelLabel: "Claude Opus 4.5" },
     });
 
-    const fallback = "vendor/gpt-5-legacy · some-gateway · High effort";
-    expect(railRow("automation-1").querySelector('[data-slot="model-name"]')?.textContent).toBe(
-      fallback,
-    );
+    const fallback = "vendor/gpt-5-legacy · High effort";
+    expect(
+      document.querySelector('[data-slot="automation-editor"] [data-slot="model-name"]')
+        ?.textContent,
+    ).toBe(fallback);
     expect(historyRun("run-1").querySelector('[data-slot="model-name"]')?.textContent).toBe(
       fallback,
     );
     expect(text()).not.toContain("Claude Opus 4.5");
+    expect(
+      document
+        .querySelector('[data-slot="automation-editor"] [data-slot="model-name"]')
+        ?.parentElement?.querySelector('[role="img"]')
+        ?.getAttribute("aria-label"),
+    ).toBe("some-gateway");
+    expect(historyRun("run-1").querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
+      "some-gateway",
+    );
     expect(useAutomationsStore.getState().editor?.automation?.runtime).toEqual(selection);
     expect(Object.values(useAutomationsStore.getState().runsByAutomation).flat()[0]?.model).toEqual(
       selection,
@@ -957,7 +1028,7 @@ describe("history is scoped to the selected Automation", () => {
     // Critically, not the previous record's rows either.
     expect(historySection().getAttribute("data-run-history")).toBe("automation-2");
     expect(historyRowIds("run")).toEqual([]);
-    expect(historySection().textContent).not.toContain("Nothing has run");
+    expect(historySection().textContent).not.toContain("No runs yet");
 
     await act(async () => {
       release?.();
@@ -980,7 +1051,7 @@ describe("history is scoped to the selected Automation", () => {
     });
 
     expect(historyRowIds("run")).toEqual([]);
-    expect(paragraph("Nothing has run this Automation yet.")).not.toBeNull();
+    expect(paragraph("No runs yet")).not.toBeNull();
     expect(historySection().textContent).not.toContain("Nightly sweep");
   });
 });
@@ -1017,7 +1088,7 @@ describe("project activity", () => {
     });
 
     expect(historySection().getAttribute("data-run-history")).toBe("project");
-    expect(historySection().textContent).toContain("Project activity");
+    expect(historySection().textContent).toContain("History");
     // Every record's work, interleaved, newest first.
     expect(historyRowIds("run")).toEqual(["run-nightly", "run-review"]);
     expect(historyRowIds("skip")).toEqual(["skip-nightly"]);
@@ -1033,7 +1104,9 @@ describe("project activity", () => {
     expect(historySection().getAttribute("data-run-history")).toBe("project");
 
     await act(async () => {
-      railRow("automation-1").click();
+      [...document.querySelectorAll<HTMLButtonElement>("button")]
+        .find((b) => b.textContent === "Automations")
+        ?.click();
     });
 
     expect(historySection().getAttribute("data-run-history")).toBe("automation-1");
@@ -1089,7 +1162,7 @@ describe("project activity", () => {
     await mount({ runs: [run()], skips: [skip({ automationId: "automation-2" })] });
 
     expect(historySection().getAttribute("data-run-history")).toBe("project");
-    expect(historySection().textContent).toContain("Project activity");
+    expect(historySection().textContent).toContain("History");
     expect(historyRowIds("run")).toEqual(["run-1"]);
     expect(historyRowIds("skip")).toEqual(["skip-1"]);
   });
@@ -1123,11 +1196,12 @@ describe("the lane view", () => {
       expect(text()).toContain(label);
     }
     // The default Trigger is "Nothing else", so the seeded record is off board.
-    expect(text()).toContain("No column");
+    expect(text()).toContain("Other");
+    await act(async () => button("Other").click());
     expect(document.querySelector('[data-lane-row="none:automation-1"]')).not.toBeNull();
   });
 
-  it("calls the disarmed choice No Automation", async () => {
+  it("names the disarmed menu choice No automation", async () => {
     await mount({ automations: [doingOnly] });
     await openLanes();
 
@@ -1137,7 +1211,10 @@ describe("the lane view", () => {
       );
     });
 
-    expect(document.body.textContent).toContain("No Automation");
+    const disarmed = document.querySelector('[data-slot="dropdown-menu-radio-item"]');
+    expect(disarmed?.textContent).toBe("No automation");
+    expect(disarmed?.querySelector("svg")).not.toBeNull();
+    expect(disarmed?.getAttribute("aria-checked")).toBe("true");
   });
 
   it("puts a SCHEDULE record in that lane too, rather than claiming every automation has a column", async () => {
@@ -1159,6 +1236,7 @@ describe("the lane view", () => {
     });
     await openLanes();
 
+    await act(async () => button("Other").click());
     expect(document.querySelector('[data-lane-row="none:nightly"]')).not.toBeNull();
     expect(text()).not.toContain("Every automation has a column.");
   });
@@ -1208,6 +1286,7 @@ describe("the lane view", () => {
     expect(
       document.querySelector('[data-lane-row="doing:shared"]')?.getAttribute("data-lane-digit"),
     ).toBe("2");
+    await act(async () => button("Needs Review").click());
     expect(
       document
         .querySelector('[data-lane-row="needs_review:shared"]')
@@ -1215,7 +1294,7 @@ describe("the lane view", () => {
     ).toBe("1");
   });
 
-  it("pins the armed row to 1 and fills its bolt while it is switched on here", async () => {
+  it("pins the armed row to 1 and accents its bolt while it is switched on here", async () => {
     await mount({
       automations: [doingAndReview, doingOnly],
       armings: [{ projectId: "p1", status: "doing", automationId: "shared", armedAt: 1 }],
@@ -1233,7 +1312,8 @@ describe("the lane view", () => {
 
     const bolt = button("Doing runs Standards sweep");
     expect(bolt.getAttribute("data-arming-state")).toBe("ready");
-    expect(bolt.querySelector('[data-arming-mark="filled"]')).not.toBeNull();
+    expect(bolt.className).toContain("text-primary-text");
+    expect(bolt.querySelector('[data-arming-mark="armed"]')).not.toBeNull();
     const row = document.querySelector('[data-lane-row="doing:shared"]');
     expect(row?.getAttribute("data-lane-digit")).toBe("1");
     expect(row?.getAttribute("data-lane-arming")).toBe("ready");
@@ -1282,6 +1362,17 @@ describe("the lane view", () => {
     for (const row of rows.slice(MAX_OFFERED_DIGITS)) {
       expect(row.getAttribute("aria-roledescription")).toBe("sortable");
       expect(row.textContent).not.toMatch(/\d/);
+    }
+    // Every row's key cap is the keycap rung, digit or not; past the ninth it
+    // keeps its width but not its ink, so the names stay in one column.
+    for (const [index, row] of rows.entries()) {
+      const cap = row.querySelector("kbd");
+      const classes = cap?.className.split(/\s+/) ?? [];
+      expect(classes).toContain("rounded-keycap");
+      expect(classes).not.toContain("rounded-sm");
+      const placeholder = index >= MAX_OFFERED_DIGITS;
+      expect(classes.includes("invisible")).toBe(placeholder);
+      expect(cap?.getAttribute("aria-hidden")).toBe(placeholder ? "true" : null);
     }
   });
 
@@ -1335,10 +1426,10 @@ describe("the lane view", () => {
     const label = "Doing is armed with Standards sweep — automatic triggers off";
     const bolt = button(label);
     expect(bolt.getAttribute("data-arming-state")).toBe("switched-off");
-    // VC-329 item 1: the bolt is filled whenever the column is ARMED — the
-    // machine-local switch is a separate fact, carried by the muted ink and
-    // the tooltip's own words.
-    expect(bolt.querySelector('[data-arming-mark="filled"]')).not.toBeNull();
+    // Armed remains distinct with triggers off: selected background, muted
+    // outline, and the tooltip's own words. No filled icon family is needed.
+    expect(bolt.className).toContain("bg-accent");
+    expect(bolt.querySelector('[data-arming-mark="armed"]')).not.toBeNull();
     expect((await showTooltip(bolt)).textContent).toBe(label);
 
     // No effective arming means no pin: the authored digit remains, and the
@@ -1352,7 +1443,14 @@ describe("the lane view", () => {
     const menuRow = [...document.querySelectorAll('[data-slot="dropdown-menu-radio-item"]')].find(
       (candidate) => candidate.textContent?.includes("Standards sweep"),
     );
-    expect(menuRow?.textContent).toContain("Manual only");
+    expect(menuRow?.textContent).toBe("Standards sweep");
+    expect(menuRow?.getAttribute("aria-label")).toBe("Standards sweep · Manual only");
+    expect(menuRow?.getAttribute("title")).toBe("Standards sweep · Manual only");
+    const expectedIcon = document.createElement("div");
+    expectedIcon.innerHTML = renderToStaticMarkup(<AutomationOffIcon />);
+    expect(menuRow?.querySelector("svg")?.innerHTML).toBe(
+      expectedIcon.querySelector("svg")!.innerHTML,
+    );
   });
 });
 
@@ -1404,7 +1502,7 @@ describe("schedules (VC-130)", () => {
     await mount({ skips: [skip({ reason: { kind: "not-observed" } })] });
     expect(text()).toContain("Skipped");
     expect(text()).toContain("Volli didn’t wake in time");
-    expect(text()).not.toContain("Volli wasn’t running");
+    expect(text()).not.toContain("Volli was closed");
   });
 
   it("prints a scheduled row's whole sentence, zone included", async () => {
@@ -1412,7 +1510,7 @@ describe("schedules (VC-130)", () => {
     // The stored zone is shown ALWAYS (VC-112) — a row that hid it would leave
     // a reader unable to tell whose 21:00 this is.
     const row = document.querySelector('[data-automation-rail-row="automation-1"]');
-    expect(row?.textContent).toContain("Every day at 21:00 Europe/London");
+    expect(row?.textContent).toContain("Daily · 21:00 · Europe/London");
   });
 
   it("shows a Skipped occurrence in the Run history, never as a silence", async () => {
@@ -1424,10 +1522,16 @@ describe("schedules (VC-130)", () => {
 
     expect(text()).toContain("Nightly sweep");
     expect(text()).toContain("Skipped");
-    expect(text()).toContain("Volli wasn’t running");
+    expect(text()).toContain("Volli was closed");
     // One row per gap, saying how wide the gap was.
     expect(text()).toContain("3 occurrences");
-    expect(document.querySelector('[data-run-history-skip="skip-1"]')).not.toBeNull();
+    const row = document.querySelector('[data-run-history-skip="skip-1"]')!;
+    expect(row).not.toBeNull();
+    const reason = [...row.querySelectorAll("span")].find(
+      (element) => element.textContent === "Skipped · Volli was closed · 3 occurrences",
+    )!;
+    expect(reason.classList.contains("block")).toBe(true);
+    expect(reason.classList.contains("truncate")).toBe(false);
   });
 
   it("offers Run now on a skip, and starts ONE Run at the Project", async () => {
@@ -1463,7 +1567,7 @@ describe("editor navigation keeps drafts", () => {
   it("resumes a new draft after leaving the page, even when saved records exist", async () => {
     await mount({ automations: [automation()] });
     const newButton = [...document.querySelectorAll("button")].find(
-      (candidate) => candidate.textContent?.trim() === "New Automation",
+      (candidate) => candidate.textContent?.trim() === "New automation",
     )!;
     await act(async () => newButton.click());
     await act(async () =>
@@ -1539,7 +1643,7 @@ describe("editor navigation keeps drafts", () => {
     // The create form is gone and the saved Automation owns the editor again,
     // so its Run control is reachable rather than stranded behind a blank form.
     expect(loadEditorDraft("p1")).toBeNull();
-    expect((document.querySelector('[aria-label="Name"]') as HTMLInputElement).value).toBe(
+    expect(document.querySelector('[data-slot="automation-editor"] h2')?.textContent).toBe(
       "Review sweep",
     );
     expect(
@@ -1554,12 +1658,22 @@ describe("editor navigation keeps drafts", () => {
     const records = [automation(), automation({ id: "second", name: "Other" })];
     await mount({ automations: records });
     await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>('[data-slot="automation-editor"] h2 button')
+        ?.click(),
+    );
+    await act(async () =>
       setInputValue(
         document.querySelector('[aria-label="Name"]') as HTMLInputElement,
         "Unsaved name",
       ),
     );
     await openLanes();
+    await act(async () =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")]
+        .find((b) => b.textContent === "Automations")
+        ?.click(),
+    );
     await act(async () =>
       (document.querySelector('[data-automation-rail-row="second"]') as HTMLButtonElement).click(),
     );
@@ -1591,4 +1705,152 @@ describe("column arming trigger control", () => {
       expect.objectContaining({ automationId: "automation-1", enabled: true }),
     );
   });
+});
+
+function buttonsNamed(name: string): HTMLButtonElement[] {
+  return [...document.querySelectorAll<HTMLButtonElement>("button")].filter(
+    (node) => (node.getAttribute("aria-label") ?? node.textContent?.trim()) === name,
+  );
+}
+
+describe("grouped reading navigation", () => {
+  it("keeps name-only primary rows unique and exposes the compact return to schedules", async () => {
+    await mount({
+      automations: [
+        automation({
+          id: "doing",
+          name: "Doing sweep",
+          trigger: { kind: "columns", columns: ["doing"] },
+        }),
+        automation({
+          id: "hourly",
+          name: "Hourly sweep",
+          trigger: {
+            kind: "schedule",
+            schedule: { preset: "hourly", minute: 17, timeZone: "UTC" },
+          },
+        }),
+      ],
+    });
+    await act(async () => railRow("doing").click());
+    expect(buttonsNamed("Doing sweep")).toHaveLength(1);
+    expect(buttonsNamed("Hourly sweep")).toHaveLength(1);
+    expect(buttonsNamed("Rename Doing sweep")).toHaveLength(1);
+    expect(button("Rename Doing sweep").closest("h2")?.getAttribute("aria-label")).toBe(
+      "Doing sweep",
+    );
+    await act(async () => button("All automations").click());
+    expect(document.querySelector(".automations-surface")?.getAttribute("data-detail")).toBe(
+      "false",
+    );
+    await act(async () => buttonsNamed("Hourly sweep")[0]!.click());
+    expect(buttonsNamed("Hourly sweep")).toHaveLength(1);
+    expect(buttonsNamed("Rename Hourly sweep")).toHaveLength(1);
+    expect(button("Rename Hourly sweep").closest("h2")?.getAttribute("aria-label")).toBe(
+      "Hourly sweep",
+    );
+  });
+
+  it("keeps three recent occurrences and opens the real scoped All runs read", async () => {
+    await mount({
+      automations: [automation()],
+      runs: Array.from({ length: 5 }, (_, n) => run({ id: `r-${n}`, createdAt: n + 1 })),
+    });
+    expect(historyRowIds("run")).toEqual(["r-4", "r-3", "r-2"]);
+    await act(async () =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")]
+        .find((b) => b.textContent === "All runs")
+        ?.click(),
+    );
+    expect(historyRowIds("run")).toEqual(["r-4", "r-3", "r-2", "r-1", "r-0"]);
+    expect(doors.runsForProject).not.toHaveBeenCalled();
+  });
+  it("filters names and visible triggers and retains the filter with zero matches", async () => {
+    await mount({
+      automations: Array.from({ length: 9 }, (_, n) =>
+        automation({ id: `a-${n}`, name: `Review ${n}` }),
+      ),
+    });
+    const field = button("Filter automations") as HTMLInputElement;
+    await act(async () => setInputValue(field, "  REVIEW 3  "));
+    expect(document.querySelectorAll("[data-automation-rail-row]")).toHaveLength(1);
+    await act(async () => setInputValue(field, "not found"));
+    expect(text()).toContain("No matching automations");
+    expect(button("Filter automations")).toBe(field);
+    await act(async () =>
+      field.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })),
+    );
+    expect(document.querySelectorAll("[data-automation-rail-row]")).toHaveLength(9);
+  });
+  it("retains stale records but refuses Run after a failed coherent refresh", async () => {
+    await mount({ automations: [automation()] });
+    doors.list.mockResolvedValue({ ok: false, error: "Read unavailable" });
+    await act(async () =>
+      useBoardStore.setState((s) => ({
+        lastPlanningChange: { ...s.lastPlanningChange, version: s.lastPlanningChange.version + 1 },
+      })),
+    );
+    expect(text()).toContain("Couldn’t refresh automations");
+    expect(railRow("automation-1")).not.toBeNull();
+    expect((button("Run Review sweep") as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+describe("honest read states", () => {
+  it("shows one failed-read recovery, never a successful empty claim", async () => {
+    await mount({ failList: true });
+    expect(text()).toContain("Couldn’t load automations");
+    expect(text()).not.toContain("No automations yet");
+    expect(
+      [...document.querySelectorAll("button")].filter((b) => b.textContent === "Retry"),
+    ).toHaveLength(1);
+    expect((button("New automation menu") as HTMLButtonElement).disabled).toBe(true);
+    doors.list.mockResolvedValue({ ok: true, automations: [] });
+    await act(async () =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")]
+        .find((b) => b.textContent === "Retry")
+        ?.click(),
+    );
+    expect(text()).toContain("No automations yet");
+  });
+  it("retains historical rows after a refresh refusal and exposes Retry", async () => {
+    await mount({ automations: [automation()], runs: [run()] });
+    doors.runsForAutomation.mockResolvedValue({ ok: false, error: "History unavailable" });
+    await act(async () =>
+      useBoardStore.setState((s) => ({
+        lastPlanningChange: { ...s.lastPlanningChange, version: s.lastPlanningChange.version + 1 },
+      })),
+    );
+    expect(text()).toContain("Couldn’t load runs");
+    expect(historyRun("run-1")).not.toBeNull();
+    expect(historySection().textContent).not.toContain("No runs yet");
+  });
+});
+
+it("opens the authored starter as a local draft, including when blank creation is already open", async () => {
+  clearEditorDraft("p1");
+  await mount({});
+  await act(async () =>
+    [...document.querySelectorAll<HTMLButtonElement>("button")]
+      .find((b) => b.textContent === "New automation")
+      ?.click(),
+  );
+  await openDropdown(button("New automation menu"));
+  await act(async () =>
+    [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+      .find((b) => b.textContent === "Morning review")
+      ?.click(),
+  );
+  expect((document.querySelector('[aria-label="Name"]') as HTMLInputElement).value).toBe(
+    "Morning review",
+  );
+  expect(loadEditorDraft("p1")).toMatchObject({
+    name: "Morning review",
+    instructions: "/code-review\nFind regressions merged since yesterday.",
+    triggerChoice: "schedule",
+    schedule: { preset: "weekdays", timeZone: "Asia/Kuwait" },
+  });
+  expect(doors.create).not.toHaveBeenCalled();
+  expect(doors.setEnabled).not.toHaveBeenCalled();
+  clearEditorDraft("p1");
 });

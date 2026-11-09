@@ -10,13 +10,14 @@ import {
   powerMonitor,
   protocol,
   safeStorage,
+  screen,
   session,
   shell,
   systemPreferences,
 } from "electron";
 import { autoUpdater } from "electron-updater";
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -38,12 +39,14 @@ import {
   NEW_TICKET_DRAFT_APP_STATE_KEY,
   OperationUnavailableError,
   RUNNER_RESIDENT_APP_STATE_KEY,
+  runnerStaysAvailable,
   VOLLI_USER_ZDOTDIR_ENV,
   workspaceInstallCommand,
 } from "@volli/shared";
 import type { SessionEnvRepair } from "@volli/shared";
 import type { HarnessAdapter, HarnessId, ResolvedAppearance } from "@volli/shared";
 import type {
+  AppStateSetResult,
   BrowserTabStateEvent,
   BackgroundShellStateEvent,
   FirstPaintHint,
@@ -85,6 +88,8 @@ import {
   updateInstallQuitInFlight,
 } from "./quit-gate";
 import { isInternalNavigationTarget } from "./navigation";
+import { onRawIpc } from "./raw-ipc";
+import { currentRendererId } from "./renderer-call";
 import {
   applyQuietAppPolicy,
   hideDockForMenuBar,
@@ -205,11 +210,21 @@ import { createCloudCheckoutPort, folderPicker, localProjectConfirmation } from 
 import {
   CLOUD_RUNNER_APP_STATE_KEY,
   createDesktopMacRunner,
+  createRunnerResidencyHold,
   holdWhileTurnsRun,
+  launchedIntoMenuBar,
   NO_POWER_BLOCKER,
   runnerAccountPort,
+  runnerLoginItemSettings,
+  runnerLoginItemState,
+  syncRunnerLoginItem,
   thisMacRunnerLaunch,
   type MacRunner,
+  type RunnerCredentialInfo,
+  type RunnerLoginItemPort,
+  type RunnerPowerFacts,
+  type RunnerPowerSource,
+  type RunnerResidencyHold,
 } from "./cloud-runner";
 import {
   CLOUD_LAUNCH_APP_STATE_KEY,
@@ -231,6 +246,7 @@ import { keychainSecretCodec } from "./secrets/codec";
 import { installHarnessGuard } from "./harness/keychain-guard";
 import { harnessSecretPorts } from "./harness/secret-ports";
 import { registerSecretIpc } from "./secrets/ipc";
+import { isSecretRenderer } from "./secrets/renderer-trust";
 import { registerAutomationIpcHandlers } from "./automations/ipc";
 import {
   registerDegradedSessionRpcIpcHandlers,
@@ -261,6 +277,18 @@ import { createClientStateFlush } from "./client-state-flush";
 import { registerGhosttyConfigIpc } from "./ghostty-config";
 import { registerIpcHandlers } from "./ipc";
 import { registerAppMenu } from "./menu";
+import {
+  createSettingsWindowOwner,
+  restoreSettingsFrame,
+  SETTINGS_WINDOW_SIZE,
+} from "./settings-window";
+import {
+  registerSettingsWindowIpcHandlers,
+  sendSettingsWindowNavigation,
+  sendWorkspaceWindowNavigation,
+} from "./settings-window-ipc";
+import { registerAppWindow, getAppContentsRole, mainWindows } from "./window-roles";
+import type { SettingsWindowNavigation, WorkspaceWindowNavigation } from "../ipc/settings-window";
 import { confirmDestructiveClose, prepareTerminalQuit, registerTerminalIpcHandlers } from "./pty";
 import { ensureHarnessWorkspaceFiles } from "./harness-workspace";
 import { clientEventSink } from "./client-event-sink";
@@ -329,7 +357,7 @@ import {
   BrowserTraceStore,
 } from "@volli/host-core/browser";
 import { createBrowserShortcutRelay } from "./browser/app-shortcut-relay";
-import { BrowserTabHost } from "./browser/tab-host";
+import { BrowserTabHost, type BrowserPreviewDiagnostic } from "./browser/tab-host";
 import { registerOrphanProcessIpcHandlers } from "./process/ipc";
 import { registerBackgroundShellIpcHandlers } from "./shell/ipc";
 import { registerBrowserTabIpcHandlers } from "./browser/ipc";
@@ -342,7 +370,9 @@ import {
 import { closeHeadlessTabsOnTicketArchive } from "./browser/lifecycle";
 import { hostLogger } from "@volli/host-core/log";
 import { exitAfterLogFlush, logPowerTransitions, startDesktopLog } from "./log/desktop-log";
+import { startDesktopPerfStore } from "./log/perf-store";
 import { registerRendererLogForwarding } from "./log/renderer-log";
+import { registerRendererStallForwarding } from "./log/renderer-stall";
 import { parkBrowserPlanesOnRendererReset } from "./browser/plane-reset";
 
 // Harness mode (VC-703): inert unless VOLLI_HARNESS=1, which only
@@ -422,6 +452,19 @@ if (isDev && !app.commandLine.hasSwitch("user-data-dir")) {
   app.setPath("userData", `${app.getPath("userData")}-dev`);
 }
 const ownsAppProfile = acquireVolliAppProfile(app);
+// The bounded, machine-local store of every stall the log records (VC-1092),
+// read by `volli perf` and the support report. Opened first so its sink sees
+// the log's first stall; null when this instance does not own the profile or
+// the file will not open.
+const desktopPerf = ownsAppProfile
+  ? startDesktopPerfStore({
+      userData: app.getPath("userData"),
+      version: app.getVersion(),
+      dev: isDev,
+      env: process.env,
+      appPath: app.getAppPath(),
+    })
+  : null;
 // One structured, correlated log for main, the in-process host and the
 // renderer (VC-699): rotating JSON lines in this profile's own log directory.
 // Only the instance that owns the profile writes there.
@@ -430,6 +473,7 @@ const desktopLog = ownsAppProfile
       userData: app.getPath("userData"),
       dev: isDev,
       env: process.env,
+      ...(desktopPerf === null ? {} : { sinks: [desktopPerf.sink] }),
       // A smoke's captured boot reads main's lines off the terminal in any build.
       terminal: isDev || isSmokeBootCapture(process.env),
     })
@@ -447,8 +491,12 @@ const worktreeLog = hostLogger("worktree");
 let revealWindowForLaunch: (() => void) | null = null;
 if (ownsAppProfile) {
   app.on("second-instance", () => {
-    answerSecondInstance(BrowserWindow.getAllWindows()[0], {
+    answerSecondInstance(mainWindows()[0], {
       cloudEnabled: () => isExperimentEnabled("cloud"),
+      hasSettingsWindow: () =>
+        BrowserWindow.getAllWindows().some(
+          (window) => getAppContentsRole(window.webContents) === "settings",
+        ),
       revealForLaunch: revealWindowForLaunch,
       show: (window) => {
         revealWindow(window, nativeWindowPolicy);
@@ -551,13 +599,36 @@ function confirmDiscardUnsaved(
   return choice === 0;
 }
 
-function createWindow(ptyManager: PtyManager, firstPaint: FirstPaintHint): BrowserWindow {
+/** How a window presents itself once its renderer has painted. */
+interface CreateWindowOptions {
+  /** `false` keeps the window hidden for a login launch that enters the menu bar. */
+  readonly revealOnReady?: boolean;
+  readonly role?: "main" | "settings";
+  readonly bounds?: Partial<Electron.Rectangle>;
+}
+
+function createWindow(
+  ptyManager: PtyManager,
+  firstPaint: FirstPaintHint,
+  options: CreateWindowOptions = {},
+): BrowserWindow {
+  const settings = options.role === "settings";
   const mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
     // Usability floor: rail + max-width sidebar + a workable content column.
     minWidth: 940,
     minHeight: 600,
+    ...(settings
+      ? {
+          ...SETTINGS_WINDOW_SIZE,
+          ...options.bounds,
+          title: "Settings",
+          vibrancy: "sidebar" as const,
+          visualEffectState: "followWindow" as const,
+          fullscreenable: false,
+        }
+      : {}),
     show: false,
     // A quiet macOS smoke window must be incapable of becoming key. Playwright
     // focus emulation still gives its page document focus and CDP input.
@@ -567,10 +638,10 @@ function createWindow(ptyManager: PtyManager, firstPaint: FirstPaintHint): Brows
     // (.app-region-drag in globals.css) and the traffic-light whitespace —
     // everything below that band is ordinary layout.
     titleBarStyle: "hiddenInset",
-    // Centers the 12px traffic-light group inside ChromeBar's 36px band
-    // ((36 - 12) / 2 = 12). Must stay in sync with ChromeBar's h-9 height
-    // (chrome-bar.tsx), the same way backgroundColor below tracks the canvas.
-    trafficLightPosition: { x: 10, y: 12 },
+    // Centers the 12px traffic-light group inside ChromeBar's 46px band
+    // ((46 - 12) / 2 = 17). Must stay in sync with --spacing-titlebar
+    // (globals.css), the same way backgroundColor below tracks the canvas.
+    trafficLightPosition: { x: 16, y: 17 },
     // The canvas's own base fill (window-theme.ts runs the same pure pipeline
     // the renderer does, preferring the background the renderer last actually
     // painted) — prevents the white flash before first paint, and keeps the
@@ -602,9 +673,14 @@ function createWindow(ptyManager: PtyManager, firstPaint: FirstPaintHint): Brows
       sandbox: true,
     },
   });
+  registerAppWindow(mainWindow, settings ? "settings" : "main");
+  if (settings) mainWindow.on("page-title-updated", (event) => event.preventDefault());
   clearUnsavedDocumentsOnWindowClosed(mainWindow);
 
   mainWindow.on("ready-to-show", () => {
+    // A login launch comes up windowless (VC-1037): its renderer still has to
+    // boot (the hooks below run), but the person gets the menu bar, not a window.
+    if (options.revealOnReady === false) return;
     revealWindow(mainWindow, nativeWindowPolicy);
     // Accessory apps may still be activated programmatically. Once the smoke's
     // one compositor window exists and is visible, prohibit activation for the
@@ -635,7 +711,7 @@ function createWindow(ptyManager: PtyManager, firstPaint: FirstPaintHint): Brows
     // Same plan as the quit gate, skip-confirm seam included: the smokes close
     // windows with editors deliberately left dirty, and a native modal here
     // would hang their teardown exactly as one on the quit path would.
-    const unsaved = unsavedDocumentNames();
+    const unsaved = unsavedDocumentNames(mainWindow.webContents.id);
     const unsavedStep = planUnsavedQuit({
       names: unsaved,
       skipConfirm: process.env["VOLLI_SKIP_CLOSE_CONFIRM"] === "1",
@@ -712,9 +788,9 @@ function createWindow(ptyManager: PtyManager, firstPaint: FirstPaintHint): Brows
   // app-owned origin (including local packaged-runtime smoke launches).
   // DevTools is not auto-opened — toggle it with ⌥⌘I when needed.
   if (isDev && process.env["ELECTRON_RENDERER_URL"]) {
-    mainWindow.loadURL(process.env["ELECTRON_RENDERER_URL"]);
+    mainWindow.loadURL(`${process.env["ELECTRON_RENDERER_URL"]}${settings ? "#settings" : ""}`);
   } else {
-    mainWindow.loadURL(PACKAGED_RENDERER_ENTRY_URL);
+    mainWindow.loadURL(`${PACKAGED_RENDERER_ENTRY_URL}${settings ? "#settings" : ""}`);
   }
   return mainWindow;
 }
@@ -731,6 +807,7 @@ const appStartup = app.whenReady().then(async () => {
   const loginShellPathAttempt = probeLoginShellPath(ADOPTION_PROBE);
   logPowerTransitions(powerMonitor);
   registerRendererLogForwarding(ipcMain);
+  if (desktopLog !== null) registerRendererStallForwarding(ipcMain, desktopLog.rendererStalls);
   // Fixed before any window opens; the future embedded supervisor supplies the same descriptor.
   let rendererSources: readonly string[] = [];
   const serveRendererAsset = async (request: Request): Promise<Response> => {
@@ -1020,7 +1097,7 @@ const appStartup = app.whenReady().then(async () => {
             };
       },
       confirm: createNativeSendConfirmation({
-        getWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
+        getWindow: () => mainWindows()[0] ?? null,
         showMessageBox: (window, options) => dialog.showMessageBox(window, options),
       }),
     },
@@ -1042,6 +1119,10 @@ const appStartup = app.whenReady().then(async () => {
       },
     },
     onTransactionViolation: app.isPackaged ? logTransactionViolation : throwTransactionViolation,
+    // web_fetch parses HTML in this worker rather than on Electron main.
+    webExtractWorker: join(__dirname, "web-extract-worker.cjs"),
+    sourceIconWorker: join(__dirname, "source-icon-worker.cjs"),
+    usageReportWorker: join(__dirname, "usage-report-worker.cjs"),
     devDiagnostics: isDev,
     secretKey: harnessPorts?.secretKey ?? keychainSecretCodec(keychainUse.keychain),
     webKeySealing: {
@@ -1159,7 +1240,7 @@ const appStartup = app.whenReady().then(async () => {
               defaultId: 0,
               cancelId: 2,
             };
-            const owner = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+            const owner = BrowserWindow.getFocusedWindow() ?? mainWindows()[0];
             const answer =
               owner === undefined
                 ? dialog.showMessageBoxSync(options)
@@ -1198,8 +1279,54 @@ const appStartup = app.whenReady().then(async () => {
   // connects without a window). A local launch, and every flag-off one,
   // composes nothing here.
   const runnerLaunch = thisMacRunnerLaunch(launch);
+  // The Keep-working switch's facts (VC-1037): the stored preference and the
+  // wall, read for every capability report and every residency recheck. A read
+  // that fails claims nothing rather than holding a Mac awake on a guess.
+  const thisMacPowerFacts = (): RunnerPowerFacts => {
+    try {
+      const source: RunnerPowerSource = powerMonitor.isOnBatteryPower() ? "battery" : "ac";
+      return {
+        enabled: runnerStaysAvailable(
+          liveHost === undefined
+            ? undefined
+            : getAppState(liveHost.database.db, RUNNER_RESIDENT_APP_STATE_KEY),
+        ),
+        source,
+      };
+    } catch {
+      return { enabled: false, source: "unknown" };
+    }
+  };
+  // The model credentials this Mac holds, as the report's availability list
+  // (VC-1037): provider ids and kinds, never a value. Lazy because the store
+  // is assigned after the runner is composed; a failed read reports none.
+  const readMacCredentials = async (): Promise<readonly RunnerCredentialInfo[]> => {
+    if (macCredentials === null) return [];
+    try {
+      return await macCredentials.list();
+    } catch (error) {
+      hostLogger("cloud-runner").warn("could not list this Mac's model credentials", { error });
+      return [];
+    }
+  };
+  // The login item behind the switch (VC-1037): macOS's own status is the
+  // truth, so a person's Login Items refusal is surfaced rather than written over.
+  const runnerLoginItem: RunnerLoginItemPort = {
+    read: () => runnerLoginItemState(app.getLoginItemSettings()),
+    apply: ({ openAtLogin }) => app.setLoginItemSettings({ openAtLogin }),
+  };
+  const runnerLoginItemFor = (preference: string | null | undefined) =>
+    runnerLoginItemSettings(
+      { cloud: launch.store === "cloud", platform: process.platform, packaged: app.isPackaged },
+      preference,
+    );
   // Bound once menu-bar mode exists below: its browser closes while resident.
   let residentMenuBar: { isResident(): boolean } | null = null;
+  // The Keep-working idle-sleep assertion and its power listeners (VC-1037),
+  // released at teardown. A blocker of its own: the turn hold and menu-bar
+  // mode's must be able to release without releasing this one.
+  let runnerResidency: RunnerResidencyHold | null = null;
+  let stopRunnerPowerWatch: (() => void) | null = null;
   // The cloud launch's turn-time power assertion, released at teardown.
   let releaseTurnPower: (() => void) | null = null;
   // Loaded only for a cloud launch: a local one never loads the Convex client.
@@ -1261,6 +1388,8 @@ const appStartup = app.whenReady().then(async () => {
                     setAppState(launchMarkerDb!, CLOUD_RUNNER_APP_STATE_KEY, value, Date.now()),
                 },
           power: powerMonitor,
+          powerFacts: thisMacPowerFacts,
+          credentials: readMacCredentials,
           liveWork: () => liveHost.liveWork.current(),
           dataDir: app.getPath("userData"),
           appVersion: app.getVersion(),
@@ -1286,6 +1415,21 @@ const appStartup = app.whenReady().then(async () => {
       host: liveHost !== undefined,
     });
   }
+  // The Keep-working switch's write is only acknowledged once its main-side
+  // effects applied (VC-1037): the login item first, because macOS can refuse
+  // it, then the residency hold and the capability report. Data IPC restores
+  // the previous value if this returns a failure.
+  const acknowledgeRunnerResident = (key: string, value: string): AppStateSetResult => {
+    if (key !== RUNNER_RESIDENT_APP_STATE_KEY) return { ok: true };
+    try {
+      syncRunnerLoginItem(runnerLoginItem, runnerLoginItemFor(value));
+    } catch (error) {
+      return { ok: false, error: errorMessage(error) };
+    }
+    runnerResidency?.refresh();
+    macRunner?.refreshCapabilities();
+    return { ok: true };
+  };
   const sessionWakeBus = liveHost?.sessionWakeBus ?? null;
   const sessionReadWatch = liveHost?.sessionReadWatch ?? null;
   // The ONE notification door (VC-295). Every native alert this process posts —
@@ -1440,14 +1584,15 @@ const appStartup = app.whenReady().then(async () => {
     if (retiresSessionSecrets(event.payload)) void secrets.endSession(event.sessionId);
   });
   registerSecretIpc(secrets, (sender) => {
-    const url = sender.getURL();
-    const renderer = isDev ? process.env["ELECTRON_RENDERER_URL"] : PACKAGED_RENDERER_ENTRY_URL;
-    if (renderer === undefined || !URL.canParse(renderer) || !URL.canParse(url)) return false;
-    const actual = new URL(url);
-    const expected = new URL(renderer);
-    actual.hash = "";
-    expected.hash = "";
-    return actual.href === expected.href;
+    const role = getAppContentsRole(sender);
+    return (
+      role !== null &&
+      isSecretRenderer(
+        sender.getURL(),
+        isDev ? process.env["ELECTRON_RENDERER_URL"] : undefined,
+        role,
+      )
+    );
   });
   const mcpSettings = liveHost?.runtimeServices.mcp ?? null;
   // Where Code Mode's sandbox worker and WebAssembly are (VC-471): the
@@ -1476,10 +1621,14 @@ const appStartup = app.whenReady().then(async () => {
   // The pictures a transcript card shows (VC-238): live captures bounded in
   // memory, model-requested screenshots also on disk under userData — never
   // the Blob store, whose Session links become the next turn's input.
+  // Both disks write off main's turn (VC-1082); an accepted quit waits for
+  // what they still hold (`settleBackgroundWork` below).
+  const browserPictureSink = browserPictureDisk(browserPicturesRoot(app.getPath("userData")));
+  const browserTraceSink = browserTraceDisk(browserTracesRoot(app.getPath("userData")));
   const browserPictures = new BrowserPictureStore({
     createId: randomUUID,
     now: Date.now,
-    persist: browserPictureDisk(browserPicturesRoot(app.getPath("userData"))),
+    persist: browserPictureSink,
   });
   // App shortcuts out of a focused Browser page (VC-301): the host delivers,
   // the handler map's `browserShortcuts.*` entries subscribe and hand focus back.
@@ -1489,10 +1638,11 @@ const appStartup = app.whenReady().then(async () => {
     }),
   );
   const browserTabs = new BrowserTabHost({
+    appVersion: app.getVersion(),
     createId: randomUUID,
     createView: (options) => new WebContentsView(options),
     fromPartition: (partition) => session.fromPartition(partition),
-    getWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
+    getWindow: () => mainWindows()[0] ?? null,
     // The off-screen stage every tab waits in until a person shows it (VC-278).
     // A tab nobody has revealed still needs a window to hold its compositor
     // surface, or its clicks land nowhere and its screenshots never answer.
@@ -1523,13 +1673,29 @@ const appStartup = app.whenReady().then(async () => {
       createId: randomUUID,
       now: Date.now,
       frameOf: (pictureId) => browserPictures.copyOf(pictureId),
-      persist: browserTraceDisk(browserTracesRoot(app.getPath("userData"))),
+      persist: browserTraceSink,
     }),
     // The holder's name for the pill and the cursor label (VC-239), from the
     // Session's own projection. A launch with no runtime has no Sessions to
     // hold a tab, so the placeholder is never what a person sees.
     sessionName: async (sessionId: string) =>
       (await sessionRuntime?.projection({ sessionId }))?.projection.session.title ?? null,
+    // Diagnostic-only (VC-1150), unpackaged builds only, and only behind the
+    // guarded harness or the dev smoke door that already exposes this host:
+    // how each preview's frame fence and camera ended, as fixed outcomes,
+    // counts, generations and times. It enables nothing and decides nothing.
+    ...(isDev &&
+    (process.env["VOLLI_HARNESS"] === "1" || process.env["VOLLI_SMOKE_BROWSER_HOST"] === "1")
+      ? {
+          previewDiagnostics: ({ stage, ...diagnostic }: BrowserPreviewDiagnostic) =>
+            hostLogger("browser").info(
+              stage === "frame"
+                ? "browser navigation picture frame"
+                : "browser navigation picture outcome",
+              diagnostic,
+            ),
+        }
+      : {}),
   });
   /**
    * Everything the runner calls back into on this Mac (VC-671): the
@@ -1541,6 +1707,7 @@ const appStartup = app.whenReady().then(async () => {
    * quit runs.
    */
   let desktopMoves: DesktopMovesService | null = null;
+  let settleSourceIcons: (() => Promise<void>) | undefined;
   const runnerEdge = createDesktopRunnerEdge({
     lifecycle: quittingApp,
     host: hostCore,
@@ -1556,10 +1723,16 @@ const appStartup = app.whenReady().then(async () => {
       accountGithub.dispose();
       account.dispose();
       releaseTurnPower?.();
+      stopRunnerPowerWatch?.();
     },
     cloudEnabled: () => isExperimentEnabled("cloud"),
     settleBackgroundWork: async () => {
-      await restore?.settled();
+      await Promise.all([
+        restore?.settled(),
+        settleSourceIcons?.(),
+        browserPictureSink.settled(),
+        browserTraceSink.settled(),
+      ]);
     },
     terminalQuit: prepareTerminalQuit,
     createSessionRpc,
@@ -1602,6 +1775,11 @@ const appStartup = app.whenReady().then(async () => {
       requestSecret: true,
       browser: { backend: browserTabs, cursorFor: (tabId) => cursorOverlayRef?.driverFor(tabId) },
       pictures: browserPictures,
+      sourceIconEpoch: () => account.sourceIconEpoch(),
+      sourceIconOwner: () => account.sourceIconOwner(),
+      sourceIconRestoring: () => account.sourceIconRestoring(),
+      sourceIconRevocation: () => account.sourceIconRevocation(),
+      watchSourceIconAuthority: (listener) => account.watchSourceIconAuthority(listener),
     },
     beforeExecution: () => loginPathBootstrap.apply(),
     shellFeed: {
@@ -1624,6 +1802,7 @@ const appStartup = app.whenReady().then(async () => {
     observability: agentObservability,
     automations: runtimeAutomations,
   } = runner;
+  settleSourceIcons = () => runner.settleSourceIcons();
   runnerEdge.bind({ automations: runtimeAutomations });
   // A local launch registers this Mac only for the move, never connects it to cloud jobs.
   // The exact same sealed identity and registration rules serve a later cloud launch.
@@ -1703,6 +1882,7 @@ const appStartup = app.whenReady().then(async () => {
         launch.store === "cloud" && launch.userId === userId
           ? (macRunner?.snapshot() ?? null)
           : null,
+      cursorsReleased: (sessionIds) => cloudStore?.forgetDrainCursors(sessionIds),
       openCloud: (projectId, workspaceId, userId) => {
         launchMarker.write(userId, workspaceId, projectId);
         relaunch.request();
@@ -1900,6 +2080,9 @@ const appStartup = app.whenReady().then(async () => {
         account,
         {
           launch: () => launch,
+          // Explicit intent stops a move immediately; account snapshots alone
+          // may temporarily have no person while the same sign-in recovers.
+          beforeSignOut: () => desktopMoves?.signInLost(),
           relaunch: () => {
             // Stable enrollment may restart before the launch grants cloud access.
             if (!accountEnrollmentEnabled()) throw new OperationUnavailableError(ACCOUNT_CLOUD_OFF);
@@ -1907,7 +2090,7 @@ const appStartup = app.whenReady().then(async () => {
           },
           reportUnsavedWrites: (count) => {
             if (!accountEnrollmentEnabled()) throw new OperationUnavailableError(ACCOUNT_CLOUD_OFF);
-            recordUnsavedBoardWrites(count);
+            recordUnsavedBoardWrites(count, currentRendererId());
           },
           // Only a cloud launch has a board to keep, and only its own account's.
           saveSnapshot: (text) => {
@@ -1986,6 +2169,7 @@ const appStartup = app.whenReady().then(async () => {
   registerNotificationIpcHandlers({
     settings: notifications.settings,
     takePendingActivation: () => notifications.takePendingActivation(),
+    mayActivate: (sender) => getAppContentsRole(sender) === "main",
     // A renderer asking for the parked click is a renderer that has just
     // subscribed to them (VC-295): until then main parks rather than
     // pushes, because a window exists long before anything inside it listens.
@@ -2002,7 +2186,7 @@ const appStartup = app.whenReady().then(async () => {
   // What each window is showing, for the focused-target rule. A `send`: it
   // flips on every navigation, needs no reply, and main's copy is advisory —
   // a report that never arrives costs one duplicate alert.
-  ipcMain.on(
+  onRawIpc(
     "volli:notification-active-target" satisfies VolliIpcChannel,
     (event, ...args: unknown[]): void => {
       const window = BrowserWindow.fromWebContents(event.sender);
@@ -2108,6 +2292,9 @@ const appStartup = app.whenReady().then(async () => {
   registerDataIpcHandlers(dbHandle, {
     ...recoveredSessionClientPorts(readyRuntimeServices),
     listOpenNativeBindings,
+    // The Keep-working switch owns a login item and the runner's residency
+    // (VC-1037): apply them before the renderer is told the write is durable.
+    onAppStateSet: acknowledgeRunnerResident,
     ...(liveHost === undefined
       ? {}
       : {
@@ -2313,10 +2500,11 @@ const appStartup = app.whenReady().then(async () => {
     });
   };
 
-  ipcMain.on(
+  onRawIpc(
     "volli:unsaved-documents" satisfies VolliIpcChannel,
-    (_event, ...args: unknown[]): void => {
-      recordUnsavedDocuments(args[0]);
+    (event, ...args: unknown[]): void => {
+      if (getAppContentsRole(event.sender) !== null)
+        recordUnsavedDocuments(args[0], event.sender.id);
     },
   );
   // The accepted-quit coordinator registered above only holds the event
@@ -2384,7 +2572,7 @@ const appStartup = app.whenReady().then(async () => {
       });
       return view;
     },
-    getWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
+    getWindow: () => mainWindows()[0] ?? null,
     // macOS is the one platform Electron reads the setting on; elsewhere the
     // cursor moves, which is the default a person who never asked expects.
     prefersReducedMotion: () =>
@@ -2442,14 +2630,16 @@ const appStartup = app.whenReady().then(async () => {
   // The draft flush-and-ack barrier (VC-577): menu-bar entry and a system
   // shutdown ask each renderer to save its drafts before a window goes.
   const clientStateFlush = createClientStateFlush({ newRequestId: () => randomUUID() });
-  ipcMain.on(
+  onRawIpc(
     "volli:client-state-flushed" satisfies VolliIpcChannel,
     (_event, ...args: unknown[]): void => {
       clientStateFlush.acknowledge(args[0]);
     },
   );
-  const createOwnedWindow = (): BrowserWindow => {
-    const window = createWindow(ptyManager, currentFirstPaint());
+  const pendingWorkspaceNavigation = new Map<number, WorkspaceWindowNavigation>();
+  const workspaceRendererReady = new Set<number>();
+  const createOwnedWindow = (options: CreateWindowOptions = {}): BrowserWindow => {
+    const window = createWindow(ptyManager, currentFirstPaint(), options);
     // Browser Tabs are live machine resources, not durable documents. Once the
     // app window that can place them closes, keeping invisible remote pages
     // running would leave network/timers with no reachable owner.
@@ -2457,16 +2647,26 @@ const appStartup = app.whenReady().then(async () => {
     // And a closed window is showing nothing: its last reported target must not
     // linger and suppress an alert nobody can see (VC-295).
     const windowId = window.id;
-    window.once("closed", () => notifications.forgetWindow(windowId));
+    window.once("closed", () => {
+      notifications.forgetWindow(windowId);
+      pendingWorkspaceNavigation.delete(windowId);
+      workspaceRendererReady.delete(windowId);
+    });
     // A page that reloads, navigates, or crashes takes its click subscription
     // and its reported target with it, while the window id lives on. Drop
     // both, so the next click parks for the fresh page instead of being pushed
     // into one that no longer listens. Same-document navigations (a hash
     // change) keep the page and are skipped.
     window.webContents.on("did-start-navigation", (details) => {
-      if (details.isMainFrame && !details.isSameDocument) notifications.forgetRenderer(windowId);
+      if (details.isMainFrame && !details.isSameDocument) {
+        notifications.forgetRenderer(windowId);
+        workspaceRendererReady.delete(windowId);
+      }
     });
-    window.webContents.on("render-process-gone", () => notifications.forgetRenderer(windowId));
+    window.webContents.on("render-process-gone", () => {
+      notifications.forgetRenderer(windowId);
+      workspaceRendererReady.delete(windowId);
+    });
     // A committed page reset strands any Browser plane the old page had put on
     // screen (VC-424): a native view is the window's child, not the page's, so
     // it goes on compositing over a fresh app UI that cannot hide a tab it has
@@ -2482,10 +2682,141 @@ const appStartup = app.whenReady().then(async () => {
     });
     return window;
   };
+  // Settings has no parent: it is movable between displays and never blocks the workbench.
+  const settingsFramePath = join(app.getPath("userData"), "settings-window-frame.json");
+  let settingsNavigation: SettingsWindowNavigation | null = null;
+  let settingsRevision = 0;
+  let settingsRendererReady = false;
+  let settingsNativeReady = false;
+  const showSettings = (window: BrowserWindow): void => {
+    if (!settingsRendererReady || !settingsNativeReady || window.isDestroyed()) return;
+    if (window.isMinimized()) window.restore();
+    revealWindow(window, nativeWindowPolicy);
+    sealQuietAppActivation(app, nativeWindowPolicy);
+  };
+  const settingsWindow = createSettingsWindowOwner({
+    create: (navigation) => {
+      settingsNavigation = { ...navigation, revision: ++settingsRevision };
+      settingsRendererReady = false;
+      settingsNativeReady = false;
+      let bounds: Partial<Electron.Rectangle> = {};
+      try {
+        bounds = restoreSettingsFrame(
+          JSON.parse(readFileSync(settingsFramePath, "utf8")),
+          screen.getAllDisplays().map((display) => display.workArea),
+        );
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+          log.warn("couldn't restore Settings frame", { error });
+      }
+      // Settings initially paints App scope; project navigation is resolved before reveal.
+      const paint = dbHandle.ok
+        ? resolveFirstPaint({
+            hint: null,
+            canvas: getGlobalCanvas(dbHandle.db),
+            appearance: getGlobalAppearance(dbHandle.db),
+            systemPrefersDark: nativeTheme.shouldUseDarkColors,
+          })
+        : currentFirstPaint();
+      const window = createWindow(ptyManager, paint, {
+        role: "settings",
+        revealOnReady: false,
+        bounds,
+      });
+      window.once("ready-to-show", () => {
+        settingsNativeReady = true;
+        showSettings(window);
+      });
+      window.webContents.on("did-start-navigation", (details) => {
+        if (details.isMainFrame && !details.isSameDocument) settingsRendererReady = false;
+      });
+      window.webContents.on("render-process-gone", () => {
+        settingsRendererReady = false;
+      });
+      const saveFrame = () => {
+        if (window.isDestroyed()) return;
+        try {
+          writeFileSync(`${settingsFramePath}.tmp`, JSON.stringify(window.getNormalBounds()));
+          renameSync(`${settingsFramePath}.tmp`, settingsFramePath);
+        } catch (error) {
+          log.warn("couldn't save Settings frame", { error });
+        }
+      };
+      window.on("resized", saveFrame);
+      window.on("moved", saveFrame);
+      window.on("close", saveFrame);
+      return window;
+    },
+    navigate: (window, navigation) => {
+      settingsNavigation = { ...navigation, revision: ++settingsRevision };
+      const listening = settingsRendererReady;
+      settingsRendererReady = false;
+      if (listening) sendSettingsWindowNavigation(window.webContents, settingsNavigation);
+    },
+    reveal: showSettings,
+  });
+  const assertSettingsRequester = (sender: Electron.WebContents): void => {
+    if (
+      settingsWindow.current()?.webContents !== sender ||
+      getAppContentsRole(sender) !== "settings"
+    ) {
+      throw new Error("Only the Settings window can receive Settings navigation.");
+    }
+  };
+  registerSettingsWindowIpcHandlers({
+    open: (navigation, sender) => {
+      if (getAppContentsRole(sender) === null)
+        throw new Error("Only an app window can open Settings.");
+      settingsWindow.open(navigation);
+    },
+    openWorkspace: (navigation, sender) => {
+      assertSettingsRequester(sender);
+      // Reuse the ordinary menu-bar exit path so a retained workbench is no
+      // longer scheduled for destruction when its draft flush acknowledges.
+      appWindows.openForNotification(runnerEdge.menuBar());
+      const focused = BrowserWindow.getFocusedWindow();
+      const window =
+        focused !== null && getAppContentsRole(focused.webContents) === "main"
+          ? focused
+          : (mainWindows()[0] ?? createOwnedWindow());
+      if (window.isMinimized()) window.restore();
+      if (workspaceRendererReady.has(window.id))
+        sendWorkspaceWindowNavigation(window.webContents, navigation);
+      else pendingWorkspaceNavigation.set(window.id, navigation);
+      revealWindow(window, nativeWindowPolicy);
+      sealQuietAppActivation(app, nativeWindowPolicy);
+    },
+    pendingWorkspaceNavigation: (sender) => {
+      if (getAppContentsRole(sender) !== "main")
+        throw new Error("Only a workspace window can receive workspace navigation.");
+      const window = BrowserWindow.fromWebContents(sender);
+      if (window === null) throw new Error("The workspace window is closed.");
+      workspaceRendererReady.add(window.id);
+      const navigation = pendingWorkspaceNavigation.get(window.id) ?? null;
+      pendingWorkspaceNavigation.delete(window.id);
+      return navigation;
+    },
+    pendingNavigation: (sender) => {
+      assertSettingsRequester(sender);
+      return settingsNavigation;
+    },
+    ready: (appliedRevision, sender) => {
+      assertSettingsRequester(sender);
+      // An opening command can supersede the bootstrap read. Do not expose
+      // the old scope; return the new intent and wait for its committed frame.
+      if (settingsNavigation !== null && appliedRevision === settingsNavigation.revision) {
+        settingsRendererReady = true;
+        const window = settingsWindow.current();
+        if (window !== null) showSettings(window);
+      }
+      return settingsNavigation;
+    },
+  });
   // Which windows count as open, their draft flush, and the reveal each door
   // that brings one back takes (VC-577).
   const appWindows = createAppWindows({
     all: () => BrowserWindow.getAllWindows(),
+    isWorkspace: (window) => getAppContentsRole(window.webContents) === "main",
     create: createOwnedWindow,
     reveal: (window) => revealWindow(window, nativeWindowPolicy),
     flush: clientStateFlush,
@@ -2496,7 +2827,17 @@ const appStartup = app.whenReady().then(async () => {
   // the app alive), and the renderer collects the parked target as it
   // subscribes. Bound here because this is where the factory exists.
   notifications.bindWindowOpener(() => appWindows.openForNotification(runnerEdge.menuBar()));
-  const mainWindow = createOwnedWindow();
+  // A login launch comes up windowless (VC-1037): Electron's launch signal
+  // (`wasOpenedAtLogin`, restored from the launch Apple Event) or the explicit
+  // acceptance argument. A cloud launch may enter the menu bar; an ordinary
+  // manual launch always reveals its window as before.
+  const startInMenuBar = launchedIntoMenuBar({
+    cloud: launch.store === "cloud",
+    platform: process.platform,
+    argv: process.argv,
+    openedAtLogin: app.getLoginItemSettings().wasOpenedAtLogin,
+  });
+  const mainWindow = createOwnedWindow({ revealOnReady: !startInMenuBar });
   const transcriptRepackAbort = new AbortController();
   runnerEdge.bind({ repack: transcriptRepackAbort });
   mainWindow.webContents.once("did-finish-load", () => {
@@ -2627,7 +2968,14 @@ const appStartup = app.whenReady().then(async () => {
     mainWindow.webContents.once("did-finish-load", () => {
       liveHost.maintenance.start();
     });
-    app.on("browser-window-focus", () => liveHost.maintenance.triggerRetention());
+    app.on("browser-window-focus", () => {
+      liveHost.maintenance.triggerRetention();
+      // A model sign-in lands in Pi's credential store outside main's own
+      // doors (the `pi` CLI can write it too). The next focus re-reads the
+      // availability list, so the picker's providers appear without a relaunch
+      // (VC-1037); an unchanged report is not sent again.
+      macRunner?.refreshCapabilities();
+    });
   }
 
   // Auto-update (VC-24): packaged builds poll GitHub Releases ~30s after
@@ -2652,8 +3000,7 @@ const appStartup = app.whenReady().then(async () => {
     // The double-notify guard: with a window open the sidebar badge/dialog
     // owns the "downloaded" announcement; the native notification only speaks
     // when no window is left to show it (macOS keeps the app alive).
-    hasUpdateSurface: () =>
-      BrowserWindow.getAllWindows().some((window) => !window.webContents.isDestroyed()),
+    hasUpdateSurface: () => mainWindows().some((window) => !window.webContents.isDestroyed()),
     // Settings → Updates' Status row survives a relaunch (VC-294); on a
     // broken db it lives for this run only, like the channel below.
     lastCheck: dbHandle.ok
@@ -2780,6 +3127,37 @@ const appStartup = app.whenReady().then(async () => {
     residentMenuBar = menuBar;
     macRunner.subscribe(() => menuBar.refresh());
     releaseTurnPower = holdWhileTurnsRun(liveHost.liveWork, electronMenuBarPower());
+    // Keep-working has its own idle-sleep assertion and its own power clock
+    // (VC-1037). A separate blocker instance: menu-bar mode's assertion and the
+    // turn hold must be able to release without releasing this one.
+    const residency = createRunnerResidencyHold(thisMacPowerFacts, electronMenuBarPower());
+    runnerResidency = residency;
+    const onPowerChanged = () => {
+      residency.refresh();
+      // C1's source changed; re-report rather than wait for the next connect.
+      macRunner.refreshCapabilities();
+    };
+    powerMonitor.on("on-ac", onPowerChanged);
+    powerMonitor.on("on-battery", onPowerChanged);
+    stopRunnerPowerWatch = () => {
+      powerMonitor.off("on-ac", onPowerChanged);
+      powerMonitor.off("on-battery", onPowerChanged);
+      residency.stop();
+      runnerResidency = null;
+    };
+  }
+  // The login item follows the same switch (VC-1037), only in a packaged Mac
+  // cloud launch. A refusal at boot is logged, never fatal: the runner still
+  // works for this launch, and the write that changes the switch reports it.
+  if (launch.store === "cloud" && liveHost !== undefined) {
+    try {
+      syncRunnerLoginItem(
+        runnerLoginItem,
+        runnerLoginItemFor(getAppState(liveHost.database.db, RUNNER_RESIDENT_APP_STATE_KEY)),
+      );
+    } catch (error) {
+      hostLogger("cloud-runner").warn("could not update the login item", { error });
+    }
   }
   // The quit path is whole from here: a dropped binding fails the launch.
   runnerEdge.assertBound();
@@ -3072,7 +3450,13 @@ const appStartup = app.whenReady().then(async () => {
     });
   };
 
-  registerAppMenu(dbHandle, { installAgentTools, uninstallAgentTools });
+  registerAppMenu(dbHandle, {
+    installAgentTools,
+    uninstallAgentTools,
+    openSettings: () => {
+      settingsWindow.open({});
+    },
+  });
 
   // Settings → CLI (VC-52): the detection surface over the silent install, and
   // the in-app doctor. Registered before the awaited socket work below for the
@@ -3144,6 +3528,8 @@ const appStartup = app.whenReady().then(async () => {
     // Counts, reasons and error class names only (VC-926).
     bootRecovery: () => runner.bootRecovery(),
     cloudRunner: () => macRunner?.snapshot() ?? null,
+    // Counts, durations and code-owned operation names only (VC-1092).
+    perfStalls: () => desktopPerf?.store ?? null,
   });
 
   try {
@@ -3239,6 +3625,8 @@ const appStartup = app.whenReady().then(async () => {
                   }),
             }),
             doctorRepair: repairSessionEnvironment,
+            // `volli perf` reads this machine's stalls (VC-1092).
+            perfStore: () => desktopPerf?.store ?? null,
           }).execute
         : async () =>
             ({
@@ -3325,6 +3713,20 @@ const appStartup = app.whenReady().then(async () => {
     void installAgentToolsQuietly().catch((error: unknown) => {
       log.error("background agent-tools install failed", { error });
     });
+  }
+
+  // Boot is whole and the menu bar has its runner line (VC-1037): a login
+  // launch now enters it, taking the hidden first window through its draft
+  // flush. When the renderer is still loading, wait for it: its finish-load
+  // hooks (retention, login PATH, web sealing) belong to the resident host, and
+  // menu-bar entry flushes drafts before closing the window. An ordinary launch
+  // never gets here with `startInMenuBar`.
+  if (startInMenuBar) {
+    if (mainWindow.isDestroyed() || !mainWindow.webContents.isLoadingMainFrame()) {
+      menuBar.enter();
+    } else {
+      mainWindow.webContents.once("did-finish-load", () => menuBar.enter());
+    }
   }
 
   // An activation means a noted logout did not happen (VC-577), and with no

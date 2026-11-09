@@ -1644,7 +1644,7 @@ describe("Session tRPC router", () => {
     ).rejects.toThrow("unavailable");
   });
 
-  it("round-trips the Code Mode policy whole — the switch and every pin", async () => {
+  it("round-trips the Code Mode policy whole — default, legacy guard and every pin", async () => {
     const fixture = runtimeFixture();
     const writes: unknown[] = [];
     const caller = createSessionRouter().createCaller(
@@ -1670,7 +1670,8 @@ describe("Session tRPC router", () => {
 
     // A routed model id carries its own slash; the key splits at the first.
     const saved = {
-      enabled: false,
+      enabled: true,
+      defaultMode: "only" as const,
       models: {
         "openai-codex/gpt-5.5": "both" as const,
         "openrouter/z-ai/glm-4.6": "off" as const,

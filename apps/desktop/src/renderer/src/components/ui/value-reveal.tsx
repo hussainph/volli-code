@@ -61,9 +61,10 @@ export function isTextClipped(element: HTMLElement | null | undefined): boolean 
  * Spread onto a `Tooltip`; point `ref` at the element that does the
  * truncating. Radix still owns the gesture — hover with the group's delay,
  * focus with none — and this only ever says no: an open is refused when the
- * text is whole, and it is measured at the moment of the request rather than
- * on a resize, because that is the one moment the answer is needed and the
- * cheapest place to ask for it.
+ * text is whole, unless `hasDetail` names a qualifier not drawn in the caption
+ * (for example, two files with the same basename). Clipping is measured at the
+ * moment of the request rather than on a resize, because that is the one
+ * moment the answer is needed and the cheapest place to ask for it.
  *
  * Pass `within` when the focus stop is an ANCESTOR rather than the element
  * itself. Focus does not travel down: `focusin` on the host bubbles up past
@@ -73,9 +74,9 @@ export function isTextClipped(element: HTMLElement | null | undefined): boolean 
  */
 export function useClippedReveal(
   ref: React.RefObject<HTMLElement | null>,
-  options: { readonly within?: string } = {},
+  options: { readonly within?: string; readonly hasDetail?: boolean } = {},
 ): HostedReveal {
-  const { within } = options;
+  const { within, hasDetail = false } = options;
   const [open, setOpen] = React.useState(false);
   // Whether the value has to be its own focus stop. `false` until a host is
   // found and asked, which is also the answer for every surface that passes no
@@ -88,9 +89,9 @@ export function useClippedReveal(
   const pressing = React.useRef(false);
   const reveal = React.useCallback(
     (next: boolean) => {
-      setOpen(next && isTextClipped(ref.current));
+      setOpen(next && (hasDetail || isTextClipped(ref.current)));
     },
-    [ref],
+    [ref, hasDetail],
   );
 
   React.useEffect(() => {
@@ -187,12 +188,20 @@ export function ValueReveal({
   contentClassName?: string;
   children: React.ReactNode;
 }) {
+  const [valueFont, setValueFont] = React.useState<string>();
+  function inheritValueFont(event: React.SyntheticEvent<HTMLButtonElement>) {
+    const button = event.currentTarget;
+    const value = button.firstElementChild ?? button;
+    setValueFont(getComputedStyle(value).fontFamily);
+  }
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <button
           type="button"
           data-slot="value-reveal"
+          onPointerEnter={inheritValueFont}
+          onFocus={inheritValueFont}
           // The alternatives were both worse. `tabIndex` on a span puts a stop
           // in the tab order that AT announces as nothing in particular, and
           // wrapping a 60-character value turns a caption into a paragraph.
@@ -205,8 +214,14 @@ export function ValueReveal({
           {children}
         </button>
       </TooltipTrigger>
-      <TooltipContent side={side} className={cn("font-mono", contentClassName)}>
-        {reveal ?? `${term} · ${full}`}
+      <TooltipContent side={side} className={contentClassName} style={{ fontFamily: valueFont }}>
+        {reveal ?? (
+          <>
+            <span className="font-sans font-medium">{term}</span>
+            {" · "}
+            <span style={{ fontFamily: valueFont }}>{full}</span>
+          </>
+        )}
       </TooltipContent>
     </Tooltip>
   );

@@ -43,6 +43,8 @@ interface CommandPaletteSessionBase {
   projectName: string;
   sessionId: string;
   sessionKind: "terminal" | "chat";
+  /** Already held by the listing; icons must not rescan the roster. */
+  savedProviderId: string | null;
   title: string;
   ticketDisplayId: string | null;
   ticketTitle: string | null;
@@ -176,6 +178,7 @@ export function buildCommandPaletteItems(
         projectName: project.name,
         sessionId: tab.sessionId,
         sessionKind: "terminal",
+        savedProviderId: null,
         title: tab.title,
         scope: tab.scope,
         ticketDisplayId:
@@ -210,6 +213,7 @@ export function buildCommandPaletteItems(
       projectName: project.name,
       sessionId: record.id,
       sessionKind: "terminal",
+      savedProviderId: null,
       title: record.title,
       // The scope decision is the Session Presentation Contract's, not this
       // row's: the same record's detail asks `terminalHistoryScope` the same
@@ -244,6 +248,7 @@ export function buildCommandPaletteItems(
       projectName: project.name,
       sessionId: record.sessionId,
       sessionKind: "chat",
+      savedProviderId: record.model?.providerId ?? null,
       title: residentChatTitles[record.sessionId] ?? record.title,
       scope:
         record.ticketId === null
@@ -328,7 +333,6 @@ export interface CommandPaletteEditorItem {
   kind: "editor-command";
   id: "go-to-line";
   title: string;
-  hint: string;
 }
 
 /**
@@ -344,7 +348,6 @@ export function buildEditorCommandItems(editorOpen: boolean): CommandPaletteEdit
       kind: "editor-command",
       id: "go-to-line",
       title: "Go to Line…",
-      hint: "In the editor you were last in",
     },
   ];
 }
@@ -352,8 +355,8 @@ export function buildEditorCommandItems(editorOpen: boolean): CommandPaletteEdit
 /* ------------------------------------------------------------ navigation */
 
 /**
- * The palette's page rows (VC-303): Home, its Board and List views, Configure
- * and each of its panes, and Settings — each reachable by typing its name.
+ * The palette's page rows (VC-303): Home, its Board and List views, project
+ * overrides, and named Settings panes — each reachable by typing its name.
  */
 export type CommandPaletteNavigationItem =
   | {
@@ -366,14 +369,14 @@ export type CommandPaletteNavigationItem =
   | {
       kind: "navigation";
       id: "configure-pane";
-      /** The Configure category key the row opens. */
+      /** The legacy category key, resolved to its Settings scope on arrival. */
       paneKey: string;
       title: string;
       hint: string;
       keywords: string[];
     };
 
-/** A Configure pane as the palette names it — the rail's own key, label and search terms. */
+/** A Settings pane as the palette names it — the rail's own key, label and search terms. */
 interface PaletteConfigurePane {
   readonly key: string;
   readonly label: string;
@@ -411,7 +414,7 @@ export function buildNavigationCommandItems(
     {
       kind: "navigation",
       id: "configure",
-      title: "Configure",
+      title: "Project settings",
       hint,
       keywords: ["configure", "project settings"],
     },
@@ -419,9 +422,9 @@ export function buildNavigationCommandItems(
       kind: "navigation",
       id: "configure-pane",
       paneKey: pane.key,
-      title: `Configure → ${pane.label}`,
+      title: `Settings → ${pane.label}`,
       hint,
-      keywords: [pane.label, ...(pane.keywords ?? [])],
+      keywords: ["configure", `Configure → ${pane.label}`, pane.label, ...(pane.keywords ?? [])],
     })),
     settings,
   ];
@@ -432,14 +435,15 @@ export function buildNavigationCommandItems(
 /**
  * "Add a host…" and "Manage hosts…" (VC-700): the palette's way to more
  * machines; and, per remote host (VC-710), "Open a project on <host>…" and
- * "Sign-ins on <host>…".
+ * "Sign-ins on <host>…". A `hint` is a place ("Settings → Hosts"), never a
+ * description of what the row does: the title already says that.
  */
 export type CommandPaletteHostItem =
   | {
       kind: "host-command";
       id: "add-host" | "manage-hosts";
       title: string;
-      hint: string;
+      hint?: string;
       keywords: string[];
     }
   | {
@@ -448,7 +452,6 @@ export type CommandPaletteHostItem =
       hostId: string;
       hostName: string;
       title: string;
-      hint: string;
       keywords: string[];
     };
 
@@ -476,7 +479,6 @@ export function buildHostCommandItems(
       hostId: host.id,
       hostName: host.name,
       title: `Open a project on ${host.name}…`,
-      hint: "Its projects, or a new one from a git URL or a folder",
       keywords: ["open project", "remote", "host", "new project", "clone", host.name],
     },
     {
@@ -485,7 +487,6 @@ export function buildHostCommandItems(
       hostId: host.id,
       hostName: host.name,
       title: `Sign-ins on ${host.name}…`,
-      hint: "Model providers and git push tokens on the host",
       keywords: ["sign in", "api key", "token", "git", "remote", host.name],
     },
   ]);
@@ -493,7 +494,6 @@ export function buildHostCommandItems(
     kind: "host-command",
     id: "add-host",
     title: "Add a host…",
-    hint: "Install Volli host on a machine over SSH",
     keywords: ["add host", "remote", "server", "ssh", "machine", "box"],
   };
   return [

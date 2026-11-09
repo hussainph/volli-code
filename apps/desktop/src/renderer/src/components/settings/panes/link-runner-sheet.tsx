@@ -1,0 +1,231 @@
+import * as React from "react";
+import { Button } from "@renderer/components/ui/button";
+import { InfoIcon } from "@renderer/components/ui/icon";
+import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
+import { toastError } from "@renderer/lib/toast";
+import { Input } from "@renderer/components/ui/input";
+import {
+  Dialog,
+  DialogBody,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@renderer/components/ui/dialog";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
+import { Notice } from "@renderer/components/ui/notice";
+import { runnerSetupFailure, type LinkPreview, type RunnerSetup } from "./runner-setup";
+
+export function LinkRunnerSheet({
+  setup,
+  onClose,
+  restoreFocus,
+}: {
+  setup: RunnerSetup;
+  onClose(): void;
+  restoreFocus?(): void;
+}) {
+  const [code, setCode] = React.useState("");
+  const [preview, setPreview] = React.useState<Extract<LinkPreview, { ok: true }> | null>(null);
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const [done, setDone] = React.useState<"approve" | "deny" | null>(null);
+  const [expired, setExpired] = React.useState(false);
+  const mounted = React.useRef(true);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  React.useEffect(() => {
+    if (preview === null) return;
+    const timer = window.setTimeout(
+      () => setExpired(true),
+      Math.max(0, preview.expiresAt - Date.now()),
+    );
+    return () => window.clearTimeout(timer);
+  }, [preview]);
+  const check = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const answer = await setup.preview(code.trim());
+      if (!mounted.current) return;
+      if (answer.ok) {
+        setExpired(false);
+        setPreview(answer);
+      } else
+        setError(
+          answer.code === "rate_limited"
+            ? "Too many attempts. Wait a minute before trying again."
+            : "That code is invalid or expired. Get a new code from the runner.",
+        );
+    } catch (failure) {
+      const message = runnerSetupFailure(
+        failure,
+        "Couldn’t check that code. Check your connection and try again.",
+      );
+      if (mounted.current) setError(message);
+      else toastError(message);
+    } finally {
+      if (mounted.current) setBusy(false);
+    }
+  };
+  const decide = async (decision: "approve" | "deny") => {
+    if (preview === null) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const answer = await setup.decide(preview.requestId, code.trim(), decision);
+      if (!mounted.current) return;
+      if (answer.ok) setDone(decision);
+      else {
+        setPreview(null);
+        setError("That request is no longer available. Get a new code from the runner.");
+      }
+    } catch (failure) {
+      const message = runnerSetupFailure(
+        failure,
+        "Couldn’t save your decision. Check your connection and try again.",
+      );
+      if (mounted.current) setError(message);
+      else toastError(message);
+    } finally {
+      if (mounted.current) setBusy(false);
+    }
+  };
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+    >
+      <DialogContent
+        aria-describedby={undefined}
+        onCloseAutoFocus={(event) => {
+          if (restoreFocus) {
+            event.preventDefault();
+            restoreFocus();
+          }
+        }}
+      >
+        <DialogHeader>
+          <DialogTitle>Link a runner</DialogTitle>
+        </DialogHeader>
+        <DialogBody className="flex flex-col gap-4">
+          {done !== null ? (
+            <p role="status" className="text-ui">
+              {done === "approve" ? `${preview?.hostname} is approved` : "Link request denied."}
+            </p>
+          ) : preview === null ? (
+            <form
+              className="flex flex-col gap-4"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (!busy && code.trim()) void check();
+              }}
+            >
+              <div className="flex items-center gap-2">
+                <label htmlFor="runner-link-code" className="text-ui">
+                  Runner code
+                </label>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label="Runner code command"
+                    >
+                      <InfoIcon />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent>
+                    <code>volli-runner link</code>
+                  </PopoverContent>
+                </Popover>
+              </div>
+              <Input
+                id="runner-link-code"
+                autoFocus
+                autoComplete="off"
+                spellCheck={false}
+                placeholder="ABCD-EFGH"
+                maxLength={32}
+                value={code}
+                disabled={busy}
+                onChange={(event) => setCode(event.target.value)}
+              />
+              <Button type="submit" disabled={busy || !code.trim()}>
+                {busy ? <LoadingLabel>Checking</LoadingLabel> : "Check code"}
+              </Button>
+            </form>
+          ) : (
+            <>
+              <dl className="grid grid-cols-2 gap-2 text-ui">
+                <dt className="text-muted-foreground">Machine</dt>
+                <dd className="break-all">{preview.hostname}</dd>
+                <dt className="text-muted-foreground">System</dt>
+                <dd>
+                  {preview.distro ?? preview.os} · {preview.arch}
+                </dd>
+                <dt className="text-muted-foreground">IP address</dt>
+                <dd>{preview.ip ?? "Not reported"}</dd>
+                <dt className="text-muted-foreground">Requested</dt>
+                <dd>{new Date(preview.requestedAt).toLocaleString()}</dd>
+              </dl>
+              <p className="text-ui text-muted-foreground">
+                Approve only a machine you own: it runs your Sessions with your GitHub access and
+                model connections, and its reported name and IP are not proof of identity.
+              </p>
+              {expired ? (
+                <Notice
+                  tone="warning"
+                  title="Code expired. Get a new one from the runner."
+                  announce
+                />
+              ) : null}
+            </>
+          )}
+          {error === null ? null : (
+            <Notice tone="error" title="Couldn't link runner" detail={error} announce />
+          )}
+        </DialogBody>
+        {done !== null ? (
+          <DialogFooter>
+            <Button size="sm" onClick={onClose}>
+              Done
+            </Button>
+          </DialogFooter>
+        ) : preview === null ? null : (
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={busy}
+              onClick={() => {
+                setPreview(null);
+                setError(null);
+              }}
+            >
+              Another code
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy || expired}
+              onClick={() => void decide("deny")}
+            >
+              Deny
+            </Button>
+            <Button size="sm" disabled={busy || expired} onClick={() => void decide("approve")}>
+              Approve runner
+            </Button>
+          </DialogFooter>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}

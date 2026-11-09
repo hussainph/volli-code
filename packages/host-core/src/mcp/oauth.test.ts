@@ -480,6 +480,68 @@ describe("signing in to a remote MCP server", () => {
     });
   });
 
+  describe("a project a move freezes (VC-1016)", () => {
+    function freezeP1(): void {
+      ctx.db.exec(`
+        INSERT INTO cloud_move_queues VALUES ('q', 'u', 'w', 'r', 1, 0, 'pending', NULL, 'running', 1, 1);
+        INSERT INTO cloud_moves (move_id, queue_id, project_id, position, user_id, workspace_id,
+          runner_id, state, app_version, mapper_version, created_at, updated_at)
+        VALUES ('m', 'q', 'p1', 0, 'u', 'w', 'r', 'frozen', 'test', 3, 1, 1);
+      `);
+    }
+
+    /** The person approves in the browser, after a move froze the project. */
+    const frozenInTheBrowser = async (url: string) => {
+      freezeP1();
+      await approveInBrowser(url);
+    };
+
+    it("stores no tokens for a saved server when the move lands while the person is in the browser", async () => {
+      fixture = await startOAuthFixture();
+      const h = harness({ browser: frozenInTheBrowser });
+      const server = remote(fixture.mcpUrl);
+      seedServer(server);
+
+      const outcome = await h.settings.signIn({ projectId: "p1", serverId: server.id });
+
+      expect(outcome).toEqual({
+        ok: false,
+        cancelled: false,
+        message: expect.stringContaining("moving to Volli Cloud"),
+      });
+      expect(h.opened).toHaveLength(1);
+      expect(h.store.read(server.id)?.oauth?.tokens).toBeUndefined();
+      const file = readFileSync(join(dir, "mcp-credentials.json"), "utf8");
+      for (const token of fixture.issuedTokens) expect(file).not.toContain(token);
+    });
+
+    it("stores no tokens for a draft either", async () => {
+      fixture = await startOAuthFixture();
+      const h = harness({ browser: frozenInTheBrowser });
+
+      const outcome = await h.settings.signIn({ projectId: "p1", server: remote(fixture.mcpUrl) });
+
+      expect(outcome).toMatchObject({ ok: false, message: expect.stringContaining("Volli Cloud") });
+      expect(h.store.read("remote-1")?.oauth?.tokens).toBeUndefined();
+    });
+
+    it("opens no browser for a draft of a project already frozen", async () => {
+      fixture = await startOAuthFixture();
+      const h = harness();
+      freezeP1();
+
+      const outcome = await h.settings.signIn({ projectId: "p1", server: remote(fixture.mcpUrl) });
+
+      expect(outcome).toEqual({
+        ok: false,
+        cancelled: false,
+        message: expect.stringContaining("moving to Volli Cloud"),
+      });
+      expect(h.opened).toEqual([]);
+      expect(h.store.read("remote-1")).toBeUndefined();
+    });
+  });
+
   it("refuses to sign in to a server that does not use OAuth", async () => {
     const h = harness();
     const outcome = await h.settings.signIn({

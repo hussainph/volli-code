@@ -338,11 +338,11 @@ try {
   // the unit tests, because a bench that compares two different answers is
   // measuring nothing. Whole rows, not just the provenance field, because the
   // batched arm now builds the rows too.
-  if (JSON.stringify(rowsPerSession(folded)) !== JSON.stringify(rowsBatched(folded))) {
+  if (JSON.stringify(rowsPerSession(folded)) !== JSON.stringify(await rowsBatched(folded))) {
     throw new Error("listing rows disagree: the batched arm is not measuring the same answer");
   }
   const provenanceTailPerSession = await repeat(REPEATS, async () => rowsPerSession(folded));
-  const provenanceTailBatched = await repeat(REPEATS, async () => rowsBatched(folded));
+  const provenanceTailBatched = await repeat(REPEATS, () => rowsBatched(folded));
   // Cold engine per call: a first visit to a project, which is the case the
   // ticket is about.
   const handlerPerSession = await repeat(REPEATS, async () =>

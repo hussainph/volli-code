@@ -34,6 +34,8 @@
  * the board's real DOM, driven by real pointer events through the real
  * `PointerSensor`. So it pins the commit chain rather than the crash.
  */
+import { readFileSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
 import { createRoot, type Root } from "react-dom/client";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -72,13 +74,18 @@ import { BoardBoundary } from "./board-boundary";
  * entry catches the board's own calls; dnd-kit's internals import these
  * directly and are unaffected.
  */
-const renders = vi.hoisted(() => ({ sortable: 0, droppable: 0 }));
+const renders = vi.hoisted(() => ({
+  sortable: 0,
+  droppable: 0,
+  policies: new Map<string, unknown>(),
+}));
 vi.mock("@dnd-kit/sortable", async (importActual) => {
   const actual = await importActual<typeof import("@dnd-kit/sortable")>();
   return {
     ...actual,
     useSortable: (...args: Parameters<typeof actual.useSortable>) => {
       renders.sortable += 1;
+      renders.policies.set(String(args[0].id), args[0].transition);
       return actual.useSortable(...args);
     },
   };
@@ -280,10 +287,12 @@ interface AnimateCall {
   element: Element;
   keyframes: Keyframe[];
   options: KeyframeAnimationOptions;
+  cancel: ReturnType<typeof vi.fn>;
 }
 
 /** Every `animate` call since the layout was installed, in order. */
 let animateCalls: AnimateCall[] = [];
+let holdSlotAnimations = false;
 
 /**
  * The Web Animations stub is what the Escape-cancel gestures next door never
@@ -302,23 +311,32 @@ function installAnimations(): () => void {
   const had = Object.prototype.hasOwnProperty.call(element, "animate");
   const real = element["animate"];
   animateCalls = [];
+  holdSlotAnimations = false;
   element["animate"] = function (
     this: Element,
     keyframes: Keyframe[],
     options: KeyframeAnimationOptions,
   ) {
-    animateCalls.push({ element: this, keyframes, options });
+    const events = new EventTarget();
+    const cancel = vi.fn(() => events.dispatchEvent(new Event("cancel")));
+    animateCalls.push({ element: this, keyframes, options, cancel });
     const animation = {
       onfinish: null as null | (() => void),
       oncancel: null as null | (() => void),
-      cancel() {},
+      addEventListener: events.addEventListener.bind(events),
+      cancel,
       finish() {},
       play() {},
       pause() {},
       effect: null,
       playState: "finished",
     };
-    setTimeout(() => animation.onfinish?.(), 0);
+    if (!holdSlotAnimations || !this.hasAttribute("data-board-ticket-slot")) {
+      setTimeout(() => {
+        animation.onfinish?.();
+        events.dispatchEvent(new Event("finish"));
+      }, 0);
+    }
     return animation;
   };
   if (!Object.prototype.hasOwnProperty.call(element, "getAnimations")) {
@@ -331,8 +349,10 @@ function installAnimations(): () => void {
   };
 }
 
-/** `--ease-swift` as `globals.css` ships it. */
-const EASE_SWIFT = "cubic-bezier(0.32, 0.72, 0, 1)";
+/** Resolve the shipped landing spring; jsdom does not load the stylesheet. */
+const STYLES = readFileSync(resolvePath(import.meta.dirname, "../../globals.css"), "utf8");
+const BOUNCY = STYLES.match(/--spring-bouncy:\s*([^;]+);/)![1]!.trim();
+const BOUNCY_DURATION = STYLES.match(/--duration-bouncy:\s*([^;]+);/)![1]!.trim();
 
 function installLayout(): () => void {
   const realRect = Element.prototype.getBoundingClientRect;
@@ -354,7 +374,11 @@ function installLayout(): () => void {
         // reads off its slot is answered here, with the shipped value.
         if (key === "getPropertyValue") {
           return (name: string) =>
-            name === "--ease-swift" ? EASE_SWIFT : target.getPropertyValue(name);
+            name === "--spring-bouncy"
+              ? BOUNCY
+              : name === "--duration-bouncy"
+                ? BOUNCY_DURATION
+                : target.getPropertyValue(name);
         }
         if (key === "overflowX") return x ? "auto" : "visible";
         if (key === "overflowY") return y ? "auto" : "visible";
@@ -904,11 +928,94 @@ function slotNamed(ticketId: string): Element {
  * The multi-drop slide (VC-665). The e2e smoke's 8.5 proves a dropped group
  * lands and its slide FINISHES, but its readiness wait is a generous bound, so
  * it would pass a slide that took 3s. This pins what the board asks the
- * browser to play: from where each slot was picked up, back to rest, in 200ms.
+ * browser to play: from where each slot was picked up, back to rest, using the
+ * shared Bouncy landing spring.
  */
 describe("a group of cards released into another column", () => {
+  it.each(["board", "list"] as const)(
+    "shares the live motion policy in %s view",
+    async (boardView) => {
+      await mountBoard();
+      await act(async () =>
+        useProjectUiStore.setState({ byProject: { p1: { ...DEFAULT_PROJECT_UI, boardView } } }),
+      );
+      expect([...renders.policies.values()].every((policy) => policy === null)).toBe(true);
+      await act(async () => {
+        document.documentElement.dataset.motion = "off";
+        window.dispatchEvent(new Event("volli-motion-change"));
+      });
+      expect([...renders.policies.values()].every((policy) => policy === null)).toBe(true);
+      await act(async () => {
+        delete document.documentElement.dataset.motion;
+        window.dispatchEvent(new Event("volli-motion-change"));
+      });
+      expect([...renders.policies.values()].every((policy) => policy === null)).toBe(true);
+      if (boardView === "list") {
+        const grip = document.querySelector<HTMLElement>("[data-ticket-row]")!;
+        await act(async () =>
+          grip.dispatchEvent(
+            new KeyboardEvent("keydown", { key: " ", code: "Space", bubbles: true }),
+          ),
+        );
+        expect([...renders.policies.values()].every((policy) => policy === null)).toBe(true);
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        await act(async () =>
+          document.dispatchEvent(
+            new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }),
+          ),
+        );
+        expect([...renders.policies.values()].every((policy) => policy === null)).toBe(true);
+      }
+    },
+  );
+
   it(
-    "slides every landed slot home from where it was picked up, in 200ms",
+    "lands keyboard drags immediately without a spring or sortable transition",
+    async () => {
+      await mountBoard();
+      const grip = columnNamed("todo").querySelector("article")!.parentElement!;
+      grip.focus();
+      await act(async () => {
+        grip.dispatchEvent(
+          new KeyboardEvent("keydown", { key: " ", code: "Space", bubbles: true }),
+        );
+      });
+      expect(document.querySelector("[data-board-drag]")?.getAttribute("data-board-drag")).toBe(
+        DRAGGED,
+      );
+      // The KeyboardSensor installs document listeners on the next task.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      await act(async () => {
+        document.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowRight", code: "ArrowRight", bubbles: true }),
+        );
+      });
+      // This layout shim resolves the keyboard coordinate to the empty rail.
+      expect(overNow()).toBe("column:backlog");
+      for (const node of document.querySelectorAll<HTMLElement>("[data-board-ticket-slot] > div")) {
+        expect(node.style.transition).toBe("");
+      }
+      await act(async () => {
+        document.dispatchEvent(
+          new KeyboardEvent("keydown", { key: " ", code: "Space", bubbles: true }),
+        );
+      });
+      expect(ticketSlots("backlog")).toContain(DRAGGED);
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 40));
+      });
+      expect(animateCalls).toEqual([]);
+      expect(loopErrors()).toEqual([]);
+    },
+    BUDGET,
+  );
+
+  it(
+    "lands with the shared Bouncy spring and cancels it when Motion turns off",
     async () => {
       // A third Todo card keeps Todo standing once the pair leaves it, so the
       // journey is the sideways one a person sees rather than a column
@@ -922,6 +1029,7 @@ describe("a group of cards released into another column", () => {
       const pickedUp = new Map(
         ["t1", "t2"].map((id) => [id, slotNamed(id).getBoundingClientRect()] as const),
       );
+      holdSlotAnimations = true;
 
       await dragTodoCardIntoDoing();
       // The board defers the group write by one animation frame so dnd-kit can
@@ -950,7 +1058,21 @@ describe("a group of cards released into another column", () => {
           { transform: `translate3d(${from.left - to.left}px, ${from.top - to.top}px, 0)` },
           { transform: "translate3d(0, 0, 0)" },
         ]);
-        expect(slide.options).toEqual({ duration: 200, easing: EASE_SWIFT });
+        expect(slide.options).toMatchObject({ duration: 240 });
+        expect(String((slide.options as KeyframeAnimationOptions).easing).replace(/\s+/g, "")).toBe(
+          BOUNCY.replace(/\s+/g, ""),
+        );
+      }
+      try {
+        await act(async () => {
+          document.documentElement.dataset.motion = "off";
+          window.dispatchEvent(new Event("volli-motion-change"));
+        });
+        for (const slide of slides()) expect(slide.cancel).toHaveBeenCalledOnce();
+        expect(ticketSlots("doing")).toEqual(expect.arrayContaining(["t1", "t2"]));
+      } finally {
+        document.documentElement.removeAttribute("data-motion");
+        window.dispatchEvent(new Event("volli-motion-change"));
       }
       expect(loopErrors()).toEqual([]);
     },

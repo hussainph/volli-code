@@ -6,7 +6,7 @@
 // sender is adapted to the supervisor's client through `clientEventSink`:
 // exactly that window, with its `destroyed` hook as the disconnect.
 
-import { app, dialog, ipcMain } from "electron";
+import { app, dialog } from "electron";
 import type { BrowserWindow } from "electron";
 import type { SessionEngine } from "@volli/session-engine";
 import { isFirstClassHarnessId, parseHarnessId } from "@volli/shared";
@@ -23,6 +23,7 @@ import { blobsRoot } from "@volli/host-core/files";
 import type { DbHandle } from "../data-ipc";
 import { windowEventBus } from "../broadcast";
 import { clientEventSink } from "../client-event-sink";
+import { handleRawIpc, onRawIpc } from "../raw-ipc";
 import { ensureHarnessWorkspaceFiles } from "../harness-workspace";
 import { SpawnLedger } from "@volli/host-core/maintenance";
 import { quitAlreadyRefused, refuseQuit, updateInstallQuitInFlight } from "../quit-gate";
@@ -233,7 +234,7 @@ export function registerTerminalIpcHandlers(
   // after this registration runs.
   const launchable = launchableHarnessGuard(agentRuntime);
 
-  ipcMain.handle(
+  handleRawIpc(
     "volli:terminal-create" satisfies VolliIpcChannel,
     (event, request: unknown): Promise<CreateTerminalSessionResult> => {
       if (!isCreateRequest(request, launchable)) {
@@ -243,7 +244,7 @@ export function registerTerminalIpcHandlers(
     },
   );
 
-  ipcMain.handle(
+  handleRawIpc(
     "volli:terminal-write" satisfies VolliIpcChannel,
     (event, sessionId: unknown, data: unknown): TerminalIoResult => {
       if (typeof sessionId !== "string" || typeof data !== "string") {
@@ -256,7 +257,7 @@ export function registerTerminalIpcHandlers(
   // Long-lived by design: it resolves when the command finishes, which for an
   // install is minutes. The renderer awaits one of these only for a run it
   // offered and the user accepted (VC-156).
-  ipcMain.handle(
+  handleRawIpc(
     "volli:terminal-run" satisfies VolliIpcChannel,
     (event, sessionId: unknown, command: unknown): Promise<TerminalCommandResult> => {
       if (typeof sessionId !== "string" || typeof command !== "string") {
@@ -270,7 +271,7 @@ export function registerTerminalIpcHandlers(
     },
   );
 
-  ipcMain.handle(
+  handleRawIpc(
     "volli:terminal-resize" satisfies VolliIpcChannel,
     (event, sessionId: unknown, cols: unknown, rows: unknown): TerminalIoResult => {
       if (typeof sessionId !== "string" || typeof cols !== "number" || typeof rows !== "number") {
@@ -280,7 +281,7 @@ export function registerTerminalIpcHandlers(
     },
   );
 
-  ipcMain.handle(
+  handleRawIpc(
     "volli:terminal-kill" satisfies VolliIpcChannel,
     (event, sessionId: unknown): TerminalIoResult => {
       if (typeof sessionId !== "string") {
@@ -290,7 +291,7 @@ export function registerTerminalIpcHandlers(
     },
   );
 
-  ipcMain.handle(
+  handleRawIpc(
     "volli:terminal-park" satisfies VolliIpcChannel,
     (event, sessionId: unknown): Promise<TerminalIoResult> => {
       if (typeof sessionId !== "string") {
@@ -301,7 +302,7 @@ export function registerTerminalIpcHandlers(
     },
   );
 
-  ipcMain.handle(
+  handleRawIpc(
     "volli:terminal-wake" satisfies VolliIpcChannel,
     (event, sessionId: unknown): TerminalIoResult => {
       if (typeof sessionId !== "string") {
@@ -311,7 +312,7 @@ export function registerTerminalIpcHandlers(
     },
   );
 
-  ipcMain.handle(
+  handleRawIpc(
     "volli:terminal-keep-awake" satisfies VolliIpcChannel,
     (event, sessionId: unknown, keepAwake: unknown): TerminalIoResult => {
       if (typeof sessionId !== "string" || typeof keepAwake !== "boolean") {
@@ -324,7 +325,7 @@ export function registerTerminalIpcHandlers(
   // Fire-and-forget (ipcRenderer.send) — pane visibility flips on every nav and
   // needs no reply; like every mutating terminal channel it is scoped to the
   // session's owning window (VC-509).
-  ipcMain.on(
+  onRawIpc(
     "volli:terminal-set-visible" satisfies VolliIpcChannel,
     (event, ...args: unknown[]): void => {
       const [sessionId, visible] = args;
@@ -333,7 +334,7 @@ export function registerTerminalIpcHandlers(
     },
   );
 
-  ipcMain.handle(
+  handleRawIpc(
     "volli:terminal-busy" satisfies VolliIpcChannel,
     (_event, sessionId: unknown): TerminalBusyResult => {
       if (typeof sessionId !== "string") {
@@ -345,7 +346,7 @@ export function registerTerminalIpcHandlers(
 
   // Fire-and-forget (ipcRenderer.send) — an ack has no result to return, and
   // round-tripping one invoke per data event would defeat the flow control.
-  ipcMain.on("volli:terminal-ack" satisfies VolliIpcChannel, (event, ...args: unknown[]): void => {
+  onRawIpc("volli:terminal-ack" satisfies VolliIpcChannel, (event, ...args: unknown[]): void => {
     const [sessionId, chars] = args;
     if (typeof sessionId !== "string") return;
     if (typeof chars !== "number" || !Number.isFinite(chars) || chars <= 0) return;

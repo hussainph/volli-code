@@ -10,10 +10,8 @@ import { ContentColumn } from "@renderer/components/layout/content-column";
 import { TicketActivityFeed } from "@renderer/components/ticket/ticket-activity-feed";
 import { TicketBodyEditor } from "@renderer/components/ticket/ticket-body-editor";
 import type { TicketBodyStatus } from "@renderer/components/ticket/use-ticket-body";
-import { Button } from "@renderer/components/ui/button";
-import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
-import { Skeleton } from "@renderer/components/ui/skeleton";
-import { cn } from "@renderer/lib/utils";
+import { PanelEmptyState } from "@renderer/components/ui/empty-state";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 
 /**
  * What the Body tab draws while the ticket's body is still a placeholder
@@ -22,15 +20,12 @@ import { cn } from "@renderer/lib/utils";
  * roster left would let a person type into a body that has not arrived and then
  * save their text over the real one.
  *
- * Three bars at the body's own rhythm rather than one block, because that is the
- * box the content takes; the skeleton's job is to hold it.
+ * A held loading region keeps the editor from seeding an incomplete draft.
  */
 function TicketBodyPlaceholder() {
   return (
-    <div data-testid="ticket-body-loading" className="flex flex-col gap-2">
-      <Skeleton className="h-4 w-2/3" />
-      <Skeleton className="h-4 w-full" />
-      <Skeleton className="h-4 w-1/2" />
+    <div data-testid="ticket-body-loading" aria-busy="true" className="min-h-20">
+      <LoadingLabel>Loading ticket</LoadingLabel>
     </div>
   );
 }
@@ -65,7 +60,7 @@ export function TicketBodyPanel({
    */
   bodyStatus?: TicketBodyStatus;
   /** Re-runs the body read — the one action the `failed` surface offers. */
-  onRetryBody?: () => void;
+  onRetryBody: () => void;
 }) {
   return (
     // One provider over both surfaces (VC-273): the body's inline images and a
@@ -73,14 +68,16 @@ export function TicketBodyPanel({
     // cannot render in one and fail in the other. The editor takes the links
     // directly because Monaco is outside React's tree.
     <MarkdownAttachmentsProvider attachments={attachments}>
-      <ContentColumn className="flex flex-col gap-8 pt-4 pb-16">
+      <ContentColumn measure="document" className="flex flex-col gap-6 pt-4 pb-16">
         {bodyStatus === "loading" ? <TicketBodyPlaceholder /> : null}
         {bodyStatus === "failed" ? (
-          <div data-testid="ticket-body-failed" className={cn(EMPTY_PAGE, "gap-4")}>
-            <p className="text-muted-foreground">Couldn&rsquo;t load this ticket&rsquo;s body.</p>
-            <Button variant="outline" size="sm" onClick={onRetryBody}>
-              Try again
-            </Button>
+          <div data-testid="ticket-body-failed">
+            <PanelEmptyState
+              illustration="failed"
+              status="failed"
+              title="Couldn’t load the ticket"
+              action={{ label: "Try again", onAction: onRetryBody }}
+            />
           </div>
         ) : null}
         {bodyStatus === "ready" ? (

@@ -25,6 +25,7 @@ import { insertProject } from "./db/projects-repo";
 import { testProject } from "./db/test-helpers";
 import type { SessionLedger } from "@volli/shared";
 import * as sessionLedgerModule from "./session-control/sqlite-ledger";
+import { sqliteUsageReporter } from "./session-control/usage-reports";
 import { SESSION_RUNTIME } from "./session-services";
 import * as sessionControl from "./session-control";
 import { createHostSessionRuntime, type HostSessionRuntimeOptions } from "./session-runtime";
@@ -211,6 +212,32 @@ function writeDamagedDatabase(root: string): string {
 }
 
 describe("createHostCore", () => {
+  it("composes one usage reader and stops it on desktop quit as well as full shutdown", async () => {
+    for (const stopPolicy of ["desktop-quit", "drain-and-close"] as const) {
+      const core = live(
+        compose(
+          { log: { error: vi.fn() } },
+          {
+            ...headlessOptions(dataDir()),
+            stopPolicy,
+            usageReportWorker: new URL(
+              "./session-control/test-support/usage-worker-under-node.mjs",
+              import.meta.url,
+            ),
+          },
+        ),
+      );
+      const db = core.database.db;
+      expect(sqliteUsageReporter(db)).toBeTypeOf("function");
+      expect(
+        (await core.sessionEngine.reportUsage({ scope: { kind: "all" } })).total.requestCount,
+      ).toBe(0);
+      await core.start(recordingRuntime());
+      await core.stop("usage-test");
+      expect(sqliteUsageReporter(db)).toBeUndefined();
+    }
+  });
+
   it("keeps construction private and every composed consumer on one Session writer", async () => {
     expect(runtimeRequiresEngine).toBe(true);
     expect(terminalRequiresEngine).toBe(true);
@@ -686,6 +713,25 @@ describe("createHostCore composition", () => {
     expect(core.worktreeDeps.machinePaths).toBe(core.machinePaths);
   });
 
+  it("passes the source icon worker to the lazy runtime services unchanged", () => {
+    const sourceIconWorker = new URL("file:///source-icon-worker.cjs");
+    const core = live(
+      compose({ log: { error: vi.fn() } }, { ...headlessOptions(dataDir()), sourceIconWorker }),
+    );
+    expect(createHostRuntimeServices).not.toHaveBeenCalled();
+    const services = core.runtimeServices;
+    expect(core.runtimeServices).toBe(services);
+    expect(createHostRuntimeServices).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(createHostRuntimeServices).mock.calls[0]![3]).toStrictEqual({
+      dbPath: core.dbPath,
+      machinePaths: core.machinePaths,
+      sourceIconWorker,
+    });
+    expect(vi.mocked(createHostRuntimeServices).mock.calls[0]![3]?.sourceIconWorker).toBe(
+      sourceIconWorker,
+    );
+  });
+
   it("asks the host for model access and venue only when the runtime services are first read", () => {
     const modelAccess = { models: {}, catalogReady: Promise.resolve() } as unknown as ReturnType<
       NonNullable<Parameters<typeof createHostCore>[1]["modelAccess"]>
@@ -693,10 +739,17 @@ describe("createHostCore composition", () => {
     const supplyModels = vi.fn(() => modelAccess);
     const webKeySealing = { keyring: null, mayUnlockUnattended: vi.fn(() => false) };
     const venue = vi.fn(() => ({ id: "cloud-host", kind: "remote" as const }));
+    const webExtractWorker = new URL("file:///web-extract-worker.cjs");
     const core = live(
       compose(
         { log: { error: vi.fn() } },
-        { ...headlessOptions(dataDir()), modelAccess: supplyModels, venue, webKeySealing },
+        {
+          ...headlessOptions(dataDir()),
+          modelAccess: supplyModels,
+          venue,
+          webKeySealing,
+          webExtractWorker,
+        },
       ),
     );
     expect(supplyModels).not.toHaveBeenCalled();
@@ -711,6 +764,7 @@ describe("createHostCore composition", () => {
       machinePaths: core.machinePaths,
       modelAccess,
       webKeySealing,
+      webExtractWorker,
       venue: { id: "cloud-host", kind: "remote" },
     });
   });

@@ -14,7 +14,7 @@
 // can only touch <userData>/volli/ghostty/.
 
 import { watch as fsWatch } from "node:fs";
-import { BrowserWindow, ipcMain } from "electron";
+import { BrowserWindow } from "electron";
 import {
   errorMessage,
   globalGhosttyOverlayPath,
@@ -34,6 +34,7 @@ import type {
 } from "@volli/shared";
 import type { VolliIpcChannel, VolliIpcEvent } from "../ipc/contract";
 import type { FsDeps } from "./fs-deps";
+import { handleRawIpc } from "./raw-ipc";
 import { hostLogger } from "@volli/host-core/log";
 
 const log = hostLogger("ghostty");
@@ -312,7 +313,7 @@ export function registerGhosttyConfigIpc(
   deps: GhosttyConfigDeps,
   appearance: () => ResolvedAppearance,
 ): void {
-  ipcMain.handle(
+  handleRawIpc(
     "volli:ghostty-config-get" satisfies VolliIpcChannel,
     (_event): GhosttyConfigResult => {
       try {

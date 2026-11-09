@@ -70,9 +70,8 @@
  *    retry, and a timed-out add is not retried).
  *    A change with no deadline of its own does not belong in here.
  *
- * The word is CONTEXT.md's. A Tab hold is "one party's turn to drive" a shared
- * thing, and that entry tells us to avoid `lock` and `lease` for exactly this
- * shape — so a repository's turn is the house word for it, not a new one.
+ * Like a Tab hold (CONTEXT.md#tab-hold), a repository turn gives one caller
+ * exclusive write access; it is not a distributed lease or ownership claim.
  *
  * Deliberately process-local, exactly like `deletion-lease.ts`. It makes no
  * promise against a second Volli install or the user's own terminal running

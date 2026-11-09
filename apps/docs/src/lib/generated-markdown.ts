@@ -1,13 +1,13 @@
 import {
   AGENT_CAPABILITY_BASELINE,
   AGENT_CAPABILITY_CHANGES,
-  AGENT_ERROR_CODES,
   ERROR_RECOVERY,
   VERB_REGISTRY,
   type VerbEffects,
   type VerbEntry,
 } from "@volli/shared";
 import { NO_COMMAND, NOT_PINNED, SESSION_ID_SOURCE_NOTES, resumeRows } from "./harness-resume";
+import { DOCUMENTED_AGENT_ERROR_CODES } from "./cli-errors";
 
 type EffectVerb = VerbEntry & { effects: VerbEffects };
 const effectVerbs = (VERB_REGISTRY as readonly VerbEntry[]).filter(
@@ -55,7 +55,7 @@ export function expandGeneratedMarkdown(body: string): string {
         .join("\n\n"),
     )
     .replace(/<AgentErrorRecovery\s*\/>/g, () =>
-      AGENT_ERROR_CODES.map((code) => {
+      DOCUMENTED_AGENT_ERROR_CODES.map((code) => {
         const guidance = ERROR_RECOVERY[code];
         return [
           `### \`${code}\``,

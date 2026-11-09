@@ -198,6 +198,26 @@ describe("homeSessionRows", () => {
     expect(rows.map((row) => row.kind)).toEqual(["terminal", "chat"]);
   });
 
+  it("carries saved chat providers with rows, including the missing-model fallback", () => {
+    const rows = homeSessionRows(
+      [
+        chat({
+          sessionId: "marked",
+          model: { providerId: "anthropic", modelId: "test", reasoningLevel: "off" },
+        }),
+        chat({ sessionId: "unmarked", model: null }),
+      ],
+      [terminal()],
+      [],
+      pulse(),
+    );
+    expect(rows.map((row) => [row.id, row.savedProviderId])).toEqual([
+      ["t1", null],
+      ["marked", "anthropic"],
+      ["unmarked", null],
+    ]);
+  });
+
   it("marks the Sessions a tab is holding", () => {
     const rows = homeSessionRows([chat()], [terminal()], ["c1"], pulse());
 

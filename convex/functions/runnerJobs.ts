@@ -31,7 +31,7 @@
  */
 
 import { ConvexError, v } from "convex/values";
-import { decodeCloudSessionIntent } from "@volli/shared";
+import { compareVersions, decodeCloudSessionIntent } from "@volli/shared";
 
 import {
   INVALID_JOB_RESULT,
@@ -71,6 +71,7 @@ import { projectImporting } from "./lib/auth";
 import { requireRunner, requireRunnerForWrite } from "./lib/runnerAuth";
 import { noticeForClaim } from "./lib/watches";
 import { settleAutomationRunJob } from "./lib/automationRuns";
+import { dropUnbornStartBody } from "./lib/sessionStarts";
 
 /** How many of its own leased jobs a claim looks at to take back. A runner holds far fewer. */
 const LEASED_SCAN = 256;
@@ -144,10 +145,22 @@ async function lease(
 export const claim = mutation({
   args: { bootId: v.string(), max: v.optional(v.number()) },
   handler: async (ctx, { bootId, max }): Promise<ClaimedJob[]> => {
-    const { runnerId, ownerUserId } = await requireRunnerForWrite(ctx);
+    const { runnerId, ownerUserId, runner } = await requireRunnerForWrite(ctx);
     if (!isUuid(bootId)) {
       throw new ConvexError({ code: "invalid_request", message: "bootId is this boot's UUID." });
     }
+    // Fence new work even before the next heartbeat, or while a below-floor
+    // runner reports an updating/draining/degraded lifecycle state. Intake,
+    // renewal and completion stay available to drain work already in flight.
+    const release = await ctx.db
+      .query("releaseChannels")
+      .withIndex("by_channel", (q) => q.eq("channel", runner.autoUpdate.channel))
+      .unique();
+    if (
+      runner.status === "upgrade_required" ||
+      (release !== null && compareVersions(runner.version, release.minVersion) < 0)
+    )
+      return [];
     const limit = bounded(max, JOB_CLAIM_MAX, 1, JOB_CLAIM_MAX);
     const now = Date.now();
     const candidates: Doc<"runnerJobs">[] = [];
@@ -525,6 +538,7 @@ export const sweep = internalMutation({
     let deleted = 0;
     for (const job of due) {
       if (isTerminalJobStatus(job.status)) {
+        await dropUnbornStartBody(ctx, job);
         await ctx.db.delete(job._id);
         deleted += 1;
       } else {

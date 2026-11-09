@@ -49,7 +49,7 @@ export function TicketTitle({ ticket }: { ticket: Ticket }) {
   }
 
   if (!canWrite) {
-    return <h1 className="text-title font-semibold text-foreground">{ticket.title}</h1>;
+    return <h1 className="text-title font-semibold break-words text-foreground">{ticket.title}</h1>;
   }
 
   return (
@@ -63,7 +63,7 @@ export function TicketTitle({ ticket }: { ticket: Ticket }) {
           setEditing(true);
         }
       }}
-      className="cursor-text text-title font-semibold text-foreground outline-none"
+      className="cursor-text rounded-control text-title font-semibold break-words text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       {ticket.title}
     </h1>

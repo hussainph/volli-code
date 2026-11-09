@@ -44,6 +44,7 @@ import {
   followCloudWorkspace,
   useCloudWorkspaceStore,
 } from "@renderer/stores/cloud-board/workspace";
+import { followRunnerDraftTabs } from "@renderer/components/chat/runner-picker-restore";
 import { createCloudHostSource, useCloudLinkInputs } from "@renderer/stores/cloud-link";
 import {
   canWriteProject,
@@ -189,7 +190,38 @@ export async function refreshPlanningData(
     const selectedProjectId = projects.some(({ id }) => id === previousSelection)
       ? previousSelection
       : (projects[0]?.id ?? null);
+    // Refresh authored theme inputs as well as planning rows. Do not rehydrate
+    // UI/navigation stores: another window's mutation is not navigation intent.
+    // Native Settings owns a local App/project scope, independent of selection.
+    const settingsWindow = typeof window !== "undefined" && window.location?.hash === "#settings";
+    useThemeStore.getState().hydrateGlobal(result.data.appState);
     useProjectsStore.getState().hydrate(projects, selectedProjectId);
+    const themeProject = useProjectsStore
+      .getState()
+      .projects.find(({ id }) => id === selectedProjectId);
+    const theme = useThemeStore.getState();
+    const projectThemeChanged =
+      JSON.stringify(theme.projectOverride?.canvas ?? null) !==
+        JSON.stringify(themeProject?.themeCanvas ?? null) ||
+      (theme.projectOverride?.appearance ?? null) !== (themeProject?.themeAppearance ?? null) ||
+      (theme.projectOverride?.terminalThemeName ?? null) !==
+        (themeProject?.themeOverride?.terminalThemeName ?? null);
+    // SettingsPage owns its scope and readiness. Its project-row subscription
+    // requests the fresh scope; a competing read here could supersede it with
+    // the workbench selection while the native window is preparing to reveal.
+    // A changed selection already announced its scope through the projects
+    // store. Other planning invalidations need no second filesystem read.
+    if (!settingsWindow && previousSelection === selectedProjectId && projectThemeChanged) {
+      void useThemeStore.getState().hydrate(
+        themeProject
+          ? {
+              projectId: themeProject.id,
+              canvas: themeProject.themeCanvas ?? null,
+              appearance: themeProject.themeAppearance ?? null,
+            }
+          : null,
+      );
+    }
     useBoardStore.getState().hydrate(ticketsByProject, labelsByProject);
     // Signal per-ticket surfaces (the Activity feed, retention badge, Done-flow
     // rail) to refetch data not carried in the board slices — events/comments,
@@ -636,8 +668,9 @@ export async function boot(
   const launch = await readBeforeDeadline(readLaunch, LOCAL_LAUNCH);
   adoptLaunch(launch);
   const selectedProjectId = resolveSelectedProjectId(payload.appState, payload.projects);
+  const settingsWindow = typeof window !== "undefined" && window.location?.hash === "#settings";
   if (launch.store === "cloud") {
-    return bootCloudLaunch(launch, payload, selectedProjectId);
+    return bootCloudLaunch(launch, payload, selectedProjectId, settingsWindow);
   }
   const remote = cloud ? decodeRemoteSelection(payload.appState[PROJECTS_UI_APP_STATE_KEY]) : null;
   // The last cloud launch's selection survives this launch's own (VC-889).
@@ -660,22 +693,25 @@ export async function boot(
   // listener hands it, and `volli:theme-state` for the terminal chain.
   await Promise.all([
     useUiStore.persist.rehydrate(),
-    useProjectUiStore.persist.rehydrate(),
-    useChatDraftsStore.persist.rehydrate(),
+    ...(!settingsWindow
+      ? [useProjectUiStore.persist.rehydrate(), useChatDraftsStore.persist.rehydrate()]
+      : []),
   ]);
   // Typed provisional Drafts are the one chat kind whose identity lives in
   // app_state rather than the Session listing. Reopen their tabs only after
   // both the Drafts and project UI layout have landed, so recorded `chat:<id>`
   // values resolve normally on the app's first render.
-  useChatSessionsStore
-    .getState()
-    .restoreProvisionalChatTabs(
-      useChatDraftsStore.getState().drafts,
-      new Set(
-        Object.values(payload.ticketsByProject).flatMap((tickets) => tickets.map(({ id }) => id)),
-      ),
-      new Set(payload.projects.map(({ id }) => id)),
-    );
+  // Settings must never become a second writer of a stale workbench draft map.
+  if (!settingsWindow)
+    useChatSessionsStore
+      .getState()
+      .restoreProvisionalChatTabs(
+        useChatDraftsStore.getState().drafts,
+        new Set(
+          Object.values(payload.ticketsByProject).flatMap((tickets) => tickets.map(({ id }) => id)),
+        ),
+        new Set(payload.projects.map(({ id }) => id)),
+      );
 
   if (remote !== null) {
     const stop = restoreRemoteSelection({
@@ -733,6 +769,7 @@ async function bootCloudLaunch(
   launch: Extract<CloudLaunch, { store: "cloud" }>,
   payload: BootstrapPayload,
   localSelection: string | null,
+  settingsWindow: boolean,
 ): Promise<BootResult> {
   const raw = payload.appState[PROJECTS_UI_APP_STATE_KEY];
   // A just-joined Workspace or moved project is a one-launch navigation intent.
@@ -776,11 +813,14 @@ async function bootCloudLaunch(
   installCloudBoardSource(source);
   await Promise.all([
     useUiStore.persist.rehydrate(),
-    useProjectUiStore.persist.rehydrate(),
-    useChatDraftsStore.persist.rehydrate(),
+    ...(!settingsWindow
+      ? [useProjectUiStore.persist.rehydrate(), useChatDraftsStore.persist.rehydrate()]
+      : []),
   ]);
-  // A provisional Draft belongs to one of this Mac's tickets or projects,
-  // none of which this launch shows: it is not reopened, and stays saved for
-  // the next local launch.
+  // Only the workbench restores pending starts; Settings owns no draft tabs.
+  if (!settingsWindow) {
+    const stopRunnerDraftTabs = followRunnerDraftTabs();
+    window.addEventListener?.("pagehide", stopRunnerDraftTabs, { once: true });
+  }
   return { ok: true };
 }

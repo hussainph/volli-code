@@ -58,6 +58,12 @@ export function createSurfaceStore(): SessionSurfaceStore {
     announce();
   };
   /**
+   * The slices written inside a {@link SurfaceSessions.batch}, published
+   * together when it returns — one map copy and one announcement however many
+   * Sessions the frame touched (VC-515). `null` outside a batch.
+   */
+  let staged: Map<string, ChatSessionSlice> | null = null;
+  /**
    * Every per-slice write lands through here, so one addressed to a Session
    * that is gone is a no-op rather than a resurrected slice — and an
    * identity-preserving transition publishes nothing.
@@ -66,15 +72,38 @@ export function createSurfaceStore(): SessionSurfaceStore {
     sessionId: string,
     change: (slice: ChatSessionSlice) => ChatSessionSlice,
   ): void => {
-    const slice = state.sessions[sessionId];
+    const slice = staged?.get(sessionId) ?? state.sessions[sessionId];
     if (slice === undefined) return;
     const next = change(slice);
     if (next === slice) return;
-    swap({ ...state.sessions, [sessionId]: next });
+    if (staged !== null) staged.set(sessionId, next);
+    else swap({ ...state.sessions, [sessionId]: next });
+  };
+
+  const batch = (run: () => void): void => {
+    if (staged !== null) {
+      run();
+      return;
+    }
+    const writes = new Map<string, ChatSessionSlice>();
+    staged = writes;
+    try {
+      run();
+    } finally {
+      staged = null;
+      let sessions: Record<string, ChatSessionSlice> | null = null;
+      // `remove` forgets a staged write, so every one left names a live slice.
+      for (const [sessionId, slice] of writes) {
+        sessions ??= { ...state.sessions };
+        sessions[sessionId] = slice;
+      }
+      if (sessions !== null) swap(sessions);
+    }
   };
 
   state = {
     sessions: {},
+    batch,
     applyStream(sessionId, frames, overlays, progress = [], clearLiveCompaction = false) {
       update(sessionId, (slice) =>
         foldStreamBatch(slice, frames, overlays, progress, clearLiveCompaction),
@@ -106,6 +135,7 @@ export function createSurfaceStore(): SessionSurfaceStore {
       swap({ ...state.sessions, [sessionId]: seedSlice(lifecycle) });
     },
     remove(sessionId) {
+      staged?.delete(sessionId);
       if (state.sessions[sessionId] === undefined) return;
       const sessions = { ...state.sessions };
       delete sessions[sessionId];

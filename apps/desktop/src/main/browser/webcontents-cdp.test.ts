@@ -56,6 +56,91 @@ describe("the WebContentsView backend's engine wire", () => {
     expect(attached).toBe(false);
   });
 
+  it.each(["Accessibility.enable", "DOM.enable", "Page.enable"])(
+    "names the actual hung domain command %s without forwarding sensitive fields",
+    async (hungMethod) => {
+      const domain = Promise.withResolvers<unknown>();
+      const started = Promise.withResolvers<void>();
+      const diagnostics = vi.fn();
+      const sendCommand = vi.fn((method: string) => {
+        if (method !== hungMethod) return Promise.resolve({});
+        started.resolve();
+        return domain.promise;
+      });
+      const transport = debuggerTransport(
+        {
+          debugger: { isAttached: () => true, sendCommand },
+        } as never,
+        diagnostics,
+      );
+      const ready = transport.ensureReady!();
+      await started.promise;
+      const diagnostic = {
+        phase: "readiness" as const,
+        method: null,
+        elapsedMs: 15_000,
+        generation: 7,
+        params: { expression: "private page text", url: "https://secret.example/" },
+        error: new Error("private failure"),
+      };
+      transport.onTimeout?.(diagnostic);
+      expect(diagnostics).toHaveBeenCalledExactlyOnceWith({
+        phase: "domain-enable",
+        method: hungMethod,
+        elapsedMs: 15_000,
+        generation: 7,
+      });
+      expect(sendCommand.mock.calls.map(([method]) => method)).toEqual(
+        ["Accessibility.enable", "DOM.enable", "Page.enable"].slice(
+          0,
+          ["Accessibility.enable", "DOM.enable", "Page.enable"].indexOf(hungMethod) + 1,
+        ),
+      );
+      domain.resolve({});
+      await ready;
+      diagnostics.mockClear();
+      transport.onTimeout?.(diagnostic);
+      expect(diagnostics).toHaveBeenCalledExactlyOnceWith({
+        phase: "readiness",
+        method: null,
+        elapsedMs: 15_000,
+        generation: 7,
+      });
+    },
+  );
+
+  it("keeps command phase and method after initialization without retaining its parameters", async () => {
+    const command = Promise.withResolvers<unknown>();
+    const diagnostics = vi.fn();
+    const transport = debuggerTransport(
+      {
+        debugger: {
+          isAttached: () => true,
+          sendCommand: (method: string) =>
+            method === "Runtime.evaluate" ? command.promise : Promise.resolve({}),
+        },
+      } as never,
+      diagnostics,
+    );
+    await transport.ensureReady?.();
+    const pending = transport.send("Runtime.evaluate", { expression: "private field value" });
+    await Promise.resolve();
+    transport.onTimeout?.({
+      phase: "action",
+      method: "Runtime.evaluate",
+      elapsedMs: 15_000,
+      generation: 2,
+    });
+    expect(diagnostics).toHaveBeenCalledExactlyOnceWith({
+      phase: "action",
+      method: "Runtime.evaluate",
+      elapsedMs: 15_000,
+      generation: 2,
+    });
+    command.resolve({});
+    await pending;
+  });
+
   it("waits for a loading tab to settle and returns at once for one already settled", async () => {
     let loading = true;
     const listeners = new Map<string, () => void>();

@@ -25,6 +25,10 @@ import { MIGRATION_IMPORT_STREAMS, MigrationDigest, migrationRowDigest } from "@
 import { vi } from "vite-plus/test";
 
 import { createMoveEngine, type MoveEngine } from "../../packages/host-core/src/cloud-move/engine";
+import { bindCloudSessionOwner } from "../../packages/host-core/src/cloud-move/freeze";
+import { sqliteDrainCursorStore } from "../../packages/host-core/src/cloud-runner/sqlite-stores";
+import { createCloudSessionOwner } from "../../packages/host-core/src/cloud-store/owner";
+import { createHostSessionServices } from "../../packages/host-core/src/session-services";
 import { presignedMoveObjects } from "../../packages/host-core/src/cloud-move/objects";
 import { createMoveSessionHistory } from "../../packages/host-core/src/cloud-move/session-history";
 import { openRawDb } from "../../packages/host-core/src/db/test-helpers";
@@ -75,11 +79,26 @@ type Db = ReturnType<typeof openRawDb>;
  * included: the move stores every event hot, as JSON text, and spills
  * nothing.
  */
-export function writeMoveFixture(root: string, artifacts = 12) {
+export function writeMoveFixture(
+  root: string,
+  artifacts = 12,
+  piLongLineBytes = PI_FIXTURE_LONG_LINE_BYTES,
+  piLongLineSecret?: string,
+) {
   // Transcript bodies (mixed plain and gzip) and a multi-slice Pi log on the
-  // moved project's busiest Session, so its history uploads too.
-  return writeMoveProfile(root, { artifacts, now: 1_790_000_000_000 });
+  // moved project's busiest Session, so its history uploads too. The Pi log
+  // holds one line longer than an export slice (VC-1030), as real logs with
+  // inline images and large tool outputs do.
+  return writeMoveProfile(root, {
+    artifacts,
+    now: 1_790_000_000_000,
+    piLongLineBytes,
+    ...(piLongLineSecret === undefined ? {} : { piLongLineSecret }),
+  });
 }
+
+/** The fixture's long Pi line: twice an export slice. */
+export const PI_FIXTURE_LONG_LINE_BYTES = 2 * 1024 * 1024;
 
 export interface MoveWorld {
   t: Tester;
@@ -102,13 +121,31 @@ export interface MoveWorld {
   cleanup(): void;
 }
 
-export async function moveWorld(fixture: { artifacts?: number } = {}): Promise<MoveWorld> {
+export async function moveWorld(
+  fixture: {
+    artifacts?: number;
+    piLongLineBytes?: number;
+    /**
+     * Credential values the history redactor knows, as a person with stored
+     * keys has. The first is written into the long Pi line, so it is redacted.
+     */
+    secrets?: readonly string[];
+  } = {},
+): Promise<MoveWorld> {
+  const redactor = new ExactValueByteRedactor(
+    (fixture.secrets ?? []).map((value) => [value, "‹secret›"] as const),
+  );
   const t = setup();
   const alice = await signIn(t, "alice");
   const world = await t.run((ctx) => seedTestWorld(ctx, { ownerUserId: alice.userId, runners: 2 }));
   const runnerId = world.runnerIds[0]!;
   const root = mkdtempSync(join(tmpdir(), "volli-move-engine-"));
-  const profile = writeMoveFixture(join(root, "profile"), fixture.artifacts);
+  const profile = writeMoveFixture(
+    join(root, "profile"),
+    fixture.artifacts,
+    fixture.piLongLineBytes,
+    fixture.secrets?.[0],
+  );
   const db = openRawDb(profile.dbPath);
   db.pragma("foreign_keys = ON");
   const objects = new S3StandIn().install();
@@ -190,7 +227,7 @@ export async function moveWorld(fixture: { artifacts?: number } = {}): Promise<M
             join(root, "profile", "session-transcripts"),
           ),
           redaction: {
-            step: (window, from, final) => new ExactValueByteRedactor([]).step(window, from, final),
+            step: (window, from, final) => redactor.step(window, from, final),
             complete: () => true,
           },
           piDirectory: join(root, "profile", "pi-sessions"),
@@ -275,3 +312,57 @@ export async function finalDigests(world: MoveWorld, moveId: string) {
     scanned,
   };
 }
+
+/**
+ * A Session born in Volli Cloud's copy of the moved project, as a cloud
+ * launch for the mover starts one here (the cloud product store binds them,
+ * the owner adopts the Session's drain cursor).
+ */
+export async function cloudBorn(w: MoveWorld): Promise<string> {
+  const services = createHostSessionServices(w.db, {
+    log: { error: () => {}, warn: () => {} },
+    events: { publish: () => {} },
+    attention: {
+      deliver: () => ({ delivered: true as const }),
+      focusedSessionIds: () => new Set<string>(),
+    },
+  });
+  bindCloudSessionOwner(w.db, w.userId);
+  try {
+    const cloud = createCloudSessionOwner({
+      db: w.db,
+      engine: services.sessionEngine,
+      ownerUserId: w.userId,
+      adopt: (sessionId) =>
+        sqliteDrainCursorStore(w.db).save({
+          sessionId,
+          ownerUserId: w.userId,
+          generation: 1,
+          acceptedThrough: 0,
+          blocked: null,
+        }),
+    });
+    const born = await cloud.engine.createSession({
+      commandId: crypto.randomUUID(),
+      projectId: w.projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Born in Volli Cloud",
+      provenance: {
+        source: { kind: "system", id: "cloud-launch", detail: null },
+        venue: { id: w.runnerId, kind: "remote" },
+      },
+    });
+    return born.session.id;
+  } finally {
+    bindCloudSessionOwner(w.db, null);
+    services.sessionActivityWatch.stop();
+  }
+}
+
+/** How many drain cursors hold a Session. */
+export const cursorOf = (w: MoveWorld, sessionId: string) =>
+  w.db
+    .prepare("SELECT COUNT(*) AS n FROM session_drain_cursors WHERE session_id = ?")
+    .get(sessionId) as { n: number };

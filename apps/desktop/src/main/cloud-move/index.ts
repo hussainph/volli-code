@@ -20,6 +20,7 @@ import { prepareLocalMoves } from "./preflight";
 import { createDesktopMovesService, type DesktopMovesService } from "./service";
 import { createMoveView, saveMovePreview } from "./view";
 import { createMoveRearm } from "./rearm";
+import { moveSignIn } from "./sign-in";
 
 async function savedBudget(root: string): Promise<number> {
   let raw: unknown;
@@ -51,6 +52,8 @@ export function createDesktopMoves(options: {
   credentials(projectId: string): Promise<string[]>;
   fullRunner(userId: string): Pick<ThisMacRunnerSnapshot, "state" | "runnerId"> | null;
   openCloud(projectId: string, workspaceId: string, userId: string): void | Promise<void>;
+  /** A move took these Sessions' drain cursors back: the cloud launch's drain forgets them. */
+  cursorsReleased?(sessionIds: readonly string[]): void;
 }): DesktopMovesService {
   const { host } = options;
   const db = host.database.db;
@@ -68,10 +71,16 @@ export function createDesktopMoves(options: {
     ]);
     return fetch(input, { ...init, signal });
   };
+  const signIn = moveSignIn({
+    account: options.account,
+    identity: options.identity,
+    signal: () => signals.getStore(),
+    waitForSignIn: async (signal) => (await service?.waitForSignIn(signal)) ?? false,
+  });
   const backend = personMoveBackend({
     url: options.backendUrl,
     enabled: options.enabled,
-    accessToken: () => options.account.accessToken(),
+    accessToken: signIn.accessToken,
     onSignInLost: () => service?.signInLost(),
     signal: () => signals.getStore(),
     fetch: moveFetch,
@@ -100,7 +109,7 @@ export function createDesktopMoves(options: {
     backend,
     objects: presignedMoveObjects({ backend, fetch: moveFetch }),
     history,
-    identity: options.identity,
+    identity: { current: signIn.current },
     realPath: windowReadCheck({ backend, sleep: (ms, signal) => delay(ms, undefined, { signal }) }),
     liveWork: { busySessionIds: options.busySessionIds },
     backup: {
@@ -140,6 +149,7 @@ export function createDesktopMoves(options: {
       },
     },
     maintenance: (work) => withProfileMaintenance(dirname(host.dbPath), work),
+    ...(options.cursorsReleased === undefined ? {} : { cursorsReleased: options.cursorsReleased }),
     exportProject: (input) =>
       runMigrationExportInWorker(options.workerEntry, input, { signal: input.signal }),
   });
@@ -150,9 +160,10 @@ export function createDesktopMoves(options: {
     backend: { query: (path, args) => signals.run(undefined, () => backend.query(path, args)) },
     account: options.account,
     identity: options.identity.current,
-    prepare: (input, signal) =>
+    prepare: (input, signal, onProgress) =>
       prepareLocalMoves(
         {
+          ...(onProgress === undefined ? {} : { onProgress }),
           db,
           profilePath: host.dbPath,
           workRoot,

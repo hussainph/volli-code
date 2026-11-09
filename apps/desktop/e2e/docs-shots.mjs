@@ -9,8 +9,9 @@
  *   ticket-workspace.png — a ticket's Body and its review rail, with Chat as the
  *                          explicit next action and Automations visible.
  *   automations.png      — the Automations page with one saved project Automation.
- *   canvas-editor.png    — Settings → Appearance's canvas editor, with the pad,
- *                          colour stops, swatches, and vibrancy/grain faders.
+ *   canvas-editor.png    — the Settings window's Appearance page, with the Canvas
+ *                          popover's pad and colour stops open beside the
+ *                          accent swatches and vibrancy/grain faders.
  *
  * `theme-picker.png` used to be the third. Its surface — Settings → Appearance's
  * app-theme picker — went with the seed-based theming system, and the file is
@@ -35,6 +36,7 @@ import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { openSettingsWindow } from "./lib/settings-window.mjs";
 
 import {
   assertProfileIsolated,
@@ -285,19 +287,29 @@ try {
 
   // ---- 4. the canvas editor ----------------------------------------------
   await attempt(7, "canvas-editor.png", async () => {
-    await page.getByRole("button", { name: "Settings", exact: true }).first().click();
-    const settings = page.getByRole("navigation", { name: "Settings categories" });
+    const settingsPage = await openSettingsWindow(app, page);
+    const settings = settingsPage.getByRole("navigation", { name: "Settings categories" });
     await settings.getByRole("button", { name: "Appearance", exact: true }).click();
-    await page.getByTestId("appearance-mode").waitFor({ timeout: 15000 });
-    const pad = page.getByTestId("canvas-pad");
+    await settingsPage.getByTestId("appearance-mode").waitFor({ timeout: 15000 });
+    await settingsPage
+      .getByRole("slider", { name: "Vibrancy", exact: true })
+      .waitFor({ timeout: 15000 });
+    await settingsPage
+      .getByRole("slider", { name: "Grain", exact: true })
+      .waitFor({ timeout: 15000 });
+    // The gradient pad lives in the Canvas row's popover; open it so the shot
+    // shows the pad and its colour stops beside the faders.
+    const editCanvas = settingsPage.getByRole("button", { name: "Edit canvas", exact: true });
+    await editCanvas.scrollIntoViewIfNeeded();
+    await parkPointer(settingsPage);
+    await editCanvas.click();
+    const pad = settingsPage.getByTestId("canvas-pad");
     await pad.waitFor({ timeout: 15000 });
-    await pad.scrollIntoViewIfNeeded();
-    await page.getByTestId("canvas-stop-orb-0").waitFor({ timeout: 15000 });
-    await page.getByRole("slider", { name: "Vibrancy", exact: true }).waitFor({ timeout: 15000 });
-    await page.getByRole("slider", { name: "Grain", exact: true }).waitFor({ timeout: 15000 });
-    await parkPointer(page);
-    await sleep(600);
-    return capture("canvas-editor.png");
+    await settingsPage.getByTestId("canvas-stop-orb-0").waitFor({ timeout: 15000 });
+    await parkPointer(settingsPage);
+    // Let the popover's open transition finish; a capture mid-fade is translucent.
+    await sleep(1500);
+    return capture("canvas-editor.png", settingsPage);
   });
 } catch (error) {
   check("!", "docs shots crashed", false, String(error?.stack ?? error));
@@ -317,18 +329,23 @@ process.exit(summarize());
  * `{ok, detail}` shape with the PNG's real pixel dimensions, read back out of
  * the file's IHDR so the check reports what actually landed on disk.
  */
-async function capture(name) {
-  const base64 = await app.evaluate(async ({ BrowserWindow }) => {
-    const win = BrowserWindow.getAllWindows()[0];
+async function capture(name, targetPage) {
+  const { base64, logicalWidth } = await app.evaluate(async ({ BrowserWindow }, targetUrl) => {
+    const win = BrowserWindow.getAllWindows().find((window) =>
+      targetUrl !== null
+        ? window.webContents.getURL() === targetUrl
+        : new URL(window.webContents.getURL()).hash !== "#settings",
+    );
+    if (!win) throw new Error("capture window is closed");
     const image = await win.webContents.capturePage();
-    return image.toPNG().toString("base64");
-  });
+    return { base64: image.toPNG().toString("base64"), logicalWidth: win.getContentSize()[0] };
+  }, targetPage?.url() ?? null);
   const bytes = Buffer.from(base64, "base64");
   const path = join(OUT_DIR, name);
   await fs.writeFile(path, bytes);
   const { width, height } = pngSize(bytes);
   return {
-    ok: bytes.length > 20_000 && width >= WINDOW.width,
+    ok: bytes.length > 20_000 && width >= logicalWidth,
     detail: `${width}x${height}, ${(bytes.length / 1024).toFixed(0)} KB → ${path}`,
   };
 }

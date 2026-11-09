@@ -304,6 +304,16 @@ describe("parseCodeModeSurface", () => {
     expect(() => parseCodeModeSurface({ ...good, descriptionVersion: 3 }, tools)).toThrow(
       "descriptionVersion is 2 or absent",
     );
+    expect(codeModeSurfaceFor({ tools: ["read", "codemode"] }).mcpResultVersion).toBe(1);
+    expect(parseCodeModeSurface({ ...good, mcpResultVersion: 1 }, tools)).toEqual({
+      ...good,
+      mcpResultVersion: 1,
+    });
+    for (const mcpResultVersion of [null, 0, 2, "1", true]) {
+      expect(() => parseCodeModeSurface({ ...good, mcpResultVersion }, tools)).toThrow(
+        "mcpResultVersion is 1 or absent",
+      );
+    }
     expect(parseCodeModeSurface({ ...good, mode: "only" }, tools)).toEqual({
       ...good,
       mode: "only",

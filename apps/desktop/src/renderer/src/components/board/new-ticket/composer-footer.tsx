@@ -1,21 +1,23 @@
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
+import { Spinner } from "@renderer/components/ui/spinner";
 import { ComposerAttachButton } from "@renderer/components/attachments/composer-attach-button";
 import { OffNote } from "@renderer/components/automations/automation-run-menu";
 import type { AutomationGroup } from "@renderer/components/automations/ticket-rail-automations-model";
 import { ComposerRunRow, type ComposerRun } from "./composer-run";
+import { RunnerPicker, type RunnerPickerState } from "@renderer/components/chat/runner-picker";
 import { composerLaunchAction, type ComposerLaunch } from "./composer-launch";
 import { Button } from "@renderer/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
-import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
+import { ChevronDownIcon, ChatIcon, AutomationIcon } from "@renderer/components/ui/icon";
 
 /**
  * TWO COMMITS AND A CHOOSER, in that order of prominence.
@@ -50,6 +52,7 @@ export function ComposerFooter({
   onSubmit,
   automationOffer,
   disabled,
+  runners,
 }: {
   projectId: string;
   onAttachFiles?: (files: readonly File[]) => void;
@@ -65,6 +68,8 @@ export function ComposerFooter({
     enabledIds: readonly string[];
   };
   disabled: boolean;
+  /** Only cloud chat kickoff needs a runner; filing and Automations do not. */
+  runners?: RunnerPickerState;
 }) {
   const action = composerLaunchAction(launch, projectId, automationOffer);
   const selection =
@@ -85,18 +90,27 @@ export function ComposerFooter({
         {onAttachFiles === undefined ? null : (
           <ComposerAttachButton className="prompt-add" onFiles={onAttachFiles} />
         )}
-        {launch.kind === "kickoff" ? <ComposerRunRow run={run} /> : null}
+        {launch.kind === "kickoff" ? (
+          <>
+            {runners === undefined ? null : <RunnerPicker state={runners} />}
+            <ComposerRunRow run={run} />
+          </>
+        ) : null}
         {launch.kind === "automation" ? (
           <span
             role="status"
             className="flex items-center gap-1 px-2 text-ui text-muted-foreground"
           >
-            <LightningIcon className="size-3.5 shrink-0" />
+            {!action.available && !automationOffer.ready ? (
+              <Spinner />
+            ) : (
+              <AutomationIcon className="size-3.5 shrink-0" />
+            )}
             {action.available
-              ? "Saved runtime"
+              ? "Saved model"
               : automationOffer.ready
                 ? "Choose an available automation"
-                : "Reading automations…"}
+                : "Reading automations"}
           </span>
         ) : null}
       </div>
@@ -120,7 +134,7 @@ export function ComposerFooter({
           disabled={disabled}
           aria-label="Create ticket"
           aria-keyshortcuts="Meta+Enter Control+Enter"
-          title="Create the ticket without starting any work (⌘↵)"
+          title="Create ticket (⌘↵)"
           className="shrink-0 rounded-r-none"
         >
           {/* No glyph. A `+` here would be the SECOND plus in the row — the Add
@@ -131,7 +145,11 @@ export function ComposerFooter({
         <Button
           data-testid={launch.kind === "kickoff" ? "composer-kickoff" : "composer-submit"}
           onClick={onSubmit}
-          disabled={disabled || !action.available}
+          disabled={
+            disabled ||
+            !action.available ||
+            (launch.kind === "kickoff" && runners !== undefined && runners.selected === null)
+          }
           aria-label={action.label}
           aria-keyshortcuts="Shift+Meta+Enter Shift+Control+Enter"
           title={`${action.label} (⇧⌘↵)`}
@@ -144,11 +162,11 @@ export function ComposerFooter({
             <Button
               size="icon"
               aria-label="Choose what starts"
-              title="Start chat, or run an Automation"
+              title="Choose what starts"
               data-testid="composer-launch-picker"
-              className="shrink-0 rounded-l-none border-l border-primary-foreground/30"
+              className="shrink-0 rounded-l-none border-l border-(--primary-text)/20"
             >
-              <CaretDownIcon weight="bold" className="size-3" />
+              <ChevronDownIcon strokeWidth={2.25} className="size-3" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" side="top" className="w-80">
@@ -171,7 +189,7 @@ export function ComposerFooter({
                   moment an Automation is chosen. The primary button carries it,
                   because the primary button is what it presses. */}
               <DropdownMenuRadioItem value="kickoff">
-                <ChatCircleIcon />
+                <ChatIcon />
                 Start chat
               </DropdownMenuRadioItem>
               <DropdownMenuSeparator />
@@ -198,25 +216,29 @@ export function CreateRunAutomationItems({
   if (!ready || groups.length === 0) {
     return (
       <div className="px-2 py-1 text-ui text-muted-foreground">
-        {ready ? "No ticket automations in this project." : "Reading automations…"}
+        {ready ? (
+          <span className="sr-only">No ticket automations</span>
+        ) : (
+          <LoadingLabel>Reading automations</LoadingLabel>
+        )}
       </div>
     );
   }
   return groups.map((group) => (
-    <div key={group.status}>
-      <DropdownMenuLabel className="text-label text-muted-foreground">
+    <DropdownMenuGroup key={group.status}>
+      <DropdownMenuLabel>
         {group.label}
         {group.current ? " · this column" : ""}
       </DropdownMenuLabel>
       {group.automations.map((automation) => (
         <DropdownMenuRadioItem key={automation.id} value={`automation:${automation.id}`}>
-          <LightningIcon />
-          <span className="min-w-0 flex-1 truncate" title={automation.name}>
+          <AutomationIcon />
+          <span className="min-w-0 flex-1 whitespace-normal break-words" title={automation.name}>
             {automation.name}
           </span>
           <OffNote automation={automation} enabledIds={enabledIds} />
         </DropdownMenuRadioItem>
       ))}
-    </div>
+    </DropdownMenuGroup>
   ));
 }

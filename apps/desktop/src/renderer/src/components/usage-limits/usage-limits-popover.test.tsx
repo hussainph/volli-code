@@ -135,7 +135,7 @@ async function renderPopover(inspect: ModelAccessClient["inspect"]): Promise<voi
  * guarantee VC-376 made when it made the name dynamic.
  */
 function button(label: string): HTMLButtonElement {
-  const found = document.querySelector(`[aria-label^="${label}"]`);
+  const found = document.querySelector(`button[aria-label^="${label}"]`);
   if (!(found instanceof HTMLButtonElement)) throw new Error(`${label} button not found`);
   return found;
 }
@@ -161,7 +161,8 @@ describe("UsageLimitsPopover", () => {
     await renderPopover(inspect);
 
     await act(async () => button("Usage limits").click());
-    expect(document.body.textContent).toContain("xAI");
+    expect(document.querySelector('[role="img"][aria-label="xAI"]')).not.toBeNull();
+    expect(document.body.textContent).not.toContain("xAI");
     expect(document.body.textContent).toContain("4% left");
     // Opening costs no request: the answer it would ask for is the one the
     // mount is already holding for this revision.
@@ -232,13 +233,14 @@ describe("UsageLimitsPopover", () => {
       settleFirst?.({ observedAt: NOW, models: [], providers: [] });
       await first;
     });
-    expect(document.body.textContent).not.toContain("No subscriptions with usage limits.");
+    expect(document.body.textContent).not.toContain("No subscriptions with usage limits");
 
     await act(async () => {
       settleSecond?.(SNAPSHOT);
       await second;
     });
-    expect(document.body.textContent).toContain("xAI");
+    expect(document.querySelector('[role="img"][aria-label="xAI"]')).not.toBeNull();
+    expect(document.body.textContent).not.toContain("xAI");
   });
 
   it("pins a window from its row, and the glyph reports it until unpinned", async () => {
@@ -278,8 +280,8 @@ describe("UsageLimitsPopover", () => {
     );
 
     await act(async () => button("Usage limits").click());
-    const trigger = [...document.querySelectorAll("button")].find((node) =>
-      node.textContent?.startsWith("Anthropic"),
+    const trigger = [...document.querySelectorAll("button")].find(
+      (node) => node.querySelector('[aria-label="Anthropic"]') !== null,
     );
     await act(async () => trigger?.click());
     await act(async () => button("Pin Session to the window bar").click());

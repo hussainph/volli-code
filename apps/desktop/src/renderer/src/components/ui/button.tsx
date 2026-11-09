@@ -1,6 +1,9 @@
 import * as React from "react";
+import { useControlShape, type ControlShape } from "./control-shape";
 import { cva, type VariantProps } from "class-variance-authority";
 import { Slot } from "radix-ui";
+
+import { CONTROL_SIZE } from "@renderer/components/ui/field-classes";
 
 import { cn } from "@renderer/lib/utils";
 
@@ -9,65 +12,44 @@ const buttonVariants = cva(
   // its contrast floor. The offset separates the ring from a filled control.
   // Text fields carry their caret instead (`ui/field-classes.ts`).
   //
-  // THE PRESS: `scale` is in the transition list and naming `transform` is not
-  // enough. Tailwind v4 compiles `scale-*` to the standalone `scale` property,
-  // not to a transform function — `.active\:scale-\[0\.97\]:active{scale:.97}`
-  // — so a list naming only `transform` transitions a property the press never
-  // touches, and the depress SNAPS with the declared 150ms doing nothing. The
-  // reduced-motion fallback is `scale-100` for the same reason: `transform:
-  // none` cannot cancel a `scale` declaration. `!` because the gate is one
-  // class inside a media query, (0,1,0), against `:active`'s (0,1,1) — the
-  // longer version of that argument is on MENU_SURFACE_FADE in
-  // `ui/menu-classes.ts`.
-  "inline-flex shrink-0 items-center justify-center gap-2 rounded-full text-sm font-medium whitespace-nowrap transition-[color,background-color,border-color,box-shadow,opacity,transform,scale] duration-150 ease-out outline-none active:scale-[0.97] motion-reduce:scale-100! focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/30 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+  // Pointer presses scale the drawing without moving its layout target.
+  // CSS excludes popup anchors so their positioned surface has a stable rect.
+  "inline-flex min-w-0 max-w-full shrink-0 items-center justify-center gap-2 rounded-native-control text-sm font-medium whitespace-normal break-words transition-[transform,opacity] duration-(--duration-menu-in) ease-out outline-none motion-reduce:transition-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/30 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
   {
     variants: {
       variant: {
-        // Keep the solved fill opaque on hover: a 90% wash loses AA on light
-        // surfaces. Elevation supplies hover feedback without changing ink.
-        default: "bg-primary text-primary-foreground hover:shadow-raised",
-        // `--destructive-foreground`, not a literal white: the destructive red
-        // is hue-locked, but the ink that reads on it is solved rather than
-        // assumed, so the label follows whatever actually lands on that fill.
-        //
-        // FULL STRENGTH IN BOTH MODES. `dark:bg-destructive/60` used to sit
-        // here to quiet a red that was frozen at #e5484d and therefore too
-        // loud against a dark canvas. The fill is solved per appearance now —
-        // pale on dark paper, deep on light — so the mode is already accounted
-        // for in the colour, and a 60% wash would only break the one guarantee
-        // the solve makes: the label is solved against THIS fill, not against
-        // a diluted version of it. Keyboard focus uses the same opaque semantic
-        // ring as every other button, not a translucent destructive wash.
-        destructive: "bg-destructive text-destructive-foreground hover:bg-destructive/90",
+        // Tonal primary: accent ink on a same-hue tint, with a stronger hover tint.
+        default: "button-tonal bg-accent text-primary-text hover:bg-(--accent-selected)",
+        // Destructive body ink is pale in dark mode; an action instead takes
+        // the shared deep-red control pair, with the same flat material as its peers.
+        destructive:
+          "control-material [--control-fill:var(--color-control-destructive)] bg-control-destructive text-control-destructive-foreground shadow-control hover:shadow-control-hover active:shadow-control-pressed",
         outline:
-          "border bg-background shadow-raised hover:bg-accent hover:text-foreground dark:border-border dark:bg-border/30 dark:hover:bg-border/50",
-        secondary: "bg-muted text-foreground hover:bg-muted/70",
-        ghost: "hover:bg-accent hover:text-foreground dark:hover:bg-accent/50",
+          "control-material border border-border-strong bg-card text-foreground shadow-control hover:bg-accent hover:[--control-fill:var(--accent)] hover:shadow-control-hover active:shadow-control-pressed",
+        secondary:
+          "control-material [--control-fill:var(--color-control-secondary)] border border-border-strong bg-control-secondary text-foreground shadow-control hover:shadow-control-hover active:shadow-control-pressed",
+        ghost: "hover:bg-accent hover:text-foreground",
+        toolbar:
+          "glass-control text-foreground hover:bg-accent aria-pressed:bg-(--accent-selected) aria-pressed:text-primary-text",
+        inspector:
+          "inspector-popup justify-start border-0 bg-transparent px-0 text-foreground shadow-none hover:bg-accent aria-pressed:bg-(--accent-selected) aria-pressed:text-primary-text",
         // --primary-text, not --primary: a link variant is read, not clicked
         // as a colored area, so it takes the accent's body-copy lightness.
         link: "text-primary-text underline-offset-4 hover:underline",
       },
-      // Pill scale (DESIGN.md): the h-7 rounded-full chip is the app's control
-      // idiom — default matches it; sm/xs step down, lg is the ceiling.
-      //
-      // THE HORIZONTAL INSETS ARE THE RECORDED EXCEPTION to the 0/4/8/16/24
-      // spacing collapse, and the reason is arithmetic rather than taste. This
-      // is a FOUR-rung ladder (20/24/28/32px tall) and its insets have to rank
-      // with it; the collapsed ladder offers exactly two candidates in range, 8
-      // and 16, so four rungs land on two values. Run mechanically it produced
-      // a 24px-tall pill wearing 16px of side padding, and `has-[>svg]:px-4`
-      // beside `px-4` — an icon-compensation variant that compensates by
-      // nothing, which is worse than either keeping the step or deleting it.
-      // A control's inset is a function of its own height, not of page rhythm.
+      // Insets track height, not icon presence; long labels grow vertically.
+      // Each inset leaves room for the 1px border Outline and Secondary draw:
+      // 20px of label line, two insets and two borders must fit the token, or
+      // a bordered button outgrows the icon button fused beside it.
       size: {
-        default: "h-7 px-3.5 text-ui has-[>svg]:px-3",
-        xs: "h-5 gap-1 px-2.5 text-ui has-[>svg]:px-2 [&_svg:not([class*='size-'])]:size-3",
-        sm: "h-6 gap-1.5 px-3 text-ui has-[>svg]:px-2.5 [&_svg:not([class*='size-'])]:size-3.5",
-        lg: "h-8 px-4 has-[>svg]:px-3.5",
-        icon: "size-7",
-        "icon-xs": "size-5 [&_svg:not([class*='size-'])]:size-3",
-        "icon-sm": "size-6 [&_svg:not([class*='size-'])]:size-3.5",
-        "icon-lg": "size-8",
+        default: `${CONTROL_SIZE.default} h-auto min-h-control-default py-0.5 text-ui`,
+        xs: `${CONTROL_SIZE.xs} h-auto min-h-control-xs px-control-pad-default py-0 gap-1 text-ui leading-4 [&_svg:not([class*='size-'])]:size-3`,
+        sm: `${CONTROL_SIZE.sm} h-auto min-h-control-sm py-px gap-1 text-ui [&_svg:not([class*='size-'])]:size-3.5`,
+        lg: `${CONTROL_SIZE.lg} h-auto min-h-control-lg py-1`,
+        icon: "size-control-default",
+        "icon-xs": "size-control-xs [&_svg:not([class*='size-'])]:size-3",
+        "icon-sm": "size-control-sm [&_svg:not([class*='size-'])]:size-3.5",
+        "icon-lg": "size-control-lg",
       },
     },
     defaultVariants: {
@@ -82,20 +64,27 @@ function Button({
   variant = "default",
   size = "default",
   asChild = false,
+  shape = "auto",
   ...props
 }: React.ComponentProps<"button"> &
   VariantProps<typeof buttonVariants> & {
     asChild?: boolean;
+    shape?: ControlShape;
   }) {
   const Comp = asChild ? Slot.Root : "button";
+  const shapeProps = useControlShape(shape, size);
 
+  // Radix triggers replace data-slot through asChild. A stable marker lets
+  // joined controls recognize the actual action underneath.
   return (
     <Comp
       data-slot="button"
       data-variant={variant}
       data-size={size}
+      {...shapeProps}
       className={cn(buttonVariants({ variant, size, className }))}
       {...props}
+      data-control="button"
     />
   );
 }

@@ -127,7 +127,7 @@ export function waitingStatus(host: HostRecord | undefined): {
   switch (host?.link.status) {
     case "connecting":
     case "reconnecting":
-      return { status: "connecting", detail: `Reconnecting to ${name}…` };
+      return { status: "connecting", detail: `Reconnecting to ${name}` };
     case "offline":
       return { status: "failed", detail: `${name} can’t be reached right now.` };
     case "incompatible":
@@ -135,7 +135,7 @@ export function waitingStatus(host: HostRecord | undefined): {
     default:
       return {
         status: "connecting",
-        detail: `Waiting for a link to ${name} that carries its log…`,
+        detail: `Waiting for a log connection to ${name}`,
       };
   }
 }

@@ -224,6 +224,12 @@ export interface BackgroundShellHostPorts {
   /** Union shared/original exact spans AND unfinished credentials in live previews. */
   redactNoticeOutput?: (text: string) => string;
   /**
+   * Changes whenever `redactNoticeOutput` could read some text differently
+   * (the credential owner learned a value). With it, a `notifyOn` watch
+   * redacts each completed line once instead of the whole output per chunk.
+   */
+  noticeRedactionVersion?: () => number;
+  /**
    * A shell has something to tell the Session that started it (VC-495): it
    * exited on its own, or its output matched the pattern the model asked to
    * be told about. Never called for a shell the Session's own `shell_kill`
@@ -535,8 +541,17 @@ export class BackgroundShellHost {
     const ring = new OutputRing(this.outputMaxBytes);
     const onOutput = new Set<(chunk: Buffer) => void>();
     const notifyOn = input.notifyOn;
-    const stdout = new NoticeOutput((text) => this.redactNoticeText(text), this.outputMaxBytes);
-    const stderr = new NoticeOutput((text) => this.redactNoticeText(text), this.outputMaxBytes);
+    const version = this.noticeRedactionVersion();
+    const stdout = new NoticeOutput(
+      (text) => this.redactNoticeText(text),
+      this.outputMaxBytes,
+      version,
+    );
+    const stderr = new NoticeOutput(
+      (text) => this.redactNoticeText(text),
+      this.outputMaxBytes,
+      version,
+    );
     let matched = false;
     const makeWatch = (): NoticeMatchWatch | null =>
       notifyTest === null || notifyOn === undefined || this.deps.onNotice === undefined
@@ -554,8 +569,8 @@ export class BackgroundShellHost {
     const stderrWatch = makeWatch();
     const matchOutput = (output: NoticeOutput, watch: NoticeMatchWatch | null): void => {
       if (matched || output.withheld || entry.endedBy === "agent" || watch === null) return;
-      const safe = output.snapshot();
-      if (!output.withheld) watch.feed(safe);
+      const view = output.view();
+      if (view !== null) watch.feedView(view);
     };
     const receive = (output: NoticeOutput, watch: NoticeMatchWatch | null, chunk: Buffer): void => {
       ring.append(chunk);
@@ -900,6 +915,17 @@ export class BackgroundShellHost {
     return redactPayloadSecrets(
       this.deps.redactNoticeOutput?.(text) ?? this.deps.redactOutput?.(text) ?? text,
     );
+  }
+
+  /**
+   * What lets notice redaction settle completed lines: the credential owner's
+   * version beside its notice redactor, or a constant when only the fixed
+   * shared redactor applies. A bare output redactor proves nothing about
+   * trailing prefixes, so its contexts are redacted whole.
+   */
+  private noticeRedactionVersion(): (() => number) | undefined {
+    if (this.deps.redactNoticeOutput !== undefined) return this.deps.noticeRedactionVersion;
+    return this.deps.redactOutput === undefined ? () => 0 : undefined;
   }
 
   private noticeText(text: string): string {

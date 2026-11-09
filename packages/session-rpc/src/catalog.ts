@@ -64,6 +64,7 @@ import {
   isCommandIntentConflict,
   isQueueRevisionConflict,
   isHandlerRefused,
+  isOperationCancelled,
   isOperationUnavailable,
   isSignInRefused,
   isolatePerformanceObserver,
@@ -331,6 +332,13 @@ export async function hostAnswer<Answer>(run: () => Answer | Promise<Answer>): P
       throw new HostProcedureError("verb-refused", error.message, error);
     }
     if (isSignInRefused(error)) throw signInRefusal(error);
+    if (isOperationCancelled(error)) {
+      throw new HostProcedureError(
+        "operation-cancelled",
+        error instanceof Error ? error.message : "This operation was cancelled",
+        error,
+      );
+    }
     if (isOperationUnavailable(error)) {
       throw new HostProcedureError(
         "operation-unavailable",
@@ -885,6 +893,14 @@ export function createCatalogBuilders<
       // before its handler ran (VC-668): the same refusal this middleware gives.
       if (!result.ok && isHandlerRefused(result.error.cause)) {
         throw new HostProcedureError("verb-refused", result.error.message, result.error.cause);
+      }
+      // A cancel is its own answer: nothing is missing, the caller may ask again.
+      if (!result.ok && isOperationCancelled(result.error.cause)) {
+        throw new HostProcedureError(
+          "operation-cancelled",
+          result.error.message,
+          result.error.cause,
+        );
       }
       // What this host cannot do now is the handler's answer (VC-668).
       if (!result.ok && isOperationUnavailable(result.error.cause)) {

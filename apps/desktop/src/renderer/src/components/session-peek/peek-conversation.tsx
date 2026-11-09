@@ -108,6 +108,7 @@ export function PeekConversation({
   onClose,
 }: PeekConversationProps): React.ReactElement | null {
   const adopt = useChatSessionsStore((state) => state.adoptChatSession);
+  const show = useChatSessionsStore((state) => state.showChatSession);
   const projection = useChatSessionsStore((state) =>
     sessionId === null ? null : (state.sessions[sessionId]?.projection ?? null),
   );
@@ -116,11 +117,14 @@ export function PeekConversation({
 
   // An explicit intent, so the Session is adopted — the peek itself never does
   // (plan §1.1): the transcript and the composer below are the resident
-  // client's, exactly as they are in a tab.
+  // client's, exactly as they are in a tab. Shown as well as adopted (VC-515):
+  // a peek has no tab to close, so once it closes its client is one the
+  // residency cap may let go when idle, instead of a stream kept forever.
   React.useEffect(() => {
     if (sessionId === null) return;
     adopt(sessionId);
-  }, [adopt, sessionId]);
+    return show(sessionId);
+  }, [adopt, show, sessionId]);
 
   const cached = React.useMemo(
     () => (sessionId === null ? null : cachedChatRecord(sessionId, byTicket, byProject)),

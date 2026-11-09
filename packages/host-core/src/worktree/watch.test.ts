@@ -193,6 +193,55 @@ describe("pollRetention — discovery", () => {
   });
 });
 
+/** A move of p1 in its first frozen state, as the move engine journals it. */
+function freezeP1(): void {
+  ctx.db.exec(`
+    INSERT INTO cloud_move_queues VALUES ('q', 'u', 'w', 'r', 1, 0, 'pending', NULL, 'running', 1, 1);
+    INSERT INTO cloud_moves (move_id, queue_id, project_id, position, user_id, workspace_id,
+      runner_id, state, app_version, mapper_version, created_at, updated_at)
+    VALUES ('m', 'q', 'p1', 0, 'u', 'w', 'r', 'frozen', 'test', 3, 1, 1);
+  `);
+}
+
+// VC-1016: `gh` takes its time, and a move can freeze the project meanwhile.
+describe("pollRetention — a move that freezes the project while gh answers", () => {
+  it("stamps no discovered PR", async () => {
+    seedProject();
+    seedTicket({ prUrl: null });
+    const { deps } = makeDeps((_file, args) => {
+      if (args[1] === "list") {
+        freezeP1();
+        return {
+          stdout: JSON.stringify([{ url: "https://x/pull/9", state: "OPEN", updatedAt: "z" }]),
+        };
+      }
+      return { stdout: "" };
+    });
+
+    await pollRetention(deps, createRetentionStore());
+
+    expect(getTicketRow(ctx.db, "t1")!.pr_url).toBeNull();
+    expect(listTicketEvents(ctx.db, "t1").map((e) => e.payload.kind)).not.toContain("pr_opened");
+  });
+
+  it("records no merge", async () => {
+    seedProject();
+    seedTicket({ prUrl: "https://x/pull/7" });
+    const { deps, notifications } = makeDeps((_file, args) => {
+      if (args[1] === "view") {
+        freezeP1();
+        return prView({ state: "MERGED", mergedAt: "2026-01-01T00:00:00Z" });
+      }
+      return { stdout: "" };
+    });
+
+    await pollRetention(deps, createRetentionStore());
+
+    expect(listTicketEvents(ctx.db, "t1").map((e) => e.payload.kind)).not.toContain("pr_merged");
+    expect(notifications).toEqual([]);
+  });
+});
+
 describe("pollRetention — merge", () => {
   it("records ONE pr_merged event + ONE notification on first merge, deduped after", async () => {
     seedProject();

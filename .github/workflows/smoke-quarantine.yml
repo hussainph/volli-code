@@ -1,7 +1,7 @@
 name: Smoke quarantine
 
 # Non-gating observation lane, not deleted coverage. Repeat-flake threshold,
-# evidence and return criteria: AGENTS.md, Smoke quarantine requirements.
+# evidence and return criteria: docs/development/smoke-tests.md, Measured quarantine.
 # Each entry has a tracked repair ticket.
 # A smoke red is visible in the summary/artifact but does not make this workflow
 # red (or send failed-smoke emails). Infrastructure/build failures still do.
@@ -30,9 +30,8 @@ jobs:
           persist-credentials: false
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        uses: ./.github/actions/setup-toolchain
         with:
-          node-version-file: package.json
           cache: true
           run-install: true
 

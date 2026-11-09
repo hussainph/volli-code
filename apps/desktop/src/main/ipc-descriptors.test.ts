@@ -1584,11 +1584,27 @@ describe("DATA_IPC descriptor table", () => {
     });
   });
 
-  describe("volli:app-state-set (positional string pair)", () => {
+  describe("volli:app-state-set (string pair and optional baseline)", () => {
     const { guard, invalidError } = DATA_IPC["volli:app-state-set"];
 
     it("accepts a [key, value] string pair", () => {
       expect(guard(["volli:ui", "{}"])).toBe(true);
+    });
+
+    it("accepts an optional string baseline, including an empty or omitted value", () => {
+      expect(guard(["volli:ui", "{}", '{"state":{"sidebarWidth":240}}'])).toBe(true);
+      expect(guard(["volli:ui", "{}", ""])).toBe(true);
+      expect(guard(["volli:ui", "{}", undefined])).toBe(true);
+    });
+
+    it.each([
+      { baseline: null },
+      { baseline: 42 },
+      { baseline: false },
+      { baseline: {} },
+      { baseline: [] },
+    ])("rejects a malformed baseline: %j", ({ baseline }) => {
+      expect(guard(["volli:ui", "{}", baseline])).toBe(false);
     });
 
     it("rejects a non-string member", () => {
@@ -1598,7 +1614,7 @@ describe("DATA_IPC descriptor table", () => {
 
     it("rejects a wrong arity", () => {
       expect(guard(["volli:ui"])).toBe(false);
-      expect(guard(["volli:ui", "{}", "extra"])).toBe(false);
+      expect(guard(["volli:ui", "{}", "baseline", "extra"])).toBe(false);
     });
 
     it("carries the handler's exact invalid-input message", () => {

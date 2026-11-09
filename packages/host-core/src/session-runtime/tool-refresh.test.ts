@@ -48,6 +48,7 @@ const candidate: Surface = {
   mcpTools: [mcp],
   codeMode: {
     descriptionVersion: 2,
+    mcpResultVersion: 1,
     routes: {
       read: "code",
       edit: "both",
@@ -144,6 +145,7 @@ describe("additions-only tool refresh", () => {
       expect(result.changed).toEqual(["codemode", "session.delegate"]);
       expect(result.surface.codeMode).toMatchObject({
         descriptionVersion: 2,
+        mcpResultVersion: 1,
         routes: { read: "both", watch: "code" },
       });
       expect(result.surface.askUserQuestions).toBeUndefined();
@@ -167,9 +169,48 @@ describe("additions-only tool refresh", () => {
       expect(result.added).toEqual(["watch", mcp.providerName]);
       expect(result.changed).toEqual([]);
       expect(result.surface.codeMode?.descriptionVersion).toBeUndefined();
+      expect(result.surface.codeMode?.mcpResultVersion).toBeUndefined();
       expect(result.surface.codeMode?.routes.read).toBe("both");
     },
   );
+
+  it("leaves existing declaration bytes intact while warm, then upgrades MCP results once at a cold boundary", () => {
+    const old: Surface = {
+      ...birth,
+      refreshDescriptions: true,
+      codeMode: { ...birth.codeMode!, descriptionVersion: 2 },
+    };
+    const before = JSON.stringify(old);
+    for (const trigger of ["warm-turn", "code-mode"] as const) {
+      const warm = additiveToolRefresh(old, candidate, trigger);
+      expect(warm.surface.codeMode?.mcpResultVersion).toBeUndefined();
+      const { routes: _routes, ...declaration } = warm.surface.codeMode!;
+      const { routes: _oldRoutes, ...oldDeclaration } = old.codeMode!;
+      expect(JSON.stringify(declaration)).toBe(JSON.stringify(oldDeclaration));
+      expect(warm.changed).toEqual([]);
+      const events = [
+        event({ kind: "session.input.recorded", input: old }),
+        refreshFact(old, warm.surface, trigger),
+      ];
+      expect(declarationToolSurface(events)).toBe(old);
+      for (const coldTrigger of ["cold-turn", "compaction", "model-switch"] as const) {
+        const cold = additiveToolRefresh(warm.surface, warm.surface, coldTrigger, old);
+        expect(cold.surface.codeMode?.mcpResultVersion).toBe(1);
+        expect(cold.changed).toEqual(["codemode"]);
+        expect(() =>
+          assertAdditiveToolRefresh(warm.surface, { trigger: coldTrigger, ...cold }, old),
+        ).not.toThrow();
+        const folded = foldToolRefreshes([
+          ...events,
+          refreshFact(warm.surface, cold.surface, coldTrigger),
+        ]);
+        expect(folded.effective).toEqual(cold.surface);
+        expect(folded.declared).toEqual(cold.surface);
+        expect(additiveToolRefresh(cold.surface, cold.surface, coldTrigger).changed).toEqual([]);
+      }
+    }
+    expect(JSON.stringify(old)).toBe(before);
+  });
 
   it("does not offer Code Mode or a direct MCP tool during a warm turn", () => {
     const direct = {
@@ -216,6 +257,7 @@ describe("additions-only tool refresh", () => {
     );
     expect(result.surface.askUserQuestions).toBe(true);
     expect(result.surface.codeMode?.descriptionVersion).toBe(2);
+    expect(result.surface.codeMode?.mcpResultVersion).toBe(1);
     expect(result.surface.codeMode?.routes.read).toBe("direct");
     expect(() =>
       additiveToolRefresh(
@@ -244,7 +286,7 @@ describe("additions-only tool refresh", () => {
     const modernBirth: Surface = {
       ...birth,
       refreshDescriptions: true,
-      codeMode: { ...birth.codeMode!, descriptionVersion: 2 },
+      codeMode: { ...birth.codeMode!, descriptionVersion: 2, mcpResultVersion: 1 },
     };
     const modernWarm = additiveToolRefresh(modernBirth, candidate, "warm-turn");
     const publish = additiveToolRefresh(

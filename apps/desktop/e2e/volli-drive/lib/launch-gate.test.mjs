@@ -5,7 +5,7 @@
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -17,9 +17,11 @@ const DRIVE = fileURLToPath(new URL("..", import.meta.url));
 const CLI = join(DRIVE, "cli.mjs");
 const read = (name) => readFileSync(join(DRIVE, name), "utf8");
 
-let root;
+// Resolve argument paths at module load, inside one private random directory.
+const root = mkdtempSync(join(os.tmpdir(), "volli-drive-gate-"));
+const validScript = join(root, "replies.json");
 before(() => {
-  root = mkdtempSync(join(os.tmpdir(), "volli-drive-gate-"));
+  writeFileSync(validScript, JSON.stringify([{ text: "scripted one" }]));
 });
 after(() => rmSync(root, { recursive: true, force: true }));
 
@@ -77,6 +79,9 @@ describe("scripted fake turns", () => {
   for (const [args, message] of [
     [["--model", "env", "--fake-script", "unused.json"], /requires --model fake/],
     [["--fake-script", join(DRIVE, "..", "..", "package.json")], /must contain a JSON array/],
+    [["--fake-tool-free-text", "A title"], /refines --fake-script and requires it/],
+    [["--fake-script", validScript, "--fake-tool-free-text"], /non-empty text/],
+    [["--fake-script", validScript, "--fake-tool-free-text", "   "], /non-empty text/],
   ]) {
     it(`rejects invalid script setup ${args.join(" ")} before reserving an instance`, async () => {
       const home = join(root, "script-home");
@@ -126,5 +131,22 @@ describe("every launch path goes through assertLaunchable", () => {
       assert.doesNotMatch(source, /VOLLI_SMOKE_APP_BINARY\s*=/, name);
       assert.doesNotMatch(source, /executablePath/, name);
     }
+  });
+});
+
+describe("--fake-tool-free-text wiring", () => {
+  it("the CLI requires --fake-script and non-empty text, and lands the value in the spec", () => {
+    const source = read("cli.mjs");
+    assert.match(source, /--fake-tool-free-text refines --fake-script and requires it/);
+    assert.match(source, /--fake-tool-free-text needs non-empty text/);
+    assert.match(source, /fakeToolFreeText === undefined \? \{\} : \{ fakeToolFreeText \}/);
+  });
+
+  it("the supervisor answers tool-free turns with spec.fakeToolFreeText; absent keeps the echo", () => {
+    const source = read("supervisor.mjs");
+    const replies = source.indexOf("const replies = spec.fakeScript?.slice();");
+    assert.ok(replies > 0, "the boot fake-script block is present");
+    const block = source.slice(replies, source.indexOf('mark("providerReady")', replies));
+    assert.match(block, /\?\s*replies\.shift\(\)\s*:\s*spec\.fakeToolFreeText\b/);
   });
 });

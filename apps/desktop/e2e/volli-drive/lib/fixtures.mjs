@@ -11,7 +11,7 @@ import { createTicketViaBridge } from "../../lib/agent-kit.mjs";
 import { seedDefaultModel, seedProjects } from "../../lib/smoke-kit.mjs";
 import { makeScratchRepo } from "./core.mjs";
 
-export const FIXTURES = ["basic", "empty", "move"];
+export const FIXTURES = ["basic", "empty", "move", "empty-pane-left", "empty-pane-right"];
 export const MOVE_PROJECT = Object.freeze({
   id: "b7f783e2-6c9c-4a6d-8ea2-137defb38c19",
   name: "Move Project",
@@ -37,8 +37,9 @@ export const BASIC_TICKETS = Object.freeze([
  * @param {string} name
  * @param {{projectsDir:string}} layout
  * @param {{providerId:string, modelId:string, reasoningLevel?:string}|null} modelPin
+ * @param {{flushClientState?:()=>Promise<void>}} options
  */
-export async function seedFixture(page, name, layout, modelPin) {
+export async function seedFixture(page, name, layout, modelPin, { flushClientState } = {}) {
   if (!FIXTURES.includes(name)) throw new Error(`unknown fixture ${name} (${FIXTURES.join(", ")})`);
   const seeded = { fixture: name, project: null, tickets: [], model: null };
   if (modelPin) {
@@ -140,6 +141,65 @@ export async function seedFixture(page, name, layout, modelPin) {
       { projectId: project.id, ticketId: seeded.tickets[3].ticketId },
     );
     seeded.tickets[3].status = "done";
+  }
+  if (name === "empty-pane-left" || name === "empty-pane-right") {
+    // SETUP only: a retained group whose Browser Tab did not survive launch.
+    // The neighbouring chat is real; launcher actions are subsequently driven
+    // through the semantic driver, never through this setup bridge.
+    await page.keyboard.press("Meta+t");
+    await page
+      .getByRole("textbox", { name: "Message", exact: true })
+      .fill("Keep this neighbouring chat unchanged.");
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await page
+      .getByText("fake-agent: Keep this neighbouring chat unchanged.", { exact: true })
+      .waitFor();
+    // Use the real flush/ack barrier, not a timing guess: pending renderer
+    // receipts must not overwrite this backend-only setup during reload.
+    if (!flushClientState) throw new Error("empty-pane fixture needs a client-state flush barrier");
+    await flushClientState();
+    const envelope = await page.waitForFunction(async () => {
+      const boot = await window.api.data.bootstrap();
+      const raw = boot.ok ? boot.data.appState["volli:workspace"] : null;
+      return raw &&
+        JSON.parse(raw).state.byProject["drive-project"]?.homeActiveTab?.startsWith("chat:")
+        ? raw
+        : false;
+    });
+    const workspace = await envelope.jsonValue();
+    await envelope.dispose();
+    seeded.emptyPane = await page.evaluate(
+      async ({ projectId, side, workspace: envelopeJson }) => {
+        const saved = JSON.parse(envelopeJson);
+        const ui = saved.state.byProject[projectId];
+        const chatId = ui.homeActiveTab;
+        const empty = {
+          kind: "pane",
+          id: "empty-launcher",
+          tabIds: ["browser:departed"],
+          activeTabId: "browser:departed",
+        };
+        const neighbour = { kind: "pane", id: "neighbour", tabIds: [chatId], activeTabId: chatId };
+        const root = {
+          kind: "split",
+          id: "launcher-group",
+          direction: "row",
+          ratio: 0.5,
+          first: side === "left" ? empty : neighbour,
+          second: side === "right" ? empty : neighbour,
+        };
+        ui.homeSplitView = {
+          pairs: [root],
+          root,
+          selectedTabId: chatId,
+          focusedPaneId: neighbour.id,
+        };
+        const result = await window.api.appState.set("volli:workspace", JSON.stringify(saved));
+        if (!result.ok) throw new Error(result.error);
+        return { side, paneId: empty.id, neighbourPaneId: neighbour.id, chatId };
+      },
+      { projectId: project.id, side: name.endsWith("left") ? "left" : "right", workspace },
+    );
   }
   // The bridge writes are live, but a reload makes the board read them the way
   // a person's next launch would, with no optimistic state left over.

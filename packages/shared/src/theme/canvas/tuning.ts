@@ -17,6 +17,9 @@
  * Each value's comment describes its effect on contrast, color or layering.
  */
 export const ARC_TUNING = {
+  /** Maximum OKLCH chroma of cards, fills, edges and muted ink; paper is exempt. */
+  neutralTint: { light: 0.035, dark: 0.032 },
+
   /**
    * Where each stop's hue sits relative to the primary's, in degrees, indexed
    * by (stop count − 1): one color, its complement, then a triad. Rotation
@@ -26,64 +29,18 @@ export const ARC_TUNING = {
    */
   harmony: [[0], [0, 180], [0, 120, 240]],
 
-  /** Light mode: the authored lightness is pulled into a pastel band. */
-  lightBand: {
-    /**
-     * Below this a "light" canvas stops reading as light at all — at 0.66 a
-     * saturated mid-tone wall strands BOTH inks near Lc 50. 0.80 is where the
-     * band turns genuinely pastel; the last 0.03 is what the worst-case ink
-     * score needs once the base fill counts as a surface.
-     */
-    min: 0.83,
-    /** Above it the pools wash out and the ink has nothing to bite on. */
-    max: 0.9,
-  },
-
-  /** Dark mode: a real drop in lightness, then the same kind of band. */
-  darkBand: {
-    /** Subtracted from the authored L first, so a dark canvas keeps the seed's ordering. */
-    shift: -0.34,
-    /** Below this the whole window collapses to one indistinguishable near-black. */
-    min: 0.25,
-    /** Above it the canvas competes with the content card floating on it. */
-    max: 0.44,
-  },
-
-  /** Saturation, as a multiplier on the authored chroma. */
-  chroma: {
-    /** Vibrancy 0: a near-neutral wash that keeps only a hint of hue. */
-    floor: 0.14,
-    /** Vibrancy 1, light mode: slightly ABOVE the authored chroma, since the light band costs some. */
-    lightGain: 1.05,
-    /** Vibrancy 1, dark mode: a dark pool has far less room before it turns muddy. */
-    darkGain: 0.62,
-    /** <1 puts more of the slider's travel in the low half, where the useful range is. */
-    vibrancyExponent: 0.75,
-    /** Hard ceilings, so a neon seed cannot out-shout the app's own accent. */
-    lightCap: 0.16,
-    darkCap: 0.09,
-  },
-
-  /** The radial pools themselves, in percentages of the painted box. */
-  pool: {
-    /** Non-primary pool size — wider than tall, like a window. */
-    width: 85,
-    height: 70,
-    /** The primary's pool is the dominant one and reaches past the edges. */
-    primaryWidth: 130,
-    primaryHeight: 110,
-    /** Where a pool has faded to nothing, at vibrancy 0 and 1. Later = a harder edge. */
-    fadeMin: 58,
-    fadeMax: 74,
-    /** The primary fades later still, so it stays the color the window reads as. */
-    primaryFadeBonus: 8,
-  },
-
-  /** The flat color under every pool, as a drop from the primary's effective L. */
-  baseFill: {
-    lightDrop: 0.05,
-    /** 0.03 left a one-stop dark canvas reading as a flat fill — the pool needs this much to register as shape. */
-    darkDrop: 0.045,
+  /** Measured window mesh: hue survives in both appearances. */
+  mesh: {
+    floor: { light: "#f4f1ee", dark: "#141414" },
+    baseAlpha: { light: 0.22, dark: 0.26 },
+    // At the default vibrancy .6, pools are 62% / 58% opaque.
+    alphaGain: { light: 0.62 / 0.6, dark: 0.58 / 0.6 },
+    sizes: [
+      [62, 70],
+      [58, 70],
+      [70, 62],
+    ],
+    fade: 74,
   },
 
   /** The film-noise tile laid over everything. */
@@ -202,7 +159,7 @@ export const ARC_TUNING = {
    * under whichever one wins.
    *
    * Three tiers rather than two, mirroring what the card already has
-   * (`LIGHT_FLOORS` in `floors.ts`): a head, a section/label tier, and a mute.
+   * in `derive.ts`: a head, a section/label tier, and a mute.
    * The canvas needs its own copy because the card's is solved against `--card`
    * and this text does not sit on `--card` — but it needs the same SHAPE, or the
    * sidebar and the paper beside it would rank their copy differently and the

@@ -90,8 +90,8 @@ describe("SplitViewGrid", () => {
     // Both rings are drawn, and only the focused one is the primary colour —
     // asserted as a pair, because the pair is what says which pane the rail is
     // reading.
-    expect(html).toContain("ring-1 ring-border/50 ring-inset");
-    expect(html).toContain("ring-1 ring-primary/50 ring-inset");
+    expect(html).toContain("ring-1 ring-border ring-inset");
+    expect(html).toContain("ring-2 ring-(--accent-selected) ring-inset");
     expect(html).toContain('data-pane-id="p1" data-focused="true"');
     expect(html).not.toContain('data-pane-id="p3" data-focused="true"');
   });
@@ -104,10 +104,10 @@ describe("SplitViewGrid", () => {
   });
 
   it("sizes the first child by the branch ratio, minus its half of the divider", () => {
-    // The terminal split's exact arithmetic: 6px of grip split evenly, so a
-    // 0.5 ratio is visually equal rather than 3px off.
-    expect(markup(split(0.5))).toContain("flex:0 0 calc(50% - 3px)");
-    expect(markup(split(0.3))).toContain("flex:0 0 calc(30% - 3px)");
+    // The terminal split's exact arithmetic: 5px of grip split evenly, so a
+    // 0.5 ratio is visually equal rather than 2.5px off.
+    expect(markup(split(0.5))).toContain("flex:0 0 calc(50% - 2.5px)");
+    expect(markup(split(0.3))).toContain("flex:0 0 calc(30% - 2.5px)");
   });
 
   it("puts a resizable separator between the two panes", () => {

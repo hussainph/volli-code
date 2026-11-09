@@ -3,7 +3,6 @@ import { writeFile } from "node:fs/promises";
 import { errorMessage } from "@volli/shared";
 import {
   DATA_EXPORT_ACTION_LABEL,
-  DATA_EXPORT_CONTENTS,
   DATA_EXPORT_LIMITS,
   DATA_EXPORT_MENU_LABEL,
 } from "../data-export-copy";
@@ -44,11 +43,11 @@ function sendZoom(cmd: UiZoomCommand): void {
  * for a write that can never happen. Every failure — a degraded db or a write
  * error — goes through `dialog.showErrorBox`, never swallowed (CLAUDE.md).
  *
- * The save dialog carries the limits (VC-283). This is the last surface before
- * a file exists, and macOS renders `message` above the filename field, so the
- * sentence that says this document cannot be restored sits in front of the
- * person at the moment they choose where to keep it — not only in the Settings
- * confirm they may never have opened.
+ * The save dialog carries the limits, and only them (VC-283). This is the last
+ * surface before a file exists, and macOS renders `message` above the filename
+ * field, so the one line that says this document cannot be restored sits in
+ * front of the person at the moment they choose where to keep it — not only in
+ * the Settings confirm they may never have opened.
  */
 export async function exportDatabase(dbHandle: DbHandle): Promise<void> {
   if (!dbHandle.ok) {
@@ -61,7 +60,7 @@ export async function exportDatabase(dbHandle: DbHandle): Promise<void> {
   const win = BrowserWindow.getFocusedWindow();
   const saveDialogOptions: Electron.SaveDialogOptions = {
     title: DATA_EXPORT_ACTION_LABEL,
-    message: `${DATA_EXPORT_LIMITS} ${DATA_EXPORT_CONTENTS}`,
+    message: DATA_EXPORT_LIMITS,
     defaultPath: defaultExportFilename(now),
     filters: [{ name: "JSON", extensions: ["json"] }],
   };
@@ -86,6 +85,7 @@ export function registerAppMenu(
   options: {
     installAgentTools?: () => Promise<void>;
     uninstallAgentTools?: () => Promise<void>;
+    openSettings?: () => void;
   } = {},
 ): void {
   const agentToolsItems: MenuItemConstructorOptions[] = [];
@@ -114,7 +114,22 @@ export function registerAppMenu(
   }
 
   const template: MenuItemConstructorOptions[] = [
-    { role: "appMenu" },
+    {
+      role: "appMenu",
+      submenu: [
+        { role: "about" },
+        { type: "separator" },
+        { label: "Settings…", accelerator: "CmdOrCtrl+,", click: () => options.openSettings?.() },
+        { type: "separator" },
+        { role: "services" },
+        { type: "separator" },
+        { role: "hide" },
+        { role: "hideOthers" },
+        { role: "unhide" },
+        { type: "separator" },
+        { role: "quit" },
+      ],
+    },
     {
       label: "File",
       submenu: [

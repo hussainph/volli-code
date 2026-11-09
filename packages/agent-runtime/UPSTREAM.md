@@ -90,6 +90,12 @@ Two Pi patches are declared in `pnpm-workspace.yaml` and stored in
   Defaults and failure text remain identical. `src/codemode/tool.test.ts`
   covers each bound and the host/worker path.
 
+The VC-1074 streaming-argument patch is dropped at 1.5: upstream now uses an
+incremental `StreamingJsonParser`/`ToolCallArgumentsStream` for every provider,
+reading each delta once rather than re-parsing a geometrically coalesced prefix.
+The real Anthropic SDK/SSE regression remains in
+`src/pi/tool-call-streaming.test.ts`; benchmark arms use the installed parser.
+
 The deleted `pi-agent-core@0.99.2` patch is folded into owned TypeScript:
 
 - `vendor/pi-harness/compaction/compaction.ts`: optional `estimateMessage`
