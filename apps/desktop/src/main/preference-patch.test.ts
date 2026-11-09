@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { isSharedPreferenceKey, mergePreferenceSnapshot } from "../preference-patch";
+
+// This pure merge test has no event queues for main's shared cleanup to drain.
+vi.mock("./broadcast", () => ({ resetDataChangedForTest: () => {} }));
 
 const json = JSON.stringify;
 describe("concurrent presentation preference snapshots", () => {
@@ -11,6 +14,38 @@ describe("concurrent presentation preference snapshots", () => {
       state: { sidebarWidth: 420, costVisible: false },
       version: 1,
     });
+  });
+  it.each([
+    {
+      key: "volli:ui",
+      base: { state: { sidebarWidth: 300, costVisible: true }, version: 1 },
+      main: { state: { sidebarWidth: 420, costVisible: true }, version: 1 },
+      settings: { state: { sidebarWidth: 300, costVisible: false }, version: 1 },
+      expected: { state: { sidebarWidth: 420, costVisible: false }, version: 1 },
+    },
+    {
+      key: "volli:style",
+      base: { state: { global: "macos", projects: {}, motion: true }, version: 0 },
+      main: { state: { global: "modern", projects: {}, motion: true }, version: 0 },
+      settings: {
+        state: { global: "macos", projects: { p: "modern" }, motion: false },
+        version: 0,
+      },
+      expected: {
+        state: { global: "modern", projects: { p: "modern" }, motion: false },
+        version: 0,
+      },
+    },
+  ])("merges both first writers to an absent $key row against their default baseline", (test) => {
+    for (const [first, second] of [
+      [test.main, test.settings],
+      [test.settings, test.main],
+    ]) {
+      const current = mergePreferenceSnapshot(undefined, json(test.base), json(first));
+      expect(JSON.parse(mergePreferenceSnapshot(current, json(test.base), json(second)))).toEqual(
+        test.expected,
+      );
+    }
   });
   it("merges separate project style overrides and retains intentional deletions", () => {
     const base = { state: { projects: { a: "macos" }, motion: true } };

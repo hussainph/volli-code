@@ -193,7 +193,7 @@ export async function refreshPlanningData(
     // Refresh authored theme inputs as well as planning rows. Do not rehydrate
     // UI/navigation stores: another window's mutation is not navigation intent.
     // Native Settings owns a local App/project scope, independent of selection.
-    const settingsWindow = window.location?.hash === "#settings";
+    const settingsWindow = typeof window !== "undefined" && window.location?.hash === "#settings";
     useThemeStore.getState().hydrateGlobal(result.data.appState);
     useProjectsStore.getState().hydrate(projects, selectedProjectId);
     const themeProject = useProjectsStore

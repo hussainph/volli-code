@@ -732,7 +732,7 @@ describe("MCP sign-in IPC (VC-470)", () => {
 });
 
 describe("volli:project-authority-policy", () => {
-  it("records a departure and answers with the project carrying it", () => {
+  it("records a departure and refreshes project settings in every window", async () => {
     const id = createProject();
 
     const result = invoke<ProjectAuthorityPolicyResult>("volli:project-authority-policy", {
@@ -745,6 +745,7 @@ describe("volli:project-authority-policy", () => {
     // The DEPARTURES ride back, not the resolved document — the pane needs to
     // tell a chosen value from an inherited one.
     expect(result.project.authorityPolicy).toEqual({ budgets: { delegationExceeded: "refuse" } });
+    await expectDataChanged({ entity: "tickets" });
   });
 
   it("REFUSES an unknown field, naming it, rather than storing a document that governs nothing", () => {
@@ -5825,7 +5826,8 @@ it("delivers a committed Settings project mutation through the real handler bus 
   expect(answer.ok).toBe(true);
   expect(getProjectById(ctx.db, id)?.baseBranch).toBe("settings-peer-branch");
   flushDataChangedForTest();
+  // Untargeted so the peer reloads project settings, not only tickets/labels.
   expect(dataChangedSends).toEqual([
-    { channel: "volli:data-changed", payload: { entity: "tickets", projectId: id } },
+    { channel: "volli:data-changed", payload: { entity: "tickets" } },
   ]);
 });

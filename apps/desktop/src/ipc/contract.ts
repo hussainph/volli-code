@@ -2930,7 +2930,11 @@ export type VolliIpcEvent =
   // the browser callback wins the race, and a renderer that saw those two
   // swapped would leave a dead input box waiting for a code nothing consumes.
   // Sent to the window that began the attempt, never broadcast.
-  | "volli:model-access-sign-in";
+  | "volli:model-access-sign-in"
+  // A credential, default, visibility list or refreshed catalogue was accepted
+  // in another window. Payload-free: readers drop their held catalogue and
+  // query the authority again; sign-in frames remain addressed to their opener.
+  | "volli:model-access-changed";
 
 // ---- session-rpc wire agreement ---------------------------------------------
 // @volli/shared owns the three Session RPC channel NAMES (session-rpc-wire.ts)

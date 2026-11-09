@@ -4,6 +4,7 @@ import type { WebContents } from "electron";
 import { createIpcServer } from "@volli/host-protocol/ipc-server";
 import { onRawIpc } from "./raw-ipc";
 import { withRendererCall } from "./renderer-call";
+import { withModelAccessChangeNotifications } from "./model-access/changes";
 import type { IpcPeer, IpcResponse } from "@volli/host-protocol/ipc";
 import {
   createBoardRouter,
@@ -64,6 +65,7 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
   const diagnostics = options.diagnostics ?? new RpcDiagnosticLog();
   // Every call's start and outcome, in the renderer's trace for it (VC-699).
   logRpcDiagnostics(diagnostics, hostLogger("rpc"));
+  const handlers = withModelAccessChangeNotifications(options.handlers);
   const server = createIpcServer({
     // The board router too (VC-565): the renderer's board with `cloud` on;
     // and the desktop-only tier's (VC-608). An area router joins here, and in
@@ -72,7 +74,7 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
     served: DESKTOP_IPC_PATHS,
     createContext: () => ({
       caller: LOCAL_DESKTOP_CALLER,
-      handlers: options.handlers,
+      handlers,
       diagnostics,
       transport: "electron-ipc" as const,
       performanceObserver: options.performanceObserver,

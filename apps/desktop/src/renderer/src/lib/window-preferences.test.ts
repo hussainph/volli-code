@@ -4,6 +4,7 @@ const spies = vi.hoisted(() => ({
   ui: vi.fn(),
   style: vi.fn(),
   hydrate: vi.fn(),
+  retention: vi.fn(),
   accepted: null as ((key: string) => void) | null,
   stopAccepted: vi.fn(),
 }));
@@ -29,6 +30,9 @@ vi.mock("@renderer/stores/theme", () => ({
       hydrateGlobal: spies.hydrate,
     }),
   },
+}));
+vi.mock("@renderer/stores/retention-ttl", () => ({
+  useRetentionTtlStore: { getState: () => ({ adopt: spies.retention }) },
 }));
 import { startWindowPreferenceSync } from "./window-preferences";
 let event: (change: { key: string; value: string }) => void;
@@ -64,6 +68,14 @@ describe("window preference synchronization", () => {
     sync.stop();
     expect(unsubscribe).toHaveBeenCalledOnce();
     expect(spies.stopAccepted).toHaveBeenCalledOnce();
+  });
+  it("adopts accepted retention policy in a peer without another read", () => {
+    const sync = startWindowPreferenceSync();
+    event({ key: "volli:retention", value: '{"ttlDays":3}' });
+    expect(spies.retention).not.toHaveBeenCalled();
+    sync.activate();
+    expect(spies.retention).toHaveBeenCalledExactlyOnceWith(3);
+    sync.stop();
   });
   it("rehydrates only shared preferences, never workspace navigation or drafts", () => {
     const sync = startWindowPreferenceSync();

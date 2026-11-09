@@ -11,7 +11,7 @@
  * failure via a toast (CLAUDE.md: never silently swallow a failed mutation).
  */
 import { errorMessage } from "@volli/shared";
-import type { StateStorage } from "zustand/middleware";
+import type { PersistOptions, StateStorage } from "zustand/middleware";
 
 import { toastError } from "@renderer/lib/toast";
 import {
@@ -20,6 +20,31 @@ import {
 } from "../../../preference-patch";
 
 const cache = new Map<string, string>();
+const preferenceDefaults = new Map<string, string>();
+
+/**
+ * A missing row still has a baseline: the store's own partialized defaults.
+ * Register before the first mutation, without creating a row or replacing a
+ * boot/peer snapshot. Never derive this from the first write: it already
+ * contains the edit whose delta another window must preserve.
+ */
+export function registerSharedPreferenceDefaults<State>(store: {
+  getInitialState(): State;
+  persist: {
+    getOptions(): Pick<Partial<PersistOptions<State, unknown>>, "name" | "version" | "partialize">;
+  };
+}): void {
+  const { name, version = 0, partialize } = store.persist.getOptions();
+  if (name === undefined || !isSharedPreference(name)) {
+    throw new Error("Only shared presentation stores may register preference defaults.");
+  }
+  const initial = store.getInitialState();
+  preferenceDefaults.set(
+    name,
+    JSON.stringify({ state: partialize === undefined ? initial : partialize(initial), version }),
+  );
+}
+
 // Only shared presentation preferences suppress identical writes. Drafts retain
 // their explicit durability/acknowledgement semantics, even for identical bytes.
 const sharedPreferenceValues = new Map<string, string>();
@@ -143,7 +168,7 @@ function persistDebounced(
   if (
     failureVerb === "save" &&
     isSharedPreference(key) &&
-    sharedPreferenceValues.get(key) === value &&
+    (sharedPreferenceValues.get(key) ?? preferenceDefaults.get(key)) === value &&
     !pendingWrites.has(key) &&
     !writesInFlight.has(key)
   )
@@ -275,7 +300,7 @@ export interface SyncStateStorage {
 export const appStateStorage: StateStorage & SyncStateStorage = {
   getItem: (key) => cache.get(key) ?? null,
   setItem: (key, value) => {
-    const baseValue = cache.get(key);
+    const baseValue = cache.get(key) ?? preferenceDefaults.get(key);
     cache.set(key, value);
     persistDebounced(key, value, "save", isSharedPreference(key) ? baseValue : undefined);
   },

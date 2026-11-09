@@ -287,6 +287,26 @@ describe("hydrateGlobal", () => {
     expect(paint.eased).toEqual([]);
   });
 
+  it("ignores a live event whose rows match what is already painted", async () => {
+    // The windows follow one shared preference (VC-1121): a second window's
+    // echo, or a redundant live event, carries rows the paint already shows.
+    // The guard is exact — painted, same mode, byte-identical canvas — so an
+    // equal-looking canvas that resolves differently still repaints (the PLUM
+    // case above), and only a true no-change event stays silent.
+    const { store, paint, gateway } = freshStore();
+    store.getState().hydrateGlobal(appState(TEAL, "light"));
+    const paintsBefore = paint.painted.length;
+
+    store.getState().hydrateGlobal(appState(TEAL, "light"), { live: true });
+
+    expect(paint.painted).toHaveLength(paintsBefore);
+    expect(paint.eased).toEqual([]);
+    // No repaint, so no second first-paint hint either. The hint's write is
+    // fire-and-forget, so let the first paint's own chain settle first.
+    await settle();
+    expect(gateway.setFirstPaint).toHaveBeenCalledTimes(1);
+  });
+
   it("falls back to the shipped canvas when nothing is stored", () => {
     const { store } = freshStore();
 

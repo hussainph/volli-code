@@ -533,7 +533,7 @@ describe("canvas writes (migration 014)", () => {
       { ...deps, fs: { ...deps.fs, homeDir: join(userDataDir, "fake-home"), env: {} } },
       hooks,
     );
-    return { windows, browserTabs };
+    return { windows, browserTabs, hooks };
   }
 
   const EDGE = "#f4efe9";
@@ -580,6 +580,13 @@ describe("canvas writes (migration 014)", () => {
     expect(browserTabs.setThemeBackground).toHaveBeenCalledWith(PLANE);
     // A window edge still waits for a background that persisted.
     for (const window of windows) expect(window.setBackgroundColor).not.toHaveBeenCalled();
+  });
+
+  it("ignores plane reports from Settings and unowned renderers at the native surface boundary", () => {
+    const { browserTabs, hooks } = setupDesktopSurfaces();
+    hooks.onPlaneBackgroundChanged?.(PLANE, { id: 2 } as Electron.WebContents);
+    hooks.onPlaneBackgroundChanged?.(PLANE, { id: 999 } as Electron.WebContents);
+    expect(browserTabs.setThemeBackground).not.toHaveBeenCalled();
   });
 
   it("paints Settings alone without overwriting the main hint or Browser planes", () => {

@@ -933,6 +933,13 @@ const api = {
     /** Deletes this profile's stored credential. Ambient environment sources are untouched. */
     signOut: (providerId: string): Promise<Result> =>
       invoke("volli:model-access-sign-out", providerId),
+    /** Accepted changes in another window; no credential or sign-in frame crosses here. */
+    onChanged: (callback: () => void): (() => void) => {
+      const listener = () => callback();
+      const channel = "volli:model-access-changed" satisfies VolliIpcEvent;
+      ipcRenderer.on(channel, listener);
+      return () => ipcRenderer.removeListener(channel, listener);
+    },
     /**
      * Subscribes to the frames of EVERY live attempt; returns the unsubscribe
      * function. One listener rather than one per attempt, for the same reason

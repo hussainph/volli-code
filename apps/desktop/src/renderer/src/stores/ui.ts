@@ -135,7 +135,7 @@ import {
   type TicketRailMode,
   resolvePersistedRailMode,
 } from "@renderer/components/ticket/ticket-rail-model";
-import { appStateStorage } from "@renderer/lib/app-state-storage";
+import { appStateStorage, registerSharedPreferenceDefaults } from "@renderer/lib/app-state-storage";
 import type { SettingsWindowOpenInput } from "../../../ipc/settings-window";
 
 let settingsWindowOpener: ((navigation: SettingsWindowOpenInput) => void) | null = null;
@@ -812,3 +812,4 @@ export function createUiStore(storage?: StateStorage) {
 
 /** App-wide singleton; components import this directly. */
 export const useUiStore = createUiStore();
+registerSharedPreferenceDefaults(useUiStore);

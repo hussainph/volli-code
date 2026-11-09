@@ -574,7 +574,9 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
             ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
           },
         ]);
-        announce(call, { projectId: updated.id });
+        // A project roster contains tickets/labels, not the project's settings.
+        // Peers must refresh project rows as well as the board slices.
+        announce(call, {});
       },
     );
     return { receipt, throughCursor, project };

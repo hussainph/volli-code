@@ -720,6 +720,7 @@ export function registerDataIpcHandlers(
       }
       const project = updateProjectAuthorityPolicy(db, input.id, override, Date.now());
       if (!project) return { ok: false, error: "Unknown project" };
+      broadcastDataChanged();
       return { ok: true, project };
     },
 
@@ -1720,7 +1721,7 @@ export function registerDataIpcHandlers(
       return { ok: true, days: getRetentionTtlDays(db) };
     },
 
-    "volli:retention-ttl-set": (input: RetentionTtlSetInput): RetentionTtlResult => {
+    "volli:retention-ttl-set": (input: RetentionTtlSetInput, sender): RetentionTtlResult => {
       const stored = setRetentionTtlDays(db, input.days, Date.now());
       // Every eligibility date the cached scan proposed was measured against the
       // OLD window, so that proposal no longer describes this app's policy
@@ -1732,6 +1733,8 @@ export function registerDataIpcHandlers(
       // The TTL clock is GLOBAL — it moves every Done ticket's archive-readiness
       // at once, so this is untargeted: every retention surface must re-evaluate.
       broadcastDataChanged({ kind: "retention" });
+      // The board invalidation does not refresh a renderer's cached TTL.
+      broadcastAppStateChanged("volli:retention", JSON.stringify({ ttlDays: stored }), sender.id);
       return { ok: true, days: stored };
     },
 

@@ -81,6 +81,9 @@ function testClient(overrides: Partial<ModelAccessClient> = {}): TestHandles {
     setHiddenModels: setHiddenModels as TestHandles["setHiddenModels"],
     beginSignIn: beginSignIn as TestHandles["beginSignIn"],
     client: {
+      ...(overrides.subscribeChanges === undefined
+        ? {}
+        : { subscribeChanges: overrides.subscribeChanges }),
       inspect,
       defaults,
       hiddenModels,
@@ -258,6 +261,60 @@ describe("the shared Model Access reads", () => {
     expect(t.inspect).toHaveBeenCalledTimes(4);
     expect(t.hiddenModels).toHaveBeenCalledTimes(4);
     expect(t.defaults).toHaveBeenCalledTimes(4);
+  });
+
+  it("drops held and in-flight reads on peer changes, without restoring an overtaken refresh", async () => {
+    let changed: (() => void) | undefined;
+    const unsubscribe = vi.fn();
+    const refreshing = deferred<ModelAccessSnapshot>();
+    const staleDefaults = deferred<typeof EMPTY_MODEL_ACCESS_DEFAULTS>();
+    const staleHidden = deferred<readonly { providerId: string; modelId: string }[]>();
+    const t = testClient({
+      subscribeChanges: (listener) => {
+        changed = listener;
+        return unsubscribe;
+      },
+    });
+    t.inspect
+      .mockResolvedValueOnce(SNAPSHOT)
+      .mockImplementationOnce(() => refreshing.promise)
+      .mockResolvedValue(snapshotAt(3));
+    t.defaults
+      .mockImplementationOnce(() => staleDefaults.promise)
+      .mockResolvedValue(EMPTY_MODEL_ACCESS_DEFAULTS);
+    t.hiddenModels.mockImplementationOnce(() => staleHidden.promise).mockResolvedValue([]);
+    const reads: ModelAccessSnapshot[] = [];
+    await mount(<Harness client={t.client} probes={2} onRead={(read) => reads.push(read)} />);
+    expect(t.inspect).toHaveBeenCalledTimes(1);
+    expect(t.defaults).toHaveBeenCalledTimes(1);
+    expect(t.hiddenModels).toHaveBeenCalledTimes(1);
+
+    let pendingRefresh: Promise<ModelAccessSnapshot> | undefined;
+    await act(async () => {
+      pendingRefresh = handle!.inspect({ refresh: true });
+    });
+    await act(async () => changed!());
+    expect(handle!.revision).toBe(1);
+    expect(reads).toEqual([snapshotAt(3), snapshotAt(3)]);
+    expect(t.inspect).toHaveBeenCalledTimes(3);
+    expect(t.defaults).toHaveBeenCalledTimes(2);
+    expect(t.hiddenModels).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      staleDefaults.resolve(EMPTY_MODEL_ACCESS_DEFAULTS);
+      staleHidden.resolve([]);
+      refreshing.resolve({ ...snapshotAt(2), refresh: REFRESH_REPORT });
+      await pendingRefresh;
+    });
+    await expect(handle!.inspect({})).resolves.toEqual(snapshotAt(3));
+    expect(handle!.revision).toBe(1);
+    expect(reads).toEqual([snapshotAt(3), snapshotAt(3)]);
+    expect(t.inspect).toHaveBeenCalledTimes(3);
+    expect(unsubscribe).not.toHaveBeenCalled();
+    await act(async () => root!.unmount());
+    root = null;
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    await act(async () => changed!());
+    expect(t.inspect).toHaveBeenCalledTimes(3);
   });
 
   it("re-reads when a sign-in settles signed-in, and not when it only ends", async () => {

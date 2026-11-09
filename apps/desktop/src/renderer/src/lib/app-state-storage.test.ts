@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { toast } from "sonner";
+import { createStore } from "zustand/vanilla";
+import { createJSONStorage, persist } from "zustand/middleware";
+import { mergePreferenceSnapshot } from "../../../preference-patch";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
@@ -35,7 +38,13 @@ const setMock =
 // `.then/.catch` microtasks the write's result runs through.
 const DEBOUNCE_MS = 200;
 const settle = () => vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
-const TEST_KEYS = ["volli:ui", "volli:workspace", "volli:projects-ui", "volli:chat-drafts"];
+const TEST_KEYS = [
+  "volli:ui",
+  "volli:style",
+  "volli:workspace",
+  "volli:projects-ui",
+  "volli:chat-drafts",
+];
 
 beforeEach(async () => {
   vi.useFakeTimers();
@@ -122,6 +131,18 @@ describe("setItem", () => {
 });
 
 describe("flushPendingAppState", () => {
+  it("ignores a queued debounce callback after an explicit flush consumed its write", async () => {
+    const timers = vi.spyOn(globalThis, "setTimeout");
+    appStateStorage.setItem("volli:workspace", "latest");
+    const callback = timers.mock.calls.at(-1)![0] as () => void;
+    await expect(flushPendingAppStateKey("volli:workspace")).resolves.toBe(true);
+    // A callback already handed to the task queue can outlive timer cancellation.
+    callback();
+    await settle();
+    expect(setMock).toHaveBeenCalledExactlyOnceWith("volli:workspace", "latest");
+    timers.mockRestore();
+  });
+
   it("writes all pending values immediately (before the debounce) and doesn't re-fire them later", async () => {
     appStateStorage.setItem("volli:ui", '{"a":1}');
     appStateStorage.setItem("volli:workspace", '{"b":2}');
@@ -377,6 +398,130 @@ it("a browser module owns its unload flush and main's acknowledged flush respond
   expect(onFlushRequest).toHaveBeenCalledWith(browser.flushAllPendingAppState);
 });
 
+describe("shared preference defaults before the first row exists", () => {
+  const defaults = { sidebarWidth: 300, costVisible: true };
+  const base = JSON.stringify({ state: defaults, version: 1 });
+  let windowModule = 0;
+
+  async function freshWindow() {
+    vi.stubGlobal("window", {
+      addEventListener: vi.fn(),
+      api: { appState: { set: setMock } },
+    });
+    // Each renderer owns a module instance. Distinct module URLs preserve that
+    // isolation without resetting unrelated modules.
+    const path = `./app-state-storage?preference-window=${++windowModule}`;
+    const storage: typeof import("./app-state-storage") = await import(/* @vite-ignore */ path);
+    const store = createStore(
+      persist(() => ({ ...defaults, transient: false }), {
+        name: "volli:ui",
+        version: 1,
+        storage: createJSONStorage(() => storage.appStateStorage),
+        skipHydration: true,
+        partialize: ({ sidebarWidth, costVisible }) => ({ sidebarWidth, costVisible }),
+      }),
+    );
+    storage.registerSharedPreferenceDefaults(store);
+    await store.persist.rehydrate();
+    return { storage, store };
+  }
+
+  it("records the actual partialized defaults without creating a row for transient navigation", async () => {
+    const { storage, store } = await freshWindow();
+    expect(storage.appStateStorage.getItem("volli:ui")).toBeNull();
+    store.setState({ transient: true });
+    await settle();
+    expect(setMock).not.toHaveBeenCalled();
+    expect(storage.appStateStorage.getItem("volli:ui")).toBe(base);
+  });
+
+  it.each([false, true])(
+    "retains independent first edits from two absent-row writers (Settings first: %s)",
+    async (settingsFirst) => {
+      const main = await freshWindow();
+      const settings = await freshWindow();
+      let stored: string | undefined;
+      setMock.mockImplementation(async (_key, value, baseline) => {
+        stored = mergePreferenceSnapshot(stored, baseline, value);
+        return { ok: true, value: stored };
+      });
+      main.store.setState({ sidebarWidth: 420 });
+      settings.store.setState({ costVisible: false });
+      const [first, second] = settingsFirst ? [settings, main] : [main, settings];
+      await first.storage.flushPendingAppStateKey("volli:ui");
+      await second.storage.flushPendingAppStateKey("volli:ui");
+      expect(setMock).toHaveBeenCalledTimes(2);
+      expect(setMock.mock.calls.every(([, , baseline]) => baseline === base)).toBe(true);
+      expect(JSON.parse(stored!)).toEqual({
+        state: { sidebarWidth: 420, costVisible: false },
+        version: 1,
+      });
+      expect(second.storage.appStateStorage.getItem("volli:ui")).toBe(stored);
+    },
+  );
+
+  it("does not acknowledge a refused first write that used the default baseline", async () => {
+    const { storage, store } = await freshWindow();
+    setMock.mockResolvedValue({ ok: false, error: "database locked" });
+    store.setState({ sidebarWidth: 420 });
+    await expect(storage.flushPendingAppStateKey("volli:ui")).resolves.toBe(false);
+    await expect(storage.flushPendingAppStateKey("volli:ui")).resolves.toBe(false);
+    expect(setMock).toHaveBeenCalledExactlyOnceWith(
+      "volli:ui",
+      JSON.stringify({ state: { ...defaults, sidebarWidth: 420 }, version: 1 }),
+      base,
+    );
+    expect(store.getState().sidebarWidth).toBe(420);
+    expect(vi.mocked(toast.error)).toHaveBeenCalledExactlyOnceWith(
+      `Couldn't save "volli:ui": database locked`,
+      { duration: 8000, closeButton: true },
+    );
+  });
+
+  it("never replaces an accepted boot/peer snapshot with the registered defaults", async () => {
+    const { storage, store } = await freshWindow();
+    const accepted = JSON.stringify({ state: { ...defaults, costVisible: false }, version: 1 });
+    storage.seedAppStateCache({ "volli:ui": accepted });
+    storage.registerSharedPreferenceDefaults(store);
+    await store.persist.rehydrate();
+    store.setState({ sidebarWidth: 420 });
+    await storage.flushPendingAppStateKey("volli:ui");
+    expect(setMock).toHaveBeenCalledExactlyOnceWith(
+      "volli:ui",
+      JSON.stringify({ state: { sidebarWidth: 420, costVisible: false }, version: 1 }),
+      accepted,
+    );
+  });
+
+  it("supports an unversioned store without partialize", async () => {
+    const { storage } = await freshWindow();
+    storage.registerSharedPreferenceDefaults({
+      getInitialState: () => ({ motion: true }),
+      persist: { getOptions: () => ({ name: "volli:style" }) },
+    });
+    const value = JSON.stringify({ state: { motion: false }, version: 0 });
+    storage.appStateStorage.setItem("volli:style", value);
+    await storage.flushPendingAppStateKey("volli:style");
+    expect(setMock).toHaveBeenCalledExactlyOnceWith(
+      "volli:style",
+      value,
+      JSON.stringify({ state: { motion: true }, version: 0 }),
+    );
+  });
+
+  it("rejects defaults for non-preference stores instead of changing draft semantics", async () => {
+    const { storage } = await freshWindow();
+    for (const name of [undefined, "volli:chat-drafts"]) {
+      expect(() =>
+        storage.registerSharedPreferenceDefaults({
+          getInitialState: () => ({}),
+          persist: { getOptions: () => ({ name }) },
+        }),
+      ).toThrow("Only shared presentation stores may register preference defaults.");
+    }
+  });
+});
+
 describe("shared preferences in separate windows", () => {
   const base = '{"state":{"sidebarWidth":300,"costVisible":true}}';
   const local = '{"state":{"sidebarWidth":300,"costVisible":false}}';
@@ -424,6 +569,66 @@ describe("shared preferences in separate windows", () => {
       accepted,
     );
   });
+  it.each(
+    ["volli:ui", "volli:style"].flatMap((key) =>
+      [false, true].flatMap((seeded) => [false, true].map((clear) => ({ key, seeded, clear }))),
+    ),
+  )(
+    "never acknowledges a refused shared write ($key, seeded: $seeded, clear: $clear)",
+    async ({ key, seeded, clear }) => {
+      const previous = '{"state":{"enabled":true},"version":0}';
+      const next = '{"state":{"enabled":false},"version":0}';
+      if (seeded) seedAppStateCache({ [key]: previous });
+      setMock.mockResolvedValue({ ok: false, error: "read-only database" });
+      if (clear) appStateStorage.removeItem(key);
+      else appStateStorage.setItem(key, next);
+      await expect(flushPendingAppStateKey(key)).resolves.toBe(false);
+      await expect(flushPendingAppStateKey(key)).resolves.toBe(false);
+      expect(appStateStorage.getItem(key)).toBe(clear ? null : next);
+      expect(vi.mocked(toast.error)).toHaveBeenCalledExactlyOnceWith(
+        `Couldn't ${clear ? "clear" : "save"} "${key}": read-only database`,
+        { duration: 8000, closeButton: true },
+      );
+    },
+  );
+
+  it("keeps repeated clears durable when an older accepted write has no remaining local baseline", async () => {
+    seedAppStateCache({ "volli:ui": base });
+    let finish!: (value: { ok: true; value: string }) => void;
+    setMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    appStateStorage.setItem("volli:ui", local);
+    const older = flushPendingAppStateKey("volli:ui");
+    appStateStorage.removeItem("volli:ui");
+    const firstClear = flushPendingAppStateKey("volli:ui");
+    // The first clear already consumed its timer, so this clear starts without
+    // either a cached value or an existing pending write to supply a baseline.
+    appStateStorage.removeItem("volli:ui");
+    expect(appStateStorage.getItem("volli:ui")).toBeNull();
+    finish({ ok: true, value: accepted });
+    await Promise.all([older, firstClear]);
+    await expect(flushPendingAppStateKey("volli:ui")).resolves.toBe(true);
+    expect(setMock).toHaveBeenNthCalledWith(1, "volli:ui", local, base);
+    expect(setMock).toHaveBeenNthCalledWith(2, "volli:ui", "");
+    expect(setMock).toHaveBeenNthCalledWith(3, "volli:ui", "");
+    expect(setMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("adopts accepted preference removals and non-snapshot appearance values without echoing them", () => {
+    seedAppStateCache({ "volli:ui": base, appearance: "dark" });
+    expect(acceptAppStateValue("volli:ui", "")).toBe(true);
+    expect(appStateStorage.getItem("volli:ui")).toBeNull();
+    expect(acceptAppStateValue("appearance", "light")).toBe(true);
+    expect(appStateStorage.getItem("appearance")).toBe("light");
+    expect(acceptAppStateValue("appearance", "")).toBe(true);
+    expect(appStateStorage.getItem("appearance")).toBeNull();
+    expect(setMock).not.toHaveBeenCalled();
+  });
+
   it("never replaces local pending intent with an event; the accepted merge reconciles it", async () => {
     seedAppStateCache({ "volli:ui": base });
     appStateStorage.setItem("volli:ui", local);

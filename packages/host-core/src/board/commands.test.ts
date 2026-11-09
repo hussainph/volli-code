@@ -497,7 +497,7 @@ describe("project writes", () => {
         commandId: "c-up",
       },
     ]);
-    expect(published()).toEqual([{ projectId: PROJECT }]);
+    expect(published()).toEqual([{}]);
 
     await expectReplay(first, () =>
       map["board.updateProject"](
@@ -573,7 +573,7 @@ describe("project writes", () => {
       USER,
     );
     expect(first.project.sessionModel).toEqual(model);
-    expect(published()).toEqual([{ projectId: PROJECT }]);
+    expect(published()).toEqual([{}]);
     await expectReplay(first, () =>
       map["board.setSessionDefaults"]({ projectId: PROJECT, commandId: "c-sd", model }, USER),
     );
@@ -1722,6 +1722,6 @@ it("announces desktop Settings project writes to peer clients, not back to the r
   );
   expect(answer.project.baseBranch).toBe("peer-branch");
   expect(publish).not.toHaveBeenCalled();
-  expect(peers).toHaveBeenCalledExactlyOnceWith("data-changed", { projectId: PROJECT });
+  expect(peers).toHaveBeenCalledExactlyOnceWith("data-changed", {});
   expect(batches).toHaveLength(1);
 });

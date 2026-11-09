@@ -1438,6 +1438,12 @@ export const CHANNEL_PLACEMENT: { readonly [C in PlacedChannel]: ChannelPlacemen
     reason:
       "Sent to the window that began a provider sign-in; becomes a request to the asking connection (F2).",
   },
+  "volli:model-access-changed": {
+    placement: "host",
+    owner: "VC-572",
+    reason:
+      "Payload-free invalidation after an accepted credential, model default, visibility or catalogue change on this machine.",
+  },
 
   // ---- Cursor overlay wire (cursor-contract.ts) --------------------------
   // Main ↔ the cursor overlay page main owns, not the app renderer.

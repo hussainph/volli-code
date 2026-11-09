@@ -19,6 +19,7 @@ import sharp from "sharp";
 
 import { createRegistry, instanceLayout, REPO } from "./lib/core.mjs";
 import { request } from "./lib/protocol.mjs";
+import { windowTargeting } from "./lib/window-targeting.mjs";
 
 const exec = promisify(execFile);
 const cli = join(REPO, "apps/desktop/e2e/volli-drive/cli.mjs");
@@ -112,14 +113,28 @@ const drive = async (...args) =>
 // Use the same supervised, serialized drive wire as the CLI, without starting
 // a new Node process for each gesture on a memory-constrained shared machine.
 const snapshot = (snap) => ({ output: snap.text, generation: snap.generation });
+// Keep each snapshot/action/wait on the chosen page through the shared
+// native-window targeting: the workbench first, then the Settings window the
+// Settings button opens, then back to the workbench after its native close.
+// `wait` keeps its socket budget riding on the requested timeout.
+const windows = windowTargeting((cmd, args = {}) =>
+  request(
+    layout.driveSocket,
+    cmd,
+    args,
+    cmd === "wait" && Number.isFinite(Number(args.timeout))
+      ? { timeoutMs: Number(args.timeout) + 30_000 }
+      : undefined,
+  ),
+);
 const find = async (query) => {
-  const snap = await request(layout.driveSocket, "find", { query });
+  const snap = await windows.call("find", { query });
   return { output: snap.matches.join("\n"), generation: snap.generation };
 };
 const act = async (snap, ref, kind, ...args) => {
   const options = {};
   for (let i = 0; i < args.length; i += 2) options[args[i].slice(2)] = args[i + 1];
-  const result = await request(layout.driveSocket, "act", {
+  const result = await windows.call("act", {
     gen: snap.generation,
     ref,
     kind,
@@ -128,10 +143,7 @@ const act = async (snap, ref, kind, ...args) => {
   return snapshot(result.snapshot);
 };
 const wait = async (text, timeout) =>
-  snapshot(
-    (await request(layout.driveSocket, "wait", { text, timeout }, { timeoutMs: timeout + 30_000 }))
-      .snapshot,
-  );
+  snapshot((await windows.call("wait", { text, timeout })).snapshot);
 const refFor = (snap, label) => {
   const line = snap.output
     .split("\n")
@@ -159,16 +171,22 @@ try {
   layout = instanceLayout(entry.scratch, entry.evidence);
   await drive("doctor", id);
   // Enable Code Mode in this isolated profile before the Session is born.
+  // Settings is a native second window: open it from the workbench button,
+  // target that window for the Agents pane, and close it at the native
+  // boundary — a quiet window cannot become key, so close is addressed
+  // explicitly, never by sending an OS-wide keyboard event. The workbench
+  // (DRV-1 and the Session below it) is the target again afterwards.
   let snap = await find("Settings");
   snap = await act(snap, refFor(snap, 'button "Settings"'), "click");
+  await windows.useSettingsWindow();
   snap = await find("Agents");
   snap = await act(snap, refFor(snap, 'button "Agents"'), "click");
   snap = await wait("Code Mode for new Sessions", 10_000);
   snap = await act(snap, refFor(snap, 'combobox "Code Mode for new Sessions"'), "click");
   snap = await find("Code and direct tools");
   snap = await act(snap, refFor(snap, 'option "Code and direct tools"'), "click");
-  snap = await find("Close Settings");
-  snap = await act(snap, refFor(snap, 'button "Close Settings"'), "click");
+  await windows.call("settings-native", { action: "close" });
+  windows.useMainWindow();
   // The real ticket -> Draft -> composer Send path, not injected renderer state.
   snap = await find("DRV-1");
   snap = await act(snap, refFor(snap, "DRV-1"), "click");
