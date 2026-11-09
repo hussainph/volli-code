@@ -66,7 +66,6 @@ import {
 import { useShallow } from "zustand/react/shallow";
 import {
   ChatPendingIcon,
-  ChatIcon,
   FoldersIcon,
   SearchIcon,
   TerminalIcon,
@@ -75,6 +74,7 @@ import {
 import { sessionProvenanceHoverLine, type Project } from "@volli/shared";
 
 import { FileSearchPanel } from "@renderer/components/files/search-panel";
+import { ChatProviderIcon } from "@renderer/components/sessions/chat-provider-icon";
 import { HomeFilesPanel } from "@renderer/components/home/home-files-panel";
 import { HomeCheckoutFooter } from "@renderer/components/home/home-rail-footer";
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
@@ -549,7 +549,6 @@ function BoardSessionRow({
 }) {
   const provenance = useSessionProvenance(projectId, row.id);
   const provenanceLine = sessionProvenanceHoverLine(provenance);
-  const Glyph = row.kind === "chat" ? ChatIcon : TerminalIcon;
   const sessionId = row.kind === "chat" ? row.id : null;
   const team = useSessionTeam(sessionId);
   const content = (
@@ -557,10 +556,13 @@ function BoardSessionRow({
       density="two-line"
       data-testid="home-session-row"
       leading={
-        <Glyph
-          aria-label={row.kind === "chat" ? "Chat" : "Terminal"}
-          className="size-4 shrink-0 text-muted-foreground"
-        />
+        row.kind === "chat" ? (
+          <span role="img" aria-label="Chat" className="inline-flex size-4 shrink-0">
+            <ChatProviderIcon sessionId={row.id} projectId={projectId} />
+          </span>
+        ) : (
+          <TerminalIcon aria-label="Terminal" className="size-4 shrink-0 text-muted-foreground" />
+        )
       }
       primary={row.title}
       primaryTrailing={

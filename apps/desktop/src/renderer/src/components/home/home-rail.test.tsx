@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import type { ChatSessionRecord, Project, SessionHarnessState, SessionRecord } from "@volli/shared";
 
 import { seedSlice } from "@volli/session-presentation";
+import { providerMark } from "@renderer/components/models/model-identity";
 import { HomeRail } from "./home-rail";
 import { HOME_BOARD_TAB_ID } from "./home-tabs";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
@@ -273,6 +274,47 @@ describe("HomeRail", () => {
     expect(markup).not.toContain("Low effort");
     expect(markup).not.toContain("No session in front");
   });
+
+  it.each(["anthropic", "openai-codex", "zai", null, "unknown-provider"])(
+    "draws the saved %s provider in Board sessions, retaining the fallback and name",
+    (providerId) => {
+      const record: ChatSessionRecord = {
+        sessionId: "chat-logo",
+        title: "Review",
+        projectId: "p1",
+        ticketId: null,
+        createdAt: 1,
+        adapterId: "pi",
+        live: true,
+        activity: "working",
+        waitingOn: null,
+        outcome: null,
+        lastActivityAt: 2,
+        bornTicketless: true,
+        role: "project",
+        parentSessionId: null,
+        model: providerId === null ? null : { providerId, modelId: "test", reasoningLevel: null },
+      };
+      useProjectSessionsStore.getInitialState().listingState = { p1: "loaded" };
+      useProjectSessionsStore.getInitialState().byProject = {
+        p1: { terminal: [], chat: [record] },
+      };
+      const html = draw(HOME_BOARD_TAB_ID);
+      const row = new DOMParser()
+        .parseFromString(html, "text/html")
+        .querySelector('[data-testid="home-session-row"]')!;
+      expect(row.querySelector('[aria-label="Chat"]')).not.toBeNull();
+      const mark = providerId === null ? null : providerMark(providerId);
+      if (mark === null) {
+        expect(row.querySelector("svg")?.classList.contains("text-muted-foreground")).toBe(true);
+      } else {
+        expect(row.querySelector("svg")?.getAttribute("fill")).toBe(mark.tint);
+        expect([...row.querySelectorAll("svg path")].map((path) => path.getAttribute("d"))).toEqual(
+          mark.paths,
+        );
+      }
+    },
+  );
 
   it("marks Home Run Sessions without printing another title at normal or narrow widths", () => {
     const chat: ChatSessionRecord = {

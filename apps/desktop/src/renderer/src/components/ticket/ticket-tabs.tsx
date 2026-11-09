@@ -49,6 +49,7 @@ import { WordWrapContextMenuItem } from "@renderer/components/editor/word-wrap-m
 import { CopyPathContextMenuItems } from "@renderer/components/files/copy-path-menu";
 import { ExternalAppContextMenu } from "@renderer/components/files/external-app-menu";
 import { SessionGlyph } from "@renderer/components/sessions/session-glyph";
+import { ChatProviderIcon } from "@renderer/components/sessions/chat-provider-icon";
 import { providerIdentityOf, providerLabelOf } from "@renderer/components/models/model-identity";
 import { useModelCatalogue } from "@renderer/lib/use-model-catalogue";
 import { TabContextActions, type TabAction } from "@renderer/components/ui/tab-actions";
@@ -660,8 +661,26 @@ const TICKET_TAB_ICONS = {
 } as const;
 
 /** What a group chip's menu says about a ticket tab. */
-function ticketTabMenuLabel(tab: TicketTabDescriptor): TabMenuLabel {
+function ticketTabMenuLabel(
+  tab: TicketTabDescriptor,
+  projectId: string,
+  ticketId: string,
+): TabMenuLabel {
   const icon = TICKET_TAB_ICONS[tab.kind];
+  if (tab.kind === "chat") {
+    return {
+      label: tab.label,
+      icon,
+      artwork: (
+        <ChatProviderIcon
+          sessionId={parseChatTabId(tab.id)}
+          projectId={projectId}
+          ticketId={ticketId}
+        />
+      ),
+      status: tab.status,
+    };
+  }
   if (tab.browserTabId !== undefined) {
     // Read when the menu opens — see the Home strip's twin.
     const url = useBrowserTabsStore.getState().byId[tab.browserTabId]?.url;
@@ -698,7 +717,7 @@ function TicketTabList({
       activeTabId={activeTabId}
       shownGroupId={shownGroupId}
       edgeTargets={groups !== undefined}
-      describe={ticketTabMenuLabel}
+      describe={(tab) => ticketTabMenuLabel(tab, projectId, ticketId)}
       onSelect={(tab) => onSelectTab(tab.id)}
       onUngroup={onUngroup}
       onClose={onCloseTab}
