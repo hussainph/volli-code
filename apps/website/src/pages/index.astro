@@ -47,12 +47,13 @@ const WHY = [
 ] as const;
 
 // Invented, public-safe work in the register of the film's sidebar.
+// Each row is a ticket's chat, so it carries that ticket's id.
 const AGENTS = [
-  "Split the billing service",
-  "Profile slow search query",
-  "Migrate auth to passkeys",
-  "Draft release notes",
-  "Cache avatar thumbnails",
+  { title: "Split the billing service", ticket: "VLT-41" },
+  { title: "Profile slow search query", ticket: "VLT-37" },
+  { title: "Migrate auth to passkeys", ticket: "VLT-12" },
+  { title: "Draft release notes", ticket: "VLT-44" },
+  { title: "Cache avatar thumbnails", ticket: "VLT-39" },
 ] as const;
 
 const description =
