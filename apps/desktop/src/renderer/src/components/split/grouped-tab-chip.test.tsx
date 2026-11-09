@@ -9,7 +9,9 @@ import {
   HomePaneTabStrip,
   type HomeTabDescriptor,
 } from "@renderer/components/home/home-tab-strip";
-import { groupTabItems, type TabGroup } from "./grouped-tab-chip";
+import { ChatIcon } from "@renderer/components/ui/icon";
+import { Tab, TabStrip } from "@renderer/components/ui/tab-strip";
+import { GroupedTabList, groupTabItems, type TabGroup } from "./grouped-tab-chip";
 
 const noop = () => {};
 /** [chat:one, term] stacked in one pane (chat in front) | [browser:one]. */
@@ -244,6 +246,66 @@ describe("one capsule per group", () => {
     click(notes);
     expect(callbacks.select).toHaveBeenCalledWith(term);
   });
+  it.each([
+    { detail: undefined, status: "working" },
+    { detail: null, status: "working" },
+    { detail: "src/session.ts", status: "working" },
+    { detail: "src/session.ts", status: undefined },
+    { detail: undefined, status: undefined },
+  ])(
+    "renders member detail $detail and status $status once in the dropdown",
+    async ({ detail, status }) => {
+      const member = { id: "member" };
+      const onSelect = vi.fn();
+      const onClose = vi.fn();
+      act(() =>
+        root.render(
+          <TabStrip label="Tabs">
+            <GroupedTabList
+              tabs={[member]}
+              groups={[
+                {
+                  id: "group",
+                  panes: [{ paneId: "pane", tabIds: [member.id], activeTabId: member.id }],
+                },
+              ]}
+              activeTabId={member.id}
+              shownGroupId="group"
+              describe={() => ({ label: "Session", icon: ChatIcon, detail, status })}
+              onSelect={onSelect}
+              onClose={onClose}
+            >
+              {() => <Tab label="Session" active tabStop onActivate={noop} />}
+            </GroupedTabList>
+          </TabStrip>,
+        ),
+      );
+      const trigger = container.querySelector<HTMLElement>('[aria-label="Actions for Session"]')!;
+      await act(async () => {
+        trigger.focus();
+        press(trigger, "ArrowDown");
+      });
+      const menu = document.querySelector('[data-slot="dropdown-menu-content"]')!;
+      const row = menu.querySelector<HTMLButtonElement>('[data-tab-id="member"]')!;
+      expect(row.tagName).toBe("BUTTON");
+      expect(row.closest(".list-row")?.getAttribute("data-density")).toBe("two-line");
+      expect(row.querySelector(".list-row-secondary")?.textContent ?? null).toBe(detail ?? null);
+      expect(row.textContent).toBe(`Session${detail ?? ""}${status ?? ""}`);
+      act(() => row.focus());
+      expect(document.activeElement).toBe(row);
+      click(row);
+      expect(onSelect).toHaveBeenCalledExactlyOnceWith(member);
+      expect(document.querySelector('[data-slot="dropdown-menu-content"]')).toBeNull();
+      await act(async () => press(trigger, "ArrowDown"));
+      const close = document.querySelector<HTMLButtonElement>('[aria-label="Close: Session"]')!;
+      expect(close.tagName).toBe("BUTTON");
+      click(close);
+      expect(onClose).toHaveBeenCalledExactlyOnceWith(member);
+      expect(onSelect).toHaveBeenCalledTimes(1);
+      expect(document.querySelector('[data-slot="dropdown-menu-content"]')).toBeNull();
+    },
+  );
+
   it("offers member actions and Ungroup in its context menu", async () => {
     const callbacks = home(chat.id);
     await openChipMenu();
