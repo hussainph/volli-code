@@ -26,4 +26,5 @@
  */
 @import "../src/globals.css";
 @source "./";
+@source "../../flute/";
 @source "../../../node_modules/streamdown/dist/*.js";

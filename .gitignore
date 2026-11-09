@@ -42,6 +42,8 @@ packages/agent-runtime/.runtime-profile/
 # default to a repo-relative dir rather than a predictable shared-temp path, so
 # the output needs ignoring rather than collecting as untracked cruft.
 /shots/
+# Local film frames and review evidence; only encoded website assets ship.
+/apps/desktop/.film-out/
 
 # VC-291 investigation evidence (screenshots, OCR sidecars, matrix JSON)
 /evidence/

@@ -1,0 +1,349 @@
+/*
+ * The release film's frame layer (VC-464): supers and grade, drawn above the
+ * scene in the capture viewport. Lab-only, like everything under src/flute.
+ *
+ * "Film Display" is Mona Sans — the app's own face — loaded from its full
+ * variable file so the supers can use the width axis the app's wght-only
+ * subset leaves out. A separate family name keeps the app components on the
+ * exact face they ship with.
+ */
+@font-face {
+  font-family: "Film Display";
+  font-style: normal;
+  font-display: block;
+  font-weight: 200 900;
+  font-stretch: 75% 125%;
+  src: url("../../../node_modules/@fontsource-variable/mona-sans/files/mona-sans-latin-standard-normal.woff2")
+    format("woff2-variations");
+}
+
+.film-frame {
+  --film-scrim: rgb(0 0 0 / 0.72);
+  --film-scrim-soft: rgb(0 0 0 / 0.55);
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.film-frame-inner {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform-origin: center;
+}
+
+.film-frame *,
+.film-frame *::before,
+.film-frame *::after {
+  transition: none !important;
+  animation: none !important;
+}
+
+.film-vignette {
+  position: absolute;
+  inset: 0;
+}
+
+.film-super {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  color: var(--canvas-ink, #f7f7f8);
+  font-family: "Film Display", var(--font-sans);
+  font-stretch: 112%;
+  font-weight: 760;
+  line-height: 0.98;
+  /* On the container, not the lines: each line sits in an overflow mask, and
+   * a shadow inside a mask is clipped into a visible box. */
+  filter: drop-shadow(0 2px 18px rgb(0 0 0 / 0.5)) drop-shadow(0 1px 2px rgb(0 0 0 / 0.45));
+}
+
+/* 16:9: lower-left, clear of X / LinkedIn / YouTube scrubbers. */
+.film-super[data-format="landscape"] {
+  left: 112px;
+  right: 112px;
+  bottom: 124px;
+}
+.film-super[data-format="landscape"][data-place="upper"] {
+  top: 104px;
+  bottom: auto;
+}
+.film-super[data-format="landscape"][data-place="center"] {
+  top: 50%;
+  bottom: auto;
+  align-items: center;
+  text-align: center;
+  translate: 0 -50%;
+}
+.film-super[data-format="landscape"][data-place="lower-right"] {
+  align-items: flex-end;
+  text-align: right;
+}
+
+/* 9:16: every glyph between y=250 and y=1500 — clear of the Reels / TikTok /
+ * Shorts header above and the caption, actions and scrubber below. */
+.film-super[data-format="portrait"] {
+  left: 80px;
+  right: 80px;
+  bottom: 470px;
+}
+.film-super[data-format="portrait"][data-place="upper"] {
+  top: 300px;
+  bottom: auto;
+}
+.film-super[data-format="portrait"][data-place="center"] {
+  top: 50%;
+  bottom: auto;
+  align-items: center;
+  text-align: center;
+  translate: 0 -50%;
+}
+.film-super[data-format="portrait"][data-place="lower-right"] {
+  align-items: flex-end;
+  text-align: right;
+}
+
+.film-line-mask {
+  overflow: hidden;
+  /* Room for descenders and the shadow inside the mask. */
+  padding: 0.04em 0.08em 0.12em;
+  margin: -0.04em -0.08em -0.1em;
+}
+
+.film-line {
+  white-space: nowrap;
+}
+
+.film-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 22px;
+  font-family: var(--font-mono);
+  font-stretch: 100%;
+  font-size: 30px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: var(--canvas-ink-muted, rgb(255 255 255 / 0.62));
+}
+
+.film-super[data-format="portrait"] .film-eyebrow {
+  font-size: 34px;
+}
+
+.film-eyebrow-caret {
+  display: inline-block;
+  width: 0.55em;
+  height: 1.05em;
+  background: currentColor;
+}
+
+.film-sub {
+  margin-top: 20px;
+  font-weight: 460;
+  font-stretch: 100%;
+  letter-spacing: -0.015em;
+  line-height: 1.12;
+  color: var(--canvas-ink-muted, rgb(255 255 255 / 0.72));
+}
+
+/* A soft pool of dark behind a super, so it reads over a white page as well
+ * as over the void. Anchored to the super's corner of the frame. */
+.film-scrim {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse 60% 55% at 12% 88%, var(--film-scrim), transparent 72%);
+}
+.film-scrim[data-place="lower-right"] {
+  background: radial-gradient(ellipse 60% 55% at 88% 88%, var(--film-scrim), transparent 72%);
+}
+.film-scrim[data-place="upper"] {
+  background: radial-gradient(ellipse 70% 50% at 20% 12%, var(--film-scrim), transparent 72%);
+}
+.film-scrim[data-place="center"] {
+  background: radial-gradient(ellipse 60% 45% at 50% 50%, var(--film-scrim-soft), transparent 75%);
+}
+.film-scrim[data-format="portrait"] {
+  background: radial-gradient(ellipse 95% 38% at 30% 72%, var(--film-scrim), transparent 72%);
+}
+.film-scrim[data-format="portrait"][data-place="upper"] {
+  background: radial-gradient(ellipse 95% 34% at 30% 22%, var(--film-scrim), transparent 72%);
+}
+.film-scrim[data-format="portrait"][data-place="center"] {
+  background: radial-gradient(ellipse 90% 30% at 50% 50%, var(--film-scrim-soft), transparent 75%);
+}
+
+/* ---- end card (shots/end.tsx) ------------------------------------------------ */
+
+.film-end {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 34px;
+  transform-origin: 50% 50%;
+  color: #f7f7f8;
+  filter: drop-shadow(0 4px 30px rgb(0 0 0 / 0.55));
+}
+
+.film-end[data-format="portrait"] {
+  gap: 40px;
+}
+
+.film-end-name-mask {
+  overflow: hidden;
+  padding: 0 0.06em 0.08em;
+}
+
+.film-end-name {
+  font-family: "Film Display", var(--font-sans);
+  font-stretch: 112%;
+  font-weight: 760;
+  font-size: 188px;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+
+.film-end[data-format="portrait"] .film-end-name {
+  font-size: 176px;
+}
+
+.film-end-tagline {
+  margin-top: -14px;
+  font-family: "Film Display", var(--font-sans);
+  font-stretch: 100%;
+  font-weight: 400;
+  font-size: 50px;
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+  color: rgb(242 234 224 / 0.78);
+  white-space: nowrap;
+}
+
+.film-end[data-format="portrait"] .film-end-tagline {
+  font-size: 44px;
+}
+
+.film-end-row {
+  display: flex;
+  align-items: center;
+  gap: 26px;
+  margin-top: -10px;
+}
+
+.film-end-out {
+  font-family: "Film Display", var(--font-sans);
+  font-stretch: 108%;
+  font-weight: 700;
+  font-size: 60px;
+  line-height: 1;
+  color: #f2eae0;
+}
+
+.film-end-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: rgb(242 234 224 / 0.45);
+}
+
+.film-end-url {
+  font-family: var(--font-mono);
+  font-size: 56px;
+  line-height: 1;
+  color: #ffb088;
+  letter-spacing: -0.01em;
+}
+
+/* ---- light mode: the frame follows the theme ------------------------------------ */
+
+:root.light .film-frame {
+  --film-scrim: rgb(255 255 255 / 0.62);
+  --film-scrim-soft: rgb(255 255 255 / 0.45);
+}
+:root.light .film-super {
+  filter: drop-shadow(0 1px 14px rgb(255 255 255 / 0.5));
+}
+
+/* ---- the world (kit/world.tsx) ------------------------------------------------- */
+
+/* Prepended into Flute's capture viewport, so the stage paints over it. */
+.film-backdrop {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background: #050507;
+}
+.film-backdrop-canvas {
+  position: absolute;
+  inset: -12%;
+  background: var(--canvas);
+  transform-origin: 50% 50%;
+}
+.film-backdrop-aurora {
+  position: absolute;
+  inset: 0;
+  mix-blend-mode: screen;
+  filter: saturate(1.15);
+}
+.film-backdrop-aurora[data-mode="light"] {
+  mix-blend-mode: normal;
+  opacity: 0.5;
+}
+.film-backdrop-pool {
+  position: absolute;
+  inset: 0;
+}
+.film-backdrop-bloom {
+  position: absolute;
+  inset: 0;
+  mix-blend-mode: screen;
+}
+:root.light .film-backdrop-aurora {
+  position: absolute;
+  inset: 0;
+  mix-blend-mode: screen;
+  filter: saturate(1.15);
+}
+.film-backdrop-aurora[data-mode="light"] {
+  mix-blend-mode: normal;
+  opacity: 0.5;
+}
+.film-backdrop-pool {
+  position: absolute;
+  inset: 0;
+}
+.film-backdrop-bloom {
+  mix-blend-mode: multiply;
+  opacity: 0.35;
+}
+.film-backdrop-rings {
+  position: absolute;
+  width: 0;
+  height: 0;
+}
+.film-backdrop-ring {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1400px;
+  height: 1400px;
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in oklab, var(--ring) 70%, transparent);
+  box-shadow:
+    0 0 40px color-mix(in oklab, var(--ring) 25%, transparent),
+    inset 0 0 40px color-mix(in oklab, var(--ring) 18%, transparent);
+}
+
+/* Flute's Scene paints an opaque black root; the world shows through it
+ * instead. Only when a backdrop is present, so a shot without one keeps its
+ * void. */
+[data-flute-capture="scene"]:has(> .film-backdrop) [data-flute-scene] {
+  background: transparent !important;
+}

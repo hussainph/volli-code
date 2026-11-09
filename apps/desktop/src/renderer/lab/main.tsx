@@ -62,9 +62,19 @@ installFakeApi();
 // once its `?v=` hash has moved on, which it does on every re-optimization. A
 // module fetched at boot is never asked for again; a module fetched an hour
 // later is asking a server that has changed its mind. See markdown-boundary.tsx.
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <HighlighterWarmup />
-    <LabShell />
-  </StrictMode>,
-);
+const root = createRoot(document.getElementById("root")!);
+if (import.meta.env.DEV && new URLSearchParams(window.location.search).has("flute-preview")) {
+  const { FluteProjectPreview } = await import("../../flute/ProjectPreview.jsx");
+  root.render(
+    <FluteProjectPreview enabled>
+      <HighlighterWarmup />
+    </FluteProjectPreview>,
+  );
+} else {
+  root.render(
+    <StrictMode>
+      <HighlighterWarmup />
+      <LabShell />
+    </StrictMode>,
+  );
+}
