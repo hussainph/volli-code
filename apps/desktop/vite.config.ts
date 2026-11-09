@@ -686,6 +686,7 @@ export default defineConfig(({ mode, command }) => ({
         "src/editor/autosave-plan.ts",
         "src/editor/document-decorations.ts",
         "src/editor/document-identity.ts",
+        "src/editor/document-height.ts",
         "src/editor/document-mode.ts",
         "src/editor/document-registry.ts",
         // Which repository Markdown may open as a document, and what a file

@@ -46,9 +46,22 @@ function fixture() {
 }
 
 describe("deferred document layout (Monaco automaticLayout is disabled)", () => {
+  it("fits once at mount outside dispatch, before readiness, then defers layout notifications", () => {
+    const f = fixture();
+    f.layout.mockImplementationOnce(() => f.sync.schedule());
+    f.sync.initialize();
+    f.sync.initialize();
+    expect(f.setHeight).toHaveBeenCalledExactlyOnceWith(800);
+    expect(f.layout).toHaveBeenCalledExactlyOnceWith({ width: 600, height: 384 });
+    expect(f.onContentHeightChange).toHaveBeenCalledExactlyOnceWith(800);
+    expect(f.frames.size).toBe(1);
+    f.flush();
+    expect(f.layout).toHaveBeenCalledTimes(1);
+  });
+
   it("coalesces Monaco's burst and reads the latest height outside its event stack", () => {
     const f = fixture();
-    f.sync.schedule(); // mount
+    f.sync.schedule(); // a deferred content-size notification
     f.sync.schedule(); // content-size notification
     f.contentHeight(960); // a second wrap update before the frame
     f.sync.schedule();
@@ -65,6 +78,7 @@ describe("deferred document layout (Monaco automaticLayout is disabled)", () => 
   it("reports unclamped height while CSS owns the actual host box, then grows and shrinks", () => {
     const f = fixture();
     const cssCap = 384;
+    f.hostSize(600, 28); // initial CSS min-height, before the desired height write
     let actualHostHeight = 0;
     f.setHeight.mockImplementation((px) => {
       actualHostHeight = Math.min(cssCap, px);
@@ -76,6 +90,12 @@ describe("deferred document layout (Monaco automaticLayout is disabled)", () => 
       f.flush();
       expect(actualHostHeight).toBe(Math.min(cssCap, height));
       expect(f.onContentHeightChange).toHaveBeenLastCalledWith(height);
+      if (height > 0) {
+        expect(f.layout).toHaveBeenLastCalledWith({
+          width: 600,
+          height: Math.min(cssCap, height),
+        });
+      }
     }
   });
 
@@ -180,12 +200,21 @@ describe("deferred document layout (Monaco automaticLayout is disabled)", () => 
     expect(f.cancelFrame).toHaveBeenCalledExactlyOnceWith(1);
     expect(f.frames.size).toBe(0);
     callback();
+    f.sync.initialize();
     f.sync.schedule();
     f.sync.dispose();
     expect(f.frames.size).toBe(0);
     expect(f.getContentHeight).not.toHaveBeenCalled();
     expect(f.setHeight).not.toHaveBeenCalled();
     expect(f.onContentHeightChange).not.toHaveBeenCalled();
+  });
+
+  it("does not report height after a synchronous teardown during layout", () => {
+    const f = fixture();
+    f.layout.mockImplementationOnce(() => f.sync.dispose());
+    f.sync.initialize();
+    expect(f.onContentHeightChange).not.toHaveBeenCalled();
+    expect(f.frames.size).toBe(0);
   });
 
   it("can dispose after a completed frame without cancelling unrelated work", () => {

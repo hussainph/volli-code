@@ -199,10 +199,10 @@ export function applyDocumentExternalValue({
  * A document grows with its text. Monaco does not do that on its own — it fills
  * whatever box it is given and scrolls inside it, which is right for a file tab
  * and wrong for a ticket body sitting in a scrolling column. So the host's
- * height tracks `getContentHeight()` in an animation frame. One layout driver
- * fits the editor to the CSS-CLAMPED host box (with automaticLayout disabled),
- * so a caller's `min-h-*` / `max-h-*` classes — or an
- * inline `maxHeight` via `style` — keep working (the composer bounds its body
+ * height tracks `getContentHeight()` on mount, then in animation frames. One
+ * layout driver fits the editor to the CSS-CLAMPED host box (automaticLayout
+ * stays disabled), so a caller's `min-h-*` / `max-h-*` classes — or an inline
+ * `maxHeight` via `style` — keep working (the composer bounds its body
  * at 40vh and scrolls inside; the ticket body clamps over a policy cap and
  * expands on demand, VC-99) without this component knowing anything about them.
  */
@@ -444,7 +444,9 @@ export const MonacoDocumentEditor = React.forwardRef<
           editorView.onDidContentSizeChange(documentLayout.schedule),
           { dispose: observePaneLayout(host, documentLayout.schedule) },
         );
-        documentLayout.schedule();
+        // This initial fit is outside Monaco dispatch. Subsequent notifications
+        // (including any from this fit) always take the deferred schedule path.
+        documentLayout.initialize();
 
         const model = lease.model;
         subscriptions.push(
@@ -495,7 +497,7 @@ export const MonacoDocumentEditor = React.forwardRef<
         });
         // The ticket description is the surface the switch benchmark waits on
         // — the harness's readiness predicate looks for Monaco's own textarea,
-        // so creating this editor's initial view is inside the measured window
+        // so creating and laying out this editor is inside the measured window
         // (VC-385). Only the ticket body stamps it: a file or diff editor
         // opening elsewhere is not what the switch is waiting for.
         if (liveRef.current.identity.kind === "ticket-body") {
