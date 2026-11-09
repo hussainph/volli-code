@@ -384,7 +384,8 @@ describe("running bash control", () => {
       expect(button()?.disabled).toBe(true);
       expect(container.querySelector("p")).toBeNull();
       expect(button()?.getAttribute("aria-description")).toContain("can’t move");
-      expect(button()?.parentElement?.title).toContain(
+      expect(button()?.parentElement?.hasAttribute("title")).toBe(false);
+      expect(button()?.getAttribute("aria-description")).toContain(
         "Nested commands and Sessions without background-shell support aren’t supported.",
       );
       await act(async () => button()?.parentElement?.dispatchEvent(shortcut()));

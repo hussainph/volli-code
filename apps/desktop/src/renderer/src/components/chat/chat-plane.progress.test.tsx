@@ -173,7 +173,7 @@ describe("calm message delivery timing", () => {
     // never an ellipsis, never a tab hung off the bubble.
     expect(footer()?.querySelector("svg.animate-spin")).not.toBeNull();
     const row = footer()?.closest('[data-slot="message-footer"]');
-    expect(row?.querySelector('[aria-label="Copy"]')).not.toBeNull();
+    expect(row?.querySelector('[aria-label="Copy message"]')).not.toBeNull();
     expect(row?.className).not.toContain("absolute");
     expect(footer()?.className).not.toContain("absolute");
     expect(container.textContent).not.toContain("Pending");

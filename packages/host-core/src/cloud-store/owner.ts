@@ -5,15 +5,13 @@ import {
   type CreateSessionRequest,
   type SessionEngine,
 } from "@volli/session-engine";
-import {
-  reportSessionUsage,
-  type SessionLedger,
-  type Session,
-  type SessionListingProjection,
-} from "@volli/shared";
+import { type Session, type SessionListingProjection } from "@volli/shared";
 import { setImmediate } from "node:timers/promises";
 import { prepared } from "../db/prepared";
-import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
+import {
+  createSqliteSessionLedger,
+  type SqliteSessionLedger,
+} from "../session-control/sqlite-ledger";
 import { localSessionRow, sessionBirthOwnerCompatible } from "../db/local-product";
 
 /** Defense in depth for runner jobs as well as in-process Session commands. */
@@ -210,7 +208,7 @@ type SessionReader = Pick<
   | "reportUsage"
 >;
 
-function sessionReader(engine: SessionEngine, ledger: SessionLedger): SessionReader {
+function sessionReader(engine: SessionEngine, ledger: SqliteSessionLedger): SessionReader {
   const project = async (sessions: readonly Session[]): Promise<SessionListingProjection[]> => {
     // Size the sole engine's listing cache from metadata, including other
     // scopes sharing that cache. No foreign history is folded or returned.
@@ -247,13 +245,7 @@ function sessionReader(engine: SessionEngine, ledger: SessionLedger): SessionRea
     listEvents: (query) => engine.listEvents(query),
     latestEventSequence: (query) => engine.latestEventSequence(query),
     getProjectionCheckpoint: (query) => engine.getProjectionCheckpoint(query),
-    reportUsage: (query) =>
-      ledger.transaction((tx) =>
-        reportSessionUsage(tx.listUsage(query), {
-          ...query,
-          meteredFrom: tx.usageMeteredFrom(),
-        }),
-      ),
+    reportUsage: (query) => ledger.reportUsage(query),
   };
 }
 

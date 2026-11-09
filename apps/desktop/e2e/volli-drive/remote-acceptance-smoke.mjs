@@ -356,7 +356,7 @@ async function journey() {
         ref: boardDefault.match(/\[ref=([^\]]+)\]/)[1],
         kind: "click",
       });
-      await click("option", "GPT-4.1 mini");
+      await click("option", "Azure OpenAI GPT-4.1 mini");
       await waitUntil(
         "the box saved its selected default",
         async () => boardDefaultControl((await snap()).text, REMOTE_HOST, "GPT-4.1 mini"),

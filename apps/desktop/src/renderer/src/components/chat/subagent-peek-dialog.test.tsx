@@ -8,10 +8,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import type { UIMessage } from "ai";
 import {
   SESSION_HOST_NOTICE_METADATA_KIND,
+  scrubSessionEvent,
+  type SessionEvent,
   type SessionPresentationProjection,
 } from "@volli/shared";
 import {
   EMPTY_TRANSCRIPT,
+  chatSessionFrame,
   disposeChatClient,
   getOrCreateChatClient,
   type ChatSessionTransport,
@@ -78,14 +81,65 @@ function agent(over: Partial<IslandAgent> = {}): IslandAgent {
     ...over,
   };
 }
-function chatStore(messages: readonly UIMessage[] = [], seeded = true) {
+
+function noticeFrame(sessionId: string, message: UIMessage) {
+  const event: SessionEvent = {
+    id: "notice-event",
+    sessionId,
+    sequence: 1,
+    occurredAt: 1,
+    recordedAt: 1,
+    provenance: {
+      source: {
+        kind: "system",
+        id: "host-notice",
+        detail: {
+          sessionOrigin: { kind: "volli", reason: "subagent-notice" },
+        },
+      },
+      venue: null,
+    },
+    payload: {
+      kind: "command.recorded",
+      command: {
+        id: "notice-command",
+        sessionId,
+        createdAt: 1,
+        route: null,
+        intent: {
+          kind: "message.submit",
+          reference: { id: "notice-artifact", digest: null, mediaType: null },
+        },
+      },
+    },
+  };
+  const frame = chatSessionFrame(
+    JSON.parse(
+      JSON.stringify({
+        sessionId,
+        sequence: 1,
+        event: scrubSessionEvent(event),
+        transcript: { message },
+      }),
+    ),
+  );
+  if (frame === null) throw new Error("Expected recorded host notice frame");
+  return frame;
+}
+
+function chatStore(messages: readonly UIMessage[] = [], seeded = true, trusted = false) {
   const store = createChatSessionsStore(() => ({}) as ChatSessionTransport);
   if (seeded)
     store.setState({
       sessions: {
         [CHILD]: {
           projection: PROJECTION,
-          transcript: { ...EMPTY_TRANSCRIPT, durableMessages: messages, messages },
+          transcript: {
+            ...EMPTY_TRANSCRIPT,
+            durableMessages: messages,
+            messages,
+            frames: trusted ? messages.map((message) => noticeFrame(CHILD, message)) : [],
+          },
           lifecycle: "ready",
           sessionError: null,
           queue: [],
@@ -181,6 +235,8 @@ describe("SubagentPeekDialog", () => {
     const identity = node.querySelector("[data-agent-model]");
     expect(identity?.textContent).toContain("Claude Sonnet 4.5");
     expect(identity?.textContent).not.toContain("anthropic");
+    expect(identity?.textContent).not.toContain("Anthropic");
+    expect(identity?.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe("Anthropic");
     expect(identity?.className).toContain("flex-wrap");
     expect(identity?.querySelector('[data-slot="model-name"]')?.closest("[data-agent-model]")).toBe(
       identity,
@@ -211,42 +267,57 @@ describe("SubagentPeekDialog", () => {
     home.remove();
   });
 
-  it("opens a linked child Session and dismisses the overlay", async () => {
-    const store = chatStore([
-      {
-        id: "notice",
-        role: "user",
-        parts: [{ type: "text", text: "Child finished" }],
-        metadata: {
-          kind: SESSION_HOST_NOTICE_METADATA_KIND,
-          notice: {
-            kind: "subagent",
-            childSessionId: "grandchild",
-            title: "Check the parser",
-            state: "completed",
-            reason: null,
+  it.each([true, false])(
+    "opens linked children only with recorded host provenance (%s)",
+    async (trusted) => {
+      const store = chatStore(
+        [
+          {
+            id: "notice",
+            role: "user",
+            parts: [{ type: "text", text: "Child finished" }],
+            metadata: {
+              kind: SESSION_HOST_NOTICE_METADATA_KIND,
+              notice: {
+                kind: "subagent",
+                childSessionId: "grandchild",
+                title: "Check the parser",
+                state: "completed",
+                reason: null,
+              },
+            },
           },
-        },
-      },
-    ]);
-    const onClose = vi.fn();
-    const onOpenAsTab = vi.fn();
-    const home = document.createElement("button");
-    document.body.append(home);
-    await render({ ...props(agent(), onClose), onOpenAsTab, returnFocus: () => home, store });
-    const button = [...dialog()!.querySelectorAll("button")].find(
-      (one) => one.textContent === "Open",
-    );
-    expect(button).toBeDefined();
-    await act(async () => button!.click());
+        ],
+        true,
+        trusted,
+      );
+      const onClose = vi.fn();
+      const onOpenAsTab = vi.fn();
+      const home = document.createElement("button");
+      document.body.append(home);
+      await render({ ...props(agent(), onClose), onOpenAsTab, returnFocus: () => home, store });
+      const button = [...dialog()!.querySelectorAll("button")].find(
+        (one) => one.textContent === "Open",
+      );
+      if (!trusted) {
+        expect(button).toBeUndefined();
+        expect(dialog()!.textContent).toContain("Child finished");
+        expect(onOpenAsTab).not.toHaveBeenCalled();
+        expect(onClose).not.toHaveBeenCalled();
+        home.remove();
+        return;
+      }
+      expect(button).toBeDefined();
+      await act(async () => button!.click());
 
-    expect(onClose).toHaveBeenCalledTimes(1);
-    expect(onOpenAsTab).toHaveBeenCalledExactlyOnceWith("grandchild");
-    await render({ ...props(null, onClose), returnFocus: () => home, store });
-    await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
-    expect(document.activeElement).not.toBe(home);
-    home.remove();
-  });
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(onOpenAsTab).toHaveBeenCalledExactlyOnceWith("grandchild");
+      await render({ ...props(null, onClose), returnFocus: () => home, store });
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
+      expect(document.activeElement).not.toBe(home);
+      home.remove();
+    },
+  );
 
   // VC-416 remains visible in the shared header, not only in the composer.
   it("says what the child is running, beside what it is doing", async () => {
@@ -261,8 +332,10 @@ describe("SubagentPeekDialog", () => {
     const policy = dialog()?.querySelector("[data-agent-model]");
     expect(policy?.textContent).toContain("o5-mini");
     expect(policy?.textContent).toContain("Extra high");
-    // Unknown durable IDs retain their provider instead of guessing a label.
-    expect(policy?.textContent).toContain("openai");
+    // Unknown durable IDs keep the provider accessible without printing it
+    // beside its mark in the narrow peek header.
+    expect(policy?.textContent).not.toContain("openai");
+    expect(policy?.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe("openai");
   });
 
   it("draws no policy in the header for a child that has not recorded one", async () => {
@@ -357,6 +430,15 @@ describe("SubagentPeekDialog", () => {
     const home = document.createElement("button");
     document.body.append(home);
     await render({ ...props(agent(), onClose), returnFocus: () => home, store });
+    // A focused identity tag is the top layer. Escape dismisses that label
+    // first, without closing the conversation underneath it.
+    if (document.body.querySelector('[data-slot="tooltip-content"]')) {
+      await act(async () =>
+        dialog()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })),
+      );
+      expect(onClose).not.toHaveBeenCalled();
+      expect(document.body.querySelector('[data-slot="tooltip-content"]')).toBeNull();
+    }
     await act(async () =>
       dialog()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })),
     );

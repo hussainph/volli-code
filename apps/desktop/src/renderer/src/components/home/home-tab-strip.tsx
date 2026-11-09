@@ -28,6 +28,8 @@ import { CopyPathContextMenuItems } from "@renderer/components/files/copy-path-m
 import { HOME_BOARD_TAB_ID } from "@renderer/components/home/home-tabs";
 import { CloudCheckoutControl } from "@renderer/components/cloud-checkout/cloud-checkout-control";
 import { SessionGlyph } from "@renderer/components/sessions/session-glyph";
+import { providerIdentityOf, providerLabelOf } from "@renderer/components/models/model-identity";
+import { useModelCatalogue } from "@renderer/lib/use-model-catalogue";
 import { TabContextActions, type TabAction } from "@renderer/components/ui/tab-actions";
 import {
   GroupedTabList,
@@ -776,11 +778,17 @@ function ChatTab({
         ?.providerId ?? null,
   );
   const providerId = liveProvider ?? savedProvider;
+  const catalogue = useModelCatalogue();
+  const providers = catalogue?.providers ?? [];
+  const providerLabel = providerId === null ? "Chat" : providerLabelOf(providers, providerId);
+  const providerIdentity =
+    providerId === null ? undefined : providerIdentityOf(providers, providerId);
   const inner = (
     <Tab
       {...sharedTabProps(title, shell)}
       onDoubleClick={canRename ? shell.onStartRename : undefined}
       label={title}
+      identity={providerIdentity}
       // The waiting dot's one line of hover, in the sidebar's own words: a
       // tab is the only place that dot stands with nothing beside it to say
       // what it means.
@@ -802,10 +810,10 @@ function ChatTab({
       leading={
         <SessionGlyph
           providerId={providerId}
-          providerLabel={providerId ?? "Chat"}
+          providerLabel={providerLabel}
           state={status}
           kind="chat"
-          name={`${providerId ?? "Chat"}, ${status}`}
+          name={`${providerIdentity ?? providerLabel}, ${status}`}
           size="tab"
         />
       }

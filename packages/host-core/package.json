@@ -119,6 +119,7 @@
     "@vscode/ripgrep": "^1.18.0",
     "better-sqlite3": "^13.0.3",
     "node-pty": "1.1.0",
+    "tldts": "7.4.10",
     "yaml": "2.9.1"
   },
   "devDependencies": {

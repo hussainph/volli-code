@@ -29,6 +29,7 @@ import { TicketCard } from "@renderer/components/board/ticket-card";
 import { useTicketComposer } from "@renderer/components/board/use-ticket-composer";
 import { readOnlyControl } from "@renderer/components/hosts/use-hosts";
 import { Button } from "@renderer/components/ui/button";
+import { scrollEdgeMask } from "@renderer/components/ui/scroll-edge-mask";
 import { cn } from "@renderer/lib/utils";
 
 interface BoardColumnProps {
@@ -130,8 +131,9 @@ function useColumnWindow({
   dragActive: boolean;
   scrollerRef: React.RefObject<HTMLDivElement | null>;
   listRef: React.RefObject<HTMLDivElement | null>;
-}): { window: ColumnWindow; rowStride: number } {
+}): { window: ColumnWindow; rowStride: number; maskImage: string | undefined } {
   const count = ticketIds.length;
+  const [maskImage, setMaskImage] = React.useState<string>();
   const [rowStride, setRowStride] = React.useState(COLUMN_ROW_STRIDE_FALLBACK);
   const [range, setRange] = React.useState<ColumnWindow>(() => ({
     first: 0,
@@ -167,6 +169,14 @@ function useColumnWindow({
   const recompute = React.useCallback(() => {
     const scroller = scrollerRef.current;
     if (scroller === null) return;
+    // The footer is outside this scrollport. Fade only an edge that cuts a
+    // card, and clear the fade when the first/last card is fully reachable.
+    setMaskImage(
+      scrollEdgeMask({
+        atTop: scroller.scrollTop <= 0,
+        atBottom: scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 1,
+      }),
+    );
     const next = columnWindow({
       count: countRef.current,
       scrollTop: scrollTopInRows(
@@ -192,11 +202,14 @@ function useColumnWindow({
     scroller.addEventListener("scroll", recompute, { passive: true });
     const observer = new ResizeObserver(recompute);
     observer.observe(scroller);
+    // A card can reflow without resizing the capped viewport (labels, title,
+    // windowed spacers). Its content height must refresh the cut-edge reading.
+    if (listRef.current !== null) observer.observe(listRef.current);
     return () => {
       scroller.removeEventListener("scroll", recompute);
       observer.disconnect();
     };
-  }, [scrollerRef, recompute]);
+  }, [scrollerRef, listRef, recompute]);
 
   // The column's content changed under a fixed scroll offset — a filter, a
   // drop, an agent moving a ticket. Recomputed in a LAYOUT effect so the first
@@ -280,7 +293,7 @@ function useColumnWindow({
   // state and state is a commit behind the props that moved it, so a drop that
   // grew this column would otherwise render the pre-drop window and leave the
   // cards that just landed out of the DOM. See `boundedWindow`.
-  return { window: boundedWindow(range, count), rowStride };
+  return { window: boundedWindow(range, count), rowStride, maskImage };
 }
 
 /**
@@ -360,7 +373,11 @@ export const BoardColumn = React.memo(function BoardColumn({
       revealTicketId === null ? -1 : tickets.findIndex((ticket) => ticket.id === revealTicketId),
     [tickets, revealTicketId],
   );
-  const { window: mountedRange, rowStride } = useColumnWindow({
+  const {
+    window: mountedRange,
+    rowStride,
+    maskImage,
+  } = useColumnWindow({
     ticketIds: sortableIds,
     selectedIndex,
     revealIndex,
@@ -395,7 +412,10 @@ export const BoardColumn = React.memo(function BoardColumn({
         // mouse drag-to-pan (see useBoardCanvasPan). Short columns still hug.
         // cursor-default overrides the canvas's cursor-grab so only empty
         // background reads as a pan surface.
-        "board-column flex min-h-0 max-h-[85%] flex-none cursor-default flex-col rounded-column",
+        // Share the canvas, but keep cards readable with few shown columns
+        // and preserve horizontal pan when the 288px floors cannot fit.
+        // The explicit flex basis supersedes the skin's fixed column width.
+        "board-column flex min-h-0 max-h-[85%] min-w-72 max-w-sm flex-1 basis-72 cursor-default flex-col rounded-column",
         // Targets and navigation update immediately, including keyboard drops.
         // Quieted while another column holds the ⌥ picker: one column is being
         // aimed at, and the rest are not the question.
@@ -454,6 +474,7 @@ export const BoardColumn = React.memo(function BoardColumn({
           <div
             ref={scrollerRef}
             data-column-scroller={status}
+            style={{ maskImage }}
             className="flex min-h-0 flex-1 flex-col overflow-y-auto"
           >
             <div

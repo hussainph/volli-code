@@ -1617,7 +1617,7 @@ describe("a chat plane holding only the host's newest window (VC-315)", () => {
 
   // A height model alone (100 px a message) and no anchor positions: the
   // fallback the plane takes when it can see no anchor.
-  it("holds the reader's place when a page completes the first turn instead of adding a row", async () => {
+  it("holds the reader's place when older per-message rows are prepended", async () => {
     const { store, scroller } = await splitTurn();
     Object.defineProperty(scroller, "scrollHeight", {
       configurable: true,
@@ -1625,13 +1625,13 @@ describe("a chat plane holding only the host's newest window (VC-315)", () => {
     });
     Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 300 });
     scroller.scrollTop = 100;
-    expect(turnRows()).toBe(1);
+    expect(turnRows()).toBe(10);
 
     await act(async () => {
       earlierButton()!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     });
 
-    expect(turnRows()).toBe(1); // no new row: the turn got its older prefix
+    expect(turnRows()).toBe(20); // Each visible message owns its own row.
     expect(messageCount(store)).toBe(20);
     expect(scroller.scrollTop).toBe(1100);
   });
@@ -1678,7 +1678,7 @@ describe("a chat plane holding only the host's newest window (VC-315)", () => {
     // The anchors are the same nodes, kept through the page: the turn's
     // identity held while its prefix completed.
     layout(store, scroller);
-    expect(turnRows()).toBe(1);
+    expect(turnRows()).toBe(20);
     // "turn number 11" was 50 px into view at the top; 10 messages arrived above.
     expect(scroller.scrollTop).toBe(1150);
   });
@@ -1720,7 +1720,9 @@ describe("a chat plane holding only the host's newest window (VC-315)", () => {
     });
 
     expect(shows(0)).toBe(true);
-    expect(container!.querySelector(".is-assistant")).toBe(turn);
+    expect(
+      container!.querySelector('[data-transcript-anchor="u10:0"]')!.closest(".is-assistant"),
+    ).toBe(turn);
     expect(container!.querySelector('[data-transcript-anchor="u14:0"]')).toBe(segment);
   });
 
@@ -2493,9 +2495,10 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
       const summary = container?.querySelector(".is-assistant button[aria-expanded]");
       expect(summary).not.toBeNull();
       // In flight wears the shared spinner beside the count, never an ellipsis.
-      expect(summary?.textContent).toContain("Using 1 tool");
+      expect(summary?.textContent).toContain("Working");
       expect(summary?.textContent).not.toContain("…");
-      expect(summary?.querySelector("svg.animate-spin")).not.toBeNull();
+      // The approved receipt uses a static clock, not a second live spinner.
+      expect(summary?.querySelector("svg")).not.toBeNull();
       expectMark(status, true);
 
       // The provider leaves the old thought marked streaming. Segmentation,

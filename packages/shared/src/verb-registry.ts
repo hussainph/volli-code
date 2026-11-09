@@ -2401,6 +2401,8 @@ export const VERB_REGISTRY = [
       "observed is how long the app was running inside the window; per-hour rates divide by it, so windows and builds of different lengths compare.",
       "Default window: the last 24h. --since takes an RFC 3339 instant or a look-back like 7d, 24h or 90m.",
       "Main stalls no door or span explains are grouped as unattributed/unattributed.",
+      "Optional loaf summary: script/blocking/render/styleLayout totals and msPerHour, each with measuredFrames; missing is unknown, not zero. Render includes the style/layout subset; signals overlap, not additive phases.",
+      "Compositor/GPU/backdrop-filter raster is mostly outside LoAF. Small script + big render suggests investigating materials, not proof.",
     ],
     options: [
       {
@@ -2443,6 +2445,8 @@ export const VERB_REGISTRY = [
     example: "volli perf stalls --operation volli:board-load --limit 10",
     notes: [
       "Each row names its process, door/operation, label and Session when known, duration, and the build that recorded it.",
+      "LoAF rows may include scriptTotalMs, blockingMs, renderMs (inclusive), styleLayoutMs (render subset), and top script basename/function/closed invoker plus scriptMs. Missing attribution is unknown, not zero; signals overlap.",
+      "Compositor/GPU/backdrop-filter raster is mostly outside LoAF. Small script + big render suggests investigating materials, not proof.",
       "hint is an unattributed main stall's last door call before it: where to look, never a claim.",
       "--operation matches an operation alone or door/operation; --version matches a version, a build label, or version+build.",
     ],
@@ -2501,6 +2505,8 @@ export const VERB_REGISTRY = [
       "Takes --version exactly twice: a then b. Each matches a version (every build of it), a build label, or version+build as perf top --by version prints it.",
       "Rows are ranked by how far b moved from a in stalled ms per hour observed; a negative delta is b stalling less.",
       "A dev build's label is its git commit; VOLLI_PERF_BUILD=<label> at launch names an experiment instead.",
+      "Each side's optional loaf summary gives script/blocking/render/styleLayout totals and msPerHour with measuredFrames per metric. Missing is unknown, not zero; compare coverage too. Render includes style/layout; script, GC and forced layout overlap, so never sum signals.",
+      "Compositor/GPU/backdrop-filter raster is mostly outside LoAF. Small script + big render suggests investigating materials, not proof.",
     ],
     options: [
       {

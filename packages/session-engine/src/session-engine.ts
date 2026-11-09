@@ -1252,6 +1252,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
     },
 
     async reportUsage(query) {
+      if (ports.ledger.reportUsage !== undefined) return ports.ledger.reportUsage(query);
       return ports.ledger.transaction((transaction) =>
         // The floor is read in the SAME transaction as the rows. Two reads
         // would let an upgrade land between them and produce a report that

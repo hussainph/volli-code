@@ -17,6 +17,9 @@
  * Each value's comment describes its effect on contrast, color or layering.
  */
 export const ARC_TUNING = {
+  /** Maximum OKLCH chroma of cards, fills, edges and muted ink; paper is exempt. */
+  neutralTint: { light: 0.035, dark: 0.032 },
+
   /**
    * Where each stop's hue sits relative to the primary's, in degrees, indexed
    * by (stop count − 1): one color, its complement, then a triad. Rotation

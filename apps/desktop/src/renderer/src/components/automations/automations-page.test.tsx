@@ -478,9 +478,8 @@ describe("the page", () => {
 
   it("shows a pinned Runtime as the shared model name, and a tier as its row", async () => {
     // No catalogue in this harness, so what a row can prove anyway is the
-    // honest fallback: the stored id, the provider said beside it (the shared
-    // name always says the provider for a model it cannot list), and the
-    // effort carrying its noun. The catalogue-labelled drawing is the
+    // honest fallback: the stored id, the provider on the mark's accessible
+    // help identity rather than in the line, and effort carrying its noun. The catalogue-labelled drawing is the
     // "the model's display name" describe below.
     await mount({
       automations: [
@@ -491,7 +490,13 @@ describe("the page", () => {
       ],
     });
 
-    expect(text()).toContain("claude-opus · anthropic · High effort");
+    expect(text()).toContain("claude-opus · High effort");
+    expect(
+      document
+        .querySelector('[data-slot="model-name"]')
+        ?.parentElement?.querySelector('[role="img"]')
+        ?.getAttribute("aria-label"),
+    ).toBe("anthropic");
     // A tier names a Settings row, not a model, and keeps its sentence — the
     // branch between the two drawings runs on the record's own runtime.
     await act(async () => railRow("automation-tier").click());
@@ -674,10 +679,16 @@ describe("run history", () => {
     await mount({ runs: [run()] });
 
     expect(text()).toContain("Review sweep");
-    // Catalogue-less fallback: the stored id with its provider, the effort as
-    // a noun — `High` alone would read as an adjective on the name beside it.
-    expect(text()).toContain("claude-opus · anthropic · High effort");
-    expect(hasUiText("claude-opus · anthropic · High effort")).toBe(true);
+    // Catalogue-less fallback: the stored model id plus effort as a noun;
+    // the mark retains the provider identity without spending line width.
+    expect(text()).toContain("claude-opus · High effort");
+    expect(
+      document
+        .querySelector('[data-slot="model-name"]')
+        ?.parentElement?.querySelector('[role="img"]')
+        ?.getAttribute("aria-label"),
+    ).toBe("anthropic");
+    expect(hasUiText("claude-opus · High effort")).toBe(true);
   });
 
   it("keeps the order main answered with — newest first", async () => {
@@ -859,7 +870,7 @@ describe("the model's display name", () => {
       catalogue: { modelLabel: "Claude Opus 4.5" },
     });
 
-    const fallback = "vendor/gpt-5-legacy · some-gateway · High effort";
+    const fallback = "vendor/gpt-5-legacy · High effort";
     expect(
       document.querySelector('[data-slot="automation-editor"] [data-slot="model-name"]')
         ?.textContent,
@@ -868,6 +879,15 @@ describe("the model's display name", () => {
       fallback,
     );
     expect(text()).not.toContain("Claude Opus 4.5");
+    expect(
+      document
+        .querySelector('[data-slot="automation-editor"] [data-slot="model-name"]')
+        ?.parentElement?.querySelector('[role="img"]')
+        ?.getAttribute("aria-label"),
+    ).toBe("some-gateway");
+    expect(historyRun("run-1").querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
+      "some-gateway",
+    );
     expect(useAutomationsStore.getState().editor?.automation?.runtime).toEqual(selection);
     expect(Object.values(useAutomationsStore.getState().runsByAutomation).flat()[0]?.model).toEqual(
       selection,

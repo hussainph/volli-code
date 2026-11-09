@@ -2,6 +2,7 @@ import { Button } from "@renderer/components/ui/button";
 import { SearchIcon } from "@renderer/components/ui/icon";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { SearchableCommand } from "@renderer/components/ui/searchable-command";
+import { scrollEdgeMask } from "@renderer/components/ui/scroll-edge-mask";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import * as React from "react";
 import {
@@ -54,6 +55,27 @@ export const ProjectRail = React.memo(function ProjectRail({
   // rail sits high enough in the shell that it re-renders on unrelated chrome
   // changes — a fresh array there re-renders every `useSortable` tile with it.
   const sortableIds = React.useMemo(() => projects.map((project) => project.id), [projects]);
+  const scrollRef = React.useRef<HTMLDivElement>(null);
+  const [edges, setEdges] = React.useState({ atTop: true, atBottom: true });
+  const measureEdges = React.useCallback(() => {
+    const element = scrollRef.current;
+    if (element === null) return;
+    const atTop = element.scrollTop <= 0;
+    const atBottom = element.scrollTop + element.clientHeight >= element.scrollHeight - 1;
+    setEdges((current) =>
+      current.atTop === atTop && current.atBottom === atBottom ? current : { atTop, atBottom },
+    );
+  }, []);
+  // Tile geometry is fixed; collection changes and viewport resizes are the two
+  // ways its scroll range changes. The footer stays outside this scrollport.
+  React.useLayoutEffect(measureEdges, [measureEdges, projects.length, presentation, cloudLaunch]);
+  React.useLayoutEffect(() => {
+    const element = scrollRef.current;
+    if (element === null) return;
+    const observer = new ResizeObserver(measureEdges);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [measureEdges]);
 
   // distance: 4 keeps plain clicks (select) and the press-scale animation
   // working — the drag only activates after pointer travel through the
@@ -144,6 +166,10 @@ export const ProjectRail = React.memo(function ProjectRail({
       >
         <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
           <div
+            ref={scrollRef}
+            data-slot="project-rail-scroll"
+            onScroll={measureEdges}
+            style={{ maskImage: scrollEdgeMask(edges) }}
             className={
               presentation === "menu"
                 ? "flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-1"

@@ -173,8 +173,12 @@ try {
     const row = accountRow(page);
     const text = (await row.textContent())?.trim() ?? "";
     const half = await accountHalf(page);
-    const signIn = await row.getByRole("button", { name: "Sign in", exact: true }).count();
-    const signOut = await row.getByRole("button", { name: "Sign out", exact: true }).count();
+    const signIn = await row
+      .getByRole("button", { name: `Sign in to ${PROVIDER_LABEL}`, exact: true })
+      .count();
+    const signOut = await row
+      .getByRole("button", { name: `Sign out of ${PROVIDER_LABEL}`, exact: true })
+      .count();
     return {
       ok: half === "available" && signIn === 1 && signOut === 0 && !/terminal/i.test(text),
       detail: `half=${half} signIn=${signIn} signOut=${signOut} row=${JSON.stringify(text)}`,
@@ -182,7 +186,9 @@ try {
   });
 
   await attempt(3, "the provider's own step is what the panel asks", async () => {
-    await accountRow(page).getByRole("button", { name: "Sign in", exact: true }).click();
+    await accountRow(page)
+      .getByRole("button", { name: `Sign in to ${PROVIDER_LABEL}`, exact: true })
+      .click();
     const panel = signInPanel(page);
     await panel.waitFor();
     const field = panel.locator("input");
@@ -235,7 +241,10 @@ try {
     await waitUntil(
       "the account row offers Sign out",
       async () => {
-        const button = accountRow(page).getByRole("button", { name: "Sign out", exact: true });
+        const button = accountRow(page).getByRole("button", {
+          name: `Sign out of ${PROVIDER_LABEL}`,
+          exact: true,
+        });
         return (await button.count()) === 1 ? button : null;
       },
       { timeout: 20_000 },
@@ -252,7 +261,9 @@ try {
   });
 
   await attempt(7, "signing out removes the stored credential", async () => {
-    await accountRow(page).getByRole("button", { name: "Sign out", exact: true }).click();
+    await accountRow(page)
+      .getByRole("button", { name: `Sign out of ${PROVIDER_LABEL}`, exact: true })
+      .click();
     const remaining = await waitUntil(
       "auth.json no longer names the provider",
       async () => {
@@ -270,14 +281,17 @@ try {
       async () => {
         // Back in "Available to connect", it may be behind the preview again.
         await revealAccount(page);
-        const button = accountRow(page).getByRole("button", { name: "Sign in", exact: true });
+        const button = accountRow(page).getByRole("button", {
+          name: `Sign in to ${PROVIDER_LABEL}`,
+          exact: true,
+        });
         return (await button.count()) === 1 ? button : null;
       },
       { timeout: 20_000 },
     );
     const half = await accountHalf(page);
     const signOut = await accountRow(page)
-      .getByRole("button", { name: "Sign out", exact: true })
+      .getByRole("button", { name: `Sign out of ${PROVIDER_LABEL}`, exact: true })
       .count();
     return {
       ok: signIn !== null && signOut === 0 && half === "available",

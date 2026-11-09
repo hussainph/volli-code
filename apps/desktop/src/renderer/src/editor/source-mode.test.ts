@@ -26,7 +26,7 @@ describe("source-mode.css surface", () => {
     expect(surface).toContain("--vscode-editor-background: var(--background);");
     expect(surface).toContain("--vscode-editorGutter-background: var(--background);");
     expect(surface).toContain("--vscode-editorLineNumber-foreground: var(--muted-foreground);");
-    expect(surface).toMatch(/--vscode-editor-selectionBackground:[^;]*var\(--foreground\)/);
+    expect(surface).toMatch(/--vscode-editor-selectionBackground:[^;]*var\(--wash-ink\)/);
     expect(surface).toContain("--vscode-editorWidget-background: var(--popover);");
     expect(surface).toMatch(/--vscode-editor-findMatchBackground:[^;]*var\(--primary\)/);
     expect(surface).toMatch(/--vscode-scrollbarSlider-background:\s*var\(--border\);/);

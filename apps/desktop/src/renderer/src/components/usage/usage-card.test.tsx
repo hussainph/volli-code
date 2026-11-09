@@ -302,8 +302,8 @@ describe("a model row", () => {
     const markup = home({ open: true });
 
     expect(text(markup)).not.toContain("Claude Opus 4.1 · Anthropic");
-    expect(markup).toContain('aria-label="Model · Claude Opus 4.1 · Anthropic"');
-    expect(markup).toContain('aria-label="Model · GPT-5.3 Codex · OpenAI"');
+    expect(markup).toContain('aria-label="Model · Claude Opus 4.1"');
+    expect(markup).toContain('aria-label="Model · GPT-5.3 Codex"');
   });
 
   it("keeps the id for a model the catalogue cannot name", () => {
@@ -336,7 +336,7 @@ describe("the Ticket footer", () => {
 
     expect(text(fact)).toContain("Claude Opus 4.1");
     expect(fact.slice(0, fact.indexOf("Claude Opus 4.1"))).toContain("<svg");
-    expect(markup).toContain('aria-label="Model · Claude Opus 4.1 · Anthropic"');
+    expect(markup).toContain('aria-label="Model · Claude Opus 4.1"');
     // One fact, not a ranking: the Ticket footer still names no second model.
     expect(text(markup)).not.toContain("By model");
   });

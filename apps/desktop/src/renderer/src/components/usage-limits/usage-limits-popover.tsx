@@ -1,3 +1,4 @@
+import { HelpTag } from "@renderer/components/ui/help-tag";
 import { PanelEmptyState } from "@renderer/components/ui/empty-state";
 /**
  * What is left of every subscription, from anywhere in the app (VC-350).
@@ -216,9 +217,10 @@ export function UsageLimitsPopover({ now }: { now?: number } = {}) {
           // stable HEAD so the control is still findable by name; no `sr-only`
           // twin, which `aria-label` would override anyway.
           aria-label={label}
-          title={label}
         >
-          <UsageLimitsIcon reading={glyph} />
+          <HelpTag label={label}>
+            <UsageLimitsIcon reading={glyph} />
+          </HelpTag>
         </Button>
       </PopoverTrigger>
       <PopoverContent tint aria-label="Usage limits" align="center" className="w-80 p-0">
@@ -315,7 +317,6 @@ function AccountItem({
       <AccordionTrigger className="group">
         <span className="flex min-w-0 items-center gap-2">
           <ProviderGlyph id={providerId} label={account.label} />
-          <span className="min-w-0 truncate text-ui font-medium">{account.label}</span>
           {/* A mark, not a control: the pins that change it are the rows
               inside, and a second button in a trigger would be a button in a
               button. It is here so a closed list still says which account

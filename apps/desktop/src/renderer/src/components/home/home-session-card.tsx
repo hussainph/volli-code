@@ -61,14 +61,8 @@
  * `claude-opus-4-1`. This page printed the bare id, and it was the last place
  * in the app that did.
  *
- * THE ACCOUNT IS NOT SAID ON THE ROW. The roomier model surfaces append a
- * "· Anthropic" where two signed-in providers ship the same model name
- * (`needsProvider`), and in a column this narrow that term is what pushes the
- * NAME into an ellipsis — it took more of the fact than it added. The mark
- * carries it instead: marks are chosen by provider first, so an Opus from
- * Anthropic and an Opus from Copilot already wear different glyphs. Same
- * answer, drawn rather than spelled, and the words are still one hover or one
- * focus away in the reveal.
+ * The account lives in the mark's long-hover/focus tag, as on every model
+ * surface. The model text's own reveal only repeats the model name.
  *
  * The id survives as the fallback for a selection the catalogue does not list
  * — a provider signed out from under a pinned Session — which is the composer
@@ -263,7 +257,7 @@ function IdentityRow({ facts }: { facts: HomeSessionFacts }) {
 
 /**
  * The model's name: one truncating line, with the whole identity — the name
- * AND the account — on a reveal (VC-288).
+ * — on a reveal (VC-288); the mark separately reveals the account.
  *
  * `ModelName`, which every roomier model surface uses, wraps instead, and its
  * run would put the mark beside the middle of a three-line block and push the
@@ -274,7 +268,7 @@ function ModelNameLine({ model }: { model: HomeSessionModel }) {
   return (
     <ValueReveal
       term="Model"
-      full={`${model.model.label} · ${model.providerLabel}`}
+      full={model.model.label}
       side="left"
       className="min-w-0 truncate rounded-sm text-left text-ui text-sidebar-foreground"
     >

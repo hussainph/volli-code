@@ -74,7 +74,8 @@ test("the box default is chosen through UI after key storage, never through a SQ
   const smoke = read("../remote-acceptance-smoke.mjs");
   const key = smoke.indexOf("await wait(`Signed in on ${REMOTE_HOST} · API key`)");
   const picker = smoke.indexOf('await click("button", `Models on ${REMOTE_HOST}…`)');
-  const select = smoke.indexOf('await click("option", "GPT-4.1 mini")');
+  const select = smoke.indexOf('await click("option", "Azure OpenAI GPT-4.1 mini")');
+  assert.doesNotMatch(smoke, /await click\("option", "GPT-4\.1 mini"\)/u);
   const session = smoke.indexOf('await send("remote-stream-turn")');
   assert.ok(key > 0 && picker > key && select > picker && session > select);
   assert.match(smoke, /await shot\("step-4-model-default"\)/u);
