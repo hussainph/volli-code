@@ -135,7 +135,7 @@ describe("fileEditorConstructionOptions", () => {
       glyphMargin: false,
       padding: { top: 32, bottom: 96 },
       // Untouched defaults still come through.
-      automaticLayout: true,
+      automaticLayout: false,
     });
   });
 
@@ -337,5 +337,8 @@ describe("MonacoFileEditor markup", () => {
     // The placeholder `globals.css` draws while Monaco's runtime chunk loads
     // keys on this attribute (VC-383); the mount effect re-stamps it later.
     expect(markup()).toContain('data-monaco-status="loading"');
+    expect(markup()).toContain(
+      "[&amp;_.current-line]:!bg-[var(--vscode-editor-lineHighlightBackground)]",
+    );
   });
 });

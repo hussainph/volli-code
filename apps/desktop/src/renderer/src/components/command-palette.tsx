@@ -1,21 +1,25 @@
+import { EmptyState } from "@renderer/components/ui/empty-state";
 import * as React from "react";
 import { useShallow } from "zustand/react/shallow";
-import type { Icon } from "@phosphor-icons/react";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
-import { FolderSimpleIcon } from "@phosphor-icons/react/dist/csr/FolderSimple";
-import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
-import { HouseIcon } from "@phosphor-icons/react/dist/csr/House";
-import { KanbanIcon } from "@phosphor-icons/react/dist/csr/Kanban";
-import { KeyIcon } from "@phosphor-icons/react/dist/csr/Key";
-import { ListBulletsIcon } from "@phosphor-icons/react/dist/csr/ListBullets";
-import { ListNumbersIcon } from "@phosphor-icons/react/dist/csr/ListNumbers";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
-import { SlidersHorizontalIcon } from "@phosphor-icons/react/dist/csr/SlidersHorizontal";
-import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
-import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import { TicketIcon } from "@phosphor-icons/react/dist/csr/Ticket";
+import {
+  type IconComponent as Icon,
+  ChevronDownIcon,
+  AutomationIcon,
+  FolderIcon,
+  SettingsIcon,
+  HomeIcon,
+  BoardIcon,
+  KeyIcon,
+  ListIcon,
+  OrderedListIcon,
+  AddIcon,
+  ConfigureIcon,
+  SearchIcon,
+  ChatIcon,
+  TerminalIcon,
+  TicketIcon,
+} from "@renderer/components/ui/icon";
+
 import { Command } from "cmdk";
 import { sessionProvenanceHoverLine } from "@volli/shared";
 
@@ -48,6 +52,7 @@ import {
   type PaletteScopeId,
   type PaletteSectionId,
 } from "@renderer/components/command-palette-search";
+import { activatePaletteNavigation } from "@renderer/components/command-palette-navigation";
 import { configureGroups } from "@renderer/components/settings/configure-groups";
 import { canGoToLine, runGoToLine } from "@renderer/editor/go-to-line";
 import { openAddHostSheet, openHostsSettings } from "@renderer/components/hosts/host-entry";
@@ -56,8 +61,15 @@ import { useAutomationsStore } from "@renderer/stores/automations";
 import { SessionProvenanceMark } from "@renderer/components/sessions/session-provenance-mark";
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { TICKET_BODY_TAB_ID } from "@renderer/components/ticket/ticket-body-tab";
-import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
-import { MENU_LABEL_CMDK, MENU_ROW_STATE_CMDK } from "@renderer/components/ui/menu-classes";
+import {
+  COMMAND_FOOTER,
+  COMMAND_OVERLAY_FRAME,
+  COMMAND_SEARCH_FIELD,
+  MENU_SHORTCUT,
+  COMMAND_RESULT_ROW,
+  MENU_LABEL_CMDK,
+} from "@renderer/components/ui/menu-classes";
+import { cn } from "@renderer/lib/utils";
 import { markPerfPhase, PERF_PHASE } from "@renderer/lib/perf-marks";
 import {
   EMPTY_PROJECT_SESSION_ROWS,
@@ -89,26 +101,26 @@ const NOTHING_EXPANDED: ReadonlySet<PaletteSectionId> = new Set();
 /** Each scope suggestion row wears its section's own glyph. */
 const SCOPE_ICONS: Record<PaletteScopeId, Icon> = {
   tickets: TicketIcon,
-  sessions: ChatCircleIcon,
-  automations: LightningIcon,
+  sessions: ChatIcon,
+  automations: AutomationIcon,
 };
 
 /**
  * The palette row, written once for both groups — they were two copies of one
  * string, which is how the two drifted apart in the first place.
  *
- * It cannot take `MENU_ROW` wholesale: a menu row is a 28px single-line
- * control and this one stacks a title over its context. What it can take is the
- * part that has nothing to do with height — cmdk's selected/disabled recipe —
- * so the palette highlights exactly like every menu in the app, cursor
- * included: a row answers a press with the arrow, never the hand
- * (`docs/DESIGN.md`'s cursor rule).
+ * Shared destination-result mechanics come from COMMAND_RESULT_ROW, including
+ * selection suppression and cmdk selected/disabled states. This surface owns
+ * only the extra inset for its stacked title/context; Quick Open stays one line.
  *
  * The height is the two line boxes plus `py-2`: `text-ui` (20) over
  * `text-label` (16) plus 16 is 52. Nothing here pins it, and every value is a
  * ladder rung (docs/DESIGN.md's five steps — no half-steps here).
  */
-const PALETTE_ROW = `flex cursor-default items-center gap-2 rounded-lg px-2 py-2 outline-none ${MENU_ROW_STATE_CMDK}`;
+const PALETTE_ROW = cn(
+  COMMAND_RESULT_ROW,
+  "py-2 data-[selected=true]:bg-(--accent-selected) data-[selected=true]:text-primary-text",
+);
 
 /** The row's leading glyph: bare and muted. */
 const PALETTE_ROW_ICON = "size-4 shrink-0 text-muted-foreground";
@@ -118,33 +130,12 @@ const NAVIGATION_ICONS: Record<
   Exclude<CommandPaletteNavigationItem["id"], "configure-pane">,
   Icon
 > = {
-  home: HouseIcon,
-  board: KanbanIcon,
-  list: ListBulletsIcon,
-  configure: SlidersHorizontalIcon,
-  settings: GearSixIcon,
+  home: HomeIcon,
+  board: BoardIcon,
+  list: ListIcon,
+  configure: ConfigureIcon,
+  settings: SettingsIcon,
 };
-
-/**
- * One Go to row's page of `projectId`: Home, the Board tab in a view, or
- * Configure (on a named pane). Settings is app-wide and opened by the row
- * itself; with no project selected the model offers no other row.
- */
-function goToProjectPage(item: CommandPaletteNavigationItem, projectId: string | null): void {
-  if (projectId === null) return;
-  const projectUi = useProjectUiStore.getState();
-  if (item.id === "home") {
-    projectUi.openHome(projectId);
-  } else if (item.id === "board" || item.id === "list") {
-    // The Board tab's own act, then the view: what the header's segmented
-    // toggle would leave on screen.
-    projectUi.openHomeBoard(projectId);
-    projectUi.setBoardView(projectId, item.id);
-  } else if (item.id === "configure" || item.id === "configure-pane") {
-    if (item.id === "configure-pane") useUiStore.getState().requestConfigureCategory(item.paneKey);
-    projectUi.setNav(projectId, "configure");
-  }
-}
 
 interface ShowAllRowProps {
   sectionId: PaletteSectionId;
@@ -171,7 +162,7 @@ function ShowAllRow({ sectionId, total, noun, onExpand }: ShowAllRowProps) {
       onSelect={() => onExpand(sectionId)}
       className={PALETTE_ROW}
     >
-      <CaretDownIcon aria-hidden className={PALETTE_ROW_ICON} />
+      <ChevronDownIcon aria-hidden className={PALETTE_ROW_ICON} />
       <span className="min-w-0 flex-1 truncate text-ui font-medium">
         Show all {total} {noun}
       </span>
@@ -235,6 +226,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     [open, byProject, projectIds],
   );
   const [query, setQuery] = React.useState("");
+  const searchInput = React.useRef<HTMLInputElement>(null);
   // The `@` scope chip (VC-205): a completed `@sessions` narrows the palette
   // to one section. It is state beside the query, not text inside it, so the
   // token never pollutes what cmdk's native filter scores rows against.
@@ -294,7 +286,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     remoteHostList,
   );
 
-  // The page rows (VC-303). Configure's panes come off the rail's own
+  // The page rows (VC-303). Settings' project panes come off the rail's own
   // definition, so a pane added there is reachable here with no second list;
   // their icons ride along by key.
   const configureCategories = React.useMemo(
@@ -430,14 +422,14 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     scope === null && navigationSlice.visible.length > 0 ? (
       <Command.Group heading="Go to" className={MENU_LABEL_CMDK}>
         {navigationSlice.visible.map(({ row: item, match }) => {
-          // A Configure pane is keyed by, and wears the rail icon of, its pane.
+          // A named Settings pane wears its own rail icon.
           const { key, RowIcon } =
             item.id === "configure-pane"
               ? {
                   key: `navigation:pane:${item.paneKey}`,
                   RowIcon:
                     configureCategories.find((category) => category.key === item.paneKey)?.icon ??
-                    SlidersHorizontalIcon,
+                    ConfigureIcon,
                 }
               : { key: `navigation:${item.id}`, RowIcon: NAVIGATION_ICONS[item.id] };
           return (
@@ -446,21 +438,17 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
               value={match.value}
               keywords={match.keywords}
               onSelect={() => {
-                if (item.id === "settings") {
-                  // Not `finishNavigation`, which closes Settings.
-                  useUiStore.getState().setSettingsOpen(true);
-                  onOpenChange(false);
-                  return;
-                }
-                goToProjectPage(item, selectedProjectId);
-                finishNavigation();
+                activatePaletteNavigation(item, selectedProjectId);
+                onOpenChange(false);
               }}
               className={PALETTE_ROW}
             >
               <RowIcon aria-hidden className={PALETTE_ROW_ICON} />
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="truncate text-ui font-medium">{item.title}</span>
-                <span className="truncate text-label text-muted-foreground">{item.hint}</span>
+                <span className="truncate text-label font-normal text-muted-foreground">
+                  {item.hint}
+                </span>
               </span>
             </Command.Item>
           );
@@ -484,27 +472,20 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       label="Search tickets, sessions, and commands"
       filter={commandPaletteFilter}
       loop
-      // The app's one `--scrim`, plus a blur no other overlay takes. This used
-      // to be a notch heavier than the dialog's — 35/55 against 30/50, a
-      // difference nobody could name behind a backdrop it also blurs, and the
-      // third and fourth spellings of one wash. The blur is what makes this
-      // overlay the exception; the wash is not.
-      overlayClassName="fixed inset-0 z-50 bg-scrim backdrop-blur-[2px]"
-      contentClassName="fixed top-[18%] left-1/2 z-50 w-[min(640px,calc(100vw-32px))] -translate-x-1/2 overflow-hidden rounded-xl border border-border bg-popover text-foreground shadow-overlay outline-none"
+      // Search is a high-frequency keyboard surface: no scrim blur or motion.
+      overlayClassName="fixed inset-0 z-50 bg-scrim"
+      contentClassName={cn(COMMAND_OVERLAY_FRAME, "material-floating")}
     >
-      {/* 36px, matching the footer strip: the header was 48 — a full rung taller
-          than any control this app draws — so the field read as a hero banner
-          rather than as the search box the rows answer to. `text-ui` is the
-          same size `ui/command.tsx`'s field takes; there is one command-input
-          type size, not one per surface. */}
-      <div className="flex h-9 items-center gap-2 border-b border-border px-4">
-        <MagnifyingGlassIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+      {/* Same separated search field and keycap treatment as Quick Open. */}
+      <div className={COMMAND_SEARCH_FIELD}>
+        <SearchIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
         {scopeDef !== null ? (
-          <span className="inline-flex h-7 shrink-0 items-center rounded-full border border-border bg-accent px-2 text-ui font-medium text-foreground">
+          <span className="inline-flex h-7 shrink-0 items-center rounded-control border border-border bg-accent px-2 text-ui font-medium text-foreground">
             {scopeDef.label}
           </span>
         ) : null}
         <Command.Input
+          ref={searchInput}
           autoFocus
           value={query}
           onValueChange={handleQueryChange}
@@ -520,12 +501,24 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
           }
           className="min-w-0 flex-1 bg-transparent text-ui text-foreground outline-none placeholder:text-muted-foreground"
         />
-        <kbd className="rounded-md border border-border bg-muted px-1 py-1 text-label text-muted-foreground">
-          esc
-        </kbd>
+        <kbd className={MENU_SHORTCUT}>Esc</kbd>
       </div>
-      <Command.List className="max-h-[min(460px,60vh)] overflow-y-auto p-2 [scrollbar-gutter:stable]">
-        <Command.Empty className={EMPTY_INLINE}>{paletteEmptyCopy(scope)}</Command.Empty>
+      <Command.List className="min-h-0 max-h-[min(460px,60svh)] overflow-x-hidden overflow-y-auto overscroll-contain p-1">
+        <Command.Empty>
+          <EmptyState
+            tier="page"
+            illustration="search"
+            title={scope === null ? "No results" : paletteEmptyCopy(scope).replace(/[.]$/, "")}
+            line="Try another search."
+            action={{
+              label: "Clear search",
+              onAction: () => {
+                handleQueryChange("");
+                searchInput.current?.focus();
+              },
+            }}
+          />
+        </Command.Empty>
 
         {navigationFirst ? navigationGroup : null}
 
@@ -545,7 +538,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                   <span className="min-w-0 flex-1 truncate text-ui font-medium">
                     Only {candidate.label.toLowerCase()}
                   </span>
-                  <span className="shrink-0 font-mono text-label text-muted-foreground">
+                  <span className="shrink-0 font-mono text-label font-normal text-muted-foreground">
                     {candidate.token}
                   </span>
                 </Command.Item>
@@ -573,11 +566,13 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                 <TicketIcon aria-hidden className={PALETTE_ROW_ICON} />
                 <span className="flex min-w-0 flex-1 flex-col">
                   <span className="truncate text-ui font-medium">{item.title}</span>
-                  <span className="truncate text-label text-muted-foreground">
+                  <span className="truncate text-label font-normal text-muted-foreground">
                     <span className="font-mono">{item.displayId}</span> · {item.projectName}
                   </span>
                 </span>
-                <span className="shrink-0 text-label text-muted-foreground">Open ticket</span>
+                <span className="shrink-0 text-label font-normal text-muted-foreground">
+                  Open ticket
+                </span>
               </Command.Item>
             ))}
             {ticketSlice.hiddenCount > 0 ? (
@@ -651,9 +646,9 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                   className={PALETTE_ROW}
                 >
                   {item.sessionKind === "chat" ? (
-                    <ChatCircleIcon aria-hidden className={PALETTE_ROW_ICON} />
+                    <ChatIcon aria-hidden className={PALETTE_ROW_ICON} />
                   ) : (
-                    <TerminalWindowIcon aria-hidden className={PALETTE_ROW_ICON} />
+                    <TerminalIcon aria-hidden className={PALETTE_ROW_ICON} />
                   )}
                   <span
                     className="flex min-w-0 flex-1 flex-col"
@@ -669,9 +664,11 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                           column every other palette row is scanned down. */}
                       <SessionProvenanceMark provenance={item.provenance} />
                     </span>
-                    <span className="truncate text-label text-muted-foreground">{context}</span>
+                    <span className="truncate text-label font-normal text-muted-foreground">
+                      {context}
+                    </span>
                   </span>
-                  <span className="shrink-0 text-label text-muted-foreground">
+                  <span className="shrink-0 text-label font-normal text-muted-foreground">
                     {item.destination === "detail" ? "Open details" : "Open session"}
                   </span>
                 </Command.Item>
@@ -713,14 +710,14 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                 }}
                 className={PALETTE_ROW}
               >
-                <LightningIcon aria-hidden className={PALETTE_ROW_ICON} />
+                <AutomationIcon aria-hidden className={PALETTE_ROW_ICON} />
                 <span className="flex min-w-0 flex-1 flex-col">
                   <span className="truncate text-ui font-medium">{item.name}</span>
-                  <span className="truncate text-label text-muted-foreground">
+                  <span className="truncate text-label font-normal text-muted-foreground">
                     {item.ownership === "global" ? "All projects" : "This project"}
                   </span>
                 </span>
-                <span className="shrink-0 text-label text-muted-foreground">
+                <span className="shrink-0 text-label font-normal text-muted-foreground">
                   Run on {item.ticketDisplayId}
                 </span>
               </Command.Item>
@@ -749,10 +746,10 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                 }}
                 className={PALETTE_ROW}
               >
-                <LightningIcon aria-hidden className={PALETTE_ROW_ICON} />
+                <AutomationIcon aria-hidden className={PALETTE_ROW_ICON} />
                 <span className="flex min-w-0 flex-1 flex-col">
                   <span className="truncate text-ui font-medium">Automations</span>
-                  <span className="truncate text-label text-muted-foreground">
+                  <span className="truncate text-label font-normal text-muted-foreground">
                     New, edit, duplicate
                   </span>
                 </span>
@@ -781,12 +778,9 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                 }}
                 className={PALETTE_ROW}
               >
-                <ListNumbersIcon aria-hidden className={PALETTE_ROW_ICON} />
-                <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="truncate text-ui font-medium">{item.title}</span>
-                  <span className="truncate text-label text-muted-foreground">{item.hint}</span>
-                </span>
-                <span className="shrink-0 text-label text-muted-foreground">⌃G</span>
+                <OrderedListIcon aria-hidden className={PALETTE_ROW_ICON} />
+                <span className="min-w-0 flex-1 truncate text-ui font-medium">{item.title}</span>
+                <span className="shrink-0 text-label font-normal text-muted-foreground">⌃G</span>
               </Command.Item>
             ))}
           </Command.Group>
@@ -796,17 +790,17 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             {hostCommands.map((item) => {
               const RowIcon =
                 item.id === "add-host"
-                  ? PlusIcon
+                  ? AddIcon
                   : item.id === "open-project"
-                    ? FolderSimpleIcon
+                    ? FolderIcon
                     : item.id === "sign-ins"
                       ? KeyIcon
-                      : GearSixIcon;
+                      : SettingsIcon;
               const key = "hostId" in item ? `host:${item.id}:${item.hostId}` : `host:${item.id}`;
               return (
                 <Command.Item
                   key={key}
-                  value={`${item.title} ${item.hint}`}
+                  value={"hint" in item && item.hint ? `${item.title} ${item.hint}` : item.title}
                   keywords={item.keywords}
                   onSelect={() => {
                     onOpenChange(false);
@@ -835,7 +829,11 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                   <RowIcon aria-hidden className={PALETTE_ROW_ICON} />
                   <span className="flex min-w-0 flex-1 flex-col">
                     <span className="truncate text-ui font-medium">{item.title}</span>
-                    <span className="truncate text-label text-muted-foreground">{item.hint}</span>
+                    {"hint" in item && item.hint ? (
+                      <span className="truncate text-label font-normal text-muted-foreground">
+                        {item.hint}
+                      </span>
+                    ) : null}
                   </span>
                 </Command.Item>
               );
@@ -844,10 +842,16 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         ) : null}
         {navigationFirst ? null : navigationGroup}
       </Command.List>
-      <div className="flex h-9 items-center justify-end gap-4 border-t border-border px-4 text-label text-muted-foreground">
-        <span>@ filter</span>
-        <span>↑↓ navigate</span>
-        <span>↵ open</span>
+      <div className={COMMAND_FOOTER}>
+        <span className="inline-flex items-center gap-1">
+          <kbd className={cn(MENU_SHORTCUT, "ml-0")}>@</kbd>Filter
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <kbd className={cn(MENU_SHORTCUT, "ml-0")}>↑↓</kbd>Navigate
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <kbd className={cn(MENU_SHORTCUT, "ml-0")}>↵</kbd>Open
+        </span>
       </div>
     </Command.Dialog>
   );

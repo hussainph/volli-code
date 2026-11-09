@@ -13,6 +13,10 @@
       "types": "./src/web/extract-worker.ts",
       "import": "./src/web/extract-worker.ts"
     },
+    "./source-icon-worker": {
+      "types": "./src/web/source-icon-worker.ts",
+      "import": "./src/web/source-icon-worker.ts"
+    },
     "./bench/mcp-parallel": {
       "types": "./bench/mcp-parallel/driver.ts",
       "import": "./bench/mcp-parallel/driver.ts"

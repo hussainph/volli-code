@@ -1,4 +1,5 @@
-import "@fontsource-variable/geist-mono/wght.css";
+import "@fontsource/space-mono/400.css";
+import "@fontsource/space-mono/700.css";
 import "@fontsource-variable/mona-sans/wght.css";
 import "@fontsource-variable/mona-sans/wght-italic.css";
 import "./globals.css";
@@ -8,6 +9,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { errorMessage } from "@volli/shared";
 import { toast } from "sonner";
+import { PauseCircleIcon, PlayCircleIcon } from "@renderer/components/ui/icon";
 
 import App from "./App";
 import { BootErrorPanel } from "./components/boot-error-panel";
@@ -18,7 +20,10 @@ import {
 import { interruptToastModel } from "./components/sessions/interrupt-toast";
 import { activateNotificationTarget } from "./lib/notification-activation";
 import { desktopNotificationSurface } from "./lib/notification-surface";
-import { sessionStartToastModel } from "./components/sessions/session-start-toast";
+import {
+  SessionStartToastTitle,
+  sessionStartToastModel,
+} from "./components/sessions/session-start-toast";
 import { chatTabId } from "./components/ticket/ticket-chat-tab";
 import {
   boot,
@@ -34,6 +39,7 @@ import { toastError } from "./lib/toast";
 import { useBoardStore } from "./stores/board";
 import { useChatSessionsStore } from "./stores/chat-sessions";
 import { useProjectsStore } from "./stores/projects";
+import { startStylePreferences } from "./stores/style";
 import { useThemeStore } from "./stores/theme";
 import { useExperimentsStore } from "./stores/experiments";
 import { launchStore } from "./stores/launch";
@@ -62,12 +68,6 @@ async function main() {
   // paint lands on the token fallback (they re-theme live either way).
   void initTerminalAppearance();
 
-  // Same reasoning for the terminal/editor half of the theme state: it is a db
-  // read with no dependency on the bootstrap payload, so fetching it
-  // concurrently only narrows the window where a non-default value hasn't
-  // landed yet. The CANVAS half rides in on the bootstrap payload instead and
-  // is adopted in boot() — there is deliberately no second read path for it.
-  void useThemeStore.getState().hydrate();
   // The `auto` half of the appearance setting: a real OS flip, pushed from main
   // because this process cannot see one (its own `prefers-color-scheme` query
   // answers from the mode the app stamped — see theme/canvas-paint.ts).
@@ -97,6 +97,17 @@ async function main() {
     root.render(<BootErrorPanel error={result.error} />);
     return;
   }
+
+  // boot() installs the stored canvas/appearance before its restored-project
+  // listener requests that scope's theme state. A concurrent global request
+  // could instead paint the default `auto` mode over preload's first-paint
+  // hint, exposing one dark frame in a stored-light launch. With no project,
+  // there is no selection announcement, so request the global terminal chain
+  // here. The independent Ghostty-config warmup above remains concurrent.
+  if (useProjectsStore.getState().selectedProjectId === null) {
+    void useThemeStore.getState().hydrate();
+  }
+  await startStylePreferences();
 
   root.render(
     <StrictMode>
@@ -128,6 +139,7 @@ async function main() {
     );
     const target = model.target;
     toast(model.message, {
+      icon: <PauseCircleIcon aria-hidden className="size-4" />,
       duration: INTERRUPT_TOAST_DURATION_MS,
       ...(target === null
         ? {}
@@ -146,14 +158,16 @@ async function main() {
   });
 
   // Socket-originated Session starts (VC-13): the app must not navigate or
-  // steal focus when a `volli session start` lands — the toast names the actor
-  // and ticket, and its action is the only door into the new session's tab
+  // steal focus when a `volli session start` lands — the toast names the new
+  // Session separately from its starter; only its action opens the new tab
   // (the same adopt + open pair the sidebar's chat rows make).
   window.api.sessions.onStarted((notice) => {
     if (cloudLaunch) return;
     const model = sessionStartToastModel(notice);
     const target = model.target;
-    toast(model.message, {
+    toast(<SessionStartToastTitle notice={notice} />, {
+      description: model.description,
+      icon: <PlayCircleIcon aria-hidden className="size-4" />,
       duration: INTERRUPT_TOAST_DURATION_MS,
       action: {
         label: "Open session",

@@ -67,16 +67,17 @@
  * anyway). Judge the interaction.
  */
 import {
-  ArrowSquareOutIcon,
-  ChatCircleIcon,
-  ColumnsPlusRightIcon,
+  ExternalIcon,
+  ChatIcon,
+  AddColumnIcon,
   FoldersIcon,
-  GitDiffIcon,
-  PlusIcon,
-  RowsPlusBottomIcon,
-  TerminalWindowIcon,
-  XIcon,
-} from "@phosphor-icons/react";
+  DiffIcon,
+  AddIcon,
+  AddRowIcon,
+  TerminalIcon,
+  CloseIcon,
+} from "@renderer/components/ui/icon";
+
 import * as React from "react";
 
 import { apcaLc, hexToOklch } from "@volli/shared";
@@ -427,9 +428,9 @@ function PaneBody({
     >
       <div className="flex shrink-0 items-center gap-2 border-b border-border px-2.5 py-1.5">
         {pane.kind === "terminal" ? (
-          <TerminalWindowIcon className="size-3.5 shrink-0 text-muted-foreground" />
+          <TerminalIcon className="size-3.5 shrink-0 text-muted-foreground" />
         ) : pane.kind === "chat" ? (
-          <ChatCircleIcon className="size-3.5 shrink-0 text-muted-foreground" />
+          <ChatIcon className="size-3.5 shrink-0 text-muted-foreground" />
         ) : null}
         <span
           className={cx(
@@ -1222,17 +1223,17 @@ export default function SplitTabsScratch(): React.JSX.Element {
 
   const pickerRows: PickerRow[] = React.useMemo(() => {
     const sessions: PickerRow[] = [
-      { id: "chat", label: "New chat", icon: <ChatCircleIcon className="size-4" />, hint: "1" },
+      { id: "chat", label: "New chat", icon: <ChatIcon className="size-4" />, hint: "1" },
       {
         id: "terminal",
         label: "New terminal",
-        icon: <TerminalWindowIcon className="size-4" />,
+        icon: <TerminalIcon className="size-4" />,
         hint: "2",
       },
       {
         id: "existing",
         label: "Existing session…",
-        icon: <ArrowSquareOutIcon className="size-4" />,
+        icon: <ExternalIcon className="size-4" />,
         hint: "3",
       },
     ];
@@ -1249,7 +1250,7 @@ export default function SplitTabsScratch(): React.JSX.Element {
       {
         id: "changes",
         label: "Changes",
-        icon: <GitDiffIcon className="size-4" />,
+        icon: <DiffIcon className="size-4" />,
         hint: "5",
         inert: true,
       },
@@ -1267,9 +1268,9 @@ export default function SplitTabsScratch(): React.JSX.Element {
       <>
         {/* A pane still being chosen has no icon — the gap is the signal. */}
         {pane.kind === "terminal" ? (
-          <TerminalWindowIcon className={cx("size-3.5 shrink-0", lift === "off" && "opacity-70")} />
+          <TerminalIcon className={cx("size-3.5 shrink-0", lift === "off" && "opacity-70")} />
         ) : pane.kind === "chat" ? (
-          <ChatCircleIcon className={cx("size-3.5 shrink-0", lift === "off" && "opacity-70")} />
+          <ChatIcon className={cx("size-3.5 shrink-0", lift === "off" && "opacity-70")} />
         ) : null}
         <span className={cx("max-w-40 truncate", pane.kind === null && "italic opacity-70")}>
           {pane.label}
@@ -1284,7 +1285,7 @@ export default function SplitTabsScratch(): React.JSX.Element {
           onClick={() => closePane(paneId)}
           className="flex size-5 shrink-0 items-center justify-center rounded-sm opacity-0 transition-opacity group-hover:opacity-100 hover:bg-border focus-visible:opacity-100"
         >
-          <XIcon className="size-3" weight="bold" />
+          <CloseIcon className="size-3" strokeWidth={2.25} />
         </button>
       </>
     );
@@ -1515,9 +1516,9 @@ export default function SplitTabsScratch(): React.JSX.Element {
                               className="flex min-w-0 flex-1 items-center gap-2 text-left"
                             >
                               {pane.kind === "terminal" ? (
-                                <TerminalWindowIcon className="size-3.5 shrink-0" />
+                                <TerminalIcon className="size-3.5 shrink-0" />
                               ) : (
-                                <ChatCircleIcon className="size-3.5 shrink-0" />
+                                <ChatIcon className="size-3.5 shrink-0" />
                               )}
                               <span className="truncate">{pane.label}</span>
                             </button>
@@ -1527,7 +1528,7 @@ export default function SplitTabsScratch(): React.JSX.Element {
                               onClick={() => ejectPane(paneId)}
                               className="flex size-5 shrink-0 items-center justify-center rounded-sm opacity-0 transition-opacity group-hover:opacity-100 hover:bg-border"
                             >
-                              <ArrowSquareOutIcon className="size-3" />
+                              <ExternalIcon className="size-3" />
                             </button>
                             <button
                               type="button"
@@ -1535,7 +1536,7 @@ export default function SplitTabsScratch(): React.JSX.Element {
                               onClick={() => closePane(paneId)}
                               className="flex size-5 shrink-0 items-center justify-center rounded-sm opacity-0 transition-opacity group-hover:opacity-100 hover:bg-border"
                             >
-                              <XIcon className="size-3" weight="bold" />
+                              <CloseIcon className="size-3" strokeWidth={2.25} />
                             </button>
                           </div>
                         );
@@ -1562,7 +1563,7 @@ export default function SplitTabsScratch(): React.JSX.Element {
               onClick={() => openTab("terminal")}
               className="flex h-6 items-center gap-1 rounded-full px-2 text-label text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
             >
-              <PlusIcon className="size-3" weight="bold" />
+              <AddIcon className="size-3" strokeWidth={2.25} />
               tab
             </button>
             <button
@@ -1571,7 +1572,7 @@ export default function SplitTabsScratch(): React.JSX.Element {
               onClick={() => requestSplit("right")}
               className="flex size-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
             >
-              <ColumnsPlusRightIcon className="size-4" />
+              <AddColumnIcon className="size-4" />
             </button>
             <button
               type="button"
@@ -1579,7 +1580,7 @@ export default function SplitTabsScratch(): React.JSX.Element {
               onClick={() => requestSplit("down")}
               className="flex size-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
             >
-              <RowsPlusBottomIcon className="size-4" />
+              <AddRowIcon className="size-4" />
             </button>
           </div>
         </div>

@@ -1,4 +1,4 @@
-import { BrowserIcon } from "@phosphor-icons/react/dist/csr/Browser";
+import { BrowserIcon } from "@renderer/components/ui/icon";
 
 /**
  * The glyph a Browser Tab wears wherever it is drawn: the browser, whoever
@@ -6,7 +6,7 @@ import { BrowserIcon } from "@phosphor-icons/react/dist/csr/Browser";
  * for the browser back (VC-614) — a strip of agent tabs read as a row of
  * robots and said nothing about what they were. Ownership is still said to
  * assistive tech ("Driven by a Session") and to probes (`data-browser-tab-mark`),
- * and on screen by the holder dot while a Session drives. `bold`, because these
+ * and on screen by the holder dot while a Session drives. A heavier stroke, because these
  * sit at 12px where regular draws lighter than the label beside it.
  */
 export function BrowserTabMark({ driven, className }: { driven: boolean; className?: string }) {
@@ -15,7 +15,7 @@ export function BrowserTabMark({ driven, className }: { driven: boolean; classNa
       aria-hidden={driven ? undefined : true}
       aria-label={driven ? "Driven by a Session" : undefined}
       role={driven ? "img" : undefined}
-      weight="bold"
+      strokeWidth={2.25}
       data-browser-tab-mark={driven ? "session" : "user"}
       className={className ?? "size-3 shrink-0 text-muted-foreground"}
     />

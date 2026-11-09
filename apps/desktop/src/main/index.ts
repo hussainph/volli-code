@@ -87,6 +87,7 @@ import {
   updateInstallQuitInFlight,
 } from "./quit-gate";
 import { isInternalNavigationTarget } from "./navigation";
+import { onRawIpc } from "./raw-ipc";
 import {
   applyQuietAppPolicy,
   hideDockForMenuBar,
@@ -243,6 +244,7 @@ import { keychainSecretCodec } from "./secrets/codec";
 import { installHarnessGuard } from "./harness/keychain-guard";
 import { harnessSecretPorts } from "./harness/secret-ports";
 import { registerSecretIpc } from "./secrets/ipc";
+import { isSecretRenderer } from "./secrets/renderer-trust";
 import { registerAutomationIpcHandlers } from "./automations/ipc";
 import {
   registerDegradedSessionRpcIpcHandlers,
@@ -341,7 +343,7 @@ import {
   BrowserTraceStore,
 } from "@volli/host-core/browser";
 import { createBrowserShortcutRelay } from "./browser/app-shortcut-relay";
-import { BrowserTabHost } from "./browser/tab-host";
+import { BrowserTabHost, type BrowserPreviewDiagnostic } from "./browser/tab-host";
 import { registerOrphanProcessIpcHandlers } from "./process/ipc";
 import { registerBackgroundShellIpcHandlers } from "./shell/ipc";
 import { registerBrowserTabIpcHandlers } from "./browser/ipc";
@@ -605,10 +607,10 @@ function createWindow(
     // (.app-region-drag in globals.css) and the traffic-light whitespace —
     // everything below that band is ordinary layout.
     titleBarStyle: "hiddenInset",
-    // Centers the 12px traffic-light group inside ChromeBar's 36px band
-    // ((36 - 12) / 2 = 12). Must stay in sync with ChromeBar's h-9 height
-    // (chrome-bar.tsx), the same way backgroundColor below tracks the canvas.
-    trafficLightPosition: { x: 10, y: 12 },
+    // Centers the 12px traffic-light group inside ChromeBar's 46px band
+    // ((46 - 12) / 2 = 17). Must stay in sync with --spacing-titlebar
+    // (globals.css), the same way backgroundColor below tracks the canvas.
+    trafficLightPosition: { x: 16, y: 17 },
     // The canvas's own base fill (window-theme.ts runs the same pure pipeline
     // the renderer does, preferring the background the renderer last actually
     // painted) — prevents the white flash before first paint, and keeps the
@@ -1086,6 +1088,8 @@ const appStartup = app.whenReady().then(async () => {
     onTransactionViolation: app.isPackaged ? logTransactionViolation : throwTransactionViolation,
     // web_fetch parses HTML in this worker rather than on Electron main.
     webExtractWorker: join(__dirname, "web-extract-worker.cjs"),
+    sourceIconWorker: join(__dirname, "source-icon-worker.cjs"),
+    usageReportWorker: join(__dirname, "usage-report-worker.cjs"),
     devDiagnostics: isDev,
     secretKey: harnessPorts?.secretKey ?? keychainSecretCodec(keychainUse.keychain),
     webKeySealing: {
@@ -1546,16 +1550,9 @@ const appStartup = app.whenReady().then(async () => {
   sessionWakeBus?.subscribe(({ event }) => {
     if (retiresSessionSecrets(event.payload)) void secrets.endSession(event.sessionId);
   });
-  registerSecretIpc(secrets, (sender) => {
-    const url = sender.getURL();
-    const renderer = isDev ? process.env["ELECTRON_RENDERER_URL"] : PACKAGED_RENDERER_ENTRY_URL;
-    if (renderer === undefined || !URL.canParse(renderer) || !URL.canParse(url)) return false;
-    const actual = new URL(url);
-    const expected = new URL(renderer);
-    actual.hash = "";
-    expected.hash = "";
-    return actual.href === expected.href;
-  });
+  registerSecretIpc(secrets, (sender) =>
+    isSecretRenderer(sender.getURL(), isDev ? process.env["ELECTRON_RENDERER_URL"] : undefined),
+  );
   const mcpSettings = liveHost?.runtimeServices.mcp ?? null;
   // Where Code Mode's sandbox worker and WebAssembly are (VC-471): the
   // workspace's installed copy unpackaged, and the copy electron-builder
@@ -1600,6 +1597,7 @@ const appStartup = app.whenReady().then(async () => {
     }),
   );
   const browserTabs = new BrowserTabHost({
+    appVersion: app.getVersion(),
     createId: randomUUID,
     createView: (options) => new WebContentsView(options),
     fromPartition: (partition) => session.fromPartition(partition),
@@ -1641,6 +1639,22 @@ const appStartup = app.whenReady().then(async () => {
     // hold a tab, so the placeholder is never what a person sees.
     sessionName: async (sessionId: string) =>
       (await sessionRuntime?.projection({ sessionId }))?.projection.session.title ?? null,
+    // Diagnostic-only (VC-1150), unpackaged builds only, and only behind the
+    // guarded harness or the dev smoke door that already exposes this host:
+    // how each preview's frame fence and camera ended, as fixed outcomes,
+    // counts, generations and times. It enables nothing and decides nothing.
+    ...(isDev &&
+    (process.env["VOLLI_HARNESS"] === "1" || process.env["VOLLI_SMOKE_BROWSER_HOST"] === "1")
+      ? {
+          previewDiagnostics: ({ stage, ...diagnostic }: BrowserPreviewDiagnostic) =>
+            hostLogger("browser").info(
+              stage === "frame"
+                ? "browser navigation picture frame"
+                : "browser navigation picture outcome",
+              diagnostic,
+            ),
+        }
+      : {}),
   });
   /**
    * Everything the runner calls back into on this Mac (VC-671): the
@@ -1652,6 +1666,7 @@ const appStartup = app.whenReady().then(async () => {
    * quit runs.
    */
   let desktopMoves: DesktopMovesService | null = null;
+  let settleSourceIcons: (() => Promise<void>) | undefined;
   const runnerEdge = createDesktopRunnerEdge({
     lifecycle: quittingApp,
     host: hostCore,
@@ -1673,6 +1688,7 @@ const appStartup = app.whenReady().then(async () => {
     settleBackgroundWork: async () => {
       await Promise.all([
         restore?.settled(),
+        settleSourceIcons?.(),
         browserPictureSink.settled(),
         browserTraceSink.settled(),
       ]);
@@ -1718,6 +1734,11 @@ const appStartup = app.whenReady().then(async () => {
       requestSecret: true,
       browser: { backend: browserTabs, cursorFor: (tabId) => cursorOverlayRef?.driverFor(tabId) },
       pictures: browserPictures,
+      sourceIconEpoch: () => account.sourceIconEpoch(),
+      sourceIconOwner: () => account.sourceIconOwner(),
+      sourceIconRestoring: () => account.sourceIconRestoring(),
+      sourceIconRevocation: () => account.sourceIconRevocation(),
+      watchSourceIconAuthority: (listener) => account.watchSourceIconAuthority(listener),
     },
     beforeExecution: () => loginPathBootstrap.apply(),
     shellFeed: {
@@ -1740,6 +1761,7 @@ const appStartup = app.whenReady().then(async () => {
     observability: agentObservability,
     automations: runtimeAutomations,
   } = runner;
+  settleSourceIcons = () => runner.settleSourceIcons();
   runnerEdge.bind({ automations: runtimeAutomations });
   // A local launch registers this Mac only for the move, never connects it to cloud jobs.
   // The exact same sealed identity and registration rules serve a later cloud launch.
@@ -2122,7 +2144,7 @@ const appStartup = app.whenReady().then(async () => {
   // What each window is showing, for the focused-target rule. A `send`: it
   // flips on every navigation, needs no reply, and main's copy is advisory —
   // a report that never arrives costs one duplicate alert.
-  ipcMain.on(
+  onRawIpc(
     "volli:notification-active-target" satisfies VolliIpcChannel,
     (event, ...args: unknown[]): void => {
       const window = BrowserWindow.fromWebContents(event.sender);
@@ -2436,7 +2458,7 @@ const appStartup = app.whenReady().then(async () => {
     });
   };
 
-  ipcMain.on(
+  onRawIpc(
     "volli:unsaved-documents" satisfies VolliIpcChannel,
     (_event, ...args: unknown[]): void => {
       recordUnsavedDocuments(args[0]);
@@ -2565,7 +2587,7 @@ const appStartup = app.whenReady().then(async () => {
   // The draft flush-and-ack barrier (VC-577): menu-bar entry and a system
   // shutdown ask each renderer to save its drafts before a window goes.
   const clientStateFlush = createClientStateFlush({ newRequestId: () => randomUUID() });
-  ipcMain.on(
+  onRawIpc(
     "volli:client-state-flushed" satisfies VolliIpcChannel,
     (_event, ...args: unknown[]): void => {
       clientStateFlush.acknowledge(args[0]);

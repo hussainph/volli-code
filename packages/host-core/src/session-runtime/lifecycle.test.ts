@@ -29,10 +29,16 @@ vi.mock("../db/projects-repo", () => ({ listProjects: () => [{ id: "project" }] 
 vi.mock("../db/scheduled-resume-repo", () => ({
   listScheduledResumeSessionIds: vi.fn(() => ["scheduled"]),
 }));
-vi.mock("../session-control", () => ({
+vi.mock("../session-control", async () => ({
   createSessionWatchdog: vi.fn(),
   createScheduledResumeHost: vi.fn(),
   createSuspendClock: vi.fn(() => ({ suspendedMsWithin: () => 0, close: vi.fn() })),
+  // The real one: the ports below are asserted to reach the engine through it.
+  ticketSessionProjections: (
+    await vi.importActual<typeof import("../session-control/scheduled-resume")>(
+      "../session-control/scheduled-resume",
+    )
+  ).ticketSessionProjections,
 }));
 vi.mock("./durable-host-notice-delivery", () => ({ createHostNoticeDelivery: vi.fn() }));
 vi.mock("./sqlite-host-notice-outbox", () => ({

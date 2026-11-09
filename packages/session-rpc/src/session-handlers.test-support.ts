@@ -225,6 +225,7 @@ export function sessionHandlersFrom(
         ...args,
       )) as DesktopRouterHandlers[Key];
   const desktop: DesktopRouterHandlers = {
+    "sourceIcons.watch": remote("sourceIcons.watch"),
     "shells.moveToBackground": (input, call) =>
       need(ports.desktop?.["shells.moveToBackground"], RUNTIME)(input, call),
     "project.reorder": (input, call) =>

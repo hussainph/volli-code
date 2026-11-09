@@ -186,14 +186,17 @@ async function main() {
       page.evaluate(() => document.querySelector("[data-volli-surface]") !== null),
     );
 
-    const card = page.locator("article").filter({
-      has: page.locator("span.font-mono", { hasText: new RegExp(`^${displayId}$`) }),
-    });
+    const card = page
+      .locator("article")
+      .filter({ visible: true })
+      .filter({
+        has: page.locator("span.font-mono", { hasText: new RegExp(`^${displayId}$`) }),
+      });
     await waitUntil("card", async () => (await card.count()) === 1);
     await card.dblclick();
     await waitUntil("detail", async () => (await page.getByRole("tablist").count()) >= 1);
 
-    const aside = page.locator("aside");
+    const aside = page.locator('[data-inspector-panel][data-shown="true"]');
     await waitUntil("rail visible", async () => (await aside.count()) === 1);
 
     // ---- 1. Changes list renders the mix ------------------------------------
@@ -339,29 +342,43 @@ async function main() {
     // ---- 4. Files navigator -------------------------------------------------
     await attempt(4, "Files navigator lists referenced context and worktree files", async () => {
       await aside.getByTestId("ticket-rail-tab-files").click();
+      // The shared file tree (`components/files/file-tree.tsx`) draws only once
+      // a read has landed, so the tree itself is the loaded signal.
+      const tree = aside.getByRole("tree", { name: "Files" });
       await waitUntil(
-        "files list loaded",
+        "files tree loaded",
         async () => {
-          if ((await aside.getByTestId("ticket-files-loading").count()) === 1) return false;
-          return (await aside.getByTestId("ticket-files-list").count()) === 1;
+          if ((await aside.getByTestId("file-tree-loading").count()) === 1) return false;
+          return (await tree.count()) === 1;
         },
         { timeout: 10000 },
       );
       await waitUntil(
         "worktree root listing",
         async () => {
-          const text = await aside.getByTestId("ticket-files-list").innerText();
+          const text = await tree.innerText();
           return text.includes("README") || text.includes("src");
         },
         { timeout: 10000 },
       );
-      const text = await aside.getByTestId("ticket-files-list").innerText();
-      const hasRef = /keep\.ts/i.test(text) || /referenced/i.test(text);
-      // The Calm Stack's Files page is ONE list, so there is no "Worktree"
-      // caption to match on any more — a worktree entry showing up IS the
-      // evidence that half of the list rendered.
-      const hasWorktree = /src/i.test(text) || /readme/i.test(text);
-      return { ok: hasRef && hasWorktree, detail: text.slice(0, 200) };
+      const rootText = await tree.innerText();
+      // No "Worktree" caption to match on — a worktree entry showing up IS the
+      // evidence that the worktree half rendered.
+      const hasWorktree = /src/i.test(rootText) || /readme/i.test(rootText);
+      // Referenced context joins the hierarchy at its own path rather than
+      // trailing the root listing, so open its folder (unless it is open).
+      const src = tree.locator('[data-testid="ticket-files-row"][data-path="src"]');
+      if ((await src.getAttribute("aria-expanded")) !== "true") await src.click();
+      const ref = tree.getByRole("treeitem", { name: "src/keep.ts, referenced", exact: true });
+      const hasRef = await waitUntil(
+        "referenced src/keep.ts row",
+        async () => (await ref.count()) === 1,
+      ).catch(() => false);
+      const text = await tree.innerText();
+      return {
+        ok: hasRef && hasWorktree,
+        detail: `ref=${hasRef} ${text.replace(/\s+/g, " ").slice(0, 200)}`,
+      };
     });
 
     // ---- Screenshots --------------------------------------------------------
@@ -381,8 +398,8 @@ async function main() {
     await attempt("shot-files", "screenshot nav-files.png", async () => {
       await aside.getByTestId("ticket-rail-tab-files").click();
       await waitUntil(
-        "files list",
-        async () => (await aside.getByTestId("ticket-files-list").count()) === 1,
+        "files tree",
+        async () => (await aside.getByRole("tree", { name: "Files" }).count()) === 1,
       );
       await sleep(300);
       const path = join(SHOT_DIR, "nav-files.png");

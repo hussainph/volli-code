@@ -71,13 +71,23 @@ export function assertAdditiveToolRefresh(
     const { routes: _newRoutes, ...newDeclaration } = next.codeMode!;
     if (!same(oldDeclaration, newDeclaration)) {
       if (!cold) fail();
-      // Image-capable Code Mode preserves every old program/input.
+      // Versioned declaration upgrades preserve every old program/input.
       const old = oldDeclaration as Record<string, unknown>;
       const updated = newDeclaration as Record<string, unknown>;
       if (updated.descriptionVersion !== old.descriptionVersion && updated.descriptionVersion !== 2)
         fail();
-      const { descriptionVersion: _oldVersion, ...oldRest } = old;
-      const { descriptionVersion: _newVersion, ...newRest } = updated;
+      if (updated.mcpResultVersion !== old.mcpResultVersion && updated.mcpResultVersion !== 1)
+        fail();
+      const {
+        descriptionVersion: _oldVersion,
+        mcpResultVersion: _oldMcpResultVersion,
+        ...oldRest
+      } = old;
+      const {
+        descriptionVersion: _newVersion,
+        mcpResultVersion: _newMcpResultVersion,
+        ...newRest
+      } = updated;
       if (!same(oldRest, newRest)) fail();
       changed.add("codemode");
     }

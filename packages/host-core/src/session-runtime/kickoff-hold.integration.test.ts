@@ -63,6 +63,14 @@ class Executor implements NativeHarnessAdapter {
   readonly runtime = { path: "/scripted", version: "1", fingerprint: "scripted" };
   /** How many of the next attaches refuse. */
   refuseAttaches = 0;
+  /**
+   * Gates the next attaches wait on before they bind, one each: an executor
+   * still starting on a busy host, past the admission bound (VC-1099).
+   */
+  readonly slowAttaches: Promise<void>[] = [];
+  /** Attachments the runtime released after they bound too late. */
+  readonly released: string[] = [];
+  readonly attached: string[] = [];
   readonly submitted: Submitted[] = [];
   readonly #sinks = new Map<string, ObservationSink>();
   #now = 100;
@@ -71,6 +79,21 @@ class Executor implements NativeHarnessAdapter {
     if (this.refuseAttaches > 0) {
       this.refuseAttaches -= 1;
       throw new Error("The executor refused to start");
+    }
+    this.attached.push(spec.attachmentId);
+    const slow = this.slowAttaches.shift();
+    if (slow !== undefined) {
+      await slow;
+      return {
+        native: { id: `native:${spec.attachmentId}`, detail: null },
+        dispatch: async () => {
+          throw new Error("A late binding must never be dispatched to");
+        },
+        reconcile: async () => ({ cursor: null, observations: [], receipts: [] }),
+        release: async () => {
+          this.released.push(spec.attachmentId);
+        },
+      };
     }
     this.#sinks.set(spec.sessionId, sink);
     return {
@@ -368,6 +391,75 @@ describe("session_start keeps its kickoff through a failed first attach (VC-799)
       .poll(() => f.executor.to(started.sessionId).map(({ messageId, text }) => [messageId, text]))
       .toEqual([["orchestrator:call-2:kickoff-message", "Rebase the stacked branch"]]);
     await expect.poll(() => f.queueOf(started.sessionId)).toEqual([]);
+  });
+});
+
+describe("session_start retries an attach that outlasted its admission bound (VC-1099)", () => {
+  it("attaches on the one retry and runs the kickoff exactly once", async () => {
+    const f = fixture();
+    const late = Promise.withResolvers<void>();
+    f.executor.slowAttaches.push(late.promise);
+
+    const started = await f.startTicketSession("orchestrator:call-3", "Profile the attach path");
+
+    expect(started).toMatchObject({ state: "ready", kickoff: "submitted" });
+    await expect
+      .poll(() => f.executor.to(started.sessionId))
+      .toEqual([
+        {
+          sessionId: started.sessionId,
+          commandId: "orchestrator:call-3:kickoff",
+          messageId: "orchestrator:call-3:kickoff-message",
+          text: "Profile the attach path",
+        },
+      ]);
+    // The first attempt's binding arrives late and is released, never used.
+    late.resolve();
+    const [first, retry] = f.executor.attached;
+    await expect.poll(() => f.executor.released).toEqual([first]);
+    const { projection } = await f.runtime.projection({ sessionId: started.sessionId });
+    expect(projection.attachments.map(({ id, openedAt }) => [id, openedAt !== null])).toEqual([
+      [first, false],
+      [retry, true],
+    ]);
+    // The first attempt's Attention is cleared by the retry's success.
+    expect(projection.attention.active).toEqual([]);
+    expect(await f.queueOf(started.sessionId)).toEqual([]);
+
+    // A replayed start replays both attempts: no third attach, no second kickoff.
+    const replayed = await f.startTicketSession("orchestrator:call-3", "Profile the attach path");
+    expect(replayed).toMatchObject({ sessionId: started.sessionId, state: "ready" });
+    await new Promise((resolve) => setTimeout(resolve, BOUND_MS * 2));
+    expect(f.executor.attached).toHaveLength(2);
+    expect(f.executor.to(started.sessionId)).toHaveLength(1);
+  });
+
+  it("holds the kickoff once when the retry outlasts the bound too", async () => {
+    const f = fixture();
+    const late = Promise.withResolvers<void>();
+    f.executor.slowAttaches.push(late.promise, late.promise);
+
+    const started = await f.startTicketSession("orchestrator:call-4", "Profile the attach path");
+
+    expect(started).toMatchObject({
+      state: "needs-recovery",
+      kickoff: "held",
+      attachFailure: expect.stringContaining("queue_admission_timeout"),
+    });
+    expect(f.executor.attached).toHaveLength(2);
+    expect(await f.queueOf(started.sessionId)).toEqual([
+      "orchestrator:call-4:kickoff-message:queued",
+    ]);
+    late.resolve();
+    await expect.poll(() => f.executor.released).toHaveLength(2);
+
+    // The app's Retry still delivers the held kickoff exactly once.
+    expect(
+      (await f.sessions.attach({ operationId: "retry-4", sessionId: started.sessionId })).state,
+    ).toBe("ready");
+    await expect
+      .poll(() => f.executor.to(started.sessionId).map(({ messageId }) => messageId))
+      .toEqual(["orchestrator:call-4:kickoff-message"]);
   });
 });
 

@@ -1,3 +1,17 @@
+import { useId } from "react";
+import {
+  InboxIcon,
+  ChecklistIcon,
+  PlayCircleIcon,
+  PreviewIcon,
+  SuccessIcon,
+  CheckIcon,
+  FolderOpenIcon,
+  BranchIcon,
+  RepeatIcon,
+  ConfigureIcon,
+} from "@renderer/components/ui/icon";
+
 import {
   TICKET_PRIORITIES,
   TICKET_PRIORITY_LABELS,
@@ -8,16 +22,19 @@ import {
 } from "@volli/shared";
 
 import {
-  ComposerBranchRow,
+  BaseBranchChip,
   type ComposerBranchRowProps,
 } from "@renderer/components/board/new-ticket/composer-branch";
 import { composerChipClass } from "@renderer/components/board/new-ticket/composer-chip";
 import { ComposerLabels } from "@renderer/components/board/new-ticket/composer-labels";
 import { PriorityIndicator } from "@renderer/components/board/priority-indicator";
-import { SlidersHorizontalIcon } from "@phosphor-icons/react/dist/csr/SlidersHorizontal";
+
+import { MENU_SEPARATOR } from "@renderer/components/ui/menu-classes";
+
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { Switch } from "@renderer/components/ui/switch";
 import { Button } from "@renderer/components/ui/button";
+import { InspectorPopup } from "@renderer/components/ui/inspector";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -26,6 +43,14 @@ import {
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
 
+const STATUS_ICON = {
+  backlog: InboxIcon,
+  todo: ChecklistIcon,
+  doing: PlayCircleIcon,
+  needs_review: PreviewIcon,
+  done: SuccessIcon,
+};
+
 function StatusChip({
   status,
   onChange,
@@ -33,23 +58,32 @@ function StatusChip({
   status: TicketStatus;
   onChange: (status: TicketStatus) => void;
 }) {
+  const Icon = STATUS_ICON[status];
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="sm" className={composerChipClass()}>
+        <InspectorPopup
+          aria-label={`Status: ${TICKET_STATUS_LABELS[status]}`}
+          className={composerChipClass()}
+        >
+          <Icon aria-hidden className="text-primary-text" />
           {TICKET_STATUS_LABELS[status]}
-        </Button>
+        </InspectorPopup>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
         <DropdownMenuRadioGroup
           value={status}
           onValueChange={(value) => onChange(value as TicketStatus)}
         >
-          {TICKET_STATUSES.map((option) => (
-            <DropdownMenuRadioItem key={option} value={option}>
-              {TICKET_STATUS_LABELS[option]}
-            </DropdownMenuRadioItem>
-          ))}
+          {TICKET_STATUSES.map((option) => {
+            const OptionIcon = STATUS_ICON[option];
+            return (
+              <DropdownMenuRadioItem key={option} value={option}>
+                <OptionIcon aria-hidden />
+                {TICKET_STATUS_LABELS[option]}
+              </DropdownMenuRadioItem>
+            );
+          })}
         </DropdownMenuRadioGroup>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -66,7 +100,10 @@ function PriorityChip({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="sm" className={composerChipClass()}>
+        <InspectorPopup
+          aria-label={`Priority: ${TICKET_PRIORITY_LABELS[priority]}`}
+          className={composerChipClass()}
+        >
           {/* aria-hidden: the indicator already carries a "Priority: X" label,
               which would pollute the chip/option's accessible name (its own
               text label is the name that matters). */}
@@ -74,7 +111,7 @@ function PriorityChip({
             <PriorityIndicator priority={priority} />
           </span>
           {TICKET_PRIORITY_LABELS[priority]}
-        </Button>
+        </InspectorPopup>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
         <DropdownMenuRadioGroup
@@ -123,8 +160,9 @@ export function ComposerChips({
   createMore: boolean;
   onCreateMoreChange(createMore: boolean): void;
 }) {
+  const workingCopyName = useId();
   return (
-    <div className="flex flex-wrap items-center gap-1">
+    <div className="flex flex-wrap items-center gap-2">
       <StatusChip status={status} onChange={onStatusChange} />
       <PriorityChip priority={priority} onChange={onPriorityChange} />
       <ComposerLabels projectId={projectId} value={labels} onChange={onLabelsChange} />
@@ -132,32 +170,68 @@ export function ComposerChips({
         <PopoverTrigger asChild>
           <Button
             variant="ghost"
-            size="sm"
             aria-label="Ticket options"
             className="ml-auto text-muted-foreground"
           >
-            <SlidersHorizontalIcon />
+            <ConfigureIcon />
             {branch.usesWorktree ? "Options" : "Project checkout"}
             {createMore ? " · Create more" : ""}
           </Button>
         </PopoverTrigger>
-        <PopoverContent align="end" side="top" className="w-80 p-4">
-          <div className="flex flex-col gap-4">
-            <div className="flex flex-col gap-2">
-              <span className="text-ui font-medium">Working copy</span>
-              <div className="flex">
-                <ComposerBranchRow {...branch} />
-              </div>
-            </div>
-            <label className="flex items-center justify-between gap-2 border-t border-border pt-4 text-ui">
-              Create more
-              <Switch
-                aria-label="Create more"
-                checked={createMore}
-                onCheckedChange={onCreateMoreChange}
+        <PopoverContent align="end" side="top" className="w-80 rounded-menu p-1">
+          <fieldset className="min-w-0">
+            <legend className="px-2 py-1 text-ui font-semibold">Working copy</legend>
+            {[true, false].map((worktree) => {
+              const Icon = worktree ? BranchIcon : FolderOpenIcon;
+              return (
+                <label
+                  key={String(worktree)}
+                  className="relative flex cursor-default select-none items-center gap-2 rounded-menu-item px-2 py-2 has-[:checked]:bg-accent has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring"
+                >
+                  <input
+                    type="radio"
+                    name={workingCopyName}
+                    className="sr-only"
+                    checked={branch.usesWorktree === worktree}
+                    onChange={() => branch.onUsesWorktreeChange(worktree)}
+                  />
+                  <Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="text-ui font-medium">
+                      {worktree ? "New worktree" : "Project checkout"}
+                    </span>
+                  </span>
+                  {branch.usesWorktree === worktree ? (
+                    <CheckIcon aria-hidden strokeWidth={2.25} className="size-3.5 shrink-0" />
+                  ) : null}
+                </label>
+              );
+            })}
+          </fieldset>
+          {branch.usesWorktree ? (
+            <div className="flex min-w-0 items-center gap-2 px-2 py-2">
+              <span className="shrink-0 text-ui font-medium text-muted-foreground">
+                Branch from
+              </span>
+              <BaseBranchChip
+                state={branch.state}
+                value={branch.baseBranch}
+                onChange={branch.onBaseBranchChange}
               />
-            </label>
-          </div>
+            </div>
+          ) : null}
+          <div className={MENU_SEPARATOR} />
+          <label className="flex items-center gap-2 px-2 py-2">
+            <RepeatIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="text-ui font-medium">Create more</span>
+            </span>
+            <Switch
+              aria-label="Create more"
+              checked={createMore}
+              onCheckedChange={onCreateMoreChange}
+            />
+          </label>
         </PopoverContent>
       </Popover>
     </div>

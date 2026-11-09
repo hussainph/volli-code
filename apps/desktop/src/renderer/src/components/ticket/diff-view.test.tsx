@@ -318,7 +318,8 @@ describe("DiffStub", () => {
     const html = renderToStaticMarkup(
       <DiffStub path="logo.png" previousPath={null} stubReason="Binary file" />,
     );
-    expect(html).toContain("Binary file");
+    expect(html).toMatch(/<h2[^>]*>Binary file<[/]h2>/);
+    expect(html).toContain('data-tier="page"');
     expect(html).toContain("logo.png");
     expect(html).toContain('data-testid="ticket-diff-stub"');
     expect(html).not.toContain("data-monaco-diff");

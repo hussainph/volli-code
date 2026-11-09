@@ -152,7 +152,6 @@ async function render(tickets: Ticket[], options: RenderOptions = {}) {
                   onOpen={() => {}}
                   composerInitiallyOpen={false}
                   onComposerClose={() => {}}
-                  animateEnter={false}
                   dragActive={options.dragActive ?? false}
                 />
               </FlipObserver>
@@ -241,12 +240,77 @@ beforeEach(() => {
   );
 });
 
+describe("column scroll edges", () => {
+  it("fades cut cards, not the footer, and clears the last-card edge at the bottom", async () => {
+    await mount(column(12));
+    giveScrollerLayout(12);
+    await scrollTo(0);
+    expect(scroller().style.maskImage.toLowerCase()).toContain("currentcolor 0");
+    expect(scroller().style.maskImage).toContain("transparent 100%");
+    await scrollTo(100);
+    expect(scroller().style.maskImage).toContain("transparent 0");
+    expect(scroller().style.maskImage).toContain("transparent 100%");
+    await scrollTo(scroller().scrollHeight - scroller().clientHeight);
+    expect(scroller().style.maskImage).not.toContain("transparent 100%");
+    expect(scroller().style.maskImage.toLowerCase()).toContain("currentcolor 100%");
+    expect(scroller().textContent).not.toContain("New");
+    expect(container?.textContent).toContain("New");
+    expect(dropzone().style.maskImage).toBe("");
+  });
+
+  it("updates when either the viewport or its content resizes, including a now-fitting list", async () => {
+    const observers: { callback: () => void; elements: Element[] }[] = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        entry: (typeof observers)[number];
+        constructor(callback: () => void) {
+          this.entry = { callback, elements: [] };
+          observers.push(this.entry);
+        }
+        observe(element: Element) {
+          this.entry.elements.push(element);
+        }
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    await mount(column(4));
+    const observer = observers.find(({ elements }) => elements.includes(scroller()))!;
+    expect(observer.elements).toContain(dropzone());
+    Object.defineProperties(scroller(), {
+      clientHeight: { value: 100, configurable: true },
+      scrollHeight: { value: 300, configurable: true },
+    });
+    await act(async () => observer.callback());
+    expect(scroller().style.maskImage).toContain("transparent 100%");
+    Object.defineProperty(scroller(), "scrollHeight", { value: 100, configurable: true });
+    await act(async () => observer.callback());
+    expect(scroller().style.maskImage).toBe("");
+  });
+});
+
 afterEach(async () => {
   await act(async () => root?.unmount());
   container?.remove();
   root = null;
   container = null;
   vi.unstubAllGlobals();
+});
+
+describe("the virtual column's scroll geometry", () => {
+  it("never flex-shrinks the list or spacers into the viewport", async () => {
+    await mount(column(100));
+    expect(dropzone().classList.contains("shrink-0")).toBe(true);
+    expect(dropzone().classList.contains("min-h-full")).toBe(true);
+    for (const spacer of container!.querySelectorAll("[data-column-spacer]")) {
+      expect(spacer.classList.contains("shrink-0")).toBe(true);
+    }
+    await scrollTo(60 * COLUMN_ROW_STRIDE_FALLBACK);
+    for (const spacer of container!.querySelectorAll("[data-column-spacer]")) {
+      expect(spacer.classList.contains("shrink-0")).toBe(true);
+    }
+  });
 });
 
 describe("a column that fits", () => {
@@ -293,11 +357,11 @@ describe("a column that does not fit", () => {
 
     expect(first).toBeGreaterThan(0);
     expect(Number.parseFloat(leading?.style.height ?? "")).toBeCloseTo(
-      first * COLUMN_ROW_STRIDE_FALLBACK - 8,
+      first * COLUMN_ROW_STRIDE_FALLBACK - 6,
       0,
     );
     expect(Number.parseFloat(trailing?.style.height ?? "")).toBeCloseTo(
-      (500 - last) * COLUMN_ROW_STRIDE_FALLBACK - 8,
+      (500 - last) * COLUMN_ROW_STRIDE_FALLBACK - 6,
       0,
     );
   });

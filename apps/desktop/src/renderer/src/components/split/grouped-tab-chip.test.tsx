@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act } from "react";
-import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
+
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -9,13 +9,7 @@ import {
   HomePaneTabStrip,
   type HomeTabDescriptor,
 } from "@renderer/components/home/home-tab-strip";
-import {
-  TicketPaneTabStrip,
-  type TicketTabDescriptor,
-} from "@renderer/components/ticket/ticket-tabs";
-import { Tab, TabStrip } from "@renderer/components/ui/tab-strip";
-import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
-import { GroupedTabList, groupTabItems, type TabGroup } from "./grouped-tab-chip";
+import { groupTabItems, type TabGroup } from "./grouped-tab-chip";
 
 const noop = () => {};
 /** [chat:one, term] stacked in one pane (chat in front) | [browser:one]. */
@@ -154,276 +148,185 @@ it("draws a group as one chip where its earliest tab sits, each pane's front a s
   expect(groupTabItems([{ id: "term" }], [group])[0]).toMatchObject({ segments: [{ id: "term" }] });
 });
 
-describe("a Home tab group's chip", () => {
-  it("selects every segment, marks the focused pane's front, keeps its nodes as focus moves", () => {
+describe("one capsule per group", () => {
+  it("has one roving tab, a flat overlapping stack, and no focused-member underline", () => {
     home(chat.id);
-    const chip = container.querySelector('[data-slot="grouped-tab-chip"]');
-    expect(chip?.getAttribute("aria-label")).toBe("Tab group");
-    expect(chip?.getAttribute("data-active")).toBe("true");
-    const first = tab("Chat");
-    const second = tab("Page");
-    // The stacked tab behind the front is not a top-level tab.
-    expect(container.querySelector('[role="tab"][aria-label="Notes"]')).toBeNull();
-    expect(first.querySelector('[data-session-glyph="working"]')).not.toBeNull();
-    expect(first.getAttribute("aria-selected")).toBe("true");
-    expect(second.getAttribute("aria-selected")).toBe("true");
-    expect(first.tabIndex).toBe(0);
-    expect(second.tabIndex).toBe(-1);
-    expect(first.parentElement?.getAttribute("data-focused")).toBe("true");
+    const chip = container.querySelector('[data-slot="grouped-tab-chip"]')!;
+    const capsule = chip.querySelector<HTMLElement>('[role="tab"]')!;
+    expect(chip.querySelectorAll('[role="tab"]')).toHaveLength(1);
+    expect(capsule.getAttribute("aria-label")).toBe("Chat");
+    expect(capsule.getAttribute("aria-selected")).toBe("true");
+    expect(chip.querySelectorAll(".group-icon-disc")).toHaveLength(3);
+    expect(chip.querySelector("[data-focused]")).toBeNull();
     home(browser.id);
-    expect(container.querySelector('[data-slot="grouped-tab-chip"]')).toBe(chip);
-    expect(tab("Chat")).toBe(first);
-    expect(first.parentElement?.getAttribute("data-focused")).toBe("false");
-    expect(second.parentElement?.getAttribute("data-focused")).toBe("true");
-    expect(second.tabIndex).toBe(0);
+    expect(chip.querySelector('[role="tab"]')).toBe(capsule);
+    expect(capsule.tabIndex).toBe(0);
   });
-
-  it("draws an unshown group's chip inactive beside an ordinary tab in front", () => {
-    home(file.id, [group], null);
-    expect(
-      container.querySelector('[data-slot="grouped-tab-chip"]')?.getAttribute("data-active"),
-    ).toBe("false");
+  it("keeps an inactive group as one capsule beside single tabs", () => {
+    const callbacks = home(file.id, [group], null);
     expect(tab("Chat").getAttribute("aria-selected")).toBe("false");
     expect(tab("a.ts").getAttribute("aria-selected")).toBe("true");
-  });
-
-  it("summarizes an unshown group's chip and opens it out once shown (VC-614)", () => {
-    home(file.id, [group], null);
-    const chip = container.querySelector('[data-slot="grouped-tab-chip"]')!;
-    expect(chip.getAttribute("data-compact")).toBe("true");
-    // The other panes fold into a +n that names them and shows the group.
-    const more = chip.querySelector<HTMLButtonElement>('[data-slot="grouped-tab-more"]')!;
-    expect(more.textContent).toBe("+1");
-    expect(more.getAttribute("aria-label")).toBe("1 more in this group: Page");
-    expect(more.title).toBe("Page");
-    expect(more.tabIndex).toBe(-1);
-    const callbacks = home(file.id, [group], null);
-    act(() => chip.querySelector<HTMLButtonElement>('[data-slot="grouped-tab-more"]')!.click());
+    click(tab("Chat"));
     expect(callbacks.select).toHaveBeenCalledWith(chat);
-    home(chat.id);
-    expect(chip.getAttribute("data-compact")).toBe("false");
-    expect(chip.querySelector('[data-slot="grouped-tab-more"]')).toBeNull();
-    // A group whose other panes have nothing live has nothing to summarize.
-    home(file.id, [{ id: "solo", panes: [group.panes[0]!] }], null);
-    expect(
-      container.querySelector('[data-slot="grouped-tab-chip"]')?.getAttribute("data-compact"),
-    ).toBe("false");
-  });
-
-  it("keeps per-segment selection, closing, rename and keyboard traversal", () => {
-    const callbacks = home(chat.id);
-    click(tab("Page"));
-    expect(callbacks.select).toHaveBeenCalledWith(browser);
-    callbacks.select.mockClear();
-    click(container.querySelector('[aria-label="Close Page"]')!);
-    expect(callbacks.close).toHaveBeenCalledWith(browser);
-    expect(callbacks.select).not.toHaveBeenCalled();
     act(() => tab("Chat").focus());
     press(tab("Chat"), "ArrowRight");
-    expect(document.activeElement).toBe(tab("Page"));
-    act(() => tab("Chat").dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
-    expect(container.querySelector('input[aria-label="Rename Chat"]')).not.toBeNull();
+    expect(document.activeElement).toBe(tab("a.ts"));
+  });
+  it("keeps twin file captions short and their hover-list directories on the secondary line", async () => {
+    const src = {
+      ...file,
+      id: "file:src/app.ts",
+      relPath: "src/app.ts",
+      title: "app.ts",
+      hint: "src",
+    };
+    const docs = {
+      ...file,
+      id: "file:docs/app.ts",
+      relPath: "docs/app.ts",
+      title: "app.ts",
+      hint: "docs",
+    };
+    act(() =>
+      root.render(
+        <HomePaneTabStrip
+          label="Files"
+          projectId="project"
+          tabs={[HOME_BOARD_TAB, src, docs]}
+          activeTabId={src.id}
+          groups={[
+            {
+              id: "twins",
+              panes: [
+                { paneId: "left", tabIds: [src.id], activeTabId: src.id },
+                { paneId: "right", tabIds: [docs.id], activeTabId: docs.id },
+              ],
+            },
+          ]}
+          shownGroupId="twins"
+          onUngroup={noop}
+          onSelect={noop}
+          onClose={noop}
+          onRename={noop}
+          onPinFile={noop}
+          onCloseOtherFiles={noop}
+        />,
+      ),
+    );
+    const chip = container.querySelector('[data-slot="grouped-tab-chip"]')!;
+    await act(async () => {
+      chip.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
+      await new Promise((done) => setTimeout(done, 300));
+    });
+    const card = document.querySelector('[data-slot="hover-card-content"]')!;
+    expect(
+      [...card.querySelectorAll(".list-row-secondary")].map((node) => node.textContent),
+    ).toEqual(["src", "docs"]);
+    expect(
+      [...card.querySelectorAll("[data-tab-id] .truncate.text-ui")].map((node) => node.textContent),
+    ).toEqual(["app.ts", "app.ts"]);
   });
 
-  it("lists the whole group by pane on right-click: one row per tab, its pane and place, then Ungroup", async () => {
-    useBrowserTabsStore.setState({
-      byId: { one: { url: "http://127.0.0.1:5173/login?next=1" } as never },
-    } as never);
+  it("lists all members on hover, retaining their details and status", async () => {
+    const callbacks = home(chat.id);
+    const chip = container.querySelector('[data-slot="grouped-tab-chip"]')!;
+    await act(async () => {
+      chip.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
+      await new Promise((done) => setTimeout(done, 300));
+    });
+    const card = document.querySelector('[data-slot="hover-card-content"]')!;
+    expect(card.getAttribute("aria-label")).toBe("Tab group items");
+    expect(card.textContent).toContain("Chat");
+    expect(card.textContent).toContain("working");
+    const notes = [...card.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Notes"),
+    )!;
+    click(notes);
+    expect(callbacks.select).toHaveBeenCalledWith(term);
+  });
+  it("offers member actions and Ungroup in its context menu", async () => {
     const callbacks = home(chat.id);
     await openChipMenu();
     const menu = document.querySelector('[data-slot="grouped-tab-menu"]')!;
-    expect(menu.textContent).toContain("Tab group");
-    expect(menu.textContent).toContain("2 panes");
-    const rows = [...menu.querySelectorAll('[data-slot="context-menu-item"][data-pane]')];
-    expect(
-      rows.map((row) => [
-        row.getAttribute("aria-label"),
-        row.getAttribute("data-pane"),
-        row.getAttribute("data-front"),
-        row.getAttribute("data-showing"),
-      ]),
-    ).toEqual([
-      ["Chat, pane 1, showing", "1", "true", "true"],
-      ["Notes, pane 1, behind", "1", "false", "false"],
-      ["Page, pane 2", "2", "true", "false"],
-    ]);
-    // The line that tells like tabs apart: a page's host:port/path.
-    expect(rows[2]!.textContent).toContain("127.0.0.1:5173/login?next=1");
-    // No checkmarks: nothing in the menu is a radio any more.
-    expect(menu.querySelector('[data-slot="context-menu-radio-item"]')).toBeNull();
-    await act(async () => {
-      rows[1]!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    });
-    expect(callbacks.select).toHaveBeenCalledWith(term);
+    expect(menu.textContent).toContain("Page");
+    const close = menu.querySelector('[aria-label="Close: Page"]')!;
+    click(close);
+    expect(callbacks.close).toHaveBeenCalledWith(browser);
     await openChipMenu();
     const ungroup = [...document.querySelectorAll('[data-slot="context-menu-item"]')].find(
-      (row) => row.textContent === "Ungroup",
+      (item) => item.textContent === "Ungroup",
     )!;
-    await act(async () => {
-      ungroup.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    });
-    expect(callbacks.ungroup).toHaveBeenCalledWith("group-1");
-    useBrowserTabsStore.setState({ byId: {} } as never);
+    click(ungroup);
+    expect(callbacks.ungroup).toHaveBeenCalledWith(group.id);
   });
-
-  it("can hold the permanent Board without making it closable or draggable", () => {
-    home(
-      browser.id,
-      [
-        {
-          id: "board-group",
-          panes: [
-            { paneId: "a", tabIds: [HOME_BOARD_TAB.id], activeTabId: HOME_BOARD_TAB.id },
-            { paneId: "b", tabIds: [browser.id], activeTabId: browser.id },
-          ],
-        },
-      ],
-      "board-group",
-    );
-    expect(tab("Board").getAttribute("aria-selected")).toBe("true");
-    expect(container.querySelector('[aria-label="Close Board"]')).toBeNull();
-    expect(tab("Page").getAttribute("aria-selected")).toBe("true");
-  });
-});
-
-it("groups Ticket Body and Browser tabs with the same segment controls and single entry point", () => {
-  const body: TicketTabDescriptor = { id: "body", kind: "body", label: "Body" };
-  const page: TicketTabDescriptor = { id: browser.id, kind: "browser", label: "Page" };
-  const onSelect = vi.fn();
-  const onClose = vi.fn();
-  act(() =>
-    root.render(
-      <TicketPaneTabStrip
-        label="Ticket tabs"
-        projectId="project"
-        ticketId="ticket"
-        tabs={[body, page]}
-        activeTabId={page.id}
-        groups={[
-          {
-            id: "body-group",
-            panes: [
-              { paneId: "a", tabIds: [body.id], activeTabId: body.id },
-              { paneId: "b", tabIds: [page.id], activeTabId: page.id },
-            ],
-          },
-        ]}
-        shownGroupId="body-group"
-        onSelectTab={onSelect}
-        onCloseTab={onClose}
-        onRenameSessionTab={noop}
-      />,
-    ),
-  );
-  expect(tab("Body").getAttribute("aria-selected")).toBe("true");
-  expect(tab("Body").tabIndex).toBe(-1);
-  expect(tab("Page").tabIndex).toBe(0);
-  expect(container.querySelector('[aria-label="Close Body"]')).toBeNull();
-  click(tab("Body"));
-  expect(onSelect).toHaveBeenCalledWith("body");
-  click(container.querySelector('[aria-label="Close Page"]')!);
-  expect(onClose).toHaveBeenCalledWith(page);
-});
-
-it("uses the same SessionGlyph and no duplicate state mark on Ticket chat tabs", () => {
-  act(() =>
-    root.render(
-      <TicketPaneTabStrip
-        label="Ticket tabs"
-        projectId="project"
-        ticketId="ticket"
-        tabs={[{ id: chat.id, kind: "chat", label: "Chat", status: "waiting" }]}
-        activeTabId={chat.id}
-        onSelectTab={noop}
-        onCloseTab={noop}
-        onRenameSessionTab={noop}
-      />,
-    ),
-  );
-  expect(tab("Chat").querySelector('[data-session-glyph="waiting"]')).not.toBeNull();
-  expect(tab("Chat").querySelector('[data-slot="tab-state"]')).toBeNull();
-});
-
-it("leaves a chip's segments out of the sortable — the chip is not dragged, its tabs move in pane strips", () => {
-  act(() =>
-    root.render(
-      <TabStrip label="Tabs" reorder={{ ids: ["x"], onReorder: noop }}>
-        <GroupedTabList
-          tabs={[{ id: "x" }, { id: "chat:one" }, { id: "browser:one" }]}
-          groups={[group]}
-          shownGroupId={null}
-          activeTabId="x"
-          edgeTargets
-          describe={(item) => ({ label: item.id, icon: ChatCircleIcon })}
+  it("puts Take out inside the pane tab dropdown, claims pointer-down, and preserves context parity", async () => {
+    const takeOut = vi.fn();
+    act(() =>
+      root.render(
+        <HomePaneTabStrip
+          label="Pane tabs"
+          projectId="p"
+          tabs={[chat]}
+          activeTabId={chat.id}
           onSelect={noop}
-        >
-          {(item, state) => (
-            <Tab
-              label={item.id}
-              dragId={state.grouped ? undefined : item.id}
-              active={state.active}
-              tabStop={state.tabStop}
-              onActivate={noop}
-            />
-          )}
-        </GroupedTabList>
-      </TabStrip>,
-    ),
-  );
-  expect(tab("x").getAttribute("aria-describedby")).toContain("DndDescribedBy");
-  expect(tab("chat:one").hasAttribute("aria-describedby")).toBe(false);
-  // Every top-level item is an edge target for grouping, segments included.
-  expect(
-    [...container.querySelectorAll("[data-pair-target-id]")].map((node) =>
-      node.getAttribute("data-pair-target-id"),
-    ),
-  ).toEqual(["x", "chat:one", "browser:one"]);
-});
-
-it("marks no edge targets on a pane's own strip", () => {
-  act(() =>
-    root.render(
-      <HomePaneTabStrip
-        label="Pane 1 tabs"
-        projectId="project"
-        tabs={[chat, browser]}
-        activeTabId={chat.id}
-        onSelect={noop}
-        onClose={noop}
-        onRename={noop}
-        onReorder={noop}
-        onPinFile={noop}
-        onCloseOtherFiles={noop}
-      />,
-    ),
-  );
-  expect(container.querySelector("[data-pair-target-id]")).toBeNull();
-  expect(container.querySelector('[data-slot="grouped-tab-chip"]')).toBeNull();
-});
-
-it("puts the way out of the group on a pane strip's trailing edge (VC-614)", () => {
-  const takeOut = vi.fn();
-  act(() =>
-    root.render(
-      <HomePaneTabStrip
-        label="Pane 2 of 3"
-        projectId="project"
-        tabs={[browser]}
-        activeTabId={browser.id}
-        onTakeOut={takeOut}
-        onSelect={noop}
-        onClose={noop}
-        onRename={noop}
-        onPinFile={noop}
-        onCloseOtherFiles={noop}
-      />,
-    ),
-  );
-  const button = container.querySelector<HTMLButtonElement>('[data-slot="pane-take-out"]')!;
-  expect(button.getAttribute("aria-label")).toBe("Take out of group");
-  act(() => button.click());
-  expect(takeOut).toHaveBeenCalledTimes(1);
-  // The top strip, and a pane strip given no way out, draw none.
-  home(chat.id);
-  expect(container.querySelector('[data-slot="pane-take-out"]')).toBeNull();
+          onClose={noop}
+          onRename={noop}
+          onPinFile={noop}
+          onCloseOtherFiles={noop}
+          onTakeOutTab={takeOut}
+        />,
+      ),
+    );
+    expect(container.querySelector('[data-slot="pane-take-out"]')).toBeNull();
+    const trigger = container.querySelector('[aria-label="Actions for Chat"]')!;
+    const down = new MouseEvent("pointerdown", { bubbles: true, button: 0, cancelable: true });
+    await act(async () => trigger.dispatchEvent(down));
+    const action = [...document.querySelectorAll('[data-slot="dropdown-menu-item"]')].find((item) =>
+      item.textContent?.includes("Take out of group"),
+    )!;
+    expect(action).toBeDefined();
+    click(action);
+    expect(takeOut).toHaveBeenCalledExactlyOnceWith(chat.id);
+    expect(document.querySelector('[data-slot="dropdown-menu-content"]')).toBeNull();
+    await act(async () =>
+      tab("Chat").dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, clientX: 10, clientY: 10 }),
+      ),
+    );
+    expect(document.querySelector('[data-slot="context-menu-content"]')?.textContent).toContain(
+      "Take out of group",
+    );
+  });
+  it("lets the dropdown own the pointer and runs a member action before dismissing", async () => {
+    const callbacks = home(chat.id);
+    const chip = container.querySelector('[data-slot="grouped-tab-chip"]')!;
+    await act(async () => {
+      chip.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    });
+    const trigger = chip.querySelector('[aria-label="Actions for Chat"]')!;
+    await act(async () =>
+      trigger.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })),
+    );
+    expect(
+      document.querySelector('[data-slot="hover-card-content"][data-state="open"]'),
+    ).toBeNull();
+    const menu = document.querySelector('[data-slot="dropdown-menu-content"]')!;
+    const close = menu.querySelector('[aria-label="Close: Page"]')!;
+    expect(close).not.toBeNull();
+    click(close);
+    expect(callbacks.close).toHaveBeenCalledExactlyOnceWith(browser);
+    expect(document.querySelector('[data-slot="dropdown-menu-content"]')).toBeNull();
+  });
+  it("uses a +N after three icons without expanding into member capsules", () => {
+    const four = {
+      ...group,
+      panes: [...group.panes, { paneId: "p3", tabIds: [file.id], activeTabId: file.id }],
+    };
+    home(chat.id, [four]);
+    const chip = container.querySelector('[data-slot="grouped-tab-chip"]')!;
+    expect(chip.querySelectorAll(".group-icon-disc")).toHaveLength(3);
+    expect(chip.textContent).toContain("+1");
+    expect(chip.querySelectorAll('[role="tab"]')).toHaveLength(1);
+  });
 });

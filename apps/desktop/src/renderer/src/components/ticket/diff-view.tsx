@@ -1,3 +1,8 @@
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
+import { Button } from "@renderer/components/ui/button";
+import { Notice } from "@renderer/components/ui/notice";
+import { RefreshIcon } from "@renderer/components/ui/icon";
+
 /**
  * Diff tab content pane (CONCEPT #48/#49/#51, issue #109).
  *
@@ -110,6 +115,7 @@ function LocalDiffView({
   onViewStateChange,
 }: DiffViewProps) {
   const [state, setState] = React.useState<LoadState>({ status: "loading" });
+  const [loadAttempt, setLoadAttempt] = React.useState(0);
   const [conflict, setConflict] = React.useState<{ text: string; mtime: number } | null>(null);
   const [liveError, setLiveError] = React.useState<string | null>(null);
   const presentation = useUiStore((s) => s.diffPresentation);
@@ -342,7 +348,7 @@ function LocalDiffView({
     return () => {
       cancelled = true;
     };
-  }, [projectId, ticket.id, relPath, previousPath, status, binary, onLoaded]);
+  }, [projectId, ticket.id, relPath, previousPath, status, binary, onLoaded, loadAttempt]);
 
   const modifiedReadOnly = state.status === "editor" ? state.plan.modifiedReadOnly : true;
 
@@ -584,10 +590,33 @@ function LocalDiffView({
   const inlineFallback = isDiffInlineFallback(presentation, paneWidth);
 
   if (state.status === "loading") {
-    return <p className="px-gutter py-4 text-ui text-muted-foreground">Loading diff…</p>;
+    return (
+      <p className="px-gutter py-4 text-ui text-muted-foreground">
+        <LoadingLabel>Loading diff</LoadingLabel>
+      </p>
+    );
   }
   if (state.status === "error") {
-    return <p className="px-gutter py-4 text-ui text-destructive">{state.error}</p>;
+    return (
+      <div className="px-gutter py-4">
+        <Notice
+          tone="error"
+          title="Couldn't load diff"
+          detail={state.error}
+          announce
+          actions={
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setLoadAttempt((attempt) => attempt + 1)}
+            >
+              <RefreshIcon aria-hidden />
+              Retry
+            </Button>
+          }
+        />
+      </div>
+    );
   }
   if (state.status === "stub") {
     return (

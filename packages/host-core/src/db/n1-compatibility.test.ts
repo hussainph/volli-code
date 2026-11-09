@@ -1546,13 +1546,16 @@ describe.skipIf(manifest === null)(
     });
 
     it.each(["both", "only"] as const)(
-      "attaches a descriptionVersion:2 Code Mode %s birth in N−1 without losing newly callable tools",
+      "attaches a versioned Code Mode %s birth in N−1 without losing newly callable tools",
       async (mode) => {
         await headProfile();
         const { head, guarded } = await probe();
         if (guarded && headFloor() > head) return; // The refusal test owns a raised floor.
         const codeMode = codeModeSurfaceFor({ tools: CODE_MODE_TOOLS, mode });
         expect(codeMode.descriptionVersion).toBe(2);
+        expect(codeMode.mcpResultVersion).toBe(1);
+        // Older codecs ignore declaration metadata they do not know. Only the
+        // advertised MCP result contract degrades; tool membership must not.
         for (const tool of NEW_CODE_CALLABLE) expect(codeMode.routes[tool], tool).toBe("both");
         const db = openVolliDb(dbPath);
         try {

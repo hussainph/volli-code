@@ -720,7 +720,7 @@ export function registerDataIpcHandlers(
     "volli:mcp-list": (input: McpProjectInput) => ({
       ok: true as const,
       servers: mcpSettings.list(input.projectId),
-      operations: listMcpOperations(db, input.projectId),
+      operations: listMcpOperations(db, mcpSettings.global ? null : input.projectId),
       access: mcpSettings.accessFor(input.projectId),
     }),
     "volli:mcp-test": (input: McpServerInput) => mcpSettings.test(input),
@@ -1011,9 +1011,14 @@ export function registerDataIpcHandlers(
      *
      * The caller already moved its own row optimistically; the answer is what it
      * reverts to if this failed.
+     *
+     * No fold for the existence check, and the row comes from the listing's
+     * one-row read (VC-1101): a receipt moves no ledger fact, so a click — or a
+     * fleet of them — costs a base-row read and a cached listing row, never a
+     * checkpoint decode and whole-projection copy.
      */
     "volli:session-read-set": async (input: SessionReadSetInput): Promise<SessionReadSetResult> => {
-      const existing = await sessionEngine.getSession({ sessionId: input.sessionId });
+      const existing = await sessionEngine.getBaseSession({ sessionId: input.sessionId });
       if (existing === null) return { ok: false, error: "Unknown session" };
       // Main's clock, never the renderer's: the receipt is main's record, and a
       // stamp from a window with a skewed clock would date the dot wrongly for
@@ -1022,7 +1027,7 @@ export function registerDataIpcHandlers(
       await publishSessionListingRow(
         {
           db,
-          getSession: (query) => sessionEngine.getSession(query),
+          getSessionListing: (query) => sessionEngine.getSessionListing(query),
           liveAttachmentIds,
           publish: broadcastSessionActivity,
         },

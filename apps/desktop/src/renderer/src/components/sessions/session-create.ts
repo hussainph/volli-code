@@ -29,6 +29,8 @@ import {
   type TerminalSplitDirection,
 } from "@renderer/stores/sessions";
 import { useProjectUiStore } from "@renderer/stores/project-ui";
+import { useProvisionalPaneLayoutStore } from "@renderer/stores/provisional-pane-layout";
+import { deactivateProvisionalPane } from "@renderer/lib/provisional-pane-commit";
 import { disposeEngine, getOrCreateEngine } from "@renderer/terminal/registry";
 import { refuseRemote, remoteHostNow } from "@renderer/stores/remote-project";
 import { useHostConnectionStore } from "@renderer/stores/host-connection";
@@ -389,9 +391,12 @@ function abandonChat(sessionId: string): void {
  * the new tab joins its focused pane rather than replacing the group.
  */
 export async function startProjectTerminal(projectId: string): Promise<string | null> {
+  const destination =
+    useProjectUiStore.getState().byProject[projectId]?.homeSplitView?.focusedPaneId;
   const sessionId = await createTerminalSession(projectScope(projectId));
   if (sessionId === null) return null;
-  useProjectUiStore.getState().openHomeTab(projectId, sessionId);
+  if (destination === undefined) useProjectUiStore.getState().openHomeTab(projectId, sessionId);
+  else useProjectUiStore.getState().openHomeTab(projectId, sessionId, destination);
   // Returned for the one caller that has something to say to the shell it just
   // opened — the dependency offer types its install into it (VC-156). Every
   // other caller ignores it, exactly as it did when this returned nothing.
@@ -440,9 +445,14 @@ export async function startProjectChat(
  * behind it and the chord would look like it had done nothing.
  */
 export async function startTicketTerminal(projectId: string, ticketId: string): Promise<void> {
+  const destination =
+    useProjectUiStore.getState().byProject[projectId]?.ticketTabs[ticketId]?.splitView
+      ?.focusedPaneId;
   const sessionId = await createTerminalSession(ticketScope(projectId, ticketId));
   if (sessionId === null) return;
-  useProjectUiStore.getState().openTicketTab(projectId, ticketId, sessionId);
+  if (destination === undefined)
+    useProjectUiStore.getState().openTicketTab(projectId, ticketId, sessionId);
+  else useProjectUiStore.getState().openTicketTab(projectId, ticketId, sessionId, destination);
 }
 
 /**
@@ -561,6 +571,12 @@ export async function bootChatSession(
     refuseRemote(scope.projectId);
     return null;
   }
+  const uiAtCommand = useProjectUiStore.getState().byProject[scope.projectId];
+  const destination = (
+    scope.kind === "ticket"
+      ? uiAtCommand?.ticketTabs[scope.ticketId]?.splitView
+      : uiAtCommand?.homeSplitView
+  )?.focusedPaneId;
   return underOwnerGuard(scope, chatStarting, async () => {
     try {
       if (!createsSessionNow) {
@@ -580,6 +596,19 @@ export async function bootChatSession(
         if (trackedProject(scope.projectId) === undefined || !land(sessionId, false)) {
           useChatDraftsStore.getState().discardProvisional(sessionId);
           return null;
+        }
+        if (destination !== undefined) {
+          const workspace = useProjectUiStore.getState();
+          if (scope.kind === "ticket")
+            workspace.focusTicketPane(scope.projectId, scope.ticketId, destination);
+          else workspace.focusHomePane(scope.projectId, destination);
+          const latest = workspace.byProject[scope.projectId];
+          const split =
+            (scope.kind === "ticket"
+              ? latest?.ticketTabs[scope.ticketId]?.splitView
+              : latest?.homeSplitView) ?? null;
+          deactivateProvisionalPane(ownerKey(scope), destination, split);
+          useProvisionalPaneLayoutStore.getState().place(ownerKey(scope), sessionId, destination);
         }
         useChatSessionsStore.getState().setProvisionalActive(ownerKey(scope), sessionId);
         return sessionId;

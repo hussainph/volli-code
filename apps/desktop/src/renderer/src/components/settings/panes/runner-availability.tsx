@@ -3,7 +3,8 @@
  * every quit and in the runner's alwaysOn/power report (VC-1037).
  */
 import * as React from "react";
-import { LaptopIcon } from "@phosphor-icons/react/dist/csr/Laptop";
+import { LaptopIcon } from "@renderer/components/ui/icon";
+
 import { RUNNER_RESIDENT_APP_STATE_KEY, runnerStaysAvailable } from "@volli/shared";
 import { PrefRow, PrefSection } from "@renderer/components/settings/kit";
 import { Switch } from "@renderer/components/ui/switch";

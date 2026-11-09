@@ -74,7 +74,8 @@ test("the box default is chosen through UI after key storage, never through a SQ
   const smoke = read("../remote-acceptance-smoke.mjs");
   const key = smoke.indexOf("await wait(`Signed in on ${REMOTE_HOST} · API key`)");
   const picker = smoke.indexOf('await click("button", `Models on ${REMOTE_HOST}…`)');
-  const select = smoke.indexOf('await click("option", "GPT-4.1 mini")');
+  const select = smoke.indexOf('await click("option", "Azure OpenAI GPT-4.1 mini")');
+  assert.doesNotMatch(smoke, /await click\("option", "GPT-4\.1 mini"\)/u);
   const session = smoke.indexOf('await send("remote-stream-turn")');
   assert.ok(key > 0 && picker > key && select > picker && session > select);
   assert.match(smoke, /await shot\("step-4-model-default"\)/u);
@@ -148,6 +149,41 @@ test("project success toast cannot make navigation actionable during dialog exit
   assert.equal(hasActionableControl('- button "Home"', "button", "Home"), false);
   assert.equal(hasActionableControl(`${ready}\n${ready}`, "button", "Home"), false);
   assert.equal(hasActionableControl('- button "Home page" [ref=e1]', "button", "Home"), false);
+});
+test("cloud move waits for the named composer, not the Chat tab or placeholder behind its menu", () => {
+  // The failed app-path capture had already committed Chat, but hideOthers
+  // still suppressed background names while the modal chooser was closing.
+  const exiting = [
+    "- tab [selected] [ref=f2e432]:",
+    "  - generic [ref=f2e440]: Chat",
+    "- textbox [ref=f2e659]:",
+    "  - /placeholder: Ask, plan, or implement…",
+    '- menu "Open a tab" [ref=f2e413]:',
+    '  - menuitem "Chat ⌘T" [active] [ref=f2e414]',
+  ].join("\n");
+  assert.equal(hasActionableControl(exiting, "textbox", "Message"), false);
+  const ready = '- textbox "Message" [ref=f2e701]';
+  assert.equal(hasActionableControl(ready, "textbox", "Message"), true);
+  for (const unavailable of [
+    '- textbox "Message" [disabled] [ref=f2e701]',
+    '- textbox "Message"',
+    `${ready}\n${ready.replace("f2e701", "f2e702")}`,
+    '- textbox "Message preview" [ref=f2e701]',
+  ])
+    assert.equal(hasActionableControl(unavailable, "textbox", "Message"), false);
+
+  // Source wiring only: the full app-path journey remains the live proof.
+  // One gate in send covers both chooser selections and the resumed Session.
+  const move = read("../cloud-move-acceptance.mjs");
+  const sendStart = move.indexOf("const send = async");
+  const send = move.slice(sendStart, move.indexOf("\ntry {", sendStart));
+  assert.match(
+    send,
+    /await waitUntil\([\s\S]*latest = await drive\("snapshot"\);\s*return hasActionableControl\(latest.text, "textbox", "Message"\);[\s\S]*await action\("type", "textbox", "Message", \{ text \}\);/u,
+  );
+  assert.match(send, /await press\("textbox", "Message", "Enter"\)/u);
+  assert.match(send, /latest\?\.text/u);
+  assert.match(send, /cause: error/u);
 });
 test("artifact setting is explicit, absolute and cannot silently fall back to downloads", () => {
   for (const value of ["", undefined, "relative.tar.gz", "/tmp/foo.zip", "/tmp/a.tar.gz:"])
@@ -322,10 +358,16 @@ test("durable answer proof uses the real titled trailer and the same question's 
 });
 
 test("log proof requires a real row, not search/filter or other-host names", () => {
-  const header = `- button "volli-acceptance" [pressed]\n- textbox "Search": serving`;
+  const header = `- button "volli-acceptance" [pressed]\n- textbox "Search logs": serving`;
   const row = `- listitem:\n  - generic: volli-acceptance\n  - button "hostd" [ref=e1]\n  - 'button "serving database: /fixture/db" [ref=e2]'`;
   assert.equal(visibleServingRow(header, "volli-acceptance"), false);
   assert.equal(visibleServingRow(`${header}\n${row}`, "volli-acceptance"), true);
+  // A narrow pane: the row folds source and component under the message.
+  const folded = `- listitem:\n  - generic:\n    - generic: 22:41:58.775\n    - generic: info\n    - button "serving" [ref=e2]\n    - generic:\n      - generic:\n        - generic: volli-acceptance\n        - button "hostd" [ref=e1]`;
+  assert.equal(visibleServingRow(`${header}\n${folded}`, "volli-acceptance"), true);
+  // A row that names neither its machine nor its component proves nothing.
+  const bare = `- listitem:\n  - generic:\n    - generic: 22:41:58.775\n    - generic: info\n    - button "serving" [ref=e2]`;
+  assert.equal(visibleServingRow(`${header}\n${bare}`, "volli-acceptance"), false);
   assert.equal(
     visibleServingRow(
       `${header}\n${row.replace("volli-acceptance", "other-host")}`,
@@ -527,13 +569,14 @@ test("step 3 waits for the real Workspace rejoin before clicking the grace-enabl
   let clicks = 0;
   const run = new Function(
     "tools",
-    `const { click, call, snap, waitUntil, hasActionableControl } = tools;
+    `const { click, call, snap, waitUntil, hasActionableControl, snapshotSubtree } = tools;
      return (async () => { ${body} })();`,
   );
   await run({
-    click: async (_role, name) => {
+    click: async (_role, name, options) => {
       if (name === "New ticket") {
         assert.equal(reads, 3, "a grace-enabled button must not be mistaken for rejoin");
+        assert.deepEqual(options, { scope: { role: "group", name: "Board actions" } });
         clicks++;
       }
     },
@@ -543,13 +586,16 @@ test("step 3 waits for the real Workspace rejoin before clicking the grace-enabl
         ready: acceptanceWorkspaceReady(workspaceSnapshot(statuses[reads++])),
       };
     },
-    snap: async () => ({ text: '- button "New ticket" [ref=e2]' }),
+    snap: async () => ({
+      text: '- group "Board actions" [ref=e1]:\n  - button "New ticket" [ref=e2]\n- region "Empty board" [ref=e3]:\n  - button "New ticket" [ref=e4]',
+    }),
     waitUntil: async (_label, check, options) => {
       assert.deepEqual(options, { timeout: 10_000, interval: 100 });
       for (let i = 0; i < 3; i++) if (await check()) return;
       assert.fail("Workspace never became ready");
     },
     hasActionableControl,
+    snapshotSubtree,
   });
   assert.equal(clicks, 1);
   const supervisor = read("../supervisor.mjs");
@@ -581,6 +627,37 @@ function liftedKeepaliveRetirement(started, quitAttempted, tools) {
   `,
   )(tools);
 }
+test("the local keepalive opens Home's scoped tab chooser and waits for its real Message field", async () => {
+  const smoke = read("../remote-acceptance-smoke.mjs");
+  const helper = smoke.slice(
+    smoke.indexOf("async function openHomeChat()"),
+    smoke.indexOf("async function hostChip()"),
+  );
+  const actions = [];
+  const run = new Function(
+    "tools",
+    `const { click, snap, waitUntil, hasActionableControl } = tools; return (${helper})();`,
+  );
+  await run({
+    click: async (...args) => actions.push(args),
+    snap: async () => ({ text: '- textbox "Message" [ref=message]' }),
+    waitUntil: async (_label, check) => assert.equal(await check(), true),
+    hasActionableControl,
+  });
+  assert.deepEqual(actions, [
+    ["button", "Open a tab", { scope: { role: "main", name: null } }],
+    ["menuitem", "Chat ⌘T"],
+  ]);
+  const bothDoors =
+    '- main [ref=main]:\n  - button "Open a tab" [ref=strip]\n- complementary [ref=sidebar]:\n  - button "Open a tab" [ref=nav]';
+  assert.equal(hasActionableControl(bothDoors, "button", "Open a tab"), false);
+  assert.equal(
+    hasActionableControl(snapshotSubtree(bothDoors, "main", null), "button", "Open a tab"),
+    true,
+  );
+  assert.match(smoke, /await openHomeChat\(\);\s*localKeepaliveStarted = true;/u);
+});
+
 test("keepalive retirement reopens normally and stops only the named local synthetic Session", async () => {
   const calls = [];
   const tools = Object.fromEntries(
@@ -669,7 +746,7 @@ test("journey arranges only benign Git state and runs all eight real assertions 
     "Signed in on",
     "Stop turn",
     "Waiting for you",
-    "Search",
+    "Search logs",
   ])
     assert.ok(smoke.includes(label), label);
   assert.doesNotMatch(smoke, /EXPECTED_PROJECT_FAILURE|XFAIL|XPASS|expectedFailure/u);
@@ -724,7 +801,7 @@ test("journey arranges only benign Git state and runs all eight real assertions 
   assert.ok(smoke.includes('call("acceptance-arrange-box")'));
   assert.match(
     smoke,
-    /hasActionableControl\(\(await snap\(\)\)\.text, "button", "New ticket"\)/u,
+    /hasActionableControl\(\s*snapshotSubtree\(\(await snap\(\)\)\.text, "group", "Board actions"\),\s*"button",\s*"New ticket",?\s*\)/u,
     "the daemon's operator restart must rejoin before the first ticket write, not just keep its chip name",
   );
   assert.ok(smoke.includes("can't add projects to it."));

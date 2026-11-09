@@ -56,6 +56,27 @@ export const PRESETS = Object.freeze({
     targetFileBytes: 746_000_000,
     targetSessionEventBytes: 346_000_000,
   }),
+  /**
+   * The owner's whole profile as the 2026-11 stutter audit found it (VC-1093):
+   * 5,034 Sessions, 1.04M Session Events, 1,218 tickets, a 1.9 GB database.
+   * The fleet-storm arm's scale. Everything the audit did not count keeps
+   * `real`'s ratios (ticket events per ticket, commands per Session, worktree
+   * share). Heavy: generating it writes about 2 GB and takes many minutes, so
+   * it is opt-in, never a default and never a CI fixture.
+   */
+  owner: Object.freeze({
+    sessions: 5_034,
+    sessionEvents: 1_040_000,
+    tickets: 1_218,
+    ticketEvents: 16_656,
+    sessionCommands: 35_890,
+    liveWorktrees: 155,
+    overlappingWorktrees: 53,
+    maxSessionEvents: 3_336,
+    transcriptMessages: 1_600,
+    targetFileBytes: 1_900_000_000,
+    targetSessionEventBytes: 692_000_000,
+  }),
   ...ticketScalePresets(),
 });
 

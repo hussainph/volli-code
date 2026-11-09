@@ -1,5 +1,6 @@
+import { Notice } from "@renderer/components/ui/notice";
 /**
- * Configure → Skills: what this project's agents can reach, and what they are
+ * Settings → Skills: what this project's agents can reach, and what they are
  * told about unprompted.
  *
  * THE MODE COLUMN IS THE POINT OF THIS PANE. A fresh Session's Volli-composed
@@ -36,11 +37,15 @@
  * vanish from the only surface able to turn it back on.
  */
 import * as React from "react";
-import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
-import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
-import { EyeIcon } from "@phosphor-icons/react/dist/csr/Eye";
-import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
+import {
+  ExternalIcon,
+  GuideIcon,
+  PreviewIcon,
+  FolderOpenIcon,
+  WarningIcon,
+  InfoIcon,
+} from "@renderer/components/ui/icon";
+
 import {
   AUTHOR_MODEL_ONLY_MODE,
   authorSkillMode,
@@ -60,9 +65,12 @@ import {
   CONTROL_W,
   Cell,
   DataTable,
+  DescriptionCell,
   RowAction,
   SectionAction,
+  PrefRow,
 } from "@renderer/components/settings/kit";
+import { actionsColumnWidth } from "@renderer/components/settings/kit/data-table";
 import { useAgentIndex } from "@renderer/components/settings/use-agent-index";
 import { ContentPreviewDialog } from "./content-preview-dialog";
 import { skillBodyTokens, skillsIndexTokens } from "./skills-budget";
@@ -75,7 +83,11 @@ import {
 } from "@renderer/components/ui/select";
 import { writeThrough } from "@renderer/stores/mutate";
 import { useProjectsStore } from "@renderer/stores/projects";
+import { Segmented } from "@renderer/components/ui/segmented";
 import { boardApi } from "@renderer/lib/board-api";
+import { SettingsNavigation } from "../settings-navigation";
+import { Button } from "@renderer/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 
 /** What each mode is called, and the one line explaining what it costs. */
 const MODE_LABEL: Record<SkillMode, string> = {
@@ -108,7 +120,15 @@ function skillScope(skill: SkillReference): "project" | "personal" {
   return skill.root.startsWith(".") ? "project" : "personal";
 }
 
-export function SkillsPane({ project }: { project: Project }) {
+export function SkillsPane({
+  project,
+  policyProjectPicker = false,
+}: {
+  project: Project;
+  policyProjectPicker?: boolean;
+}) {
+  const projects = useProjectsStore((store) => store.projects);
+  const navigation = React.useContext(SettingsNavigation);
   const { state, reload } = useAgentIndex(project.id);
   const [filter, setFilter] = React.useState("all");
   // Inspection is its own state, apart from the Mode column: opening a skill
@@ -129,30 +149,105 @@ export function SkillsPane({ project }: { project: Project }) {
     <>
       <AsyncSection
         title="Skills"
-        icon={BookOpenIcon}
-        hint={
-          indexTokens === null ? (
-            <>
-              Auto costs prompt budget every turn. Manual keeps <code>/name</code> working.
-            </>
-          ) : (
-            <>Auto entries add ~{formatTokens(indexTokens)} tokens to every turn.</>
-          )
+        titleHidden
+        icon={GuideIcon}
+        action={
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <Segmented
+              ariaLabel="Skill scope"
+              value={filter}
+              onChange={setFilter}
+              options={[
+                { key: "all", label: "All" },
+                { key: "personal", label: "Global" },
+                { key: "project", label: "This project" },
+              ]}
+            />
+            {/* What Auto costs every turn: the one number the mode column hides. */}
+            {indexTokens === null ? null : (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-muted-foreground"
+                    aria-label="Auto token estimate"
+                  >
+                    Auto
+                    <InfoIcon />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>~{formatTokens(indexTokens)} tokens per turn</TooltipContent>
+              </Tooltip>
+            )}
+            {state.status === "ready" && state.data.skills.length === 0 ? null : (
+              <SectionAction label="Reload" icon={FolderOpenIcon} onAct={reload} />
+            )}
+          </div>
         }
-        action={<SectionAction label="Reload" icon={FolderOpenIcon} onAct={reload} />}
+        before={
+          policyProjectPicker ? (
+            <PrefRow label="Activation project">
+              <Select
+                value={project.id}
+                onValueChange={(id) => navigation?.selectPolicyProject?.(id)}
+                disabled={!navigation?.selectPolicyProject}
+              >
+                <SelectTrigger
+                  aria-label="Skill activation project"
+                  size="sm"
+                  className="w-56 max-w-full"
+                >
+                  <SelectValue>{project.name}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {(projects.length ? projects : [project]).map((item) => (
+                    <SelectItem key={item.id} value={item.id}>
+                      {item.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </PrefRow>
+          ) : undefined
+        }
         fill
         state={state}
         isEmpty={(data) => data.skills.length === 0}
-        empty="No skills yet. Add one to .agents/skills."
+        empty="No skills"
+        emptyIllustration="skill"
+        emptyLine="Add to .agents/skills."
+        emptyAction={{ label: "Reload", onAction: reload }}
       >
         {(data) => (
-          <SkillsTable
-            project={project}
-            skills={data.skills}
-            filter={filter}
-            onFilter={setFilter}
-            onPreview={setPreviewing}
-          />
+          <>
+            {data.omittedSkillDirectories ? (
+              <Notice
+                title={`${data.omittedSkillDirectories} skill directories not read`}
+                detail="Discovery reads the first 200 directories per location."
+                actions={
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() =>
+                      void writeThrough("reveal skills", () =>
+                        window.api.fs.revealInFinder(`${project.path}/.agents/skills`),
+                      )
+                    }
+                  >
+                    <FolderOpenIcon />
+                    Reveal skills folder
+                  </Button>
+                }
+              />
+            ) : null}
+            <SkillsTable
+              project={project}
+              skills={data.skills}
+              filter={filter}
+              onPreview={setPreviewing}
+            />
+          </>
         )}
       </AsyncSection>
       <ContentPreviewDialog
@@ -169,7 +264,7 @@ export function SkillsPane({ project }: { project: Project }) {
 
 /** Where a skill lives, as its preview's origin line: its tier, then its root. */
 function skillOrigin(skill: SkillReference): string {
-  return `${skillScope(skill) === "project" ? "This project" : "Personal"} · ${skill.root}`;
+  return `${skillScope(skill) === "project" ? "This project" : "Global"} · ${skill.root}`;
 }
 
 /**
@@ -207,13 +302,11 @@ function SkillsTable({
   project,
   skills,
   filter,
-  onFilter,
   onPreview,
 }: {
   project: Project;
   skills: readonly SkillReference[];
   filter: string;
-  onFilter: (next: string) => void;
   onPreview: (skill: SkillReference) => void;
 }) {
   const adoptProject = useProjectsStore((store) => store.adoptProject);
@@ -221,6 +314,7 @@ function SkillsTable({
   // to move reads as one that did not take. The write's answer settles it.
   const [pending, setPending] = React.useState<SkillModes | null>(null);
   const modes = pending ?? project.skillModes ?? {};
+  const [selected, setSelected] = React.useState<ReadonlySet<string>>(new Set());
 
   const shown = React.useMemo(
     () => (filter === "all" ? skills : skills.filter((skill) => skillScope(skill) === filter)),
@@ -253,62 +347,56 @@ function SkillsTable({
       items={shown}
       keyOf={(skill) => `${skillScope(skill)}/${skill.name}`}
       rows="fill"
+      minWidth={680}
+      selection={{ keys: selected, onChange: setSelected, labelOf: (skill) => skill.name }}
       search={(skill) => `${skill.name} ${skill.description}`}
       placeholder="Search skills"
       bulk={(matched) => <BulkMode skills={matched} onApply={setAllModes} />}
-      filter={{
-        label: "Filter by source",
-        value: filter,
-        isFiltering: filter !== "all",
-        onChange: onFilter,
-        options: [
-          { value: "all", label: "All sources" },
-          { value: "project", label: "This project" },
-          { value: "personal", label: "Personal" },
-        ],
-      }}
-      empty="No skills yet. Add one to .agents/skills."
-      noResults="No skills match."
+      empty="No skills"
+      emptyIllustration="skill"
+      noResults="No matching skills"
       columns={[
         {
           key: "name",
           header: "Skill",
           width: "20%",
           cell: (skill) => (
-            <Cell strong title={skill.name}>
-              <span className="inline-flex items-center gap-1">
+            <span className="flex min-w-0 items-center gap-1">
+              {/* The name clips in a 20% column; ValueReveal gives it back
+                  whole on hover AND on keyboard focus, where a native title
+                  only ever answered a pointer. */}
+              <Cell strong reveal="Skill">
                 {skill.name}
-                {/*
-                 * A declared policy Volli could not take at face value — two
-                 * spellings that disagree, or a flag that is not a boolean.
-                 * It belongs on the row rather than in a log because the
-                 * symptom is invisible: the skill simply behaves as though the
-                 * author had written nothing, and nothing on screen would
-                 * otherwise say why.
-                 */}
-                {skill.policyDiagnostic === null ? null : (
-                  <WarningIcon
-                    className="size-3.5 shrink-0 text-muted-foreground"
-                    aria-label={`${skill.name}: ${skill.policyDiagnostic}`}
-                  >
-                    <title>{skill.policyDiagnostic}</title>
-                  </WarningIcon>
-                )}
-              </span>
-            </Cell>
+              </Cell>
+              {/*
+               * A declared policy Volli could not take at face value — two
+               * spellings that disagree, or a flag that is not a boolean.
+               * It belongs on the row rather than in a log because the
+               * symptom is invisible: the skill simply behaves as though the
+               * author had written nothing, and nothing on screen would
+               * otherwise say why.
+               */}
+              {skill.policyDiagnostic === null ? null : (
+                <WarningIcon
+                  className="size-3.5 shrink-0 text-muted-foreground"
+                  aria-label={`${skill.name}: ${skill.policyDiagnostic}`}
+                  alt={skill.policyDiagnostic}
+                />
+              )}
+            </span>
           ),
         },
         {
           key: "description",
           header: "Description",
-          cell: (skill) => <Cell muted>{skill.description}</Cell>,
+          cell: (skill) => <DescriptionCell>{skill.description}</DescriptionCell>,
         },
         {
           key: "source",
           header: "Source",
           width: "7rem",
           cell: (skill) => (
-            <Cell muted>{skillScope(skill) === "project" ? "This project" : "Personal"}</Cell>
+            <Cell muted>{skillScope(skill) === "project" ? "This project" : "Global"}</Cell>
           ),
         },
         {
@@ -324,7 +412,9 @@ function SkillsTable({
         {
           key: "open",
           header: "Open",
-          width: "4.5rem",
+          // Measured for the two RowActions below, with the cell's own gap
+          // and insets, so neither glyph is clipped or pushed off the row.
+          width: actionsColumnWidth(2),
           align: "end",
           headerHidden: true,
           cell: (skill) => (
@@ -332,13 +422,13 @@ function SkillsTable({
               <RowAction
                 label={`Preview ${skill.name}`}
                 hint="Preview"
-                icon={EyeIcon}
+                icon={PreviewIcon}
                 onAct={() => onPreview(skill)}
               />
               <RowAction
                 label={`Reveal ${skill.name} in Finder`}
                 hint="Reveal in Finder"
-                icon={ArrowSquareOutIcon}
+                icon={ExternalIcon}
                 onAct={() => void revealSkill(project, skill)}
               />
             </>
@@ -413,7 +503,7 @@ function BulkMode({
   onApply: (targets: readonly SkillReference[], mode: SkillMode) => Promise<void>;
 }) {
   const [busy, setBusy] = React.useState(false);
-  const label = `Set all ${skills.length} to…`;
+  const label = `Set selected ${skills.length} to…`;
 
   return (
     <Select

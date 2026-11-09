@@ -36,6 +36,7 @@ import {
   HARNESS_VIOLATION_EXIT_CODE,
   RECORDED_SHELL_METHODS,
   SAFE_STORAGE_METHODS,
+  REPO,
   assertLaunchable,
   bundleCarriesGuard,
   createRegistry,
@@ -74,6 +75,8 @@ import {
   prepareRemoteAcceptance,
 } from "./lib/remote-acceptance.mjs";
 
+import { guardedChatWindowBench } from "./lib/chat-window-bench.mjs";
+import { stopResult } from "./lib/stop-result.mjs";
 import { assertRestoreRestart } from "./lib/restore-acceptance.mjs";
 import { deploymentElectronEnv, recordedWorkosSignIn } from "./lib/deployment.mjs";
 
@@ -695,6 +698,33 @@ async function boot() {
           reasoningLevel: provider.reasoningLevel,
         }
       : null,
+    {
+      flushClientState: () =>
+        app.evaluate(async ({ BrowserWindow, ipcMain }) => {
+          const window = BrowserWindow.getAllWindows().find((candidate) =>
+            candidate.webContents.getURL().startsWith("volli-app:"),
+          );
+          if (!window) throw new Error("fixture window disappeared before flush");
+          const requestId = `drive-fixture-${Date.now()}`;
+          await new Promise((resolveFlush, rejectFlush) => {
+            const cleanup = () => {
+              clearTimeout(timer);
+              ipcMain.removeListener("volli:client-state-flushed", acked);
+            };
+            const acked = (event, id) => {
+              if (event.sender.id !== window.webContents.id || id !== requestId) return;
+              cleanup();
+              resolveFlush();
+            };
+            const timer = setTimeout(() => {
+              cleanup();
+              rejectFlush(new Error("fixture client-state flush timed out"));
+            }, 10000);
+            ipcMain.on("volli:client-state-flushed", acked);
+            window.webContents.send("volli:client-state-flush", requestId);
+          });
+        }),
+    },
   );
   mark("fixtureSeeded");
   await waitUntil("the app's agent socket", () => pathExists(L.appSocket), { timeout: 30_000 });
@@ -920,6 +950,34 @@ async function handle(cmd, args) {
   armIdle();
   void recordMembers();
   switch (cmd) {
+    case "chat-window-bench": {
+      const report = await guardedChatWindowBench({
+        app,
+        spec,
+        layout: L,
+        repo: REPO,
+        settings: args.settings,
+        doctor,
+        expire: async (reason) => {
+          await finalize(reason);
+          process.exit(1);
+        },
+      });
+      const guardAfter = await doctor();
+      if (!guardAfter.ok) throw new Error(`bench guard failed: ${guardAfter.problems.join("; ")}`);
+      report.guardAfter = guardAfter;
+      writeFileSync(
+        join(L.evidence, "chat-window-bench.json"),
+        `${JSON.stringify(report, null, 2)}\n`,
+      );
+      transcript({
+        cmd,
+        arm: args.settings?.arm,
+        guard: report.guard.ok,
+        guardAfter: guardAfter.ok,
+      });
+      return report;
+    }
     case "acceptance-fixture":
       if (!remoteFixture) throw new Error("Not a remote acceptance instance");
       return { projectPath: remoteFixture.projectPath, originPath: remoteFixture.originPath };
@@ -1084,7 +1142,7 @@ async function handle(cmd, args) {
         keepScratch: Boolean(args.keepScratch),
       });
       setTimeout(() => process.exit(0), 100);
-      return { manifest: L.manifest, evidence: L.evidence, leftovers: manifest?.leftovers ?? [] };
+      return stopResult(manifest, { manifestPath: L.manifest, evidence: L.evidence });
     }
     default:
       throw new Error(`unknown command ${cmd}`);

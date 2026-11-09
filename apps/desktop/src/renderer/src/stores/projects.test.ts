@@ -905,11 +905,12 @@ describe("selectByIndex", () => {
       project({ id: "b", path: "/b" }),
       project({ id: "c", path: "/c" }),
     ];
-    const { store } = freshStore();
+    const { store, onSelectedProjectChange } = freshStore();
     store.getState().hydrate([a, project({ id: "b", path: "/b" }), c], null);
 
     store.getState().selectByIndex(0);
     expect(store.getState().selectedProjectId).toBe(a.id);
+    expect(onSelectedProjectChange).toHaveBeenLastCalledWith(a.id, "keyboard");
 
     store.getState().selectByIndex(2);
     expect(store.getState().selectedProjectId).toBe(c.id);

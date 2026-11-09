@@ -1,4 +1,4 @@
-import { BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { BrowserWindow, dialog, shell } from "electron";
 import { promises as fs } from "node:fs";
 import { basename, resolve } from "node:path";
 import { compareDirEntries, errorMessage } from "@volli/shared";
@@ -13,6 +13,7 @@ import type {
 // consumers (this file, pty.ts) share one instance.
 import { isRealPathWithinRoots, syncProjectRoots } from "@volli/host-core/board";
 import { isInside, worktreesHome } from "@volli/host-core/worktree";
+import { handleRawIpc } from "./raw-ipc";
 
 /** Project checkouts OR the app-owned worktree home (ticket Files navigator). */
 function isBrowsableFsPath(absPath: string): boolean {
@@ -26,7 +27,7 @@ function isBrowsableFsPath(absPath: string): boolean {
 // ipcMain.handle rejections serialize into useless "Error invoking remote
 // method" strings, and every failure must be surfaceable in the UI.
 export function registerIpcHandlers(): void {
-  ipcMain.handle(
+  handleRawIpc(
     "volli:pick-project-folder" satisfies VolliIpcChannel,
     async (event): Promise<PickFolderResult> => {
       const win = BrowserWindow.fromWebContents(event.sender);
@@ -48,11 +49,11 @@ export function registerIpcHandlers(): void {
     },
   );
 
-  ipcMain.handle("volli:sync-project-roots" satisfies VolliIpcChannel, (_event, paths: unknown) => {
+  handleRawIpc("volli:sync-project-roots" satisfies VolliIpcChannel, (_event, paths: unknown) => {
     syncProjectRoots(paths);
   });
 
-  ipcMain.handle(
+  handleRawIpc(
     "volli:list-directory" satisfies VolliIpcChannel,
     async (_event, absPath: unknown): Promise<ListDirectoryResult> => {
       if (typeof absPath !== "string") {
@@ -88,11 +89,11 @@ export function registerIpcHandlers(): void {
     },
   );
 
-  ipcMain.handle("volli:window-is-fullscreen" satisfies VolliIpcChannel, (event): boolean => {
+  handleRawIpc("volli:window-is-fullscreen" satisfies VolliIpcChannel, (event): boolean => {
     return BrowserWindow.fromWebContents(event.sender)?.isFullScreen() ?? false;
   });
 
-  ipcMain.handle(
+  handleRawIpc(
     "volli:reveal-in-finder" satisfies VolliIpcChannel,
     (_event, absPath: unknown): RevealResult => {
       if (typeof absPath !== "string") {

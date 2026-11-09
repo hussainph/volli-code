@@ -170,6 +170,14 @@ export function driveInstance(label, socket) {
   };
 }
 
+/** The compact detail hides the master list. Return through its real back
+ * control before selecting the name-only primary navigation row. */
+export async function openAutomationDefinition(drive, name) {
+  if (await drive.has("button", "All automations")) await drive.click("button", "All automations");
+  await drive.wait(`button "${name}"`, 30_000);
+  await drive.click("button", name);
+}
+
 /** Open the journey's sole Run for this Automation, not a title substring:
  * its birth title also names the column chip and can already be stale after
  * auto-title. The Session-only provenance survives that rename. No `first`:

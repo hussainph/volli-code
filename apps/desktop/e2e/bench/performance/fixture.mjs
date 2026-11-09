@@ -303,6 +303,11 @@ function sessionId(index) {
   return `perf-session-${digits(4, index + 1)}`;
 }
 
+/** The id the fixture gives its `index`th Session (0-based): what a bench arm addresses. */
+export function fixtureSessionId(index) {
+  return sessionId(index);
+}
+
 function ticketId(index) {
   return `perf-ticket-${digits(4, index + 1)}`;
 }

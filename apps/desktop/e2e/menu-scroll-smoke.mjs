@@ -198,7 +198,7 @@ async function main() {
     if (!composerClosed) throw new Error("New-ticket composer never closed after 10 Escapes");
 
     // === 3. The rail's label picker, with NO dialog underneath =============
-    await page.locator("article").first().dblclick();
+    await page.locator("article").filter({ visible: true }).first().dblclick();
     await sleep(1200);
     await page.getByRole("button", { name: "Add label", exact: true }).first().click();
     await sleep(400);
@@ -221,7 +221,7 @@ async function main() {
     await goToBoard(page);
 
     // === 4. The context menu's Labels submenu (own scroll lock) ============
-    await page.locator("article").first().click({ button: "right" });
+    await page.locator("article").filter({ visible: true }).first().click({ button: "right" });
     await sleep(400);
     await page.getByRole("menuitem", { name: /Labels/ }).hover();
     await sleep(500);

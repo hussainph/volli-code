@@ -1,11 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { SESSION_PROJECTION_CHECKPOINT_VERSION } from "@volli/shared";
+import {
+  createSessionProjectionCheckpoint,
+  SESSION_PROJECTION_CHECKPOINT_VERSION,
+} from "@volli/shared";
+import type { SessionObservation } from "@volli/shared";
 
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject } from "../db/test-helpers";
 import type { TestDb } from "../db/test-helpers";
 import { createTestSessionEngine } from "../testing/session-engine";
-import { BACKFILL_SLICE_MS, backfillProjectionCheckpoints } from "./checkpoint-backfill";
+import {
+  BACKFILL_FOLD_PAGE,
+  BACKFILL_SLICE_MS,
+  backfillProjectionCheckpoints,
+} from "./checkpoint-backfill";
+import { createSqliteSessionLedger } from "./sqlite-ledger";
 
 let ctx: TestDb;
 
@@ -113,6 +122,57 @@ describe("backfillProjectionCheckpoints (VC-1076)", () => {
     });
     expect(result).toEqual({ candidates: 2, refreshed: 2 });
     expect(checkpointRows()).toHaveLength(2);
+  });
+
+  it("folds a long log a page at a time, yielding between pages, to the whole-log answer (VC-1098)", async () => {
+    const { engine, ids } = await seed(1);
+    const sessionId = ids[0]!;
+    const fact = (index: number): SessionObservation => ({
+      kind: "adapter.observed",
+      id: `fact-${index}`,
+      sessionId,
+      occurredAt: 1_000 + index,
+      provenance: {
+        source: { kind: "adapter", id: "pi", detail: null },
+        venue: { id: "local", kind: "local" },
+      },
+      attachmentId: null,
+      name: "vc1098.test",
+      native: null,
+    });
+    const facts = BACKFILL_FOLD_PAGE * 2 + 17;
+    for (let index = 0; index < facts; index += 1) await engine.observe(fact(index));
+    ctx.db.prepare("DELETE FROM session_projection_checkpoints").run();
+
+    let clock = 0;
+    let yields = 0;
+    const result = await backfillProjectionCheckpoints({
+      db: ctx.db,
+      yieldToHost: async () => {
+        yields += 1;
+        // A fact recorded while the pass is between pages is folded by the
+        // next page, not lost behind a cursor the pass already moved past.
+        if (yields === 1) await engine.observe(fact(facts));
+        await immediate();
+      },
+      now: () => (clock += BACKFILL_SLICE_MS),
+    });
+
+    expect(result).toEqual({ candidates: 1, refreshed: 1 });
+    // One turn between each pair of pages, then the slice's own turn.
+    expect(yields).toBeGreaterThanOrEqual(3);
+    const ledger = createSqliteSessionLedger(ctx.db);
+    const [stored, whole] = await ledger.transaction((transaction) => {
+      const session = transaction.getSession(sessionId)!;
+      return [
+        transaction.getProjectionCheckpoint(sessionId),
+        createSessionProjectionCheckpoint(session, transaction.listProjectionEvents({ sessionId })),
+      ] as const;
+    });
+    expect(stored?.throughSequence).toBe(
+      await ledger.transaction((transaction) => transaction.latestEventSequence(sessionId)),
+    );
+    expect(stored).toEqual(whole);
   });
 
   it("moves past a Session it cannot fold", async () => {

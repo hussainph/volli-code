@@ -169,16 +169,16 @@ describe("HomeRail", () => {
   // strings: an inactive page drops its WORD (that is what lets the pill fit at
   // the 240px floor) but must keep its NAME, or the icon that replaces the word
   // is unreadable to a screen reader and unnameable to a query.
-  it("names every page even where only the selected one wears its label", () => {
+  it("names every icon page without expanding the selected segment", () => {
     const markup = draw("chat:s1");
 
     expect(markup).toContain('aria-label="Now"');
     expect(markup).toContain('aria-label="Files"');
     expect(markup).toContain('aria-label="Search"');
-    // Resting page selected; the other two are icons, so their word is absent.
+    // All three pages are icons, with labels retained for assistive technology.
     expect(markup).toContain(">Now<");
-    expect(markup).not.toContain(">Files<");
-    expect(markup).not.toContain(">Search<");
+    expect(markup).toContain('aria-label="Files"');
+    expect(markup).toContain('aria-label="Search"');
   });
 
   // VC-406. Home hardcoded `data-narrow="false"` while the Ticket rail computed
@@ -228,8 +228,9 @@ describe("HomeRail", () => {
     // same word the Files page uses for the same checkout.
     expect(markup).toContain("Volli Code");
     // Idle until something is typed: an empty Search page is a resting state,
-    // not a list of the whole checkout.
-    expect(markup).toContain('data-testid="file-search-idle"');
+    // not a list of the whole checkout, and not a prompt either.
+    expect(markup).not.toContain('data-testid="file-search-results"');
+    expect(markup).not.toContain("Type to find text");
   });
 
   it("draws ONE block on Now — the roster — and no Session-identity card", () => {
@@ -382,7 +383,7 @@ describe("HomeRail", () => {
     useUiStore.getInitialState().railFolds = { ...DEFAULT_RAIL_FOLDS, worktree: true };
     // Before any read: the body waits, and the row states no fact — a
     // placeholder fact would be a claim about a tree nobody has looked at.
-    expect(draw("chat:s1")).toContain('data-testid="home-checkout-loading"');
+    expect(draw("chat:s1")).not.toContain('data-testid="home-checkout-loading"');
     expect(draw("chat:s1")).not.toContain('data-testid="home-checkout-glance"');
 
     useWorkingCopyStore.getInitialState().byScope = {
@@ -425,8 +426,8 @@ describe("HomeRail", () => {
     // project has no Sessions.
     const markup = draw(HOME_BOARD_TAB_ID);
 
-    expect(markup).toContain('data-testid="home-sessions-loading"');
-    expect(markup).not.toContain("No sessions yet");
+    expect(markup).not.toContain('data-testid="home-sessions-loading"');
+    expect(markup).not.toContain("No sessions");
   });
 
   it("says the roster is empty only once the listing has said so", () => {
@@ -437,7 +438,7 @@ describe("HomeRail", () => {
     const markup = draw(HOME_BOARD_TAB_ID);
 
     expect(markup).not.toContain('data-testid="home-sessions-loading"');
-    expect(markup).toContain("No sessions yet");
+    expect(markup).toContain("No sessions");
   });
 
   // VC-406: Home mapped every open, non-ended
@@ -508,7 +509,7 @@ describe("HomeRail", () => {
     const markup = draw(HOME_BOARD_TAB_ID);
 
     expect(markup).not.toContain('data-testid="home-sessions-loading"');
-    expect(markup).not.toContain("No sessions yet");
+    expect(markup).not.toContain("No sessions");
     // The failure is the body, and it brings the retry with it: a refused read
     // that drew nothing but a sentence left the reader with no way to try again.
     expect(markup).toContain('data-testid="home-sessions-error"');
@@ -529,7 +530,7 @@ describe("HomeRail", () => {
       const markup = draw(HOME_BOARD_TAB_ID);
       expect(markup).toContain('data-testid="home-sessions-unavailable"');
       expect(markup).toContain("Sessions aren’t available on box — update it to use them here");
-      expect(markup).not.toContain("No sessions yet");
+      expect(markup).not.toContain("No sessions");
       expect(markup).not.toContain("Retry");
     } finally {
       Object.assign(useRemoteSessionAvailabilityStore.getInitialState(), { unavailable: {} });

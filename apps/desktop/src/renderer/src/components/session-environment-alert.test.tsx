@@ -7,9 +7,7 @@ const FAULT = {
   fault: "login-path-unreadable" as const,
   key: "login-path-unreadable",
   title: "Volli couldn't read your terminal's PATH",
-  detail:
-    "Sessions can't find gh and node, so some commands may be missing. " +
-    "Fix now asks your terminal again — Sessions you start afterwards get the result.",
+  detail: "Sessions can't find git.",
 };
 
 describe("SessionEnvironmentNotice", () => {
@@ -24,13 +22,22 @@ describe("SessionEnvironmentNotice", () => {
     );
 
     expect(html).toContain("Volli couldn&#x27;t read your terminal&#x27;s PATH");
-    expect(html).toContain("Sessions can&#x27;t find gh and node");
+    expect(html).toContain("Sessions can&#x27;t find git");
     expect(html).toContain("Fix now");
+    const actions = (html.match(/<button[^>]+>/g) ?? []).filter((button) =>
+      button.includes('data-variant="outline"'),
+    );
+    expect(actions).toHaveLength(2);
+    for (const action of actions) {
+      expect(action).toContain("control-material");
+      expect(action).toContain("shadow-control");
+      expect(action).toContain("hover:shadow-control-hover");
+    }
     expect(html).toContain("Review details");
     expect(html).not.toContain("volli doctor");
     // The escape hatch: a fault the user has read can be put away, so the
     // persistent notice never becomes a permanent one.
-    expect(html).toContain("Dismiss");
+    expect(html).toContain('aria-label="Dismiss notice"');
     expect(html).toContain("bg-destructive/10");
     expect(html).toContain('role="status"');
   });
@@ -46,20 +53,20 @@ describe("SessionEnvironmentNotice", () => {
       />,
     );
 
-    expect(html).toContain("Fixing…");
+    expect(html).toContain("Fixing");
     expect(html).toContain("disabled");
   });
 
-  // A project's uninstalled dependencies are not Volli's to repair, so the
-  // notice that reports them offers no repair button at all.
+  // A missing repository git is not repaired by re-reading the login PATH;
+  // only the app-level PATH fault offers Fix now.
   it("drops Fix now for a notice with no app fault behind it", () => {
     const html = renderToStaticMarkup(
       <SessionEnvironmentNotice
         alert={{
           fault: null,
-          key: "readiness:Acme::absent",
+          key: "readiness:Acme:git",
           title: "Sessions aren't ready for Acme",
-          detail: "Dependencies are not installed. Run pnpm install before starting a Session.",
+          detail: "Missing from the Session PATH: git",
         }}
         onReview={() => undefined}
         onDismiss={() => undefined}
@@ -68,6 +75,6 @@ describe("SessionEnvironmentNotice", () => {
 
     expect(html).not.toContain("Fix now");
     expect(html).toContain("Review details");
-    expect(html).toContain("Dismiss");
+    expect(html).toContain('aria-label="Dismiss notice"');
   });
 });

@@ -68,6 +68,17 @@ describe("renderHelp command detail", () => {
     }
   });
 
+  it.each(["top", "stalls", "compare"])("documents LoAF limits for perf %s", (command) => {
+    const detail = renderHelp(["perf", command]);
+    expect(detail).toContain("unknown, not zero");
+    expect(detail).toContain("Compositor/GPU/backdrop-filter raster is mostly outside LoAF");
+    expect(detail).toContain(
+      "Small script + big render suggests investigating materials, not proof",
+    );
+    expect(detail).toContain("overlap");
+    if (command !== "stalls") expect(detail).toContain("measuredFrames");
+  });
+
   it("renders a rich write command with a compact usage, full options, values, and notes", () => {
     const detail = renderHelp(["ticket", "create"]);
     expect(detail).toContain("ticket create — Create a ticket (defaults to Backlog).");
