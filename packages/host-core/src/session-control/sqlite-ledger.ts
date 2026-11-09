@@ -379,47 +379,58 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
    * supersede the one it replaces; this read then orders by that instead of by
    * `session_event_sequence`.
    *
-   * The same sidecar is how the read finds the rows (VC-1075): its derived
-   * `kind` (kept equal to the payload's by migration 057's trigger) seeks
-   * `session_event_sequence_match (session_id, kind, sequence)` per Session,
-   * so only signal events are read and parsed rather than every event of
-   * every ticketed Session. The payload's own kind is still tested, so the
-   * index narrows the rows and never decides them.
+   * Migration 070's partial index seeks the latest VALID signal id per
+   * Session, in Session sequence order, without opening historical payloads
+   * (VC-1146). Only those winners join the acceptance-order sidecar and enter
+   * the ticket window; only ticket winners decode the signal and reason.
+   * The predicate is the same as the old full-history read, including its
+   * fallback past an unsupported signal value. SQLite maintains it on any
+   * insert, repair or deletion, with no application cache to invalidate.
+   * Below 070 the same query remains correct, just without the fast seek.
    */
   listLatestTicketSignals(query: ListLatestTicketSignalsQuery): readonly LatestSessionSignal[] {
     this.assertOpen();
+    // Without a hint SQLite can prefer the general (session_id, sequence)
+    // index before ANALYZE, walking unrelated history when no signal exists.
+    // The head schema always has it; the unhinted fallback is for restores
+    // staged below 070. Re-probe this connection each read, caching only the
+    // statement (per handle), never a presence result across restores/reopens.
+    const signalIndex =
+      prepared(
+        this.db,
+        "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'session_events_latest_signal'",
+      ).get() === undefined
+        ? ""
+        : " INDEXED BY session_events_latest_signal";
     const rows = prepared(
       this.db,
-      `WITH latest_session_signals AS (
+      `WITH latest_ticket_signals AS (
            SELECT s.ticket_id AS ticket_id,
                   s.id AS session_id,
-                  json_extract(e.payload, '$.signal') AS signal,
-                  json_extract(e.payload, '$.reason') AS reason,
+                  e.payload AS payload,
                   e.occurred_at AS occurred_at,
-                  es.sequence AS accepted_sequence,
-                  ROW_NUMBER() OVER (PARTITION BY s.id ORDER BY e.sequence DESC) AS session_rank
+                  ROW_NUMBER() OVER (
+                    PARTITION BY s.ticket_id
+                    ORDER BY es.sequence DESC
+                  ) AS ticket_rank
              FROM sessions s
-             JOIN session_event_sequence es
-               ON es.session_id = s.id AND es.kind = 'session.signaled'
-             JOIN session_events e ON e.id = es.event_id
+             JOIN session_events e ON e.id = (
+               SELECT candidate.id
+                 FROM session_events candidate${signalIndex}
+                WHERE candidate.session_id = s.id
+                  AND json_extract(candidate.payload, '$.kind') = 'session.signaled'
+                  AND json_extract(candidate.payload, '$.signal') IN ('done', 'blocked')
+                ORDER BY candidate.sequence DESC
+                LIMIT 1
+             )
+             JOIN session_event_sequence es ON es.event_id = e.id
             WHERE s.project_id = @projectId${this.scopeSql("s.id")}
               AND s.ticket_id IS NOT NULL
-              AND json_extract(e.payload, '$.kind') = 'session.signaled'
-              AND json_extract(e.payload, '$.signal') IN ('done', 'blocked')
-         ), latest_ticket_signals AS (
-           SELECT ticket_id,
-                  session_id,
-                  signal,
-                  reason,
-                  occurred_at,
-                  ROW_NUMBER() OVER (
-                    PARTITION BY ticket_id
-                    ORDER BY accepted_sequence DESC
-                  ) AS ticket_rank
-             FROM latest_session_signals
-            WHERE session_rank = 1
          )
-         SELECT ticket_id, session_id, signal, reason, occurred_at
+         SELECT ticket_id, session_id,
+                json_extract(payload, '$.signal') AS signal,
+                json_extract(payload, '$.reason') AS reason,
+                occurred_at
            FROM latest_ticket_signals
           WHERE ticket_rank = 1
           ORDER BY ticket_id COLLATE BINARY ASC`,
