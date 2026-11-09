@@ -150,6 +150,9 @@ packageExtensions:
 
 patchedDependencies:
   "@dnd-kit/core@6.3.1": patches/@dnd-kit__core@6.3.1.patch
+  # Anthropic OAuth requires a recent Claude Code identity (pi#11969).
+  # Remove once the pinned release advertises 2.1.321 or newer.
+  "@earendil-works/pi-ai@1.0.0": patches/@earendil-works__pi-ai@1.0.0.patch
   # Adds `maxOutputChars` to the Code Mode sandbox (VC-471): the host stops
   # keeping a program's `text()`/`console.*`/`image()` output past a bound and
   # fails the run, so a program that prints in a loop cannot grow Electron
