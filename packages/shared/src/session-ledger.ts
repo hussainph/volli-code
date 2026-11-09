@@ -1879,6 +1879,35 @@ export function advanceSessionProjection(
   return foldSessionProjection(session, events, checkpoint);
 }
 
+/**
+ * Whether a fact of this kind moves a Session's `lastActivityAt`: the fold's
+ * rule, and the one boot recovery's ledger walk applies to name when the prior
+ * process was last alive without folding every Session (VC-1095).
+ *
+ * Recency is about the agent's work, so pure Volli bookkeeping does not move
+ * it: `command.recorded` / `command.receipt.recorded` fire for a retitle, and
+ * `session.retitled` is the rename fact itself. Floating a Session to the top
+ * of a recency-sorted list because someone renamed it is a lie about what is
+ * happening in it. Nothing is lost by skipping them — a `message.submit`
+ * command is followed immediately by the `turn.started` it caused, which does
+ * count.
+ *
+ * `usage.recorded` is skipped for a second reason: it is written by a backfill
+ * as well as by a live turn, and a repair that re-dated every historical
+ * Session would rewrite the user's sense of what they were last working on.
+ * The turn that spent the tokens already counted.
+ */
+export function movesSessionActivity(kind: SessionEventPayload["kind"]): boolean {
+  return (
+    kind !== "command.recorded" &&
+    kind !== "command.receipt.recorded" &&
+    kind !== "session.input.recorded" &&
+    kind !== "session.tools.refreshed" &&
+    kind !== "session.retitled" &&
+    kind !== "usage.recorded"
+  );
+}
+
 function foldSessionProjection(
   session: Session,
   events: readonly SessionProjectionEvent[],
@@ -1946,28 +1975,7 @@ function foldSessionProjection(
     .toSorted((left, right) => left.sequence - right.sequence);
 
   for (const event of ordered) {
-    // Recency is about the agent's work, so pure Volli bookkeeping does not
-    // move it: `command.recorded` / `command.receipt.recorded` fire for a
-    // retitle, and `session.retitled` is the rename fact itself. Floating a
-    // Session to the top of a recency-sorted list because someone renamed it
-    // is a lie about what is happening in it. Nothing is lost by skipping
-    // them — a `message.submit` command is followed immediately by the
-    // `turn.started` it caused, which does count.
-    //
-    // `usage.recorded` is skipped for a second reason: it is written by a
-    // backfill as well as by a live turn, and a repair that re-dated every
-    // historical Session would rewrite the user's sense of what they were
-    // last working on. The turn that spent the tokens already counted.
-    if (
-      event.payload.kind !== "command.recorded" &&
-      event.payload.kind !== "command.receipt.recorded" &&
-      event.payload.kind !== "session.input.recorded" &&
-      event.payload.kind !== "session.tools.refreshed" &&
-      event.payload.kind !== "session.retitled" &&
-      event.payload.kind !== "usage.recorded"
-    ) {
-      lastActivityAt = event.occurredAt;
-    }
+    if (movesSessionActivity(event.payload.kind)) lastActivityAt = event.occurredAt;
 
     switch (event.payload.kind) {
       case "command.recorded": {
