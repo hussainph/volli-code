@@ -1,0 +1,164 @@
+---
+title: What's new in 0.3
+description: Settings in its own window, grouped tabs, updated Automations, Code Mode, canvas controls, and clearer chat activity in the 0.3 canaries.
+sidebar:
+  label: What's new in 0.3
+---
+
+import { Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
+
+The 0.3 canaries update the desktop layout, Settings, Automations, and chat
+activity. They also add Code Mode, optional decision models, and secure
+credential requests.
+
+<Aside type="caution" title="Canary builds">
+  These notes cover the 0.3 canaries. Features can change between builds. Keep
+  backups and Git branches for important work.
+</Aside>
+
+Check your version and update channel in **Settings → Updates**. Downloads are
+also available at [volli.app/download](https://volli.app/download/).
+
+## Settings in a separate window
+
+**Settings** now opens in its own window. Press `⌘,` to open it or bring it
+forward while you keep your project open.
+
+- **All projects** holds app-wide preferences and shared tool connections.
+- The project row holds overrides for Sessions, appearance, worktrees, and
+  other project configuration.
+- **Search settings** finds pages and controls across both scopes.
+- **Agents** holds Code Mode, decision models, automatic model choice, and
+  automatic compaction.
+
+See [Settings and configuration](/guides/settings/) for where each control lives.
+
+## Tab groups and split view
+
+A split view is a group of panes, each with its own stack of tabs. The top
+strip shows the group as one chip. Chat provider logos help identify the
+conversations in the group.
+
+Drag a tab, file, or Session to a pane's edge to split there, or to its center
+to join its stack. New tabs open in the focused pane. Selecting an ordinary
+tab shows it on its own; returning to the group restores its arrangement.
+**Ungroup** keeps the tabs open.
+
+See [Split view](/guides/split-view/) for drag targets and keyboard shortcuts.
+
+## Ticket details and navigation
+
+Status, priority, and labels now sit beside the Ticket Body's title. The
+**Now**, **Diffs**, **Files**, and **Search** rail keeps Session history and
+repository work beside the open tab.
+
+The sidebar separates file browsing from Session lists. You can select a range
+of Session rows with Shift and inspect a conversation without leaving your
+current work. The command palette finds tickets, Sessions, and commands;
+`⌘P` opens files.
+
+Archived tickets can be opened read-only before you restore them. Removing a
+project from Volli keeps its folder, tickets, and Sessions; adding the same
+folder again restores the project.
+
+See [Ticket view](/guides/ticket-view/), [Manage tickets](/guides/manage-tickets/),
+and [Keyboard shortcuts](/reference/keyboard-shortcuts/).
+
+## Automations
+
+The **Automations** page groups saved instructions, Triggers, Runtimes, and
+Runs. Edit each section of a saved Automation separately. Unsaved drafts
+survive navigation, and **Draft in chat** opens a conversation to help write
+instructions without saving or running them.
+
+Choose **This project** or **All projects** when you create an Automation.
+**Automatic triggers** remains an explicit choice on this Mac. A schedule
+shows its next due time; Volli must be open and awake to run it. Missed
+occurrences are recorded as skipped rather than replayed in a burst.
+
+See [Create an Automation](/guides/automations/create/) and
+[Schedule an Automation](/guides/automations/schedules/).
+
+## Chat activity and recovery
+
+Tool activity groups into inspectable rows beside the conversation. The
+Activity Island keeps Browser Tabs, subagents, plans, and background shells
+above the composer.
+
+- Background shells notify the agent when they exit. A running command can
+  also be moved to the background with **Move to background** or `⌃⇧B`.
+- A question card can collect related questions before you send your answers.
+- **Replay** on a Browser Tab card lets you inspect the agent's recorded
+  browser actions. **Open beside chat** shows its live page in a tab group.
+- Interrupted chats keep their history and explain the next recovery action.
+  Volli can resume an interrupted turn after restart when it is safe to do so.
+
+See [Use a chat](/guides/sessions/), [Browser Tabs](/guides/browser-tabs/), and
+[Recover a Session](/guides/recover-session/).
+
+## Agent tools and model choices
+
+**Code Mode** lets an agent combine tool calls in a short JavaScript program.
+You can set its default and per-model exceptions in **Settings → All projects
+→ Agents**. It uses the Session's available tools; it does not grant additional
+access.
+
+An optional decision model answers typed classification questions.
+**Pick models automatically** can use a supported remote decision model to
+choose a new Session's model and reasoning from defaults you approved. On a
+miss, Volli uses the configured default.
+
+**MCP Servers** now lives under **All projects**. Connections and selected
+tools apply across projects on this Mac. Skills have a shared inventory, with
+activation modes set for the selected project.
+
+See [Code Mode](/guides/code-mode/), [Models and usage](/guides/models/),
+[MCP servers](/guides/mcp-servers/), and
+[Skills and commands](/guides/skills-and-commands/).
+
+## Session credentials
+
+When an agent requests a credential, enter it in **Credential requested**
+instead of a chat message. Choose **Session**, **Project**, or **Always** to
+control reuse. The value goes to command environments; the tool reply does not
+return it to the model. Exact-output redaction is best effort, so commands
+still need care when handling secrets.
+
+See [Supply a Session credential](/guides/session-credentials/) for scopes,
+replacement, and revocation.
+
+## Canvas and appearance
+
+**Settings → All projects → Appearance** separates **Light**, **Dark**, and
+**Auto** appearance from your canvas colors. Edit color placement, **Accent**,
+**Vibrancy**, and **Grain**. **Style** offers **macOS** and **Modern**;
+**Motion** controls app animations.
+
+Project overrides can change appearance and canvas independently. Terminal
+appearance still follows your Ghostty configuration and Volli's overlays.
+See [Theming](/guides/theming/).
+
+## Next steps
+
+<CardGrid>
+  <LinkCard
+    title="Settings"
+    href="/guides/settings/"
+    description="Find app-wide preferences and project overrides."
+  />
+  <LinkCard
+    title="Split view"
+    href="/guides/split-view/"
+    description="Arrange chats, files, and browser pages in panes."
+  />
+  <LinkCard
+    title="Automations"
+    href="/guides/automations/"
+    description="Save instructions and choose when they run."
+  />
+  <LinkCard
+    title="Keyboard shortcuts"
+    href="/reference/keyboard-shortcuts/"
+    description="Look up keys for Settings, files, Sessions, and panes."
+  />
+</CardGrid>
