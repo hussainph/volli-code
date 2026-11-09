@@ -12,6 +12,9 @@
  * background. Wide screens get
  * the 16:9 composition, narrow ones the film's 9:16 recomposition.
  *
+ * Complete panes can opt into `contain` rather than clipping model choices
+ * or one side of a split group; other stills keep their edge-to-edge crop.
+ *
  * A card may bring its own Window in the `window` slot instead of a still
  * (the activity feed, `Feed.astro`); it takes the still's place and floats in
  * the same light.
@@ -38,6 +41,8 @@ interface Props {
   body?: string;
   /** Where the still's subject sits, as a CSS object-position. */
   position?: string;
+  /** Keep a complete settings pane or split group readable in either cut. */
+  fit?: "cover" | "contain";
   focus?: readonly [number, number];
   /** Columns of the bento's twelve this card spans on wide screens. */
   span?: 3 | 5 | 6 | 7;
@@ -54,7 +59,8 @@ const {
   alt,
   beats,
   body,
-  position = "0% 0%",
+  fit = "cover",
+  position = fit === "contain" ? "50% 50%" : "0% 0%",
   focus = [0.5, 0.7],
   span = 7,
   shader = "mesh",
@@ -99,7 +105,7 @@ const hasWindow = Astro.slots.has("window");
     <slot name="window" />
   </div>
   ) : primary && tall && (
-  <picture class="chapter-still" data-tilt style={`--still-position: ${position}`}>
+  <picture class="chapter-still" data-tilt style={`--still-position: ${position}; --still-fit: ${fit}`}>
     {
       landscape && (
         <source
