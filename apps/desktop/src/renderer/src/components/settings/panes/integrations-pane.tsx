@@ -10,7 +10,9 @@
  * surface reads.
  */
 import * as React from "react";
-import { PlugsIcon } from "@phosphor-icons/react/dist/csr/Plugs";
+import { CodeFileIcon, IntegrationIcon } from "@renderer/components/ui/icon";
+
+import { AppGlyph } from "../kit/app-glyph";
 
 import type { ExternalApp } from "../../../../../ipc/contract";
 
@@ -19,9 +21,7 @@ import type { ExternalAppDiscovery } from "@renderer/components/files/external-a
 import {
   AsyncSection,
   CONTROL_W,
-  ItemRow,
   PrefRow,
-  Provenance,
   type AsyncState,
 } from "@renderer/components/settings/kit";
 import {
@@ -80,10 +80,9 @@ export function IntegrationsPane() {
   return (
     <AsyncSection
       title="External apps"
-      icon={PlugsIcon}
-      hint={<>Volli offers these apps whenever you open a file or a worktree.</>}
+      icon={IntegrationIcon}
       before={
-        <PrefRow label="Open files in" htmlFor="open-files-in">
+        <PrefRow label="Open files in" icon={CodeFileIcon} htmlFor="open-files-in">
           <Select
             value={selectedValue}
             onValueChange={(value) => {
@@ -102,7 +101,10 @@ export function IntegrationsPane() {
               <SelectItem value={ASK_EVERY_TIME_VALUE}>Ask every time</SelectItem>
               {apps.map((app) => (
                 <SelectItem key={app.id} value={app.id}>
-                  {app.label}
+                  <span className="flex items-center gap-2">
+                    <AppGlyph name={app.label} />
+                    {app.label}
+                  </span>
                 </SelectItem>
               ))}
             </SelectContent>
@@ -111,19 +113,10 @@ export function IntegrationsPane() {
       }
       state={state}
       isEmpty={(availableApps) => availableApps.length === 0}
-      empty="Volli found no supported apps on this Mac."
+      empty="No supported apps found"
+      emptyIllustration="mcp"
     >
-      {(availableApps) => (
-        <>
-          {availableApps.map((app) => (
-            <ItemRow
-              key={app.id}
-              name={app.label}
-              badges={<Provenance>{app.kind === "terminal" ? "Terminal" : "Editor"}</Provenance>}
-            />
-          ))}
-        </>
-      )}
+      {() => null}
     </AsyncSection>
   );
 }

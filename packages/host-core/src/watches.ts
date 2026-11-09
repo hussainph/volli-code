@@ -116,6 +116,7 @@ import type { TicketWake } from "./ticket-wake";
 import type { DetachedWorkPort } from "./detached-work";
 import { deliverHostNotice, errorText } from "./session-runtime/host-notice-delivery";
 import { hostLogger } from "./log/root";
+import { withMainSpan } from "./log/context";
 
 const log = hostLogger("watches");
 
@@ -256,7 +257,9 @@ export function createWatches(ports: WatchesPorts): Watches {
     if (watcher.timer !== undefined) return;
     watcher.timer = setTimer(() => {
       watcher.timer = undefined;
-      const work = flush(watcher).catch((error: unknown) => {
+      const work = withMainSpan({ door: "timer", operation: "session-watch-notice" }, () =>
+        flush(watcher),
+      ).catch((error: unknown) => {
         report(`watch notice for ${shortSessionId(watcher.sessionId)} failed: ${errorText(error)}`);
       });
       ports.detachedWork?.track(work);

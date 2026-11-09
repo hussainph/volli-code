@@ -62,9 +62,12 @@ const moveTicket = vi.fn();
 const setTicketPriority = vi.fn();
 const setLabels = vi.fn();
 
-async function render(ticket: Ticket = TICKET) {
+async function render(
+  ticket: Ticket = TICKET,
+  presentation: "inspector" | "summary" = "inspector",
+) {
   await act(async () => {
-    root?.render(<TicketProperties projectId="p1" ticket={ticket} />);
+    root?.render(<TicketProperties projectId="p1" ticket={ticket} presentation={presentation} />);
   });
 }
 
@@ -74,17 +77,29 @@ function query<T extends Element>(selector: string): T {
   return found;
 }
 
-/** A row's leading glyph wrapper: the decorative mark at the left of the line. */
-function glyph(field: string): HTMLElement {
-  const row = query<HTMLElement>(`[data-testid="ticket-rail-property-row-${field}"]`);
-  const first = row.firstElementChild;
-  if (!(first instanceof HTMLElement)) throw new Error(`no glyph on the ${field} row`);
-  return first;
-}
-
 function pills(): HTMLElement[] {
   return [...document.querySelectorAll<HTMLElement>('[data-testid="ticket-rail-label-pill"]')];
 }
+
+it("bounds a thousand applied labels before the editor opens", async () => {
+  const labels = Array.from({ length: 1000 }, (_, i) => `Label ${String(i).padStart(4, "0")}`);
+  await render({ ...TICKET, labels });
+  expect(pills()).toHaveLength(2);
+  expect(query<HTMLButtonElement>('[aria-label="Manage labels, 998 more"]').textContent).toBe(
+    "+998",
+  );
+  expect(document.querySelectorAll('[data-slot="command-item"]')).toHaveLength(0);
+});
+
+it("searches and removes a label beyond the bounded run through its editor", async () => {
+  const labels = ["Label 0000", "Label 0001", "Label 0002", "Label 0999"];
+  await render({ ...TICKET, labels });
+  await press(query<HTMLButtonElement>('[aria-label="Manage labels, 2 more"]'));
+  await type("Label 0999");
+  expect(offered()).toEqual(["Label 0999"]);
+  await choose("Label 0999");
+  expect(setLabels).toHaveBeenCalledWith("t1", labels.slice(0, -1));
+});
 
 /** The pill names, in the order the run draws them. */
 function pillNames(): string[] {
@@ -104,7 +119,7 @@ async function press(element: HTMLElement): Promise<void> {
 function optionRow(label: string): HTMLElement {
   const found = [
     ...document.querySelectorAll<HTMLElement>(
-      '[data-slot="dropdown-menu-radio-item"],[cmdk-item=""]',
+      '[data-slot="dropdown-menu-radio-item"],[data-slot="command-item"]',
     ),
   ].find((candidate) => candidate.textContent?.trim() === label);
   if (found === undefined) throw new Error(`no option named ${label}`);
@@ -124,7 +139,7 @@ async function type(text: string): Promise<void> {
 
 /** The words on every row of the open list. */
 function offered(): string[] {
-  return [...document.querySelectorAll('[cmdk-item=""]')].map(
+  return [...document.querySelectorAll('[data-slot="command-item"]')].map(
     (row) => row.textContent?.trim() ?? "",
   );
 }
@@ -177,46 +192,34 @@ afterEach(async () => {
 });
 
 describe("the property rows", () => {
-  it("draws the value as a 28px dropdown trigger, and no field caption beside it", async () => {
+  it("aligns named properties with borderless 24px pop-ups and wrapping chips", async () => {
     await render();
-
-    const status = query<HTMLButtonElement>('[data-testid="ticket-rail-property-status"]');
-    const priority = query<HTMLButtonElement>('[data-testid="ticket-rail-property-priority"]');
-    // The app's own compact trigger: 28px tall, sized to its label.
-    expect(status.className).toContain("h-7");
-    expect(priority.className).toContain("h-7");
-    // The value is the only thing the row spends ink on.
-    expect(status.textContent).toContain("Todo");
-    expect(priority.textContent).toContain("Medium");
-    // The caption that used to trail each row is gone from all three — the
-    // glyph at the left already says which field the line is.
-    for (const [field, word] of [
-      ["status", "Status"],
-      ["priority", "Priority"],
-      ["labels", "Labels"],
-    ] as const) {
-      expect(query(`[data-testid="ticket-rail-property-row-${field}"]`).textContent).not.toContain(
-        word,
-      );
+    for (const [field, label, value] of [
+      ["status", "Status", "Todo"],
+      ["priority", "Priority", "Medium"],
+    ]) {
+      const trigger = query<HTMLButtonElement>(`[data-testid="ticket-rail-property-${field}"]`);
+      const row = query(`[data-testid="ticket-rail-property-row-${field}"]`);
+      expect(row.firstElementChild?.textContent).toBe(label);
+      expect(row.className).toContain("grid-cols-[4rem_minmax(0,1fr)]");
+      expect(trigger.dataset.variant).toBe("inspector");
+      expect(trigger.dataset.size).toBe("sm");
+      expect(trigger.textContent).toContain(value);
+      expect(trigger.getAttribute("aria-label")).toBe(`${label}: ${value}`);
+      expect(trigger.querySelectorAll("svg")).toHaveLength(field === "priority" ? 1 : 2);
+      expect(trigger.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
     }
-    // Nothing beside the control names the field, so the control still does:
-    // "Todo" alone names no field.
-    expect(status.getAttribute("aria-label")).toBe("Status: Todo");
-    expect(priority.getAttribute("aria-label")).toBe("Priority: Medium");
+    const labels = query('[data-testid="ticket-rail-property-row-labels"]');
+    expect(labels.firstElementChild?.textContent).toBe("Labels");
+    expect(labels.className).toContain("grid-cols-[4rem_minmax(0,1fr)]");
   });
 
-  it("keeps the leading glyph, decorative beside the control that names the field", async () => {
+  it("keeps the radio check as the only mark in plain choice menus", async () => {
     await render();
-
-    for (const field of ["status", "priority", "labels"]) {
-      const mark = glyph(field);
-      expect(mark.querySelector('svg, [role="img"]')).not.toBeNull();
-      expect(mark.getAttribute("aria-hidden")).toBe("true");
-    }
-    // `PriorityIndicator` is a labelled `img`: hidden, it cannot say
-    // "Priority: Medium" a second time beside the trigger that says it.
-    const indicator = query('[role="img"][aria-label="Priority: Medium"]');
-    expect(indicator.closest("[aria-hidden]")).toBe(glyph("priority"));
+    await press(query('[data-testid="ticket-rail-property-status"]'));
+    expect(optionRow("Todo").getAttribute("aria-checked")).toBe("true");
+    expect(optionRow("Doing").getAttribute("aria-checked")).toBe("false");
+    expect(optionRow("Doing").querySelectorAll("svg")).toHaveLength(0);
   });
 
   it("is not itself a target: the row holds one control and answers no press", async () => {
@@ -252,6 +255,33 @@ describe("the property rows", () => {
 });
 
 describe("the label run", () => {
+  it("retains stored label colours on the neutral property pills", async () => {
+    useBoardStore.setState({
+      labelsByProject: {
+        p1: LABELS.map((label) =>
+          label.name === "UI" ? Object.assign({}, label, { color: "#123456" }) : label,
+        ),
+      },
+    });
+    await render();
+    const ui = pills().find((pill) => pill.dataset.label === "UI")!;
+    expect(ui.querySelector<HTMLElement>('[aria-hidden="true"]')?.style.backgroundColor).toBe(
+      "rgb(18, 52, 86)",
+    );
+    await act(async () =>
+      useBoardStore.setState({
+        labelsByProject: {
+          p1: LABELS.map((label) =>
+            label.name === "UI" ? Object.assign({}, label, { color: "#abcdef" }) : label,
+          ),
+        },
+      }),
+    );
+    expect(ui.querySelector<HTMLElement>('[aria-hidden="true"]')?.style.backgroundColor).toBe(
+      "rgb(171, 205, 239)",
+    );
+    expect(ui.querySelector('[aria-label="Remove UI"]')).not.toBeNull();
+  });
   it("draws one removable pill per label, in the ticket's own order", async () => {
     await render();
 
@@ -393,4 +423,35 @@ describe("the label run", () => {
 
     expect(document.activeElement?.getAttribute("aria-label")).toBe("Add label");
   });
+});
+
+it("retains the board priority severity signal in the native trigger and every choice (PAR-11)", async () => {
+  await render();
+  const trigger = query<HTMLElement>('[data-testid="ticket-rail-property-priority"]');
+  const signal = trigger.querySelector('[role="img"][aria-label="Priority: Medium"]');
+  expect(signal).not.toBeNull();
+  expect(signal?.querySelectorAll('div[style*="var(--primary-text)"]')).toHaveLength(2);
+  await press(trigger);
+  for (const [label, count, ink] of [
+    ["Low", 1, "muted-foreground"],
+    ["Medium", 2, "primary-text"],
+    ["High", 3, "destructive"],
+  ] as const) {
+    const choice = optionRow(label);
+    const glyph = choice.querySelector(`[role="img"][aria-label="Priority: ${label}"]`);
+    expect(glyph).not.toBeNull();
+    expect(glyph?.querySelectorAll(`div[style*="var(--${ink})"]`)).toHaveLength(count);
+    expect(glyph?.querySelectorAll("div")).toHaveLength(3);
+  }
+});
+
+it("keeps summary metadata as named capsule controls with the same status write path", async () => {
+  await render(TICKET, "summary");
+  const status = query<HTMLButtonElement>('[aria-label="Status: Todo"]');
+  expect(status.dataset.shape).toBe("capsule");
+  expect(status.dataset.variant).toBe("secondary");
+  expect(query('[data-testid="ticket-rail-property-row-status"]').className).toContain("contents");
+  await press(status);
+  await choose("Doing");
+  expect(moveTicket).toHaveBeenCalledWith("p1", "t1", "doing", Number.MAX_SAFE_INTEGER);
 });

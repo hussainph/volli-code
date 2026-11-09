@@ -1,3 +1,5 @@
+import { PanelEmptyState } from "@renderer/components/ui/empty-state";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 /**
  * Search — the rail's find-across-files page, at both scopes (VC-193, plan
  * §4.7).
@@ -38,25 +40,22 @@
  *    but the words, so no unmounted page keeps a search alive.
  */
 import * as React from "react";
-import { FileCodeIcon } from "@phosphor-icons/react/dist/csr/FileCode";
-import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
+import { SearchIcon } from "@renderer/components/ui/icon";
+
 import { errorMessage } from "@volli/shared";
 
 import {
   searchGroups,
   searchHighlight,
   searchInput,
-  searchMatchKey,
   searchQuery,
   searchRevealTarget,
   searchSummary,
-  searchTruncationNote,
   SEARCH_DEBOUNCE_MS,
   type SearchGroup,
   type SearchScope,
 } from "@renderer/components/files/search-model";
-import { CopyPathContextMenuItems } from "@renderer/components/files/copy-path-menu";
-import { ExternalAppContextMenu } from "@renderer/components/files/external-app-menu";
+import { FileTree } from "./file-tree";
 import {
   navigatorScopeKey,
   useRememberedNavigatorView,
@@ -64,22 +63,16 @@ import {
 import {
   RailHeadingReadStatus,
   RailReadFaultBody,
-  RAIL_PANEL_INSET,
   RAIL_PANEL_MARGIN,
 } from "@renderer/components/ticket/rail-panel-parts";
 import {
   railReadCanClaimEmpty,
   railReadFeedback,
 } from "@renderer/components/ticket/rail-read-feedback";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-} from "@renderer/components/ui/context-menu";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { Input } from "@renderer/components/ui/input";
-import { ListRow } from "@renderer/components/ui/list-row";
+import { SectionHeading } from "@renderer/components/ui/section-heading";
+import { ValueReveal } from "@renderer/components/ui/value-reveal";
 import { fileRevealKey, requestFileReveal } from "@renderer/editor/reveal-line";
 import { cn } from "@renderer/lib/utils";
 import type { FileSearchFile, FileSearchLimit, FileSearchMatch } from "../../../../ipc/contract";
@@ -114,7 +107,7 @@ export function searchSummaryLine(state: {
   failed: boolean;
 }): string | null {
   const { pending, outcome, failed } = state;
-  if (outcome === null) return pending === null ? null : `Searching “${pending}”…`;
+  if (outcome === null) return pending === null ? null : `Searching “${pending}”`;
   const found = searchSummary(outcome);
   if (pending !== null && pending !== outcome.query) {
     return `Searching “${pending}” · results below are for “${outcome.query}”`;
@@ -286,11 +279,14 @@ function FileSearchScope({ scope, root, onOpenMatch }: FileSearchPanelProps) {
 
   return (
     <div data-testid="file-search-panel" className="flex min-h-0 flex-1 flex-col">
-      <header className={cn("flex shrink-0 flex-col gap-2 pt-1 pb-4", RAIL_PANEL_INSET)}>
-        <div className="flex items-center gap-2">
+      <header className="flex shrink-0 flex-col gap-2 px-4 pt-1 pb-2">
+        <div className="flex items-center gap-1">
           <div className="min-w-0 flex-1">
-            <div className="flex min-w-0 items-center gap-1.5">
-              <p className="text-ui font-medium">Search</p>
+            <div
+              data-slot="navigator-header-band"
+              className="flex min-h-7 min-w-0 items-center gap-1"
+            >
+              <SectionHeading as="h3">Search</SectionHeading>
               {/* The read's own state rides this row rather than a strip below
                   it, and brings the retry a stale list needs. */}
               <RailHeadingReadStatus
@@ -303,16 +299,24 @@ function FileSearchScope({ scope, root, onOpenMatch }: FileSearchPanelProps) {
             {/* The navigator's own mono sub-line, saying which checkout these
                 results come from — the branch in a Ticket view, the
                 project in Home. */}
-            <p
-              data-testid="file-search-scope"
-              className="truncate font-mono text-ui text-muted-foreground"
+            <ValueReveal
+              term="Scope"
+              full={root}
+              className="block min-h-6 w-full min-w-0 rounded-control-small text-left"
             >
-              {root}
-            </p>
+              <span
+                data-testid="file-search-scope"
+                dir="rtl"
+                className="block truncate text-left font-mono text-label text-muted-foreground"
+              >
+                <span dir="ltr">{root}</span>
+              </span>
+            </ValueReveal>
           </div>
-          <MagnifyingGlassIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+          <SearchIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
         </div>
         <Input
+          variant="search"
           value={raw}
           onChange={(event) => setRaw(event.target.value)}
           aria-label="Search files"
@@ -327,7 +331,7 @@ function FileSearchScope({ scope, root, onOpenMatch }: FileSearchPanelProps) {
             title={summary}
             className="text-ui text-muted-foreground"
           >
-            {summary}
+            {pendingQuery !== null ? <LoadingLabel>{summary}</LoadingLabel> : summary}
           </p>
         )}
       </header>
@@ -346,7 +350,6 @@ function FileSearchScope({ scope, root, onOpenMatch }: FileSearchPanelProps) {
       <SearchResults
         groups={groups}
         query={outcome?.query ?? null}
-        limit={outcome?.limit ?? "none"}
         idle={query === null}
         searching={pendingQuery !== null}
         canClaimEmpty={railReadCanClaimEmpty({
@@ -357,26 +360,26 @@ function FileSearchScope({ scope, root, onOpenMatch }: FileSearchPanelProps) {
         projectId={projectId}
         ticketId={ticketId}
         onOpenMatch={openMatch}
+        onClearSearch={() => setRaw("")}
       />
     </div>
   );
 }
 
-/** The result list: one heading per file, its matched lines under it. */
+/** Shared navigator ancestry, with each file’s content matches beneath it. */
 function SearchResults({
   groups,
   query,
-  limit,
   idle,
   searching,
   canClaimEmpty,
   projectId,
   ticketId,
   onOpenMatch,
+  onClearSearch,
 }: {
   groups: readonly SearchGroup[];
   query: string | null;
-  limit: FileSearchLimit;
   idle: boolean;
   searching: boolean;
   /**
@@ -388,87 +391,62 @@ function SearchResults({
   projectId: string;
   ticketId: string | null;
   onOpenMatch(relPath: string, match: FileSearchMatch, query: string): void;
+  onClearSearch(): void;
 }) {
-  if (idle) {
-    return (
-      <p data-testid="file-search-idle" className={EMPTY_INLINE}>
-        Type to find text in these files
-      </p>
-    );
-  }
+  // Idle is a resting state: the field above is the whole of it.
+  if (idle) return null;
   if (groups.length === 0) {
     if (searching) {
       return (
         <p data-testid="file-search-pending" className={EMPTY_INLINE}>
-          Searching…
+          <LoadingLabel>Searching</LoadingLabel>
         </p>
       );
     }
     if (!canClaimEmpty) return null;
     return (
-      <p data-testid="file-search-empty" className={EMPTY_INLINE}>
-        No matches
-      </p>
+      <div data-testid="file-search-empty">
+        <PanelEmptyState
+          illustration="search"
+          title="No matches"
+          line="Try another search."
+          action={{ label: "Clear search", onAction: onClearSearch }}
+        />
+      </div>
     );
   }
-  const note = searchTruncationNote(limit);
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto pb-8 [scroll-padding-bottom:2rem]">
-      <ul data-testid="file-search-results" className="px-2">
-        {groups.map((group) => (
-          <li key={group.relPath}>
-            <ContextMenu>
-              <ContextMenuTrigger asChild>
-                <ListRow
-                  data-testid="file-search-file"
-                  data-path={group.relPath}
-                  onActivate={null}
-                  leading={<FileCodeIcon className="size-4 shrink-0 text-muted-foreground" />}
-                  primary={group.name}
-                  secondary={group.dir}
-                  trailing={
-                    <span className="shrink-0 text-label text-muted-foreground tabular-nums">
-                      {group.matches.length}
-                    </span>
-                  }
-                />
-              </ContextMenuTrigger>
-              <ContextMenuContent>
-                <ExternalAppContextMenu
-                  target={{
-                    kind: "file",
-                    projectId,
-                    ticketId: ticketId ?? undefined,
-                    relPath: group.relPath,
-                  }}
-                />
-                <ContextMenuSeparator />
-                <CopyPathContextMenuItems
-                  target={{ projectId, ticketId: ticketId ?? undefined, relPath: group.relPath }}
-                />
-              </ContextMenuContent>
-            </ContextMenu>
-            <ul>
-              {group.matches.map((match) => (
-                <li key={searchMatchKey(group.relPath, match)}>
-                  <MatchRow
-                    match={match}
-                    onActivate={() => onOpenMatch(group.relPath, match, query ?? "")}
-                  />
-                </li>
-              ))}
-            </ul>
-          </li>
-        ))}
-      </ul>
-      {note === null ? null : (
-        <p
-          data-testid="file-search-truncated"
-          className={cn("pt-2 text-ui text-muted-foreground", RAIL_PANEL_INSET)}
-        >
-          {note}
-        </p>
-      )}
+    <div data-testid="file-search-results" className="flex min-h-0 flex-1 flex-col pb-8">
+      <FileTree
+        projectId={projectId}
+        ticketId={ticketId ?? undefined}
+        entries={groups.map((group) => ({
+          path: group.relPath,
+          matches: group.matches.map((match) => ({ line: match.line, text: match.preview })),
+        }))}
+        onOpen={(path) => {
+          const match = groups.find((group) => group.relPath === path)?.matches[0];
+          if (match) onOpenMatch(path, match, query ?? "");
+        }}
+        onPin={(path) => {
+          const match = groups.find((group) => group.relPath === path)?.matches[0];
+          if (match) onOpenMatch(path, match, query ?? "");
+        }}
+        searchMatches={{
+          render: (line, path) => {
+            const match = groups
+              .find((group) => group.relPath === path)
+              ?.matches.find((candidate) => candidate.line === line.line);
+            return match ? <MatchSnippet match={match} /> : null;
+          },
+          onOpen: (path, line) => {
+            const match = groups
+              .find((group) => group.relPath === path)
+              ?.matches.find((candidate) => candidate.line === line);
+            if (match) onOpenMatch(path, match, query ?? "");
+          },
+        }}
+      />
     </div>
   );
 }
@@ -479,28 +457,22 @@ function SearchResults({
  * Monospace, because this is code being quoted rather than a label — and the
  * line number is the fact that makes a result a place rather than a string.
  */
-function MatchRow({ match, onActivate }: { match: FileSearchMatch; onActivate(): void }) {
+function MatchSnippet({ match }: { match: FileSearchMatch }) {
   const { before, hit, after } = React.useMemo(() => searchHighlight(match), [match]);
   return (
-    <ListRow
-      data-testid="file-search-match"
-      data-line={match.line}
-      onActivate={onActivate}
-      // A FIXED 32px column, so every quoted line starts at the same x down the
-      // page and the code reads as a column of code rather than a ragged edge
-      // that moves with the line numbers' digit count.
-      leading={
-        <span className="w-8 shrink-0 text-right font-mono text-ui text-muted-foreground/70 tabular-nums">
-          {match.line}
+    <>
+      <span className="w-8 shrink-0 text-right font-mono text-ui text-muted-foreground tabular-nums">
+        {match.line}
+      </span>
+      <span className="flex min-w-0 flex-1 overflow-hidden whitespace-pre font-mono text-ui">
+        <span className="min-w-0 shrink overflow-hidden text-ellipsis whitespace-pre text-muted-foreground">
+          {before}
         </span>
-      }
-      primary={
-        <span className="flex min-w-0 flex-1 overflow-hidden whitespace-nowrap font-mono text-ui">
-          <span className="min-w-0 shrink truncate text-muted-foreground">{before}</span>
-          <mark className="shrink-0 rounded-xs bg-attention/25 text-foreground">{hit}</mark>
-          <span className="min-w-0 flex-1 truncate text-muted-foreground">{after}</span>
+        <mark className="shrink-0 rounded-keycap bg-attention/30 text-foreground">{hit}</mark>
+        <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-pre text-muted-foreground">
+          {after}
         </span>
-      }
-    />
+      </span>
+    </>
   );
 }

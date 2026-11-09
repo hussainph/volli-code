@@ -113,7 +113,7 @@ await installContextSpy(page);
 await seedProject(page, { path: projectDir });
 await seedTicketAndOpen(page, "VC-291 a11y probe");
 
-await startTerminalSession(page.locator("aside"));
+await startTerminalSession(page.locator('[data-inspector-panel][data-shown="true"]'));
 {
   const strip = page.getByRole("tablist", { name: "Ticket tabs" }).getByRole("tab");
   await waitUntil("session tab to appear", async () => (await strip.count()) >= 2, {
@@ -736,7 +736,12 @@ try {
   try {
     await page.getByRole("button", { name: "Home", exact: true }).click();
     await sleep(900);
-    await page.locator("article").filter({ hasText: "VC-1" }).first().dblclick({ timeout: 15000 });
+    await page
+      .locator("article")
+      .filter({ visible: true })
+      .filter({ hasText: "VC-1" })
+      .first()
+      .dblclick({ timeout: 15000 });
     await sleep(900);
     await page.getByRole("tablist", { name: "Ticket tabs" }).getByRole("tab").last().click();
     await sleep(900);

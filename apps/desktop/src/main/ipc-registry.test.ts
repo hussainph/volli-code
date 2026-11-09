@@ -1,3 +1,5 @@
+import { installHostLog, startMainStallMonitor } from "@volli/host-core/log";
+import type { LogRecord } from "@volli/shared";
 import { describe, expect, it, vi, beforeEach } from "vite-plus/test";
 import type { IpcArgs } from "../ipc/contract";
 
@@ -120,6 +122,62 @@ describe("registerGuardedIpcHandlers", () => {
       ok: false,
       error: "remote said no",
     });
+  });
+});
+
+/** Holds the event loop for `ms`, as a slow synchronous SQLite read would. */
+function block(ms: number): void {
+  const until = performance.now() + ms;
+  while (performance.now() < until) {
+    // Busy: nothing else in this process runs until it returns.
+  }
+}
+
+describe("main stall telemetry through the envelope (VC-1073)", () => {
+  it("writes one attributed stall line for a handler that blocks past the threshold, none below", async () => {
+    const records: LogRecord[] = [];
+    const undoLog = installHostLog({
+      level: "info",
+      sink: { write: (record) => records.push(record) },
+    });
+    const monitor = startMainStallMonitor({ thresholdMs: 100 });
+    try {
+      registerGuardedIpcHandlers(descriptors, {
+        "volli:app-state-set": () => {
+          block(150);
+          return { ok: true };
+        },
+        "volli:data-bootstrap": () => {
+          block(10);
+          return { ok: false, error: "unused" };
+        },
+      });
+      expect(invoke("volli:app-state-set", "k", "v")).toEqual({ ok: true });
+      expect(invoke("volli:data-bootstrap")).toEqual({ ok: false, error: "unused" });
+      // Past the probe's next tick: the lag the block caused is already explained.
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    } finally {
+      monitor.stop();
+      undoLog();
+    }
+    const attributed = records.filter(
+      (record) => record.msg === "main stall" && record.attribution === "door",
+    );
+    expect(attributed).toEqual([
+      expect.objectContaining({
+        component: "main-stall",
+        door: "ipc",
+        operation: "volli:app-state-set",
+        durationMs: expect.any(Number),
+        traceId: expect.stringMatching(/^[0-9a-f]{32}$/),
+      }),
+    ]);
+    expect(attributed[0]?.durationMs).toBeGreaterThanOrEqual(150);
+    expect(
+      records.some(
+        (record) => record.msg === "main stall" && record.operation === "volli:data-bootstrap",
+      ),
+    ).toBe(false);
   });
 });
 

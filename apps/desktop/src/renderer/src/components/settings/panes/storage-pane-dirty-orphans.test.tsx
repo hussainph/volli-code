@@ -16,13 +16,33 @@ import type {
 } from "../../../../../ipc/contract";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { useUiStore } from "@renderer/stores/ui";
-import { StoragePane } from "./storage-pane";
+import { StorageOverviewPane } from "./storage-pane";
 
 vi.mock("@renderer/lib/session-rpc-ipc-link", () => ({
   sessionRpcClient: () => ({
     worktree: {
       trimSettings: {
         query: async () => ({ keepPatterns: [".env"], trimOnFinish: true }),
+      },
+    },
+    // The Storage page's backups section; idle, so it adds nothing to assert.
+    backups: {
+      status: {
+        query: async () => ({ revision: "b", running: false, lastBackup: null, notice: null }),
+      },
+      restoreStatus: {
+        query: async () => ({
+          revision: "r",
+          phase: "idle",
+          bundles: [],
+          selectedFile: null,
+          projects: [],
+          checkpoints: 0,
+          paused: false,
+          problems: [],
+          credentialsMessage: null,
+          previousProfile: null,
+        }),
       },
     },
   }),
@@ -156,10 +176,16 @@ async function mountPane(): Promise<void> {
   await act(async () => {
     root?.render(
       <TooltipProvider>
-        <StoragePane />
+        <StorageOverviewPane />
       </TooltipProvider>,
     );
   });
+  // The orphan list lives on the page's Review cleanup sheet.
+  const review = [...document.querySelectorAll("button")].find(
+    (candidate) => candidate.textContent?.trim() === "Review cleanup",
+  );
+  if (!review) throw new Error("no Review cleanup button");
+  await act(async () => review.click());
 }
 
 /**
@@ -171,6 +197,15 @@ function rows(testId = "orphan-row"): HTMLElement[] {
   return [...document.querySelectorAll<HTMLElement>(`[data-testid="${testId}"]`)].map(
     (target) => target.parentElement as HTMLElement,
   );
+}
+
+/**
+ * Each held failure: the shared error Notice under its row. Unlike a row, the
+ * notice's recovery lives inside its own shell, so the test id's element IS
+ * the scope.
+ */
+function failures(): HTMLElement[] {
+  return [...document.querySelectorAll<HTMLElement>('[data-testid="orphan-failure"]')];
 }
 
 function button(name: string, scope: ParentNode = document): HTMLButtonElement {
@@ -194,14 +229,18 @@ async function click(target: HTMLElement): Promise<void> {
 }
 
 describe("Storage → dirty orphan rows (VC-292)", () => {
-  it("leads with the ticket, keeps the whole path on hover, and offers the ticket instead of Delete", async () => {
+  it("leads with the ticket, reveals the whole path, and offers the ticket instead of Delete", async () => {
     await mountPane();
     const [row] = rows();
 
     expect(row?.textContent).toContain("VC-82");
     expect(row?.textContent).toContain("Strand the checkout");
-    // The clipped path is no longer the name — the full one is a hover away.
-    expect(row?.querySelector(`[title="${CLAIMED.path}"]`)).not.toBeNull();
+    // The clipped path is no longer the name. The name is the shared
+    // ValueReveal: a focus stop naming the ticket and the full path, which
+    // hover AND keyboard focus open — never a native title alone.
+    const name = row?.querySelector<HTMLButtonElement>('button[data-slot="value-reveal"]');
+    expect(name?.getAttribute("aria-label")).toBe(`VC-82 Strand the checkout · ${CLAIMED.path}`);
+    expect(row?.querySelector("[title]")).toBeNull();
     expect(hasButton("Open ticket", row)).toBe(true);
     // Main refuses to delete a folder a ticket claims, so no button promises it.
     expect(hasButton(`Delete ${CLAIMED.path}`, row)).toBe(false);
@@ -223,16 +262,21 @@ describe("Storage → dirty orphan rows (VC-292)", () => {
 
     await click(button("Open ticket"));
 
-    const [failure] = rows("orphan-failure");
+    const [failure] = failures();
     expect(failure?.textContent).toContain("Couldn't open the ticket");
     expect(failure?.textContent).toContain("Its project isn't open in Volli.");
+    // Announced, through the Notice's own live region, which holds the
+    // message and never its controls.
+    const announced = failure?.querySelector('[role="status"][aria-live="polite"]');
+    expect(announced?.textContent).toContain("Couldn't open the ticket");
+    expect(announced?.querySelector("button")).toBeNull();
     expect(navigation.openTicketView).not.toHaveBeenCalled();
 
     navigation.projects = [{ id: "p1" }];
     await click(button("Retry", failure));
 
     expect(navigation.openTicketView).toHaveBeenCalledWith("p1", "t82", { tabId: "doc" });
-    expect(rows("orphan-failure")).toEqual([]);
+    expect(failures()).toEqual([]);
   });
 
   it("names an archived ticket, a ticketless folder, and an unreadable one", async () => {
@@ -262,7 +306,7 @@ describe("Storage → dirty orphan rows (VC-292)", () => {
     await act(async () => copy.focus());
 
     expect(writeText).toHaveBeenCalledWith(CLAIMED.path);
-    expect(rows("orphan-failure")).toEqual([]);
+    expect(failures()).toEqual([]);
     expect(document.body.textContent).toContain("Path copied");
 
     await act(async () => vi.advanceTimersByTime(900));
@@ -290,13 +334,13 @@ describe("Storage → dirty orphan rows (VC-292)", () => {
     await mountPane();
 
     await click(button(`Copy ${CLAIMED.path}`));
-    const [failure] = rows("orphan-failure");
+    const [failure] = failures();
     expect(failure?.textContent).toContain("Couldn't copy the path");
     expect(failure?.textContent).toContain("clipboard blocked");
 
     await click(button("Retry", failure));
     expect(writeText).toHaveBeenCalledTimes(2);
-    expect(rows("orphan-failure")).toEqual([]);
+    expect(failures()).toEqual([]);
   });
 
   it("keeps a failed reveal on the row until it is retried or dismissed", async () => {
@@ -304,19 +348,19 @@ describe("Storage → dirty orphan rows (VC-292)", () => {
     await mountPane();
 
     await click(button(`Reveal ${CLAIMED.path} in Finder`));
-    expect(rows("orphan-failure")[0]?.textContent).toContain("Couldn't reveal the folder");
+    expect(failures()[0]?.textContent).toContain("Couldn't reveal the folder");
 
     // A retry that fails again stays; a thrown failure reads the same way.
     revealInFinder.mockRejectedValueOnce(new Error("bridge gone"));
-    await click(button("Retry", rows("orphan-failure")[0]));
-    expect(rows("orphan-failure")[0]?.textContent).toContain("bridge gone");
+    await click(button("Retry", failures()[0]));
+    expect(failures()[0]?.textContent).toContain("bridge gone");
 
-    await click(button("Dismiss: Couldn't reveal the folder"));
-    expect(rows("orphan-failure")).toEqual([]);
+    await click(button("Dismiss notice", failures()[0]));
+    expect(failures()).toEqual([]);
 
     revealInFinder.mockResolvedValue({ ok: true });
     await click(button(`Reveal ${CLAIMED.path} in Finder`));
-    expect(rows("orphan-failure")).toEqual([]);
+    expect(failures()).toEqual([]);
   });
 
   it("keeps a refused delete on the row, and its retry asks for confirmation again", async () => {
@@ -332,7 +376,7 @@ describe("Storage → dirty orphan rows (VC-292)", () => {
 
     // The confirmation closed, and the reason is on the row it was about.
     expect(document.querySelector('[role="alertdialog"]')).toBeNull();
-    const [failure] = rows("orphan-failure");
+    const [failure] = failures();
     expect(failure?.textContent).toContain("Couldn't delete this worktree");
     expect(failure?.textContent).toContain("Something else is already changing this folder.");
 
@@ -344,14 +388,14 @@ describe("Storage → dirty orphan rows (VC-292)", () => {
     // A thrown failure is held the same way.
     deleteOrphan.mockRejectedValueOnce(new Error("bridge gone"));
     await click(button("Delete"));
-    expect(rows("orphan-failure")[0]?.textContent).toContain("bridge gone");
+    expect(failures()[0]?.textContent).toContain("bridge gone");
 
     // And a delete that lands clears it and rescans.
     orphans.mockResolvedValue(scan([]));
-    await click(button("Retry", rows("orphan-failure")[0]));
+    await click(button("Retry", failures()[0]));
     await click(button("Delete"));
     expect(deleteOrphan).toHaveBeenLastCalledWith(UNCLAIMED.path);
     expect(orphans).toHaveBeenLastCalledWith({ refresh: true });
-    expect(rows("orphan-failure")).toEqual([]);
+    expect(failures()).toEqual([]);
   });
 });

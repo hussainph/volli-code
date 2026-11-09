@@ -8,7 +8,6 @@ import { PromptInput } from "@renderer/components/ui/ai-elements/prompt-input";
 import { AttachmentStrip } from "@renderer/components/attachments/attachment-strip";
 import type { ComposerPickerState } from "@renderer/chat/composer-picker";
 import { Button } from "@renderer/components/ui/button";
-import { DropdownMenuContent, DropdownMenuItem } from "@renderer/components/ui/dropdown-menu";
 
 import { ComposerAddMenu } from "./composer-add-menu";
 import { EffortPill } from "./composer-effort-ui";
@@ -46,6 +45,12 @@ function findElements(
     if (!React.isValidElement(child)) continue;
     if (child.type === type) found.push(child as React.ReactElement<InspectableProps>);
     found.push(...findElements((child.props as InspectableProps).children, type));
+    // Slot props hold elements too: a ListRow's `actions` are its children's
+    // siblings, passed as a prop rather than nested.
+    for (const [key, value] of Object.entries(child.props as Record<string, unknown>)) {
+      if (key !== "children" && React.isValidElement(value))
+        found.push(...findElements(value, type));
+    }
   }
   return found;
 }
@@ -91,14 +96,14 @@ function renderComposer(working = true): string {
 }
 
 describe("the queued message row", () => {
-  it("keeps steer and removal direct while editing lives behind an accessible menu", () => {
+  it("keeps steer, removal and pencil editing direct and accessible", () => {
     const html = renderComposer();
 
     expect(html).toContain("Steer");
     expect(html).toContain('aria-label="Steer queued message: also cover the empty-name branch"');
     expect(html).toContain('aria-label="Remove queued message: also cover the empty-name branch"');
     expect(html).toContain('data-slot="dropdown-menu-trigger"');
-    expect(html).toContain('aria-label="Queued message actions: also cover the empty-name branch"');
+    expect(html).toContain('aria-label="Edit queued message: also cover the empty-name branch"');
     expect(html).not.toContain('aria-label="Edit queued message"');
   });
 
@@ -128,8 +133,10 @@ describe("the queued message row", () => {
       };
       expect(disabled("Steer queued message: later")).toBe(queueState === "releasing");
       expect(disabled("Remove queued message: later")).toBeFalsy();
-      expect(disabled("Queued message actions: later")).toBeFalsy();
-      expect(findElements(tree, DropdownMenuItem)).toHaveLength(1);
+      expect(disabled("Edit queued message: later")).toBeFalsy();
+      expect(
+        buttons.filter((entry) => entry.props["aria-label"]?.startsWith("Edit queued message:")),
+      ).toHaveLength(1);
     }
   });
 
@@ -169,7 +176,9 @@ describe("the queued message row", () => {
       }),
     );
 
-    findElements(tree, DropdownMenuItem)[0]?.props.onSelect?.();
+    findElements(tree, Button)
+      .find((button) => button.props["aria-label"]?.startsWith("Edit queued message:"))
+      ?.props.onClick?.();
     await findElements(tree, Button)
       .find((button) => button.props["aria-label"] === "Remove queued message: in flight")
       ?.props.onClick?.();
@@ -233,7 +242,7 @@ describe("the queued message row", () => {
       expect(html).toContain(`aria-label="Queued message: ${text}"`);
       expect(html).toContain(`aria-label="Steer queued message: ${text}"`);
       expect(html).toContain(`aria-label="Remove queued message: ${text}"`);
-      expect(html).toContain(`aria-label="Queued message actions: ${text}"`);
+      expect(html).toContain(`aria-label="Edit queued message: ${text}"`);
     }
   });
 
@@ -255,30 +264,14 @@ describe("the queued message row", () => {
         onComposerFocusRequest: () => acts.push("focus"),
       }),
     );
-    const edits = findElements(tree, DropdownMenuItem);
-    const edit = edits[0];
-    const menu = findElements(tree, DropdownMenuContent)[0];
-    let restorePrevented = false;
-
-    expect(edits).toHaveLength(1);
-    expect(renderToStaticMarkup(<>{edit?.props.children}</>)).toContain("Edit message");
-    // Dismissing a menu with its trigger intact keeps Radix's normal restore.
-    menu?.props.onCloseAutoFocus?.({ preventDefault: () => (restorePrevented = true) });
-    expect(restorePrevented).toBe(false);
-    edit?.props.onSelect?.();
-    menu?.props.onCloseAutoFocus?.({
-      preventDefault: () => {
-        restorePrevented = true;
-      },
-    });
+    const edit = findElements(tree, Button).find((button) =>
+      button.props["aria-label"]?.startsWith("Edit queued message:"),
+    );
+    expect(edit).toBeDefined();
+    edit?.props.onClick?.();
     expect(nextQueue).toEqual([]);
     await vi.waitFor(() => expect(nextDraft).toBe("also cover the empty-name branch\nnew thought"));
-    // Two focus requests: one inside `editQueued` (which the modal menu's
-    // focus trap swallows while the content is still mounted) and one from
-    // `onCloseAutoFocus`, the first moment after the trap is gone — the only
-    // request that can actually land on the textarea.
-    expect(acts).toEqual(["queue", "focus", "draft", "focus"]);
-    expect(restorePrevented).toBe(true);
+    expect(acts).toEqual(["queue", "draft", "focus"]);
   });
 
   it("does not edit or remove a row whose resident delivery claim rejects mutation", async () => {
@@ -296,7 +289,9 @@ describe("the queued message row", () => {
       }),
     );
 
-    findElements(tree, DropdownMenuItem)[0]?.props.onSelect?.();
+    findElements(tree, Button)
+      .find((button) => button.props["aria-label"]?.startsWith("Edit queued message:"))
+      ?.props.onClick?.();
     const remove = findElements(tree, Button).find(
       (button) =>
         button.props["aria-label"] === "Remove queued message: also cover the empty-name branch",
@@ -339,7 +334,9 @@ describe("the queued message row", () => {
       }),
     );
 
-    findElements(tree, DropdownMenuItem)[0]?.props.onSelect?.();
+    findElements(tree, Button)
+      .find((button) => button.props["aria-label"]?.startsWith("Edit queued message:"))
+      ?.props.onClick?.();
 
     await vi.waitFor(() => expect(acts).toEqual(["queue", "restore", "draft", "focus"]));
   });
@@ -369,7 +366,9 @@ describe("the queued message row", () => {
         onValueChange: () => events.push("draft"),
       }),
     );
-    findElements(tree, DropdownMenuItem)[0]?.props.onSelect?.();
+    findElements(tree, Button)
+      .find((button) => button.props["aria-label"]?.startsWith("Edit queued message:"))
+      ?.props.onClick?.();
     expect(events).toEqual(["cancel"]);
     accept(false);
     await Promise.resolve();
@@ -410,7 +409,7 @@ describe("the queued message row", () => {
 
     expect(html).not.toContain('aria-label="Steer queued message:');
     expect(html).toContain('aria-label="Remove queued message:');
-    expect(html).toContain('aria-label="Queued message actions:');
+    expect(html).toContain('aria-label="Edit queued message:');
   });
 
   it("keeps Steer direct but lets its printed label give way in a narrow live turn", () => {
@@ -603,18 +602,18 @@ describe("the effort control's place in the footer", () => {
     expect(html).toMatch(
       /data-variant="ghost" data-size="sm"[^>]*aria-label="Reasoning effort: Medium"/,
     );
-    expect(html).toMatch(/data-variant="default" data-size="icon-lg"[^>]*aria-label="Send"/);
+    expect(html).toMatch(/data-variant="default" data-size="icon"[^>]*aria-label="Send"/);
     expect(html).not.toContain('data-size="xs"');
     expect(html).not.toContain('data-size="icon-xs"');
   });
 
-  it("separates the writing sheet, settings tray, and send key (VC-335)", () => {
+  it("preserves the writing sheet and controls in one dock with a round send key", () => {
     const html = renderFooter();
     expect(html).toContain("prompt-surface");
     expect(html).toContain("prompt-toolbar");
     expect(html).toContain("prompt-config");
-    expect(html).toContain("prompt-primary rounded-control");
-    expect(html).toContain("min-h-20");
+    expect(html).toContain("prompt-primary rounded-full");
+    expect(html).toContain("min-h-10");
   });
 
   it("keeps prompt entry on the writing sheet without an expanded-editor icon", () => {
@@ -687,21 +686,14 @@ describe("what the model pill is willing to say", () => {
     ).toBe("sonnet-4.5");
   });
 
-  it("still leads with the provider where the name alone would be ambiguous", () => {
+  it("leaves provider identity to the mark even for an unlisted model", () => {
     expect(
       modelPillLabel(MODELS, {
         providerId: "azure",
         modelId: "sonnet-4.5",
         reasoningLevel: "high",
       }),
-    ).toBe("azure · sonnet-4.5");
-    expect(
-      modelPillLabel(
-        MODELS,
-        { providerId: "azure", modelId: "sonnet-4.5", reasoningLevel: "high" },
-        "Azure OpenAI",
-      ),
-    ).toBe("Azure OpenAI · sonnet-4.5");
+    ).toBe("sonnet-4.5");
   });
 
   it("says the whole identity where the pill has room for a fragment of it", () => {
@@ -833,7 +825,8 @@ describe("the model pill's controlled open", () => {
     // because a `title` is not keyboard-reachable and a name is not readable.
     const tiered = pillMarkup({ selectionTier: "Fast" });
     expect(tiered).toContain('aria-label="Model: Fast · sonnet-4.5 · Anthropic"');
-    expect(tiered).toContain('title="Fast · sonnet-4.5 · Anthropic"');
+    expect(tiered).not.toContain('title="Fast · sonnet-4.5 · Anthropic"');
+    expect(tiered).toContain('aria-label="Anthropic"');
   });
 
   // The line the open list leads with is portalled, so it exists only in a

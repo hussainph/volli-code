@@ -6,7 +6,21 @@ import {
 } from "./document-identity";
 
 export type DocumentRevision = string | number | null;
-export type DocumentSavePolicy = "read-only" | "explicit" | "autosave";
+/**
+ * Who keeps the buffer's text safe, which decides whether it can ever be
+ * unsaved work.
+ *
+ * - `read-only`: nobody writes it.
+ * - `explicit`: ⌘S writes it; until then the edit is dirty.
+ * - `autosave`: the host writes it shortly after typing stops; until that
+ *   write, the edit is dirty.
+ * - `draft`: the host caches every change as it is made (the New-ticket
+ *   composer's draft cache) and restores it on the next open, so there is
+ *   never anything in the buffer to lose. A draft document never reads as
+ *   dirty: reporting it would make ⌘Q warn about text that is already kept
+ *   (VC-1094), and since nothing ever saves it, the warning would never clear.
+ */
+export type DocumentSavePolicy = "read-only" | "explicit" | "autosave" | "draft";
 
 export interface RegistryModel {
   getValue(): string;
@@ -302,7 +316,9 @@ export class DocumentRegistry<Model extends RegistryModel, ViewState> {
    * fires a content change per keystroke and all but the first say the same
    * thing.
    */
-  private setDirty(entry: DocumentEntry<Model, ViewState>, dirty: boolean): void {
+  private setDirty(entry: DocumentEntry<Model, ViewState>, edited: boolean): void {
+    // A draft document's host already holds every edit (see DocumentSavePolicy).
+    const dirty = edited && entry.savePolicy !== "draft";
     if (entry.dirty === dirty) return;
     entry.dirty = dirty;
     for (const listener of this.unsavedListeners) listener();

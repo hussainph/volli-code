@@ -1,6 +1,6 @@
 /**
- * The unified terminal-session store: ONE resident model for both Project
- * Sessions (CONTEXT.md's "Session Role": ticketless, main checkout) and
+ * The unified terminal-session store: ONE resident model for both Board
+ * Sessions (CONTEXT.md#session-role: ticketless, main checkout) and
  * ticket-scoped sessions (ticket-detail-mvp decision #19). Every tab carries a
  * {@link SessionScope} discriminator; the always-mounted sessions layer reads
  * it to route each live terminal to its surface (Home for a Board Session, a
@@ -54,7 +54,7 @@ export function ownerKey(scope: SessionScope): string {
   return scope.kind === "project" ? scope.projectId : scope.ticketId;
 }
 
-/** A project's own, ticketless scope — the Session Role CONTEXT.md calls `project`. */
+/** A project's own, ticketless scope — the `project` Session Role (CONTEXT.md#session-role). */
 export function projectScope(projectId: string): SessionScope {
   return { kind: "project", projectId };
 }

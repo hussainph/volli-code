@@ -175,7 +175,7 @@ function click(target: Element): void {
 }
 
 const blockerRow = () => container?.querySelector('[data-slot="session-blocker"]') ?? null;
-const dismissButton = () => container?.querySelector('[aria-label="Dismiss"]') ?? null;
+const dismissButton = () => container?.querySelector('[aria-label="Dismiss notice"]') ?? null;
 
 describe("a click naming a failure", () => {
   it("brings back a blocker row the person had dismissed", async () => {

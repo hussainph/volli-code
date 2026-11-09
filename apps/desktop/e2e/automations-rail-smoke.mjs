@@ -79,7 +79,11 @@ console.log("scratch:", scratch, "\n");
 function cardById(page, id) {
   return page
     .locator("article")
-    .filter({ has: page.locator("span.font-mono", { hasText: new RegExp(`^${id}$`) }) });
+
+    .filter({
+      visible: true,
+      has: page.locator("span.font-mono", { hasText: new RegExp(`^${id}$`) }),
+    });
 }
 
 let app = null;
@@ -168,7 +172,7 @@ try {
       const said = await rail().innerText();
       // VC-406 retired the rail's Run once; the block ends at its rows.
       const runOnce = await rail().locator('[data-testid="ticket-rail-run-once"]').count();
-      const emptyReport = rail().getByText("No automations in this project yet.", { exact: true });
+      const emptyReport = rail().getByText("No automations", { exact: true });
       const door = pageDoor();
       const [headingBox, doorBox] = await Promise.all([heading.boundingBox(), door.boundingBox()]);
       const reportMetrics = await emptyReport.evaluate((element) => {
@@ -195,7 +199,7 @@ try {
       await backToBoard();
       return {
         ok:
-          said.includes("No automations in this project yet.") &&
+          said.includes("No automations") &&
           runOnce === 0 &&
           strayLinks === 0 &&
           doorSharesHeadingRow &&
@@ -302,6 +306,7 @@ try {
     await inspection().waitFor({ timeout: 15000 });
     await page.getByTestId("ticket-rail-automation-run").click();
     await page.getByRole("navigation", { name: "Settings categories" }).waitFor({ timeout: 20000 });
+    await page.getByRole("button", { name: "Close Settings", exact: true }).click();
     await backToBoard();
     return { ok: true, detail: "ran the armed Automation, refused for the missing model" };
   });
@@ -356,17 +361,34 @@ try {
     const submenu = page.getByRole("menu").nth(1);
     await submenu.waitFor({ timeout: 10000 });
     const items = await submenu.innerText();
+    // Group labels read as their parts — the column, then the mark naming this
+    // Ticket's own — case-folded: how the label lays out and cases those parts
+    // is presentation, while the order is the claim.
+    const headings = await submenu
+      .locator('[data-slot="context-menu-label"]')
+      .evaluateAll((labels) =>
+        labels.map((label) =>
+          [...label.childNodes]
+            .map((part) => part.textContent?.trim() ?? "")
+            .filter(Boolean)
+            .join(" · ")
+            .toLowerCase(),
+        ),
+      );
     await page.keyboard.press("Escape");
     await page.keyboard.press("Escape");
+    const ownColumn = headings.indexOf("doing · this ticket");
+    const doneColumn = headings.indexOf("done");
     return {
       ok:
         items.includes("Review sweep") &&
         items.includes("Nightly sweep") &&
         items.includes("Done sweep") &&
-        items.indexOf("DOING · THIS TICKET") < items.indexOf("DONE") &&
+        ownColumn >= 0 &&
+        ownColumn < doneColumn &&
         // A card has nowhere to type an Unbound Run, so it offers none.
         !items.includes("Run once"),
-      detail: items.replaceAll("\n", " | ").slice(0, 240),
+      detail: `headings=${JSON.stringify(headings)} ${items.replaceAll("\n", " | ").slice(0, 200)}`,
     };
   });
 

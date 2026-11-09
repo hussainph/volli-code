@@ -265,6 +265,7 @@ describe("Session tool refresh through Pi", { timeout: 20_000 }, () => {
       codeMode: {
         ...legacy.codeMode!,
         descriptionVersion: 2,
+        mcpResultVersion: 1,
         routes: { ...legacy.codeMode!.routes, [install.providerName]: "deferred" },
       },
     };
@@ -325,6 +326,7 @@ describe("Session tool refresh through Pi", { timeout: 20_000 }, () => {
       codeMode: {
         ...legacy.codeMode!,
         descriptionVersion: 2,
+        mcpResultVersion: 1,
         routes: { ...legacy.codeMode!.routes, [tool.providerName]: "deferred" },
       },
     };
@@ -379,7 +381,12 @@ describe("Session tool refresh through Pi", { timeout: 20_000 }, () => {
     const events = await f.engine.listEvents({ sessionId: f.sessionId });
     const refreshed = events.filter((event) => event.payload.kind === "session.tools.refreshed");
     expect(refreshed).toHaveLength(1);
-    expect(refreshed[0]?.payload).toMatchObject({ trigger: "cold-turn", changed: ["codemode"] });
+    expect(refreshed[0]?.payload).toMatchObject({
+      trigger: "cold-turn",
+      changed: ["codemode"],
+      delta: { descriptionVersion: 2, mcpResultVersion: 1 },
+    });
+    expect(effectiveToolSurface(events)?.codeMode?.mcpResultVersion).toBe(1);
     const birth = events.find((event) => event.payload.kind === "session.input.recorded");
     expect(birth?.payload).toEqual({ kind: "session.input.recorded", input: legacy });
     f.replies.push({ text: "Done again" });
@@ -396,7 +403,11 @@ describe("Session tool refresh through Pi", { timeout: 20_000 }, () => {
     async (supportsMidConvoSystemMessages) => {
       const modern = {
         ...legacy,
-        codeMode: { ...legacy.codeMode!, descriptionVersion: 2 as const },
+        codeMode: {
+          ...legacy.codeMode!,
+          descriptionVersion: 2 as const,
+          mcpResultVersion: 1 as const,
+        },
       };
       const f = await fixture(modern, modern, supportsMidConvoSystemMessages);
       f.replies.push({ text: "First" });

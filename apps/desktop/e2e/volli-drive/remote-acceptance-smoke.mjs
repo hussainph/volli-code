@@ -91,6 +91,17 @@ async function send(text) {
   await type("Message", text);
   await action("press", "textbox", "Message", { key: "Enter" });
 }
+async function openHomeChat() {
+  // Home's approved entry point is its tab chooser, not the removed empty-chat
+  // button. Scope the strip door to main; the sidebar has an equivalent +.
+  await click("button", "Open a tab", { scope: { role: "main", name: null } });
+  await click("menuitem", "Chat ⌘T");
+  await waitUntil(
+    "the local chat Message box is actionable",
+    async () => hasActionableControl((await snap()).text, "textbox", "Message"),
+    { timeout: 30_000, interval: 100 },
+  );
+}
 async function hostChip() {
   await click("button", "Host:", { contains: true });
   await wait("Switch host");
@@ -209,6 +220,7 @@ async function journey() {
     // Never click Forget: this is only a real UI scroll for the evidence frame.
     await action("scroll", "button", "Forget…", { direction: "down" });
     await shot("step-1-paired-device");
+    await click("button", "Close Settings");
     await click("button", "Home");
   });
 
@@ -255,6 +267,10 @@ async function journey() {
         async () => hasActionableControl((await snap()).text, "button", "Home"),
         { timeout: 10_000, interval: 100 },
       );
+      // The project sheet is nested in floating Settings. Closing the sheet
+      // does not dismiss its parent or make the sidebar pointer-actionable.
+      await click("button", "Close Settings");
+      await call("wait", { text: "Close Settings", gone: true, timeout: 10_000 });
       await click("button", "Home");
       await selectHost(REMOTE_HOST);
       const selected = await wait(REMOTE_PROJECT);
@@ -267,15 +283,22 @@ async function journey() {
     await click("button", "Home");
     // Operator configuration restarts hostd. New ticket stays enabled during
     // the reconnect grace, so it cannot prove rejoin (VC-768). Observe the
-    // project's real Workspace-ready state, then the renderer's write control.
+    // project's real Workspace-ready state, then the header's write control.
+    // An empty board legitimately offers the same New ticket action in its
+    // empty state too; bind the persistent page-wide group, not an arbitrary
+    // first match or a uniqueness check over both entry points.
     await waitUntil(
       "Workspace rejoins after model deployment and New ticket is actionable",
       async () =>
         (await call("acceptance-workspace")).ready &&
-        hasActionableControl((await snap()).text, "button", "New ticket"),
+        hasActionableControl(
+          snapshotSubtree((await snap()).text, "group", "Board actions"),
+          "button",
+          "New ticket",
+        ),
       { timeout: 10_000, interval: 100 },
     );
-    await click("button", "New ticket");
+    await click("button", "New ticket", { scope: { role: "group", name: "Board actions" } });
     await type("Ticket title", TITLE);
     await click("button", "Create ticket");
     await wait(TITLE);
@@ -333,7 +356,7 @@ async function journey() {
         ref: boardDefault.match(/\[ref=([^\]]+)\]/)[1],
         kind: "click",
       });
-      await click("option", "GPT-4.1 mini");
+      await click("option", "Azure OpenAI GPT-4.1 mini");
       await waitUntil(
         "the box saved its selected default",
         async () => boardDefaultControl((await snap()).text, REMOTE_HOST, "GPT-4.1 mini"),
@@ -376,7 +399,7 @@ async function journey() {
       // scripted turn keeps the client alive while the remote question waits.
       await selectHost("This Mac");
       await click("button", "Home");
-      await click("button", "New chat", { first: true });
+      await openHomeChat();
       localKeepaliveStarted = true;
       await send(LOCAL_KEEPALIVE);
       await wait("Stop turn");
@@ -422,13 +445,13 @@ async function journey() {
       await click("button", "Logs", { contains: true, first: true });
       await wait("Sources");
       await click("button", REMOTE_HOST);
-      await type("Search", "serving");
+      await type("Search logs", "serving");
       const current = await wait('button "serving');
       assert.ok(controls(current.text, "button", "This Mac").length === 1);
       assert.ok(controls(current.text, "button", REMOTE_HOST)[0]?.includes("[pressed]"));
       assert.ok(
         visibleServingRow(current.text, REMOTE_HOST),
-        "Real serving row must name hostd and the remote machine, not just the Search input",
+        "Real serving row must name hostd and the remote machine, not just the Search logs input",
       );
     },
   );

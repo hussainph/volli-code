@@ -12,6 +12,7 @@ import {
   type TranscriptArtifactStore,
 } from "@volli/session-engine";
 import { createCheckpointFailureReporter } from "../session-control";
+import { noteAttachFailureCause } from "../session-control/session-event-log";
 import type { HostEventBus, PowerPort } from "../ports";
 import type { Logger } from "../log/logger";
 import { correlatedExecutor } from "./correlated-executor";
@@ -87,6 +88,8 @@ export function createHostSessionRuntime(options: HostSessionRuntimeOptions): Ho
     // The payload stays durable and the Session raises Attention; this is the
     // operator's record of why an automatic release did not go out.
     onFollowUpFailure: (error) => options.log.error("follow-up queue release failed", { error }),
+    // Why an attach failed rides that `attachment.failed` fact's line (VC-1099).
+    onAttachFailure: noteAttachFailureCause,
     // Attachments start detached, commands run under their own trace (VC-699).
     executors: mapSessionExecutorSlot(options.executors, correlatedExecutor),
     artifacts: options.artifacts ?? createFileTranscriptArtifactStore(options.transcriptDirectory),

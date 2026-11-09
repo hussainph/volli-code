@@ -29,7 +29,7 @@
  * failure, not the accessible choice.
  */
 import * as React from "react";
-import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
+import { AutomationIcon } from "@renderer/components/ui/icon";
 
 import { armedRunProgress, armedRunSecondsLeft, type PendingArmedRun } from "./armed-move-model";
 import { cancelArmedRun, useArmedRunStore } from "./armed-run";
@@ -110,12 +110,12 @@ function ArmedRunCard({ window, now }: { window: PendingArmedRun; now: number })
         "pointer-events-auto relative w-80 overflow-hidden rounded-container border border-border",
         "bg-popover shadow-overlay",
         // Entrance only — the bar below is information and never opts out.
-        !reducedMotion && "transition-[opacity,translate] duration-200 ease-swift",
+        !reducedMotion && "transition-[opacity,translate] duration-(--duration-sheet) ease-swift",
         !reducedMotion && "starting:translate-y-2 starting:opacity-0",
       )}
     >
       <div className="flex items-center gap-2 px-4 py-2">
-        <LightningIcon className="size-4 shrink-0 text-muted-foreground" />
+        <AutomationIcon className="size-4 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate text-ui text-foreground">
           {window.automationName}
           <span className="text-muted-foreground">
@@ -138,7 +138,7 @@ function ArmedRunCard({ window, now }: { window: PendingArmedRun; now: number })
       {/* The bar rides the card's own bottom edge rather than sitting in the
           layout: it must read as the window draining, not as a third control. */}
       <div
-        className="absolute inset-x-0 bottom-0 h-[2px] bg-foreground/10"
+        className="absolute inset-x-0 bottom-0 h-[2px] bg-wash-ink/10"
         role="progressbar"
         aria-label={`${window.automationName} starts in ${secondsLeft} seconds`}
         aria-valuemin={0}
@@ -149,7 +149,7 @@ function ArmedRunCard({ window, now }: { window: PendingArmedRun; now: number })
             clearly against the `/10` wash behind it without becoming ink. */}
         <div
           data-armed-run-progress
-          className="h-full bg-foreground/50"
+          className="h-full bg-wash-ink/50"
           style={{ width: `${progress * 100}%` }}
         />
       </div>

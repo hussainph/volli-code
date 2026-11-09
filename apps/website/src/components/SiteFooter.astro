@@ -1,5 +1,6 @@
 ---
 /** The quiet end of every page (BRAND.md §7.6). */
+import { PREVIEW_AGREEMENT_URL, PREVIEW_PRIVACY_URL } from "@volli/shared";
 import { DOCS_URL, ISSUES_URL, RELEASES_URL, REPOSITORY_URL } from "../data/links";
 import Mark from "./Mark.astro";
 ---
@@ -16,6 +17,8 @@ import Mark from "./Mark.astro";
     <a href={REPOSITORY_URL}>GitHub</a>
     <a href={ISSUES_URL}>Feedback</a>
     <a href={`${REPOSITORY_URL}/security/policy`}>Security</a>
+    <a href={PREVIEW_AGREEMENT_URL}>Preview Agreement</a>
+    <a href={PREVIEW_PRIVACY_URL}>Privacy</a>
     {/* The OFL notices for the fonts this site self-hosts, emitted by
         src/pages/licenses.txt.ts. Linked so the notice is reachable, which
         is what redistributing font software asks of us. */}

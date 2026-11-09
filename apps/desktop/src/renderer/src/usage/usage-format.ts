@@ -240,8 +240,7 @@ export function formatUsd(amount: number): string {
  * Cache reads as a share of all prompt tokens, as a percentage.
  *
  * Never called a hit rate — providers report token classes, not one
- * hit-or-miss bit per request, and CONTEXT.md is explicit that the wrong name
- * here invites the wrong diagnosis.
+ * hit-or-miss bit per request (CONTEXT.md#cached-input-share).
  */
 export function formatCachedShare(summary: SessionUsageSummary): string | null {
   if (summary.cachedInputShare === null) return null;

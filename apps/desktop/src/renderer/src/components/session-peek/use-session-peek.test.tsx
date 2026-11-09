@@ -900,6 +900,9 @@ describe("where the card is drawn", () => {
     // The framed shell clips the left sidebar with `clip-path`, which a
     // `position: fixed` descendant does not escape — so the card must not be one.
     expect(container.contains(shown)).toBe(false);
-    expect(shown?.parentElement).toBe(document.body);
+    expect(shown?.parentElement?.id).toBe("volli-overlays");
+    expect(shown?.parentElement?.parentElement).toBe(document.body);
+    expect(shown?.parentElement?.style.position).toBe("");
+    expect(shown?.parentElement?.style.overflow).toBe("");
   });
 });

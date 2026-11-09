@@ -26,14 +26,11 @@ export const DATA_EXPORT_MENU_LABEL = `${DATA_EXPORT_ACTION_LABEL}…`;
 export const DATA_EXPORT_CONFIRM_TITLE = `${DATA_EXPORT_ACTION_LABEL}?`;
 
 /**
- * What this file is and is not, stated before the export runs — the three
+ * What this file is not, said once at the moment of the choice — the three
  * facts a person needs in order not to mistake it for a backup: it is
  * partial, it has no restore path, and the two things it silently leaves
- * behind are exactly the ones that would look like data loss later.
+ * behind are exactly the ones that would look like data loss later. One line:
+ * both the Settings confirm and the File menu's save dialog show it alone.
  */
 export const DATA_EXPORT_LIMITS =
-  "This is a limited data export. It cannot be restored. It does not include attachments or transcript files.";
-
-/** What it does carry, kept beside the limits so the sentence above is not the only thing said. */
-export const DATA_EXPORT_CONTENTS =
-  "The file holds a readable copy of your projects, tickets, comments, sessions, and labels for inspection.";
+  "A limited data export that cannot be restored, with no attachments or transcript files.";

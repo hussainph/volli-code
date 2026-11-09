@@ -137,10 +137,19 @@ export type StructuredSessionCommands = Pick<SessionRuntime, "command">;
  * system prompt from that record, never from a second disk read, so a
  * restart-recovery re-attach months later injects the same bytes this start
  * did — index included.
+ *
+ * `instructions` is the workspace's repository instruction file (VC-1054) —
+ * the one the Session's own working copy holds, read from the ref a Ticket's
+ * checkout will be cut from when that checkout does not exist yet (VC-1055) —
+ * best-effort like the index and recorded in the same input, FIRST: it is the
+ * project's standing material, and ahead of any named skill it keeps the
+ * longest prefix every Session in the project shares. Absent on a host that
+ * reads no files, which records exactly what it recorded before.
  */
 export interface SessionSkillPorts {
   resolve(projectId: string, names: readonly string[]): Promise<readonly PromptResource[]>;
   index(projectId: string, injectedNames: readonly string[]): Promise<PromptResource | null>;
+  instructions?(projectId: string, ticketId: string | null): Promise<PromptResource | null>;
   record(sessionId: string, resources: readonly PromptResource[]): Promise<void>;
 }
 
@@ -162,9 +171,8 @@ export interface SessionToolSurfacePorts {
    * Session carries project-wide control; a Ticket Role carries
    * delegation-scoped steering.
    * The separate `grants` argument is the durable birth exception, which keeps
-   * availability-as-enforcement without turning it into a bundle edit. Before
-   * this argument existed every Session resolved the same list, and "Role
-   * determines the tool bundle" was true only in `CONTEXT.md`.
+   * availability-as-enforcement without turning it into a bundle edit
+   * (CONTEXT.md#agent-tool-surface).
    *
    * `within` is a Subagent Session's bound (VC-9): its parent's own frozen
    * surface. A child cannot get a port its parent lacked, and the parent's
@@ -902,7 +910,16 @@ export function createSessions(options: SessionsOptions): Sessions {
       input.projectId,
       explicit.map((resource) => resource.name),
     );
-    const resources = index === null ? explicit : [...explicit, index];
+    // The repository instructions lead (VC-1054). Read here, at birth, from
+    // the workspace this Session will run in, and frozen in the same record:
+    // a re-attach composes these bytes whatever the file says by then.
+    const instructions =
+      (await options.skills.instructions?.(input.projectId, input.ticketId)) ?? null;
+    const resources = [
+      ...(instructions === null ? [] : [instructions]),
+      ...explicit,
+      ...(index === null ? [] : [index]),
+    ];
     // Resolve grants before creation and freeze them before the surface they
     // authorize. The resolver still owns vocabulary validation; this port owns
     // the durable per-Session source and its scope/recursion data.
@@ -1094,13 +1111,31 @@ export function createSessions(options: SessionsOptions): Sessions {
 
     async start(input) {
       const created = await mint(input);
-      const attached = await attachStructuredSession(
+      const origin = birthOrigin(input);
+      let attached = await attachStructuredSession(
         options.runtime,
         input.operationId,
         created.sessionId,
         "fresh",
-        birthOrigin(input),
+        origin,
       );
+      // An attach that merely outlasted its admission bound ran nothing to
+      // completion: under a busy host its executor was still starting, and the
+      // runtime released whatever it finished late. That is the transient
+      // failure the start retries, once, before handing the Session to a
+      // person (VC-1099). The retry's command id is derived from the start's
+      // own, so a replayed start replays both attempts' receipts rather than
+      // attaching a third time, and the caller's kickoff still waits on the
+      // one answer it gets back here.
+      if (attachTimedOut(attached)) {
+        attached = await attachStructuredSession(
+          options.runtime,
+          `${input.operationId}${START_RETRY_SUFFIX}`,
+          created.sessionId,
+          "fresh",
+          origin,
+        );
+      }
       return { ...attached, model: created.model };
     },
 
@@ -1177,6 +1212,21 @@ async function attachStructuredSession(
     receipt: attached.receipt,
     throughSequence: attached.throughSequence,
   };
+}
+
+/**
+ * The suffix a start's one attach retry derives its operation from, so its
+ * command is `<op>:retry:start` (VC-1099). Durable: a replayed start finds
+ * the retry's receipt under exactly this id; changing it would attach again.
+ */
+const START_RETRY_SUFFIX = ":retry";
+
+/** A start whose attach was refused only for outlasting the admission bound. */
+function attachTimedOut(result: SessionStartResult): boolean {
+  const receipt = result.receipt;
+  return (
+    receipt !== null && receipt.status === "rejected" && receipt.code === "queue_admission_timeout"
+  );
 }
 
 function attachmentReady(result: SessionRuntimeCommandResult): boolean {

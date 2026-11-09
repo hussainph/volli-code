@@ -11,8 +11,10 @@
  *   resumes it and owes the backend only what happens after the move.
  *
  * No board row changes and git is untouched. Each write is an upsert by id,
- * so the step runs again safely; what it wrote is journaled so a roll back
- * takes back exactly that ({@link releaseHandover}).
+ * so the step runs again safely; the path registrations it wrote are
+ * journaled so a roll back takes back exactly those ({@link releaseHandover}),
+ * and the cursors go with every other cursor on the project
+ * ({@link releaseProjectCursors}).
  */
 import type Database from "better-sqlite3";
 
@@ -114,45 +116,52 @@ export function handOver(input: {
 }
 
 /**
- * Takes back what {@link handOver} wrote: the path registrations still as it
- * wrote them, and the drain cursors no new fact moved. Answers the Sessions
- * that kept a cursor because they took new facts in Volli Cloud since.
+ * Takes back every drain cursor this runner holds for `userId` on the
+ * project's Sessions: the moved ones (moved on or not) and those born in
+ * Volli Cloud since. For when the project is the local copy's again (Go back
+ * to local) or its cloud copy is purged (a roll back after the commit): this
+ * runner serves none of them any more, and what it drained is in the local
+ * ledger already. Only this person's cursors, only on this project's
+ * Sessions. A Session born in Volli Cloud keeps its local row, now with no
+ * cursor: an orphan the local copy lists and nothing uploads (intended).
+ * Answers the Sessions whose cursors went.
+ */
+export function releaseProjectCursors(
+  db: Database.Database,
+  userId: string,
+  projectId: string,
+): string[] {
+  return db.transaction(() => {
+    const held = prepared<[string, string], { session_id: string }>(
+      db,
+      `SELECT session_id FROM session_drain_cursors WHERE owner_user_id = ?
+        AND session_id IN (SELECT id FROM sessions WHERE project_id = ?) ORDER BY session_id`,
+    )
+      .all(userId, projectId)
+      .map((row) => row.session_id);
+    prepared(
+      db,
+      `DELETE FROM session_drain_cursors WHERE owner_user_id = ?
+        AND session_id IN (SELECT id FROM sessions WHERE project_id = ?)`,
+    ).run(userId, projectId);
+    return held;
+  })();
+}
+
+/**
+ * Takes back the path registrations {@link handOver} wrote, still as it
+ * wrote them. Its drain cursors are not this function's: every cursor on the
+ * project goes by {@link releaseProjectCursors} (Go back to local, a roll
+ * back), so the ids it takes back reach a running drain. A roll back takes a
+ * handover back only after the commit (`handover` is journaled in the
+ * `committed` step), when the cloud copy is purged with every cursor on it.
  */
 export function releaseHandover(input: {
   db: Database.Database;
-  history: MoveSessionHistory;
-  userId: string;
   runnerId: string;
   record: HandoverRecord;
-  /**
-   * Going back to local, for this project: every Session's cursor goes, the
-   * moved ones (moved on or not) and those born in Volli Cloud since. What
-   * this runner drained since the move is in the local ledger already.
-   */
-  everyCursor?: { projectId: string };
-}): string[] {
+}): void {
   const { db, record, runnerId } = input;
-  let kept: string[] = [];
-  if (input.everyCursor !== undefined) {
-    const { projectId } = input.everyCursor;
-    db.transaction(() => {
-      for (const { sessionId } of record.cursors) {
-        prepared(
-          db,
-          "DELETE FROM session_drain_cursors WHERE session_id = ? AND owner_user_id = ?",
-        ).run(sessionId, input.userId);
-      }
-      // And the Sessions born in Volli Cloud's copy since: this runner serves
-      // none of the project's Sessions any more.
-      prepared(
-        db,
-        `DELETE FROM session_drain_cursors WHERE owner_user_id = ?
-          AND session_id IN (SELECT id FROM sessions WHERE project_id = ?)`,
-      ).run(input.userId, projectId);
-    })();
-  } else {
-    kept = input.history.releaseCursors(input.userId, record.cursors);
-  }
   db.transaction(() => {
     for (const checkout of record.checkouts) {
       prepared(
@@ -168,5 +177,4 @@ export function releaseHandover(input: {
       ).run(runnerId, copy.ticketId, copy.projectRepoId, copy.absPath);
     }
   })();
-  return kept;
 }

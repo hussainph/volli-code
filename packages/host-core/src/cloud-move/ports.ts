@@ -88,11 +88,6 @@ export interface MoveSessionHistory {
     ownerUserId: string,
     sessions: ReadonlyArray<{ sessionId: string; acceptedThrough: number }>,
   ): void;
-  /** Takes back the cursors a seed wrote and nothing moved since; answers the Sessions that kept theirs. */
-  releaseCursors(
-    ownerUserId: string,
-    sessions: ReadonlyArray<{ sessionId: string; acceptedThrough: number }>,
-  ): string[];
 }
 
 /** The profile's verified backup: written once per queue, re-read before any freeze.
@@ -157,6 +152,13 @@ export interface MoveEnginePorts {
   exportProject(options: MigrationExportOptions): Promise<MigrationExportResult>;
   /** Holds the profile-maintenance lease (backups pause) around a whole run. */
   maintenance?<T>(work: () => Promise<T>): Promise<T>;
+  /**
+   * The project's drain cursors were taken back (Go back to local, a roll
+   * back after the commit), for these Sessions: a running cloud launch's
+   * drain forgets their streams. Without it, the drain drops them the next
+   * time it looks at them.
+   */
+  cursorsReleased?(sessionIds: readonly string[]): void;
   now?: () => number;
   newId?: () => string;
   /** Backoff between retries. Resolves early (or rejects) when `signal` aborts. */

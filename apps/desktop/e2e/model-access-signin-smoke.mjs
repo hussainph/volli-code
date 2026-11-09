@@ -50,6 +50,8 @@ import {
  * the real provider table; this only has to click them.
  */
 const PROVIDER_ID = "groq";
+/** The name a person types into the provider search to find it. */
+const PROVIDER_LABEL = "Groq";
 /** Never a real key, and never validated by anything — see the header. */
 const FAKE_KEY = "gsk-volli-smoke-not-a-real-key-000000";
 
@@ -70,6 +72,44 @@ async function storedProviders() {
 }
 
 /**
+ * The provider's name, as the Models page lists it.
+ *
+ * A provider row is the settings kit's `ItemRow`, and the shared list row puts
+ * a `data-testid` on its NAME half — the row's buttons are that element's
+ * sibling, never its children (`ui/list-row.tsx`). The row a person reads —
+ * name, status and actions — is the shell one level up, so that is what
+ * {@link accountRow} names.
+ */
+const accountName = (page) => page.getByTestId(`account-${PROVIDER_ID}`);
+const accountRow = (page) => accountName(page).locator("xpath=..");
+const signInPanel = (page) => page.getByTestId(`sign-in-${PROVIDER_ID}`);
+
+/**
+ * Which half of the accounts list holds the provider: `connected` under
+ * "Signed in", `available` under "Available to connect", or null when neither
+ * renders it. The rebuilt page dropped the per-row "Sign in required" status
+ * as a repeat of the row's own action; the half it sits in is what says it.
+ */
+async function accountHalf(page) {
+  const inHalf = (slot) =>
+    page.locator(`[data-slot="${slot}"]`).getByTestId(`account-${PROVIDER_ID}`).count();
+  if ((await inHalf("model-access-accounts")) > 0) return "connected";
+  if ((await inHalf("model-access-accounts-available")) > 0) return "available";
+  return null;
+}
+
+/**
+ * "Available to connect" previews a handful of common providers and keeps the
+ * rest behind its own search, so a signed-out Groq is found the way a person
+ * finds it: by typing its name. Signed in, it moves up to "Signed in", where
+ * nothing hides it.
+ */
+async function revealAccount(page) {
+  if ((await accountName(page).count()) > 0) return;
+  await page.getByRole("searchbox", { name: "Search providers", exact: true }).fill(PROVIDER_LABEL);
+}
+
+/**
  * Settings → Models, scoped through the nav landmark because these words are
  * common on this surface.
  *
@@ -84,11 +124,11 @@ async function openAgentSettings(page) {
     .getByRole("navigation", { name: "Settings categories" })
     .getByRole("button", { name: "Models", exact: true })
     .click();
-  await page.getByTestId(`account-${PROVIDER_ID}`).waitFor();
+  // The provider search renders once the catalogue has loaded.
+  await page.getByRole("searchbox", { name: "Search providers", exact: true }).waitFor();
+  await revealAccount(page);
+  await accountName(page).waitFor();
 }
-
-const accountRow = (page) => page.getByTestId(`account-${PROVIDER_ID}`);
-const signInPanel = (page) => page.getByTestId(`sign-in-${PROVIDER_ID}`);
 
 console.log("scratch:", scratch, "\n");
 await fs.mkdir(home, { recursive: true });
@@ -131,16 +171,24 @@ try {
   await attempt(2, "a signed-out provider offers Sign in rather than a terminal", async () => {
     await openAgentSettings(page);
     const row = accountRow(page);
-    const status = (await row.textContent())?.trim() ?? "";
-    const signIn = row.getByRole("button", { name: "Sign in", exact: true });
+    const text = (await row.textContent())?.trim() ?? "";
+    const half = await accountHalf(page);
+    const signIn = await row
+      .getByRole("button", { name: `Sign in to ${PROVIDER_LABEL}`, exact: true })
+      .count();
+    const signOut = await row
+      .getByRole("button", { name: `Sign out of ${PROVIDER_LABEL}`, exact: true })
+      .count();
     return {
-      ok: (await signIn.count()) === 1 && status.includes("Sign in required"),
-      detail: `status=${JSON.stringify(status)}`,
+      ok: half === "available" && signIn === 1 && signOut === 0 && !/terminal/i.test(text),
+      detail: `half=${half} signIn=${signIn} signOut=${signOut} row=${JSON.stringify(text)}`,
     };
   });
 
   await attempt(3, "the provider's own step is what the panel asks", async () => {
-    await accountRow(page).getByRole("button", { name: "Sign in", exact: true }).click();
+    await accountRow(page)
+      .getByRole("button", { name: `Sign in to ${PROVIDER_LABEL}`, exact: true })
+      .click();
     const panel = signInPanel(page);
     await panel.waitFor();
     const field = panel.locator("input");
@@ -193,7 +241,10 @@ try {
     await waitUntil(
       "the account row offers Sign out",
       async () => {
-        const button = accountRow(page).getByRole("button", { name: "Sign out", exact: true });
+        const button = accountRow(page).getByRole("button", {
+          name: `Sign out of ${PROVIDER_LABEL}`,
+          exact: true,
+        });
         return (await button.count()) === 1 ? button : null;
       },
       { timeout: 20_000 },
@@ -201,15 +252,18 @@ try {
     // The panel is gone: an ended attempt leaves nothing open, and nothing on
     // screen claims the key was verified, because nothing verified it.
     const panels = await signInPanel(page).count();
+    const half = await accountHalf(page);
     const text = (await accountRow(page).textContent()) ?? "";
     return {
-      ok: panels === 0 && !/connected|verified/i.test(text),
-      detail: `panels=${panels} row=${JSON.stringify(text.trim())}`,
+      ok: panels === 0 && half === "connected" && !/connected|verified/i.test(text),
+      detail: `panels=${panels} half=${half} row=${JSON.stringify(text.trim())}`,
     };
   });
 
   await attempt(7, "signing out removes the stored credential", async () => {
-    await accountRow(page).getByRole("button", { name: "Sign out", exact: true }).click();
+    await accountRow(page)
+      .getByRole("button", { name: `Sign out of ${PROVIDER_LABEL}`, exact: true })
+      .click();
     const remaining = await waitUntil(
       "auth.json no longer names the provider",
       async () => {
@@ -225,15 +279,24 @@ try {
     const signIn = await waitUntil(
       "the account row offers Sign in again",
       async () => {
-        const button = accountRow(page).getByRole("button", { name: "Sign in", exact: true });
+        // Back in "Available to connect", it may be behind the preview again.
+        await revealAccount(page);
+        const button = accountRow(page).getByRole("button", {
+          name: `Sign in to ${PROVIDER_LABEL}`,
+          exact: true,
+        });
         return (await button.count()) === 1 ? button : null;
       },
       { timeout: 20_000 },
     );
+    const half = await accountHalf(page);
     const signOut = await accountRow(page)
-      .getByRole("button", { name: "Sign out", exact: true })
+      .getByRole("button", { name: `Sign out of ${PROVIDER_LABEL}`, exact: true })
       .count();
-    return { ok: signIn !== null && signOut === 0, detail: `signOutButtons=${signOut}` };
+    return {
+      ok: signIn !== null && signOut === 0 && half === "available",
+      detail: `half=${half} signOutButtons=${signOut}`,
+    };
   });
 
   check(

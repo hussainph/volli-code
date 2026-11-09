@@ -154,7 +154,7 @@ function messageBox(page) {
   // since the check was authored — #233 reproduced it on a quiet machine).
   // The DOM contract still pins the same control; only the resolution path
   // stops depending on an accessibility tree a modal menu legitimately hides.
-  return page.locator('textarea[aria-label="Message"]').first();
+  return page.locator('textarea[aria-label="Message"]:visible').first();
 }
 
 function accessibleMessageBox(page) {

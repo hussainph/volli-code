@@ -2,8 +2,10 @@ name: CI extended
 
 # The lanes that left the PR gate (VC-934), kept rather than deleted: the rest
 # smoke tier (every non-core, non-quarantined journey) and flag-on cloud
-# acceptance, plus the move engine's kill/resume matrix and the large-profile
-# backup restore rehearsal (both Linux). The smoke
+# acceptance, plus the move engine's kill/resume matrix, the large-profile
+# backup restore rehearsal, the older-app live check (the newest shipped
+# build against this commit's backend) and the BYO runner acceptance (all
+# Linux). The smoke
 # lanes are macOS-only and long, and gating every PR on them held
 # all five of the account's concurrent macOS slots per PR run, so PRs queued
 # behind each other. Here they run:
@@ -12,8 +14,9 @@ name: CI extended
 #   - on demand for ANY branch: `gh workflow run ci-extended.yml --ref <branch>`.
 #     A PR that changes a journey's area or the cloud path should dispatch it
 #     before merge; its result shows on that commit;
-#   - on a PR only when it changes this file or the smoke runner, so the lane
-#     definition is proven by the PR that edits it (as ci.yml is).
+#   - on a PR only when it changes this file, the smoke runner, or the
+#     older-app live harness, so the lane definition is proven by the PR that
+#     edits it (as ci.yml is).
 #
 # Results are visible, not gating: a red here is a red X on the commit and a
 # failed `Extended result`, never a required PR check. The release workflow
@@ -40,6 +43,7 @@ on:
       - .github/workflows/ci-extended.yml
       - apps/desktop/scripts/run-smokes.mjs
       - apps/desktop/scripts/smoke-quiet-check.mjs
+      - scripts/convex-compat/**
   schedule:
     - cron: "17 6 * * *"
   workflow_dispatch:
@@ -71,9 +75,8 @@ jobs:
           persist-credentials: false
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        uses: ./.github/actions/setup-toolchain
         with:
-          node-version-file: package.json
           cache: true
           run-install: true
 
@@ -120,22 +123,9 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        uses: ./.github/actions/setup-toolchain
         with:
-          node-version-file: .nvmrc
           run-install: false
-
-      # setup-vp manages pnpm internally; package.mjs calls it by name.
-      - name: Enable pinned pnpm
-        run: |
-          set -euo pipefail
-          node_bin="$(dirname "$(node -p process.execPath)")"
-          mkdir -p "$RUNNER_TEMP/pnpm-bin"
-          "$node_bin/corepack" enable --install-directory "$RUNNER_TEMP/pnpm-bin" pnpm
-          echo "$RUNNER_TEMP/pnpm-bin" >> "$GITHUB_PATH"
-          export PATH="$RUNNER_TEMP/pnpm-bin:$PATH"
-          expected="$(node -p 'require("./package.json").packageManager.split("@")[1]')"
-          test "$(pnpm --version)" = "$expected"
 
       - name: Check hostd target and desktop version
         run: |
@@ -199,6 +189,8 @@ jobs:
   # and its clock are both SIMULATED (the power seam; the fixture backend's
   # guarded `testAutomations` hooks). Sharing this job's loopback-CSP build is
   # what makes the second journey cost the slot rather than a second build.
+  # A third journey shares it too: BYO-6's runner-setup sheet (VC-1039), one
+  # Mac and a SIMULATED Linux box on the real /runner/* wire.
   #
   # First in the same single-slot chain, for quick cloud wake feedback.
   # The rest tier and remote acceptance still run afterward, even if this
@@ -208,8 +200,9 @@ jobs:
     name: Smoke (cloud wake acceptance)
     if: ${{ !cancelled() }}
     runs-on: macos-15
-    # Two journeys in one slot: the wake path, then the Automation path.
-    timeout-minutes: 55
+    # Three journeys in one slot: the wake path, the Automation path, then
+    # the runner-setup sheet.
+    timeout-minutes: 75
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -219,9 +212,8 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        uses: ./.github/actions/setup-toolchain
         with:
-          node-version-file: .nvmrc
           cache: true
           run-install: true
 
@@ -269,6 +261,28 @@ jobs:
           node fixture/with-backend.ts --deploy --
           node ../apps/desktop/e2e/volli-drive/cloud-automation-acceptance-smoke.mjs
 
+      # BYO-6 (VC-1039): Settings → Runners → Add a runner on one Mac, against
+      # its own throwaway backend; a SIMULATED Linux box (a Node process on the
+      # real /runner/* wire, not a Volli build) spends the token, and the sheet
+      # reads "is online". Same build and slot. Until #1107 lands its script,
+      # the step says so and passes: there is nothing of it to run yet.
+      - name: Run the runner-setup acceptance (Linux box SIMULATED)
+        if: ${{ !cancelled() }}
+        # Only the scrubbed report is uploaded: the smoke keeps its raw drive
+        # home and evidence private by itself.
+        env:
+          VOLLI_SMOKE_REPORT_DIR: ${{ runner.temp }}/runner-setup-acceptance
+        run: |
+          set -euo pipefail
+          smoke=apps/desktop/e2e/volli-drive/runner-setup-acceptance-smoke.mjs
+          if [[ ! -f "$smoke" ]]; then
+            echo "::notice title=Runner-setup acceptance pending::$smoke is not on this tree yet (VC-1039)"
+            exit 0
+          fi
+          node --test apps/desktop/e2e/volli-drive/lib/runner-setup-evidence.test.mjs
+          cd convex
+          node fixture/with-backend.ts --deploy -- node "../$smoke"
+
       - name: Upload two-Mac cloud acceptance evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -277,6 +291,7 @@ jobs:
           path: |
             ${{ runner.temp }}/cloud-wake-acceptance
             ${{ runner.temp }}/cloud-automation-acceptance
+            ${{ runner.temp }}/runner-setup-acceptance
           if-no-files-found: warn
           retention-days: 30
 
@@ -297,9 +312,8 @@ jobs:
           persist-credentials: false
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        uses: ./.github/actions/setup-toolchain
         with:
-          node-version-file: .nvmrc
           cache: true
           run-install: true
 
@@ -324,9 +338,8 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        uses: ./.github/actions/setup-toolchain
         with:
-          node-version-file: .nvmrc
           cache: true
           run-install: true
 
@@ -387,9 +400,8 @@ jobs:
           persist-credentials: false
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        uses: ./.github/actions/setup-toolchain
         with:
-          node-version-file: .nvmrc
           cache: true
           run-install: true
 
@@ -409,6 +421,324 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # The behavioural half of the app↔backend contract (VC-1019): the newest
+  # shipped build — the latest `v*` tag by semver, prereleases included, so
+  # today `v0.3.0-canary.1` — runs its OWN live cloud suites. Its tree comes
+  # out of the tag with `git archive` and its own lockfile is installed, so the
+  # suites, every module they import, the `convex` client and the committed
+  # `convex/functions/_generated` API are that build's. Only the backend is
+  # this commit's: `with-backend.ts --deploy` pushes `convex/functions` to the
+  # pinned local backend and hands the run its URL and a test issuer key.
+  #
+  # The static API guard owns the surface (a function removed, an argument made
+  # required, a validator narrowed — each shows up there as a diff); this lane
+  # owns what that surface is for — the build people are actually running still
+  # signs in, still paints its board, still streams a Session, still reads
+  # "Waiting for <Mac>". Neither substitutes for the other: a rename is caught
+  # by both, a changed behaviour behind an unchanged signature only here.
+  #
+  # Linux: these suites are plain Node under `vp test`, and `Convex (codegen +
+  # backend)` already runs the same files on ubuntu, so this holds no macOS
+  # slot. `fetch-depth: 0` brings the tags the build is chosen from, and the
+  # older tree is installed from its own lockfile with `--ignore-scripts` (no
+  # Electron download, no node-pty build) into the pnpm store this checkout
+  # already filled.
+  #
+  # `scripts/convex-compat/` is the lane's own harness: one script picks and
+  # materializes the build, the other runs its suites under the fixture and
+  # refuses any result without evidence — not one test, or a skipped one, is a
+  # failure rather than a green. Both report the selected tag, its commit and
+  # the suite list to the run's summary, and the JSON report is kept.
+  # VC-937: the exact canary.2 legal-version exception in live-exceptions.json
+  # requires an extra typed-refusal probe. A labelled current-consent fixture
+  # lets all frozen data-plane test bodies run unchanged; no failure is waived.
+  # It becomes inactive automatically when a tag newer than canary.2 ships.
+  older-app-live:
+    name: Older app (live)
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Tags: which build shipped is chosen from them.
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Bootstrap this commit's backend; prepare installs the tag's own frozen
+      # lockfile separately, and its live runner uses that tree's Vite+ binary.
+      - name: Setup Vite+
+        uses: ./.github/actions/setup-toolchain
+        with:
+          cache: true
+          run-install: true
+
+      - name: Place the backend cache outside the checkout
+        run: echo "VOLLI_CONVEX_BACKEND_CACHE=$RUNNER_TEMP/convex-local-backend" >> "$GITHUB_ENV"
+
+      - name: Restore the pinned Convex local backend
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/convex-local-backend
+          key: convex-local-backend-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('convex/fixture/backend.json') }}
+
+      - name: Fetch and verify the pinned backend
+        run: vp run --filter @volli/convex backend:fetch
+
+      - name: Harness unit tests
+        run: node --test scripts/convex-compat/*.test.mjs
+
+      - name: Materialize the newest shipped build
+        id: prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/convex-compat/prepare-older-app.mjs --latest --out "$RUNNER_TEMP/older-app" \
+            | tee "$RUNNER_TEMP/older-app-prepare.log"
+          # The manifest path is the log's last line; the lines above it name the
+          # build chosen (and went to this step's summary already).
+          manifest="$(tail -n 1 "$RUNNER_TEMP/older-app-prepare.log")"
+          test -f "$manifest"
+          echo "manifest=$manifest" >> "$GITHUB_OUTPUT"
+
+      - name: Run that build's own live suites against this commit's backend
+        working-directory: convex
+        env:
+          VOLLI_CLOUD_BOARD_LIVE_REQUIRED: "1"
+          VOLLI_CLOUD_SESSION_LIVE_REQUIRED: "1"
+        run: >-
+          node fixture/with-backend.ts --deploy --
+          node "$GITHUB_WORKSPACE/scripts/convex-compat/older-app-live.mjs"
+          --manifest "${{ steps.prepare.outputs.manifest }}"
+          --report "$RUNNER_TEMP/older-app/live-report.json"
+
+      - name: Upload the older-app live evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: older-app-live-attempt-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/older-app/live-report.json
+            ${{ runner.temp }}/older-app-prepare.log
+          if-no-files-found: warn
+          retention-days: 30
+
+  # The runner's release artifact, built with release.yml's steps (BYO-7: the
+  # bullseye ABI-baseline image, package, boot), once per architecture on a
+  # native runner. The install matrix and the BYO lane take it from here. Two
+  # deliberate differences from a release: no deployment is baked in (no
+  # VOLLI_BUILD_CONVEX_*), so a test artifact links only where `--server`
+  # points it and can never reach a real deployment; and the boot accepts the
+  # command-registry skeleton (ALLOW_SKELETON), as a dry run does. Until
+  # BYO-7's scripts are on the tree, the job says so and builds nothing.
+  byo-runner-artifact:
+    name: BYO runner artifact (linux-${{ matrix.arch }})
+    if: ${{ !cancelled() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Check the packaging is on this tree
+        id: present
+        run: |
+          if [[ -f apps/runner/scripts/ci-build-artifact.sh && -f .devcontainer/runner-build/Dockerfile ]]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Runner artifact pending::BYO-7 (VC-1040) packaging is not on this tree yet"
+          fi
+
+      - name: Build, package and boot the runner
+        if: steps.present.outputs.present == 'true'
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          docker build --file .devcontainer/runner-build/Dockerfile --tag volli-runner-build .
+          mkdir -p "$RUNNER_TEMP/runner"
+          chmod 0777 "$RUNNER_TEMP/runner"
+          docker run --rm -e EXPECTED_ARCH="$ARCH" volli-runner-build sh -ec \
+            'test "$(node -p process.arch)" = "$EXPECTED_ARCH"'
+          docker run --rm -v "$PWD:/src:ro" -v "$RUNNER_TEMP/runner:/out" volli-runner-build \
+            bash /src/apps/runner/scripts/ci-build-artifact.sh
+          docker run --rm -i -e ALLOW_SKELETON=true -v "$RUNNER_TEMP/runner:/out:ro" volli-runner-build \
+            bash -s < apps/runner/scripts/ci-boot-artifact.sh
+
+      - name: Upload the runner artifact
+        if: steps.present.outputs.present == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: byo-runner-linux-${{ matrix.arch }}
+          path: |
+            ${{ runner.temp }}/runner/*.tar.gz
+            ${{ runner.temp }}/runner/*.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  # install.sh across the supported distros (BYO-7's acceptance): both
+  # artifacts behind a loopback "release", Ubuntu 20.04/22.04/24.04, Debian
+  # 11/12 and Fedora 41, root and user, curl and wget; musl and old glibc
+  # refused in one line. Until BYO-10's `install` is on the tree the matrix
+  # runs `--bootstrap-only`: download, SHA-256 and the native/Code Mode probes
+  # are real, and only the skeleton's exact install stub is accepted after
+  # them. Never a claim of a service install.
+  byo-install-matrix:
+    name: BYO install.sh matrix
+    needs: byo-runner-artifact
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    # Twelve image builds and 26 serial container runs.
+    timeout-minutes: 75
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Check the matrix is on this tree
+        id: present
+        run: |
+          # The artifact job's own gate too: without packaging there is
+          # nothing to install, and that is pending, not a failure.
+          if [[ -f apps/runner/scripts/ci-install-matrix.sh && -f apps/runner/scripts/ci-build-artifact.sh && -f .devcontainer/runner-build/Dockerfile ]]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Install matrix pending::BYO-7 (VC-1040) ci-install-matrix.sh is not on this tree yet"
+          fi
+          if [[ -d apps/runner/src/install ]]; then
+            echo "mode=" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=--bootstrap-only" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup pinned Node
+        if: steps.present.outputs.present == 'true'
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+
+      - name: Download both runner artifacts
+        if: steps.present.outputs.present == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: byo-runner-linux-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/runner-assets
+
+      - name: Run the install.sh matrix
+        if: steps.present.outputs.present == 'true'
+        env:
+          MODE: ${{ steps.present.outputs.mode }}
+        run: |
+          set -euo pipefail
+          ls -l "$RUNNER_TEMP/runner-assets"
+          # shellcheck disable=SC2086 # MODE is empty or one flag.
+          bash apps/runner/scripts/ci-install-matrix.sh "$RUNNER_TEMP/runner-assets" $MODE
+
+  # BYO runner acceptance (VC-1043): a person's own Linux box, end to end,
+  # against the pinned local backend: a seeded person, the fake GitHub
+  # (scripts/fake-github: OAuth + REST for the backend, git smart HTTP that
+  # checks x-access-token), a local "GitHub release" file server, and a fresh
+  # Ubuntu 24.04 box booted under systemd in a privileged container on the
+  # host network. Every leg's work is on main, so the lane runs with
+  # --require-all: install, update, rollback and the Session leg must each
+  # PASS; a leg that fails, or is left PENDING or BLOCKED, is red
+  # (apps/runner/e2e/README.md). Linux, no macOS slot.
+  byo-runner:
+    name: BYO runner acceptance
+    needs: byo-runner-artifact
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Setup Vite+
+        uses: ./.github/actions/setup-toolchain
+        with:
+          cache: true
+          run-install: true
+
+      - name: Place the backend cache outside the checkout
+        run: echo "VOLLI_CONVEX_BACKEND_CACHE=$RUNNER_TEMP/convex-local-backend" >> "$GITHUB_ENV"
+
+      - name: Restore the pinned Convex local backend
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/convex-local-backend
+          key: convex-local-backend-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('convex/fixture/backend.json') }}
+
+      - name: Fetch and verify the pinned backend
+        run: vp run --filter @volli/convex backend:fetch
+
+      # Both runner artifacts for the install leg's local release (a C4
+      # manifest names both targets; the box installs x64). Not on this tree
+      # yet (BYO-7) is a notice; on the tree but not built is red.
+      - name: Check the packaging is on this tree
+        id: present
+        run: |
+          if [[ -f apps/runner/scripts/ci-build-artifact.sh && -f .devcontainer/runner-build/Dockerfile ]]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Runner artifact pending::BYO-7 (VC-1040) packaging is not on this tree yet"
+          fi
+
+      - name: Download both runner artifacts
+        if: steps.present.outputs.present == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: byo-runner-linux-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/runner-assets
+
+      # The fake GitHub's name (a runner refuses a loopback literal as a
+      # remote). The box adds the same line to its own /etc/hosts.
+      - name: Map github.byo.test to the loopback
+        run: echo "127.0.0.1 github.byo.test" | sudo tee -a /etc/hosts
+
+      - name: Harness self-tests (fake GitHub, release server, legs)
+        run: node --test scripts/fake-github/*.test.mjs apps/runner/e2e/lib/*.test.mjs
+
+      - name: Run the BYO runner acceptance
+        env:
+          VOLLI_BYO_EVIDENCE: ${{ runner.temp }}/byo-acceptance
+          VOLLI_BYO_RUNNER_ASSETS: ${{ runner.temp }}/runner-assets
+        working-directory: convex
+        run: >-
+          node fixture/with-backend.ts --deploy --
+          node ../apps/runner/e2e/acceptance.mjs --require-all
+
+      - name: Upload BYO runner acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: byo-runner-acceptance-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/byo-acceptance
+          if-no-files-found: warn
+          retention-days: 30
+
   # One place to read the outcome, on the run page and in its summary. It
   # waits on every lane (`always()`, so a cancelled or failed lane is still
   # reported) and fails unless every lane succeeded — nothing here may skip.
@@ -417,7 +747,18 @@ jobs:
     name: Extended result
     if: always()
     needs:
-      [smoke-rest, smoke-cloud, smoke-cloud-wake, move-matrix, move-app, backup-restore-rehearsal]
+      [
+        smoke-rest,
+        smoke-cloud,
+        smoke-cloud-wake,
+        move-matrix,
+        move-app,
+        backup-restore-rehearsal,
+        older-app-live,
+        byo-runner-artifact,
+        byo-install-matrix,
+        byo-runner,
+      ]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -431,6 +772,10 @@ jobs:
           MOVE_MATRIX: ${{ needs.move-matrix.result }}
           MOVE_APP: ${{ needs.move-app.result }}
           BACKUP_RESTORE: ${{ needs.backup-restore-rehearsal.result }}
+          OLDER_APP_LIVE: ${{ needs.older-app-live.result }}
+          BYO_RUNNER_ARTIFACT: ${{ needs.byo-runner-artifact.result }}
+          BYO_INSTALL_MATRIX: ${{ needs.byo-install-matrix.result }}
+          BYO_RUNNER: ${{ needs.byo-runner.result }}
         run: |
           set -euo pipefail
           status=0
@@ -455,4 +800,8 @@ jobs:
           report "Move to Volli Cloud" "$MOVE_MATRIX"
           report "Move to Volli Cloud (app path)" "$MOVE_APP"
           report "Backup restore rehearsal" "$BACKUP_RESTORE"
+          report "Older app (live)" "$OLDER_APP_LIVE"
+          report "BYO runner artifact" "$BYO_RUNNER_ARTIFACT"
+          report "BYO install.sh matrix" "$BYO_INSTALL_MATRIX"
+          report "BYO runner acceptance" "$BYO_RUNNER"
           exit "$status"

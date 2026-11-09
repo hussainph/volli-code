@@ -19,8 +19,7 @@
  * turn; a compaction moves once or twice in a Session.
  */
 import * as React from "react";
-import { ArrowsInLineVerticalIcon } from "@phosphor-icons/react/dist/csr/ArrowsInLineVertical";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
+import { CollapseVerticalIcon, WarningIcon } from "@renderer/components/ui/icon";
 
 import {
   compactionBoundaryCopy,
@@ -50,17 +49,11 @@ export const CompactionProgress = React.memo(function CompactionProgress({
   return (
     <div
       role="status"
-      className="not-prose flex min-w-0 items-center gap-3 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-ui"
+      title={compaction.reason === "manual" ? "Manual compaction" : "Automatic compaction"}
+      className="not-prose flex min-w-0 items-center gap-3 rounded-card border border-border bg-(--accent-tint) px-3 py-2 text-ui"
     >
-      <Spinner aria-hidden role="presentation" className="size-4 shrink-0 text-primary" />
-      <div className="min-w-0">
-        <p className="font-medium text-foreground">
-          {compaction.reason === "manual"
-            ? "Compacting context…"
-            : "Compacting context on its own…"}
-        </p>
-        <p className="text-muted-foreground">Preparing a shorter working context</p>
-      </div>
+      <Spinner aria-hidden role="presentation" className="size-4 shrink-0 text-primary-text" />
+      <span className="font-medium text-foreground">Compacting context</span>
     </div>
   );
 });
@@ -73,20 +66,18 @@ export const CompactionBoundary = React.memo(function CompactionBoundary({
   const copy = compactionBoundaryCopy(compaction);
   const compacted = compaction.outcome === "compacted";
   return (
-    // The whole row hovers to its full sentence: both the reason and the note
-    // clip on a narrow window, and this is the only way back to the rest of one.
+    // The row hovers to its reason, and a failure's clipped detail in full.
     <div className="not-prose flex min-w-0 flex-col gap-1" title={copy.description}>
       <div className="flex min-w-0 items-center gap-2 text-ui">
         {compacted ? (
-          <ArrowsInLineVerticalIcon aria-hidden className="size-3.5 shrink-0 text-primary" />
+          <CollapseVerticalIcon aria-hidden className="size-3.5 shrink-0 text-primary" />
         ) : (
           // A failure that changed nothing is not a broken Session — the message
           // that paid for it was delivered on the context that was already
           // there. Attention, not destructive: something did not happen.
-          <WarningIcon aria-hidden className="size-3.5 shrink-0 text-attention" weight="fill" />
+          <WarningIcon aria-hidden className="size-3.5 shrink-0 text-attention" />
         )}
         <span className="shrink-0 font-medium">{copy.headline}</span>
-        <span className="min-w-0 truncate text-muted-foreground">{copy.reason}</span>
         {/* The rule runs from the label to the count, so the two ends of the
             row are the two things a glance wants and the line is what joins
             them. Only the compacted arm draws one; see the module note. */}
@@ -95,12 +86,8 @@ export const CompactionBoundary = React.memo(function CompactionBoundary({
           <span className="shrink-0 tabular-nums text-muted-foreground">{copy.before}</span>
         )}
       </div>
-      {/* The row's actual job, said once: what a reader scrolling up is looking
-          at. Everything above this line is still here and still true; it is
-          simply not what the model is reading any more. */}
-      <p className="text-ui text-muted-foreground/70">{copy.note}</p>
       {copy.detail === null ? null : (
-        <p className="truncate text-ui text-muted-foreground/70">{copy.detail}</p>
+        <p className="truncate text-ui text-muted-foreground">{copy.detail}</p>
       )}
     </div>
   );

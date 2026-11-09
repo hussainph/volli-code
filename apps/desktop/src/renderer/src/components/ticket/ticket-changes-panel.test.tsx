@@ -205,10 +205,12 @@ describe("TicketChangesList markup", () => {
     expect(html).toContain("src/old.ts");
   });
 
-  it("renders a framed empty state when there are no changes", () => {
+  it("renders a reasoned inspector empty state without success-card chrome", () => {
     const html = render([]);
     expect(html).toContain("No changes vs base");
-    expect(html).toContain("The branch is up to date.");
+    expect(html).toContain('data-tier="panel"');
+    expect(html).not.toContain('data-slot="notice"');
+    expect(html).not.toContain("The branch is up to date.");
   });
 
   it("says how many files the cap left out rather than silently dropping them", () => {
@@ -223,13 +225,13 @@ describe("TicketChangesList markup", () => {
   });
 
   // VC-406: a filter that matched none of the files it COULD see, over a
-  // snapshot that is already cut, was drawing "No files match" and dropping the
+  // snapshot that is already cut, was drawing "No matching changes" and dropping the
   // truncation notice with the list — a page claiming it had searched files it
   // never held.
   it("qualifies an empty filter over a truncated snapshot, and keeps the cap visible", () => {
     const html = render([], { filtered: true, hiddenCount: 4000 });
 
-    expect(html).toContain("No matches among the files shown");
+    expect(html).toContain("No matching files shown");
     expect(html).toContain('data-testid="ticket-changes-truncated"');
     expect(html).toContain("4,000 files not shown or searched");
     // Not the branch-is-clean claim, which is about the whole change set.
@@ -239,7 +241,7 @@ describe("TicketChangesList markup", () => {
   it("still says plainly that nothing matched when the snapshot is whole", () => {
     const html = render([], { filtered: true });
 
-    expect(html).toContain("No files match");
+    expect(html).toContain("No matching changes");
     expect(html).not.toContain('data-testid="ticket-changes-truncated"');
   });
 
@@ -251,7 +253,7 @@ describe("TicketChangesList markup", () => {
     expect(html).not.toContain("No changes vs base");
   });
 
-  it("renders updated awareness as visible text with an accessible explanation", () => {
+  it("renders compact updated awareness with an accessible explanation", () => {
     const html = render([
       {
         ...toChangeListRow(file({ path: "src/ticket.tsx" }), EMPTY_CHANGE_RECENCY_STATE),
@@ -260,7 +262,8 @@ describe("TicketChangesList markup", () => {
       },
     ]);
 
-    expect(html).toContain(">Updated<");
+    expect(html).toContain('<span class="sr-only">Updated</span>');
+    expect(html).toContain('title="Updated since you last opened this file"');
     expect(html).toContain('aria-label="Updated since you last opened this file"');
   });
 });
@@ -376,6 +379,12 @@ describe("the Change Set list in the accessibility tree", () => {
     // A row is a button, which is what makes Enter and Space open a diff
     // without this list implementing a keyboard model of its own.
     expect(row(PAIR_TEST).tagName).toBe("BUTTON");
+    const actions = row(PAIR_TEST).nextElementSibling as HTMLElement;
+    expect(actions.className).not.toContain("absolute");
+    expect(actions.className).toContain("shrink-0");
+    expect(actions.className).toContain("pointer-events-none");
+    expect(actions.className).toContain("group-hover:pointer-events-auto");
+    expect(actions.className).toContain("group-focus-within:pointer-events-auto");
   });
 
   it("names every file with its status, its FULL path and its counts in words", () => {
@@ -865,8 +874,8 @@ describe("TicketChangesPanel reads", () => {
     await press("Filter changed files");
     await typeFilter("nothing-matches-this");
 
-    expect(drawn('[data-testid="ticket-changes-filter-empty"]')[0]?.textContent).toBe(
-      "No matches among the files shown",
+    expect(drawn('[data-testid="ticket-changes-filter-empty"] h2')[0]?.textContent).toBe(
+      "No matching files shown",
     );
     const note = drawn('[data-testid="ticket-changes-truncated"]')[0];
     expect(note?.getAttribute("data-hidden-count")).toBe("4000");

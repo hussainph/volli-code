@@ -110,6 +110,8 @@ describe("PrChecksRow — the popover", () => {
     // two identically-named rows apart.
     expect(html).toContain("CI / ");
     expect(html).toContain("Check + Test");
+    expect(html).toContain("wrap-anywhere");
+    expect(html).not.toContain("flex-1 truncate");
   });
 
   it("makes a check with a log a button, and one without a plain row", () => {

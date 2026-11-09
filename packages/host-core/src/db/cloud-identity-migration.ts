@@ -14,7 +14,7 @@
  *
  * `workspace_epochs.workspace_id` holds a project id: the host protocol called
  * a project a "Workspace", a word that now names the team container
- * (CONTEXT.md). Shipped schema is never renamed in place, so the table and
+ * (CONTEXT.md#workspace). Shipped schema is never renamed in place, so the table and
  * column keep the old name.
  *
  * Every statement is `IF NOT EXISTS`, so a lineage re-offered version 58 (a

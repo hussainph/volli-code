@@ -468,6 +468,9 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
         devDiagnostics: false,
         // The one sealed store this host opened at boot, never a second handle.
         secretStore: secrets.store,
+        ...(runtimeOptions.webExtractWorker === undefined
+          ? {}
+          : { webExtractWorker: runtimeOptions.webExtractWorker }),
         modelAccess: () => headlessModelAccess(options.env, runtimeOptions),
         venue: hostdRunner,
         // Read on every scan, and only after readiness (maintenance starts

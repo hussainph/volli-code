@@ -28,6 +28,8 @@ import {
   createSafeWebFetch,
   createWebSearch,
   searxngWebSearchProvider,
+  type WebExtractor,
+  type ReadSourceIconCandidate,
   type WebSearchProvider,
 } from "@volli/agent-runtime";
 import type { SessionRuntimeSpec } from "@volli/shared";
@@ -67,14 +69,44 @@ export function webSearchProviderFor(access: ResolvedWebAccess): WebSearchProvid
   }
 }
 
-/** The ports for one attachment. `{}` when this profile has configured no web access. */
-export function webPortsFor(access: ResolvedWebAccess): SessionWebPorts {
+/**
+ * The ports for one attachment. `{}` when this profile has configured no web access.
+ *
+ * `extract` is where the fetcher reads HTML: the host's worker-backed
+ * extractor, so a large page is parsed off the thread the host serves from.
+ * Absent, it is parsed on that thread.
+ */
+export function webPortsFor(
+  access: ResolvedWebAccess,
+  extract?: WebExtractor,
+  beginSourceIconRead?: () =>
+    | ((candidate: ReadSourceIconCandidate, signal: AbortSignal) => void)
+    | undefined,
+): SessionWebPorts {
   const provider = webSearchProviderFor(access);
   if (provider === null) return {};
-  const fetcher = createSafeWebFetch();
+  const fetcher =
+    beginSourceIconRead === undefined
+      ? createSafeWebFetch(extract === undefined ? {} : { extract })
+      : undefined;
   const search = createWebSearch({ provider });
   return {
-    webFetch: (input) => fetcher.fetch(input),
+    webFetch: (input) => {
+      if (fetcher !== undefined) return fetcher.fetch(input);
+      // Capture the decoration grant for EACH initiating read, synchronously
+      // before DNS, transport or extraction can yield. It is not attachment state.
+      let onSourceIcon: ReturnType<NonNullable<typeof beginSourceIconRead>>;
+      try {
+        onSourceIcon = beginSourceIconRead?.();
+      } catch {
+        /* Optional decoration. */
+      }
+      const reader = createSafeWebFetch({
+        ...(extract === undefined ? {} : { extract }),
+        ...(onSourceIcon === undefined ? {} : { onSourceIcon }),
+      });
+      return reader.fetch(input);
+    },
     webSearch: (input) => search.search(input),
   };
 }

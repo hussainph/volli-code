@@ -27,11 +27,9 @@
  * (2) The project list is derived from `pnpm-workspace.yaml` — the same file
  *     pnpm reads — rather than a second hand-maintained glob, so a newly added
  *     workspace package cannot silently skip the gate. It is parsed HERE
- *     rather than by shelling out to `pnpm ls`, because the CI runner that
- *     runs this check has no `pnpm` on its PATH (vite-plus manages the package
- *     manager internally), and a gate that cannot start is a gate that does
- *     not gate. The parser understands exactly the shape this repo's
- *     `packages:` block uses and THROWS on anything else, so a future
+ *     rather than by shelling out to `pnpm ls`, so the check also works before
+ *     a package manager has been enabled. The parser understands exactly the
+ *     shape this repo's `packages:` block uses and THROWS on anything else, so a future
  *     workspace shape this file cannot read fails loudly here instead of
  *     quietly enumerating nothing and reporting success.
  */

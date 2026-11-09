@@ -44,7 +44,7 @@ import {
   pickSessionColor,
   type BrowserTabHolder,
 } from "@volli/shared";
-import { BrowserIcon } from "@phosphor-icons/react/dist/csr/Browser";
+import { BrowserIcon } from "@renderer/components/ui/icon";
 
 import { BrowserChrome } from "@renderer/components/browser/browser-chrome";
 import { BrowserHolderDot } from "@renderer/components/browser/browser-holder-dot";
@@ -767,7 +767,7 @@ export default function SessionCursorScratch() {
                 leading={
                   <BrowserIcon
                     aria-hidden
-                    weight="bold"
+                    strokeWidth={2.25}
                     className="size-3 shrink-0 text-muted-foreground"
                   />
                 }

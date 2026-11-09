@@ -1,3 +1,4 @@
+import { SETTINGS_CONNECTION_LABEL } from "../kit/status-labels";
 /**
  * What Configure → MCP Servers decides without drawing anything: how a
  * server's tools are found, grouped and selected in bulk, and what a server's
@@ -232,29 +233,45 @@ export function serverHealth(
   access: McpServerAccess | undefined,
   signingIn: boolean,
 ): McpServerHealth {
-  if (!server.enabled) return { state: "stopped", label: "Off", fix: null, detail: null };
+  if (!server.enabled)
+    return { state: "stopped", label: SETTINGS_CONNECTION_LABEL.off, fix: null, detail: null };
   if (signingIn) {
-    return { state: "starting", label: "Signing in…", fix: "cancel-sign-in", detail: null };
+    return {
+      state: "starting",
+      label: SETTINGS_CONNECTION_LABEL.signingIn,
+      fix: "cancel-sign-in",
+      detail: null,
+    };
   }
   if (access?.signIn === "needs-sign-in") {
-    return { state: "waiting", label: "Needs sign-in", fix: "sign-in", detail: null };
+    return {
+      state: "waiting",
+      label: SETTINGS_CONNECTION_LABEL.needsSignIn,
+      fix: "sign-in",
+      detail: null,
+    };
   }
   const missing = access?.missingSecrets ?? [];
   if (missing.length > 0) {
     return {
       state: "waiting",
-      label: "Missing credential",
+      label: SETTINGS_CONNECTION_LABEL.missingCredential,
       fix: "credentials",
       detail: `Missing ${missing.join(", ")}`,
     };
   }
   if (server.error !== null) {
-    return { state: "error", label: "Refresh failed", fix: "retry", detail: server.error };
+    return {
+      state: "error",
+      label: SETTINGS_CONNECTION_LABEL.failed,
+      fix: "retry",
+      detail: server.error,
+    };
   }
   if (access?.signIn === "signed-in") {
-    return { state: "ready", label: "Signed in", fix: null, detail: null };
+    return { state: "ready", label: SETTINGS_CONNECTION_LABEL.signedIn, fix: null, detail: null };
   }
-  return { state: "ready", label: "Ready", fix: null, detail: null };
+  return { state: "ready", label: SETTINGS_CONNECTION_LABEL.ready, fix: null, detail: null };
 }
 
 /**

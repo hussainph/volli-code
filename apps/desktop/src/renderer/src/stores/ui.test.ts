@@ -302,12 +302,13 @@ describe("configureCategory", () => {
 
     store.getState().requestConfigureCategory("secrets");
     expect(store.getState().configureCategory).toBe("secrets");
+    expect(store.getState().settingsOpen).toBe(true);
 
     store.getState().consumeConfigureCategory();
     expect(store.getState().configureCategory).toBeNull();
   });
 
-  it("is never persisted: a relaunch opens Configure where the page itself would", () => {
+  it("is never persisted: a relaunch opens Settings where the page itself would", () => {
     const storage = createMemoryStorage();
     createUiStore(storage).getState().requestConfigureCategory("secrets");
 

@@ -40,13 +40,13 @@ import { cn } from "@renderer/lib/utils";
 
 /**
  * The three things this field is, named by what it replaces rather than by
- * where it is used — `tab` and `row` were the same 20px chip with different
+ * where it is used — `tab` and `row` were the same 22px chip with different
  * widths, and width is the caller's business.
  */
 export type InlineRenameSize = "row" | "field" | "title";
 
 /**
- * `row` and `title` are their own drawings, not text fields: one is a 20px chip
+ * `row` and `title` are their own drawings, not text fields: one is a 22px chip
  * that replaces a label in place, the other is a seamless `h1` whose only cue
  * is the caret. `field` IS the app's text field, so it renders {@link Input}
  * rather than restating its border, radius, inset and lift — the one variant
@@ -56,7 +56,7 @@ const SIZE_CLASS: Record<Exclude<InlineRenameSize, "field">, string> = {
   // Height and type step belong to the primitive: the two strips that rename
   // had drifted to `h-5 w-40 text-ui` against `h-5 w-32 text-sm` before the
   // field was shared, and only the width was ever a decision.
-  row: "h-5 rounded-sm border border-primary/50 bg-background px-1 text-ui",
+  row: "h-control-xs rounded-control border border-border-strong control-material [--control-fill:var(--background)] bg-background px-2 text-ui shadow-control",
   // No border, no fill, no ring — the input carries the heading's exact
   // typography so nothing shifts when you click into it.
   title: "w-full bg-transparent text-title font-semibold",
@@ -65,7 +65,6 @@ const SIZE_CLASS: Record<Exclude<InlineRenameSize, "field">, string> = {
 export function InlineRename({
   value,
   size = "row",
-  mono = false,
   onCommit,
   onClear,
   onCancel,
@@ -74,8 +73,6 @@ export function InlineRename({
 }: {
   value: string;
   size?: InlineRenameSize;
-  /** The edited string is a name the machine chose — a branch, a path, a ref. */
-  mono?: boolean;
   onCommit(next: string): void;
   /**
    * What an emptied field means, where empty is a legal value. Absent, empty
@@ -147,7 +144,7 @@ export function InlineRename({
   // not reach the thing you are editing — the value would not even select on
   // open.
   if (size === "field") {
-    return <Input {...shared} className={cn("select-text", mono && "font-mono", className)} />;
+    return <Input {...shared} className={cn("select-text", className)} />;
   }
 
   return (
@@ -156,7 +153,6 @@ export function InlineRename({
       className={cn(
         "min-w-0 text-foreground outline-none select-text",
         SIZE_CLASS[size],
-        mono && "font-mono",
         className,
       )}
     />

@@ -10,9 +10,8 @@
  * stored. There is no plain-value kind: configuration never holds a value.
  */
 import * as React from "react";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import { ChevronDownIcon, AddIcon, CloseIcon } from "@renderer/components/ui/icon";
+
 import {
   MCP_OAUTH_CLIENT_SECRET_SLOT,
   mcpCredentialSlot,
@@ -31,6 +30,13 @@ import {
   CollapsibleTrigger,
 } from "@renderer/components/ui/collapsible";
 import { Input } from "@renderer/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@renderer/components/ui/select";
 import { cn } from "@renderer/lib/utils";
 
 /** One credential row as the editor holds it: the reference, or a typed secret. */
@@ -178,8 +184,17 @@ export function applyCredentials(
   };
 }
 
-const KIND_SELECT =
-  "h-7 shrink-0 rounded-control border border-border bg-background px-2 text-ui outline-none focus-visible:ring-2 focus-visible:ring-ring";
+type KindOption<K extends string> = { readonly value: K; readonly label: string };
+
+const VALUE_KINDS: readonly KindOption<McpCredentialSource["kind"]>[] = [
+  { value: "secret", label: "Stored secret" },
+  { value: "reference", label: "Environment variable" },
+];
+
+const CLIENT_SECRET_KINDS: readonly KindOption<EditorOAuth["secretKind"]>[] = [
+  { value: "none", label: "None" },
+  ...VALUE_KINDS,
+];
 
 /** The value field for one row: a write-only secret, or a `${NAME}` reference. */
 function ValueField({
@@ -223,25 +238,40 @@ function ValueField({
   );
 }
 
-function KindSelect({
+/** Which kind a value is, on the shared Select; `label` names the row it belongs to. */
+function KindSelect<K extends string>({
   label,
   value,
+  options,
+  disabled = false,
   onChange,
 }: {
   label: string;
-  value: McpCredentialSource["kind"];
-  onChange: (kind: McpCredentialSource["kind"]) => void;
+  value: K;
+  options: readonly KindOption<K>[];
+  disabled?: boolean;
+  onChange: (kind: K) => void;
 }) {
   return (
-    <select
-      aria-label={`${label} kind`}
-      className={KIND_SELECT}
+    <Select
       value={value}
-      onChange={(event) => onChange(event.target.value as McpCredentialSource["kind"])}
+      disabled={disabled}
+      onValueChange={(next) => {
+        const picked = options.find((option) => option.value === next);
+        if (picked !== undefined) onChange(picked.value);
+      }}
     >
-      <option value="secret">Stored secret</option>
-      <option value="reference">Environment variable</option>
-    </select>
+      <SelectTrigger size="sm" className="shrink-0" aria-label={`${label} kind`}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {options.map((option) => (
+          <SelectItem key={option.value} value={option.value}>
+            {option.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }
 
@@ -271,7 +301,7 @@ function CredentialRows({
           variant="ghost"
           aria-label={`${open ? "Hide" : "Show"} ${title.toLowerCase()}`}
         >
-          <CaretDownIcon aria-hidden className={cn(open && "rotate-180")} />
+          <ChevronDownIcon aria-hidden className={cn(open && "rotate-180")} />
           {title}
           {rows.length > 0 ? (
             <span className="text-muted-foreground tabular-nums">{rows.length}</span>
@@ -291,7 +321,7 @@ function CredentialRows({
               ])
             }
           >
-            <PlusIcon />
+            <AddIcon />
             {`Add ${noun}`}
           </Button>
           {rows.map((row, index) => {
@@ -312,6 +342,7 @@ function CredentialRows({
                 <KindSelect
                   label={label}
                   value={row.kind}
+                  options={VALUE_KINDS}
                   onChange={(kind) => update(index, { kind })}
                 />
                 <div className="min-w-0 flex-1 basis-48 @max-[32rem]/credentials:order-last @max-[32rem]/credentials:basis-full">
@@ -332,7 +363,7 @@ function CredentialRows({
                   aria-label={`Remove ${label}`}
                   onClick={() => onChange(rows.filter((_row, at) => at !== index))}
                 >
-                  <XIcon />
+                  <CloseIcon />
                 </Button>
               </div>
             );
@@ -368,7 +399,7 @@ function OAuthClientFields({
           variant="ghost"
           aria-label={`${open ? "Hide" : "Show"} custom OAuth client`}
         >
-          <CaretDownIcon aria-hidden className={cn(open && "rotate-180")} />
+          <ChevronDownIcon aria-hidden className={cn(open && "rotate-180")} />
           Custom OAuth client
         </Button>
       </CollapsibleTrigger>
@@ -390,19 +421,13 @@ function OAuthClientFields({
               Client secret
             </label>
             <div className="flex gap-2">
-              <select
-                aria-label="Client secret kind"
-                className={KIND_SELECT}
+              <KindSelect
+                label="Client secret"
                 value={oauth.secretKind}
+                options={CLIENT_SECRET_KINDS}
                 disabled={oauth.clientId.trim().length === 0}
-                onChange={(event) =>
-                  set({ secretKind: event.target.value as EditorOAuth["secretKind"] })
-                }
-              >
-                <option value="none">None</option>
-                <option value="secret">Stored secret</option>
-                <option value="reference">Environment variable</option>
-              </select>
+                onChange={(secretKind) => set({ secretKind })}
+              />
               {oauth.secretKind === "none" ? null : (
                 <ValueField
                   id="mcp-oauth-secret"

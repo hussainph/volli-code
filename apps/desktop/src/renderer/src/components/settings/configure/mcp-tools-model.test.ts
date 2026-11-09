@@ -254,7 +254,7 @@ describe("a server's health", () => {
   it("ranks a sign-in in progress, then a needed sign-in, then a missing credential, then a failed refresh", () => {
     const failing = server({ error: "Could not refresh Server." });
     expect(serverHealth(failing, undefined, true)).toMatchObject({
-      label: "Signing in…",
+      label: "Signing in",
       fix: "cancel-sign-in",
     });
     expect(

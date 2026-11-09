@@ -19,6 +19,7 @@ interface BrowserTabAgentState {
 
 export interface BrowserAgentControllerFactory {
   transport: () => CdpTransport;
+  currentGeneration?: () => number;
   cursor?: TabCursorDriver;
 }
 
@@ -74,6 +75,16 @@ export class BrowserAgentCoordinator {
     const controller = new BrowserTabController(
       {
         send: async (method, params) => await transport.send(method, params),
+        ...(transport.sendGuarded === undefined ? {} : { sendGuarded: transport.sendGuarded }),
+        ...(factory.currentGeneration === undefined
+          ? {}
+          : { currentGeneration: factory.currentGeneration }),
+        ...(transport.onTimeout === undefined ? {} : { onTimeout: transport.onTimeout }),
+        // Diagnostic-only (VC-1150): the controller here is the one production
+        // builds, so a transport's preview-frame listener must survive the hop.
+        ...(transport.onPreviewFrame === undefined
+          ? {}
+          : { onPreviewFrame: transport.onPreviewFrame }),
         ...(ensureReady === undefined ? {} : { ensureReady: async () => await ensureReady() }),
       },
       {},
