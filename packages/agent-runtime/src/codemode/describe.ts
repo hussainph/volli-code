@@ -58,6 +58,13 @@ export interface CodeModeDescription {
   declarationTokens: number;
 }
 
+/**
+ * These declaration bytes are part of existing Sessions' frozen Cache Prefix,
+ * independently of their descriptionVersion. Pi 1.2 added constraint comments;
+ * retain Pi 1.0 rendering for both full declarations and discovery samples.
+ */
+const FROZEN_DECLARATIONS = { legacy: true } as const;
+
 export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
@@ -139,7 +146,7 @@ function isTypedSchema(schema: unknown): boolean {
     typeof schema === "object" &&
     schema !== null &&
     Object.keys(schema).length > 0 &&
-    schemaToType(schema as JsonSchema) !== "unknown" &&
+    schemaToType(schema as JsonSchema, FROZEN_DECLARATIONS) !== "unknown" &&
     !(
       (schema as JsonSchema)["type"] === "object" &&
       (schema as JsonSchema)["properties"] === undefined
@@ -154,13 +161,13 @@ function isTypedSchema(schema: unknown): boolean {
  */
 function specificOutput(tool: CallableTool): string | undefined {
   if (tool.nativeStructuredOutput === true || tool.name === "browser_screenshot") {
-    return schemaToType(tool.outputSchema);
+    return schemaToType(tool.outputSchema, FROZEN_DECLARATIONS);
   }
   const properties = tool.outputSchema["properties"];
   if (typeof properties !== "object" || properties === null) return undefined;
   const { details, structuredContent } = properties as Record<string, unknown>;
   if (!isTypedSchema(details) && !isTypedSchema(structuredContent)) return undefined;
-  return schemaToType(tool.outputSchema);
+  return schemaToType(tool.outputSchema, FROZEN_DECLARATIONS);
 }
 
 /** Which declared tools a program may call, said the shorter way. */
@@ -205,7 +212,7 @@ export function describeCodeMode(input: {
   const chosen: CallableTool[] = [];
   let spent = 0;
   for (const tool of input.tools.filter((candidate) => candidate.listed && !candidate.declared)) {
-    const cost = estimateTokens(renderToolSample(rendered(tool)));
+    const cost = estimateTokens(renderToolSample(rendered(tool), FROZEN_DECLARATIONS));
     if (spent + cost > input.budgetTokens) break;
     chosen.push(tool);
     spent += cost;
@@ -264,6 +271,7 @@ export function describeCodeMode(input: {
       : [
           "",
           renderDeclarations({
+            ...FROZEN_DECLARATIONS,
             tools: chosen.map(rendered),
             globals: left.length === 0 ? [] : DISCOVERY_SIGNATURES,
           }),
@@ -383,7 +391,7 @@ export function describeTool(tools: readonly CallableTool[], name: string): stri
   if (tool === undefined) {
     throw new Error(`No code-callable tool is named ${JSON.stringify(name)}. Try searchTools().`);
   }
-  return renderToolSample(rendered(tool));
+  return renderToolSample(rendered(tool), FROZEN_DECLARATIONS);
 }
 
 export { toCodemodeIdentifier };

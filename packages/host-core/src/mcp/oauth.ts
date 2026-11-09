@@ -627,6 +627,9 @@ export class McpOAuthBroker {
         await authorizeMcp(provider, {
           serverUrl: target.url,
           authorizationCode: code,
+          // Pi 1.5 validates RFC 9207 too; forward the callback's issuer so
+          // its code exchange checks the same identity we admitted above.
+          iss,
           fetch: this.#fetch,
         });
       }

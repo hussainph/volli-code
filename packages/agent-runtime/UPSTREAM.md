@@ -6,7 +6,7 @@ Pi, consumed from npm.
 - Repository: https://github.com/earendil-works/pi
 - Previously `badlogic/pi-mono`, published under the `@mariozechner/*` npm scope.
   Both are stale — the current packages are `@earendil-works/*`.
-- Pinned releases: `pi-agent-core`, `pi-ai` and `pi-codemode` at `1.0.0`.
+- Pinned releases: `pi-agent-core`, `pi-ai` and `pi-codemode` at `1.5.0`.
   Keep these aligned on every bump.
 - Node floor: `>=22.19.0`. ESM only.
 
@@ -14,12 +14,12 @@ Pi, consumed from npm.
 
 Direct dependencies, pinned exactly:
 
-- `@earendil-works/pi-agent-core` `1.0.0` — only `Agent`, the agent loop
+- `@earendil-works/pi-agent-core` `1.5.0` — only `Agent`, the agent loop
   (including `runToolCall`) and their types. The removed harness is owned
   locally; see `src/pi/vendor/pi-harness/README.md`.
-- `@earendil-works/pi-ai` `1.0.0` — model catalog, provider streams, and
+- `@earendil-works/pi-ai` `1.5.0` — model catalog, provider streams, and
   message types
-- `@earendil-works/pi-codemode` `1.0.0` (VC-471) — the Code Mode sandbox: a
+- `@earendil-works/pi-codemode` `1.5.0` (VC-471) — the Code Mode sandbox: a
   QuickJS VM (WebAssembly, from its one dependency `quickjs-wasi` 3.6.2, MIT) in
   a worker per run, whose only capability is calling the tools it is handed.
   Standalone: no Pi dependency and no Pi extension API. Used through
@@ -29,17 +29,17 @@ Direct dependencies, pinned exactly:
   `pi-agent-core`. Volli's layer over it is `src/codemode/`.
 
 `@earendil-works/chord` and `@earendil-works/pi-telemetry` are now direct,
-exact-pinned `1.0.0` dependencies for the owned compatibility modules.
+exact-pinned `1.5.0` dependencies for the owned compatibility modules.
 Cancellation uses chord's `Context`, `BACKGROUND_CONTEXT` and `withAbortSignal`.
 Telemetry remains a no-op in this embedding: no exporter or network code is
 added. `diff@8.0.4` and `typebox@1.3.27` are exact baseline dependencies of the
 copied edit/tool contracts. The coding-agent TUI, client and protocol packages
-remain absent. There is no `@earendil-works/pi-durable` dependency. Desktop
-pins `pi-mcp` independently.
+remain absent. `@earendil-works/pi-durable@1.0.0` remains a development-only benchmark
+dependency, not an executor. Desktop and host-core exact-pin `pi-mcp@1.5.0`.
 
 ## Process sandbox runtime
 
-Direct dependency, pinned exactly to `0.0.74`, used by the injectable
+Direct dependency, pinned exactly to `0.0.79`, used by the injectable
 `ScopedExecutionEnv`:
 
 - `@anthropic-ai/sandbox-runtime` — https://github.com/anthropic-experimental/sandbox-runtime,
@@ -71,7 +71,7 @@ path; and record any policy or API divergence here before bumping the pin.
 Two Pi patches are declared in `pnpm-workspace.yaml` and stored in
 `patches/` at the repo root:
 
-- `@earendil-works/pi-ai@1.0.0` — raises the Anthropic OAuth Claude Code
+- `@earendil-works/pi-ai@1.5.0` — raises the Anthropic OAuth Claude Code
   identity from `2.1.280` to `2.1.321` in `dist/api/anthropic-messages.js`
   and its source map's embedded TypeScript. No declaration carries the constant.
   Subscription requests for Claude Fable 5.2 require at least `2.1.290`
@@ -81,8 +81,10 @@ Two Pi patches are declared in `pnpm-workspace.yaml` and stored in
   newer; `src/pi/anthropic-oauth.test.ts` captures the outgoing request through
   Pi's real Anthropic SDK to guard the identity. This does not add Fable 5.2
   to the model catalog.
-- `@earendil-works/pi-codemode@1.0.0` — rebased unchanged from 0.99.2;
-  upstream still lacks `maxOutputChars` and `maxCallChars`. Host/worker bounds
+- `@earendil-works/pi-codemode@1.5.0` — retains configurable
+  `maxOutputChars` and `maxCallChars`. Upstream added fixed output caps in
+  1.0.1, but they do not replace Volli's lower per-run limit or its call,
+  return-value and error bounds. Host/VM bounds
   cover text, console/image output, return values, error text and serialized
   call arguments before an oversized worker message reaches Electron main.
   Defaults and failure text remain identical. `src/codemode/tool.test.ts`
@@ -289,6 +291,60 @@ Audited all entries after 0.99.2 in the release-tag changelogs for
   not contain it. This migration does not claim that fix shipped or silently
   substitute a main-branch build for the exact release pin. The unreleased
   inline-Anthropic-tool beta change is likewise not taken.
+
+## The 1.5 bump (VC-1173)
+
+Audited the release-tag changelogs from 1.0.0 through 1.5.0 for
+[AI](https://github.com/earendil-works/pi/blob/v1.5.0/packages/ai/CHANGELOG.md),
+[agent-core](https://github.com/earendil-works/pi/blob/v1.5.0/packages/agent/CHANGELOG.md),
+[codemode](https://github.com/earendil-works/pi/blob/v1.5.0/packages/codemode/CHANGELOG.md),
+[MCP](https://github.com/earendil-works/pi/blob/v1.5.0/packages/mcp/CHANGELOG.md),
+Chord and telemetry. This is the published release, not upstream main.
+
+- **Schema validation:** AI/core no longer re-export TypeBox and validate JSON
+  Schema through `pi-schema`. Volli imports its existing exact-pinned TypeBox
+  directly, retaining the same schema JSON and tool declaration bytes. The
+  retained harness's TypeBox static type is adapted at `bindContext`; schemas
+  are not rebuilt with pi-schema's differently defaulted object builders.
+  Tool arguments now receive upstream's JSON Schema coercion and diagnostics.
+- **Telemetry:** summary requests use Chord's `context.telemetry` span instead
+  of the removed `telemetryContext` request option. The embedding keeps its
+  no-op parent; there is no new exporter or content telemetry.
+- **Code Mode:** the rebased patch retains configurable host/VM output, call,
+  return and error bounds. Its opt-in `legacy` renderer preserves 1.0's
+  declarations and tool samples (including MCP shorthand), rather than letting
+  1.2's constraint comments rewrite existing Sessions' frozen prefix. The
+  existing deterministic clock/random prelude runs through the patch's
+  host-only `initializationCode` before upstream freezes built-ins. The host
+  holds scheduler capacity through actual worker exit, not just 1.3's earlier
+  execution/close settlement. QuickJS remains `3.6.2`.
+- **Catalog:** keep the default staleness floor from
+  `getBuiltinModelDataGeneratedAt()` and the baseline API/origin redirection
+  guard. Feed and restored models carry bounded object-valued
+  `samplingParamsByThinkingLevel` alongside `thinkingLevelMap`, `compat` and
+  ordinary sampling overrides. The installed catalog timestamp is exercised
+  without a synthetic floor; a stale feed still cannot roll back the package.
+- **Azure identity:** 1.0.3 renamed the provider to `azure`. Volli keeps the
+  frozen durable id `azure-openai-responses` for credentials, selections,
+  caches, callbacks and emitted assistant messages. A request-time copy of the
+  model/history uses Pi's native id so its signed-thinking and composite tool-id
+  replay checks still agree; neither stored history nor credentials are
+  migrated. The public feed is read under `azure` and re-keyed only after the
+  existing admission guard. An independently upgraded Pi CLI's native `azure`
+  credential key is not alias-read: Volli continues using the legacy key.
+  Newly offered completions models cannot run on older builds; upstream-retired
+  chat models are not reconstructed. `azure-provider-compat.test.ts` drives the
+  real Models/SDK transport, legacy credentials, cache restoration and replay.
+- **OpenCode routing:** Pi now supplies routing headers at the Models layer
+  too. Explicit sidecar routing ids still win; a standalone summary without
+  one uses the retained summarizer's fresh request UUID.
+- **MCP:** 1.5 validates the redirect issuer during code exchange too. The
+  broker forwards `iss` after its own RFC 9207 check, so a valid issuer succeeds
+  and wrong/missing promised issuers are refused before token exchange. The
+  real transport/loopback OAuth tests cover the change.
+- **Replay:** the owned 0.99.2 harness and sidecar codecs remain the source of
+  compatibility, not a new upstream harness. Frozen-surface baseline fixtures
+  are not regenerated. No model-catalog entry for Fable 5.2 is added here.
 
 ## Credentials
 

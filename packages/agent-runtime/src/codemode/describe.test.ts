@@ -334,6 +334,78 @@ describe("search and describe", () => {
 });
 
 describe("frozen description wording", () => {
+  it("retains Pi 1.0 declaration bytes and budgeting for constrained schemas", () => {
+    const bounded = tool("bounded", {
+      description: "Bounded tool.",
+      declared: false,
+      inputSchema: {
+        type: "object",
+        properties: {
+          count: { type: "integer", minimum: 1, maximum: 50, default: 10 },
+          path: {
+            type: "string",
+            minLength: 1,
+            pattern: "^[a-z]+$",
+            description: "A path.\u2028Not a new line in Pi 1.0.",
+          },
+        },
+        required: ["path"],
+      },
+      outputSchema: {
+        type: "object",
+        properties: { total: { type: "integer", minimum: 0 } },
+      },
+    });
+    // Captured from Pi 1.0, not regenerated from the upgraded renderer.
+    const expected = [
+      "Bounded tool.",
+      "",
+      "codemode tool declaration:",
+      "```ts",
+      "declare const tools: { bounded(args: {",
+      "  count?: number;",
+      "  // A path.\u2028Not a new line in Pi 1.0.",
+      "  path: string;",
+      "}): Promise<{ total?: number; }>; };",
+      "```",
+    ].join("\n");
+    expect(describeTool([bounded], "bounded")).toBe(expected);
+    const budgetTokens = estimateTokens(expected);
+    for (const legacy of [false, true]) {
+      const description = describeCodeMode({
+        tools: [bounded],
+        legacy,
+        budgetTokens,
+        limits,
+      });
+      expect(description.rendered).toBe(1);
+      expect(description.declarationTokens).toBe(budgetTokens);
+      expect(description.text).not.toContain("@minimum");
+      expect(description.text).not.toContain("@integer");
+    }
+    const direct = describeCodeMode({
+      tools: [{ ...bounded, declared: true, nativeStructuredOutput: true }],
+      budgetTokens,
+      limits,
+    });
+    expect(direct.text).toContain("- `tools.bounded(…)` resolves to { total?: number; }");
+  });
+
+  it("retains Pi 1.0's MCP-shaped native output shorthand in discovery declarations", () => {
+    const native = tool("native", {
+      outputSchema: {
+        type: "object",
+        properties: {
+          content: { type: "array", items: { type: "object" } },
+          isError: { type: "boolean" },
+          _meta: { type: "object" },
+          structuredContent: { type: "object", properties: { id: { type: "integer" } } },
+        },
+      },
+    });
+    expect(describeTool([native], "native")).toContain("Promise<CallToolResult<{ id?: number; }>>");
+  });
+
   it("retains pre-0.2.2 provider bytes, including the old result declarations and example", () => {
     const cases = [
       [tool("read"), tool("bash")],

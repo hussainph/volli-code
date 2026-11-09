@@ -8,3 +8,7 @@ pnpm-lock.yaml linguist-generated=true merge=binary
 
 # Committed z.toJSONSchema projection; reviewed through its generator and gate.
 docs/protocol/protocol.schema.json linguist-generated=true
+
+# pnpm-generated diffs preserve upstream context (including space-before-tab
+# and blank context lines); whitespace-check the patched sources, not diff syntax.
+patches/*.patch -whitespace

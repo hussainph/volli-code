@@ -8,8 +8,10 @@
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Worker } from "node:worker_threads";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import { Type } from "@earendil-works/pi-ai";
+import { loadQuickJSWasm } from "@earendil-works/pi-codemode";
+import { Type } from "typebox";
 import {
   MCP_RESULT_IMAGE_MAX_BYTES,
   MCP_RESULT_MAX_IMAGES,
@@ -166,7 +168,108 @@ async function run(
 }
 
 describe("the sandbox", () => {
-  it("uses Pi 1.0's safe membership check and diagnoses missing computed members without making a call", async () => {
+  it("keeps the provider's Code Mode schema identical with the direct TypeBox import", () => {
+    expect(JSON.parse(JSON.stringify(fixture({ tools: [] }).tool.parameters))).toEqual({
+      type: "object",
+      properties: {
+        code: {
+          type: "string",
+          description:
+            "The program: the body of an async function. Optionally starts with a `// @options: {...}` line.",
+        },
+      },
+      required: ["code"],
+    });
+  });
+
+  it("holds the scheduler slot until the actual worker releases capacity, not merely close()", async () => {
+    const exited = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const once = Worker.prototype.once;
+    // Real worker and codec; delay only delivery of its exit/release notification.
+    const observeExit = vi
+      .spyOn(Worker.prototype, "once")
+      .mockImplementation(function (this: Worker, event, listener) {
+        if (event !== "exit") return once.call(this, event, listener);
+        return once.call(this, event, (...args: unknown[]) => {
+          exited.resolve();
+          void release.promise.then(() => listener(...args));
+        });
+      });
+    let settled = false;
+    const pending = run(fixture({ tools: [] }), "return 1;").then((result) => {
+      settled = true;
+      return result;
+    });
+    try {
+      await exited.promise;
+      expect(settled).toBe(false);
+      release.resolve();
+      expect((await pending).text).toContain("Returned: 1");
+    } finally {
+      release.resolve();
+      await pending;
+      observeExit.mockRestore();
+    }
+  });
+
+  it("does not start a late worker when wasm finishes loading after cancellation", async () => {
+    const { createRequire } = await import("node:module");
+    const { fileURLToPath } = await import("node:url");
+    const worker = fileURLToPath(import.meta.resolve("@earendil-works/pi-codemode/worker"));
+    // A distinct cache key for the same real file keeps compilation controllable.
+    const wasmPath = createRequire(worker)
+      .resolve("quickjs-wasi/quickjs.wasm")
+      .replace(/quickjs\.wasm$/u, "./quickjs.wasm");
+    const loading = Promise.withResolvers<void>();
+    const allowLoad = Promise.withResolvers<void>();
+    const compile = WebAssembly.compile;
+    const delayedCompile = vi.spyOn(WebAssembly, "compile").mockImplementation(async (bytes) => {
+      loading.resolve();
+      await allowLoad.promise;
+      return compile(bytes);
+    });
+    const workerEvents = vi.spyOn(Worker.prototype, "on");
+    const controller = new AbortController();
+    const pending = run(
+      fixture({ tools: [], sandbox: { wasmPath } }),
+      "return 1;",
+      "late-worker",
+      controller.signal,
+    );
+    try {
+      await loading.promise;
+      controller.abort();
+      expect((await pending).details.error).toBe("aborted");
+      allowLoad.resolve();
+      await loadQuickJSWasm(wasmPath);
+      // Flush the launcher's continuations after compilation, including its admission check.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(workerEvents).not.toHaveBeenCalled();
+    } finally {
+      controller.abort();
+      allowLoad.resolve();
+      await pending;
+      delayedCompile.mockRestore();
+      workerEvents.mockRestore();
+    }
+  });
+
+  it("protects the pinned clock and randomness with Pi's builtin lockdown", async () => {
+    const f = fixture({ tools: [], now: () => 1_000_000 });
+    const result = await run(
+      f,
+      `const before = Date.now();
+       try { Object.defineProperty(Date.prototype, "constructor", { value: function() {} }); } catch {}
+       try { globalThis.Date = function() {}; } catch {}
+       try { Math.random = () => 0; } catch {}
+       return [before, Date.now(), new Date().getTime(), performance.now(), Object.isFrozen(Math), Object.isFrozen(Date.prototype), Math.random() !== 0];`,
+    );
+    expect(result.isError).toBe(false);
+    expect(result.text).toContain("Returned: [1000000,1000000,1000000,0,true,true,true]");
+  });
+
+  it("uses Pi's safe membership check and diagnoses missing computed members without making a call", async () => {
     const execute = vi.fn(() => "hi");
     const f = fixture({ tools: [textTool("echo", execute)] });
     const membership = await run(
@@ -273,6 +376,9 @@ describe("limits", () => {
     const raised = await run(f, '// @options: {"timeout_ms": 100000000}\nwhile (true) {}');
     expect(raised.text).toContain("ran past its 1 s limit");
     expect((await run(f, '// @options: {"bogus": 1}\nreturn 1;')).details.error).toBe("check");
+    const misplaced = await run(f, '\n// @options: {"timeout_ms": 1}\nreturn 1;');
+    expect(misplaced.details.error).toBe("check");
+    expect(misplaced.text).toContain("must be the first line");
   });
 
   it("holds the VM to its memory limit", async () => {
@@ -334,6 +440,15 @@ describe("limits", () => {
     expect(calls).toBe(0);
     expect(text).toContain("arguments passed their limit of 1048576 characters");
     expect(details.nestedCalls.calls).toEqual([]);
+    // A refused call must not leave a phantom pending call in the prelude.
+    const stalled = await run(
+      f,
+      'try { await tools.write({ content: "q".repeat(2 * 1024 * 1024) }); } catch {} await new Promise(() => {});',
+      "stalled-after-refusal",
+    );
+    expect(stalled.details.error).toBe("script");
+    expect(stalled.text).toContain("no tool call is pending");
+    expect(calls).toBe(0);
   });
 
   it("holds a huge return value or error text to the output limit, refused before it reaches the host", async () => {
@@ -346,6 +461,31 @@ describe("limits", () => {
     expect(thrown.details.error).toBe("script");
     expect(thrown.text.length).toBeLessThan(MAX_HELD_OUTPUT_CHARS);
     expect(thrown.text).toContain("…");
+  });
+
+  it("shares the output budget between printed text and the returned value", async () => {
+    const result = await run(
+      fixture({ tools: [] }),
+      'text("x".repeat(3 * 1024 * 1024)); return "y".repeat(2 * 1024 * 1024);',
+    );
+    expect(result.details.error).toBe("script");
+    expect(result.text).toContain("return value passed its output limit");
+  });
+
+  it("bounds errors by their encoded JSON size, including escaped characters", async () => {
+    const result = await run(
+      fixture({ tools: [] }),
+      'throw new Error("\\u0000".repeat(2 * 1024 * 1024));',
+    );
+    expect(result.details.error).toBe("script");
+    expect(result.text).toContain("…");
+    expect(result.text).not.toContain("error passed its limit");
+  });
+
+  it("retains upstream's item bound even when every printed string is empty", async () => {
+    const result = await run(fixture({ tools: [] }), 'while (true) text("");');
+    expect(result.details.error).toBe("script");
+    expect(result.text).toContain("100000 text(), image(), and console calls");
   });
 
   it("stops a program that keeps calling past its limit", async () => {
