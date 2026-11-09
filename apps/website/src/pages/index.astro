@@ -26,7 +26,7 @@ import Base from "../layouts/Base.astro";
 const WHY = [
   {
     title: "Agents never collide",
-    body: "Each ticket can get its own worktree and branch, so agents never write over each other's code.",
+    body: "Each ticket gets its own worktree and branch, so agents never write over each other's code.",
   },
   {
     title: "Diff to pull request",
@@ -37,8 +37,8 @@ const WHY = [
     body: "Run any command-line agent in a terminal tab, right inside the ticket's worktree.",
   },
   {
-    title: "Local when signed out",
-    body: "Signed-out projects, tickets and chats stay on your Mac. Signed-in preview history syncs to the cloud. You choose your model connection.",
+    title: "Local without an account",
+    body: "Local projects, tickets and chats stay on your Mac. You choose the model provider or gateway that receives your requests.",
   },
   {
     title: "Free and open source",
@@ -56,7 +56,7 @@ const AGENTS = [
 ] as const;
 
 const description =
-  "Build like a team of twenty. Volli is a Mac app for building ambitious software with many coding agents, all at once. Every task runs in its own worktree and branch, so agents never collide — and every change lands on one board for review.";
+  "Build like a team of twenty. Volli is a Mac app for building ambitious software with many coding agents, all at once. Every ticket runs in its own worktree and branch, so agents never collide — and every change lands on one board for review.";
 ---
 
 <Base
@@ -78,8 +78,8 @@ const description =
           />
           <p class="hero-lede hero-rise" style="--rise: 3">
             Volli is a Mac app for building ambitious software with many coding agents, all at
-            once. Every task runs in its own worktree and branch, so agents never collide — and
-            every change lands on one board for review.
+            once. Every ticket runs in its own worktree and branch, so agents never collide —
+            and every change lands on one board for review.
           </p>
         </div>
         <div class="hero-action hero-rise" style="--rise: 4">
@@ -216,7 +216,7 @@ const description =
         still={still("armed")}
         alt="Three tickets land in a Doing column set to start agents; each shows an Implement countdown with a Cancel button."
         beats={[{ text: "Automate" }, { text: "the routine work", bold: true }]}
-        body="Save a workflow once. Run it on a schedule, or whenever a ticket lands in a column."
+        body="Save a workflow once. Run it by hand, on a schedule, or whenever a ticket lands in a column."
       />
 
       <Chapter
@@ -226,7 +226,7 @@ const description =
         world="ember"
         still={still("limits")}
         alt="The usage limits popover: session and weekly windows with time left until they reset."
-        beats={[{ text: "No surprise", bold: true }, { text: "usage limits." }]}
+        beats={[{ text: "See your", bold: true }, { text: "usage limits." }]}
       />
 
       <Chapter

@@ -1,75 +1,98 @@
 ---
 title: Skills and commands
-description: Find, configure, and use reusable Skills and slash commands in Volli.
+description: Configure Skill activation for a project, invoke Skills from chat, and create reusable slash-command prompt templates.
 sidebar:
   label: Skills and commands
 ---
 
-Skills and Commands appear in a composer’s `/` picker, but they do different
-jobs. A **Skill** is a set of instructions you can make available to a Session.
-A **Command** is a saved prompt template that expands into the message you
-send.
+Skills and Commands share the composer's `/` picker. A **Skill** supplies an
+instruction resource to a Session. A **Command** expands a saved prompt
+template into the message you send. Neither grants tools or changes the
+Session's authority.
 
 ## Find and configure Skills
 
-Open **Configure → Skills** for a project. Volli lists Skills from the project
-and from your personal Skills directory:
+Open **Settings → All projects → Skills**. Choose **Activation project** to
+set modes for that project's Sessions. **All**, **Global**, and **This
+project** filter where the Skill files come from; the activation rules you
+edit still apply only to the selected project.
 
 | Source | Location |
 | --- | --- |
-| This project | `.agents/skills/<slug>/SKILL.md` |
-| Personal | `~/.agents/skills/<slug>/SKILL.md` |
+| **This project** | `.agents/skills/<slug>/SKILL.md` |
+| **Global** | `~/.agents/skills/<slug>/SKILL.md` |
 
-The directory name is the Skill’s `/slug`. If a project Skill and a personal
-Skill share a slug, the project Skill wins: a personal Skill can add a slug but
-never replace one the repository defines. If a Command uses the same name, the
-Command keeps `/slug` and the Skill appears as `/skill:slug`.
+The directory name is the Skill's slug. If project and personal Skills share a
+slug, the project Skill wins. If a Command uses that name, it keeps `/slug`
+and the Skill uses `/skill:slug`.
 
-Choose a mode for each Skill:
+Choose a **Mode** for each Skill:
 
 | Mode | What it does |
 | --- | --- |
-| **Auto** | Adds the Skill’s name, path, and description to the Session’s Skills index, so the model can find it. The index adds prompt tokens on every turn. |
-| **Manual** | Keeps the Skill out of the model’s index, but leaves it available when you invoke `/slug`. |
-| **Off** | Removes the Skill from the index and the `/` picker. |
+| **Auto** | Makes the Skill discoverable to the model and available from `/`. Its metadata can appear in the bounded Skills index. |
+| **Manual** | Keeps it out of the model's index, but available when you invoke `/slug`. |
+| **Off** | Removes it from the model's index and the `/` picker. |
 
-Auto makes the Skill discoverable, but it does not include the full `SKILL.md`
-body by itself. The model can read the file when it activates the Skill. You
-can also type `/slug` in a composer to include the Skill’s instructions with
-that message.
+The **Auto** token estimate shows the metadata cost of discoverable Skills.
+The index has a size limit; it does not include full Skill bodies. A model
+reads `SKILL.md` when it activates a discoverable Skill. Invoking `/slug`
+explicitly includes the Skill's instructions as a separate resource with your
+message.
 
-Select **Preview** on a Skill’s row to read its full name, description, and
-instructions without leaving Volli. Previewing does not change the Skill’s mode.
+Use a row's **Preview** action to read its instructions without changing its
+mode. **Reload** reads the files again after you add or edit a Skill. You can
+select several rows to change their modes together.
+
+### Skill author defaults
+
+Before you set a project mode, Volli follows the Skill's frontmatter:
+
+- `disable-model-invocation: true` makes it manual-only.
+- `user-invocable: false` hides it from `/` while leaving model discovery
+  enabled, unless model invocation is also disabled. Settings shows this as
+  **Model only (author)**.
+- Without either restriction, both model discovery and user invocation are
+  enabled.
+
+Choosing **Auto**, **Manual**, or **Off** overrides both author controls for
+that project. A warning beside a Skill identifies malformed or conflicting
+invocation declarations. Fix the file if its declaration does not match what
+you intended.
 
 ## Create and use Commands
 
-Open **Configure → Commands** to see the project and personal Commands
-available in a composer. A project Command takes precedence over a personal
-Command with the same name. With the **Volli Cloud (unstable)** experimental flag on, the
-personal Command takes precedence instead.
+Select the project in Settings, then **Commands**. **Configure → Commands**
+opens the same page. Volli lists project and personal templates; a project
+Command takes precedence when both have the same name.
 
-1. In **Configure → Commands**, select **New command**.
-2. Enter a **Name** and **Prompt**. Optional: Add a **Description**.
-3. In **Save to**, choose this project or your personal commands.
+1. Select **New command**.
+2. Enter **Name** and **Prompt**, and optionally **Description**.
+3. In **Save to**, choose **This project** or **Personal**.
 4. Select **Create**.
-5. In a chat composer, type `/` and select the command.
+5. In a chat composer, type `/` and choose the command.
 
-The name becomes the slash command. A Command named `review` becomes
-`/review`. Commands and Skills supply instructions; they do not grant tools or
-change a Session's authority.
+Names accept letters, numbers, dashes, and underscores. A Command named
+`review` becomes `/review`.
 
-Commands are Markdown prompt templates. A Command's body replaces the slash
-command in the message you send. Add placeholders such as `$1` for the first
-argument or `$ARGUMENTS` for all arguments. For example, `/review src/app.ts`
-can fill `$1` with `src/app.ts`.
+Commands are Markdown files. The body replaces the slash command in your
+message. Use `$1` for the first argument or `$ARGUMENTS` for all arguments.
+For example, this `review` template makes `/review src/app.ts` ask for a review
+of that file:
 
-Project Commands live in `.volli/commands/<name>.md`. Personal Commands are
-stored in Volli’s user-data `commands` directory and are available across
-projects. The Command’s frontmatter can provide a `description`; the body is
-the prompt.
+```md
+---
+description: Review a file for bugs
+---
+Review $1 for correctness and missing tests.
+```
+
+Project Commands live in `.volli/commands/<name>.md`. Personal Commands live
+in Volli's application-data `commands` directory and are available across
+projects. **Write a markdown file** provides the file-based creation path.
 
 ## Distinguish Skills, Commands, and file references
 
-Typing `/name` can select a Skill or a Command. A Command expands into prompt
-text. A Skill’s instructions are included as a separate resource alongside your
-message. Use `@` for composer file references, not for Skills or Commands.
+Use `/` for Skills and Commands. A Command expands into prompt text; a Skill
+arrives as a separate instruction resource alongside your message. Use `@`
+for file references.

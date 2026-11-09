@@ -20,12 +20,12 @@ function stripLeadingImports(body: string): string {
   return body.replace(/^(?:import\s[^\n]*\n|\s*\n)*/, "");
 }
 export const getStaticPaths: GetStaticPaths = async () => {
-  const docs = await getCollection("docs");
+  const docs = await getCollection("docs", ({ data }) => !data.draft);
   return docs.map((entry) => ({ params: { slug: entry.id || undefined } }));
 };
 
 export const GET: APIRoute = async ({ params }) => {
-  const docs = await getCollection("docs");
+  const docs = await getCollection("docs", ({ data }) => !data.draft);
   const entry = docs.find((doc) => (doc.id || undefined) === params.slug);
 
   if (!entry) {

@@ -1,58 +1,66 @@
 ---
 title: Arm a column Automation
-description: Enable automatic starts for an Automation and choose the board column that can run it.
+description: Offer an Automation in board columns, enable automatic starts on this Mac, and choose what runs when a ticket arrives.
 sidebar:
   label: Column triggers
 ---
 
-A **Ticket enters** Trigger offers an Automation in the board columns you
-select. To start a Run automatically, turn on **Automatic triggers** and arm the
-Automation in a column. Arming does not affect tickets that are already in that
-column.
+A **Columns** Trigger offers an Automation in the board columns you select.
+To run it automatically, enable **Automatic triggers** and arm it in a column.
+Arming does not start work on tickets already in that column.
 
-## Configure a Ticket enters Trigger
+<span id="configure-a-ticket-enters-trigger"></span>
 
-1. Open **Automations** in the app navigation and select an Automation, or
-   choose **New Automation**.
-2. Select **Ticket enters** under **Trigger**.
-3. Select **Choose columns**, then select one or more columns.
-4. Save the record with **Create automation** or **Save changes**.
+## Configure a column Trigger
 
+1. In your project's navigation, open **Automations** and select an Automation.
+2. Beside **Trigger**, select **Edit**.
+3. Select **Columns**, then check one or more board columns.
+4. Select **Save**.
+
+For a new Automation, configure the Trigger before selecting **Create**.
 Each selected column offers the Automation in its list. A column can offer
-several Automations but can arm only one. In **Lanes**, drag the offered rows
-to change their order.
+several Automations but can arm only one.
 
 ## Enable and arm automatic starts
 
 ### Enable an Automation
 
-On the Automations page, turn on **Automatic triggers** in the selected
-Automation's header. The switch is stored on this Mac and is off by default.
-While it is off, you can still run the Automation by hand, but it will not start
-from a column Trigger or a schedule.
+In the Automation's **Trigger** section, turn on **Automatic triggers**. It is
+off by default and applies only to this Mac. While it is off, you can run the
+Automation by hand, but a column arrival or schedule will not start it.
 
 ### Arm a column
 
-On the board, select the bolt in the column header and choose the Automation
-from its offered list. The menu names the destination column. Select
-**No Automation** to disarm it. You can also choose an Automation in the
-**Lanes** view. Each column has at most one armed Automation.
+On the board, select the bolt in the column header, then choose the Automation.
+Select **No automation** to disarm the column. If an armed Automation's
+automatic starts are off, you can enable **Automatic triggers** in this menu.
 
-The armed Automation starts automatically only when a ticket enters its column
-in a deliberate move, such as dragging the card, choosing **Move to**, or
-changing **Status** in its **Properties**. The ticket must arrive after you
-enable the Automation and arm the column; tickets already in the column do not
-start a Run. When a Run is about to start, select **Cancel** to keep the move
-but skip the Run.
+You can also arm it in the editor: in **Trigger**, turn on **Arrival** for the
+column. Arming a different Automation replaces that column's earlier choice.
+
+An armed, enabled Automation starts only after a deliberate move into its
+column, such as dragging a card, choosing **Move to**, or changing **Status**
+in a ticket's **Properties**. Automatic lifecycle moves do not trigger it.
+During the 3.5-second countdown, select **Cancel** to keep the move but skip
+the Run.
+
+In **Automations → Columns**, choose a column to see its offered list. Drag
+rows to change their order. An armed Automation with **Automatic triggers** on
+stays pinned first; you can reorder the others.
 
 ## Choose during a board drag
 
-While you drag a ticket, hold **Option (⌥)** over a column to expand its offered
+While dragging a ticket, hold **Option (⌥)** over a column to expand its offered
 Automations into landing targets. Release on an Automation to run it for this
-move, or release on **Move only** to change the ticket's status without starting
-a Run. Press **1** through **9** to choose an offered Automation, or press **0**
-for **Move only**. A chosen Automation uses the same cancellable delay as an
-armed arrival. Choosing one during a drag does not change the column's arming or
-the Automation's Trigger.
+move, or release on **Move only** to change status without starting a Run.
 
-For fixed-time starts, see [Schedule an Automation](/guides/automations/schedules/).
+Press **1** through **9** to choose an offered Automation, or **0** for
+**Move only**. An armed Automation with **Automatic triggers** on takes the
+first slot. A chosen Automation uses the same cancellable countdown as an armed
+arrival. This is a
+one-time choice: it does not change the column's arming or the Automation's
+Trigger, and it can run even with **Automatic triggers** off.
+
+For recurring times, see [Schedule an
+Automation](/guides/automations/schedules/).
