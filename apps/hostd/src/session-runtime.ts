@@ -56,6 +56,12 @@ export interface HeadlessRuntimeOptions {
   /** Host-scope project creation, composed only behind cloud. */
   projectsRoot?: string | null;
   userInstall?: boolean;
+  /**
+   * The bundled HTML extraction worker (`web-extract-worker.cjs` beside
+   * `hostd.cjs`), so `web_fetch` parses pages off the thread that serves the
+   * agent socket. Absent, it parses on that thread.
+   */
+  webExtractWorker?: string;
 }
 
 function headlessHomeDir(env: Readonly<Record<string, string | undefined>>): string {

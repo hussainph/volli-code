@@ -251,6 +251,18 @@ describe.skipIf(!fixture)(
             list: () => [...cursors.values()],
             get: (sessionId) => cursors.get(sessionId) ?? null,
             save: (cursor) => void cursors.set(cursor.sessionId, cursor),
+            update: (cursor, expected) => {
+              const row = cursors.get(cursor.sessionId);
+              if (
+                row?.ownerUserId !== cursor.ownerUserId ||
+                row.generation !== expected.generation ||
+                row.acceptedThrough !== expected.acceptedThrough
+              ) {
+                return false;
+              }
+              cursors.set(cursor.sessionId, cursor);
+              return true;
+            },
           },
           accept: acceptOverLink(parts.link),
           ownerUserId: userId,

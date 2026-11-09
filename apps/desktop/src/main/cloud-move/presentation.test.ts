@@ -69,6 +69,8 @@ const FAILURE_CODES = [
   "export_source_unreadable",
   "export_schema_unsupported",
   "export_source_corrupt",
+  "export_pi_log_too_large",
+  "export_pi_log_incomplete",
   "export_integrity",
   "export_io_failed",
   "export_worker_failed",

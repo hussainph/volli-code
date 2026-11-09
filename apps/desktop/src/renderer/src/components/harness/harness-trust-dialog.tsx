@@ -89,11 +89,11 @@ export function HarnessTrustDialog() {
             Volli will run this command every time a session starts this harness.
           </AlertDialogDescription>
         </AlertDialogHeader>
-        <div className="flex flex-col gap-2">
-          <pre className="overflow-x-auto rounded-md border border-border bg-background/30 px-4 py-2 font-mono text-ui text-foreground">
+        <div className="flex min-w-0 flex-col gap-2">
+          <pre className="min-w-0 whitespace-pre-wrap rounded-control border border-border bg-background/30 px-4 py-2 font-mono text-ui text-foreground [overflow-wrap:anywhere]">
             {manifest === undefined ? "" : harnessCommandLine(manifest)}
           </pre>
-          <p className="truncate font-mono text-ui text-muted-foreground">
+          <p className="min-w-0 font-mono text-ui text-muted-foreground [overflow-wrap:anywhere]">
             {manifest?.manifestPath}
           </p>
           {manifest !== undefined && manifest.claimedEvents.length > 0 ? (
@@ -103,7 +103,7 @@ export function HarnessTrustDialog() {
                   above them, and this whole block is one quotation of what the
                   harness declared about itself. */}
               {manifest.claimedEvents.map((event) => (
-                <Badge key={event} mono className="text-ui">
+                <Badge key={event} className="font-mono text-ui">
                   {event}
                 </Badge>
               ))}

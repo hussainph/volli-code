@@ -29,7 +29,11 @@ import {
 } from "./session-usage";
 import type { SessionTodoList } from "./session-todo";
 import type { SessionUsage, SessionUsageSummary } from "./session-usage";
-import type { SessionUsageEntry } from "./session-usage-report";
+import type {
+  SessionUsageEntry,
+  SessionUsageReport,
+  SessionUsageReportQuery,
+} from "./session-usage-report";
 
 /**
  * One durable Session row.
@@ -1684,6 +1688,22 @@ export interface SessionProjection {
 }
 
 /**
+ * A Session as a listing hands it out: its {@link SessionProjection} without
+ * the full command and receipt history (VC-848).
+ *
+ * The listing fold cache keeps one of these per listed Session for as long as
+ * the host runs, so its weight is paid once per Session in the roster. The two
+ * arrays left out grow with every command a Session ever received, and on a
+ * real 5,087-Session profile they were about two thirds of a resident row
+ * (`e2e/bench/listing-row-weight-vc848.mjs`). A caller that needs them reads
+ * that Session through `getSession`, which keeps the full projection.
+ *
+ * A full projection is a listing row too (it only has more fields), so code
+ * that reads no history takes this type and accepts either.
+ */
+export type SessionListingProjection = Omit<SessionProjection, "commands" | "receipts">;
+
+/**
  * The resumable state behind a persisted Session projection.
  *
  * `projection` is the public read model. `pendingExecutorStarts` is the one
@@ -1859,6 +1879,35 @@ export function advanceSessionProjection(
   return foldSessionProjection(session, events, checkpoint);
 }
 
+/**
+ * Whether a fact of this kind moves a Session's `lastActivityAt`: the fold's
+ * rule, and the one boot recovery's ledger walk applies to name when the prior
+ * process was last alive without folding every Session (VC-1095).
+ *
+ * Recency is about the agent's work, so pure Volli bookkeeping does not move
+ * it: `command.recorded` / `command.receipt.recorded` fire for a retitle, and
+ * `session.retitled` is the rename fact itself. Floating a Session to the top
+ * of a recency-sorted list because someone renamed it is a lie about what is
+ * happening in it. Nothing is lost by skipping them — a `message.submit`
+ * command is followed immediately by the `turn.started` it caused, which does
+ * count.
+ *
+ * `usage.recorded` is skipped for a second reason: it is written by a backfill
+ * as well as by a live turn, and a repair that re-dated every historical
+ * Session would rewrite the user's sense of what they were last working on.
+ * The turn that spent the tokens already counted.
+ */
+export function movesSessionActivity(kind: SessionEventPayload["kind"]): boolean {
+  return (
+    kind !== "command.recorded" &&
+    kind !== "command.receipt.recorded" &&
+    kind !== "session.input.recorded" &&
+    kind !== "session.tools.refreshed" &&
+    kind !== "session.retitled" &&
+    kind !== "usage.recorded"
+  );
+}
+
 function foldSessionProjection(
   session: Session,
   events: readonly SessionProjectionEvent[],
@@ -1926,28 +1975,7 @@ function foldSessionProjection(
     .toSorted((left, right) => left.sequence - right.sequence);
 
   for (const event of ordered) {
-    // Recency is about the agent's work, so pure Volli bookkeeping does not
-    // move it: `command.recorded` / `command.receipt.recorded` fire for a
-    // retitle, and `session.retitled` is the rename fact itself. Floating a
-    // Session to the top of a recency-sorted list because someone renamed it
-    // is a lie about what is happening in it. Nothing is lost by skipping
-    // them — a `message.submit` command is followed immediately by the
-    // `turn.started` it caused, which does count.
-    //
-    // `usage.recorded` is skipped for a second reason: it is written by a
-    // backfill as well as by a live turn, and a repair that re-dated every
-    // historical Session would rewrite the user's sense of what they were
-    // last working on. The turn that spent the tokens already counted.
-    if (
-      event.payload.kind !== "command.recorded" &&
-      event.payload.kind !== "command.receipt.recorded" &&
-      event.payload.kind !== "session.input.recorded" &&
-      event.payload.kind !== "session.tools.refreshed" &&
-      event.payload.kind !== "session.retitled" &&
-      event.payload.kind !== "usage.recorded"
-    ) {
-      lastActivityAt = event.occurredAt;
-    }
+    if (movesSessionActivity(event.payload.kind)) lastActivityAt = event.occurredAt;
 
     switch (event.payload.kind) {
       case "command.recorded": {
@@ -2373,6 +2401,16 @@ function sameSessionCommandIntent(
  * Adding a verb that rewrites a row breaks every such reader.
  */
 export interface SessionLedgerTransaction {
+  /**
+   * True when this transaction runs inside one the ledger does not own (in
+   * SQLite, a savepoint under a caller's outer transaction). Its promise then
+   * settles when the savepoint is released, and the outer transaction can
+   * still roll everything back afterwards. A caller that remembers what a
+   * transaction wrote once it settles (the engine's hot checkpoints) must not
+   * remember it from an enclosed one. Absent or false: settling is
+   * committing.
+   */
+  readonly enclosed?: boolean;
   /** The stored row as inserted. Only its events change what a Session shows. */
   getSession(sessionId: string): Session | null;
   /** Returns immutable base Sessions ordered by creation time descending, then id descending. */
@@ -2484,6 +2522,12 @@ export type Synchronous<T> = T extends PromiseLike<unknown> ? never : T;
 /** The composition root guarantees atomicity for every function passed here. */
 export interface SessionLedger {
   transaction<T>(work: (transaction: SessionLedgerTransaction) => Synchronous<T>): Promise<T>;
+  /**
+   * Optional storage-owned read boundary, so a large report can run off the
+   * host thread. It must use the same row codecs and reportSessionUsage fold,
+   * with coverage and rows from one snapshot; it is not a second arithmetic.
+   */
+  reportUsage?(query: ListSessionUsageQuery & SessionUsageReportQuery): Promise<SessionUsageReport>;
 }
 
 /** Injected by the composition root so the domain never imports a runtime clock or UUID library. */

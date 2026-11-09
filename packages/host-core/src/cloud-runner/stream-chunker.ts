@@ -57,6 +57,7 @@ import {
 } from "@volli/shared/cloud";
 
 import type { BackendLink } from "./backend-link";
+import { withMainSpan } from "../log/context";
 
 /** The backend calls a chunker makes. */
 export interface StreamChunkBackend {
@@ -552,6 +553,10 @@ export function createStreamChunker(options: StreamChunkerOptions): StreamChunke
       );
   }
 
+  function timedTick(): void {
+    withMainSpan({ door: "timer", operation: "runner-stream-chunk" }, tick);
+  }
+
   function tick(): void {
     const at = now();
     for (const watch of watches.values()) {
@@ -577,7 +582,7 @@ export function createStreamChunker(options: StreamChunkerOptions): StreamChunke
   }
 
   function syncInterval(): void {
-    if (watches.size > 0 && interval === null) interval = timers.setInterval(tick, cadenceMs);
+    if (watches.size > 0 && interval === null) interval = timers.setInterval(timedTick, cadenceMs);
     if (watches.size === 0 && interval !== null) {
       timers.clearInterval(interval);
       interval = null;
@@ -652,10 +657,16 @@ export function startStreamChunks(parts: {
   const off = parts.link.subscribe(STREAM_CHUNK_FUNCTIONS.watched, {}, (value) =>
     chunker.setWatched(watchedSessionIds(value)),
   );
+  let stopping: Promise<void> | undefined;
   return {
-    async stop() {
-      off();
-      await chunker.close();
+    // Idempotent: the store's dispose and its connection's stop both end the
+    // streams, and the Convex client throws on a second unsubscribe.
+    stop() {
+      stopping ??= (async () => {
+        off();
+        await chunker.close();
+      })();
+      return stopping;
     },
   };
 }

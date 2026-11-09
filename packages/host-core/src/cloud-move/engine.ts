@@ -55,7 +55,7 @@ import { derivedId } from "../migration-export/transform";
 import { verifyMigrationExport } from "../migration-export/verify";
 import { OBJECT_UPLOAD_TIMEOUT_MS } from "../transcript-spool/object-store";
 import { saveCloudChanges } from "./cloud-changes";
-import { handOver, plannedHandover, releaseHandover } from "./handover";
+import { handOver, plannedHandover, releaseHandover, releaseProjectCursors } from "./handover";
 import {
   MoveBackendError,
   MOVE_RETRY,
@@ -158,6 +158,14 @@ export class MoveProblemError extends Error {
     this.code = code;
     this.detail = detail;
   }
+}
+
+/** A dry run's measuring export carries no history (`historyMeasured`): it is never a move's. */
+export function refuseDryRunExport(
+  manifest: Pick<MigrationExportManifest, "historyMeasured">,
+): void {
+  if (manifest.historyMeasured !== undefined)
+    throw new MoveProblemError("export_integrity", "A dry run's export cannot be moved.");
 }
 
 /** A step that found the move must start over under a new move id. */
@@ -278,6 +286,15 @@ function targetOf(move: MoveRow): MigrationTarget {
 }
 
 export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
+  /** Tells a running drain; its failure never fails the move (the drain drops them itself later). */
+  const cursorsReleased = (sessionIds: readonly string[]) => {
+    if (sessionIds.length === 0) return;
+    try {
+      ports.cursorsReleased?.(sessionIds);
+    } catch {
+      // The drain's own check (`held`) drops the streams when it next looks.
+    }
+  };
   const now = ports.now ?? Date.now;
   const newId = ports.newId ?? randomUUID;
   const sleep =
@@ -538,7 +555,11 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
           if (error.code === "cancelled" || error.code === "in_progress") {
             throw new MovePausedError("paused");
           }
-          throw new MoveProblemError(`export_${error.code}`, error.message);
+          throw new MoveProblemError(
+            `export_${error.code}`,
+            error.message,
+            error.sessionId === undefined ? {} : { sessionId: error.sessionId },
+          );
         }
         throw error;
       }
@@ -547,6 +568,7 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
     const verified = await verifyMigrationExport(dir).catch((error: unknown) => {
       throw new MoveProblemError("export_integrity", (error as Error).message);
     });
+    refuseDryRunExport(verified.manifest);
     const { sha256 } = await fileSha256(join(dir, MANIFEST_FILE));
     return journal.advance(move.moveId, "frozen", "exported", {
       journal: { exportId: verified.manifest.exportId, exportManifestSha256: sha256 },
@@ -883,20 +905,40 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
       move = journal.patch(move.moveId, { journal: { aborted: true } });
       await fault("rollback.aborted");
     }
+    // `uncommitted` too: a roll back resumed after its uncommit no longer asks
+    // the backend, so `shown` can read false there.
+    const purged = shown || move.journal.uncommitted === true;
+    // Its paths only. A handover is journaled in the `committed` step, so a
+    // roll back that has one rolls back from a committed state: `shown`, and
+    // the moved Sessions' cursors go with every other one just below.
     if (move.journal.handover !== undefined) {
-      const kept = releaseHandover({
-        db: ports.db,
-        history: ports.history,
-        userId: move.userId,
-        runnerId: move.runnerId,
-        record: move.journal.handover,
-      });
-      // Sessions that took new facts in Volli Cloud keep their cursors: say so.
-      if (kept.length > 0 && move.failure !== null) {
-        move = journal.patch(move.moveId, {
-          failure: { ...move.failure, detail: { ...move.failure.detail, keptCursors: kept } },
+      releaseHandover({ db: ports.db, runnerId: move.runnerId, record: move.journal.handover });
+    }
+    if (purged) {
+      // The cloud copy is purged: no Session of the project is served from
+      // here any more, the ones that moved on since and those born in Volli
+      // Cloud included (whether or not the handover ran). Taken back and named
+      // in one transaction, so a crash between cannot lose the names. A roll
+      // back resumed after that adds to the names an earlier run kept.
+      const failure = move.failure;
+      let takenBack: string[] = [];
+      move = ports.db.transaction(() => {
+        takenBack = releaseProjectCursors(ports.db, move.userId, move.projectId);
+        if (takenBack.length === 0 || failure === null) return move;
+        const earlier = failure.detail?.["cursorsTakenBack"];
+        const kept = Array.isArray(earlier)
+          ? earlier.filter((id): id is string => typeof id === "string")
+          : [];
+        const named = new Set([...kept, ...takenBack]);
+        return journal.patch(move.moveId, {
+          failure: {
+            ...failure,
+            detail: { ...failure.detail, cursorsTakenBack: [...named].toSorted() },
+          },
         });
-      }
+      })();
+      cursorsReleased(takenBack);
+      await fault("rollback.cursors");
     }
     await rm(workDir(move), { recursive: true, force: true, maxRetries: 3 });
     const again = move.journal.againOnRunner;
@@ -1404,15 +1446,11 @@ export function createMoveEngine(ports: MoveEnginePorts): MoveEngine {
         await fault("returning.saved");
       }
       if (move.journal.handover !== undefined) {
-        releaseHandover({
-          db: ports.db,
-          history: ports.history,
-          userId: move.userId,
-          runnerId: move.runnerId,
-          record: move.journal.handover,
-          everyCursor: { projectId: move.projectId },
-        });
+        releaseHandover({ db: ports.db, runnerId: move.runnerId, record: move.journal.handover });
       }
+      // Every cursor on the project, whether or not the handover ran: the
+      // moved Sessions and those born in Volli Cloud since the commit.
+      cursorsReleased(releaseProjectCursors(ports.db, move.userId, move.projectId));
       await rm(exportDir(move), { recursive: true, force: true, maxRetries: 3 });
       return journal.advance(moveId, "returning", "returned", { returnedAt: now() });
     },

@@ -18,9 +18,9 @@
  * only complete chunks, or chunk files no journal line names, which the next
  * run deletes. The journal is the only thing a resume trusts.
  */
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { mkdir, open, readdir, readFile, rename, rm, stat } from "node:fs/promises";
+import { link, mkdir, open, readdir, readFile, rename, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { MigrationExportError } from "./errors";
 import type { StreamName } from "./sources";
@@ -92,6 +92,35 @@ export async function writeFileDurably(path: string, bytes: Buffer | string): Pr
     await handle.close();
   }
   await rename(temp, path);
+}
+
+/**
+ * Writes `parts` to `path` durably as they arrive, the way {@link writeFileDurably}
+ * writes a whole buffer: a fsynced `.tmp`, then a rename. Answers what it wrote.
+ * A failure leaves only the `.tmp`, which recovery removes like any unjournaled file.
+ */
+export async function writeFileDurablyFrom(
+  path: string,
+  parts: AsyncIterable<Buffer>,
+): Promise<{ bytes: number; sha256: string }> {
+  await mkdir(dirname(path), { recursive: true });
+  const temp = `${path}.tmp`;
+  const hash = createHash("sha256");
+  let bytes = 0;
+  const handle = await open(temp, "w");
+  try {
+    for await (const part of parts) {
+      for (let at = 0; at < part.length;)
+        at += (await handle.write(part, at, part.length - at, bytes + at)).bytesWritten;
+      hash.update(part);
+      bytes += part.length;
+    }
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  await rename(temp, path);
+  return { bytes, sha256: hash.digest("hex") };
 }
 
 /** Appends one line and fsyncs it. */
@@ -218,12 +247,25 @@ function processAlive(pid: number): boolean {
   }
 }
 
+/**
+ * Creates the lock with its holder already written: the pid goes into a
+ * private file first, which is then linked into place (atomic, and refused
+ * with EEXIST when a lock is there). Opening the lock itself and writing
+ * after would let a second run read it empty in between, take it for a dead
+ * holder's and take it over, and both would export into one staging area.
+ */
 async function writeLock(path: string): Promise<void> {
-  const handle = await open(path, "wx");
+  const pending = `${path}.${process.pid}.${randomUUID()}`;
+  const handle = await open(pending, "wx");
   try {
     await handle.writeFile(`${process.pid}\n`);
   } finally {
     await handle.close();
+  }
+  try {
+    await link(pending, path);
+  } finally {
+    await rm(pending, { force: true });
   }
 }
 

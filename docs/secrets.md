@@ -104,7 +104,7 @@ newer than this build's is `locked` (`newer-format`) and left alone.
 Only material sealed under this key is gated: today, persistent Session
 secrets. Model sign-ins (Pi `auth.json`) and MCP credentials are not under
 this key yet and keep working. Web search keys have only a sealed *mirror*
-([step E](#web-search-keys-step-e-vc-643)): a locked or corrupt inventory
+([web-search mirror](#web-search-key-mirror)): a locked or corrupt inventory
 leaves the mirror pending, and the keys keep working from the database. The
 typed store (VC-631) adds the other kinds as each one moves in.
 
@@ -138,7 +138,7 @@ unwrap. Session-only storage remains the no-keychain choice.
 family moves onto ([storage contract](sealed-credentials.md#typed-inventory-and-file-contract)).
 The typed inventory is not yet canonical for these families. A credential
 cutover requires an explicit compatibility gate, not merely a storage adapter. The web search keys are mirrored
-there now ([step E](#web-search-keys-step-e-vc-643)), with the database still
+there now ([web-search mirror](#web-search-key-mirror)), with the database still
 their source. Persistent Session secrets already
 run on its lock and durable file engine, in their own file and format: the same
 `session-secrets.enc`, envelope (`VSF1`/`VSC1`) and `{ version: 1, secrets }`
@@ -275,13 +275,15 @@ Low-level UI polls remain nonblocking so rendering and status observation never
 stall on another process.
 This does not make Electron's legacy synchronous `safeStorage` calls asynchronous.
 
-## Web search keys: step E (VC-643)
+<a id="web-search-keys-step-e-vc-643"></a>
+
+## Web search key mirror
 
 The Brave and Exa keys are the first family in the typed inventory, as a
 **mirror** ([expand contract](sealed-credentials.md#expand)). The `secrets`
 table in `volli.db` stays their one source of truth, in the clear: every read
 (Settings, Session attach) still comes from it, and nothing ever reads the
-mirror back. The read switch is VC-644.
+mirror back. The mirror is not a read source.
 
 - **Migration 059**, additive, floor unchanged (`raisesMinReader` off).
   `web_credential_source` holds a random lineage id and a revision that three
@@ -310,8 +312,8 @@ mirror back. The read switch is VC-644.
   key only if this launch has already used the keychain successfully (the
   Session-secrets store opened, or pre-023 web keys were carried out of it).
   Otherwise the mirror stays `pending` (`key-pending`) and the next save or
-  clear a person makes fetches the key and seals it. Safe in step E: reads
-  come only from SQLite, and VC-644's switch reconciles explicitly.
+  clear a person makes fetches the key and seals it. Reads still
+  come only from SQLite; any future switch must reconcile explicitly.
 - **Stopped at quit.** When the accepted-quit coordinator accepts a quit
   (`quit-gate.ts`, `stopBackgroundWork`), the launch timer is cancelled, a
   busy retry stops, a key fetch in flight is abandoned rather than awaited,
@@ -336,7 +338,7 @@ mirror back. The read switch is VC-644.
 - **Older builds.** The release before this one opens a 059 database (floor
   58), and saves, clears, attaches, bundles and restores exactly as before;
   the triggers count its writes, and the next launch of this build reconciles
-  them. A restored bundle never carries keys or step-E state: the restored
+  them. A restored bundle never carries keys or mirror state: the restored
   database is a new lineage with no keys, so reconciliation empties the
   mirror and nothing stale is merged back. `web/n1-compatibility.test.ts` runs
   main's exact code (pinned by git blob id) for all of this.
@@ -346,7 +348,7 @@ a revocation committed between reading a command's environment and starting
 the command still reaches that one command (the next one is clean), and
 restoring an older `session-secrets.enc` sealed under the same key brings
 revoked Session secrets back, because the legacy payload has no generation or
-tombstone. A later family (VC-644 or after) adds a generation check.
+tombstone. Do not infer a generation check for the legacy payload.
 
 ## Headless hosts
 

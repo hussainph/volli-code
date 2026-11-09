@@ -47,7 +47,7 @@ export function updateStatus(state: UpdateUiState, now: number): UpdateStatus {
   const failed = last?.result === "download-error" ? "Download failed" : "Check failed";
   switch (state.phase) {
     case "checking":
-      return { state: "working", label: "Checking…", detail: null, action: "Check now" };
+      return { state: "working", label: "Checking", detail: null, action: "Check now" };
     case "downloading": {
       const what = state.targetVersion === null ? "update" : `Volli ${state.targetVersion}`;
       const percent = state.percent === null ? "" : ` · ${Math.round(state.percent)}%`;

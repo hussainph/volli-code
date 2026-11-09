@@ -148,7 +148,9 @@ function liftTarget(
   if (lift > 0) return { hex: paper, alpha: lift * liftAlpha[resolved] };
   const { h } = hexToOklch(canvas.stops[canvas.primaryIndex].hex);
   return {
-    hex: awayFromPaper(paper, baseFillHex(canvas, resolved), h),
+    // Neutral paper can straddle a dark mesh's lightness. Chrome's sink
+    // direction stays anchored to black rather than flipping with the page.
+    hex: awayFromPaper("#000000", baseFillHex(canvas, resolved), h),
     alpha: -lift * sinkAlpha[resolved],
   };
 }

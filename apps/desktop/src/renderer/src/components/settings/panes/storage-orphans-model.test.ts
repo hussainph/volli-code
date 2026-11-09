@@ -27,7 +27,6 @@ import {
   hasCleanupWork,
   historyRows,
   isScanStale,
-  orphanPolicyNote,
   planCleanup,
   preservationHistoryRows,
   retentionNote,
@@ -221,7 +220,7 @@ describe("what a row says", () => {
 
   it("distinguishes a stale RECORD from a directory, and names its project", () => {
     expect(describeMetadata(prunable)).toBe(
-      "Proj One — stale git record (gitdir file points to non-existent location). Cleanup would prune the record; nothing on disk changes.",
+      "Proj One — stale git record (gitdir file points to non-existent location)",
     );
   });
 
@@ -259,18 +258,7 @@ describe("what a row says", () => {
   });
 
   it("shows the retention window the eligibility dates come from", () => {
-    expect(retentionNote(14)).toBe("Unused folders become eligible after 14 day(s).");
-  });
-
-  // The retention period and the archive policy have to be SHOWN,
-  // not summoned — and the orphan/ticket distinction is what explains why this
-  // list's only verb is "remove the folder".
-  it("states the retention window and the archive policy as a row of its own", () => {
-    const note = orphanPolicyNote(9);
-    expect(note).toContain("eligible after 9 day(s)");
-    expect(note).toContain("no ticket to archive");
-    expect(note).toContain("branch stays in git");
-    expect(note).toContain("Archiving a ticket is a separate action");
+    expect(retentionNote(14)).toBe("Eligible after 14 day(s)");
   });
 });
 
@@ -478,13 +466,13 @@ describe("an interrupted run", () => {
     });
 
     expect(describeInterrupted(interrupted)).toBe(
-      `A cleanup was interrupted on ${new Date(AT + 5_000).toLocaleString()}: 1 completed, 1 skipped, 1 never attempted. Scan again to review what is left.`,
+      `A cleanup was interrupted on ${new Date(AT + 5_000).toLocaleString()}: 1 completed, 1 skipped, 1 never attempted`,
     );
   });
 
   it("counts failures separately, and dates an unstamped interruption from the run's start", () => {
     expect(describeInterrupted(run({ finishedAt: null, items: [item({ state: "failed" })] }))).toBe(
-      `A cleanup was interrupted on ${new Date(AT).toLocaleString()}: 0 completed, 1 failed, 0 never attempted. Scan again to review what is left.`,
+      `A cleanup was interrupted on ${new Date(AT).toLocaleString()}: 0 completed, 1 failed, 0 never attempted`,
     );
   });
 
@@ -499,7 +487,7 @@ describe("an interrupted run", () => {
         }),
       ),
     ).toBe(
-      `A cleanup was interrupted on ${new Date(AT).toLocaleString()}: 0 completed, 2 may or may not have taken effect, 0 never attempted. Scan again to review what is left.`,
+      `A cleanup was interrupted on ${new Date(AT).toLocaleString()}: 0 completed, 2 may or may not have taken effect, 0 never attempted`,
     );
   });
 
@@ -609,7 +597,7 @@ describe("a run that finished with trouble in it", () => {
     // The per-path reasons are rows of their own (historyRows); this line is
     // the one a person notices, and the place the recovery hangs off.
     expect(describeRunFailures(troubled)).toBe(
-      `Cleanup at ${new Date(AT).toLocaleString()} — 1 failed, 1 with an unknown outcome. Each one is listed below with its reason. Scan again to review what is left.`,
+      `Cleanup at ${new Date(AT).toLocaleString()} — 1 failed, 1 with an unknown outcome`,
     );
     expect(historyRows([troubled]).map((row) => row.meta)).toEqual([
       expect.stringContaining("disk busy"),
@@ -689,7 +677,7 @@ describe("a scan measured against a retention window that has since moved", () =
     expect(isScanStale(report, null)).toBe(false);
     expect(isScanStale(report, 30)).toBe(true);
     expect(staleScanNote(report, 30)).toBe(
-      "The retention window changed from 14 to 30 day(s) after this scan, so these dates were measured against the old one. Scan again to see what is eligible now.",
+      "Retention changed from 14 to 30 day(s) after this scan",
     );
   });
 });

@@ -19,9 +19,8 @@
  * the answer to "what is holding this checkout".
  */
 import * as React from "react";
-import { ArrowsClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowsClockwise";
-import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
-import { SkullIcon } from "@phosphor-icons/react/dist/csr/Skull";
+import { SyncIcon, ProcessorIcon, CrashIcon } from "@renderer/components/ui/icon";
+
 import { errorMessage, formatProcessAge, type AutoReapPolicy } from "@volli/shared";
 
 import type { OrphanProcessInventory } from "../../../../../ipc/contract";
@@ -34,6 +33,7 @@ import {
   type AsyncState,
 } from "@renderer/components/settings/kit";
 import { Button } from "@renderer/components/ui/button";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import { Switch } from "@renderer/components/ui/switch";
 import { formatFileSize } from "@renderer/components/attachments/attachment-model";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
@@ -134,17 +134,11 @@ export function RunningProcessesSection() {
   return (
     <AsyncSection
       title="Running processes"
-      icon={CpuIcon}
-      hint={
-        <>
-          Processes still running under a ticket&rsquo;s worktree with no live Session. Scanning
-          only looks.
-        </>
-      }
+      icon={ProcessorIcon}
       action={
         <SectionIconAction
           label="Look for processes no Session owns"
-          icon={ArrowsClockwiseIcon}
+          icon={SyncIcon}
           busy={scanning}
           onAct={() => void scan()}
         />
@@ -153,7 +147,11 @@ export function RunningProcessesSection() {
         <>
           <PrefRow label="No Session owns">
             <span className="text-ui text-muted-foreground">
-              {processSummary(state.status === "loading", inventory)}
+              {state.status === "loading" ? (
+                <LoadingLabel>Looking</LoadingLabel>
+              ) : (
+                processSummary(false, inventory)
+              )}
             </span>
             <Button
               size="xs"
@@ -161,7 +159,7 @@ export function RunningProcessesSection() {
               disabled={reapable.length === 0 || scanning || reaping}
               onClick={() => void reap(reapable)}
             >
-              <SkullIcon />
+              <CrashIcon />
               Reap all
             </Button>
           </PrefRow>
@@ -193,7 +191,7 @@ export function RunningProcessesSection() {
                   <RowAction
                     label={`Reap pid ${candidate.pid}`}
                     hint="Reap"
-                    icon={SkullIcon}
+                    icon={CrashIcon}
                     disabled={scanning || reaping}
                     onAct={() => void reap([candidate.itemId])}
                   />

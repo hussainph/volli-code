@@ -267,7 +267,7 @@ export function railRunLabel(action: RailRunAction): string {
  * own state rather than a name it might be about to change its mind on — the
  * one thing it must not print in this moment is a name someone could press.
  */
-export const RAIL_UNREAD_LABEL = "Reading automations…";
+export const RAIL_UNREAD_LABEL = "Reading automations";
 
 /** What an unarmed column's default press is called where one is named at all. */
 export const RAIL_UNARMED_LABEL = "Nothing armed";
@@ -325,7 +325,7 @@ export function modelOverrideRows(models: readonly ComposerModel[]): readonly Mo
 export type RunLaunchState = "idle" | "pending" | "failed";
 
 /** What the row's right edge says while a launch it started is in flight. */
-export const RAIL_PENDING_LABEL = "Starting…";
+export const RAIL_PENDING_LABEL = "Starting";
 
 /**
  * What the explicit Run control says in each state.

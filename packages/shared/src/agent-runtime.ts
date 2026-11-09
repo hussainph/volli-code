@@ -57,7 +57,7 @@ export const SESSION_ROLES = ["project", "ticket", "subagent"] as const;
 export type SessionRole = (typeof SESSION_ROLES)[number];
 
 /**
- * The glossary word for each Role (CONTEXT.md "Session Role"), for prose a
+ * The glossary word for each Role (CONTEXT.md#session-role), for prose a
  * person or an agent reads. The enum value is a frozen durable field written
  * into Session history and stays `project`; the word for it is Board.
  */
@@ -366,9 +366,9 @@ export interface RuntimeAskRequest {
  * standing answer into, so nothing here can mean "always". `stop` ends the turn,
  * not the Session.
  *
- * Named a choice rather than an outcome or an answer deliberately — `CONTEXT.md`
- * reserves both of those for the durable Session Interaction vocabulary, and
- * this is the runtime's private reading of a decision that is recorded there.
+ * This is the runtime's private reading of a decision, not the durable
+ * SessionInteractionAnswer or SessionInteractionResolution recorded in history
+ * (CONTEXT.md#sessioninteractionanswer and #sessioninteractionresolution).
  */
 export type RuntimeAskChoice = "allow" | "refuse" | "stop";
 

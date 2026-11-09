@@ -5,7 +5,7 @@ Generated file. Do not edit by hand.
   verify:      pnpm run check:notices
 
 Scope: the macOS arm64 Volli Code application bundle (app id app.volli.desktop).
-It covers 482 third-party packages: the production dependency closure
+It covers 465 third-party packages: the production dependency closure
 of the desktop app and of the bundled `volli` CLI, the native platform packages
 electron-builder ships as binaries, the build-time sources whose output is part of
 the bundle, and the vendored material recorded in apps/desktop/notices/sources.json.
@@ -54,7 +54,7 @@ they are listed so the index accounts for every module in the bundle.
   @volli/shared
 
 =========================================================================================================
-2. PACKAGE INDEX (482 packages)
+2. PACKAGE INDEX (465 packages)
 =========================================================================================================
 
   <package>@<version>  <licence declared by the package>  [how it reaches the .app]
@@ -110,9 +110,11 @@ they are listed so the index accounts for every module in the bundle.
   @floating-ui/dom@1.8.0  MIT  [bundled into a chunk]
   @floating-ui/react-dom@2.1.9  MIT  [bundled into a chunk]
   @floating-ui/utils@0.2.12  MIT  [bundled into a chunk]
-  @fontsource-variable/geist-mono@5.3.0  OFL-1.1  [bundled into a chunk]
   @fontsource-variable/mona-sans@5.3.0  OFL-1.1  [bundled into a chunk]
+  @fontsource/space-mono@5.3.0  OFL-1.1  [bundled into a chunk]
   @google/genai@2.21.0  Apache-2.0  [bundled into a chunk]
+  @hugeicons/core-free-icons@4.4.0  MIT  [bundled into a chunk]
+  @hugeicons/react@1.1.10  MIT  [bundled into a chunk]
   @img/colour@1.1.0  MIT  [node_modules tree, unpacked from the asar]
   @img/sharp-darwin-arm64@0.35.5  Apache-2.0  [native binary, unpacked]
   @img/sharp-libvips-darwin-arm64@1.3.4  LGPL-3.0-or-later  [native binary, unpacked]
@@ -132,7 +134,6 @@ they are listed so the index accounts for every module in the bundle.
   @opentelemetry/sdk-metrics@2.12.0  Apache-2.0  [bundled into a chunk]
   @opentelemetry/sdk-trace@2.12.0  Apache-2.0  [bundled into a chunk]
   @opentelemetry/semantic-conventions@1.43.0  Apache-2.0  [bundled into a chunk]
-  @phosphor-icons/react@2.1.10  MIT  [bundled into a chunk]
   @pondwader/socks5-server@1.0.10  MIT  [bundled into a chunk]
   @protobufjs/aspromise@1.1.2  BSD-3-Clause  [bundled into a chunk]
   @protobufjs/base64@1.1.2  BSD-3-Clause  [bundled into a chunk]
@@ -144,7 +145,6 @@ they are listed so the index accounts for every module in the bundle.
   @protobufjs/pool@1.1.0  BSD-3-Clause  [bundled into a chunk]
   @protobufjs/utf8@1.1.2  BSD-3-Clause  [bundled into a chunk]
   @radix-ui/number@1.1.3  MIT  [bundled into a chunk]
-  @radix-ui/primitive@1.1.5  MIT  [bundled into a chunk]
   @radix-ui/primitive@1.2.0  MIT  [bundled into a chunk]
   @radix-ui/react-accessible-icon@1.2.0  MIT  [bundled into a chunk]
   @radix-ui/react-accordion@1.3.1  MIT  [bundled into a chunk]
@@ -157,18 +157,13 @@ they are listed so the index accounts for every module in the bundle.
   @radix-ui/react-collection@1.2.0  MIT  [bundled into a chunk]
   @radix-ui/react-compose-refs@1.1.3  MIT  [bundled into a chunk]
   @radix-ui/react-compose-refs@1.1.5  MIT  [bundled into a chunk]
-  @radix-ui/react-context@1.2.0  MIT  [bundled into a chunk]
   @radix-ui/react-context@1.3.0  MIT  [bundled into a chunk]
   @radix-ui/react-context-menu@2.4.1  MIT  [bundled into a chunk]
-  @radix-ui/react-dialog@1.1.19  MIT  [bundled into a chunk]
   @radix-ui/react-dialog@1.3.1  MIT  [bundled into a chunk]
   @radix-ui/react-direction@1.2.0  MIT  [bundled into a chunk]
-  @radix-ui/react-dismissable-layer@1.1.15  MIT  [bundled into a chunk]
   @radix-ui/react-dismissable-layer@1.2.1  MIT  [bundled into a chunk]
   @radix-ui/react-dropdown-menu@2.2.1  MIT  [bundled into a chunk]
-  @radix-ui/react-focus-guards@1.1.4  MIT  [bundled into a chunk]
   @radix-ui/react-focus-guards@1.2.0  MIT  [bundled into a chunk]
-  @radix-ui/react-focus-scope@1.1.12  MIT  [bundled into a chunk]
   @radix-ui/react-focus-scope@1.3.1  MIT  [bundled into a chunk]
   @radix-ui/react-form@0.3.0  MIT  [bundled into a chunk]
   @radix-ui/react-hover-card@1.2.1  MIT  [bundled into a chunk]
@@ -182,10 +177,8 @@ they are listed so the index accounts for every module in the bundle.
   @radix-ui/react-password-toggle-field@0.2.1  MIT  [bundled into a chunk]
   @radix-ui/react-popover@1.3.1  MIT  [bundled into a chunk]
   @radix-ui/react-popper@1.4.0  MIT  [bundled into a chunk]
-  @radix-ui/react-portal@1.1.13  MIT  [bundled into a chunk]
   @radix-ui/react-portal@1.2.0  MIT  [bundled into a chunk]
   @radix-ui/react-presence@1.1.11  MIT  [bundled into a chunk]
-  @radix-ui/react-presence@1.1.7  MIT  [bundled into a chunk]
   @radix-ui/react-primitive@2.1.7  MIT  [bundled into a chunk]
   @radix-ui/react-primitive@2.2.0  MIT  [bundled into a chunk]
   @radix-ui/react-progress@1.2.1  MIT  [bundled into a chunk]
@@ -204,11 +197,8 @@ they are listed so the index accounts for every module in the bundle.
   @radix-ui/react-toggle-group@1.2.1  MIT  [bundled into a chunk]
   @radix-ui/react-toolbar@1.2.1  MIT  [bundled into a chunk]
   @radix-ui/react-tooltip@1.4.1  MIT  [bundled into a chunk]
-  @radix-ui/react-use-callback-ref@1.1.2  MIT  [bundled into a chunk]
   @radix-ui/react-use-callback-ref@1.1.5  MIT  [bundled into a chunk]
-  @radix-ui/react-use-controllable-state@1.2.3  MIT  [bundled into a chunk]
   @radix-ui/react-use-controllable-state@1.3.0  MIT  [bundled into a chunk]
-  @radix-ui/react-use-effect-event@0.0.3  MIT  [bundled into a chunk]
   @radix-ui/react-use-effect-event@0.0.5  MIT  [bundled into a chunk]
   @radix-ui/react-use-escape-keydown@1.1.6  MIT  [bundled into a chunk]
   @radix-ui/react-use-is-hydrated@0.1.3  MIT  [bundled into a chunk]
@@ -219,19 +209,13 @@ they are listed so the index accounts for every module in the bundle.
   @radix-ui/react-use-size@1.1.5  MIT  [bundled into a chunk]
   @radix-ui/react-visually-hidden@1.2.13  MIT  [bundled into a chunk]
   @radix-ui/rect@1.1.3  MIT  [bundled into a chunk]
-  @shikijs/core@3.23.0  MIT  [bundled into a chunk]
   @shikijs/core@4.5.0  MIT  [bundled into a chunk]
-  @shikijs/engine-javascript@3.23.0  MIT  [bundled into a chunk]
   @shikijs/engine-javascript@4.5.0  MIT  [bundled into a chunk]
-  @shikijs/engine-oniguruma@3.23.0  MIT  [bundled into a chunk]
   @shikijs/engine-oniguruma@4.5.0  MIT  [bundled into a chunk]
-  @shikijs/langs@3.23.0  MIT  [bundled into a chunk]
   @shikijs/langs@4.5.0  MIT  [bundled into a chunk]
   @shikijs/monaco@4.5.0  MIT  [bundled into a chunk]
   @shikijs/primitive@4.5.0  MIT  [bundled into a chunk]
-  @shikijs/themes@3.23.0  MIT  [bundled into a chunk]
   @shikijs/themes@4.5.0  MIT  [bundled into a chunk]
-  @shikijs/types@3.23.0  MIT  [bundled into a chunk]
   @shikijs/types@4.5.0  MIT  [bundled into a chunk]
   @shikijs/vscode-textmate@10.0.2  MIT  [bundled into a chunk]
   @smithy/core@3.36.0  Apache-2.0  [bundled into a chunk]
@@ -243,7 +227,7 @@ they are listed so the index accounts for every module in the bundle.
   @stablelib/base64@1.0.1  MIT  [bundled into a chunk]
   @standard-schema/spec@1.1.0  MIT  [bundled into a chunk]
   @streamdown/cjk@1.0.4  Apache-2.0  [bundled into a chunk]
-  @streamdown/code@1.1.1  Apache-2.0  [bundled into a chunk]
+  @streamdown/code@2.0.0  Apache-2.0  [bundled into a chunk]
   @trpc/client@11.19.0  MIT  [node_modules tree]
   @trpc/server@11.19.0  MIT  [node_modules tree]
   @types/debug@4.1.13  MIT  [bundled into a chunk]
@@ -484,7 +468,6 @@ they are listed so the index accounts for every module in the bundle.
   sharp@0.35.5  Apache-2.0  [node_modules tree, unpacked from the asar]
   shebang-command@2.0.0  MIT  [bundled into a chunk]
   shebang-regex@3.0.0  MIT  [bundled into a chunk]
-  shiki@3.23.0  MIT  [bundled into a chunk]
   shiki@4.5.0  MIT  [bundled into a chunk]
   signal-exit@3.0.7  ISC  [bundled into a chunk]
   sonner@2.0.8  MIT  [bundled into a chunk]
@@ -550,7 +533,7 @@ Packages carrying byte-identical terms share one block; the package line names
 every one of them. A block reproduces each licence file the package publishes.
 
 =========================================================================================================
-Packages: @ai-sdk/gateway@4.0.115, @ai-sdk/provider@4.0.28, @streamdown/cjk@1.0.4, @streamdown/code@1.1.1, ai@7.0.142, remend@1.4.0, streamdown@2.7.0
+Packages: @ai-sdk/gateway@4.0.115, @ai-sdk/provider@4.0.28, @streamdown/cjk@1.0.4, @streamdown/code@2.0.0, ai@7.0.142, remend@1.4.0, streamdown@2.7.0
 SPDX: Apache-2.0
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -2493,11 +2476,11 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
 =========================================================================================================
-Packages: @fontsource-variable/geist-mono@5.3.0
+Packages: @fontsource-variable/mona-sans@5.3.0
 SPDX: OFL-1.1
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
-Copyright 2024 The Geist Project Authors (https://github.com/vercel/geist-font.git) GeistMono-Italic[wght].ttf: Copyright 2024 The Geist Project Authors (https://github.com/vercel/geist-font.git)
+Copyright 2022 The Mona Sans Project Authors (https://github.com/github/mona-sans), with Reserved Font Name "Mona" MonaSans-Italic[wdth,wght].ttf: Copyright 2022 The Mona Sans Project Authors (https://github.com/github/mona-sans), with Reserved Font Name "Mona"
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:
@@ -2593,11 +2576,11 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
 
 
 =========================================================================================================
-Packages: @fontsource-variable/mona-sans@5.3.0
+Packages: @fontsource/space-mono@5.3.0
 SPDX: OFL-1.1
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
-Copyright 2022 The Mona Sans Project Authors (https://github.com/github/mona-sans), with Reserved Font Name "Mona" MonaSans-Italic[wdth,wght].ttf: Copyright 2022 The Mona Sans Project Authors (https://github.com/github/mona-sans), with Reserved Font Name "Mona"
+Copyright 2016 The Space Mono Project Authors (https://github.com/googlefonts/spacemono) SpaceMono-Italic.ttf: Copyright 2016 The Space Mono Project Authors (https://github.com/googlefonts/spacemono) SpaceMono-Bold.ttf: Copyright 2016 The Space Mono Project Authors (https://github.com/googlefonts/spacemono) SpaceMono-BoldItalic.ttf: Copyright 2016 The Space Mono Project Authors (https://github.com/googlefonts/spacemono)
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:
@@ -2899,6 +2882,34 @@ File: LICENSE
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
+
+
+=========================================================================================================
+Packages: @hugeicons/core-free-icons@4.4.0, @hugeicons/react@1.1.10
+SPDX: MIT
+File: LICENSE.md
+---------------------------------------------------------------------------------------------------------
+MIT License
+
+Copyright (c) 2025 Hugeicons
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 
 =========================================================================================================
@@ -3334,34 +3345,6 @@ File: LICENSE
 
 
 =========================================================================================================
-Packages: @phosphor-icons/react@2.1.10
-SPDX: MIT
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-MIT License
-
-Copyright (c) 2020 Phosphor Icons
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-
-=========================================================================================================
 Packages: @pondwader/socks5-server@1.0.10
 SPDX: MIT
 File: LICENSE
@@ -3422,7 +3405,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
 =========================================================================================================
-Packages: @radix-ui/number@1.1.3, @radix-ui/primitive@1.1.5, @radix-ui/primitive@1.2.0, @radix-ui/react-accessible-icon@1.2.0, @radix-ui/react-accordion@1.3.1, @radix-ui/react-alert-dialog@1.2.1, @radix-ui/react-arrow@1.1.17, @radix-ui/react-aspect-ratio@1.2.0, @radix-ui/react-avatar@1.3.1, @radix-ui/react-checkbox@1.4.1, @radix-ui/react-collapsible@1.2.1, @radix-ui/react-collection@1.2.0, @radix-ui/react-compose-refs@1.1.3, @radix-ui/react-compose-refs@1.1.5, @radix-ui/react-context@1.2.0, @radix-ui/react-context@1.3.0, @radix-ui/react-context-menu@2.4.1, @radix-ui/react-dialog@1.1.19, @radix-ui/react-dialog@1.3.1, @radix-ui/react-direction@1.2.0, @radix-ui/react-dismissable-layer@1.1.15, @radix-ui/react-dismissable-layer@1.2.1, @radix-ui/react-dropdown-menu@2.2.1, @radix-ui/react-focus-guards@1.1.4, @radix-ui/react-focus-guards@1.2.0, @radix-ui/react-focus-scope@1.1.12, @radix-ui/react-focus-scope@1.3.1, @radix-ui/react-form@0.3.0, @radix-ui/react-hover-card@1.2.1, @radix-ui/react-id@1.1.2, @radix-ui/react-id@1.1.4, @radix-ui/react-label@2.1.17, @radix-ui/react-menu@2.2.1, @radix-ui/react-menubar@1.2.1, @radix-ui/react-navigation-menu@1.4.1, @radix-ui/react-one-time-password-field@0.2.1, @radix-ui/react-password-toggle-field@0.2.1, @radix-ui/react-popover@1.3.1, @radix-ui/react-popper@1.4.0, @radix-ui/react-portal@1.1.13, @radix-ui/react-portal@1.2.0, @radix-ui/react-presence@1.1.11, @radix-ui/react-presence@1.1.7, @radix-ui/react-primitive@2.1.7, @radix-ui/react-primitive@2.2.0, @radix-ui/react-progress@1.2.1, @radix-ui/react-radio-group@1.5.1, @radix-ui/react-roving-focus@1.2.1, @radix-ui/react-scroll-area@1.4.0, @radix-ui/react-select@2.4.1, @radix-ui/react-separator@1.2.0, @radix-ui/react-slider@1.6.1, @radix-ui/react-slot@1.3.0, @radix-ui/react-slot@1.5.0, @radix-ui/react-switch@1.4.1, @radix-ui/react-tabs@1.2.1, @radix-ui/react-toast@1.3.1, @radix-ui/react-toggle@1.2.1, @radix-ui/react-toggle-group@1.2.1, @radix-ui/react-toolbar@1.2.1, @radix-ui/react-tooltip@1.4.1, @radix-ui/react-use-callback-ref@1.1.2, @radix-ui/react-use-callback-ref@1.1.5, @radix-ui/react-use-controllable-state@1.2.3, @radix-ui/react-use-controllable-state@1.3.0, @radix-ui/react-use-effect-event@0.0.3, @radix-ui/react-use-effect-event@0.0.5, @radix-ui/react-use-escape-keydown@1.1.6, @radix-ui/react-use-is-hydrated@0.1.3, @radix-ui/react-use-layout-effect@1.1.2, @radix-ui/react-use-layout-effect@1.1.4, @radix-ui/react-use-previous@1.1.4, @radix-ui/react-use-rect@1.1.4, @radix-ui/react-use-size@1.1.5, @radix-ui/react-visually-hidden@1.2.13, @radix-ui/rect@1.1.3, radix-ui@1.8.1
+Packages: @radix-ui/number@1.1.3, @radix-ui/primitive@1.2.0, @radix-ui/react-accessible-icon@1.2.0, @radix-ui/react-accordion@1.3.1, @radix-ui/react-alert-dialog@1.2.1, @radix-ui/react-arrow@1.1.17, @radix-ui/react-aspect-ratio@1.2.0, @radix-ui/react-avatar@1.3.1, @radix-ui/react-checkbox@1.4.1, @radix-ui/react-collapsible@1.2.1, @radix-ui/react-collection@1.2.0, @radix-ui/react-compose-refs@1.1.3, @radix-ui/react-compose-refs@1.1.5, @radix-ui/react-context@1.3.0, @radix-ui/react-context-menu@2.4.1, @radix-ui/react-dialog@1.3.1, @radix-ui/react-direction@1.2.0, @radix-ui/react-dismissable-layer@1.2.1, @radix-ui/react-dropdown-menu@2.2.1, @radix-ui/react-focus-guards@1.2.0, @radix-ui/react-focus-scope@1.3.1, @radix-ui/react-form@0.3.0, @radix-ui/react-hover-card@1.2.1, @radix-ui/react-id@1.1.2, @radix-ui/react-id@1.1.4, @radix-ui/react-label@2.1.17, @radix-ui/react-menu@2.2.1, @radix-ui/react-menubar@1.2.1, @radix-ui/react-navigation-menu@1.4.1, @radix-ui/react-one-time-password-field@0.2.1, @radix-ui/react-password-toggle-field@0.2.1, @radix-ui/react-popover@1.3.1, @radix-ui/react-popper@1.4.0, @radix-ui/react-portal@1.2.0, @radix-ui/react-presence@1.1.11, @radix-ui/react-primitive@2.1.7, @radix-ui/react-primitive@2.2.0, @radix-ui/react-progress@1.2.1, @radix-ui/react-radio-group@1.5.1, @radix-ui/react-roving-focus@1.2.1, @radix-ui/react-scroll-area@1.4.0, @radix-ui/react-select@2.4.1, @radix-ui/react-separator@1.2.0, @radix-ui/react-slider@1.6.1, @radix-ui/react-slot@1.3.0, @radix-ui/react-slot@1.5.0, @radix-ui/react-switch@1.4.1, @radix-ui/react-tabs@1.2.1, @radix-ui/react-toast@1.3.1, @radix-ui/react-toggle@1.2.1, @radix-ui/react-toggle-group@1.2.1, @radix-ui/react-toolbar@1.2.1, @radix-ui/react-tooltip@1.4.1, @radix-ui/react-use-callback-ref@1.1.5, @radix-ui/react-use-controllable-state@1.3.0, @radix-ui/react-use-effect-event@0.0.5, @radix-ui/react-use-escape-keydown@1.1.6, @radix-ui/react-use-is-hydrated@0.1.3, @radix-ui/react-use-layout-effect@1.1.2, @radix-ui/react-use-layout-effect@1.1.4, @radix-ui/react-use-previous@1.1.4, @radix-ui/react-use-rect@1.1.4, @radix-ui/react-use-size@1.1.5, @radix-ui/react-visually-hidden@1.2.13, @radix-ui/rect@1.1.3, radix-ui@1.8.1
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -3450,7 +3433,7 @@ SOFTWARE.
 
 
 =========================================================================================================
-Packages: @shikijs/core@3.23.0, @shikijs/core@4.5.0, @shikijs/engine-javascript@3.23.0, @shikijs/engine-javascript@4.5.0, @shikijs/engine-oniguruma@3.23.0, @shikijs/engine-oniguruma@4.5.0, @shikijs/langs@3.23.0, @shikijs/langs@4.5.0, @shikijs/monaco@4.5.0, @shikijs/primitive@4.5.0, @shikijs/themes@3.23.0, @shikijs/themes@4.5.0, @shikijs/types@3.23.0, @shikijs/types@4.5.0, shiki@3.23.0, shiki@4.5.0
+Packages: @shikijs/core@4.5.0, @shikijs/engine-javascript@4.5.0, @shikijs/engine-oniguruma@4.5.0, @shikijs/langs@4.5.0, @shikijs/monaco@4.5.0, @shikijs/primitive@4.5.0, @shikijs/themes@4.5.0, @shikijs/types@4.5.0, shiki@4.5.0
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -11454,7 +11437,7 @@ SOFTWARE.
 
 
 =========================================================================================================
-7. VENDORED SOURCES (5)
+7. VENDORED SOURCES (7)
 =========================================================================================================
 
 Third-party source copied into this repository rather than installed. Each entry
@@ -11514,6 +11497,72 @@ licence is asserted for it. What is known and what is missing:
   than a packaging fact, so this entry records it and asserts nothing;
   apps/desktop/notices/README.md carries it as an open item for the separate licensing
   review.
+
+=========================================================================================================
+Source: Lobe Icons provider logomarks (Groq, xAI, Together, Cerebras, Fireworks, Amazon Bedrock, Baseten, Ant Group)
+Paths: apps/desktop/src/renderer/src/components/models/model-identity.tsx
+Upstream: https://github.com/lobehub/lobe-icons (packages/static-svg/icons)
+SPDX: MIT
+Evidence:
+  The eight marks (Groq, xAI, Together, Cerebras, Fireworks, Amazon Bedrock, Baseten,
+  Ant Group) in model-identity.tsx marked `lobe-icons (MIT)` preserve the upstream
+  static SVG paths and viewBoxes verbatim (VC-617). The other marks there come from
+  simple-icons, CC0-1.0, which needs no notice.
+---------------------------------------------------------------------------------------------------------
+MIT License
+
+Copyright (c) 2023 LobeHub
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+=========================================================================================================
+Source: Phosphor brand identity marks (Apple, Linux, GitHub, Google)
+Paths: apps/desktop/src/renderer/src/components/ui/brand-marks.tsx
+Upstream: @phosphor-icons/react@2.1.10, dist/defs/{AppleLogo,LinuxLogo,GithubLogo,GoogleLogo}.es.js
+SPDX: MIT
+Evidence:
+  The identity paths in brand-marks.tsx are retained verbatim from the previously
+  installed package, independently of the UI symbol set.
+---------------------------------------------------------------------------------------------------------
+MIT License
+
+Copyright (c) 2020 Phosphor Icons
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 
 =========================================================================================================
 Source: Pi 0.99.2 harness compatibility sources
@@ -11617,13 +11666,14 @@ SOFTWARE.
 
 
 =========================================================================================================
-8. MODIFIED PACKAGES (2)
+8. MODIFIED PACKAGES (3)
 =========================================================================================================
 
 These packages are modified before they are bundled, by the pnpm patches recorded
 in pnpm-workspace.yaml. The patch files are in the repository and state the change.
 
   @dnd-kit/core@6.3.1 — patches/@dnd-kit__core@6.3.1.patch
+  @earendil-works/pi-ai@1.0.0 — patches/@earendil-works__pi-ai@1.0.0.patch
   @earendil-works/pi-codemode@1.0.0 — patches/@earendil-works__pi-codemode@1.0.0.patch
 
 =========================================================================================================

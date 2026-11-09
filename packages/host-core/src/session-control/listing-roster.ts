@@ -21,42 +21,76 @@
  * about who started a Session.
  */
 import type Database from "better-sqlite3";
+import { setImmediate } from "node:timers";
 import {
   SESSION_LISTING_BOUNDS,
   type ListSessionsQuery,
   type SessionListingPage,
   type SessionListingRow,
-  type SessionProjection,
+  type SessionListingProjection,
 } from "@volli/shared";
 
 import { readSessionProvenance, readSessionProvenances } from "../db/session-provenance-repo";
 import { getTicketRow } from "../db/tickets-repo";
 import { readSessionUnread, readSessionUnreads } from "../db/session-read-repo";
 import { sessionListingRow, sessionListingRows } from "./listing-row";
+import { withMainSpan } from "../log/context";
 
-export function sessionListingRowsForRoster(
+/** The rows' build (VC-1090). */
+const LISTING_ROWS = { door: "projection", operation: "listing-rows" } as const;
+
+/**
+ * How many Sessions one stretch of the rows step reads and builds before the
+ * host gets a turn (VC-1076). The batch reads below are set-based, so a chunk
+ * keeps them that way; measured over a 4,542-Session roster the unchunked step
+ * was one 146 ms block warm and up to 1.4 s cold.
+ */
+export const SESSION_LISTING_ROWS_CHUNK = 512;
+
+export async function sessionListingRowsForRoster(
   db: Database.Database,
-  sessions: readonly SessionProjection[],
+  sessions: readonly SessionListingProjection[],
   liveAttachmentIds: ReadonlySet<string>,
-): SessionListingRow[] {
-  const sessionIds = sessions.map((session) => session.session.id);
-  const provenanceOf = readSessionProvenances(
-    db,
-    sessions.map((session) => ({
-      sessionId: session.session.id,
-      ticketId: session.session.ticketId,
-    })),
-  );
-  // The second per-Session fact a row carries (VC-30), joined here for exactly
-  // the reason provenance is: one set-based read for the whole roster, and the
-  // same answer the push channel reads one Session at a time.
-  const readOf = readSessionUnreads(db, sessionIds);
-  return sessionListingRows(
-    sessions,
-    (session) => provenanceOf(session.session.id),
-    liveAttachmentIds,
-    (session) => readOf(session.session.id),
-  );
+  yieldToHost: () => Promise<void> = yieldToMainProcess,
+): Promise<SessionListingRow[]> {
+  const rows: SessionListingRow[] = [];
+  for (let from = 0; from < sessions.length; from += SESSION_LISTING_ROWS_CHUNK) {
+    // Between chunks, never before the first: a one-chunk roster costs what
+    // it always did.
+    if (from > 0) await yieldToHost();
+    // Each chunk is timed (VC-1090): it runs after the door's await, outside its span.
+    const built = withMainSpan(LISTING_ROWS, () => {
+      const chunk = sessions.slice(from, from + SESSION_LISTING_ROWS_CHUNK);
+      const provenanceOf = readSessionProvenances(
+        db,
+        chunk.map((session) => ({
+          sessionId: session.session.id,
+          ticketId: session.session.ticketId,
+        })),
+      );
+      // The second per-Session fact a row carries (VC-30), joined here for
+      // exactly the reason provenance is: one set-based read per chunk, and the
+      // same answer the push channel reads one Session at a time.
+      const readOf = readSessionUnreads(
+        db,
+        chunk.map((session) => session.session.id),
+      );
+      return sessionListingRows(
+        chunk,
+        (session) => provenanceOf(session.session.id),
+        liveAttachmentIds,
+        (session) => readOf(session.session.id),
+      );
+    });
+    rows.push(...built);
+  }
+  return rows;
+}
+
+function yieldToMainProcess(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 /**
@@ -65,7 +99,7 @@ export function sessionListingRowsForRoster(
  */
 export interface SessionListingSources {
   readonly db: Database.Database;
-  readonly listSessions: (query: ListSessionsQuery) => Promise<readonly SessionProjection[]>;
+  readonly listSessions: (query: ListSessionsQuery) => Promise<readonly SessionListingProjection[]>;
   readonly liveAttachmentIds: () => ReadonlySet<string>;
 }
 
@@ -226,12 +260,17 @@ export function boundedSessionListing(
 export async function sessionListingNotice(
   ports: {
     db: Database.Database;
-    getSession: (input: { sessionId: string }) => Promise<SessionProjection | null>;
+    /**
+     * The Engine's one-row listing read (VC-1101), not `getSession`: the row
+     * is the one a listing folds, from the listing's own cache, so a receipt
+     * flip on a Session whose log has not moved decodes and copies nothing.
+     */
+    getSessionListing: (input: { sessionId: string }) => Promise<SessionListingProjection | null>;
     liveAttachmentIds: () => ReadonlySet<string>;
   },
   sessionId: string,
 ): Promise<{ projectId: string; ticketId: string | null; row: SessionListingRow } | null> {
-  const projection = await ports.getSession({ sessionId });
+  const projection = await ports.getSessionListing({ sessionId });
   if (projection === null) return null;
   const row = sessionListingRow(
     projection,

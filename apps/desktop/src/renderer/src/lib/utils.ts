@@ -24,10 +24,32 @@ import { extendTailwindMerge } from "tailwind-merge";
 // way its caller meant.
 const twMerge = extendTailwindMerge({
   extend: {
+    // Control geometry must merge with caller resets (h-auto, px-0), just as
+    // semantic shadows must merge with shadow-none in attached fields.
+    theme: {
+      spacing: [
+        "control-xs",
+        "control-sm",
+        "control-default",
+        "control-lg",
+        "control-pad-xs",
+        "control-pad-sm",
+        "control-pad-default",
+        "control-pad-lg",
+      ],
+    },
     classGroups: {
+      "max-w": ["max-w-content", "max-w-workbench"],
       "font-size": ["text-label", "text-ui", "text-heading", "text-title"],
       rounded: ["rounded-control", "rounded-container", "rounded-row"],
-      shadow: ["shadow-raised", "shadow-card", "shadow-overlay"],
+      shadow: [
+        "shadow-raised",
+        "shadow-card",
+        "shadow-overlay",
+        "shadow-control",
+        "shadow-control-hover",
+        "shadow-control-pressed",
+      ],
     },
   },
 });

@@ -18,10 +18,14 @@ import { fileURLToPath } from "node:url";
 
 import { describe, it } from "node:test";
 
+import { serve } from "./protocol.mjs";
 import {
   AUTOMATION_RUN_TOOL,
   ticketCardButtonRef,
   driveRequestBudget,
+  driveInstance,
+  openAutomationDefinition,
+  finishRunTurn,
   MINUTES,
   automationRunToolCall,
   coalescingProblems,
@@ -104,6 +108,106 @@ describe("the unnamed board card's semantic ancestor ref", () => {
       /found 0/u,
     );
   });
+});
+
+async function withDrive(t, sessionRows) {
+  const dir = mkdtempSync(join(tmpdir(), "run-row-"));
+  const socket = join(dir, "drive.sock");
+  let generation = 0;
+  const actions = [];
+  const waits = [];
+  const text = `- button "Home" [ref=home]
+- button "Doing runs Doing sweep on Mac A · Armed by Dev User" [ref=chip]
+- button "Doing sweep Automatic triggers Ticket enters Doing" [ref=definition]
+${sessionRows}`;
+  const server = await serve(socket, (cmd, args) => {
+    if (cmd === "act") {
+      assert.equal(args.gen, generation, "act must use the freshest snapshot");
+      actions.push(args.ref);
+    } else if (cmd === "wait") {
+      waits.push(args);
+    } else assert.equal(cmd, "snapshot");
+    const snapshot = { text, generation: ++generation };
+    return cmd === "snapshot" ? snapshot : { snapshot };
+  });
+  t.after(async () => {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  });
+  return { drive: driveInstance("Mac A", socket), actions, waits };
+}
+
+describe("opening the Run Session without a title race", () => {
+  for (const title of ["Doing sweep", "fake-agent: Volli Cloud ticket"]) {
+    it(`opens the Session with title ${JSON.stringify(title)}, never the column chip`, async (t) => {
+      const { drive, actions, waits } = await withDrive(
+        t,
+        `- 'button "Idle ${title} Shared with workspace Started by the Automation Doing sweep AUTO-1 · just now" [ref=session]':
+  - generic "Started by the Automation Doing sweep" [ref=mark]`,
+      );
+      await finishRunTurn(drive, "Doing sweep", "SCRIPTED arrival finished");
+      assert.deepEqual(actions, ["home", "session"]);
+      assert.deepEqual(waits.slice(1), [
+        { text: "SCRIPTED arrival finished", timeout: 120_000 },
+        { text: "Stop turn", timeout: 60_000, gone: true },
+      ]);
+    });
+  }
+
+  it("refuses two Sessions with the same provenance instead of picking the first", async (t) => {
+    const { drive, actions } = await withDrive(
+      t,
+      `- button "Idle First Started by the Automation Doing sweep AUTO-1" [ref=one]
+- button "Idle Second Started by the Automation Doing sweep AUTO-1" [ref=two]`,
+    );
+    await assert.rejects(
+      finishRunTurn(drive, "Doing sweep", "SCRIPTED arrival finished"),
+      /expected button .* once; found 2/u,
+    );
+    assert.deepEqual(actions, ["home"]);
+  });
+});
+
+describe("Automation definition navigation", () => {
+  for (const compact of [false, true])
+    for (const name of ["Doing sweep", "Hourly sweep"]) {
+      it(`selects the name-only ${name} row at ${compact ? "compact" : "wide"} width through the real drive codec`, async (t) => {
+        const dir = mkdtempSync(join(tmpdir(), "automation-definition-"));
+        const socket = join(dir, "drive.sock");
+        let detail = compact;
+        let generation = 0;
+        const actions = [];
+        const list =
+          '- button "Doing sweep" [ref=doing]\n- button "Hourly sweep" [ref=hourly]\n- button "Rename Doing sweep" [ref=rename]\n- button "Run Doing sweep" [ref=run]';
+        const server = await serve(socket, (cmd, args) => {
+          if (cmd === "act") {
+            assert.equal(args.gen, generation);
+            actions.push(args.ref);
+            if (args.ref === "back") detail = false;
+            else {
+              assert.equal(detail, false, "a hidden master row is not a control");
+              assert.equal(args.ref, name === "Doing sweep" ? "doing" : "hourly");
+            }
+          } else assert.ok(cmd === "snapshot" || cmd === "wait");
+          const snapshot = {
+            generation: ++generation,
+            text: detail
+              ? '- button "All automations" [ref=back]\n- button "Rename Doing sweep" [ref=rename]\n- button "Run Doing sweep" [ref=run]'
+              : list,
+          };
+          return cmd === "snapshot" ? snapshot : { snapshot };
+        });
+        t.after(async () => {
+          await new Promise((resolve) => server.close(resolve));
+          rmSync(dir, { recursive: true, force: true });
+        });
+        await openAutomationDefinition(driveInstance("A", socket), name);
+        assert.deepEqual(actions, [
+          ...(compact ? ["back"] : []),
+          name === "Doing sweep" ? "doing" : "hourly",
+        ]);
+      });
+    }
 });
 
 describe("hourlyBackdateAt", () => {
@@ -252,6 +356,30 @@ describe("coalescingProblems", () => {
 });
 
 describe("the copy this driver waits for is the copy production prints", () => {
+  it("opens the project's History destination before reading the sleeping Mac's waiting Run", () => {
+    const page = source(
+      "apps/desktop/src/renderer/src/components/automations/automations-page.tsx",
+    );
+    const journey = source("apps/desktop/e2e/volli-drive/cloud-automation-acceptance-smoke.mjs");
+    assert.match(page, /aria-label="History"\s+onClick=\{\(\) => setView\("history"\)\}/u);
+    const sleep = journey.slice(journey.indexOf("await step(5,"), journey.indexOf("await step(6,"));
+    assert.match(
+      sleep,
+      /await macB\.drive\.click\("button", "Automations"\);\s*await macB\.drive\.click\("button", "History"\);\s*await macB\.drive\.wait\(waitingForAsleepCopy\(nameA\), 60_000\);/u,
+    );
+    assert.ok(!journey.includes('"Project activity"'));
+  });
+
+  it("waits for the approved Next middle-dot line, never the retired colon copy", () => {
+    const controls = source(
+      "apps/desktop/src/renderer/src/components/automations/cloud-automation-controls.tsx",
+    );
+    const journey = source("apps/desktop/e2e/volli-drive/cloud-automation-acceptance-smoke.mjs");
+    assert.match(controls, /Next ·\{/u);
+    assert.ok(journey.includes('await macA.drive.wait("Next ·", 30_000)'));
+    assert.ok(!journey.includes('wait("Next:"'));
+  });
+
   it("waiting for a sleeping Mac is the Run label's own words", () => {
     const state = source("apps/desktop/src/renderer/src/stores/cloud-automations/state.ts");
     assert.match(state, /Waiting for \$\{name\}/u);

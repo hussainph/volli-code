@@ -121,6 +121,7 @@ function oauthStateStore(
   store: McpCredentialStore,
   serverId: string,
   ephemeral: { serverUrl?: string; codeVerifier?: string; oauthState?: string },
+  assertMayWrite: () => void = () => undefined,
 ): McpOAuthStateStore {
   return {
     load(): McpOAuthState | undefined {
@@ -141,6 +142,7 @@ function oauthStateStore(
       else ephemeral.codeVerifier = codeVerifier;
       if (oauthState === undefined) delete ephemeral.oauthState;
       else ephemeral.oauthState = oauthState;
+      assertMayWrite();
       store.update(serverId, (current) => ({
         ...current,
         oauth: durable as McpStoredOAuthState,
@@ -213,6 +215,27 @@ function signInFailure(serverName: string, error: unknown): string {
 
 /** A failure on the way to a pending browser callback, said plainly. */
 class SignInWaitError extends McpConnectionProblem {}
+
+/** A write the sign-in's starter refused ({@link McpSignInOptions.writeRefusal}), in its own words. */
+class SignInHeldError extends McpConnectionProblem {}
+
+/** What one sign-in is given by the caller that starts it. */
+export interface McpSignInOptions {
+  sources: McpCredentialSources;
+  signal: AbortSignal;
+  probe: (auth: AuthProvider, signal: AbortSignal) => Promise<void>;
+  /**
+   * Asked before each write the sign-in itself makes to the credential
+   * store (discovery, registration, the tokens, the cleared refusal): a
+   * sentence stops the sign-in there, with nothing more written, and is its
+   * outcome; null lets the write through. A sign-in can wait minutes on the
+   * browser, and the server's project can stop taking writes meanwhile (a
+   * move froze it). The check-by-connecting probe that follows the stored
+   * tokens is an ordinary connection and does not ask. Callers that join a
+   * sign-in already running share its starter's.
+   */
+  writeRefusal?: () => string | null;
+}
 
 export interface McpOAuthBrokerOptions {
   store: McpCredentialStore;
@@ -380,14 +403,7 @@ export class McpOAuthBroker {
    * afterwards; it is injected because the client that can connect is built
    * on top of this broker.
    */
-  signIn(
-    server: McpServerDraft,
-    options: {
-      sources: McpCredentialSources;
-      signal: AbortSignal;
-      probe: (auth: AuthProvider, signal: AbortSignal) => Promise<void>;
-    },
-  ): Promise<McpSignInOutcome> {
+  signIn(server: McpServerDraft, options: McpSignInOptions): Promise<McpSignInOutcome> {
     // One sign-in per server, whoever asked for it. Each caller waits on it
     // with its own signal: a caller that stops waiting (an agent's turn
     // interrupted, say) leaves it running for the others, and only when every
@@ -458,14 +474,11 @@ export class McpOAuthBroker {
     this.#signingIn.delete(serverId);
   }
 
-  async #signIn(
-    server: McpServerDraft,
-    options: {
-      sources: McpCredentialSources;
-      signal: AbortSignal;
-      probe: (auth: AuthProvider, signal: AbortSignal) => Promise<void>;
-    },
-  ): Promise<McpSignInOutcome> {
+  async #signIn(server: McpServerDraft, options: McpSignInOptions): Promise<McpSignInOutcome> {
+    const assertMayWrite = (): void => {
+      const refusal = options.writeRefusal?.() ?? null;
+      if (refusal !== null) throw new SignInHeldError(refusal);
+    };
     if (
       server.transport.type === "streamable-http" &&
       !mcpEndpointMayCarryCredentials(server.transport.url)
@@ -508,7 +521,7 @@ export class McpOAuthBroker {
         },
         ...(target.oauth?.clientId === undefined ? {} : { clientId: target.oauth.clientId }),
         ...(clientSecret === undefined ? {} : { clientSecret }),
-        store: oauthStateStore(this.#store, server.id, {}),
+        store: oauthStateStore(this.#store, server.id, {}, assertMayWrite),
         onRedirect: (url) => {
           authorizationUrl = url;
         },
@@ -645,6 +658,7 @@ export class McpOAuthBroker {
               | undefined
           )?.client_id;
       const port = Number(new URL(callback.redirectUrl).port);
+      assertMayWrite();
       this.#store.update(server.id, (current) => ({
         ...current,
         signInRequired: undefined,

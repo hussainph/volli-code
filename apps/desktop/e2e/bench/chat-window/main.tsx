@@ -28,6 +28,7 @@ import { ACTIVITY_METADATA_KEY, type ActivityDescriptor } from "@volli/shared";
 import { EMPTY_TRANSCRIPT, type ChatSessionTransport } from "@volli/session-presentation";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { ChatPlane } from "@renderer/components/chat/chat-plane";
+import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { createChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useBackgroundShellsStore } from "@renderer/stores/background-shells";
 import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
@@ -56,6 +57,10 @@ const bridgeNode = (path: string[]): unknown =>
       const name = path.at(-1) ?? "";
       if (name.startsWith("on")) return () => {};
       if (name === "pathForFile") return String(args[0]);
+      // The draft-typing arm writes the drafts envelope through app_state on
+      // every keystroke's debounce; an acknowledging write keeps a refusal
+      // toast from landing in the very document being measured.
+      if (path.at(-2) === "appState" && name === "set") return Promise.resolve({ ok: true });
       return Promise.resolve({ ok: false, error: "not stubbed" });
     },
   });
@@ -551,6 +556,7 @@ async function streamAndScroll(
     priorTop = actualTop;
   };
 
+  performance.mark("chat-bench:start");
   const started = performance.now();
   for (let step = 0; step < steps; step += 1) {
     const tokenCount = Math.max(1, Math.floor(((performance.now() - started) * tokenRate) / 1_000));
@@ -587,6 +593,7 @@ async function streamAndScroll(
   const streamedWhileWorking = streamedSlice?.lifecycle === "working";
   const streamedWhileTurnActive = streamedSlice?.transcript.turnActive === true;
   const latencyMs = performance.now() - started;
+  performance.mark("chat-bench:end");
   for (const entry of observer?.takeRecords() ?? []) longTasks.push(entry.duration);
   observer?.disconnect();
   const observedResizeCallbacks = resizeObserverCallbacks - resizeObserverCallbacksBefore;
@@ -692,18 +699,93 @@ async function streamAndScroll(
 /* ----------------------------------------------------------------- surface */
 
 let setMounted: ((ids: readonly string[]) => void) | null = null;
+let setBallastCount: ((count: number) => void) | null = null;
+let setRevealed: ((ids: readonly string[]) => void) | null = null;
+
+/** The Draft the typing arm writes into: an empty provisional Board chat. */
+const DRAFT_SESSION = "bench-draft";
+
+/**
+ * The rest of a real window, as far as style recalc is concerned: a sidebar's
+ * rows, a board's cards. Laid out and painted (not `display: none`), so a
+ * whole-document style pass has to visit every one of them.
+ */
+function Ballast({ count }: { count: number }) {
+  if (count === 0) return null;
+  return (
+    <div data-bench-ballast className="w-72 shrink-0 overflow-hidden border-r border-border">
+      {Array.from({ length: Math.ceil(count / 4) }, (_value, index) => (
+        <div key={index} className="flex items-center gap-2 px-3 py-1 text-ui">
+          <span className="size-2 rounded-full bg-primary" />
+          <span className="truncate text-muted-foreground">Row {index}</span>
+          <span className="ml-auto tabular-nums">{index % 97}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * One pane cell holding several chats, the front one shown and the rest kept
+ * mounted behind `<Activity mode="hidden">` — the shape VC-1080 gave Home and
+ * the Ticket view (`kept-chat-views.ts`). The switch is a real button so the
+ * runner can press it through Chromium's trusted input path (VC-1100).
+ */
+function RevealCell({ ids }: { ids: readonly string[] }) {
+  const [front, setFront] = React.useState(0);
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <button
+        type="button"
+        data-bench-switch
+        className="h-8 shrink-0 border-b border-border text-ui"
+        onClick={() => setFront((index) => (index + 1) % ids.length)}
+      >
+        Next chat
+      </button>
+      {ids.map((id, index) => (
+        <React.Activity key={id} mode={index === front ? "visible" : "hidden"}>
+          <div data-bench-plane={id} className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <ChatPlane
+              sessionId={id}
+              projectId={PROJECT}
+              ticketId={null}
+              onOpenFile={() => {}}
+              store={store}
+            />
+          </div>
+        </React.Activity>
+      ))}
+    </div>
+  );
+}
 
 function BenchSurface() {
   const [ids, setIds] = React.useState<readonly string[]>([]);
+  const [ballast, setBallast] = React.useState(0);
+  const [revealed, setRevealedIds] = React.useState<readonly string[]>([]);
   React.useEffect(() => {
     setMounted = setIds;
+    setBallastCount = setBallast;
+    setRevealed = setRevealedIds;
   }, []);
+  if (revealed.length > 0) {
+    return (
+      <TooltipProvider delayDuration={0}>
+        <div className="flex h-svh w-full bg-background text-foreground">
+          <Ballast count={ballast} />
+          <RevealCell ids={revealed} />
+        </div>
+      </TooltipProvider>
+    );
+  }
   return (
     <TooltipProvider delayDuration={0}>
       {/* Panes side by side, each a full-height column, because a plane that is
           not laid out does not virtualize, scroll or paint — and then none of
           these numbers are about the app. */}
       <div className="flex h-svh w-full bg-background text-foreground">
+        <Ballast count={ballast} />
         {ids.map((id) => (
           <div key={id} data-bench-plane={id} className="flex min-h-0 min-w-0 flex-1 flex-col">
             <ChatPlane
@@ -741,13 +823,7 @@ function nodes(): number {
 function planeScroller(index: number): HTMLElement | null {
   const plane = document.querySelectorAll<HTMLElement>("[data-bench-plane]")[index];
   if (plane === undefined) return null;
-  // `StickToBottom` renders the scrolling element as the first child of the
-  // `role="log"` box (its `Content` wrapper), with the measured content inside
-  // it. The library offers no hook for a data attribute on that element, so the
-  // bench walks to it rather than marking it.
-  const log = plane.querySelector<HTMLElement>('[role="log"]');
-  const scroller = log?.querySelector<HTMLElement>(":scope > div") ?? null;
-  return scroller;
+  return transcriptScroller(plane);
 }
 
 function geometry(index: number): { top: number; height: number; client: number } | null {
@@ -836,6 +912,216 @@ window.addEventListener("unhandledrejection", (event) => {
   });
 });
 
+/**
+ * Typing into an empty Draft beside a realistic document (VC-1079).
+ *
+ * The keystrokes are REAL: `electron-main.cjs` sends them with
+ * `webContents.sendInputEvent`, so they take Chromium's trusted input path
+ * through the focused textarea, React's change handler and the drafts store,
+ * exactly as a person's would. This side only listens:
+ *
+ *  - `handlerMs`: window-capture `input` to window-bubble `input` — React's
+ *    synchronous work for the keystroke (a discrete event commits inside its
+ *    own dispatch), including any style recalc a render forces.
+ *  - `latencyMs`: the key's own `timeStamp` to the frame after it painted
+ *    (rAF, then a posted task) — what the person waits to see the letter.
+ *  - long tasks, from Chromium's own observer, across the whole run.
+ */
+let typingProbe: {
+  handlerMs: number[];
+  latencyMs: number[];
+  longTasksMs: number[];
+  observer: PerformanceObserver | null;
+  detach: () => void;
+} | null = null;
+
+function startTypingProbe(): boolean {
+  const textarea = document.querySelector<HTMLTextAreaElement>(
+    `[data-bench-plane="${DRAFT_SESSION}"] textarea`,
+  );
+  if (textarea === null) return false;
+  textarea.focus();
+  const handlerMs: number[] = [];
+  const latencyMs: number[] = [];
+  const longTasksMs: number[] = [];
+  let inputStarted = 0;
+  const onInputCapture = (): void => {
+    inputStarted = performance.now();
+  };
+  const onInputBubble = (): void => {
+    handlerMs.push(performance.now() - inputStarted);
+  };
+  const onKeyDown = (event: KeyboardEvent): void => {
+    const pressed = event.timeStamp;
+    requestAnimationFrame(() => {
+      const channel = new MessageChannel();
+      channel.port1.addEventListener("message", () => latencyMs.push(performance.now() - pressed));
+      channel.port1.start();
+      channel.port2.postMessage(null);
+    });
+  };
+  window.addEventListener("input", onInputCapture, true);
+  window.addEventListener("input", onInputBubble, false);
+  window.addEventListener("keydown", onKeyDown, true);
+  let observer: PerformanceObserver | null = null;
+  try {
+    observer = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) longTasksMs.push(entry.duration);
+    });
+    observer.observe({ type: "longtask", buffered: false });
+  } catch {
+    observer = null;
+  }
+  typingProbe = {
+    handlerMs,
+    latencyMs,
+    longTasksMs,
+    observer,
+    detach: () => {
+      window.removeEventListener("input", onInputCapture, true);
+      window.removeEventListener("input", onInputBubble, false);
+      window.removeEventListener("keydown", onKeyDown, true);
+    },
+  };
+  return true;
+}
+
+async function stopTypingProbe(): Promise<unknown> {
+  await settle();
+  const probe = typingProbe;
+  if (probe === null) return { ok: false, why: "no probe" };
+  for (const entry of probe.observer?.takeRecords() ?? []) probe.longTasksMs.push(entry.duration);
+  probe.observer?.disconnect();
+  probe.detach();
+  typingProbe = null;
+  const text = useChatDraftsStore.getState().drafts[DRAFT_SESSION]?.text ?? "";
+  return {
+    ok: true,
+    typedCharacters: text.length,
+    emptyStateMounted: document.querySelector('[data-empty-visual="streak"]') !== null,
+    nodes: nodes(),
+    handlerMs: probe.handlerMs,
+    latencyMs: probe.latencyMs,
+    longTasksMs: probe.longTasksMs,
+  };
+}
+
+/**
+ * Pressing a pane's next chat with the others kept hidden (VC-1100). Listens
+ * only, like the typing probe: the guarded driver sends trusted synthetic input.
+ *
+ *  - `handlerMs`: window-capture `click` to window-bubble `click` — React's
+ *    synchronous commit of the reveal (a discrete event), including the layout
+ *    effects it runs and any style/layout they force.
+ *  - `latencyMs`: the click's own `timeStamp` to the frame after it painted.
+ */
+let revealProbe: {
+  handlerMs: number[];
+  latencyMs: number[];
+  longTasksMs: number[];
+  observer: PerformanceObserver | null;
+  detach: () => void;
+} | null = null;
+
+function startRevealProbe(): boolean {
+  if (document.querySelector("[data-bench-switch]") === null) return false;
+  const handlerMs: number[] = [];
+  const latencyMs: number[] = [];
+  const longTasksMs: number[] = [];
+  let started = 0;
+  const onCapture = (): void => {
+    started = performance.now();
+  };
+  const onBubble = (event: MouseEvent): void => {
+    handlerMs.push(performance.now() - started);
+    const pressed = event.timeStamp;
+    requestAnimationFrame(() => {
+      const channel = new MessageChannel();
+      channel.port1.addEventListener("message", () => latencyMs.push(performance.now() - pressed));
+      channel.port1.start();
+      channel.port2.postMessage(null);
+    });
+  };
+  window.addEventListener("click", onCapture, true);
+  window.addEventListener("click", onBubble, false);
+  let observer: PerformanceObserver | null = null;
+  try {
+    observer = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) longTasksMs.push(entry.duration);
+    });
+    observer.observe({ type: "longtask", buffered: false });
+  } catch {
+    observer = null;
+  }
+  revealProbe = {
+    handlerMs,
+    latencyMs,
+    longTasksMs,
+    observer,
+    detach: () => {
+      window.removeEventListener("click", onCapture, true);
+      window.removeEventListener("click", onBubble, false);
+    },
+  };
+  return true;
+}
+
+async function stopRevealProbe(): Promise<unknown> {
+  await settle();
+  const probe = revealProbe;
+  if (probe === null) return { ok: false, why: "no probe" };
+  for (const entry of probe.observer?.takeRecords() ?? []) probe.longTasksMs.push(entry.duration);
+  probe.observer?.disconnect();
+  probe.detach();
+  revealProbe = null;
+  return {
+    ok: true,
+    nodes: nodes(),
+    handlerMs: probe.handlerMs,
+    latencyMs: probe.latencyMs,
+    longTasksMs: probe.longTasksMs,
+  };
+}
+
+/** The scroller of one Session's plane, shown or hidden. */
+function sessionScroller(sessionId: string): HTMLElement | null {
+  const plane = document.querySelector<HTMLElement>(`[data-bench-plane="${sessionId}"]`);
+  return transcriptScroller(plane);
+}
+
+/** Current product marks the real scroll ref. Newer containment adds a viewport
+ * wrapper: writing its scrollTop measures no scrolling at all. Keep the legacy
+ * walk only for exact-source comparisons whose product predates the marker.
+ */
+function transcriptScroller(plane: HTMLElement | null): HTMLElement | null {
+  const log = plane?.querySelector<HTMLElement>('[role="log"]');
+  return (
+    log?.querySelector<HTMLElement>("[data-conversation-scroller]") ??
+    log?.querySelector<HTMLElement>(":scope > [data-conversation-viewport] > div") ??
+    log?.querySelector<HTMLElement>(":scope > div") ??
+    null
+  );
+}
+
+/** Which kept plane is in front, and where its reader stands. */
+function revealState(): unknown {
+  for (const plane of document.querySelectorAll<HTMLElement>("[data-bench-plane]")) {
+    if (plane.offsetParent === null) continue;
+    const id = plane.dataset["benchPlane"] ?? "";
+    const scroller = sessionScroller(id);
+    if (scroller === null) return { id, scroller: false };
+    return {
+      id,
+      top: Math.round(scroller.scrollTop),
+      fromBottom: Math.round(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight),
+      height: Math.round(scroller.scrollHeight),
+      rows: plane.querySelectorAll(".is-user, .is-assistant").length,
+      elements: plane.getElementsByTagName("*").length,
+    };
+  }
+  return { id: null };
+}
+
 interface ChatBench {
   seed(sessions: number, turns: number): Promise<{ ids: string[]; nodes: number }>;
   show(count: number): Promise<{ mounted: number; nodes: number }>;
@@ -849,6 +1135,13 @@ interface ChatBench {
     tokenRate: number,
     content?: StreamContent,
   ): Promise<unknown>;
+  showDraft(backgroundPlanes: number, ballast: number): Promise<{ nodes: number }>;
+  startTyping(): boolean;
+  stopTyping(): Promise<unknown>;
+  showReveal(planes: number, ballast: number): Promise<{ nodes: number }>;
+  revealState(): unknown;
+  startReveal(): boolean;
+  stopReveal(): Promise<unknown>;
   collect(): void;
   uncaught(): { message: string; stack: string | null }[];
 }
@@ -885,10 +1178,34 @@ const bench: ChatBench = {
     if (sessionId === undefined) return { ok: false, why: "no session" };
     return streamAndScroll(sessionId, index, steps, tokenRate, content);
   },
+  async showDraft(backgroundPlanes, ballast) {
+    useChatDraftsStore.getState().openProvisional(DRAFT_SESSION, {
+      projectId: PROJECT,
+      ticketId: null,
+      operationId: "bench-draft-operation",
+      title: null,
+    });
+    setBallastCount?.(ballast);
+    setMounted?.([DRAFT_SESSION, ...sessionIds.slice(0, backgroundPlanes)]);
+    await settle();
+    await settle();
+    return { nodes: nodes() };
+  },
+  startTyping: startTypingProbe,
+  stopTyping: stopTypingProbe,
+  async showReveal(planes, ballast) {
+    setBallastCount?.(ballast);
+    setRevealed?.(sessionIds.slice(0, planes));
+    await settle();
+    await settle();
+    return { nodes: nodes() };
+  },
+  revealState,
+  startReveal: startRevealProbe,
+  stopReveal: stopRevealProbe,
   collect() {
-    // Present because the bench runner launches Electron with --expose-gc: a
-    // number sampled before the garbage of the previous step is collected is a
-    // number about the garbage.
+    // The guarded driver awaits HeapProfiler.collectGarbage before this
+    // compatibility hook; no extra process-wide Chromium switch is needed.
     (globalThis as { gc?: () => void }).gc?.();
   },
   uncaught() {

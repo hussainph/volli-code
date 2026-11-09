@@ -16,41 +16,40 @@
  */
 import {
   BrowserIcon,
-  CaretRightIcon,
-  CheckCircleIcon,
-  CircleDashedIcon,
+  ChevronRightIcon,
+  SuccessIcon,
+  PendingIcon,
   CopyIcon,
-  FilePlusIcon,
-  FileTextIcon,
+  AddFileIcon,
+  DocumentIcon,
   FolderIcon,
   GaugeIcon,
-  GlobeSimpleIcon,
-  ListChecksIcon,
-  MagnifyingGlassIcon,
-  PencilSimpleIcon,
-  ProhibitIcon,
-  SpinnerGapIcon,
-  TerminalWindowIcon,
-  UsersThreeIcon,
-  WrenchIcon,
-  XCircleIcon,
-  type Icon,
-} from "@phosphor-icons/react";
+  GlobeIcon,
+  ChecklistIcon,
+  SearchIcon,
+  EditIcon,
+  BlockedIcon,
+  TerminalIcon,
+  TeamIcon,
+  ToolsIcon,
+  ErrorIcon,
+  type IconComponent as Icon,
+} from "@renderer/components/ui/icon";
+
 import type { ActivityBrowse, ActivityKind } from "@volli/shared";
-import type { DynamicToolUIPart, ReasoningUIPart } from "ai";
+import type { DynamicToolUIPart } from "ai";
 import * as React from "react";
 
 import { useStopFollowing } from "@renderer/components/ui/ai-elements/conversation";
-import { ReasoningBody, useElapsed } from "@renderer/components/ui/ai-elements/reasoning";
+import { ReasoningBody } from "@renderer/components/ui/ai-elements/reasoning";
 import {
   activityDescriptor,
+  presentTranscriptTool,
   activityStatus,
-  bundleNeedsAttention,
   bundleSummary,
   compactSignature,
   describeActivity,
   isBundleStreaming,
-  reasoningBody,
   reasoningStatus,
   splitPath,
   type ActivityDetail,
@@ -61,6 +60,7 @@ import {
   type NumberedLine,
   type SummarySegment,
   type SummaryTone,
+  type TranscriptWorkWindow,
 } from "@volli/session-presentation";
 import {
   BrowserCardHostContext,
@@ -69,12 +69,22 @@ import {
   useBrowserPicture,
 } from "@renderer/components/browser/browser-tab-card";
 import { Button } from "@renderer/components/ui/button";
+import { Spinner } from "@renderer/components/ui/spinner";
 import { languageForPath } from "@renderer/editor/document-identity";
 import { normalizeChatToolPath } from "@renderer/lib/chat-open-target";
 import { cn } from "@renderer/lib/utils";
 
 import { TokenText, useHighlightedLines, useOnScreen } from "./tool-output-highlight";
 import { RunningBashCall, RunningBashControl, RunningBashReason } from "./running-bash-control";
+import { WorkReceipt } from "./work-receipt";
+import { copyText, COPY_FEEDBACK_MS } from "./transcript-copy";
+export { copyText } from "./transcript-copy";
+import {
+  OriginalOutput,
+  PresentedToolRow,
+  TranscriptToolContext,
+  WebWorkGroup,
+} from "./presented-tool-row";
 import {
   codeModeImageContent,
   codeModeImageDataUrl,
@@ -153,7 +163,7 @@ function Caret({
         className,
       )}
     >
-      <CaretRightIcon
+      <ChevronRightIcon
         aria-hidden
         className={cn(
           "size-3 text-muted-foreground transition-transform",
@@ -261,7 +271,6 @@ function RowDisclosure({
       type="button"
       aria-expanded={open}
       aria-label={label}
-      title={label}
       onClick={(event) => {
         event.stopPropagation();
         onToggle();
@@ -307,17 +316,17 @@ function RowDisclosure({
 /* -------------------------------------------------------------------- atoms */
 
 const KIND_ICONS: Record<ActivityKind, Icon> = {
-  "run-command": TerminalWindowIcon,
-  "read-file": FileTextIcon,
-  "edit-file": PencilSimpleIcon,
-  "write-file": FilePlusIcon,
-  search: MagnifyingGlassIcon,
+  "run-command": TerminalIcon,
+  "read-file": DocumentIcon,
+  "edit-file": EditIcon,
+  "write-file": AddFileIcon,
+  search: SearchIcon,
   "list-directory": FolderIcon,
-  "fetch-url": GlobeSimpleIcon,
-  plan: ListChecksIcon,
-  delegate: UsersThreeIcon,
+  "fetch-url": GlobeIcon,
+  plan: ChecklistIcon,
+  delegate: TeamIcon,
   browse: BrowserIcon,
-  other: WrenchIcon,
+  other: ToolsIcon,
 };
 
 /**
@@ -329,10 +338,36 @@ const KIND_ICONS: Record<ActivityKind, Icon> = {
  * below it carries the mark for its own kind.
  */
 function BundleGlyph() {
-  return <WrenchIcon aria-hidden className={GLYPH_CLASS} />;
+  return <ToolsIcon aria-hidden className={GLYPH_CLASS} />;
 }
 
 const GLYPH_CLASS = "size-3.5 shrink-0 text-muted-foreground";
+
+/**
+ * The one progress mark in the glyph column, shared by the bundle header, a
+ * running tool row and a live thought. The fixed 14px slot is what layout and
+ * the bundle's visibility arbitration see — never the rotating bounds — and
+ * reduced motion stills the ring in that same slot rather than swapping it, so
+ * the column never shifts. Decorative: the verb beside it already says the work
+ * is in progress, and a second `status` region would repeat it to readers.
+ * `tracked` marks a row's mark for `useVisibleBundleProgress`; the header's own
+ * mark stays untracked.
+ */
+function ProgressGlyph({ tracked = false }: { tracked?: boolean }) {
+  return (
+    <span
+      aria-hidden
+      data-activity-progress={tracked ? "" : undefined}
+      className="flex size-3.5 shrink-0"
+    >
+      <Spinner
+        aria-hidden
+        role="presentation"
+        className="size-full text-primary motion-reduce:animate-none"
+      />
+    </span>
+  );
+}
 
 /**
  * The one glyph a tool row gets.
@@ -369,23 +404,15 @@ function StatusGlyph({ status }: { status: ActivityStatus }) {
     // claims an outcome, and neither is owed an alarm.
     case "pending":
     case "not-run":
-      return <CircleDashedIcon aria-hidden className={cn(className, "text-muted-foreground")} />;
+      return <PendingIcon aria-hidden className={cn(className, "text-muted-foreground")} />;
     case "running":
-      return (
-        <span aria-hidden data-activity-progress className={cn("flex", className)}>
-          <SpinnerGapIcon className="size-full animate-spin text-primary" />
-        </span>
-      );
+      return <ProgressGlyph tracked />;
     case "failed":
-      return (
-        <XCircleIcon aria-hidden className={cn(className, "text-destructive")} weight="fill" />
-      );
+      return <ErrorIcon aria-hidden className={cn(className, "text-destructive")} />;
     case "denied":
-      return (
-        <ProhibitIcon aria-hidden className={cn(className, "text-destructive")} weight="fill" />
-      );
+      return <BlockedIcon aria-hidden className={cn(className, "text-destructive")} />;
     default:
-      return <CheckCircleIcon aria-hidden className={cn(className, "text-muted-foreground")} />;
+      return <SuccessIcon aria-hidden className={cn(className, "text-muted-foreground")} />;
   }
 }
 
@@ -439,9 +466,26 @@ export const ToolRow = React.memo(function ToolRow(props: {
   onOpenSession?(sessionId: string): void;
   className?: string;
 }) {
+  const context = React.useContext(TranscriptToolContext);
+  const presentation = presentTranscriptTool(props.part, context);
+  const images =
+    presentation?.category === "code"
+      ? codeModeImageContent(props.part)?.filter((block) => block.type === "image")
+      : null;
   return (
     <RunningBashCall part={props.part}>
-      <ToolRowContent {...props} />
+      {presentation ? (
+        <PresentedToolRow
+          part={props.part}
+          presentation={presentation}
+          onOpenSession={props.onOpenSession}
+          onOpenFile={props.onOpenFile}
+        >
+          {images && images.length > 0 ? <CodeModeOutput input={null} content={images} /> : null}
+        </PresentedToolRow>
+      ) : (
+        <ToolRowContent {...props} />
+      )}
     </RunningBashCall>
   );
 });
@@ -459,12 +503,16 @@ const ToolRowContent = React.memo(function ToolRowContent({
   className?: string;
 }) {
   const row = describeActivity(part);
-  // A failed/refused call owes its explanation even with the detail closed.
-  // This is the runtime's error, not a reinterpretation of successful output.
-  const deniedReason =
+  // Failures are payloads too: keep the runtime's full error behind the same
+  // disclosure and capped output frame as a successful call. An output-error
+  // part has no output, so its presenter may otherwise have no detail (Read)
+  // or only the call's input (Write). Never mistake that input for the result.
+  const failureReason =
     row.status === "failed" || row.status === "denied"
       ? (row.errorText ?? activityDescriptor(part).outcome?.summary ?? null)
       : null;
+  const errorText =
+    row.errorText ?? (row.status === "denied" || row.detail === null ? failureReason : null);
   // A browse row that touched a tab opens onto the tab card (VC-238): the live
   // tab, its owner, its picture, and the controls that show or close it.
   const card = row.browse !== null && row.browse.tabId !== null ? row.browse : null;
@@ -473,7 +521,11 @@ const ToolRowContent = React.memo(function ToolRowContent({
   // printed. Other rows only need a disclosure when their presenter has detail.
   const imageContent = codeModeImageContent(part);
   const expandable =
-    row.detail !== null || row.command !== null || card !== null || imageContent !== null;
+    row.detail !== null ||
+    errorText !== null ||
+    row.command !== null ||
+    card !== null ||
+    imageContent !== null;
   const { open, toggle, rowProps } = useRowToggle(expandable);
 
   return (
@@ -506,27 +558,20 @@ const ToolRowContent = React.memo(function ToolRowContent({
         ) : null}
       </div>
       <RunningBashReason />
-      {deniedReason ? (
-        <p
-          data-slot="refusal-explanation"
-          className="py-1 text-ui text-foreground whitespace-pre-wrap break-words"
-        >
-          {deniedReason}
-        </p>
-      ) : null}
       {expandable ? (
         <Disclosure open={open}>
           {card !== null ? <BrowserTabCard facet={card} note={refusalNote(part, card)} /> : null}
           {imageContent !== null ? (
             <CodeModeOutput input={part.input} content={imageContent} />
-          ) : (
-            <ToolDetail
-              kind={row.kind}
-              command={row.command}
-              detail={row.detail}
-              openPath={row.openPath}
-            />
-          )}
+          ) : null}
+          <ToolDetail
+            kind={row.kind}
+            command={imageContent === null ? row.command : null}
+            detail={imageContent === null ? row.detail : null}
+            errorText={errorText}
+            openPath={row.openPath}
+          />
+          <OriginalOutput part={part} />
         </Disclosure>
       ) : null}
     </div>
@@ -602,7 +647,6 @@ function RowObject({
     return (
       <button
         type="button"
-        title="Open the subagent Session"
         onClick={(event) => {
           event.stopPropagation();
           onOpenSession(openSessionId);
@@ -615,10 +659,7 @@ function RowObject({
   }
   if (!openPath || !onOpenFile) {
     return (
-      <code
-        className="min-w-0 truncate font-mono text-ui text-foreground"
-        title={row.kind === "run-command" ? object : undefined}
-      >
+      <code className="min-w-0 truncate font-mono text-ui text-foreground">
         <ObjectText value={object} />
       </code>
     );
@@ -626,7 +667,7 @@ function RowObject({
   return (
     <button
       type="button"
-      title={openPath}
+      aria-label={openPath}
       onClick={(event) => {
         event.stopPropagation();
         // Tool-input spelling → what Pi actually resolved (leading `@`, Unicode
@@ -638,31 +679,6 @@ function RowObject({
       <ObjectText value={object} />
     </button>
   );
-}
-
-/** How long the copy button holds its verdict before going back to offering. */
-const COPY_FEEDBACK_MS = 1200;
-
-type ClipboardWriter = Pick<Clipboard, "writeText">;
-
-/**
- * The browser boundary for copying visible text.
- *
- * Clipboard access can reject for ordinary runtime conditions (permission,
- * focus, or insecure context). Return the result the control must show rather
- * than leaving its caller to guess whether a rejected promise was success.
- */
-export async function copyText(
-  value: string,
-  clipboard: ClipboardWriter | undefined = navigator.clipboard,
-): Promise<"copied" | "failed"> {
-  try {
-    if (!clipboard) return "failed";
-    await clipboard.writeText(value);
-    return "copied";
-  } catch {
-    return "failed";
-  }
 }
 
 /** Kept as the activity row's semantic entry point. */
@@ -685,7 +701,7 @@ function RowActions({ row }: { row: ActivityRow }) {
   }, [copyState]);
   if (!row.object) return <span className="ml-auto" />;
   const CopyStateIcon =
-    copyState === "copied" ? CheckCircleIcon : copyState === "failed" ? XCircleIcon : CopyIcon;
+    copyState === "copied" ? SuccessIcon : copyState === "failed" ? ErrorIcon : CopyIcon;
   return (
     <span className="ml-auto flex shrink-0 items-center opacity-0 transition-opacity group-focus-within/row:opacity-100 group-hover/row:opacity-100">
       <Button
@@ -816,11 +832,13 @@ function ToolDetail({
   kind,
   command,
   detail,
+  errorText,
   openPath,
 }: {
   kind: ActivityKind;
   command: string | null;
   detail: ActivityDetail | null;
+  errorText: string | null;
   openPath: string | null;
 }) {
   return (
@@ -828,7 +846,11 @@ function ToolDetail({
       {command !== null ? (
         <DetailFrame className="whitespace-pre-wrap text-foreground">{command}</DetailFrame>
       ) : null}
-      {detail !== null ? (
+      {errorText !== null ? (
+        <DetailFrame className="whitespace-pre-wrap break-words text-muted-foreground">
+          {errorText}
+        </DetailFrame>
+      ) : detail !== null ? (
         <ActivityOutputDetail detail={detail} kind={kind} openPath={openPath} />
       ) : null}
     </>
@@ -992,16 +1014,16 @@ function DiffDetail({ lines, language }: { lines: DiffLine[]; language: string |
             data-line
             className={cn(
               "whitespace-pre",
-              line.kind === "add" && "bg-primary/10 text-foreground",
-              line.kind === "remove" && "bg-destructive/10 text-foreground",
+              line.kind === "add" && "transcript-diff-add text-foreground",
+              line.kind === "remove" && "transcript-diff-remove text-foreground",
               line.kind === "context" && "text-muted-foreground",
             )}
           >
             <span
               data-marker
               className={cn(
-                line.kind === "add" && "text-primary-text",
-                line.kind === "remove" && "text-destructive",
+                line.kind === "add" && "text-diff-added",
+                line.kind === "remove" && "text-diff-removed",
               )}
             >
               {marker}
@@ -1091,9 +1113,8 @@ function useVisibleBundleProgress(
  * *at the same left edge*: no indent, no rule, no second column. The list simply
  * got longer, and the caret is what says why.
  *
- * Open state is derived — `userOpen ?? needsAttention` — so restoring a session
- * fires no transitions at boot, and a bundle holding a failure is open before
- * anyone asks. A pending approval never reaches here; it left the bundle
+ * Disclosure state belongs to the reader, including on failure and replay.
+ * A pending approval never reaches here; it left the bundle
  * upstream, because the one thing that blocks the reader must not be behind a
  * disclosure at all.
  */
@@ -1103,15 +1124,57 @@ export const ActivityBundle = React.memo(
     onOpenFile,
     onOpenSession,
     progressEnabled = true,
+    work,
   }: {
     rows: readonly BundleRow[];
+    work?: TranscriptWorkWindow;
     progressEnabled?: boolean;
     onOpenFile?(path: string): void;
     onOpenSession?(sessionId: string): void;
   }) {
-    const [userOpen, setUserOpen] = React.useState<boolean | null>(null);
-    const summary = React.useMemo(() => bundleSummary(rows), [rows]);
-    const open = userOpen ?? bundleNeedsAttention(rows);
+    // Disclosure is reader-owned. Failure is visible in the summary, but an
+    // arriving failure must not reveal output, move focus or change the fold.
+    const [open, setOpen] = React.useState(false);
+    const summary = React.useMemo(() => {
+      const segments = bundleSummary(rows);
+      const local = rows.flatMap((row) =>
+        row.kind === "tool" && !["failed", "denied"].includes(activityStatus(row.part))
+          ? [presentTranscriptTool(row.part)?.status]
+          : [],
+      );
+      const failed = local.filter((status) => status === "failed").length;
+      const blocked = local.filter((status) => status === "denied").length;
+      if (failed > 0) segments.push({ text: `${failed} failed`, tone: "danger" });
+      if (blocked > 0) segments.push({ text: `${blocked} blocked`, tone: "danger" });
+      return segments;
+    }, [rows]);
+    const thoughts = React.useMemo(
+      () =>
+        rows.filter(
+          (row): row is ThinkingPart =>
+            row.kind === "reasoning" && (row.streaming || row.part.text.trim().length > 0),
+        ),
+      [rows],
+    );
+    const firstThought = thoughts[0];
+    const webGroups = React.useMemo(() => {
+      const groups = new Map<string, Extract<BundleRow, { kind: "tool" }>[]>();
+      let group: Extract<BundleRow, { kind: "tool" }>[] | null = null;
+      for (const row of rows) {
+        const name = row.kind === "tool" ? activityDescriptor(row.part).nativeToolName : "";
+        if (row.kind === "tool" && (name === "web_search" || name === "web_fetch")) {
+          if (!group) {
+            group = [];
+            groups.set(row.key, group);
+          }
+          group.push(row);
+        } else group = null;
+      }
+      return groups;
+    }, [rows]);
+    const groupedWebKeys = new Set(
+      [...webGroups.values()].flatMap((group) => group.slice(1).map((row) => row.key)),
+    );
     const streaming = progressEnabled && isBundleStreaming(rows);
     const viewport = React.useRef<HTMLDivElement>(null);
     const indicatorKeys = JSON.stringify(
@@ -1125,23 +1188,33 @@ export const ActivityBundle = React.memo(
     const liveThought = progressEnabled
       ? rows.findLast((row) => row.kind === "reasoning" && row.streaming)
       : undefined;
-    // Wired to the click and not to `open`, which is derived: a bundle that
-    // opens itself because a row inside it failed is not a reader reaching for
-    // anything, and must not detach them from a live stream.
+    // Only an explicit expansion detaches the reader from the live tail.
     const stopFollowing = useStopFollowing();
 
     const list = (
       <ActivityProgressContext.Provider value={progressEnabled}>
         <div className="space-y-1">
-          {rows.map((row) => (
-            <RegisteredBundleRow
-              key={row.key}
-              row={row}
-              open={summary.length === 0 || open}
-              onOpenFile={onOpenFile}
-              onOpenSession={onOpenSession}
-            />
-          ))}
+          {rows.map((row) =>
+            webGroups.has(row.key) ? (
+              <Disclosure key={row.key} open={summary.length === 0 || open}>
+                <WebWorkGroup rows={webGroups.get(row.key)!} onOpenFile={onOpenFile} />
+              </Disclosure>
+            ) : groupedWebKeys.has(row.key) ? null : row.kind === "reasoning" ? (
+              row.key === firstThought?.key ? (
+                <Disclosure key={row.key} open={summary.length === 0 || open}>
+                  <ReasoningRow rows={thoughts} />
+                </Disclosure>
+              ) : null
+            ) : (
+              <RegisteredBundleRow
+                key={row.key}
+                row={row}
+                open={summary.length === 0 || open}
+                onOpenFile={onOpenFile}
+                onOpenSession={onOpenSession}
+              />
+            ),
+          )}
         </div>
       </ActivityProgressContext.Provider>
     );
@@ -1153,37 +1226,38 @@ export const ActivityBundle = React.memo(
     const toggle = () => {
       if (hasTextSelection()) return;
       if (!open) stopFollowing();
-      setUserOpen(!open);
+      setOpen(!open);
     };
 
     return (
       <div className="not-prose">
-        <button
-          type="button"
-          onClick={toggle}
-          aria-expanded={open}
-          data-slot="activity-bundle-header"
-          className={cn(ROW_CLASS, ROW_INTERACTIVE, ROW_FOCUSABLE)}
-        >
-          {streaming && (!open || !rowProgressVisible) ? (
-            <SpinnerGapIcon
-              aria-hidden
-              className="size-3.5 shrink-0 animate-spin text-primary motion-reduce:animate-none"
-            />
-          ) : (
-            <BundleGlyph />
-          )}
-          {/* A closed bundle must not hide its live thought behind a finished
+        {work ? (
+          <WorkReceipt work={work} summary={summary} open={open} onToggle={toggle} />
+        ) : (
+          <button
+            type="button"
+            onClick={toggle}
+            aria-expanded={open}
+            data-slot="activity-bundle-header"
+            className={cn(ROW_CLASS, ROW_INTERACTIVE, ROW_FOCUSABLE)}
+          >
+            {streaming && (!open || !rowProgressVisible) ? <ProgressGlyph /> : <BundleGlyph />}
+            {/* A closed bundle must not hide its live thought behind a finished
               tool summary. Open, the thought already has its own visible row. */}
-          {!open && liveThought?.kind === "reasoning" ? (
-            <span className="min-w-0 truncate">
-              {reasoningStatus(liveThought.part.text, { streaming: true }).verb}
-            </span>
-          ) : (
-            <Summary segments={summary} />
-          )}
-          <Caret open={open} pinned />
-        </button>
+            {!open && liveThought?.kind === "reasoning" ? (
+              <>
+                <span className="min-w-0 truncate">{thinkingLabel(thoughts, true)}</span>
+                {/* A live thought must not hide a failed, denied or unexecuted call. */}
+                <span className="shrink-0">
+                  <Summary segments={summary.filter((segment) => segment.tone !== "neutral")} />
+                </span>
+              </>
+            ) : (
+              <Summary segments={summary} />
+            )}
+            <Caret open={open} pinned />
+          </button>
+        )}
         {/* Call owners stay mounted; only each row's disclosed UI unmounts.
             No `overscroll-contain`: at the bundle's edges the wheel must chain
               to the transcript, or the feed reads as dead under the cursor for
@@ -1205,6 +1279,9 @@ export const ActivityBundle = React.memo(
     previous.onOpenFile === next.onOpenFile &&
     previous.onOpenSession === next.onOpenSession &&
     previous.progressEnabled === next.progressEnabled &&
+    previous.work?.startedAt === next.work?.startedAt &&
+    previous.work?.endedAt === next.work?.endedAt &&
+    previous.work?.state === next.work?.state &&
     sameBundleRows(previous.rows, next.rows),
 );
 
@@ -1240,21 +1317,17 @@ const RegisteredBundleRow = React.memo(
     onOpenFile,
     onOpenSession,
   }: {
-    row: BundleRow;
+    row: Extract<BundleRow, { kind: "tool" }>;
     open: boolean;
     onOpenFile?(path: string): void;
     onOpenSession?(sessionId: string): void;
   }) {
     const content = (
       <Disclosure open={open}>
-        <BundleRowView row={row} onOpenFile={onOpenFile} onOpenSession={onOpenSession} />
+        <ToolRow part={row.part} onOpenFile={onOpenFile} onOpenSession={onOpenSession} />
       </Disclosure>
     );
-    return row.kind === "tool" ? (
-      <RunningBashCall part={row.part}>{content}</RunningBashCall>
-    ) : (
-      content
-    );
+    return <RunningBashCall part={row.part}>{content}</RunningBashCall>;
   },
   // Segmentation creates fresh row wrappers, not fresh parts. Keep settled call
   // owners from rendering or registering again while another call streams.
@@ -1265,79 +1338,58 @@ const RegisteredBundleRow = React.memo(
     sameBundleRows([previous.row], [next.row]),
 );
 
-const BundleRowView = React.memo(function BundleRowView({
-  row,
-  onOpenFile,
-  onOpenSession,
-}: {
-  row: BundleRow;
-  onOpenFile?(path: string): void;
-  onOpenSession?(sessionId: string): void;
-}) {
-  if (row.kind === "reasoning") {
-    return <ReasoningRow part={row.part} streaming={row.streaming} />;
+type ThinkingPart = Extract<BundleRow, { kind: "reasoning" }>;
+
+/** Only the provider's recognized summary headings can supply a short update. */
+function thinkingLabel(rows: readonly ThinkingPart[], progressing: boolean): string {
+  if (!progressing) return "Thought";
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const summary = reasoningStatus(rows[index]!.part.text, { streaming: true }).verb;
+    if (summary !== "Thinking") return `Thinking · ${summary}`;
   }
-  return <ToolRow part={row.part} onOpenFile={onOpenFile} onOpenSession={onOpenSession} />;
-});
+  return "Thinking";
+}
 
 /**
- * Reasoning as an ordinary row.
- *
- * Same shell, same gutter, same caret as a tool call — the only difference is
- * the glyph. The reason is structural rather than aesthetic: a bespoke reasoning
- * block is a second kind of line in the same column, and two kinds of line
- * cannot share one left edge for long.
- *
- * The glyph is a Gauge, and it is the same one the composer's effort chip
- * wears. Reasoning has one vocabulary in this app now: the dial you set before
- * the turn and the row that reports what it bought are the same object seen
- * from two ends. (It was a Brain, which said "thinking" and nothing else — no
- * magnitude, and a lumpy drawing at 14px.)
+ * One view-owned row per work window, anchored at its first reasoning part.
+ * Later summaries replace the label, not the identity or the audit trail.
+ * Reasoning parts carry no recorded clock, so mount time is not a duration.
  */
-const ReasoningRow = React.memo(function ReasoningRow({
-  part,
-  streaming,
-}: {
-  part: ReasoningUIPart;
-  streaming: boolean;
-}) {
+const ReasoningRow = React.memo(function ReasoningRow({ rows }: { rows: readonly ThinkingPart[] }) {
   const progressEnabled = React.useContext(ActivityProgressContext);
-  const progressing = progressEnabled && streaming;
-  const elapsed = useElapsed(progressing);
-  const status = reasoningStatus(part.text, { streaming: progressing, durationMs: elapsed });
-  const body = reasoningBody(part.text);
-  const expandable = body !== null;
+  const progressing = progressEnabled && rows.some((row) => row.streaming);
+  const expandable = rows.some((row) => row.part.text.trim().length > 0);
   const { open, toggle, rowProps } = useRowToggle(expandable);
 
   return (
-    <div className="group/row not-prose">
+    <div className="group/row not-prose" data-slot="thinking-row">
       <div {...rowProps} className={cn(ROW_CLASS, expandable && ROW_INTERACTIVE)}>
         {progressing ? (
-          <span aria-hidden data-activity-progress className="flex size-3.5 shrink-0">
-            <SpinnerGapIcon className="size-full animate-spin text-primary" />
-          </span>
+          <ProgressGlyph tracked />
         ) : (
           <GaugeIcon aria-hidden className={GLYPH_CLASS} />
         )}
-        <span className="min-w-0 truncate">{status.verb}</span>
+        <span className="min-w-0 truncate">{thinkingLabel(rows, progressing)}</span>
         <RowDisclosure open={open} expandable={expandable} onToggle={toggle} />
-        <span className="ml-auto" />
-        {status.meta ? (
-          <span className="shrink-0 font-mono tabular-nums text-muted-foreground/70">
-            {status.meta}
-          </span>
-        ) : null}
       </div>
-      {body !== null ? (
-        <Disclosure open={open}>
-          <ReasoningBody
-            isAnimating={streaming}
-            className="my-1 rounded-md border border-border/50 bg-muted/30 p-2 text-ui leading-5"
-          >
-            {body}
-          </ReasoningBody>
-        </Disclosure>
-      ) : null}
+      <Disclosure open={open}>
+        <div
+          className="max-h-72 overflow-auto"
+          role="region"
+          aria-label="Reasoning history"
+          tabIndex={0}
+        >
+          {rows.map((row) => (
+            <ReasoningBody
+              key={row.key}
+              isAnimating={row.streaming}
+              className="my-1 rounded-md border border-border/50 bg-muted/30 p-2 text-ui leading-5"
+            >
+              {row.part.text}
+            </ReasoningBody>
+          ))}
+        </div>
+      </Disclosure>
     </div>
   );
 });
@@ -1362,9 +1414,9 @@ export function AttentionReceipt({ part }: { part: DynamicToolUIPart }) {
           the receipt is the settled record of what you did about it, and a
           second filled mark on the same fact is the same bit twice. */}
       {approved ? (
-        <CheckCircleIcon aria-hidden className="size-3.5 shrink-0 text-primary" />
+        <SuccessIcon aria-hidden className="size-3.5 shrink-0 text-primary" />
       ) : (
-        <ProhibitIcon aria-hidden className={GLYPH_CLASS} />
+        <BlockedIcon aria-hidden className={GLYPH_CLASS} />
       )}
       <span className="shrink-0">You {approved ? "allowed" : "denied"}</span>
       {row.object ? (

@@ -1,7 +1,6 @@
 import * as React from "react";
 import "./grouped-tab-chip.css";
-import type { Icon } from "@phosphor-icons/react";
-import { LinkBreakIcon } from "@phosphor-icons/react/dist/csr/LinkBreak";
+import { type IconComponent as Icon, UnlinkIcon, CloseIcon } from "@renderer/components/ui/icon";
 
 import {
   ContextMenu,
@@ -10,8 +9,15 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
-import { tabStopIndex } from "@renderer/components/ui/tab-strip";
-import { cn } from "@renderer/lib/utils";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@renderer/components/ui/hover-card";
+import { ListRow } from "@renderer/components/ui/list-row";
+import { Tab, tabStopIndex } from "@renderer/components/ui/tab-strip";
+import {
+  TabActionScope,
+  TabDropdownDismissContext,
+  type TabAction,
+} from "@renderer/components/ui/tab-actions";
+import { Button } from "@renderer/components/ui/button";
 
 /** One pane of a group, as the strip draws it: its live stack and its front. */
 export interface TabGroupPane {
@@ -23,6 +29,7 @@ export interface TabGroupPane {
 /** One tab group, as the top strip draws it — see `split-tab-groups.ts`. */
 export interface TabGroup {
   id: string;
+  title?: string;
   /** Reading order. A pane with no live tab draws no segment. */
   panes: readonly TabGroupPane[];
 }
@@ -36,6 +43,8 @@ export interface TabMenuLabel {
    * host:port/path, a File tab's folder. `null` when the title is enough.
    */
   detail?: string | null;
+  /** Existing tab liveness, when this kind carries one. */
+  status?: string;
 }
 
 type StripItem<T> =
@@ -84,144 +93,198 @@ export function groupTabItems<T extends { id: string }>(
   });
 }
 
-/**
- * One chip for a whole group: each pane's front tab is a segment (a click
- * selects that pane), and the right-click menu lists every tab of the group,
- * pane by pane — choosing one brings it to the front of its
- * pane — with Ungroup to dissolve the group, every tab staying open.
- *
- * The menu (VC-614, owner feedback) is one row per tab, in pane order: its
- * glyph, its title over the line that tells like tabs apart (a page's
- * host:port/path, a file's folder), and its pane's number at the trailing edge.
- * The tab on screen is emphasised and a tab stacked behind its pane's front is
- * muted; no checkmarks, which on a group of single-tab panes would mark every
- * row and say nothing.
- *
- * A group that is NOT on screen draws SUMMARIZED (`compact`): the first pane's
- * front keeps a shortened label and the other panes fold into a `+n` count, so
- * a three- or four-pane group stops costing three or four full tabs of strip.
- * The count's tooltip names what it folds, the chip's menu lists every tab,
- * and the chip opens out again once selected.
- */
+const EMPTY_ACTIONS: readonly TabAction[] = [];
+const noActions = () => EMPTY_ACTIONS;
+
+/** The same two-line member rows serve hover inspection and the tab dropdown. */
+function GroupMemberRows<T extends { id: string }>({
+  tabs,
+  describe,
+  onSelect,
+  actionsFor,
+}: {
+  tabs: readonly T[];
+  describe(tab: T): TabMenuLabel;
+  onSelect(tab: T): void;
+  actionsFor(tab: T): readonly TabAction[];
+}) {
+  const dismiss = React.useContext(TabDropdownDismissContext);
+  return tabs.map((tab) => {
+    const { label, icon: Mark, detail, status } = describe(tab);
+    return (
+      <ListRow
+        key={tab.id}
+        data-tab-id={tab.id}
+        density="two-line"
+        leading={<Mark className="size-4 shrink-0" />}
+        primary={label}
+        secondary={detail ?? undefined}
+        trailing={
+          status ? (
+            <span className="text-label text-muted-foreground capitalize">{status}</span>
+          ) : undefined
+        }
+        onActivate={() => {
+          onSelect(tab);
+          dismiss();
+        }}
+        actions={actionsFor(tab).map((action) => (
+          <Button
+            key={action.label}
+            size="icon-sm"
+            variant="ghost"
+            aria-label={`${action.label}: ${label}`}
+            title={action.label}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              action.run();
+              dismiss();
+            }}
+          >
+            <action.icon className="size-3.5" />
+          </Button>
+        ))}
+      />
+    );
+  });
+}
+
 function GroupedTabChip<T extends { id: string }>({
   item,
   active,
+  tabStop,
   activeTabId,
-  compact,
   describe,
   onSelect,
   onUngroup,
-  children,
+  onClose,
+  actionsFor,
 }: {
   item: Extract<StripItem<T>, { group: TabGroup }>;
   active: boolean;
-  /** The surface's active tab: the one on screen, if this group is shown. */
+  tabStop: boolean;
   activeTabId: string;
-  /** Summarized: see `grouped-tab-chip.css`. */
-  compact: boolean;
   describe(tab: T): TabMenuLabel;
   onSelect(tab: T): void;
-  onUngroup?(groupId: string): void;
-  children: React.ReactNode;
+  onUngroup?(id: string): void;
+  onClose?(tab: T): void;
+  actionsFor(tab: T): readonly TabAction[];
 }) {
-  return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <div
-          role="group"
-          aria-label="Tab group"
-          data-slot="grouped-tab-chip"
-          data-group-id={item.group.id}
-          data-active={active}
-          data-compact={compact}
-          className={cn(
-            "flex shrink-0 items-center rounded-t-lg border border-b-0 border-border",
-            // The group owns the folder outline; members retain their tab hit targets.
-            "[&_[data-slot=tab]]:mb-0 [&_[data-slot=tab]]:rounded-none [&_[data-slot=tab]]:bg-transparent [&_[data-slot=tab]]:before:hidden [&_[data-slot=tab]]:after:hidden",
-            active ? "-mb-px bg-background" : "bg-rail",
-          )}
-        >
-          {children}
-        </div>
-      </ContextMenuTrigger>
-      <ContextMenuContent data-slot="grouped-tab-menu" className="w-72">
-        <div
-          aria-hidden
-          className="flex items-center justify-between px-2 pt-1 pb-1.5 text-label text-muted-foreground"
-        >
-          <span>Tab group</span>
-          <span className="tabular-nums">{`${item.stacks.filter((stack) => stack.tabs.length > 0).length} panes`}</span>
-        </div>
-        {item.stacks.map(({ pane, tabs }, index) =>
-          tabs.map((tab) => {
-            const { label, icon, detail } = describe(tab);
-            const front = tab.id === (pane.activeTabId ?? tabs[0]?.id);
-            const showing = active && tab.id === activeTabId;
-            return (
-              <ContextMenuItem
-                key={tab.id}
-                icon={icon}
-                data-pane={index + 1}
-                data-front={front}
-                data-showing={showing}
-                aria-label={`${label}, pane ${index + 1}${showing ? ", showing" : front ? "" : ", behind"}`}
-                onSelect={() => onSelect(tab)}
-                className={cn(
-                  "py-1.5",
-                  showing && "font-medium [&>svg]:text-foreground",
-                  !front && "text-muted-foreground",
-                )}
-              >
-                <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="truncate">{label}</span>
-                  {detail ? (
-                    <span className="truncate text-label font-normal text-muted-foreground">
-                      {detail}
-                    </span>
-                  ) : null}
-                </span>
-                <span
-                  aria-hidden
-                  className="flex size-4 shrink-0 items-center justify-center rounded-sm border border-border text-label font-normal text-muted-foreground tabular-nums"
-                >
-                  {index + 1}
-                </span>
-              </ContextMenuItem>
-            );
-          }),
-        )}
-        {onUngroup === undefined ? null : (
-          <>
-            <ContextMenuSeparator />
-            <ContextMenuItem icon={LinkBreakIcon} onSelect={() => onUngroup(item.group.id)}>
-              Ungroup
-            </ContextMenuItem>
-          </>
-        )}
-      </ContextMenuContent>
-    </ContextMenu>
+  const [hoverOpen, setHoverOpen] = React.useState(false);
+  const [menuOpen, setMenuOpen] = React.useState(false);
+  const tabs = item.stacks.flatMap((stack) => stack.tabs);
+  const front = item.segments.find((tab) => tab.id === activeTabId) ?? item.segments[0]!;
+  const title = item.group.title ?? describe(item.segments[0]!).label;
+  const groupActions: TabAction[] = onUngroup
+    ? [{ label: "Ungroup", icon: UnlinkIcon, run: () => onUngroup(item.group.id) }]
+    : [];
+  const memberActions = (tab: T) => [
+    ...actionsFor(tab),
+    ...(onClose
+      ? [{ label: "Close", icon: CloseIcon, run: () => onClose(tab), destructive: true }]
+      : []),
+  ];
+  const rows = (
+    <>
+      <div className="truncate px-2 py-2 text-ui font-semibold">{title}</div>
+      <GroupMemberRows
+        tabs={tabs}
+        describe={describe}
+        onSelect={onSelect}
+        actionsFor={memberActions}
+      />
+    </>
   );
-}
-
-/**
- * The `+n` a summarized chip ends with: how many other panes it folds, their
- * fronts named in the tooltip. A press shows the group, the same as pressing
- * its first segment. Out of the tab order — the segments carry the strip's
- * roving focus, and the chip's menu reaches every tab by keyboard.
- */
-function GroupMoreCount({ hidden, onSelect }: { hidden: readonly string[]; onSelect(): void }) {
   return (
-    <button
-      type="button"
-      tabIndex={-1}
-      data-slot="grouped-tab-more"
-      aria-label={`${hidden.length} more in this group: ${hidden.join(", ")}`}
-      title={hidden.join("\n")}
-      onClick={onSelect}
-      className="mr-1.5 flex h-5 shrink-0 cursor-default items-center rounded-sm px-1 text-ui text-muted-foreground tabular-nums outline-none hover:bg-accent/50 hover:text-foreground"
+    <HoverCard
+      open={menuOpen ? false : hoverOpen}
+      onOpenChange={(open) => setHoverOpen(!menuOpen && open)}
+      openDelay={250}
+      closeDelay={100}
     >
-      +{hidden.length}
-    </button>
+      <ContextMenu
+        onOpenChange={(open) => {
+          setMenuOpen(open);
+          if (open) setHoverOpen(false);
+        }}
+      >
+        <HoverCardTrigger asChild>
+          <ContextMenuTrigger asChild>
+            <div
+              data-slot="grouped-tab-chip"
+              data-group-id={item.group.id}
+              data-active={active}
+              data-pair-target-id={front.id}
+              className="relative flex shrink-0"
+            >
+              <TabActionScope actions={groupActions}>
+                <Tab
+                  label={title}
+                  active={active}
+                  tabStop={tabStop}
+                  onActivate={() => onSelect(front)}
+                  onClose={onClose ? () => tabs.forEach(onClose) : undefined}
+                  leading={
+                    <span className="group-icon-stack" aria-hidden>
+                      {tabs.slice(0, 3).map((tab) => {
+                        const Mark = describe(tab).icon;
+                        return (
+                          <span key={tab.id} className="group-icon-disc">
+                            <Mark className="size-3.5" />
+                          </span>
+                        );
+                      })}
+                      {tabs.length > 3 ? (
+                        <span className="text-label tabular-nums">+{tabs.length - 3}</span>
+                      ) : null}
+                    </span>
+                  }
+                  actionsContent={rows}
+                  onActionsOpenChange={(open) => {
+                    setMenuOpen(open);
+                    if (open) setHoverOpen(false);
+                  }}
+                />
+              </TabActionScope>
+            </div>
+          </ContextMenuTrigger>
+        </HoverCardTrigger>
+        <ContextMenuContent data-slot="grouped-tab-menu" className="w-80">
+          {tabs.map((tab) => {
+            const { label, icon } = describe(tab);
+            return (
+              <React.Fragment key={tab.id}>
+                <ContextMenuItem icon={icon} onSelect={() => onSelect(tab)}>
+                  {label}
+                </ContextMenuItem>
+                {memberActions(tab).map((action) => (
+                  <ContextMenuItem
+                    key={action.label}
+                    icon={action.icon}
+                    aria-label={`${action.label}: ${label}`}
+                    onSelect={() => action.run()}
+                  >
+                    {action.label}: {label}
+                  </ContextMenuItem>
+                ))}
+              </React.Fragment>
+            );
+          })}
+          {onUngroup ? (
+            <>
+              <ContextMenuSeparator />
+              <ContextMenuItem icon={UnlinkIcon} onSelect={() => onUngroup(item.group.id)}>
+                Ungroup
+              </ContextMenuItem>
+            </>
+          ) : null}
+        </ContextMenuContent>
+      </ContextMenu>
+      <HoverCardContent align="start" aria-label="Tab group items">
+        {rows}
+      </HoverCardContent>
+    </HoverCard>
   );
 }
 
@@ -252,6 +315,8 @@ export function GroupedTabList<T extends { id: string }>({
   describe,
   onSelect,
   onUngroup,
+  onClose,
+  actionsFor = noActions,
   children,
 }: {
   tabs: readonly T[];
@@ -263,6 +328,8 @@ export function GroupedTabList<T extends { id: string }>({
   describe(tab: T): TabMenuLabel;
   onSelect(tab: T): void;
   onUngroup?: (groupId: string) => void;
+  onClose?: (tab: T) => void;
+  actionsFor?: (tab: T) => readonly TabAction[];
   children: (tab: T, state: GroupedTabState) => React.ReactNode;
 }) {
   const items = groupTabItems(tabs, groups);
@@ -272,58 +339,40 @@ export function GroupedTabList<T extends { id: string }>({
     ordered.findIndex((tab) => tab.id === activeTabId),
   );
   const stopId = stop === null ? undefined : ordered[stop]?.id;
-  const target = (id: string) => (edgeTargets ? { "data-pair-target-id": id } : {});
+  const target = (id: string) => ({
+    "data-strip-tab-id": id,
+    ...(edgeTargets ? { "data-pair-target-id": id } : {}),
+  });
   return items.map((item) => {
     if (item.group === null) {
       const { tab } = item;
       return (
         <div key={tab.id} {...target(tab.id)} className="relative flex shrink-0">
-          {children(tab, {
-            active: tab.id === activeTabId,
-            tabStop: tab.id === stopId,
-            grouped: false,
-          })}
+          <TabActionScope actions={actionsFor(tab)}>
+            {children(tab, {
+              active: tab.id === activeTabId,
+              tabStop: tab.id === stopId,
+              grouped: false,
+            })}
+          </TabActionScope>
         </div>
       );
     }
     if (item.segments.length === 0) return null;
     const active = item.group.id === shownGroupId;
-    const compact = !active && item.segments.length > 1;
     return (
       <GroupedTabChip
         key={item.group.id}
         item={item}
         active={active}
+        tabStop={item.segments.some((tab) => tab.id === stopId)}
         activeTabId={activeTabId}
-        compact={compact}
         describe={describe}
         onSelect={onSelect}
         onUngroup={onUngroup}
-      >
-        {item.segments.map((tab, index) => (
-          <div
-            key={tab.id}
-            data-slot="grouped-tab-member"
-            {...target(tab.id)}
-            data-focused={active && tab.id === activeTabId}
-            className={cn("relative flex items-center", index > 0 && "border-l border-border")}
-          >
-            {children(tab, { active, tabStop: tab.id === stopId, grouped: true })}
-            {active && tab.id === activeTabId ? (
-              <span
-                aria-hidden
-                className="pointer-events-none absolute inset-x-2 bottom-0 h-px bg-primary"
-              />
-            ) : null}
-          </div>
-        ))}
-        {compact ? (
-          <GroupMoreCount
-            hidden={item.segments.slice(1).map((tab) => describe(tab).label)}
-            onSelect={() => onSelect(item.segments[0]!)}
-          />
-        ) : null}
-      </GroupedTabChip>
+        onClose={onClose}
+        actionsFor={actionsFor}
+      />
     );
   });
 }

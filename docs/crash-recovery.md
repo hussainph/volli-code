@@ -14,6 +14,13 @@ The host reconciles Sessions whose turn was live when the previous process
 ended. It must construct the services required by attachment resolution before
 running that sweep, including browser and frozen-tool-surface resolvers.
 
+The sweep folds only the Sessions it could act on: an open attachment that is
+not the structured executor's, an open one under a turn the ledger still shows
+active, or an Interaction still waiting. The ledger's indexed facts pick them
+(`boot-recovery-reader.ts`), so a relaunch does not fold the machine's whole
+history before anything can read a Session. When the prior process was last
+alive is read only when a turn was recovered for restart resume to judge.
+
 When reconciliation cannot recover an attachment, it records the failure and
 closes that attachment so the projection cannot falsely claim it is live.
 An interrupted turn may carry `partial_turn_interrupted`; an attachment failure

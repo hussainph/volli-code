@@ -133,7 +133,7 @@ export function RemoveWorktreeDialog({
             {step === "confirm" ? "Remove worktree?" : "Remove this worktree anyway?"}
           </AlertDialogTitle>
           <AlertDialogDescription>
-            {step === "confirm" ? "The branch is kept. Only the folder is removed." : dirtyReason}
+            {step === "confirm" ? "The branch is kept." : dirtyReason}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

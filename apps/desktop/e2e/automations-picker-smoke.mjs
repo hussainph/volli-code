@@ -66,7 +66,11 @@ const windowFor = (page, ticketId) => page.locator(`[data-armed-run-window="${ti
 function cardById(page, id) {
   return page
     .locator("article")
-    .filter({ has: page.locator("span.font-mono", { hasText: new RegExp(`^${id}$`) }) });
+
+    .filter({
+      visible: true,
+      has: page.locator("span.font-mono", { hasText: new RegExp(`^${id}$`) }),
+    });
 }
 
 /** A column's own root, hit-tested by the picker exactly as the pointer is. */
@@ -153,7 +157,11 @@ async function liftOver(page, displayId, status, { expectPanel = true, dwell = 1
   // then has to travel to. A COLLAPSED PILL is some forty pixels tall, so
   // check 8 says where to park rather than inheriting a depth measured for a
   // full column.
-  const dwellY = column.y + dwell;
+  const target = columnFor(page, status).locator(`[data-column-dropzone="${status}"]`);
+  const dropzone = (await target.count()) > 0 ? await target.boundingBox() : null;
+  const dwellY = dropzone
+    ? dropzone.y + dropzone.height / 2
+    : column.y + Math.min(dwell, column.height / 2);
   // Both ends of the gesture have to be somewhere a pointer can actually go.
   // Asserted rather than discovered: an aim outside the viewport fails as a
   // sentence naming the point and the window, instead of as a ten-second wait

@@ -18,7 +18,8 @@
  *   1. A fresh profile lands on Home with the Board tab in front, the board
  *      showing, and NO auto-opened Session anywhere (VC-54 scope 2).
  *   2. The Sessions nav item is gone, and Files retired with it (VC-122): the
- *      nav is Home / Configure, nothing else.
+ *      nav is Home / Configure, nothing else. The sidebar's Sessions/Files
+ *      content toggle is a value below the nav, not a destination in it.
  *   3. "+ New Session" opens a Board Session tab beside the Board, and the
  *      Board tab is not closable.
  *   3a. The Home rail's Files page lists and live-watches the Main checkout;
@@ -157,15 +158,29 @@ try {
     },
   );
 
-  await attempt(2, "the nav is Home / Configure — Sessions and Files are both gone", async () => {
-    const sessions = await page.getByRole("button", { name: "Sessions", exact: true }).count();
-    const files = await page.getByRole("button", { name: "Files", exact: true }).count();
-    const home = await page.getByRole("button", { name: "Home", exact: true }).count();
-    const configure = await page.getByRole("button", { name: "Configure", exact: true }).count();
-    const board = await page.getByRole("button", { name: "Board", exact: true }).count();
+  await attempt(2, "the nav keeps Home; Settings owns configuration", async () => {
+    // The sidebar's Sessions/Files segmented toggle picks what the sidebar
+    // lists below the nav; it is a value, not a destination, so its two
+    // buttons are not nav items.
+    const contentToggle = page.getByRole("group", { name: "Sidebar content" });
+    const navButtons = async (name) =>
+      (await page.getByRole("button", { name, exact: true }).count()) -
+      (await contentToggle.getByRole("button", { name, exact: true }).count());
+    const sessions = await navButtons("Sessions");
+    const files = await navButtons("Files");
+    const home = await navButtons("Home");
+    const configure = await navButtons("Configure");
+    const board = await navButtons("Board");
+    const settings = await navButtons("Settings");
     return {
-      ok: sessions === 0 && files === 0 && home === 1 && configure === 1 && board === 0,
-      detail: `sessionsNav=${sessions} filesNav=${files} homeNav=${home} configureNav=${configure} boardNav=${board}`,
+      ok:
+        sessions === 0 &&
+        files === 0 &&
+        home === 1 &&
+        configure === 0 &&
+        board === 0 &&
+        settings === 1,
+      detail: `sessionsNav=${sessions} filesNav=${files} homeNav=${home} configureNav=${configure} boardNav=${board} settingsNav=${settings}`,
     };
   });
 
@@ -260,9 +275,9 @@ try {
         timeout: 15000,
       });
 
-      // Walk INTO the folder: the header's mono line becomes the way back out.
-      await docsRow.click();
-      const upOut = filesPanel.getByTestId("home-files-up");
+      // Open the folder: the header's mono line becomes the way back out.
+      if ((await docsRow.getAttribute("aria-expanded")) !== "true") await docsRow.click();
+      const upOut = filesPanel.getByTestId("file-tree-up");
       await waitUntil(
         "navigator inside docs/",
         async () => (await upOut.getAttribute("aria-label")) === "Leave docs",
@@ -318,7 +333,7 @@ try {
     5,
     "opening a ticket hides the Home strip; leaving it restores the strip and its tabs",
     async () => {
-      await page.locator("article").first().dblclick();
+      await page.locator("article").filter({ visible: true }).first().dblclick();
       await waitUntil(
         "the Ticket view to open",
         async () => (await tabStrip(page, "Ticket tabs").count()) > 0,

@@ -1,10 +1,14 @@
+import { PanelEmptyState } from "@renderer/components/ui/empty-state";
 import * as React from "react";
 import { useShallow } from "zustand/react/shallow";
-import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
-import { EnvelopeSimpleIcon } from "@phosphor-icons/react/dist/csr/EnvelopeSimple";
-import { EnvelopeSimpleOpenIcon } from "@phosphor-icons/react/dist/csr/EnvelopeSimpleOpen";
-import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
-import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
+import {
+  RefreshIcon,
+  MailIcon,
+  MailOpenIcon,
+  SearchIcon,
+  EditIcon,
+} from "@renderer/components/ui/icon";
+
 import {
   errorMessage,
   sessionProvenanceOf,
@@ -45,8 +49,7 @@ import { InlineRename } from "@renderer/components/ui/inline-rename";
 import { Input } from "@renderer/components/ui/input";
 import { splitDragSourceProps } from "@renderer/components/split/split-drag-source";
 import type { SplitDragPayload } from "@renderer/components/split/split-drop";
-import { ListRow, ListRowSkeleton } from "@renderer/components/ui/list-row";
-import { loadingRegionProps } from "@renderer/components/ui/loading-region";
+import { ListRow } from "@renderer/components/ui/list-row";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
 import { SessionProvenanceMark } from "@renderer/components/sessions/session-provenance-mark";
 import { SessionTeamMark, SessionShare } from "@renderer/components/sessions/session-team";
@@ -395,20 +398,17 @@ function SessionRow({
           <ContextMenuContent>
             <SessionShare sessionId={sessionId} projectId={drag?.projectId ?? null} />
             {canManage && onResume !== undefined ? (
-              <ContextMenuItem icon={ArrowClockwiseIcon} onSelect={onResume}>
+              <ContextMenuItem icon={RefreshIcon} onSelect={onResume}>
                 Resume
               </ContextMenuItem>
             ) : null}
             {canManage ? (
-              <ContextMenuItem icon={PencilSimpleIcon} onSelect={onStartRename}>
+              <ContextMenuItem icon={EditIcon} onSelect={onStartRename}>
                 Rename
               </ContextMenuItem>
             ) : null}
             {onToggleRead === null || !canManage ? null : (
-              <ContextMenuItem
-                icon={unread ? EnvelopeSimpleOpenIcon : EnvelopeSimpleIcon}
-                onSelect={onToggleRead}
-              >
+              <ContextMenuItem icon={unread ? MailOpenIcon : MailIcon} onSelect={onToggleRead}>
                 {unread ? "Mark as read" : "Mark as unread"}
               </ContextMenuItem>
             )}
@@ -427,19 +427,6 @@ function SessionRow({
  * and the status phrase at the right. No words — the rows that replace this
  * carry the words.
  */
-function SessionListSkeleton() {
-  return (
-    <div
-      className="flex flex-col gap-1"
-      {...loadingRegionProps("sessions")}
-      data-testid="ticket-sessions-loading"
-    >
-      {(["w-3/5", "w-2/5"] as const).map((width) => (
-        <ListRowSkeleton key={width} mark primaryWidth={width} trailingWidth="w-12" />
-      ))}
-    </div>
-  );
-}
 
 /**
  * What a chat row's mark is NAMED after: the provider whose logo it draws, or
@@ -1155,9 +1142,9 @@ export function TicketSessionsPanel({
             match for it. */}
         {filterable ? (
           <div className="relative mb-1">
-            <MagnifyingGlassIcon
+            <SearchIcon
               aria-hidden
-              className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
+              className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground"
             />
             <Input
               type="search"
@@ -1169,12 +1156,12 @@ export function TicketSessionsPanel({
             />
           </div>
         ) : null}
-        {feedback?.kind === "reading" ? (
-          // The baseline read is in flight. The heading and its "+" stay live
-          // above — a pending list blocks nothing about starting a Session —
-          // and the rows hold their box below.
-          <SessionListSkeleton />
-        ) : null}
+        {feedback?.kind === "reading"
+          ? // The baseline read is in flight. The heading and its "+" stay live
+            // above — a pending list blocks nothing about starting a Session —
+            // and the rows hold their box below.
+            null
+          : null}
         {/* A refused baseline knows nothing about this Ticket's Sessions. The
             toast carries the bridge detail; this keeps the block from claiming
             the roster is empty when it has never been read, and carries the one
@@ -1191,18 +1178,6 @@ export function TicketSessionsPanel({
             testId="ticket-sessions-error"
           />
         )}
-        {sessionsUnavailable === null &&
-        current.length === 0 &&
-        (!searching || filteredHistory.length === 0) &&
-        canClaimEmpty ? (
-          // Nothing to read, so the block is the sentence alone: the header's
-          // own control is 20px above it, and a second copy of the same act
-          // inside the empty frame would be the same offer twice in one glance.
-          // Gated on a read having LANDED — a refused one has proved nothing.
-          <p className={SESSION_SECTION_EMPTY}>
-            {searching ? "No matching sessions" : "No active sessions"}
-          </p>
-        ) : null}
         {/* ONE peek surface over both halves: the handlers go on the block that
             holds the rows, never on a row, so a press is still a drag or a
             click and rows keep their own props (`use-session-peek.tsx`). The
@@ -1214,6 +1189,28 @@ export function TicketSessionsPanel({
           {...peek.rowProps("rail")}
           {...peek.scrollProps}
         >
+          {sessionsUnavailable === null &&
+          current.length === 0 &&
+          (!searching || filteredHistory.length === 0) &&
+          canClaimEmpty ? (
+            // Only a landed read can claim empty. Keep its action in the roster's
+            // scroller, so a constrained inspector never clips an unreachable act.
+            <PanelEmptyState
+              illustration="chat"
+              title={
+                searching
+                  ? "No matching sessions"
+                  : history.length > 0
+                    ? "No active sessions"
+                    : "No sessions"
+              }
+              action={
+                searching
+                  ? { label: "Clear search", onAction: () => setRosterQuery("") }
+                  : { label: "New chat", onAction: onNewChat, disabled: effectiveCreating }
+              }
+            />
+          ) : null}
           {current.length > 0 ? (
             <SessionList rows={current} variant="current" {...listProps} />
           ) : null}

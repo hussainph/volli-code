@@ -1,12 +1,12 @@
 /**
- * A tab label that reveals word by word when its text CHANGES — the one motion
+ * A tab label that reveals only an explicitly automatic change — the one motion
  * a landing auto-title earns (VC-81).
  *
  * What this is not: an entrance animation. On first mount the label renders
  * static, because a boot or a tab strip remount is not a title landing and a
  * strip of flying labels would read as the app stuttering. The reveal fires
- * only when an already-visible label is replaced — the heuristic title
- * sharpening into the model's, or a rename committing — and it is the
+ * only when an already-visible label is automatically replaced. Manual and
+ * unknown-origin replacements render immediately. It is the
  * gentlest bridge a label swap can get: words fade up 2px in sequence, under
  * 300ms for the longest real title, on the compositor (opacity + transform
  * only, CSS keyframes, no JS timeline beside a busy chat).
@@ -26,6 +26,7 @@
  * still on, and the CSS one-shot runs to its end.
  */
 import * as React from "react";
+import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 
 /** The stagger between two words, in milliseconds. */
 export const TITLE_REVEAL_STAGGER_MS = 25;
@@ -45,15 +46,18 @@ export const INITIAL_REVEAL_STATE: TitleRevealState = { seen: null, revealing: n
 /**
  * The state this component should hold for `text`, given what it holds now.
  *
- * Three cases, and the whole behaviour of the reveal is in them:
- * - the text is unchanged → the state stands, so an unrelated re-render can
- *   never cancel a reveal already under way;
- * - the first text a component ever sees → recorded, never revealed;
- * - a genuine replacement → latched as the text being revealed.
+ * An unchanged text keeps its latch across streaming re-renders, even after
+ * its one-shot provenance has been consumed. First mount, manual and unknown
+ * replacements stay static. The component separately clears the latch on a
+ * live Motion preference change, so restoring it cannot replay a cancelled reveal.
  */
-export function nextRevealState(state: TitleRevealState, text: string): TitleRevealState {
+export function nextRevealState(
+  state: TitleRevealState,
+  text: string,
+  automatic = false,
+): TitleRevealState {
   if (state.seen === text) return state;
-  return { seen: text, revealing: state.seen === null ? null : text };
+  return { seen: text, revealing: state.seen === null || !automatic ? null : text };
 }
 
 /** Whether `text` is the text currently being revealed. */
@@ -78,18 +82,22 @@ export function titleWordKeys(words: readonly string[]): readonly string[] {
 
 export interface TitleRevealProps {
   text: string;
+  /** A local automatic rename, explicitly identified by its owner. */
+  automatic?: boolean;
   className?: string;
 }
 
-export function TitleReveal({ text, className }: TitleRevealProps) {
+export function TitleReveal({ text, automatic = false, className }: TitleRevealProps) {
+  const instant = useReducedMotion();
   const [state, setState] = React.useState<TitleRevealState>(INITIAL_REVEAL_STATE);
   // Adjusting state during render, the documented React pattern for deriving
   // from changed props: React re-runs this component immediately, before any
   // DOM is touched, so no frame ever paints the stale answer.
-  const settled = nextRevealState(state, text);
+  const updated = nextRevealState(state, text, automatic && !instant);
+  const settled = instant && updated.revealing !== null ? { ...updated, revealing: null } : updated;
   if (settled !== state) setState(settled);
 
-  const reveal = isRevealing(settled, text);
+  const reveal = !instant && isRevealing(settled, text);
   const words = text.split(" ");
   const keys = titleWordKeys(words);
 

@@ -78,3 +78,15 @@ describe("host Model Access client", () => {
     expect(mutate).not.toHaveBeenCalled();
   });
 });
+
+it("keeps the explicit default on the host codec path", async () => {
+  const { client, mutate } = fixture();
+  await expect(
+    client.setCodeModePolicy({ enabled: true, defaultMode: "both", models: {} }),
+  ).resolves.toEqual({ enabled: true, defaultMode: "both", models: {} });
+  expect(mutate).toHaveBeenCalledWith(
+    "hostModels.setCodeModePolicy",
+    { enabled: true, defaultMode: "both", models: {} },
+    {},
+  );
+});

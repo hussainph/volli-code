@@ -17,6 +17,7 @@ import {
   listProjects,
   listProjectSessionIds,
 } from "./db/projects-repo";
+import { ProjectFrozenError } from "./cloud-move/freeze";
 import { insertTicket } from "./db/tickets-repo";
 import { openTestDb, testProject, testTicket, type TestDb } from "./db/test-helpers";
 import {
@@ -45,6 +46,16 @@ function insertSession(id: string, projectId: string): void {
       "INSERT INTO sessions (id, project_id, ticket_id, title, created_at) VALUES (?, ?, NULL, ?, 1)",
     )
     .run(id, projectId, id);
+}
+
+/** A move of p1 in its first frozen state, as the move engine journals it. */
+function freezeP1(): void {
+  ctx.db.exec(`
+    INSERT INTO cloud_move_queues VALUES ('q', 'u', 'w', 'r', 1, 0, 'pending', NULL, 'running', 1, 1);
+    INSERT INTO cloud_moves (move_id, queue_id, project_id, position, user_id, workspace_id,
+      runner_id, state, app_version, mapper_version, created_at, updated_at)
+    VALUES ('m', 'q', 'p1', 0, 'u', 'w', 'r', 'frozen', 'test', 3, 1, 1);
+  `);
 }
 
 function removedAt(projectId: string): number | null {
@@ -189,6 +200,33 @@ describe("removeProject", () => {
     await expect(refusal).rejects.toMatchObject({ stillOpen: ["s-late", "s-later"] });
     expect(steps).toEqual([]);
     expect(isProjectAttached(ctx.db, "p1")).toBe(true);
+  });
+
+  // VC-993: a project moving to Volli Cloud stays on the rail until its move settles.
+  it("refuses a project a move froze, releasing nothing", async () => {
+    freezeP1();
+    const { steps, ports } = recorder();
+
+    await expect(removeProject(ports, "p1")).rejects.toBeInstanceOf(ProjectFrozenError);
+
+    expect(steps).toEqual([]);
+    expect(isProjectAttached(ctx.db, "p1")).toBe(true);
+  });
+
+  // VC-1016: the release awaits, and an idle project is exactly what a move freezes.
+  it("refuses, detaching nothing, when a move freezes the project during the release", async () => {
+    const { steps, ports } = recorder({
+      releaseBindings: async () => {
+        freezeP1();
+        return { stillOpen: [] };
+      },
+    });
+
+    await expect(removeProject(ports, "p1")).rejects.toThrow("moving to Volli Cloud");
+
+    expect(steps).toEqual([]);
+    expect(isProjectAttached(ctx.db, "p1")).toBe(true);
+    expect(removedAt("p1")).toBeNull();
   });
 
   it("removes a project on a host that keeps no MCP settings, stamped by the wall clock", async () => {

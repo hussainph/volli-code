@@ -3,29 +3,56 @@ import * as React from "react";
 const QUERY = "(prefers-reduced-motion: reduce)";
 
 // One MediaQueryList shared by every caller — the flag is global to the
-// window, and this hook mounts once per ticket card, so per-instance
+// window, and hot lists may mount many callers, so per-instance
 // `matchMedia` objects would multiply with board size and churn on remount.
 // Lazily created so importing the module never touches `window`.
 let mediaQuery: MediaQueryList | undefined;
 
-function getMediaQuery(): MediaQueryList {
+function getMediaQuery(): MediaQueryList | undefined {
+  if (typeof window.matchMedia !== "function") return undefined;
   mediaQuery ??= window.matchMedia(QUERY);
   return mediaQuery;
 }
 
-function subscribe(onChange: () => void): () => void {
+const subscribers = new Set<() => void>();
+function notifyMotionPreference(): void {
+  for (const subscriber of subscribers) subscriber();
+}
+
+/** One OS/app listener pair, installed only while an animation owner subscribes. */
+export function subscribeMotionPreference(onChange: () => void): () => void {
+  if (typeof window === "undefined") return () => {};
   const query = getMediaQuery();
-  query.addEventListener("change", onChange);
-  return () => query.removeEventListener("change", onChange);
+  // A distinct entry allows two owners to subscribe the same callback safely.
+  const notify = () => onChange();
+  if (subscribers.size === 0) {
+    query?.addEventListener("change", notifyMotionPreference);
+    window.addEventListener("volli-motion-change", notifyMotionPreference);
+  }
+  subscribers.add(notify);
+  return () => {
+    if (!subscribers.delete(notify) || subscribers.size !== 0) return;
+    query?.removeEventListener("change", notifyMotionPreference);
+    window.removeEventListener("volli-motion-change", notifyMotionPreference);
+  };
+}
+
+/** OS reduce and app Motion off both settle all motion immediately. */
+export function motionPreferenceSnapshot(): { appOff: boolean; systemReduce: boolean } {
+  return {
+    appOff: typeof document !== "undefined" && document.documentElement?.dataset?.motion === "off",
+    systemReduce: typeof window !== "undefined" && getMediaQuery()?.matches === true,
+  };
 }
 
 function getSnapshot(): boolean {
-  return getMediaQuery().matches;
+  const preference = motionPreferenceSnapshot();
+  return preference.appOff || preference.systemReduce;
 }
 
-/** Live `prefers-reduced-motion` flag; drives JS-side animation opt-outs. */
+/** Live system + app Motion preference; drives JS-side animation opt-outs. */
 export function useReducedMotion(): boolean {
-  return React.useSyncExternalStore(subscribe, getSnapshot);
+  return React.useSyncExternalStore(subscribeMotionPreference, getSnapshot, () => true);
 }
 
 /**
@@ -39,7 +66,5 @@ export function useReducedMotion(): boolean {
  * whole renderer test suite does exactly that.
  */
 export function prefersReducedMotion(): boolean {
-  return typeof window === "undefined" || typeof window.matchMedia !== "function"
-    ? false
-    : getSnapshot();
+  return typeof window === "undefined" ? false : getSnapshot();
 }

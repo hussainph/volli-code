@@ -15,6 +15,7 @@ import {
   isAllowedBrowserUrl,
   type BrowserLoadWaitMode,
   type BrowserTabCreateOptions,
+  type CdpPreviewFrameDiagnostic,
   type CdpTransport,
   BrowserTabRegistry,
   type BrowserTabChrome,
@@ -39,6 +40,8 @@ export interface BrowserTabHostDependencies extends BrowserTabRegistryPorts {
   createView: (options: WebContentsViewConstructorOptions) => WebContentsView;
   fromPartition: (partition: string) => Session;
   getWindow: () => BrowserWindow | null;
+  /** The composition root supplies `app.getVersion()`; no Electron singleton here. */
+  appVersion?: string;
   /**
    * Creates the window headless tabs are parked in — never shown, never given
    * to the person. Called on the first tab that needs a stage and again only
@@ -54,7 +57,41 @@ export interface BrowserTabHostDependencies extends BrowserTabRegistryPorts {
    * page's, which is what a host with no app renderer to route to should do.
    */
   deliverAppShortcut?: (window: BrowserWindow, event: BrowserAppShortcutEvent) => void;
+  /**
+   * Diagnostic-only (VC-1150): how each navigation/act preview ended — the
+   * frame fence and the native camera. The composition root supplies it only
+   * for dev diagnostics; absent, nothing is observed and every decision below
+   * is the same. Observes outcomes; never decides one.
+   */
+  previewDiagnostics?: (diagnostic: BrowserPreviewDiagnostic) => void;
 }
+
+/** One preview stage's ending: fixed outcome, opaque id, counts, generations, time. No page data. */
+export type BrowserPreviewDiagnostic =
+  | ({ stage: "frame" } & CdpPreviewFrameDiagnostic)
+  | {
+      stage: "camera";
+      outcome:
+        | "missing-entry"
+        | "withdrawn-early"
+        | "privacy"
+        | "pending-cap"
+        | "withdrawn"
+        | "deadline"
+        | "empty-image"
+        | "closed"
+        | "generation-changed"
+        | "privacy-after-capture"
+        | "empty-jpeg"
+        | "camera-error"
+        | "stored";
+      picture: string | null;
+      lookupSize: number;
+      generation: number | null;
+      currentGeneration: number | null;
+      pending: number | null;
+      elapsedMs: number;
+    };
 
 /**
  * Where one tab's native view is parented right now. A view has exactly ONE
@@ -1071,8 +1108,35 @@ export class BrowserTabHost extends BrowserTabRegistry<
     // Unlike an explicit screenshot, this is background enrichment of an
     // already completed action. A closed tab or failed camera owes no failed
     // mutation: the snapshot remains useful without a transcript thumbnail.
+    const startedAt = performance.now();
     const entry = this.tabs.get(tabId);
-    if (entry === undefined || signal?.aborted) return null;
+    // Observes every ending, the two early ones included, and returns what it
+    // was given: each branch below answers exactly what it answered before.
+    const finish = (
+      outcome: Extract<BrowserPreviewDiagnostic, { stage: "camera" }>["outcome"],
+      picture: string | null = null,
+      generation: number | null = entry?.state.generation ?? null,
+    ): string | null => {
+      const listen = this.deps.previewDiagnostics;
+      if (listen === undefined) return picture;
+      try {
+        listen({
+          stage: "camera",
+          outcome,
+          picture,
+          lookupSize: picture === null ? 0 : (this.pictureOf(picture)?.length ?? 0),
+          generation,
+          currentGeneration: entry?.state.generation ?? null,
+          pending: entry?.pictureCaptures.size ?? null,
+          elapsedMs: Math.round(performance.now() - startedAt),
+        });
+      } catch {
+        // Diagnostics observe; a failing sink must never change the answer.
+      }
+      return picture;
+    };
+    if (entry === undefined) return finish("missing-entry");
+    if (signal?.aborted) return finish("withdrawn-early");
     const contents = entry.view.webContents;
     const generation = entry.state.generation;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -1080,7 +1144,7 @@ export class BrowserTabHost extends BrowserTabRegistry<
     try {
       // Interaction privacy is independent of the final presentation. A tab
       // hidden one moment after the person typed still carries those pixels.
-      if (this.isBeingUsed(entry)) return null;
+      if (this.isBeingUsed(entry)) return finish("privacy", null, generation);
       const deadline = new Promise<null>((resolve) => {
         abandon = () => resolve(null);
         signal?.addEventListener("abort", abandon, { once: true });
@@ -1098,7 +1162,7 @@ export class BrowserTabHost extends BrowserTabRegistry<
         capture === undefined &&
         entry.pictureCaptures.size >= BROWSER_PREVIEW_MAX_PENDING_CAPTURES
       )
-        return null;
+        return finish("pending-cap", null, generation);
       if (capture === undefined) {
         capture = contents.capturePage();
         entry.pictureCaptures.set(generation, capture);
@@ -1118,28 +1182,30 @@ export class BrowserTabHost extends BrowserTabRegistry<
       // No late writes: navigation, teardown, withdrawal, or a person starting
       // to type during capture invalidates the frame just as surely as an
       // empty image. Keep the generation from BEFORE capture, never relabel it.
-      if (
-        image === null ||
-        signal?.aborted ||
-        image.isEmpty() ||
-        this.tabs.get(tabId) !== entry ||
-        entry.state.generation !== generation ||
-        this.isBeingUsed(entry)
-      )
-        return null;
+      if (signal?.aborted) return finish("withdrawn", null, generation);
+      if (image === null) return finish("deadline", null, generation);
+      if (image.isEmpty()) return finish("empty-image", null, generation);
+      if (this.tabs.get(tabId) !== entry) return finish("closed", null, generation);
+      if (entry.state.generation !== generation)
+        return finish("generation-changed", null, generation);
+      if (this.isBeingUsed(entry)) return finish("privacy-after-capture", null, generation);
       const bytes = image.toJPEG(BROWSER_CAPTURE_JPEG_QUALITY);
-      if (bytes.length === 0) return null;
-      return this.deps.pictures.put({
-        tabId,
+      if (bytes.length === 0) return finish("empty-jpeg", null, generation);
+      return finish(
+        "stored",
+        this.deps.pictures.put({
+          tabId,
+          generation,
+          mime: "image/jpeg",
+          bytes,
+          ownerSessionId: entry.state.ownerSessionId,
+          persist: false,
+        }),
         generation,
-        mime: "image/jpeg",
-        bytes,
-        ownerSessionId: entry.state.ownerSessionId,
-        persist: false,
-      });
+      );
     } catch (error) {
       log.warn("browser tab preview capture unavailable", { tabId, error });
-      return null;
+      return finish("camera-error", null, generation);
     } finally {
       clearTimeout(timer);
       if (abandon !== undefined) signal?.removeEventListener("abort", abandon);
@@ -1273,7 +1339,39 @@ export class BrowserTabHost extends BrowserTabRegistry<
    * reach this tab, or the app's own renderer, through a loopback endpoint.
    */
   transportFor(tabId: string): CdpTransport {
-    return debuggerTransport(this.webContentsOf(tabId));
+    const entry = this.requireTab(tabId);
+    const contents = entry.view.webContents;
+    const previewDiagnostics = this.deps.previewDiagnostics;
+    return debuggerTransport(
+      contents,
+      (diagnostic) => {
+        // Read only local/native state: diagnostics must not send another CDP
+        // command to the target that just stopped answering. No tab identity or
+        // page-derived values belong in this record.
+        const window = entry.parent.kind === "window" ? entry.parent.window : null;
+        const liveWindow = window !== null && !window.isDestroyed() ? window : null;
+        log.warn("browser CDP command timed out", {
+          phase: diagnostic.phase,
+          method: diagnostic.method,
+          elapsedMs: diagnostic.elapsedMs,
+          generation: diagnostic.generation,
+          debuggerAttached: contents.debugger.isAttached(),
+          parent: entry.parent.kind,
+          // These are the containing app window's native flags, not proof of
+          // unoccluded pixels. The never-shown stage has no visible app window.
+          windowVisible: liveWindow?.isVisible() ?? null,
+          windowMinimized: liveWindow?.isMinimized() ?? null,
+          wakeLeases: entry.wakeLeases,
+          backgroundThrottling: contents.isDestroyed() ? null : contents.getBackgroundThrottling(),
+          build: this.deps.appVersion ?? null,
+          electron: process.versions.electron ?? null,
+          chromium: process.versions.chrome ?? null,
+        });
+      },
+      previewDiagnostics === undefined
+        ? undefined
+        : (frame) => previewDiagnostics({ stage: "frame", ...frame }),
+    );
   }
 
   /** Settles when the tab stops loading, at the bound, or on withdrawal; see `loadWaiter`. */

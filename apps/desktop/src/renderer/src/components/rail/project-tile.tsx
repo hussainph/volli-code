@@ -1,11 +1,14 @@
 import * as React from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ArrowsLeftRightIcon } from "@phosphor-icons/react/dist/csr/ArrowsLeftRight";
-import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
-import { HardDrivesIcon } from "@phosphor-icons/react/dist/csr/HardDrives";
-import { MinusCircleIcon } from "@phosphor-icons/react/dist/csr/MinusCircle";
-import { CloudArrowUpIcon } from "@phosphor-icons/react/dist/csr/CloudArrowUp";
+import {
+  SwapIcon,
+  FolderOpenIcon,
+  StorageIcon,
+  RemoveCircleIcon,
+  CloudUploadIcon,
+} from "@renderer/components/ui/icon";
+
 import { errorMessage, monogram, projectColor, type Project } from "@volli/shared";
 
 import { RelinkProjectDialog } from "@renderer/components/rail/relink-project-dialog";
@@ -27,6 +30,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { useProjectsStore } from "@renderer/stores/projects";
+import { useUiStore } from "@renderer/stores/ui";
 
 interface ProjectTileProps {
   project: Project;
@@ -34,10 +38,17 @@ interface ProjectTileProps {
   index: number;
   /** True while this tile is the active dnd-kit drag item. */
   dimmed: boolean;
+  presentation?: "rail" | "menu";
 }
 
-export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
+export function ProjectTile({ project, index, dimmed, presentation = "rail" }: ProjectTileProps) {
   const select = useProjectsStore((state) => state.select);
+  const sidebarPinned = useUiStore((state) => state.sidebarPinned);
+  const showTooltip = sidebarPinned || presentation === "menu";
+  const [tooltipOpen, setTooltipOpen] = React.useState(false);
+  React.useEffect(() => {
+    if (!showTooltip) setTooltipOpen(false);
+  }, [showTooltip]);
   const isSelected = useProjectsStore((state) => state.selectedProjectId === project.id);
   // A remote project's host (VC-711): its tile says where it runs, and this
   // Mac's folder actions stand down for it. Null for This Mac's, flag off too.
@@ -66,19 +77,28 @@ export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
       <div
         ref={setNodeRef}
         style={{ transform: CSS.Transform.toString(transform), transition }}
-        className={cn("app-region-no-drag shrink-0", dimmed && "opacity-[0.45]")}
+        className={cn(
+          "app-region-no-drag shrink-0",
+          presentation === "menu" && "w-full",
+          dimmed && "opacity-[0.45]",
+        )}
         {...attributes}
         {...listeners}
       >
         {/* Tooltip root sits between the two triggers so each `asChild` slots
             onto a prop-forwarding element and both merge onto the button. */}
         <ContextMenu>
-          <Tooltip>
+          <Tooltip
+            open={showTooltip && tooltipOpen}
+            onOpenChange={(next) => setTooltipOpen(showTooltip && next)}
+          >
             <ContextMenuTrigger asChild>
               <TooltipTrigger asChild>
                 <button
                   type="button"
-                  onClick={() => select(project.id)}
+                  onClick={(event) =>
+                    select(project.id, event.detail === 0 ? "keyboard" : "pointer")
+                  }
                   onKeyDown={(event) => {
                     if (!cloudEnabled) return;
                     if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10"))
@@ -98,41 +118,52 @@ export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
                       }),
                     );
                   }}
-                  style={{ backgroundColor: projectColor(project.colorIndex) }}
+                  data-project-tile={project.id}
+                  aria-label={project.name}
+                  aria-current={isSelected ? "true" : undefined}
+                  style={
+                    { "--tile-color": projectColor(project.colorIndex) } as React.CSSProperties
+                  }
                   className={cn(
-                    // `text-white` is ink on the PROJECT's own color, not on
-                    // the page — `PROJECT_COLORS` is identity, not theme, so it
-                    // holds still across a mode flip and so does the ink on it.
-                    "group/tile relative flex size-9 items-center justify-center rounded-control text-sm font-semibold text-white transition-transform duration-100 ease-out active:scale-[0.96] motion-reduce:scale-100!",
-                    // `ring-offset-transparent`, NOT `ring-offset-rail` (#74):
-                    // the rail gave up its fill to sit on the canvas, so an
-                    // offset painted in `--rail` would punch an opaque dark
-                    // halo through the gradient around every selected tile.
-                    // The offset is a GAP, and a gap has to show what is behind.
+                    "group/tile relative flex items-center rounded-row text-ui font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+                    presentation === "rail"
+                      ? "workspace-tile size-[38px] justify-center"
+                      : "h-9 w-full gap-2 px-2 text-left hover:bg-accent",
                     isSelected &&
-                      "ring-2 ring-foreground/90 ring-offset-[3px] ring-offset-transparent",
+                      (presentation === "rail"
+                        ? "workspace-tile-selected"
+                        : "bg-(--fill-row-selected)"),
                   )}
                 >
-                  {monogram(project.name)}
+                  {presentation === "rail" ? (
+                    monogram(project.name)
+                  ) : (
+                    <>
+                      <span className="workspace-tile project-menu-tile shrink-0">
+                        {monogram(project.name)}
+                      </span>
+                      <span className="min-w-0 truncate">{project.name}</span>
+                    </>
+                  )}
                   {remoteHost === null ? null : (
                     <span
                       aria-hidden
                       data-slot="project-tile-host"
                       className="pointer-events-none absolute -right-1 -bottom-1 grid size-3.5 place-items-center rounded-full border border-border bg-card text-foreground"
                     >
-                      <HardDrivesIcon weight="bold" className="size-2.5" />
+                      <StorageIcon strokeWidth={2.25} className="size-2.5" />
                     </span>
                   )}
                   <span
                     aria-hidden
-                    className="pointer-events-none absolute inset-0 rounded-control bg-foreground/10 opacity-0 group-hover/tile:opacity-100"
+                    className="pointer-events-none absolute inset-0 rounded-control bg-wash-ink/10 opacity-0 group-hover/tile:opacity-100"
                   />
                 </button>
               </TooltipTrigger>
             </ContextMenuTrigger>
             <TooltipContent side="right" className="max-w-80">
               <div className="flex items-center gap-1">
-                <span className="font-bold">{project.name}</span>
+                <span className="font-semibold">{project.name}</span>
                 {index < 9 && (
                   <kbd className="rounded-sm bg-background/30 px-1 py-px font-sans text-label font-bold">
                     ⌘{index + 1}
@@ -142,7 +173,10 @@ export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
               {remoteHost === null ? null : (
                 <div className="text-background/70">On {remoteHost.name}</div>
               )}
-              <div className="text-background/70">{project.path}</div>
+              <div className="mt-2 flex items-start gap-2 rounded-control border border-border/30 px-2 py-1">
+                <FolderOpenIcon aria-hidden className="mt-1 size-4 shrink-0" />
+                <span className="min-w-0 font-mono [overflow-wrap:anywhere]">{project.path}</span>
+              </div>
             </TooltipContent>
           </Tooltip>
           <ContextMenuContent>
@@ -161,7 +195,7 @@ export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
                 }
               />
             ) : (
-              <ContextMenuItem icon={HardDrivesIcon} disabled>
+              <ContextMenuItem icon={StorageIcon} disabled>
                 {notAvailableOn(remoteHost)}
               </ContextMenuItem>
             )}
@@ -197,16 +231,16 @@ function LocalProjectActions({
       <ContextMenuItem icon={FolderOpenIcon} onSelect={onReveal}>
         Reveal in Finder
       </ContextMenuItem>
-      <ContextMenuItem icon={ArrowsLeftRightIcon} onSelect={onRelink}>
-        Relink folder…
+      <ContextMenuItem icon={SwapIcon} onSelect={onRelink}>
+        Relink folder
       </ContextMenuItem>
       {onMove === undefined ? null : (
-        <ContextMenuItem icon={CloudArrowUpIcon} onSelect={onMove}>
+        <ContextMenuItem icon={CloudUploadIcon} onSelect={onMove}>
           Move to Volli Cloud…
         </ContextMenuItem>
       )}
-      <ContextMenuItem icon={MinusCircleIcon} variant="destructive" onSelect={onRemove}>
-        Remove from Volli…
+      <ContextMenuItem icon={RemoveCircleIcon} variant="destructive" onSelect={onRemove}>
+        Remove from Volli
       </ContextMenuItem>
     </>
   );

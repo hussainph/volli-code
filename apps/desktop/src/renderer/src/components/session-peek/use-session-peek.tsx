@@ -1,3 +1,4 @@
+import { overlayLayer } from "@renderer/components/ui/overlay-layer";
 /**
  * VC-30 — the peek's controller: the one hook both sidebars mount.
  *
@@ -397,11 +398,14 @@ export function useSessionPeek(options: SessionPeekOptions): SessionPeekBinding 
    * coming, and the card keeps the words for it.
    */
   const adoptChatSession = useChatSessionsStore((store) => store.adoptChatSession);
+  const showChatSession = useChatSessionsStore((store) => store.showChatSession);
   const pinnedSessionId = state.pinned === null ? null : sessionId;
   React.useEffect(() => {
     if (pinnedSessionId === null) return;
     adoptChatSession(pinnedSessionId);
-  }, [adoptChatSession, pinnedSessionId]);
+    // Held while pinned, released on unpin (VC-515): see `showChatSession`.
+    return showChatSession(pinnedSessionId);
+  }, [adoptChatSession, showChatSession, pinnedSessionId]);
   const residentQuestion = useChatSessionsStore((store) =>
     pinnedSessionId === null
       ? null
@@ -416,6 +420,10 @@ export function useSessionPeek(options: SessionPeekOptions): SessionPeekBinding 
     },
     [dispatch],
   );
+
+  const close = React.useCallback(() => {
+    dispatch({ type: "close", now: Date.now() });
+  }, [dispatch]);
 
   /** The scroller the shown row lives in — the clamp, and what a scroll dismisses. */
   const scrollerOf = React.useCallback((): HTMLElement | null => {
@@ -745,7 +753,7 @@ export function useSessionPeek(options: SessionPeekOptions): SessionPeekBinding 
             }}
             onOpenTicket={() => {
               ports.openTicket(subject.ticketId);
-              dismiss("click-away");
+              close();
             }}
             {...cardProps}
           />
@@ -782,15 +790,15 @@ export function useSessionPeek(options: SessionPeekOptions): SessionPeekBinding 
           // answer: one rule, in `canPinRow`.
           canReply={canAct && via.kind === "row" && canPinRow(rowId, kindOf)}
           onPin={() => dispatch({ type: "pin", target: { rowId, surface: shown.surface } })}
-          onClose={() => dispatch({ type: "escape", now: Date.now() })}
+          onClose={close}
           onOpen={() => {
             ports.openSession(rowId);
-            dismiss("click-away");
+            close();
           }}
           onViewConversation={() => {
             if (answerTo === null) return;
             ports.viewConversation(answerTo);
-            dismiss("click-away");
+            close();
           }}
           onAnswer={(interactionId, submission) =>
             answerTo === null
@@ -865,7 +873,7 @@ export function useSessionPeek(options: SessionPeekOptions): SessionPeekBinding 
     // nothing — found by the real-app probe (e2e/session-peek-shots.mjs), not
     // by jsdom, which has no clipping. React keeps its own tree through the
     // portal, so events still bubble to the surface exactly as before.
-    card: card === null ? null : createPortal(card, document.body),
+    card: card === null ? null : createPortal(card, overlayLayer() ?? document.body),
     // The hold (D7): a pointer in this surface, or any card open, freezes moves.
     holding: pointerInside || shown !== null,
     shownRowId: shown?.rowId ?? null,

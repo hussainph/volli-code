@@ -14,8 +14,8 @@
  *     relaunch; chip-only fiddling (no content) is not a draft.
  *
  * Drives the REAL built app (shared machinery in ./lib/smoke-kit.mjs) against a
- * scratch SQLite DB + isolated profile. Written BEFORE the feature exists, so
- * the restore checks are EXPECTED TO FAIL now — cleanly, never by crashing.
+ * scratch SQLite DB + isolated profile. Both the immediately editable native
+ * draft and its lossless Monaco handover must preserve the same full state.
  *
  *   Run:
  *     pnpm run build
@@ -40,7 +40,19 @@ import {
 import { createOnlyTicket } from "./lib/composer-actions.mjs";
 
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("volli-composer-draft-smoke-");
-const { attempt, summarize } = createRunner();
+const runner = createRunner();
+const { summarize } = runner;
+// A failed comparison must not strand a modal over the next check's trigger.
+let currentPage;
+async function attempt(n, label, check) {
+  return runner.attempt(n, label, async () => {
+    try {
+      return await check();
+    } finally {
+      if (currentPage && !currentPage.isClosed()) await closeAnyDialog(currentPage);
+    }
+  });
+}
 
 const PROJECT_ALPHA = { id: "draft-alpha", name: "Alpha Project", prefix: "AL" };
 const PROJECT_BETA = { id: "draft-beta", name: "Beta Project", prefix: "BE" };
@@ -95,11 +107,18 @@ async function closeAnyDialog(page) {
   );
 }
 
+/** Read the surface actually presented, without activating its rich handover. */
+async function readDraftBody(page) {
+  const native = composer(page).getByRole("textbox", { name: "Ticket description", exact: true });
+  if (await native.count()) return native.inputValue();
+  return readMonacoText(composer(page));
+}
+
 /** Snapshot the restorable field state of the OPEN composer. */
 async function readComposerState(page) {
   const chipText = (await projectChip(page).textContent()) ?? "";
   const title = await titleInput(page).inputValue();
-  const bodyText = await readMonacoText(composer(page));
+  const bodyText = await readDraftBody(page);
   const statusTodo = await composer(page).getByRole("button", { name: "Todo" }).count();
   const statusBacklog = await composer(page).getByRole("button", { name: "Backlog" }).count();
   const priorityHigh = await composer(page).getByRole("button", { name: "High" }).count();
@@ -122,6 +141,7 @@ async function main() {
   try {
     await assertProfileIsolated(app, userDataDir);
     let page = await app.firstWindow();
+    currentPage = page;
     await page.waitForLoadState("domcontentloaded");
     await sleep(1000);
 
@@ -298,13 +318,14 @@ async function main() {
 
         app = await launch({ dbPath, userDataDir });
         page = await app.firstWindow();
+        currentPage = page;
         await page.waitForLoadState("domcontentloaded");
         await sleep(1000);
         await goToBoard(page);
         const reopened = await openComposerViaHeader(page);
         if (!reopened) return { ok: false, detail: "composer did not reopen after relaunch" };
         const title = await titleInput(page).inputValue();
-        const bodyText = await readMonacoText(composer(page));
+        const bodyText = await readDraftBody(page);
         await closeAnyDialog(page);
         const ok = title === restartTitle && bodyText.includes("DELTA-9");
         return {

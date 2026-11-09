@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import type { FileSearchResult } from "../../../../ipc/contract";
 import { fileRevealKey, takeFileReveal } from "@renderer/editor/reveal-line";
 import { FileSearchPanel, searchSummaryLine } from "./search-panel";
+import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import {
   clearRememberedNavigatorViews,
   navigatorScopeKey,
@@ -62,7 +63,9 @@ async function mount(
   root = createRoot(container);
   await act(async () => {
     root?.render(
-      <FileSearchPanel scope={scope} root="volli/VC-193-search" onOpenMatch={onOpenMatch} />,
+      <TooltipProvider>
+        <FileSearchPanel scope={scope} root="volli/VC-193-search" onOpenMatch={onOpenMatch} />
+      </TooltipProvider>,
     );
   });
   return { search };
@@ -97,9 +100,29 @@ function rows(selector: string): Element[] {
   return [...document.querySelectorAll(selector)];
 }
 
+/** Idle is the field alone: no results, no empty claim, no wait, no prompt. */
+function expectIdle(): void {
+  const panel = document.querySelector('[data-testid="file-search-panel"]');
+  expect(panel).not.toBeNull();
+  expect(
+    rows(
+      '[data-testid="file-search-results"], [data-testid="file-search-empty"], [data-testid="file-search-pending"]',
+    ),
+  ).toHaveLength(0);
+  expect(panel?.textContent).not.toContain("Type to find text");
+}
+
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   onOpenMatch.mockReset();
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
 });
 
 afterEach(async () => {
@@ -117,11 +140,25 @@ afterEach(async () => {
 });
 
 describe("what the page sends", () => {
+  it("uses a compact heading and keyboard-reachable full scope", async () => {
+    await mount({ kind: "home", projectId: "p1" });
+    expect(container?.querySelector("h3")?.textContent).toBe("Search");
+    const scope = container?.querySelector<HTMLElement>('[data-testid="file-search-scope"]');
+    expect(scope?.className).toContain("text-label");
+    expect(scope?.getAttribute("dir")).toBe("rtl");
+    const reveal = scope?.closest("button");
+    expect(reveal?.getAttribute("aria-label")).toBe("Scope · volli/VC-193-search");
+    act(() => reveal?.focus());
+    expect(document.querySelector('[role="tooltip"]')?.textContent).toContain(
+      "volli/VC-193-search",
+    );
+  });
+
   it("asks nothing until there is a query", async () => {
     const { search } = await mount({ kind: "home", projectId: "p1" });
 
     expect(search).not.toHaveBeenCalled();
-    expect(rows('[data-testid="file-search-idle"]')).toHaveLength(1);
+    expectIdle();
   });
 
   it("searches Main from Home", async () => {
@@ -161,6 +198,8 @@ describe("what the page draws", () => {
 
     const files = rows('[data-testid="file-search-file"]');
     expect(files).toHaveLength(1);
+    expect(rows('[role="tree"]')).toHaveLength(1);
+    expect(rows('[data-testid="file-search-folder"]')[0]?.textContent).toBe("src");
     expect(files[0]?.getAttribute("data-path")).toBe("src/app.ts");
     expect(rows('[data-testid="file-search-match"]')).toHaveLength(1);
     expect(document.querySelector("mark")?.textContent).toBe("needle");
@@ -200,7 +239,11 @@ describe("what the page draws", () => {
     expect(snippet?.classList.contains("flex")).toBe(true);
     expect(snippet?.classList.contains("min-w-0")).toBe(true);
     expect(snippet?.classList.contains("overflow-hidden")).toBe(true);
-    expect(snippet?.classList.contains("whitespace-nowrap")).toBe(true);
+    // Flex text runs must retain spaces at the highlight boundary: otherwise
+    // `const needle = 1` is painted as `constneedle= 1` despite correct textContent.
+    expect(snippet?.classList.contains("whitespace-pre")).toBe(true);
+    expect(before?.classList.contains("whitespace-pre")).toBe(true);
+    expect(after?.classList.contains("whitespace-pre")).toBe(true);
     expect(snippet?.classList.contains("truncate")).toBe(false);
     expect(hit?.classList.contains("shrink-0")).toBe(true);
     expect(before?.classList.contains("min-w-0")).toBe(true);
@@ -233,7 +276,7 @@ describe("what the page draws", () => {
     }
   });
 
-  it("says out loud that a capped search is not the whole answer", async () => {
+  it("says a capped search is capped in its count, with no note under the results", async () => {
     await mount({ kind: "home", projectId: "p1" }, { ...oneMatch, matches: 500, limit: "matches" });
 
     await type("needle");
@@ -241,7 +284,7 @@ describe("what the page draws", () => {
     expect(document.querySelector('[data-testid="file-search-summary"]')?.textContent).toBe(
       "First 500 matches in 1 file",
     );
-    expect(rows('[data-testid="file-search-truncated"]')).toHaveLength(1);
+    expect(document.body.textContent).not.toContain("There may be more");
   });
 
   it("keeps zero results distinct from a truncated result", async () => {
@@ -250,8 +293,8 @@ describe("what the page draws", () => {
       { ok: true, files: [], matches: 0, limit: "none" },
     );
     await type("absent");
-    expect(rows('[data-testid="file-search-empty"]')[0]?.textContent).toBe("No matches");
-    expect(rows('[data-testid="file-search-truncated"]')).toHaveLength(0);
+    expect(rows('[data-testid="file-search-empty"] h2')[0]?.textContent).toBe("No matches");
+    expect(rows('[data-testid="file-search-empty"] button')[0]?.textContent).toBe("Clear search");
   });
 
   it("reports a failed search rather than drawing it as no matches", async () => {
@@ -269,12 +312,28 @@ describe("what the page draws", () => {
 
     await type("");
 
-    expect(rows('[data-testid="file-search-idle"]')).toHaveLength(1);
+    expectIdle();
     expect(rows('[data-testid="file-search-match"]')).toHaveLength(0);
   });
 });
 
 describe("what a click does", () => {
+  it("lands on a result reached through the shared tree keyboard cursor", async () => {
+    await mount({ kind: "ticket", projectId: "p1", ticketId: "t1" });
+    await type("needle");
+    const tree = document.querySelector('[role="tree"]')!;
+    await act(async () => {
+      tree.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
+    });
+    // Let the End cursor render before activating its match.
+    await act(async () =>
+      tree.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+    );
+    expect(onOpenMatch).toHaveBeenCalledWith("src/app.ts");
+    expect(
+      takeFileReveal(fileRevealKey({ projectId: "p1", ticketId: "t1", relPath: "src/app.ts" })),
+    ).toEqual({ line: 12, column: 7, length: 6 });
+  });
   it("opens the file as a preview and asks that editor to land on the match", async () => {
     await mount({ kind: "ticket", projectId: "p1", ticketId: "t1" });
     await type("needle");
@@ -313,7 +372,7 @@ describe("the summary line, as pure text", () => {
 
   it("names the query it is still searching for", () => {
     expect(searchSummaryLine({ pending: "needle", outcome: null, failed: false })).toBe(
-      "Searching “needle”…",
+      "Searching “needle”",
     );
   });
 
@@ -472,7 +531,7 @@ describe("a query typed over an answer, before the debounce elapses", () => {
 
     await typeOnly("needle");
 
-    expect(summaryText()).toBe("Searching “needle”…");
+    expect(summaryText()).toBe("Searching “needle”");
     expect(rows('[data-testid="file-search-pending"]')).toHaveLength(1);
   });
 
@@ -517,7 +576,9 @@ describe("a scope swapped under the page", () => {
   async function show(scope: SearchScope): Promise<void> {
     await act(async () => {
       root?.render(
-        <FileSearchPanel scope={scope} root="volli/VC-193-search" onOpenMatch={onOpenMatch} />,
+        <TooltipProvider>
+          <FileSearchPanel scope={scope} root="volli/VC-193-search" onOpenMatch={onOpenMatch} />
+        </TooltipProvider>,
       );
     });
   }
@@ -538,7 +599,7 @@ describe("a scope swapped under the page", () => {
     expect(before?.isConnected).toBe(false);
     expect(rows('[data-testid="file-search-match"]')).toHaveLength(0);
     expect(summaryText()).toBeNull();
-    expect(rows('[data-testid="file-search-idle"]')).toHaveLength(1);
+    expectIdle();
   });
 
   it("lets a search the old scope left in flight write nothing here", async () => {
@@ -552,7 +613,7 @@ describe("a scope swapped under the page", () => {
 
     expect(rows('[data-testid="file-search-match"]')).toHaveLength(0);
     expect(rows('[data-testid="file-search-error"]')).toHaveLength(0);
-    expect(rows('[data-testid="file-search-idle"]')).toHaveLength(1);
+    expectIdle();
   });
 });
 

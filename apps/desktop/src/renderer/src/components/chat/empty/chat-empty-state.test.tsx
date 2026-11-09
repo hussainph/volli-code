@@ -2,9 +2,10 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { WorkingCopyReading, WorkingCopyMeasurement } from "@volli/shared";
 
+import { useSessionStartsStore } from "@renderer/stores/session-starts";
 import { ChatEmptyState } from "./chat-empty-state";
 import { WorkingCopyChips } from "./working-copy-chips";
 import { WorkingCopyVisual } from "./working-copy-visual";
@@ -36,17 +37,25 @@ function draw(node: React.ReactElement): string {
  * inherit) and lands on the state the test drew.
  */
 let mounted: { root: Root; host: HTMLElement } | null = null;
-function mount(node: React.ReactElement, reading: WorkingCopyReading): string {
+async function mount(node: React.ReactElement, reading: WorkingCopyReading): Promise<string> {
   Object.assign(window, {
-    api: { workingCopy: { snapshot: vi.fn().mockResolvedValue({ ok: true, reading }) } },
+    api: {
+      workingCopy: { snapshot: vi.fn().mockResolvedValue({ ok: true, reading }) },
+      sessions: { starts: vi.fn().mockResolvedValue({ ok: true, startedAt: [] }) },
+    },
   });
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
-  act(() => root.render(<TooltipProvider>{node}</TooltipProvider>));
+  await act(async () => root.render(<TooltipProvider>{node}</TooltipProvider>));
   mounted = { root, host };
   return host.innerHTML;
 }
+
+beforeEach(() => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  HTMLElement.prototype.scrollIntoView ??= vi.fn();
+});
 
 afterEach(async () => {
   if (mounted !== null) {
@@ -62,6 +71,8 @@ afterEach(async () => {
   Reflect.deleteProperty(window, "api");
   useWorkingCopyStore.setState({ byScope: {} });
   useUiStore.setState({ homeEmptyVisual: "streak" });
+  useSessionStartsStore.setState({ startedAt: undefined, error: null });
+  vi.unstubAllGlobals();
 });
 
 describe("WorkingCopyVisual", () => {
@@ -142,33 +153,86 @@ describe("WorkingCopyChips", () => {
   });
 });
 
-/**
- * These render the composed surface at its DEFAULTS, which is all a static
- * render can honestly see: zustand serves `getInitialState()` to
- * `useSyncExternalStore` during server rendering, so a seeded singleton would
- * not reach the tree. Which drawing a stored choice resolves to is asserted
- * where that decision lives (`empty-visual.test.ts`); what is asserted here is
- * the part no unit test can — that the two scopes draw different objects.
- */
+/** The quiet entry preserves the existing charts behind a named disclosure. */
 describe("ChatEmptyState", () => {
-  it("offers a Board Session the whole menu, and draws its default", () => {
+  it("keeps even a ready ticket's center empty while its stats are loading", async () => {
+    let finish!: (value: { ok: true; startedAt: readonly number[] }) => void;
+    const history = new Promise<{ ok: true; startedAt: readonly number[] }>((resolve) => {
+      finish = resolve;
+    });
+    Object.assign(window, {
+      api: {
+        workingCopy: {
+          snapshot: vi.fn().mockResolvedValue({
+            ok: true,
+            reading: { state: "measured", workingCopy: workingCopy() },
+          }),
+        },
+        sessions: { starts: vi.fn(() => history) },
+      },
+    });
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    mounted = { root, host };
+    await act(async () =>
+      root.render(
+        <TooltipProvider>
+          <ChatEmptyState projectId="p1" ticketId="t1" />
+        </TooltipProvider>,
+      ),
+    );
+    expect(host.textContent).toBe("");
+    expect(host.querySelector("button,[data-day],[data-working-copy-state]")).toBeNull();
+    await act(async () => finish({ ok: true, startedAt: [] }));
+    expect(host.textContent).not.toContain("New chat");
+    expect(host.querySelectorAll(".streak-stats > div")).toHaveLength(3);
+  });
+  it("shows no title, chart, or placeholder before the practice-history read", () => {
     const markup = draw(<ChatEmptyState projectId="p1" ticketId={null} />);
-
-    expect(markup).toContain('data-empty-visual="streak"');
-    expect(markup).toContain("empty-visual-picker");
-    expect(markup).toContain("Streak");
-    expect(markup).toContain("Board");
-    expect(markup).toContain("Venue");
+    expect(markup).not.toContain("New chat");
+    expect(markup).not.toContain("data-day");
+    expect(markup).not.toContain("sessions");
+    expect(markup).not.toContain("Session overview");
+    expect(markup).not.toContain("skeleton");
+  });
+  it("draws successful practice history inline and keeps alternate charts in overview", async () => {
+    await mount(<ChatEmptyState projectId="p1" ticketId={null} />, { state: "pending" });
+    expect(document.body.querySelectorAll("[data-day]")).toHaveLength(182);
+    expect(document.body.querySelector(".streak-stats")?.textContent).toBe(
+      "0sessions0active days0day streak",
+    );
+    openOverview();
+    expect(document.body.querySelector('[data-empty-visual="streak"]')).not.toBeNull();
+    expect(document.body.querySelector('[aria-label="Empty chat visual"]')).not.toBeNull();
   });
 
-  it("offers a Ticket Session no menu at all, and none of Home's fields", () => {
-    const markup = draw(<ChatEmptyState projectId="p1" ticketId="t1" />);
+  it("keeps every chart reachable through the overview's native picker", async () => {
+    await mount(<ChatEmptyState projectId="p1" ticketId={null} />, { state: "pending" });
+    openOverview();
+    const picker = document.body.querySelector<HTMLButtonElement>(
+      '[aria-label="Empty chat visual"]',
+    );
+    if (!picker) throw new Error("No visual picker");
+    act(() => picker.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    const options = Array.from(document.body.querySelectorAll<HTMLElement>('[role="option"]'));
+    expect(options.map((option) => option.textContent)).toEqual(["Streak", "Board", "Venue"]);
+    act(() =>
+      options[1]?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+    );
+    expect(useUiStore.getState().homeEmptyVisual).toBe("board");
+    expect(document.body.querySelector('[data-empty-visual="board"]')).not.toBeNull();
+  });
 
-    // The shortness of a ticket's menu is the identity signal, so there is no
-    // picker to show — one item is a statement dressed as a question.
-    expect(markup).not.toContain("empty-visual-picker");
-    expect(markup).not.toContain('data-empty-visual="streak"');
-    expect(markup).not.toContain('data-empty-visual="board"');
+  it("shares the quiet matrix with Ticket Sessions, keeping their overview scope-specific", async () => {
+    await mount(<ChatEmptyState projectId="p1" ticketId="t1" />, {
+      state: "measured",
+      workingCopy: workingCopy(),
+    });
+    openOverview();
+    expect(document.body.querySelector('[aria-label="Empty chat visual"]')).toBeNull();
+    expect(document.body.querySelector('[data-empty-visual="streak"]')).not.toBeNull();
+    expect(document.body.querySelector('[data-empty-visual="board"]')).toBeNull();
   });
 
   it("says nothing about a working copy it has not read — no chips, no zeroed bar", () => {
@@ -178,7 +242,7 @@ describe("ChatEmptyState", () => {
     expect(markup).not.toContain('data-empty-visual="venue"');
   });
 
-  it("draws the waiting shape, not the main checkout, for a ticket still resolving its worktree (VC-286)", () => {
+  it("keeps a resolving ticket quiet instead of drawing checkout facts or a skeleton", async () => {
     useWorkingCopyStore.setState({
       byScope: {
         // The project's own reading exists and is the main checkout — the
@@ -191,26 +255,39 @@ describe("ChatEmptyState", () => {
       },
     });
 
-    const markup = mount(<ChatEmptyState projectId="p1" ticketId="t1" />, { state: "pending" });
+    const markup = await mount(<ChatEmptyState projectId="p1" ticketId="t1" />, {
+      state: "pending",
+    });
 
-    expect(markup).toContain('data-working-copy-state="resolving"');
+    expect(document.body.querySelector('[data-empty-visual="venue"]')).toBeNull();
+    expect(document.body.querySelector("[data-working-copy-state]")).toBeNull();
     expect(markup).not.toContain("Main checkout");
     expect(markup).not.toContain("Worktree");
     expect(markup).not.toContain('data-empty-visual="venue"');
   });
 
-  it("draws the working copy once the ticket's checkout is measured", () => {
+  it("draws the working copy once the ticket's checkout is measured", async () => {
     useWorkingCopyStore.setState({
       byScope: { [workingCopyKey("p1", "t1")]: { status: "ready", workingCopy: workingCopy() } },
     });
 
-    const markup = mount(<ChatEmptyState projectId="p1" ticketId="t1" />, {
+    const markup = await mount(<ChatEmptyState projectId="p1" ticketId="t1" />, {
       state: "measured",
       workingCopy: workingCopy(),
     });
 
-    expect(markup).toContain('data-empty-visual="venue"');
-    expect(markup).toContain("Worktree");
+    openOverview();
+    expect(document.body.querySelector('[data-empty-visual="venue"]')).not.toBeNull();
+    expect(markup).not.toContain("Worktree");
+    expect(markup).not.toContain("volli/VC-81-auto-title");
     expect(markup).not.toContain("data-working-copy-state");
   });
 });
+
+function openOverview(): void {
+  const trigger = Array.from(document.body.querySelectorAll("button")).find((button) =>
+    button.textContent?.includes("Session overview"),
+  );
+  if (!trigger) throw new Error("No overview control");
+  act(() => trigger.click());
+}

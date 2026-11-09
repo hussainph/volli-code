@@ -106,6 +106,8 @@ export function fileTypeLabel(originalName: string, mime: string): string {
   if (dot > 0 && dot < originalName.length - 1) {
     return originalName.slice(dot + 1).toUpperCase();
   }
+  if (mime === "text/plain") return "Text";
+  if (mime === "application/octet-stream") return "File";
   const subtype = mime.split("/")[1];
   return subtype === undefined || subtype.length === 0 ? "FILE" : subtype.toUpperCase();
 }

@@ -1,3 +1,4 @@
+import { GLASS_MOTION } from "@renderer/lib/glass-motion";
 /**
  * ONE DRAG CONTEXT PER SURFACE (VC-202 §4).
  *
@@ -31,6 +32,8 @@
  * one flag either way.
  */
 import * as React from "react";
+import { createPortal } from "react-dom";
+import { useOverlayLayer } from "@renderer/components/ui/overlay-layer";
 import {
   closestCenter,
   defaultDropAnimationSideEffects,
@@ -163,8 +166,8 @@ const splitCollision: CollisionDetection = (args) => {
  * kept, composed rather than replaced.
  */
 const GHOST_DROP_ANIMATION: DropAnimation = {
-  duration: 150,
-  easing: "cubic-bezier(0.23, 1, 0.32, 1)",
+  duration: GLASS_MOTION.menuIn,
+  easing: GLASS_MOTION.easeOutCss,
   sideEffects: (parameters) => {
     parameters.dragOverlay.node.style.pointerEvents = "none";
     return defaultDropAnimationSideEffects({ styles: { active: { opacity: "0" } } })(parameters);
@@ -238,13 +241,17 @@ export function SplitDnd({
     },
     [onGroupDrop],
   );
+  const overlayLayer = useOverlayLayer();
   const sensors = useSurfaceSensors();
   const reducedMotion = useReducedMotion();
+  const [keyboardDrag, setKeyboardDrag] = React.useState(false);
+  const instant = reducedMotion || keyboardDrag;
   const [activeTabId, setActiveTabId] = React.useState<string | null>(null);
   const [ghostLabel, setGhostLabel] = React.useState<string | null>(null);
   const nativePayload = useAcceptedNativeDrag(origin);
 
   const handleDragStart = React.useCallback((event: DragStartEvent) => {
+    setKeyboardDrag(event.activatorEvent.type === "keydown");
     setActiveTabId(String(event.active.id));
     const label = event.active.data.current?.tabLabel;
     setGhostLabel(typeof label === "string" ? label : null);
@@ -299,20 +306,25 @@ export function SplitDnd({
       onDragCancel={handleDragCancel}
     >
       <SplitDndStateContext.Provider value={state}>
-        <TabStripSurface>
+        <TabStripSurface keyboardDrag={keyboardDrag}>
           <div ref={areaRef} data-split-area className="contents">
             {children}
           </div>
         </TabStripSurface>
       </SplitDndStateContext.Provider>
-      <DragOverlay
-        // The tab returns to its slot in the time a dropdown opens. `null`
-        // under reduced motion: a drop that lands is a state change, and the
-        // flight back is the decoration the flag turns off.
-        dropAnimation={reducedMotion ? null : GHOST_DROP_ANIMATION}
-      >
-        {ghostLabel === null ? null : <TabDragGhost label={ghostLabel} />}
-      </DragOverlay>
+      {overlayLayer &&
+        createPortal(
+          <DragOverlay
+            // A glass surface is a fixed-position containing block. The overlay
+            // uses viewport coordinates for travel AND collision measurements,
+            // so it must escape that surface, like every other floating layer.
+            transition={instant ? "" : undefined}
+            dropAnimation={instant ? null : GHOST_DROP_ANIMATION}
+          >
+            {ghostLabel === null ? null : <TabDragGhost label={ghostLabel} />}
+          </DragOverlay>,
+          overlayLayer,
+        )}
     </DndContext>
   );
 }

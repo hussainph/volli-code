@@ -12,14 +12,12 @@ export function ResolvedModelName({
   selection,
   providerLabel,
   trailing,
-  alwaysProvider = false,
   className,
 }: {
   selection: Pick<ModelSelection, "providerId" | "modelId">;
   /** A caller's known provider name while the catalogue is unavailable. */
   providerLabel?: string;
   trailing?: string;
-  alwaysProvider?: boolean;
   className?: string;
 }) {
   const catalogue = useModelCatalogue();
@@ -36,7 +34,7 @@ export function ResolvedModelName({
       model={model}
       models={catalogue?.models ?? []}
       providerLabel={provider}
-      alwaysProvider={alwaysProvider || listed === undefined}
+      providers={catalogue?.providers}
       trailing={trailing}
       className={className}
     />

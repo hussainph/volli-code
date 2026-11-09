@@ -158,8 +158,8 @@ function ActiveDropZones({ paneId, native }: { paneId: string; native: boolean }
         aria-hidden
         style={preview}
         className={cn(
-          "pointer-events-none absolute rounded-md bg-primary/10 ring-1 ring-primary/40 ring-inset",
-          "transition-[opacity,left,top,width,height] duration-150 ease-out motion-reduce:transition-none",
+          "pointer-events-none absolute rounded-row bg-(--accent-selected) ring-1 ring-ring ring-inset",
+          "transition-opacity duration-(--duration-menu-out) ease-out motion-reduce:transition-none",
           zone === null ? "opacity-0" : "opacity-100",
         )}
       />

@@ -101,7 +101,7 @@ copy as first committed:
 | ------------------ | ----------------- | -------------- | ----------- |
 | `prompt-input.tsx` | 232               | 199            | required    |
 | `conversation.tsx` | 138               | 15             | required    |
-| `message.tsx`      | 94                | 10             | required    |
+| `message.tsx`      | 94                | 8              | required    |
 | `reasoning.tsx`    | 80                | 1              | no          |
 | `shimmer.tsx`      | 46                | 2              | no          |
 
@@ -154,7 +154,7 @@ Recorded because Apache-2.0 §4(b) requires the copies to say they changed, and
 a bare "modified" tells a reader nothing.
 
 - **Import paths and icons.** `@repo/shadcn-ui/*` → `@renderer/*`, and
-  `lucide-react` → `@phosphor-icons/react` (`fbd3b1ee` retired lucide entirely).
+  `lucide-react` → the shared semantic icon seam (`ui/icon.tsx`); its UI symbols use the MIT Hugeicons free Stroke Rounded set.
 - **Diagram rendering.** Upstream wires Mermaid into Streamdown
   (`const streamdownPlugins = { cjk, code, math, mermaid }`); the copies here
   drop `@streamdown/mermaid` and render `mermaid` fences through the local
@@ -174,6 +174,9 @@ a bare "modified" tells a reader nothing.
 - **`conversation.tsx` does not animate scroll.** Both `StickToBottom` props are
   `instant` rather than upstream's smooth default, on measured evidence; the
   file's own comment carries the reasoning.
+- **`ConversationEmptyState` carries no copy.** Its default title, description
+  and icon slots were removed; the caller draws the empty state inside the
+  shell.
 
 ## License
 

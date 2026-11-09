@@ -22,8 +22,8 @@
  * one shape for "pick from a list you can also search".
  */
 import * as React from "react";
-import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
+import { CheckIcon, AddIcon } from "@renderer/components/ui/icon";
+
 import type { Label, Ticket } from "@volli/shared";
 
 import {
@@ -32,10 +32,10 @@ import {
   newLabelFromQuery,
   withLabelToggled,
 } from "@renderer/components/ticket/label-picker-model";
-import { Command, CommandInput, CommandItem, CommandList } from "@renderer/components/ui/command";
-import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
+import { SearchableCommand } from "@renderer/components/ui/searchable-command";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { resolveLabelColor } from "@renderer/lib/labels";
+import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
 
 // Stable fallbacks: an inline `?? []` mints a fresh array identity per render,
@@ -65,6 +65,7 @@ function LabelDot({ color }: { color: string }) {
   return (
     <span
       aria-hidden
+      data-slot="label-mark"
       className="size-1.5 shrink-0 rounded-full"
       style={{ backgroundColor: color }}
     />
@@ -81,58 +82,70 @@ export function LabelPickerContent({
   projectId,
   value,
   onChange,
+  readOnly = false,
 }: {
   projectId: string;
   value: readonly string[];
   onChange: (next: string[]) => void;
+  /** Overflow metadata remains searchable on a read-only host. */
+  readOnly?: boolean;
 }) {
   const [query, setQuery] = React.useState("");
   const projectLabels = useBoardStore((state) => state.labelsByProject[projectId]);
   const vocabulary = useLabelVocabulary(projectId);
   const options = labelPickerOptions(vocabulary, value, query);
-  const creatable = newLabelFromQuery(vocabulary, value, query);
+  const creatable = readOnly ? null : newLabelFromQuery(vocabulary, value, query);
 
+  const choices = [
+    ...options.map((option) => ({ name: option.name, selected: option.selected, create: false })),
+    ...(creatable === null ? [] : [{ name: creatable, selected: false, create: true }]),
+  ];
   return (
-    // Our own filter, so the rows stay in the vocabulary's alphabetical order
-    // rather than cmdk's match ranking — a label list is a vocabulary, and one
-    // that reorders itself as you type is one you cannot learn.
-    <Command shouldFilter={false} className="bg-transparent">
-      <CommandInput autoFocus value={query} onValueChange={setQuery} placeholder="Search labels…" />
-      <CommandList className="max-h-64">
-        {options.length === 0 && creatable === null ? (
-          <div className={EMPTY_INLINE}>No labels</div>
-        ) : null}
-        {options.map((option) => (
-          <CommandItem
-            key={option.name}
-            value={option.name}
-            // The closure, never cmdk's callback argument: it hands the value
-            // back LOWERCASED, and `bug` is not the label `Bug`.
-            onSelect={() => onChange(withLabelToggled(value, option.name))}
-          >
+    <SearchableCommand
+      items={choices}
+      query={query}
+      onQueryChange={setQuery}
+      placeholder="Search labels…"
+      disabled={readOnly}
+      empty="No labels"
+      keyOf={(option) => `${option.create ? "create" : "label"}:${option.name}`}
+      onSelect={(option) => {
+        if (option.create) {
+          onChange([...value, option.name]);
+          setQuery("");
+        } else onChange(withLabelToggled(value, option.name));
+      }}
+      renderItem={(option) => (
+        <>
+          {option.create ? (
+            <AddIcon />
+          ) : (
             <LabelDot color={resolveLabelColor(projectLabels, option.name)} />
-            <span className="truncate">{option.name}</span>
-            {option.selected ? (
-              <CheckIcon weight="bold" className="ml-auto size-3.5 shrink-0 text-foreground" />
-            ) : null}
-          </CommandItem>
-        ))}
-        {creatable === null ? null : (
-          <CommandItem
-            // Namespaced so a project that literally has a label called
-            // `new label` cannot collide with this row's cmdk value.
-            value={`new-label:${creatable}`}
-            onSelect={() => {
-              onChange([...value, creatable]);
-              setQuery("");
-            }}
-          >
-            <PlusIcon />
-            <span className="truncate">Create “{creatable}”</span>
-          </CommandItem>
-        )}
-      </CommandList>
-    </Command>
+          )}
+          <span className="min-w-0 flex-1 truncate" dir="auto" title={option.name}>
+            {option.create ? `Create “${option.name}”` : option.name}
+          </span>
+          {option.selected ? (
+            <CheckIcon strokeWidth={2.25} className="ml-auto size-3.5 shrink-0 text-foreground" />
+          ) : null}
+        </>
+      )}
+    />
+  );
+}
+
+/** Keep search stationary and let the inner command list own all overflow.
+ * The surface has no padding; its border is the only height outside the body. */
+export function LabelPickerSurface({
+  className,
+  ...props
+}: React.ComponentProps<typeof PopoverContent>) {
+  return (
+    <PopoverContent
+      {...props}
+      className={cn("flex w-64 flex-col p-0", className)}
+      bodyClassName="max-h-[calc(var(--radix-popover-content-available-height)-2px)] overflow-hidden"
+    />
   );
 }
 
@@ -159,9 +172,9 @@ export function LabelPickerPopover({
   return (
     <Popover>
       <PopoverTrigger asChild>{children}</PopoverTrigger>
-      <PopoverContent align="start" className="w-64 p-0">
+      <LabelPickerSurface align="start">
         <LabelPickerContent projectId={projectId} value={value} onChange={onChange} />
-      </PopoverContent>
+      </LabelPickerSurface>
     </Popover>
   );
 }

@@ -138,6 +138,7 @@ import type { UIMessage } from "ai";
 import type { SessionWebPorts } from "../web/ports";
 import { readWorkspaceEnvironment } from "../session-env";
 import type { TurnAttachments } from "../turn-attachments";
+import { withMainSpan } from "../log/context";
 import { hostLogger } from "../log/root";
 import { STRUCTURED_ADAPTER_ID } from "./sessions";
 
@@ -392,7 +393,11 @@ export interface PiAdapterOptions {
    * than its web tools — a missing credential is a Session with no web, which
    * is what `WebAccessSettings.resolve` answers instead of raising.
    */
-  resolveWebPorts?: () => SessionWebPorts;
+  resolveWebPorts?: (scope: {
+    sessionId: string;
+    attachmentId: string;
+    signal: AbortSignal;
+  }) => SessionWebPorts;
   /**
    * The desktop's Browser capability for one Session, scoped before the model
    * ever speaks: the adapter states the Session's own project and Ticket from
@@ -400,8 +405,8 @@ export interface PiAdapterOptions {
    * them. Optional on `resolveWebPorts`'s terms — absent means a Session is
    * offered no browser tool — and called once per attachment, not per turn.
    *
-   * Unlike the web resolver this one takes an argument, because scope is the
-   * capability here: the same host answers every Session, and which tabs a
+   * Like the web resolver this takes attachment scope: the same host answers
+   * every Session, and which tabs a
    * port may see is decided by who is asking — a fact only the adapter's
    * context can state honestly.
    */
@@ -747,6 +752,8 @@ export function createPiRuntimeHost(options: PiAdapterOptions): PiRuntimeHost {
       ? {}
       : { parallelMcpReads: options.parallelMcpReads }),
     ...(options.codeModeSandbox === undefined ? {} : { codeModeSandbox: options.codeModeSandbox }),
+    // The stall log names the Session behind a Pi event or a tool's start (VC-1090).
+    mainSpan: withMainSpan,
     ...(options.persistActivityImage === undefined
       ? {}
       : { persistActivityImage: options.persistActivityImage }),
@@ -807,7 +814,7 @@ function piNativeAdapter(
         recovery,
         carry: recovery === undefined ? piContextCarry(spec) : undefined,
         now,
-        web: options.resolveWebPorts?.() ?? {},
+        web: {},
         browser: options.resolveBrowserPort?.({
           projectId: context.projectId,
           ticketId: context.ticketId,
@@ -983,7 +990,12 @@ class PiBinding implements BindingHandle {
     this.#recovery = options.recovery;
     this.#carry = options.carry;
     this.#now = options.now;
-    this.#web = options.web;
+    this.#web =
+      options.resolveWebPorts?.({
+        sessionId: options.spec.sessionId,
+        attachmentId: options.spec.attachmentId,
+        signal: this.#abort.signal,
+      }) ?? options.web;
     this.#browser = options.browser;
     this.#shell = options.shell;
     this.#classify = options.classify;
@@ -1328,7 +1340,12 @@ class PiBinding implements BindingHandle {
           }
           this.#mcp = port;
         }
-        this.#web = this.#resolveWebPorts?.() ?? this.#web;
+        this.#web =
+          this.#resolveWebPorts?.({
+            sessionId: this.#spec.sessionId,
+            attachmentId: this.#spec.attachmentId,
+            signal: this.#abort.signal,
+          }) ?? this.#web;
         const next = this.runtimeSpec(updated);
         this.#context = updated;
         this.#refreshedSpec = next;

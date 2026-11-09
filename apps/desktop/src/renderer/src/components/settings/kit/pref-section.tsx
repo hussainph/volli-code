@@ -1,28 +1,15 @@
-/**
- * A section, and the two shapes an action on one can take.
- *
- * ONE HEADER GRAMMAR for every section on both surfaces: icon · title ·
- * optional `(i)` · at most one action. The audit found sections with a
- * description, sections with two actions, sections with a segmented control
- * parked in the header — three different objects wearing the same name.
- *
- * There is deliberately **no `description` prop**. CLAUDE.md forbids
- * explanatory text under a section header, and an earlier pass of this
- * redesign added thirteen of them anyway. A rule you cannot express is a rule
- * you cannot break: what a section needs to say goes in an {@link InfoHint}
- * beside its title, which the reader opens or ignores.
- */
-import type * as React from "react";
-import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
-import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
+/** Shared settings section: an outside heading and one grouped body. */
+import * as React from "react";
+import { type IconComponent, RefreshIcon } from "@renderer/components/ui/icon";
 
 import { Button } from "@renderer/components/ui/button";
+import { SectionHeading } from "@renderer/components/ui/section-heading";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { cn } from "@renderer/lib/utils";
-
-import { InfoHint } from "./info-hint";
 
 export function PrefSection({
   title,
+  titleHidden = false,
   icon: Icon,
   hint,
   action,
@@ -30,8 +17,15 @@ export function PrefSection({
   children,
 }: {
   title: string;
-  icon?: PhosphorIcon;
-  /** The `(i)`. A node, not a string, so it can carry a link. */
+  /** The pane already names this group; retain its accessible heading. */
+  titleHidden?: boolean;
+  icon?: IconComponent;
+  /**
+   * The one-line trust boundary AGENTS.md allows ("Volli writes an overlay
+   * file and never edits your Ghostty config"): what Volli will and will not
+   * touch, which no control can show. Never explanation, never a tour of the
+   * section — the controls are the explanation.
+   */
   hint?: React.ReactNode;
   action?: React.ReactNode;
   /**
@@ -42,37 +36,44 @@ export function PrefSection({
   fill?: boolean;
   children: React.ReactNode;
 }) {
+  const titleId = React.useId();
   return (
-    // One fill, no border, no internal rules. This card already sits inside
-    // the app shell's framed content card, and a frame here is what turns a
-    // pane into boxes inside boxes: a bordered card holding a bordered table
-    // holding a bordered search field.
-    <section className={cn("rounded-lg bg-card px-4 py-4", fill && "flex min-h-0 flex-1 flex-col")}>
-      {/* The rule under the header is DELIBERATE and drawn here, and the
-          wrapper below is what keeps it to ONE line.
-
-          A row draws `border-t` with `first:border-t-0`, which only suppresses
-          the top rule when the row is genuinely its parent's first child. With
-          the rows as direct children of this `<section>`, THIS header is the
-          first child, `first:` matched nothing, and every section drew the
-          header's rule and the first row's rule eight pixels apart. */}
-      {/* `items-center`, not `items-start`: an action can be taller than the
-          title line (the provider list parks a search field here), and
-          top-aligning it left the field visibly off the title's axis. */}
-      <div className="mb-2 flex items-center justify-between gap-4 border-b border-border/50 pb-2">
-        <div className="flex min-w-0 items-center gap-2">
+    <section
+      aria-labelledby={titleId}
+      data-slot="pref-section"
+      className={cn("flex flex-col gap-2", fill && "min-h-0 flex-1")}
+    >
+      {/* A heading and its actions share an axis outside the framed row group. */}
+      <div
+        className={cn(
+          "flex flex-wrap items-center justify-between gap-2",
+          titleHidden && !action ? "sr-only" : "min-h-7",
+        )}
+      >
+        <div className={cn("flex min-w-0 items-center gap-2", titleHidden && "sr-only")}>
           {Icon ? <Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" /> : null}
-          <h2 data-slot="pref-section-title" className="min-w-0 truncate text-sm font-semibold">
+          <SectionHeading
+            as="h2"
+            id={titleId}
+            data-slot="pref-section-title"
+            className="min-w-0 text-ui font-medium"
+          >
             {title}
-          </h2>
-          {hint ? <InfoHint label={title}>{hint}</InfoHint> : null}
+          </SectionHeading>
         </div>
         {action}
       </div>
-      {/* Rows live in their own box so `first:` has something true to say. */}
-      {/* `|| undefined` so a non-filling section emits no `class` at all rather
-          than an empty one — `cn(false)` returns "". */}
-      <div className={cn(fill && "flex min-h-0 flex-1 flex-col") || undefined}>{children}</div>
+      {hint ? <div className="text-ui text-muted-foreground">{hint}</div> : null}
+      {/* A direct first row suppresses its top rule against the group's border. */}
+      <div
+        data-slot="pref-group"
+        className={cn(
+          "rounded-container border border-border bg-card",
+          fill && "flex min-h-0 flex-1 flex-col",
+        )}
+      >
+        {children}
+      </div>
     </section>
   );
 }
@@ -85,10 +86,13 @@ export function SectionAction({
   onAct,
 }: {
   label: string;
-  icon?: PhosphorIcon;
+  icon?: IconComponent;
   disabled?: boolean;
   onAct?: () => void;
 }) {
+  if (/^refresh\b/i.test(label)) {
+    return <SectionIconAction label={label} icon={Icon} disabled={disabled} onAct={onAct} />;
+  }
   return (
     <Button size="xs" variant="ghost" disabled={disabled} onClick={onAct}>
       {Icon ? <Icon /> : null}
@@ -100,27 +104,32 @@ export function SectionAction({
 /** A section action that is only a glyph. Its name lives in `aria-label`. */
 export function SectionIconAction({
   label,
-  icon: Icon = ArrowClockwiseIcon,
+  icon: Icon = RefreshIcon,
   busy = false,
   disabled,
   onAct,
 }: {
   label: string;
-  icon?: PhosphorIcon;
+  icon?: IconComponent;
   /** Spins the glyph. A refresh that gives no sign of running reads as broken. */
   busy?: boolean;
   disabled?: boolean;
   onAct?: () => void;
 }) {
   return (
-    <Button
-      size="icon-xs"
-      variant="ghost"
-      aria-label={label}
-      disabled={disabled ?? busy}
-      onClick={onAct}
-    >
-      <Icon className={busy ? "animate-spin" : undefined} />
-    </Button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          aria-label={label}
+          disabled={disabled || busy}
+          onClick={onAct}
+        >
+          <Icon className={busy ? "animate-spin motion-reduce:animate-none" : undefined} />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
   );
 }

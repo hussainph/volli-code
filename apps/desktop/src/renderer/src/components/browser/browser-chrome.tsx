@@ -1,8 +1,5 @@
 import type * as React from "react";
-import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
-import { ArrowLeftIcon } from "@phosphor-icons/react/dist/csr/ArrowLeft";
-import { ArrowRightIcon } from "@phosphor-icons/react/dist/csr/ArrowRight";
-import { CodeIcon } from "@phosphor-icons/react/dist/csr/Code";
+import { RefreshIcon, ArrowLeftIcon, ArrowRightIcon, CodeIcon } from "@renderer/components/ui/icon";
 
 import type { BrowserTabHolder } from "@volli/shared";
 
@@ -51,6 +48,12 @@ export interface BrowserChromeProps {
   onForward(): void;
   onReload(): void;
   onToggleDevTools(): void;
+  /**
+   * Sends a Session's tab back to its Activity Island (VC-1118). Present only
+   * for a tab that can go there; absent, the control is not drawn, which is
+   * how a person's own tab keeps the chrome it always had.
+   */
+  onHide?(): void;
   onTakeOver?(): void;
   onAskToLeave?(): void;
   onHandBack?(): void;
@@ -69,6 +72,7 @@ export function BrowserChrome({
   onForward,
   onReload,
   onToggleDevTools,
+  onHide: _onHide,
   onTakeOver,
   onAskToLeave,
   onHandBack,
@@ -84,11 +88,11 @@ export function BrowserChrome({
     >
       <div
         data-slot="browser-address-row"
-        className="flex min-w-0 items-center gap-1 overflow-x-auto p-2"
+        className="flex h-control-default min-w-0 items-center gap-0.5 overflow-x-auto px-1"
       >
         <Button
           type="button"
-          variant="ghost"
+          variant="toolbar"
           size="icon-sm"
           aria-label="Back"
           disabled={!tab.canGoBack}
@@ -98,7 +102,7 @@ export function BrowserChrome({
         </Button>
         <Button
           type="button"
-          variant="ghost"
+          variant="toolbar"
           size="icon-sm"
           aria-label="Forward"
           disabled={!tab.canGoForward}
@@ -106,8 +110,14 @@ export function BrowserChrome({
         >
           <ArrowRightIcon />
         </Button>
-        <Button type="button" variant="ghost" size="icon-sm" aria-label="Reload" onClick={onReload}>
-          {tab.loading ? <Spinner className="size-3.5" /> : <ArrowClockwiseIcon />}
+        <Button
+          type="button"
+          variant="toolbar"
+          size="icon-sm"
+          aria-label="Reload"
+          onClick={onReload}
+        >
+          {tab.loading ? <Spinner className="size-3.5" /> : <RefreshIcon />}
         </Button>
         <form
           className="min-w-12 flex-1"
@@ -123,7 +133,8 @@ export function BrowserChrome({
             placeholder="Enter a URL"
             value={address}
             onChange={(event) => onAddressChange(event.currentTarget.value)}
-            className="min-w-0 bg-card"
+            variant="search"
+            className="h-control-xs min-w-0 bg-card px-2 text-ui"
             spellCheck={false}
           />
         </form>
@@ -137,7 +148,7 @@ export function BrowserChrome({
         ) : null}
         <Button
           type="button"
-          variant="ghost"
+          variant="toolbar"
           size="icon-sm"
           aria-label="Toggle DevTools"
           title="Toggle DevTools"

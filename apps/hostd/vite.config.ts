@@ -28,7 +28,9 @@ export default defineConfig({
       // (argv, signals, exit codes); CI's artifact job boots the real binary
       // and drives it, which is that file's test.
       include: ["src/**/*.ts"],
-      exclude: ["src/**/*.test.ts", "src/main.ts"],
+      // `web-extract-worker.ts` only ever runs inside a worker thread, which
+      // the coverage provider does not instrument; agent-runtime drives it.
+      exclude: ["src/**/*.test.ts", "src/main.ts", "src/web-extract-worker.ts"],
       thresholds: { statements: 100, branches: 100, functions: 100, lines: 100 },
     },
   },
@@ -39,7 +41,8 @@ export default defineConfig({
   // "Packaging".
   pack: {
     define,
-    entry: { hostd: "src/main.ts" },
+    // The HTML extraction worker is its own entry: a thread starts from a file.
+    entry: { hostd: "src/main.ts", "web-extract-worker": "src/web-extract-worker.ts" },
     format: "cjs",
     platform: "node",
     target: "node24",

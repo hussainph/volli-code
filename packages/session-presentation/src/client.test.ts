@@ -68,7 +68,7 @@ const REFUSED = {
 
 /**
  * The receipt a harness sends when it does not know whether a command ran
- * (CONTEXT.md's `unreconciled`). It is NOT a rejection and NOT an acceptance,
+ * (CONTEXT.md#receipt: `unreconciled`). It is NOT a rejection and NOT an acceptance,
  * so it must never be read as a success: that read latches `working` for a
  * message and clears the error band for an attach, which is the silent success
  * this surface exists to refuse. Its words, when there are any, are the host's
@@ -626,6 +626,112 @@ describe("racingFlushScheduler", () => {
     host.timers[0]!();
 
     expect(folded).toBe(0);
+  });
+
+  it("shares one frame per window, and folds each store's flushes inside one batch (VC-515)", () => {
+    // N streaming clients used to arm N frame callbacks and make N store
+    // writes; now every scheduler handed out for one window is the same one.
+    const host = fakeHost();
+    expect(racingFlushScheduler(host)).toBe(racingFlushScheduler(host));
+    const order: string[] = [];
+    const batches: string[] = [];
+    const batchA = (run: () => void) => {
+      batches.push("A:open");
+      run();
+      batches.push("A:close");
+    };
+    const batchB = (run: () => void) => {
+      batches.push("B:open");
+      run();
+      batches.push("B:close");
+    };
+    const scheduler = racingFlushScheduler(host);
+    scheduler.schedule(() => order.push("a1"), batchA);
+    scheduler.schedule(() => order.push("b1"), batchB);
+    scheduler.schedule(() => order.push("a2"), batchA);
+    scheduler.schedule(() => order.push("loose"));
+
+    expect(host.frames).toHaveLength(1);
+    expect(host.timers).toHaveLength(1);
+    host.frames[0]!();
+
+    expect(order).toEqual(["a1", "a2", "b1", "loose"]);
+    expect(batches).toEqual(["A:open", "A:close", "B:open", "B:close"]);
+  });
+
+  it("arms a fresh race for the next frame, and ignores the last frame's losing callback", () => {
+    const host = fakeHost();
+    const scheduler = racingFlushScheduler(host);
+    let folded = 0;
+    scheduler.schedule(() => {
+      folded += 1;
+    });
+    host.frames[0]!();
+    scheduler.schedule(() => {
+      folded += 10;
+    });
+
+    // The first frame's timer lost its race; a fake host still runs it.
+    host.timers[0]!();
+    expect(folded).toBe(1);
+
+    host.frames[1]!();
+    expect(folded).toBe(11);
+  });
+
+  it("keeps the frame armed while another flush is still pending", () => {
+    const host = fakeHost();
+    const scheduler = racingFlushScheduler(host);
+    let folded = 0;
+    const cancel = scheduler.schedule(() => {
+      folded += 1;
+    });
+    scheduler.schedule(() => {
+      folded += 10;
+    });
+
+    cancel();
+    cancel();
+    expect(host.cancelledFrames).toEqual([]);
+    host.frames[0]!();
+
+    expect(folded).toBe(10);
+  });
+
+  it("skips a flush an earlier one in the same frame cancelled", () => {
+    const host = fakeHost();
+    const scheduler = racingFlushScheduler(host);
+    let folded = 0;
+    const cancels: (() => void)[] = [];
+    scheduler.schedule(() => cancels[0]?.());
+    cancels.push(
+      scheduler.schedule(() => {
+        folded += 1;
+      }),
+    );
+
+    host.frames[0]!();
+
+    expect(folded).toBe(0);
+  });
+
+  it("lets one flush's throw strand none of the others, and still reports it", () => {
+    const host = fakeHost();
+    const scheduler = racingFlushScheduler(host);
+    const failure = new Error("fold failed");
+    let folded = 0;
+    scheduler.schedule(() => {
+      throw failure;
+    });
+    scheduler.schedule(() => {
+      folded += 1;
+    });
+
+    host.frames[0]!();
+
+    expect(folded).toBe(1);
+    // Rethrown on its own task: the second timer is the report.
+    expect(() => host.timers[1]!()).toThrow(failure);
   });
 });
 

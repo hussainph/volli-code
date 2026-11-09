@@ -59,9 +59,31 @@ export interface BootRecoverySession {
   };
 }
 
-/** The Session Engine verbs boot recovery is allowed to reach. */
+/**
+ * The ledger reads and Session Engine verbs boot recovery is allowed to reach.
+ * Production composes it over SQLite with `createBootRecoveryEngine`
+ * (`boot-recovery-reader.ts`).
+ */
 export interface BootRecoveryEngine {
-  listSessions(query: { projectId: string; scope: "all" }): Promise<readonly BootRecoverySession[]>;
+  /**
+   * The project's Sessions this sweep could act on, folded, in listing order.
+   *
+   * A superset of what the sweep would act on in a fold of every Session the
+   * project has: an open attachment that is not the structured adapter's, an
+   * open one under a turn still active, or an Interaction still active. The
+   * rest are history, and a relaunch must not fold the machine's whole past
+   * to learn that (VC-1095).
+   */
+  listRecoveryCandidates(query: { projectId: string }): Promise<readonly BootRecoverySession[]>;
+  /**
+   * The newest `lastActivityAt`, by the fold's own rule, of every Session in
+   * these projects except `excluding` — the candidates, whose activity the
+   * sweep already read from their folds. `null` when no Session remains.
+   */
+  latestActivityAt(query: {
+    projectIds: readonly string[];
+    excluding: ReadonlySet<string>;
+  }): Promise<number | null>;
   /**
    * One Session as the ledger has it now. Read after a failed reconcile,
    * because the listing predates it: a rebuilt executor may already have
@@ -95,9 +117,11 @@ export interface BootRecoveryOptions {
   /**
    * One malformed or concurrently-closed attachment must not leave every later
    * stale one falsely open after relaunch, so a failure is reported and the
-   * sweep continues.
+   * sweep continues. `null` names no attachment: the end-of-sweep read of when
+   * the prior process was last alive failed, and the sweep reported its turns
+   * with that moment unknown.
    */
-  onError: (attachmentId: string, error: unknown) => void;
+  onError: (attachmentId: string | null, error: unknown) => void;
   /**
    * Told about every structured attachment whose reconcile failed, with the
    * classified reason and what the sweep did about it — the line a support
@@ -118,8 +142,9 @@ export interface BootRecoveryOptions {
    * Told once, when a sweep finishes, which interrupted turns it recovered onto
    * a rebuilt attachment — the turns a restart resume may continue (VC-450) —
    * and when the prior process was last known alive: the newest activity any
-   * listed Session recorded, or `null` when none did. A sweep a shutdown cut
-   * short tells nothing; the next launch recovers the rest.
+   * Session in the swept projects recorded before the sweep, or `null` when
+   * none did. A sweep a shutdown cut short tells nothing; the next launch
+   * recovers the rest.
    */
   onRecovered?(recovered: BootRecoveredTurns): void;
 }
@@ -165,6 +190,12 @@ export interface BootRecoveryFailure {
 /** The interrupted turns one sweep recovered onto a live attachment. */
 export interface BootRecoveredTurns {
   readonly turns: readonly { readonly sessionId: string; readonly attachmentId: string }[];
+  /**
+   * The restart resume verdict's input, read only when there is a turn for it
+   * to judge: with no turns it is `null`, and nothing reads it. Reading it
+   * means visiting every Session the swept projects hold, which a launch that
+   * recovered nothing has no reason to pay for (VC-1095).
+   */
   readonly lostAt: number | null;
 }
 
@@ -183,13 +214,24 @@ export async function closeStaleAttachments(options: BootRecoveryOptions): Promi
   // stop, not a lost sidecar — no durable fact is recorded from it.
   const stopping = () => options.shouldStop?.() ?? false;
   const recovered: { sessionId: string; attachmentId: string }[] = [];
-  let lostAt: number | null = null;
+  // When the prior process was last alive is the newest activity any Session
+  // recorded before this sweep wrote anything. A candidate's comes from its
+  // fold, read before the sweep acts on it; every other Session's is read at
+  // the end, and only if a turn was recovered for the verdict to judge. That
+  // later read is the same answer, because the sweep writes only to the
+  // Sessions it acts on, and those are candidates.
+  let candidatesLostAt: number | null = null;
+  const folded = new Set<string>();
   for (const projectId of options.projectIds) {
     if (stopping()) return closed;
-    const sessions = await options.engine.listSessions({ projectId, scope: "all" });
+    const sessions = await options.engine.listRecoveryCandidates({ projectId });
     for (const projection of sessions) {
+      folded.add(projection.session.id);
       if (projection.lastActivityAt !== undefined) {
-        lostAt = Math.max(lostAt ?? projection.lastActivityAt, projection.lastActivityAt);
+        candidatesLostAt = Math.max(
+          candidatesLostAt ?? projection.lastActivityAt,
+          projection.lastActivityAt,
+        );
       }
       for (const attachment of projection.attachments) {
         if (stopping()) return closed;
@@ -301,7 +343,33 @@ export async function closeStaleAttachments(options: BootRecoveryOptions): Promi
       }
     }
   }
-  if (!stopping()) options.onRecovered?.({ turns: recovered, lostAt });
+  if (stopping() || options.onRecovered === undefined) return closed;
+  if (recovered.length === 0) {
+    options.onRecovered({ turns: recovered, lostAt: null });
+    return closed;
+  }
+  // The sweep's closes and reconciles are already durable. A Session that
+  // cannot be read here (a malformed fact) must not turn them into a failed
+  // sweep, so the moment stays unknown and restart resume declines to judge
+  // it (`loss-unknown`), leaving each turn's Resume to the person.
+  let othersLostAt: number | null;
+  try {
+    othersLostAt = await options.engine.latestActivityAt({
+      projectIds: options.projectIds,
+      excluding: folded,
+    });
+  } catch (error) {
+    options.onError(null, error);
+    if (stopping()) return closed;
+    options.onRecovered({ turns: recovered, lostAt: null });
+    return closed;
+  }
+  if (stopping()) return closed;
+  const lostAt =
+    othersLostAt === null || candidatesLostAt === null
+      ? (othersLostAt ?? candidatesLostAt)
+      : Math.max(othersLostAt, candidatesLostAt);
+  options.onRecovered({ turns: recovered, lostAt });
   return closed;
 }
 

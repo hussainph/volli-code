@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
@@ -162,6 +162,82 @@ describe("runtime attachment assembly", () => {
     await assembled.sessionRuntime?.close();
   });
 
+  it("hands each attachment's web_fetch the host's HTML extractor", async () => {
+    const options = await fixture();
+    vi.spyOn(options.webAccess!, "resolve").mockReturnValue({
+      configured: true,
+      provider: "brave",
+      apiKey: "fixture-key",
+    });
+    const fetcher = vi.spyOn(agentRuntime, "createSafeWebFetch");
+    const extract: agentRuntime.WebExtractor = vi.fn(async () => ({
+      text: "",
+      extracted: false,
+      truncated: false,
+    }));
+    const assembled = createRuntimeAssembly({ ...options, webExtract: extract });
+    const native = vi.mocked(pi.createPiRuntimeHost).mock.calls[0]![0];
+    expect(
+      typeof native.resolveWebPorts?.({
+        sessionId: "session",
+        attachmentId: "attachment",
+        signal: new AbortController().signal,
+      }).webFetch,
+    ).toBe("function");
+    expect(fetcher).toHaveBeenCalledWith({ extract });
+    await assembled.sessionRuntime?.close();
+  });
+
+  it("scopes live HTML decoration to the Session and both read/attachment cancellation", async () => {
+    const options = await fixture();
+    vi.spyOn(options.webAccess!, "resolve").mockReturnValue({
+      configured: true,
+      provider: "brave",
+      apiKey: "fixture-only",
+    });
+    const fetcher = vi.spyOn(agentRuntime, "createSafeWebFetch");
+    const observe = vi.fn();
+    const beginRead = vi.fn(
+      (sessionId: string, attachment: AbortSignal) =>
+        (candidate: agentRuntime.ReadSourceIconCandidate, signal: AbortSignal) =>
+          observe(sessionId, candidate, AbortSignal.any([attachment, signal])),
+    );
+    const assembled = createRuntimeAssembly({
+      ...options,
+      sourceIconRefiner: { beginRead } as never,
+    });
+    const native = vi.mocked(pi.createPiRuntimeHost).mock.calls[0]![0];
+    const attachment = new AbortController();
+    const read = new AbortController();
+    const ports = native.resolveWebPorts!({
+      sessionId: "session",
+      attachmentId: "attachment",
+      signal: attachment.signal,
+    });
+    expect(beginRead).not.toHaveBeenCalled(); // not an attachment-scoped grant
+    const first = ports.webFetch!({ url: "file:///not-a-web-read", signal: read.signal });
+    expect(beginRead).toHaveBeenCalledExactlyOnceWith("session", attachment.signal);
+    const candidate = { origin: "https://example.com", url: "https://example.com/icon" };
+    fetcher.mock.calls.at(-1)![0]!.onSourceIcon!(candidate, read.signal);
+    const received = observe.mock.calls[0]!;
+    expect(received[0]).toBe("session");
+    expect(received[1]).toBe(candidate);
+    expect((received[2] as AbortSignal).aborted).toBe(false);
+    read.abort();
+    expect((received[2] as AbortSignal).aborted).toBe(true);
+    await expect(first).rejects.toThrow("Only http and https");
+    const second = ports.webFetch!({
+      url: "file:///not-a-web-read",
+      signal: new AbortController().signal,
+    });
+    expect(beginRead).toHaveBeenCalledTimes(2); // same attachment, fresh read grant
+    fetcher.mock.calls.at(-1)![0]!.onSourceIcon!(candidate, new AbortController().signal);
+    attachment.abort();
+    expect((observe.mock.calls[1]![2] as AbortSignal).aborted).toBe(true);
+    await expect(second).rejects.toThrow("Only http and https");
+    await assembled.sessionRuntime?.close();
+  });
+
   it.each(["execute", "background shell"] as const)(
     "wires %s credential reads through environmentAsync with the Session and signal",
     async (door) => {
@@ -293,6 +369,10 @@ describe("runtime attachment assembly", () => {
     const data = Buffer.alloc(50_000, 201).toString("base64");
     const id = native.persistActivityImage!("session", { data, mimeType: "image/png" })!;
     expect(first.pictures.dataUrl(id)).toBe(`data:image/png;base64,${data}`);
+    // The disk write leaves the caller's turn (VC-1082); a relaunch reads what landed.
+    await vi.waitFor(() =>
+      expect(existsSync(join(root, "browser-pictures", `${id}.json`))).toBe(true),
+    );
     const second = createRuntimeAssembly(options);
     expect(second.pictures.dataUrl(id)).toBe(`data:image/png;base64,${data}`);
     expect(createRuntimeAssembly({ ...options, pictures: second.pictures }).pictures).toBe(

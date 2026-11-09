@@ -376,6 +376,15 @@ Each was a decision made while turning the design into code.
     `by_user_session` needs the reader). `PURGE_TABLES` in
     `lib/projectPurge.ts` names every table; a new table states whether a
     purge deletes it.
+46. `projectRepos` gains optional `remoteUrl` (nullable; absent reads as
+    unknown). It is set only on `provider: none` rows, from a `main`
+    checkout's `projectCheckouts.report`, after `normalizeGitRemoteUrl`
+    (`@volli/shared/cloud`): network transports only, no loopback or
+    link-local hosts, no userinfo secrets, GitHub spellings in canonical
+    `https` form. The first recorded remote stays, so a member's fork origin
+    never re-points everyone's runners. It is a URL, never a machine path; a
+    local-path origin is not recorded. GitHub rows never store one:
+    `runnerContext` derives theirs from `owner`/`name` and `GITHUB_WEB_URL`.
 
 ## Rehearsal Workspace cleanup
 
@@ -744,15 +753,21 @@ receipt; missing, stale or incomplete receipts are never auto-backfilled.
 Waitlisted accounts do not record acceptance. Every Workspace create/accept
 requires the current receipt as well as invitation. Account replies include
 `previewAgreementAccepted`; missing/unknown acceptance fails the desktop gate
-closed and offers sign-out/reacceptance. The temporary enrollment version
-constant has a one-line TODO to switch to the legal pages' shared constant
-once that change lands. Waitlisted people must accept again after invitation;
-no receipt is stored before they are invited. Only the current receipt is
-kept on the person row. Legal text still requires owner approval before the
-preview ships.
+closed and offers sign-out/reacceptance. The site's notice bundle (agreement,
+privacy and subprocessors) and desktop use `PREVIEW_AGREEMENT_VERSION` from
+`@volli/shared`; the backend's `PREVIEW_ENROLLMENT_AGREEMENT_VERSION` is an alias
+of that same value, not an independent version. The published date and version
+share one source. A material notice change bumps the version and requires
+existing people, including test accounts, to update and explicitly reaccept;
+no receipt is auto-backfilled. Waitlisted people must accept again after
+invitation; no receipt is stored before they are invited. Only the current
+receipt is kept on the person row. Publish approved pages before enabling their
+version in the backend and desktop. Legal text still requires owner approval
+before the preview ships.
 
-Deploy the backend before a desktop that sends the new optional agreement
-argument: an older backend rejects unknown arguments. Older canaries cannot
+Deploy the backend before a desktop that sends a new agreement version or
+optional agreement argument: an older backend rejects an unknown version or
+argument. Older canaries cannot
 submit agreement acceptance, so they must update before setting up, creating
 or accepting Workspaces. A stale submitted agreement version explicitly asks
 the person to update Volli; sign-out alone cannot update a compiled version.
@@ -818,3 +833,57 @@ network and code/global buckets. Refilled rows are equivalent to absent rows;
 the hourly paged sweep deletes them using `by_full_at`. All three linking doors have
 a deployment-wide cap as well as a network cap, bounding device-code and
 limiter-metadata allocations across distinct networks.
+
+## Runner release feed and update policy
+
+`runnerReleaseFeeds` caches public GitHub Releases pages per repository: their
+ETags, the highest stable/prerelease candidates and whether another page exists.
+The poll is bounded to ten pages of 100 releases, runs every 15 minutes without
+a GitHub token, and validates selected manifests before advancing a channel.
+Semantic version precedence chooses the newest release; publication time breaks
+equal-version ties. A malformed manifest keeps that channel's last good pointer
+without blocking a valid update to the other channel. Failed API requests keep
+both pointers and cache unchanged. The cache is deployment metadata, retained
+when a project is purged.
+
+`releaseChannels.pinned` is optional (absent means feed-managed). The internal
+`runnerReleases.pin` mutation writes an operator override; `pinned: false`
+releases it for the next poll. Only deployment operators can call it. Select the
+intended deployment explicitly when using the Convex CLI; no release workflow
+or runner holds a deployment credential.
+
+`runners.pinnedManifestUrl` is optional and nullable, preserving the exact
+absolute URL when the owner calls `runners.updateNow`. That call pins the
+channel's current version without enabling automatic updates. The first
+heartbeat at or above the pinned version releases this one-shot intent, and a
+channel change releases it too. Older rows without the URL remain valid; the
+runner target query returns null rather than inventing a download origin for an
+old pin. Reissuing Update now records the current pointer and its URL.
+
+Heartbeat sets `upgrade_required` below the selected channel's minimum version
+and clears it on the first compliant beat (or when the selected channel has no
+floor). A stale pin cannot override the floor. The heartbeat's `targetVersion`
+is advisory; the updater applies enabled/idle/floor policy. `runnerJobs.claim`
+rechecks the floor independently, including before heartbeat or during reported
+update states; `sessions.accept`, lease renewal and completion remain available.
+`runnerReleases.target` is runner-authenticated and exposes the selected absolute
+manifest URL. Receiving-task wiring: the runner updater's `onTarget` callback
+reads it before staging, treats a pin as explicit intent even when auto-update
+is disabled, and never lets opt-out bypass the minimum floor.
+
+`runners.setAutoUpdate` and `updateNow` require the runner owner's person token;
+`unlinkSelf` requires the runner token and uses the same removed/revoked path as
+Settings Remove. `runners.list` additively exposes `autoUpdate` and the existing
+open `update` projection. The latter remains unknown to readers until they
+recognize a runner-reported update state.
+
+`runnerUpdateReports.report` is that projection's one writer. The runner's
+update agent sends each outcome its updater recorded
+(`update_staged`, `update_applied`, `update_failed`, `rolled_back`; the
+vocabulary is `@volli/shared/cloud` `runner-updates.ts`), runner-token only and
+idempotent by `outcomeId` over the runner's last 100 events. Each report is a
+`runnerEvents` row of that kind; the newest by the runner's clock (clamped to
+within a day of the server's) becomes `runners.update` =
+`{ kind, version, fromVersion, reason, at }`. Retries arriving out of order
+never replace a newer projection. It decides nothing about claiming: the
+version floor does.
