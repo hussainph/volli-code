@@ -1,7 +1,7 @@
 import { StyleChoice } from "../kit/style-choice";
 import { Switch } from "@renderer/components/ui/switch";
 import { useStyleStore } from "@renderer/stores/style";
-import { OverrideLinks } from "../settings-navigation";
+import { OverrideMenu } from "../settings-navigation";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { CanvasInstrument } from "../kit/canvas-instrument";
 import { LoadingLabel } from "@renderer/components/ui/loading-label";
@@ -101,15 +101,15 @@ function AppThemeSection() {
   const resolved = resolveAppearance(appearance, systemPrefersDark);
 
   // No "Project override" pill when a project's canvas shadows this one — it
-  // would be a status nothing here could act on. The section names each project
-  // that overrides it as a link, and that project's own Configure page carries
+  // would be a status nothing here could act on. The section menu opens each
+  // overriding project, and that project's own Configure page carries
   // the divergence and its revert.
   return (
     <PrefSection
       title="Theme"
       icon={PaletteIcon}
       action={
-        <OverrideLinks
+        <OverrideMenu
           projects={projects.filter((p) => p.themeCanvas != null || p.themeAppearance != null)}
           page="appearance"
         />
