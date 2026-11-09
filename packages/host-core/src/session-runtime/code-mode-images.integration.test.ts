@@ -427,7 +427,9 @@ describe("deferred MCP Code Mode images (VC-748)", () => {
           (message) => message.role === "toolResult" && message.toolCallId === "scripted-call-1",
         );
       if (result?.role !== "toolResult") throw new Error("Missing failed Code Mode result");
-      expect(result.isError).toBe(true);
+      // This is the request projection, not the durable failed result.
+      expect(result.isError).toBe(false);
+      expect(result.content[0]).toEqual({ type: "text", text: "The tool call failed." });
       expect(result.content.filter((block) => block.type === "image")).toEqual([IMAGE]);
       const providerText = result.content
         .flatMap((block) => (block.type === "text" ? [block.text] : []))
@@ -451,6 +453,7 @@ describe("deferred MCP Code Mode images (VC-748)", () => {
         throw new Error("Expected a failed dynamic tool part");
       const input = failed.input as Record<string, unknown>;
       const facet = input["volli.codemode.failure"] as { errorCause: string };
+      expect(redactPayloadSecrets(providerText)).toContain(facet.errorCause);
       // Keep checking recovery even when diagnostics fail: a missing exception
       // name must not hide a separate artifact/replay regression.
       expect.soft(facet.errorCause).toMatch(cause);
@@ -507,11 +510,14 @@ describe("deferred MCP Code Mode images (VC-748)", () => {
       const output = codeModeOutput(snapshot.frames, "scripted-call-1");
       // Activity prose is deliberately redacted (including JSON parser text
       // that says "token:"); picture bytes must still match the provider.
-      const safeContent = result.content.map((block) =>
-        block.type === "text"
-          ? { type: "text" as const, text: redactPayloadSecrets(block.text) }
-          : block,
-      );
+      // The leading failure line exists only in the provider request.
+      const safeContent = result.content
+        .slice(1)
+        .map((block) =>
+          block.type === "text"
+            ? { type: "text" as const, text: redactPayloadSecrets(block.text) }
+            : block,
+        );
       expectSameContent(output, safeContent, f.pictures);
 
       await f.host.close();
@@ -565,21 +571,43 @@ describe("deferred MCP Code Mode images (VC-748)", () => {
       .at(-1)!
       .find((message) => message.role === "toolResult" && message.toolCallId === "scripted-call-1");
     if (result?.role !== "toolResult") throw new Error("Missing failed Code Mode result");
-    expect(result.isError).toBe(true);
+    expect(result.isError).toBe(false);
+    expect(result.content[0]).toEqual({ type: "text", text: "The tool call failed." });
     expect(result.content.filter((block) => block.type === "image")).toEqual([IMAGE]);
+    const originalContent = result.content.slice(1);
+    const providerText = originalContent
+      .flatMap((block) => (block.type === "text" ? [block.text] : []))
+      .join("\n");
+    expect(providerText).toContain("Program failed");
+    expect(providerText).toContain("after image");
     const snapshot = await f.host.snapshot({ sessionId: f.sessionId });
+    const failedPart = snapshot.frames
+      .flatMap((frame) => frame.transcript?.message.parts ?? [])
+      .find(
+        (part) =>
+          part.type === "dynamic-tool" &&
+          part.toolCallId === "scripted-call-1" &&
+          part.state === "output-error",
+      );
+    expect(failedPart).toMatchObject({
+      state: "output-error",
+      errorText: expect.stringContaining("after image"),
+    });
     expectSameContent(
       codeModeOutput(snapshot.frames, "scripted-call-1"),
-      result.content,
+      originalContent,
       f.pictures,
     );
     await f.host.close();
     hosts.splice(hosts.indexOf(f.host), 1);
     const restarted = f.launch();
     const reloaded = await restarted.host.snapshot({ sessionId: f.sessionId });
+    expect(
+      reloaded.frames.flatMap((frame) => frame.transcript?.message.parts ?? []),
+    ).toContainEqual(failedPart);
     expectSameContent(
       codeModeOutput(reloaded.frames, "scripted-call-1"),
-      result.content,
+      originalContent,
       restarted.pictures,
     );
   }, 30000);
