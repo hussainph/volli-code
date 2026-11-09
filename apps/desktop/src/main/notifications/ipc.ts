@@ -51,6 +51,8 @@ export function registerNotificationIpcHandlers(ports: {
   takePendingActivation: () => NotificationTarget | null;
   /** The asking window's renderer is now listening for notification clicks. */
   markRendererReady: (sender: WebContents) => void;
+  /** Settings can read preferences, but only a workbench can consume Session targets. */
+  mayActivate?: (sender: WebContents) => boolean;
   unavailableReason?: string;
 }): void {
   const unavailable = ports.unavailableReason ?? "Notification settings are unavailable.";
@@ -66,6 +68,7 @@ export function registerNotificationIpcHandlers(ports: {
   // receive a click at all.
   const pending: IpcHandlerTable<"volli:notifications-pending-activation"> = {
     "volli:notifications-pending-activation": (sender) => {
+      if (ports.mayActivate?.(sender) === false) return { ok: true, target: null };
       ports.markRendererReady(sender);
       return { ok: true, target: ports.takePendingActivation() };
     },

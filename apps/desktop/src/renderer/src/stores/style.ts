@@ -3,7 +3,7 @@
  */
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
-import { appStateStorage } from "@renderer/lib/app-state-storage";
+import { appStateStorage, registerSharedPreferenceDefaults } from "@renderer/lib/app-state-storage";
 import { useThemeStore } from "./theme";
 
 type Style = "macos" | "modern";
@@ -51,6 +51,8 @@ export const useStyleStore = create<StyleState>()(
     },
   ),
 );
+
+registerSharedPreferenceDefaults(useStyleStore);
 
 /** Called once after bootstrap has seeded app_state and selected a scope. */
 export async function startStylePreferences(): Promise<void> {

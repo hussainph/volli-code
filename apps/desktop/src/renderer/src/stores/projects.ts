@@ -194,6 +194,9 @@ export type SelectedProjectListener = (
 ) => void;
 
 const defaultSelectedProjectListener: SelectedProjectListener = (projectId, origin) => {
+  // Settings owns App/project scope locally; its cloud follower's workspace
+  // selection must not repaint App preferences in that project's palette.
+  if (typeof window !== "undefined" && window.location?.hash === "#settings") return;
   if (projectId === null) {
     void useThemeStore.getState().hydrate(null, origin);
     return;

@@ -68,6 +68,7 @@ import {
 import { seedFixture } from "./lib/fixtures.mjs";
 import { serve } from "./lib/protocol.mjs";
 import { quitNativeWindow, reopenNativeWindow } from "./lib/native-window-lifecycle.mjs";
+import { settingsNative } from "./lib/settings-native.mjs";
 import {
   assertAcceptanceRunner,
   acceptanceScript,
@@ -1006,6 +1007,11 @@ async function handle(cmd, args) {
       const ready = acceptanceWorkspaceReady(result.data);
       transcript({ cmd: "acceptance-workspace", ready });
       return { ready };
+    }
+    case "settings-native": {
+      const result = await settingsNative(app, args);
+      transcript({ cmd, action: args.action ?? "state", ...result });
+      return result;
     }
     case "native-quit": {
       // The real application's native Quit menu item, not the menu-bar test

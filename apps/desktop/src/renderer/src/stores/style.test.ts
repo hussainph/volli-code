@@ -59,6 +59,7 @@ describe("client style preference", () => {
     expect(set).toHaveBeenLastCalledWith(
       "volli:style",
       expect.stringContaining('"global":"modern"'),
+      expect.stringContaining('"global":"unknown"'),
     );
     await useStyleStore.persist.rehydrate();
     expect(useStyleStore.getState().projects.p1).toBe("macos");
@@ -70,6 +71,7 @@ describe("client style preference", () => {
     expect(set).toHaveBeenLastCalledWith(
       "volli:style",
       expect.stringContaining('"global":"macos"'),
+      expect.stringContaining('"global":"modern"'),
     );
     vi.unstubAllGlobals();
   });

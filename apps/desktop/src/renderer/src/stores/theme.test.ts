@@ -260,6 +260,53 @@ describe("hydrateGlobal", () => {
     expect(gateway.state).not.toHaveBeenCalled();
   });
 
+  it("crossfades a live appearance flip from another window without writing the preference back", () => {
+    const { store, paint, gateway } = freshStore();
+    store.getState().hydrateGlobal(appState(TEAL, "dark"));
+    store.getState().hydrateGlobal(appState(TEAL, "light"), { live: true });
+
+    expect(store.getState().globalAppearance).toBe("light");
+    expect(paint.eased).toEqual([{ canvas: TEAL, resolved: "light", transient: false }]);
+    expect(gateway.setGlobalAppearance).not.toHaveBeenCalled();
+    expect(gateway.setGlobalCanvas).not.toHaveBeenCalled();
+    expect(gateway.state).not.toHaveBeenCalled();
+  });
+
+  it("still hard-cuts a live first paint because it has no previous look", () => {
+    const { store, paint } = freshStore();
+    store.getState().hydrateGlobal(appState(TEAL, "light"), { live: true });
+    expect(paint.painted).toEqual([{ canvas: TEAL, resolved: "light", transient: false }]);
+    expect(paint.eased).toEqual([]);
+  });
+
+  it("does not ease a live canvas refresh that leaves the resolved appearance unchanged", () => {
+    const { store, paint } = freshStore();
+    store.getState().hydrateGlobal(appState(TEAL, "dark"));
+    store.getState().hydrateGlobal(appState(PLUM, "dark"), { live: true });
+    expect(paint.painted.at(-1)).toEqual({ canvas: PLUM, resolved: "dark", transient: false });
+    expect(paint.eased).toEqual([]);
+  });
+
+  it("ignores a live event whose rows match what is already painted", async () => {
+    // The windows follow one shared preference (VC-1121): a second window's
+    // echo, or a redundant live event, carries rows the paint already shows.
+    // The guard is exact — painted, same mode, byte-identical canvas — so an
+    // equal-looking canvas that resolves differently still repaints (the PLUM
+    // case above), and only a true no-change event stays silent.
+    const { store, paint, gateway } = freshStore();
+    store.getState().hydrateGlobal(appState(TEAL, "light"));
+    const paintsBefore = paint.painted.length;
+
+    store.getState().hydrateGlobal(appState(TEAL, "light"), { live: true });
+
+    expect(paint.painted).toHaveLength(paintsBefore);
+    expect(paint.eased).toEqual([]);
+    // No repaint, so no second first-paint hint either. The hint's write is
+    // fire-and-forget, so let the first paint's own chain settle first.
+    await settle();
+    expect(gateway.setFirstPaint).toHaveBeenCalledTimes(1);
+  });
+
   it("falls back to the shipped canvas when nothing is stored", () => {
     const { store } = freshStore();
 
@@ -301,10 +348,10 @@ describe("hydrateGlobal", () => {
 });
 
 describe("hydrate", () => {
-  it("adopts the terminal chain and paints, editor included", async () => {
+  it("returns true after adopting the terminal chain and painting, editor included", async () => {
     const { store, paint } = freshStore();
 
-    await store.getState().hydrate();
+    await expect(store.getState().hydrate()).resolves.toBe(true);
 
     expect(store.getState().terminal).toEqual(TERMINAL);
     expect(store.getState().hydrated).toBe(true);
@@ -383,7 +430,7 @@ describe("hydrate", () => {
     const first = store.getState().hydrate();
     const second = store.getState().hydrate(projectScope({ canvas: TEAL }));
     slow.resolve({ ok: true, value: statePayload() });
-    await Promise.all([first, second]);
+    await expect(Promise.all([first, second])).resolves.toEqual([false, true]);
 
     expect(store.getState().projectId).toBe("p1");
     expect(effectiveCanvas(store.getState())).toEqual(TEAL);
@@ -394,7 +441,7 @@ describe("hydrate", () => {
       state: vi.fn(async () => ({ ok: false as const, error: "database is locked" })),
     });
 
-    await store.getState().hydrate();
+    await expect(store.getState().hydrate()).resolves.toBe(false);
 
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
       expect.stringContaining("database is locked"),
@@ -410,7 +457,7 @@ describe("hydrate", () => {
       }),
     });
 
-    await store.getState().hydrate();
+    await expect(store.getState().hydrate()).resolves.toBe(false);
 
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
       expect.stringContaining("bridge gone"),

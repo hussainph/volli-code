@@ -85,6 +85,7 @@ export function registerAppMenu(
   options: {
     installAgentTools?: () => Promise<void>;
     uninstallAgentTools?: () => Promise<void>;
+    openSettings?: () => void;
   } = {},
 ): void {
   const agentToolsItems: MenuItemConstructorOptions[] = [];
@@ -113,7 +114,22 @@ export function registerAppMenu(
   }
 
   const template: MenuItemConstructorOptions[] = [
-    { role: "appMenu" },
+    {
+      role: "appMenu",
+      submenu: [
+        { role: "about" },
+        { type: "separator" },
+        { label: "Settings…", accelerator: "CmdOrCtrl+,", click: () => options.openSettings?.() },
+        { type: "separator" },
+        { role: "services" },
+        { type: "separator" },
+        { role: "hide" },
+        { role: "hideOthers" },
+        { role: "unhide" },
+        { type: "separator" },
+        { role: "quit" },
+      ],
+    },
     {
       label: "File",
       submenu: [

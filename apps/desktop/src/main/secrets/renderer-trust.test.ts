@@ -15,6 +15,17 @@ describe("credential renderer trust", () => {
     expect(isSecretRenderer(PACKAGED_RENDERER_ENTRY_URL, entry)).toBe(false);
     expect(isSecretRenderer("http://localhost:5174/", entry)).toBe(false);
   });
+  it("bounds each explicitly owned renderer to its entry", () => {
+    expect(isSecretRenderer(PACKAGED_RENDERER_ENTRY_URL, undefined, "main")).toBe(true);
+    expect(isSecretRenderer(`${PACKAGED_RENDERER_ENTRY_URL}#settings`, undefined, "settings")).toBe(
+      true,
+    );
+    expect(isSecretRenderer(`${PACKAGED_RENDERER_ENTRY_URL}#settings`, undefined, "main")).toBe(
+      false,
+    );
+    expect(isSecretRenderer(PACKAGED_RENDERER_ENTRY_URL, undefined, "settings")).toBe(false);
+    expect(isSecretRenderer(`${PACKAGED_RENDERER_ENTRY_URL}#other`)).toBe(false);
+  });
   it("rejects other bundle pages, query changes, external and malformed URLs", () => {
     for (const url of [
       "volli-app://bundle/cursor.html",

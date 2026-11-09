@@ -53,6 +53,7 @@ import {
   transcriptReferenceSql,
 } from "./lib/navigation-host-evidence.mjs";
 import { request } from "./lib/protocol.mjs";
+import { windowTargeting } from "./lib/window-targeting.mjs";
 
 const exec = promisify(execFile);
 const cli = join(REPO, "apps/desktop/e2e/volli-drive/cli.mjs");
@@ -239,10 +240,19 @@ function refFor(snap, label) {
   assert.ok(line, "required UI control missing");
   return /\[ref=([^\]]+)\]/.exec(line)[1];
 }
-const call = (cmd, args = {}, cap = 15_000) =>
+// Keep each snapshot/action/wait on the chosen page through the shared
+// native-window targeting: the workbench first, then the Settings window the
+// Settings button opens, then back to the workbench after its native close.
+// `wait`'s socket budget still rides on its requested timeout.
+const windows = windowTargeting((cmd, args = {}) =>
   request(layout.driveSocket, cmd, args, {
-    timeoutMs: Math.min(cap, remaining()),
-  });
+    timeoutMs: Math.min(
+      cmd === "wait" ? Number(args.timeout ?? 15_000) + 1_000 : 15_000,
+      remaining(),
+    ),
+  }),
+);
+const call = windows.call;
 const find = async (query) => {
   const snap = await call("find", { query });
   return { text: snap.matches.join("\n"), generation: snap.generation };
@@ -256,8 +266,7 @@ const act = async (snap, label, kind = "click", extra = {}) =>
       ...extra,
     })
   ).snapshot;
-const wait = async (text, timeout = 15_000) =>
-  (await call("wait", { text, timeout }, timeout + 1_000)).snapshot;
+const wait = async (text, timeout = 15_000) => (await call("wait", { text, timeout })).snapshot;
 
 async function diagnostics() {
   const fields = [
@@ -393,16 +402,22 @@ try {
       () => ({ incomplete: true }),
     );
   phase = "composer setup";
+  // Settings is a native second window: open it from the workbench button,
+  // target that window for the Agents pane, and close it at the native
+  // boundary — a quiet window cannot become key, so close is addressed
+  // explicitly, never by sending an OS-wide keyboard event. The workbench
+  // (the ticket and the Session born below) is the target again afterwards.
   let snap = await find("Settings");
   snap = await act(snap, 'button "Settings"');
+  await windows.useSettingsWindow();
   snap = await find("Agents");
   snap = await act(snap, 'button "Agents"');
   snap = await wait("Code Mode for new Sessions");
   snap = await act(snap, 'combobox "Code Mode for new Sessions"');
   snap = await find("Code and direct tools");
   snap = await act(snap, 'option "Code and direct tools"');
-  snap = await find("Close Settings");
-  snap = await act(snap, 'button "Close Settings"');
+  await call("settings-native", { action: "close" });
+  windows.useMainWindow();
   snap = await find("DRV-1");
   snap = await act(snap, "DRV-1");
   snap = await act(snap, "DRV-1", "press", { key: "Enter" });

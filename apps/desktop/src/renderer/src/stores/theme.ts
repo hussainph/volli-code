@@ -238,9 +238,9 @@ interface ThemeState {
   systemPrefersDark: boolean;
 
   /** Seeds the global canvas + appearance from the bootstrap payload's raw `app_state` rows. */
-  hydrateGlobal(appState: Record<string, string>): void;
+  hydrateGlobal(appState: Record<string, string>, options?: { live: boolean }): void;
   /** Reads the terminal chain for a scope, adopting the workspace's canvas columns with it. */
-  hydrate(scope?: ThemeProjectScope | null, origin?: ScopeRepaintOrigin): Promise<void>;
+  hydrate(scope?: ThemeProjectScope | null, origin?: ScopeRepaintOrigin): Promise<boolean>;
   /** The system flipped light↔dark: re-resolve and repaint every scope on `auto`. */
   noteSystemAppearance(prefersDark: boolean): void;
   acceptTerminal(payload: GhosttyAppearancePayload): void;
@@ -620,7 +620,7 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
       previewAppearance: null,
       systemPrefersDark: deps.systemPrefersDark(),
 
-      hydrateGlobal(appState) {
+      hydrateGlobal(appState, options) {
         // A row that is absent, unparseable, or still holds the seed system's
         // `ThemeDefinition` all read the same: no canvas stored, so the shipped
         // default. That IS decision 7 — reset to the default canvas, no
@@ -636,8 +636,18 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
           }
         }
         const appearance = appState[APPEARANCE_APP_STATE_KEY];
-        // NEVER eased, and that is the same rule as "the first paint is not a
-        // transition" — it just has to be said here, because by the time these
+        const globalCanvas = stored ?? DEFAULT_CANVAS;
+        const globalAppearance = isAppearance(appearance) ? appearance : "auto";
+        const current = get();
+        if (
+          painted !== null &&
+          current.globalAppearance === globalAppearance &&
+          JSON.stringify(current.globalCanvas) === JSON.stringify(globalCanvas)
+        )
+          return;
+        // Boot is never eased: "the first paint is not a transition". A live
+        // preference event from another window may ease an actual mode flip.
+        // The boot distinction matters because by the time these
         // rows land something may already have painted. `volli:theme-state` can
         // beat the bootstrap payload back (main.tsx asks for it the moment the
         // renderer exists; this arrives with `boot()`), and that read's
@@ -649,10 +659,10 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
         // definition: this IS the previous look arriving.
         setAndRepaint(
           {
-            globalCanvas: stored ?? DEFAULT_CANVAS,
-            globalAppearance: isAppearance(appearance) ? appearance : "auto",
+            globalCanvas,
+            globalAppearance,
           },
-          { ease: false },
+          { ease: options?.live === true },
         );
       },
 
@@ -668,17 +678,18 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
           // default — but it is still a failure the user must see, or their
           // chosen canvas silently "resets".
           toastError(`Couldn't load the theme: ${errorMessage(error)}`);
-          return;
+          return false;
         }
         // Superseded while in flight: adopting this payload would repaint the
         // app in a scope it has already left. Silent by design — the read didn't
         // fail, it just stopped being the answer to the question being asked.
-        if (generation !== hydrateGeneration) return;
+        if (generation !== hydrateGeneration) return false;
         if (!result.ok) {
           toastError(`Couldn't load the theme: ${result.error}`);
-          return;
+          return false;
         }
         accept(result.value, scope ?? null, origin);
+        return true;
       },
 
       noteSystemAppearance(prefersDark) {

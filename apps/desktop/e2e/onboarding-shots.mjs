@@ -43,6 +43,11 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import { join } from "node:path";
+import {
+  settingsPageOf,
+  assertSettingsWindow,
+  closeSettingsWindow,
+} from "./lib/settings-window.mjs";
 
 import {
   assertBuiltRendererLoaded,
@@ -98,11 +103,12 @@ const app = await launch({ dbPath, userDataDir, extraEnv: { HOME: home } });
 async function capture(page, name) {
   await page.mouse.move(4, 4); // park the pointer so no hover state ships
   await sleep(500);
-  const base64 = await app.evaluate(async ({ BrowserWindow }) => {
-    const win = BrowserWindow.getAllWindows()[0];
+  const base64 = await app.evaluate(async ({ BrowserWindow }, url) => {
+    const win = BrowserWindow.getAllWindows().find((window) => window.webContents.getURL() === url);
+    if (!win) throw new Error("capture window is closed");
     const image = await win.webContents.capturePage();
     return image.toPNG().toString("base64");
-  });
+  }, page.url());
   const file = join(OUT_DIR, name);
   await fs.writeFile(file, Buffer.from(base64, "base64"));
   return { ok: true, detail: file };
@@ -157,19 +163,26 @@ try {
     return capture(page, "03-provider-menu.png");
   });
 
+  let settingsPage = null;
   // ---- 04: the provider's own key step (deep-linked into Settings) ---------
   await attempt(4, "04 sign-in key step (masked input)", async () => {
     await page.getByRole("menuitem", { name: PROVIDER_LABEL }).click();
-    const panel = page.getByTestId(`sign-in-${PROVIDER_ID}`);
+    settingsPage = await waitUntil(
+      "the provider's native Settings window",
+      () => settingsPageOf(app),
+      { timeout: 20000 },
+    );
+    await assertSettingsWindow(app, page, settingsPage);
+    const panel = settingsPage.getByTestId(`sign-in-${PROVIDER_ID}`);
     await panel.waitFor({ timeout: 20000 });
     await panel.locator("input").fill(FAKE_KEY);
     await sleep(300);
-    return capture(page, "04-signin-key-step.png");
+    return capture(settingsPage, "04-signin-key-step.png");
   });
 
   // ---- 05: signed in -------------------------------------------------------
   await attempt(5, "05 Model Access — account signed in", async () => {
-    await page
+    await settingsPage
       .getByTestId(`sign-in-${PROVIDER_ID}`)
       .getByRole("button", { name: "Continue", exact: true })
       .click();
@@ -178,7 +191,7 @@ try {
       async () => {
         // The test id marks the row's name; its buttons are siblings, so the
         // row is the shell one level up (see model-access-signin-smoke.mjs).
-        const button = page
+        const button = settingsPage
           .getByTestId(`account-${PROVIDER_ID}`)
           .locator("xpath=..")
           .getByRole("button", { name: "Sign out", exact: true });
@@ -186,12 +199,12 @@ try {
       },
       { timeout: 20000 },
     );
-    return capture(page, "05-signed-in.png");
+    return capture(settingsPage, "05-signed-in.png");
   });
 
   // ---- 06: back on the board — choose a default ----------------------------
   await attempt(6, "06 board — 'No default model'", async () => {
-    await page.keyboard.press("Escape");
+    await closeSettingsWindow(app, settingsPage);
     const line = firstRunLine(page, "No default model");
     const appeared = await waitUntil(
       "choose-default line",
@@ -203,7 +216,7 @@ try {
       .then(() => true)
       .catch(() => false);
     if (!appeared) {
-      // Escape did not close Settings on this build — reload lands on Home.
+      // Re-read the workbench after the cross-window account update.
       await page.reload();
       await page.waitForLoadState("domcontentloaded");
       await waitUntil("choose-default line after reload", async () => (await line.count()) === 1, {

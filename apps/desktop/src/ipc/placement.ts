@@ -1072,6 +1072,33 @@ export const CHANNEL_PLACEMENT: { readonly [C in PlacedChannel]: ChannelPlacemen
     reason: "The person's Ghostty config on the viewing device (decision #26).",
   },
 
+  // ---- VolliSettingsWindowIpcContract ------------------------------------
+  "volli:settings-window-open": {
+    placement: "client-local",
+    owner: "stays",
+    reason: "Opens or focuses this desktop's native Settings window; presentation intent only.",
+  },
+  "volli:settings-window-pending-navigation": {
+    placement: "client-local",
+    owner: "stays",
+    reason: "Reads the Settings window's parked presentation intent before its first render.",
+  },
+  "volli:settings-window-ready": {
+    placement: "client-local",
+    owner: "stays",
+    reason: "Acknowledges the painted navigation revision before revealing native Settings.",
+  },
+  "volli:settings-window-open-workspace": {
+    placement: "client-local",
+    owner: "stays",
+    reason: "Reveals a file or Ticket in this desktop's workspace window; no domain writes.",
+  },
+  "volli:settings-window-pending-workspace-navigation": {
+    placement: "client-local",
+    owner: "stays",
+    reason: "Reads parked workspace-window presentation intent after its renderer subscribes.",
+  },
+
   // ---- VolliUpdateIpcContract --------------------------------------------
   "volli:update-state-get": {
     placement: "client-local",
@@ -1254,6 +1281,21 @@ export const CHANNEL_PLACEMENT: { readonly [C in PlacedChannel]: ChannelPlacemen
     owner: "stays",
     reason: "Window state.",
   },
+  "volli:settings-window-navigate": {
+    placement: "client-local",
+    owner: "stays",
+    reason: "Revisioned presentation intent targeted to one Settings renderer, never broadcast.",
+  },
+  "volli:workspace-window-navigate": {
+    placement: "client-local",
+    owner: "stays",
+    reason: "Targets one workspace renderer with a file or Ticket to reveal on this desktop.",
+  },
+  "volli:app-state-changed": {
+    placement: "client-local",
+    owner: "stays",
+    reason: "Accepted preference writes for this device's other windows, never a remote host.",
+  },
   "volli:client-state-flush": {
     placement: "client-local",
     owner: "stays",
@@ -1395,6 +1437,12 @@ export const CHANNEL_PLACEMENT: { readonly [C in PlacedChannel]: ChannelPlacemen
     owner: "VC-572",
     reason:
       "Sent to the window that began a provider sign-in; becomes a request to the asking connection (F2).",
+  },
+  "volli:model-access-changed": {
+    placement: "host",
+    owner: "VC-572",
+    reason:
+      "Payload-free invalidation after an accepted credential, model default, visibility or catalogue change on this machine.",
   },
 
   // ---- Cursor overlay wire (cursor-contract.ts) --------------------------

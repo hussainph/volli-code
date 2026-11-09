@@ -75,6 +75,7 @@ import {
 } from "./lib/cloud-transcript-acceptance.mjs";
 import { createRegistry, instanceLayout, REPO } from "./lib/core.mjs";
 import { request } from "./lib/protocol.mjs";
+import { windowTargeting } from "./lib/window-targeting.mjs";
 import { hasActionableControl, visibleControls as controls } from "./lib/remote-acceptance.mjs";
 
 const exec = promisify(execFile);
@@ -110,7 +111,10 @@ function record(number, status, assertion, detail = "") {
 
 /** One instance's drive: every action from a fresh tree; ambiguity is a failure. */
 function driver(label, socket) {
-  const call = (cmd, args = {}) => request(socket, cmd, args, { timeoutMs: 150_000 });
+  const windows = windowTargeting((cmd, args = {}) =>
+    request(socket, cmd, args, { timeoutMs: 150_000 }),
+  );
+  const call = windows.call;
   const snap = () => call("snapshot");
   const wait = async (text, timeout = 45_000) => (await call("wait", { text, timeout })).snapshot;
   const gone = async (text, timeout = 45_000) =>
@@ -132,6 +136,8 @@ function driver(label, socket) {
   return {
     label,
     call,
+    useMainWindow: windows.useMainWindow,
+    useSettingsWindow: windows.useSettingsWindow,
     snap,
     wait,
     gone,
@@ -226,7 +232,9 @@ async function step(number, body) {
 
 /** Settings → Account → the agreement → Continue with GitHub; the browser double completes it. */
 async function signIn(drive) {
+  drive.useMainWindow();
   await drive.click("button", "Settings", { first: true });
+  await drive.useSettingsWindow();
   await drive.wait("Settings categories");
   await drive.click("button", "Account", { first: true });
   await drive.wait("Accept Preview Agreement");
@@ -255,6 +263,7 @@ async function cloudState(drive) {
 
 /** The cloud project's Home on this Mac. */
 async function openProject(drive) {
+  drive.useMainWindow();
   await drive.wait(CLOUD_PROJECT.name, 60_000);
   if (await drive.has("button", CLOUD_PROJECT.name)) {
     await drive.click("button", CLOUD_PROJECT.name, { first: true });
