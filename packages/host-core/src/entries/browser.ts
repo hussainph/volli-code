@@ -22,6 +22,7 @@ export {
   isAllowedBrowserUrl,
 } from "../browser/backend";
 export type {
+  CdpPreviewFrameDiagnostic,
   CdpTimeoutDiagnostic,
   CdpTransport,
   TabCursorDriver,

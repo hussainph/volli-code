@@ -2,14 +2,14 @@
  * Host-authored transcript notices projected for every Session client.
  *
  * A notice is stored as a `user` message because the Agent Runtime must read
- * it in-band. Its shared metadata says who actually authored it. This module
- * turns that durable fact into a framework-neutral row model; clients render
- * the model and never interpret message metadata themselves.
+ * it in-band. Recorded command provenance identifies the host producer; its
+ * metadata describes the notice, but cannot independently prove authorship.
  *
- * Messages written before the shared metadata existed are recognized by the
- * delegation notice's frozen message-id suffix or a Browser hold notice's
- * frozen Volli text frame. This keeps existing Session history out of the
- * person's voice without broadly guessing from ordinary prose.
+ * A bounded tail or legacy history without producer provenance degrades to a
+ * neutral ordinary message with its full original content. Neither metadata,
+ * a frozen message-id suffix nor a familiar text frame can promote it. Older
+ * text formats are parsed only after recorded host provenance establishes the
+ * corresponding producer.
  */
 
 import {
@@ -25,6 +25,7 @@ import {
   type SubagentNoticeState,
   type WatchNoticeEvent,
   type WatchNoticeFact,
+  type SessionOrigin,
 } from "@volli/shared";
 import type { UIMessage } from "ai";
 
@@ -68,26 +69,47 @@ export type TranscriptHostNotice =
 /**
  * Read one transcript message as a host notice.
  *
- * `null` means the message has no host marker and is an ordinary Turn. Once a
- * known host marker is present, malformed or newer payloads become an unknown
- * host notice rather than falling back to a user bubble.
+ * `null` means host authorship is not established, or the format is not a
+ * notice. Only recorded producer evidence permits malformed/newer host
+ * payloads to become unknown host notices instead of ordinary message content.
  */
 export function readHostNotice(
   message: Pick<UIMessage, "id" | "role" | "metadata" | "parts">,
+  origin?: SessionOrigin | null,
 ): TranscriptHostNotice | null {
   if (message.role !== "user") return null;
+  // Missing command evidence and explicit conflict are both untrusted for
+  // authorship. In particular, an adapter-only bounded tail must not promote
+  // caller-controlled metadata while waiting for its older command to load.
+  if (origin?.kind !== "volli") return null;
+  if (
+    !["subagent-notice", "browser-notice", "watch-notice", "shell-notice"].includes(origin.reason)
+  )
+    return null;
   const text = messageText(message.parts);
   const metadata = recordOf(message.metadata);
 
   if (metadata?.kind === SESSION_HOST_NOTICE_METADATA_KIND) {
-    return readSharedNotice(metadata.notice) ?? unknownNotice(text);
+    const notice = readSharedNotice(metadata.notice);
+    if (notice === null) return unknownNotice(text);
+    const expected =
+      notice.kind === "subagent"
+        ? "subagent-notice"
+        : notice.kind === "browser-hold"
+          ? "browser-notice"
+          : notice.kind === "watch"
+            ? "watch-notice"
+            : "shell-notice";
+    return origin.reason === expected ? notice : unknownNotice(text);
   }
 
   // Historical host messages had no metadata. A foreign marker means another
   // producer owns the message, even when its id or prose resembles an old one.
   if (message.metadata !== undefined) return null;
-  const historicalHold = readBrowserHoldText(text);
-  if (historicalHold !== null) return historicalHold;
+  if (origin?.kind === "volli" && origin.reason === "browser-notice") {
+    return readBrowserHoldText(text) ?? unknownNotice(text);
+  }
+  if (origin.reason !== "subagent-notice") return null;
   if (!message.id.endsWith(SUBAGENT_NOTICE_MESSAGE_ID_SUFFIX)) return null;
   if (!text.startsWith("[Subagent Session ")) return null;
   return readHistoricalSubagent(text) ?? unknownNotice(text);

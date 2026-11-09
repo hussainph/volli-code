@@ -15,6 +15,7 @@ import { busyRefusal } from "@volli/host-core/worktree";
 import type { BackgroundShellHostPorts } from "@volli/host-core/session-runtime";
 // The runner's private staging, recorded here at its module seam.
 import { SESSION_RUNTIME } from "../../../packages/host-core/src/session-services";
+import { createDetachedWorkTracker } from "../../../packages/host-core/src/detached-work";
 import type { RuntimeAssemblyOptions } from "../../../packages/host-core/src/session-runtime/assembly";
 
 const seam = vi.hoisted(() => ({
@@ -198,6 +199,7 @@ function fixture() {
     sessionEngine: engine,
     sessionWakeBus: { subscribe: vi.fn(() => () => {}) },
     liveWork: { observeShell: vi.fn(), forgetShell: vi.fn() },
+    detachedWork: createDetachedWorkTracker(),
     [SESSION_RUNTIME]: { claim: () => () => {} },
     dataDir: "/data",
     runtimeServices,
@@ -415,9 +417,18 @@ describe("headless runtime ownership", () => {
     expect(f.agents.toolDoor).toHaveBeenCalledWith(f.proof);
     const drain = seam.lifecycle.mock.lastCall![0];
     expect(drain.services()).toBe(f.facade);
+    const track = vi.spyOn(f.host.detachedWork, "track");
     drain.stopProducers();
+    expect(track).toHaveBeenCalledOnce();
+    expect(track.mock.calls[0]![0]).toBeInstanceOf(Promise);
+    expect(f.host.detachedWork.pending).toBe(1);
+    await f.host.detachedWork.drain();
+    expect(f.host.detachedWork.pending).toBe(0);
     expect(f.automations.stop).toHaveBeenCalledOnce();
     owner.stopProducers();
+    expect(track).toHaveBeenCalledTimes(2);
+    await f.host.detachedWork.drain();
+    expect(f.host.detachedWork.pending).toBe(0);
     expect(f.automations.stop).toHaveBeenCalledTimes(2);
     drain.installQuitHold(vi.fn());
     // The runtime's drain JOINS shell termination: it settles only after the

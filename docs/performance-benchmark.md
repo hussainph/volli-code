@@ -26,7 +26,14 @@ pnpm bench:desktop -- --preset small --repetitions 2 --arms idle --stream-steps 
 ```
 
 Use `--help` for controls. With `--fixture`, pass its generation preset too.
-`--skip-build` is for repeated probes after the relevant bundles are built.
+`--skip-build` is for repeated probes only after `chat-window-bench.mjs` has
+built the app and bench and generated a matching source/overlay/artifact proof.
+A plain desktop or bench build does not create that proof. Run the matrix once
+without `--skip-build` (its streaming caller, `bench/performance/run.mjs`, invokes
+that entry), or run `chat-window-bench.mjs` without `--skip-build` first. The matrix
+forwards `--skip-build` to that entry, so it has the same prerequisite; unchanged
+source, overlay and built artifacts are required. See the
+[guarded bench guide](../apps/desktop/e2e/bench/chat-window/README.md).
 A full run uses 20 repetitions, giving a meaningful nearest-rank p95, and
 throws away one complete warm-up iteration in **each** arm. The arms run
 sequentially; comparing a cold first arm with a warm second is invalid.
@@ -243,8 +250,10 @@ Raw lines per repetition stay in `benchmark.json` (`repetitionSignals`). The
 warm-up repetition's stalls are discarded with it. Each repetition also records how the app
 closed (`closeKind`): the log sink writes each line as it comes, so lines
 logged before the pre-quit wait are on disk even when the close falls back to a
-signal. A stream-only run launches
-no full app and has no signals.
+signal. A stream-only run still launches the guarded app as its synthetic
+renderer's host through volli-drive. The matrix does not collect that separate
+driver instance's host logs into its full-app `repetitionSignals`; they remain in
+the driver's evidence directory.
 
 ## Compare two runs
 

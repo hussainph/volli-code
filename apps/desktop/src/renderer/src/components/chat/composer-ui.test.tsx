@@ -686,21 +686,14 @@ describe("what the model pill is willing to say", () => {
     ).toBe("sonnet-4.5");
   });
 
-  it("still leads with the provider where the name alone would be ambiguous", () => {
+  it("leaves provider identity to the mark even for an unlisted model", () => {
     expect(
       modelPillLabel(MODELS, {
         providerId: "azure",
         modelId: "sonnet-4.5",
         reasoningLevel: "high",
       }),
-    ).toBe("azure · sonnet-4.5");
-    expect(
-      modelPillLabel(
-        MODELS,
-        { providerId: "azure", modelId: "sonnet-4.5", reasoningLevel: "high" },
-        "Azure OpenAI",
-      ),
-    ).toBe("Azure OpenAI · sonnet-4.5");
+    ).toBe("sonnet-4.5");
   });
 
   it("says the whole identity where the pill has room for a fragment of it", () => {
@@ -832,7 +825,8 @@ describe("the model pill's controlled open", () => {
     // because a `title` is not keyboard-reachable and a name is not readable.
     const tiered = pillMarkup({ selectionTier: "Fast" });
     expect(tiered).toContain('aria-label="Model: Fast · sonnet-4.5 · Anthropic"');
-    expect(tiered).toContain('title="Fast · sonnet-4.5 · Anthropic"');
+    expect(tiered).not.toContain('title="Fast · sonnet-4.5 · Anthropic"');
+    expect(tiered).toContain('aria-label="Anthropic"');
   });
 
   // The line the open list leads with is portalled, so it exists only in a

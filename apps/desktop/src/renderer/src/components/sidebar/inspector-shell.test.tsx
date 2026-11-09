@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { InspectorShell } from "./inspector-shell";
-import { InspectorHostContext } from "./inspector-host";
+import { InspectorHostContext, useInspectorVisible } from "./inspector-host";
 import { EXIT_GRACE_MS } from "./edge-reveal";
 import { useUiStore } from "@renderer/stores/ui";
 
@@ -21,6 +21,14 @@ let panel: HTMLDivElement;
 let button: HTMLButtonElement;
 const cancel = vi.fn();
 const animate = vi.fn(() => ({ cancel, onfinish: null }));
+function ResidentReader() {
+  const visible = useInspectorVisible();
+  return (
+    <div data-live-child="" data-reader-visible={String(visible)}>
+      Resident page
+    </div>
+  );
+}
 function Harness({ owner = "home" }: { owner?: "home" | "ticket" }) {
   return (
     <>
@@ -33,7 +41,7 @@ function Harness({ owner = "home" }: { owner?: "home" | "ticket" }) {
       </button>
       <div data-reading-plane="" />
       <InspectorShell enabled owner={owner}>
-        <div data-live-child="">Resident page</div>
+        <ResidentReader />
       </InspectorShell>
     </>
   );
@@ -102,7 +110,9 @@ describe("resident inspector", () => {
     it(`${owner}: mirrors pointer push, dwell, suppression and pin without remounting its page`, async () => {
       await setup(owner);
       const child = host.querySelector("[data-live-child]");
+      expect(child?.getAttribute("data-reader-visible")).toBe("true");
       await click(1);
+      expect(child?.getAttribute("data-reader-visible")).toBe("false");
       expect(panel.getAttribute("aria-hidden")).toBe("true");
       expect(panel.hasAttribute("data-pane-withdrawn")).toBe(true);
       expect(panel.parentElement!.style.width).toBe("var(--right-pane-push, 0px)");
@@ -125,6 +135,7 @@ describe("resident inspector", () => {
       await move(980, 18, 138);
       expect(panel.getAttribute("aria-hidden")).toBe("true");
       await move(980, 18, 2);
+      expect(child?.getAttribute("data-reader-visible")).toBe("true");
       expect(panel.getAttribute("aria-hidden")).toBeNull();
       expect(panel.hasAttribute("data-pane-withdrawn")).toBe(false);
       expect(panel.style.getPropertyValue("--reveal-duration")).not.toBe("0ms");

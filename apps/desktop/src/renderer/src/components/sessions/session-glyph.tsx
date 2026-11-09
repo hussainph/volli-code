@@ -14,7 +14,7 @@ import {
 
 import { isFirstClassHarnessId, type FirstClassHarnessId, type HarnessId } from "@volli/shared";
 
-import { ModelMark, providerMark } from "@renderer/components/models/model-identity";
+import { ModelArtwork, providerMark } from "@renderer/components/models/model-identity";
 import type { StatusDotState } from "@renderer/components/ui/status-dot";
 import { cn } from "@renderer/lib/utils";
 
@@ -126,8 +126,10 @@ export function SessionGlyph({
         tab && "mr-0.5",
       )}
     >
+      {/* The tab/row owns its help surface and keyboard anchor. A nested
+          ModelMark would create a competing tooltip and another focus stop. */}
       {hasMark ? (
-        <ModelMark
+        <ModelArtwork
           model={{ providerId, modelId: providerId, label: providerLabel }}
           providerLabel={providerLabel}
           by="provider"

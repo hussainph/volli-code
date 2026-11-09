@@ -886,6 +886,7 @@ describe("createAgentBrowserPort empty pages, timeouts and act evidence (VC-277)
   function over(
     page: { tree: () => object; hang?: string },
     onClick: (tabs: Map<string, BrowserTabState>) => void = () => undefined,
+    onPreviewFrame?: CdpTransport["onPreviewFrame"],
   ) {
     const fake = fakeHost([state({ tabId: "mine", createdBy: "session" })]);
     const browser = createAgentBrowserPort({
@@ -902,6 +903,7 @@ describe("createAgentBrowserPort empty pages, timeouts and act evidence (VC-277)
           }
           return {};
         },
+        ...(onPreviewFrame === undefined ? {} : { onPreviewFrame }),
       }),
       waitForLoad: async () => undefined,
       holdAwake: () => () => undefined,
@@ -1054,6 +1056,41 @@ describe("createAgentBrowserPort empty pages, timeouts and act evidence (VC-277)
     await expect(acting).rejects.toMatchObject({ rule: "browser.stale-ref" });
     expect(input).not.toHaveBeenCalled();
     expect((await browser.snapshot({ tabId: "mine", signal })).generation).toBe(tab.generation + 1);
+  });
+
+  it("carries each preview frame ending through the coordinator to the transport's listener (VC-1150)", async () => {
+    // The production hop: port -> host-wide coordinator -> the controller it
+    // builds from the transport. A field the coordinator does not forward is
+    // a listener production never calls.
+    vi.useFakeTimers();
+    try {
+      const seen: string[] = [];
+      const listen: CdpTransport["onPreviewFrame"] = (diagnostic) =>
+        void seen.push(diagnostic.outcome);
+      const stalled = over(
+        { tree: () => BUTTON_TREE, hang: "Runtime.evaluate" },
+        undefined,
+        listen,
+      );
+      const navigation = stalled.port.navigate({
+        tabId: "mine",
+        navigation: { kind: "reload" },
+        signal,
+      });
+      await vi.advanceTimersByTimeAsync(500);
+      expect(await navigation).toMatchObject({ picture: null });
+      expect(seen).toEqual(["deadline"]);
+      const settled = over({ tree: () => BUTTON_TREE }, undefined, listen);
+      const photographed = await settled.port.navigate({
+        tabId: "mine",
+        navigation: { kind: "reload" },
+        signal,
+      });
+      expect(photographed.picture).toBe("live:mine:1");
+      expect(seen).toEqual(["deadline", "ready"]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("returns a structural navigation result without a photo when frames stall", async () => {

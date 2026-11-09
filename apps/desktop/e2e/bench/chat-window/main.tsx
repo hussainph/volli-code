@@ -504,6 +504,7 @@ async function streamAndScroll(
     priorTop = actualTop;
   };
 
+  performance.mark("chat-bench:start");
   const started = performance.now();
   for (let step = 0; step < steps; step += 1) {
     const tokenCount = Math.max(1, Math.floor(((performance.now() - started) * tokenRate) / 1_000));
@@ -534,6 +535,7 @@ async function streamAndScroll(
   const streamedWhileWorking = streamedSlice?.lifecycle === "working";
   const streamedWhileTurnActive = streamedSlice?.transcript.turnActive === true;
   const latencyMs = performance.now() - started;
+  performance.mark("chat-bench:end");
   for (const entry of observer?.takeRecords() ?? []) longTasks.push(entry.duration);
   observer?.disconnect();
   const observedResizeCallbacks = resizeObserverCallbacks - resizeObserverCallbacksBefore;
@@ -925,7 +927,7 @@ async function stopTypingProbe(): Promise<unknown> {
 
 /**
  * Pressing a pane's next chat with the others kept hidden (VC-1100). Listens
- * only, like the typing probe: the presses arrive from `electron-main.cjs`.
+ * only, like the typing probe: the guarded driver sends trusted synthetic input.
  *
  *  - `handlerMs`: window-capture `click` to window-bubble `click` — React's
  *    synchronous commit of the reveal (a discrete event), including the layout
@@ -1103,9 +1105,8 @@ const bench: ChatBench = {
   startReveal: startRevealProbe,
   stopReveal: stopRevealProbe,
   collect() {
-    // Present because the bench runner launches Electron with --expose-gc: a
-    // number sampled before the garbage of the previous step is collected is a
-    // number about the garbage.
+    // The guarded driver awaits HeapProfiler.collectGarbage before this
+    // compatibility hook; no extra process-wide Chromium switch is needed.
     (globalThis as { gc?: () => void }).gc?.();
   },
   uncaught() {

@@ -80,6 +80,11 @@ export class BrowserAgentCoordinator {
           ? {}
           : { currentGeneration: factory.currentGeneration }),
         ...(transport.onTimeout === undefined ? {} : { onTimeout: transport.onTimeout }),
+        // Diagnostic-only (VC-1150): the controller here is the one production
+        // builds, so a transport's preview-frame listener must survive the hop.
+        ...(transport.onPreviewFrame === undefined
+          ? {}
+          : { onPreviewFrame: transport.onPreviewFrame }),
         ...(ensureReady === undefined ? {} : { ensureReady: async () => await ensureReady() }),
       },
       {},

@@ -197,8 +197,14 @@ describe("the host sign-in sheet", () => {
       expect(dialog.classList.contains("max-h-[80vh]")).toBe(true);
       expect(dialog.classList.contains("overflow-y-auto")).toBe(true);
       expect(dialog.textContent).toContain("Sign-ins on Hetzner");
-      expect(dialog.textContent).toContain("Provider 0");
-      expect(dialog.textContent).toContain("Provider 39");
+      expect(
+        dialog.querySelector('[role="img"][aria-label="Provider 0 · provider-0"]'),
+      ).not.toBeNull();
+      expect(
+        dialog.querySelector('[role="img"][aria-label="Provider 39 · provider-39"]'),
+      ).not.toBeNull();
+      expect(dialog.textContent).not.toContain("Provider 0");
+      expect(dialog.textContent).not.toContain("Provider 39");
       expect(dialog.querySelectorAll("button").length).toBeGreaterThanOrEqual(40);
     } finally {
       await act(async () => root.unmount());
@@ -217,7 +223,8 @@ describe("the host sign-in sheet", () => {
       useHostSignInSheet.getState().open({ hostId: "h", hostName: "Hetzner", providerId: "xai" }),
     );
     expect(document.body.textContent).toContain("Sign-ins on Hetzner");
-    expect(document.body.textContent).toContain("xAI");
+    expect(document.querySelector('[role="img"][aria-label="xAI · xai"]')).not.toBeNull();
+    expect(document.body.textContent).not.toContain("xAI");
     expect(source.calls).toContain("signIn h xai");
     await act(async () => {
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));

@@ -428,15 +428,9 @@ function CatalogSection({
             header: "Model",
             cell: (model) => (
               <Cell strong>
-                <ModelName model={model} models={[]} providers={providers} />
+                <ModelName model={model} models={offerable} providers={providers} />
               </Cell>
             ),
-          },
-          {
-            key: "provider",
-            header: "Provider",
-            width: "10rem",
-            cell: (model) => <Cell muted>{providerLabelFor(providers, model.providerId)}</Cell>,
           },
           // The Reserve column that sat here was retired with per-model
           // compaction reserves (VC-155) — a ladder of numbers nobody could

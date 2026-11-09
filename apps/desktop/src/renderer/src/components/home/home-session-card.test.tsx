@@ -79,7 +79,7 @@ describe("HomeSessionCard", () => {
     expect(markup.slice(0, markup.indexOf("Claude Haiku 4.5"))).toContain("<svg");
     expect(markup).not.toContain('aria-label="Chat"');
     // And the whole identity is one focus stop away where the row clips.
-    expect(markup).toContain('aria-label="Model · Claude Haiku 4.5 · Anthropic"');
+    expect(markup).toContain('aria-label="Model · Claude Haiku 4.5"');
   });
 
   it("never spends the row's width on the account — the mark is what says whose it is", () => {

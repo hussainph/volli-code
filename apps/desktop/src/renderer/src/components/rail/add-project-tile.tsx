@@ -36,7 +36,7 @@ export function AddProjectTile() {
           )}
           <span
             aria-hidden
-            className="pointer-events-none absolute inset-0 rounded-control bg-foreground/10 opacity-0 group-hover/tile:opacity-100"
+            className="pointer-events-none absolute inset-0 rounded-control bg-wash-ink/10 opacity-0 group-hover/tile:opacity-100"
           />
           <span className="sr-only">Add project</span>
         </button>

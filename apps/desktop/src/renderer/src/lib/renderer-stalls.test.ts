@@ -152,6 +152,7 @@ describe("entries as stalls", () => {
       blockingMs: 190,
       renderMs: 40,
       styleLayoutMs: 20,
+      scriptTotalMs: 200,
       scripts: 3,
       script: {
         file: "chat-plane.tsx",
@@ -186,6 +187,25 @@ describe("entries as stalls", () => {
       label: "send",
       durationMs: 150,
     });
+  });
+
+  it("sums scripts before rounding, bounds totals, and preserves measured zero", () => {
+    expect(
+      frameStall({ ...LOAF, scripts: [{ duration: 0.4 }, { duration: 0.4 }] }, "idle"),
+    ).toMatchObject({ scriptTotalMs: 1 });
+    expect(frameStall({ ...LOAF, scripts: [{ duration: 0 }] }, "idle")).toMatchObject({
+      scriptTotalMs: 0,
+    });
+    expect(
+      frameStall({ ...LOAF, scripts: [{ duration: Number.MAX_VALUE }, { duration: 10 }] }, "idle")
+        .scriptTotalMs,
+    ).toBe(RENDERER_STALL_BOUNDS.maxDurationMs);
+    const malformed = [{ duration: Number.NaN }, { duration: -1 }, { duration: Infinity }];
+    expect(frameStall({ ...LOAF, scripts: malformed }, "idle")).not.toHaveProperty("scriptTotalMs");
+    expect(frameStall({ ...LOAF, scripts: malformed }, "idle")).not.toHaveProperty("script");
+    expect(
+      frameStall({ ...LOAF, scripts: [...malformed, { duration: 20 }] }, "idle"),
+    ).toMatchObject({ scriptTotalMs: 20, script: { durationMs: 20 } });
   });
 
   it("drops a script's unreadable function name and keeps its file", () => {

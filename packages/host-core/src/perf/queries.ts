@@ -10,12 +10,14 @@ import { shortSessionId, type PerfGrouping, type PerfProcess } from "@volli/shar
 
 import {
   DurationGroups,
+  LoafTotals,
   observedMs,
   perfStats,
   perfVersionKey,
   perfVersionMatches,
   perHour,
   type PerfGroupStats,
+  type PerfLoafSummary,
   type PerfStallRecord,
 } from "./report";
 import type { PerfStallFilter, PerfStore } from "./store";
@@ -61,6 +63,7 @@ export interface PerfTopAnswer {
   /** How many groups there were before the limit. */
   readonly groupCount: number;
   readonly groups: readonly PerfTopGroup[];
+  readonly loaf?: PerfLoafSummary;
 }
 
 export interface PerfTopInput {
@@ -78,15 +81,20 @@ function share(part: number, whole: number): number {
 /** The top offenders in a window, by total stalled time. */
 export async function perfTop(store: PerfReader, input: PerfTopInput): Promise<PerfTopAnswer> {
   const grouped = new DurationGroups(input.by);
+  const loaf = new LoafTotals();
   await fold(
     store,
     { since: input.since, ...(input.process === null ? {} : { process: input.process }) },
     input.until,
-    (stall) => grouped.add(stall),
+    (stall) => {
+      grouped.add(stall);
+      loaf.add(stall);
+    },
   );
   const runs = store.runs();
   const observed = observedMs(runs, input.since, input.until);
   const stallMs = grouped.totalMs;
+  const loafSummary = loaf.summary(observed);
   const groups = [...grouped.groups].map(([key, durations]) => {
     const stats = perfStats(durations);
     const hours =
@@ -116,11 +124,22 @@ export async function perfTop(store: PerfReader, input: PerfTopInput): Promise<P
     stallMsPerHour: perHour(stallMs, observed),
     groupCount: groups.length,
     groups: groups.slice(0, input.limit),
+    ...(loafSummary === undefined ? {} : { loaf: loafSummary }),
   };
 }
 
 /** One stall as `volli perf stalls` lists it. */
-export interface PerfStallLine {
+export interface PerfStallLine extends Pick<
+  PerfStallRecord,
+  | "scriptTotalMs"
+  | "blockingMs"
+  | "renderMs"
+  | "styleLayoutMs"
+  | "scriptFile"
+  | "scriptFunction"
+  | "scriptInvoker"
+  | "scriptMs"
+> {
   readonly at: number;
   readonly process: PerfProcess;
   readonly kind: string;
@@ -147,6 +166,14 @@ export function perfStallLine(stall: PerfStallRecord): PerfStallLine {
     durationMs: stall.durationMs,
     hint: stall.hint,
     version: perfVersionKey(stall.version, stall.build),
+    ...(stall.scriptTotalMs === undefined ? {} : { scriptTotalMs: stall.scriptTotalMs }),
+    ...(stall.blockingMs === undefined ? {} : { blockingMs: stall.blockingMs }),
+    ...(stall.renderMs === undefined ? {} : { renderMs: stall.renderMs }),
+    ...(stall.styleLayoutMs === undefined ? {} : { styleLayoutMs: stall.styleLayoutMs }),
+    ...(stall.scriptFile === undefined ? {} : { scriptFile: stall.scriptFile }),
+    ...(stall.scriptFunction === undefined ? {} : { scriptFunction: stall.scriptFunction }),
+    ...(stall.scriptInvoker === undefined ? {} : { scriptInvoker: stall.scriptInvoker }),
+    ...(stall.scriptMs === undefined ? {} : { scriptMs: stall.scriptMs }),
   };
 }
 
@@ -161,6 +188,7 @@ export interface PerfCompareSide {
   readonly stallMs: number;
   readonly stallsPerHour: number | null;
   readonly stallMsPerHour: number | null;
+  readonly loaf?: PerfLoafSummary;
 }
 
 export interface PerfCompareCell extends PerfGroupStats {
@@ -223,6 +251,8 @@ export async function perfCompare(
   const [selectorA, selectorB] = input.versions;
   const groupedA = new DurationGroups(input.by);
   const groupedB = new DurationGroups(input.by);
+  const loafA = new LoafTotals();
+  const loafB = new LoafTotals();
   await fold(
     store,
     {
@@ -232,13 +262,20 @@ export async function perfCompare(
     input.until,
     (stall) => {
       // A stall can fall on both sides when the selectors overlap.
-      if (perfVersionMatches(selectorA, stall)) groupedA.add(stall);
-      if (perfVersionMatches(selectorB, stall)) groupedB.add(stall);
+      if (perfVersionMatches(selectorA, stall)) {
+        groupedA.add(stall);
+        loafA.add(stall);
+      }
+      if (perfVersionMatches(selectorB, stall)) {
+        groupedB.add(stall);
+        loafB.add(stall);
+      }
     },
   );
-  const side = (selector: string, grouped: DurationGroups) => {
+  const side = (selector: string, grouped: DurationGroups, loaf: LoafTotals) => {
     const sideRuns = runs.filter((run) => perfVersionMatches(selector, run));
     const observed = observedMs(sideRuns, since, input.until);
+    const loafSummary = loaf.summary(observed);
     const summary: PerfCompareSide = {
       version: selector,
       matched: [
@@ -250,11 +287,12 @@ export async function perfCompare(
       stallMs: grouped.totalMs,
       stallsPerHour: perHour(grouped.count, observed),
       stallMsPerHour: perHour(grouped.totalMs, observed),
+      ...(loafSummary === undefined ? {} : { loaf: loafSummary }),
     };
     return { summary, groups: grouped.groups, observed };
   };
-  const a = side(selectorA, groupedA);
-  const b = side(selectorB, groupedB);
+  const a = side(selectorA, groupedA, loafA);
+  const b = side(selectorB, groupedB, loafB);
   const keys = new Set([...a.groups.keys(), ...b.groups.keys()]);
   const groups: PerfCompareGroup[] = [...keys].map((key) => {
     const left = compareCell(a.groups.get(key), a.observed);

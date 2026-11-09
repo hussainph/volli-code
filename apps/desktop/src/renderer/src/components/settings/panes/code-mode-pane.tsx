@@ -201,7 +201,7 @@ export function CodeModeSettings({
             className="flex flex-wrap items-center gap-2 border-t border-border/50 px-3 py-2"
           >
             <div className="min-w-0 flex-1 break-words">
-              <ModelName model={pin.model} models={models} providers={providers} alwaysProvider />
+              <ModelName model={pin.model} models={models} providers={providers} />
               <div className="text-label text-muted-foreground">
                 Default:{" "}
                 {

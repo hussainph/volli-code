@@ -253,12 +253,7 @@ export function CodeModeSettings({
                       key: "model",
                       header: "Model",
                       cell: (pin) => (
-                        <ModelName
-                          model={pin.model}
-                          models={models}
-                          providers={providers}
-                          alwaysProvider
-                        />
+                        <ModelName model={pin.model} models={models} providers={providers} />
                       ),
                     },
                     {
@@ -370,7 +365,7 @@ function PinPicker({
       <SelectContent>
         {groups.map((group) => (
           <SelectGroup key={group.providerId}>
-            <SelectLabel>{group.providerLabel}</SelectLabel>
+            <SelectLabel className="sr-only">{group.providerLabel}</SelectLabel>
             {group.models.map((model) => (
               <SelectItem key={codeModeModelKey(model)} value={codeModeModelKey(model)}>
                 <ModelName model={model} models={candidates} providers={providers} />

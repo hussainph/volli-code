@@ -61,8 +61,9 @@ export function AgentModelLine({
         className,
       )}
     >
-      {/* Catalogue names and marks match the parent composer. The name may
-          wrap; the effort remains a distinct setting beside its gauge. */}
+      {/* Catalogue model names and marks match the parent composer. Provider
+          names stay in the mark's long-hover/focus tag, never in this narrow
+          line. The model may wrap; effort remains separate beside its gauge. */}
       <ResolvedModelName selection={agent.model} className="max-w-full" />
       <span className="inline-flex shrink-0 items-center gap-1">
         <GaugeIcon aria-hidden strokeWidth={2.25} className="size-3 shrink-0" />
