@@ -17,18 +17,13 @@ const DRIVE = fileURLToPath(new URL("..", import.meta.url));
 const CLI = join(DRIVE, "cli.mjs");
 const read = (name) => readFileSync(join(DRIVE, name), "utf8");
 
-// A valid script fixture. The path is fixed at module load (unique per process)
-// so test-argument arrays can capture it; before() writes the content.
-const validScript = join(os.tmpdir(), `volli-drive-gate-${process.pid}-replies.json`);
-let root;
+// Resolve argument paths at module load, inside one private random directory.
+const root = mkdtempSync(join(os.tmpdir(), "volli-drive-gate-"));
+const validScript = join(root, "replies.json");
 before(() => {
-  root = mkdtempSync(join(os.tmpdir(), "volli-drive-gate-"));
   writeFileSync(validScript, JSON.stringify([{ text: "scripted one" }]));
 });
-after(() => {
-  rmSync(root, { recursive: true, force: true });
-  rmSync(validScript, { force: true });
-});
+after(() => rmSync(root, { recursive: true, force: true }));
 
 describe("packed mode", () => {
   for (const args of [

@@ -23,7 +23,7 @@
 <p align="center">
   <img
     src=".github/readme/demo.gif"
-    alt="Volli’s core loop: open a ticket from the board, send a chat request, watch the agent inspect and write a file, then review the added lines in the Diffs rail."
+    alt="Volli’s core loop: open a ticket from the five-column board, send a chat request, watch the agent inspect and write a file, review the added lines in the Diffs rail, and move the ticket to Needs Review."
     width="1200"
   />
 </p>

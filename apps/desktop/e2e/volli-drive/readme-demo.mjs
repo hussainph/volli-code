@@ -19,7 +19,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { createTicketViaBridge } from "../lib/agent-kit.mjs";
-import { goToBoard, seedProjects } from "../lib/smoke-kit.mjs";
+import { cardById, goToBoard, seedProjects } from "../lib/smoke-kit.mjs";
 import {
   createRegistry,
   instanceLayout,
@@ -52,6 +52,8 @@ export function indexByColumn(tickets: readonly Ticket[]) {
 `;
 const PROMPT = "Add a typed column index for the board.";
 const TITLE = "Index board columns";
+const WARMUP = "Let's improve the board.";
+const WARMUP_REPLY = "What should we change?";
 const gitEnvironment = (layout) => ({
   ...supervisorEnv(process.env),
   HOME: layout.home,
@@ -73,7 +75,57 @@ const TICKETS = [
   ["needs_review", "Warn before closing a busy chat", "high"],
   ["done", "Create a branch for each ticket", "high"],
   ["done", "Persist the ticket rail width", "low"],
+  ["backlog", "Inline diffs in the file editor", "medium"],
+  ["todo", "Show agent progress on cards", "medium"],
+  ["doing", "Improve keyboard tab navigation", "medium"],
+  ["doing", "Reconnect parked sessions", "high"],
+  ["needs_review", "Confirm before archiving a worktree", "high"],
+  ["needs_review", "Restore board filters on launch", "medium"],
+  ["done", "Add project keyboard shortcuts", "medium"],
+  ["done", "Search ticket titles from the command bar", "medium"],
 ];
+
+// Same addressed View-menu command as docs-shots: no native focus needed.
+const uiZoom = (app, command) =>
+  app.evaluate(({ BrowserWindow }, cmd) => {
+    BrowserWindow.getAllWindows()[0].webContents.send("volli:ui-zoom-command", cmd);
+  }, command);
+
+async function fitBoardColumns(page, app) {
+  let steps = 1;
+  await page.getByRole("button", { name: "Toggle navigation sidebar", exact: true }).click();
+  await uiZoom(app, "out");
+  await sleep(400);
+  const overflow = () =>
+    page.evaluate(() => {
+      const scroller = Array.from(document.querySelectorAll("div.overflow-x-auto")).find(
+        (el) => el.querySelector("article") !== null && el.getClientRects().length > 0,
+      );
+      if (!scroller) throw new Error("no visible board scroller");
+      return scroller.scrollWidth - scroller.clientWidth;
+    });
+  if ((await overflow()) > 1) {
+    await uiZoom(app, "out");
+    steps += 1;
+    await sleep(400);
+  }
+  assert.ok((await overflow()) <= 1, "all five board columns must fit without horizontal clipping");
+  const columns = await page.locator("[data-board-column]:visible").evaluateAll((elements) =>
+    elements.map((el) => {
+      const rect = el.getBoundingClientRect();
+      return {
+        status: el.getAttribute("data-board-column"),
+        visible: rect.left >= 0 && rect.right <= window.innerWidth + 1,
+      };
+    }),
+  );
+  assert.deepEqual(
+    columns.map((column) => column.status),
+    ["backlog", "todo", "doing", "needs_review", "done"],
+  );
+  assert.ok(columns.every((column) => column.visible));
+  return steps;
+}
 
 /** Called only by the isolated supervisor's dedicated capture command. */
 export async function captureReadmeDemo({ page, app, layout }) {
@@ -107,12 +159,27 @@ export async function captureReadmeDemo({ page, app, layout }) {
     if (!result.ok) throw new Error(result.error);
   }, tickets[3].ticketId);
   await app.evaluate(({ BrowserWindow }) => {
-    BrowserWindow.getAllWindows()[0].setContentSize(1200, 800);
+    BrowserWindow.getAllWindows()[0].setContentSize(1440, 900);
   });
+  // A logical viewport avoids work-area clamping on smaller displays. Both
+  // screencast and the final flush still read only this isolated renderer.
+  await page.setViewportSize({ width: 1440, height: 900 });
   await page.reload();
   await page.getByText("VLT-4", { exact: true }).waitFor();
   await page.evaluate(() => document.fonts.ready);
-  await sleep(1000);
+  // Prepare a real, short exchange and a Draft through the UI, before capture.
+  // Reopening this existing chat never exposes the zero-history heatmap.
+  await cardById(page, "VLT-4").dblclick();
+  await page.getByRole("button", { name: "New chat", exact: true }).click();
+  const draft = page.getByRole("textbox", { name: "Message", exact: true });
+  await draft.fill(WARMUP);
+  await draft.press("Enter");
+  await page.getByText(WARMUP_REPLY, { exact: true }).waitFor();
+  await page.getByText(TITLE, { exact: true }).first().waitFor();
+  await draft.fill(PROMPT);
+  await goToBoard(page);
+  const boardZoomSteps = await fitBoardColumns(page, app);
+  await sleep(500);
 
   const framesDir = join(layout.evidence, "readme-frames");
   await mkdir(framesDir);
@@ -129,36 +196,52 @@ export async function captureReadmeDemo({ page, app, layout }) {
     saveFrame(Buffer.from(data, "base64"));
     void cdp.send("Page.screencastFrameAck", { sessionId }).catch(() => {});
   });
+  // Start with an explicit board frame, even if a browser skips unchanged
+  // frames on screencast startup. The rest is continuous renderer motion.
+  saveFrame(await page.screenshot({ scale: "css" }));
   await cdp.send("Page.startScreencast", {
     format: "png",
-    maxWidth: 1200,
-    maxHeight: 800,
+    maxWidth: 1440,
+    maxHeight: 900,
     everyNthFrame: 2,
   });
   try {
-    await sleep(1000);
-    // A real card opens on double click (first click selects it).
-    await page.getByText("VLT-4", { exact: true }).dblclick();
-    await page.getByRole("button", { name: "New chat", exact: true }).click();
+    await sleep(1600);
+    await cardById(page, "VLT-4").dblclick();
+    await page.getByRole("tab", { name: new RegExp(TITLE) }).click();
+    await uiZoom(app, "reset");
     const composer = page.getByRole("textbox", { name: "Message", exact: true });
     await composer.waitFor();
-    await sleep(350);
-    await composer.pressSequentially(PROMPT, { delay: 18 });
-    await sleep(200);
+    assert.equal(await composer.inputValue(), PROMPT);
+    assert.equal(await page.locator('[data-slot="chat-empty-state"]:visible').count(), 0);
+    await sleep(400);
     await composer.press("Enter");
     await page.getByRole("button", { name: "Working", exact: true }).click();
     await page.getByRole("tab", { name: /Diffs/ }).click();
     await page.getByTestId("ticket-changes-row").filter({ hasText: "columns.ts" }).waitFor();
     await page.getByText("Ready for review.", { exact: false }).waitFor({ timeout: 60_000 });
     await page.getByText(TITLE, { exact: true }).first().waitFor({ timeout: 5000 });
-    // Give the final summary a reading beat and keep fast machines inside the
-    // 12–20s brief, without changing the speed of any recorded interaction.
-    await sleep(Math.max(2800, 13_000 - (performance.now() - start)));
-    await goToBoard(page);
-    // Subsampling can miss a single static navigation frame. Flush the real
-    // renderer at this final checkpoint, at CSS scale like the screencast.
+    await sleep(2000);
+    await page.getByRole("button", { name: "Back", exact: true }).click();
+    for (let step = 0; step < boardZoomSteps; step += 1) await uiZoom(app, "out");
+    await page.getByRole("button", { name: "New ticket", exact: true }).waitFor();
+    await sleep(200);
+    // The user's own keyboard-drag path: Todo -> Doing -> Needs Review.
+    const card = cardById(page, "VLT-4").locator("..");
+    await card.focus();
+    await card.press("Space");
+    await sleep(200);
+    await page.keyboard.press("ArrowRight");
+    await sleep(250);
+    await page.keyboard.press("ArrowRight");
+    await sleep(250);
+    await page.keyboard.press("Space");
+    await page
+      .locator('[data-board-column="needs_review"]')
+      .getByText("VLT-4", { exact: true })
+      .waitFor();
     saveFrame(await page.screenshot({ scale: "css" }));
-    await sleep(700);
+    await sleep(1500);
   } finally {
     await cdp.send("Page.stopScreencast");
     await cdp.detach();
@@ -193,9 +276,11 @@ async function main() {
   await writeFile(
     script,
     JSON.stringify([
+      { text: WARMUP_REPLY },
       {
         text: "I’ll check the board types, then add the column index.",
-        delayMs: 500,
+        delayMs: 700,
+        chunkDelayMs: 200,
         toolCalls: [
           { name: "bash", arguments: { command: "ls src/board && cat src/board/types.ts" } },
         ],
@@ -203,8 +288,9 @@ async function main() {
       {
         toolCalls: [{ name: "write", arguments: { path: "src/board/columns.ts", content: CODE } }],
         delayMs: 900,
+        chunkDelayMs: 120,
       },
-      { text: SUMMARY, delayMs: 1400 },
+      { text: SUMMARY, delayMs: 600, chunkDelayMs: 300 },
     ]),
   );
   const drive = async (...args) =>
@@ -243,7 +329,8 @@ async function main() {
       "sql",
       "SELECT ticket_number, status, worktree_path FROM tickets WHERE ticket_number=4",
     );
-    const [{ worktree_path: worktree }] = JSON.parse(proof);
+    const [{ worktree_path: worktree, status }] = JSON.parse(proof);
+    assert.equal(status, "needs_review");
     assert.ok((await realpath(worktree)).startsWith(`${await realpath(layout.scratch)}/`));
     assert.equal(await readFile(join(worktree, "src/board/columns.ts"), "utf8"), CODE);
     const changed = await exec("git", ["status", "--short"], {
@@ -299,8 +386,8 @@ async function main() {
     );
     const duration = Number(probe.format.duration);
     assert.equal(probe.streams[0].width, 1200);
-    assert.equal(probe.streams[0].height, 800);
-    assert.ok(duration >= 12 && duration <= 20, `GIF duration ${duration}s is outside 12–20s`);
+    assert.equal(probe.streams[0].height, 750);
+    assert.ok(duration >= 12 && duration <= 18, `GIF duration ${duration}s is outside 12–18s`);
     console.log(
       `${out}: ${bytes} bytes; ${duration.toFixed(2)}s; ${capture.frames} captured frames; ${probe.streams[0].nb_frames} GIF frames`,
     );
