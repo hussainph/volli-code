@@ -68,6 +68,7 @@ import {
   makeGitRepo,
   makeScratch,
   seedProjects,
+  waitUntil,
 } from "./lib/smoke-kit.mjs";
 import {
   assertSettingsWindow,
