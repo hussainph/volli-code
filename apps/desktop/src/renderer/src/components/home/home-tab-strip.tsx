@@ -300,6 +300,13 @@ function homeTabMenuLabel(
           savedProviderId={providers.get(tab.sessionId) ?? null}
         />
       ),
+      memberGlyph: (
+        <ChatProviderIcon
+          sessionId={tab.sessionId}
+          savedProviderId={providers.get(tab.sessionId) ?? null}
+          state={tab.status}
+        />
+      ),
       status: tab.status,
     };
   }

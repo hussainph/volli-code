@@ -678,6 +678,13 @@ function ticketTabMenuLabel(
       label: tab.label,
       icon,
       artwork: <ChatProviderIcon sessionId={sessionId} savedProviderId={savedProviderId} />,
+      memberGlyph: (
+        <ChatProviderIcon
+          sessionId={sessionId}
+          savedProviderId={savedProviderId}
+          state={tab.status ?? "idle"}
+        />
+      ),
       status: tab.status,
     };
   }
