@@ -141,9 +141,13 @@ describe("provider image limits", () => {
       maxImagesPerRequest: 100,
       requestImageBudgetBytes: Math.floor(33_554_432 * REQUEST_IMAGE_BUDGET_FRACTION),
     });
-    // A newer Claude takes more images; the guard follows the catalog, not a constant.
+    // Pi 1.5 corrects Sonnet 4.5 to 100 images; 4.6 still admits 600.
+    // Keep both so the guard must follow each catalog entry, not a constant.
     expect(
       providerImageLimits(getBuiltinModel("anthropic", "claude-sonnet-4-5")).maxImagesPerRequest,
+    ).toBe(100);
+    expect(
+      providerImageLimits(getBuiltinModel("anthropic", "claude-sonnet-4-6")).maxImagesPerRequest,
     ).toBe(600);
   });
 

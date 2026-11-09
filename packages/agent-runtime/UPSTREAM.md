@@ -201,10 +201,11 @@ for `readTextLines`. (VC-801 later added a Volli-owned `openFileReader`, which
 `readBinaryFile`, and `refusingCredentialReads` refuses it for credential
 files.)
 
-The optional `Model.inputLimits` and `Model.promptCache` fields (0.87) are used
-only by Pi's coding-agent for image resizing and cache warming.
-`model-catalog.ts`'s pi.dev-feed allowlist does not admit them, and this runtime
-does not read them.
+The optional `Model.inputLimits` and `Model.promptCache` fields arrived in 0.87.
+Volli's send-time image guard (`provider-images.ts`) now reads built-in
+`inputLimits`; models without them use conservative defaults.
+`model-catalog.ts`'s pi.dev-feed allowlist does not admit either field.
+`promptCache` remains unused by this runtime.
 
 ## The 0.99 bump (VC-469)
 
@@ -330,6 +331,9 @@ Chord and telemetry. This is the published release, not upstream main.
   `samplingParamsByThinkingLevel` alongside `thinkingLevelMap`, `compat` and
   ordinary sampling overrides. The installed catalog timestamp is exercised
   without a synthetic floor; a stale feed still cannot roll back the package.
+  The generated image limits also change: Sonnet 4.5 allows 100 images per
+  request, while Sonnet 4.6 still allows 600. The send-time guard follows each
+  model's entry rather than retaining the old catalog's larger cap.
 - **Azure identity:** 1.0.3 renamed the provider to `azure`. Volli keeps the
   frozen durable id `azure-openai-responses` for credentials, selections,
   caches, callbacks and emitted assistant messages. A request-time copy of the
