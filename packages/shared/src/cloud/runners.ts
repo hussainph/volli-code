@@ -260,6 +260,8 @@ export interface RunnerCapabilities {
   /** `null` when git is not installed: such a runner cannot start Sessions. */
   git: { version: string } | null;
   docker: boolean;
+  /** Older runners omit this; readers treat absence as unknown, not always-on. */
+  power?: { source: "ac" | "battery" | "unknown"; alwaysOn: boolean };
   terminals: "available" | "unavailable";
   browser: RunnerBrowserCapability;
   /** How many Sessions this runner admits at once (its memory admission). */
@@ -391,6 +393,16 @@ export function parseRunnerCapabilities(value: unknown): RunnerCapabilities {
       : { state: "unavailable", reason: textOf(browserFields, "reason", `${what}.browser`) };
   if (typeof fields.docker !== "boolean")
     throw new RunnerWireError(`${what}.docker must be a boolean`);
+  let power: NonNullable<RunnerCapabilities["power"]> = { source: "unknown", alwaysOn: false };
+  if (fields.power !== undefined) {
+    const powerFields = objectOf(fields.power, `${what}.power`);
+    if (typeof powerFields.alwaysOn !== "boolean")
+      throw new RunnerWireError(`${what}.power.alwaysOn must be a boolean`);
+    power = {
+      source: oneOf(powerFields, "source", ["ac", "battery", "unknown"] as const, `${what}.power`),
+      alwaysOn: powerFields.alwaysOn,
+    };
+  }
   return {
     v: RUNNER_CAPABILITIES_VERSION,
     nodeVersion: textOf(fields, "nodeVersion", what),
@@ -398,6 +410,7 @@ export function parseRunnerCapabilities(value: unknown): RunnerCapabilities {
     memTotalMb: countOf(fields, "memTotalMb", what),
     git,
     docker: fields.docker,
+    power,
     terminals: oneOf(fields, "terminals", ["available", "unavailable"] as const, what),
     browser,
     maxConcurrentSessions: countOf(fields, "maxConcurrentSessions", what),

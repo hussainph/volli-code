@@ -35,15 +35,16 @@
  * are dimmed, are not pointer targets, and the lit row is Move only, because
  * that is what every release in this one column does.
  *
- * Motion is appearance only: rows fade and the panel's own padding eases, and
- * nothing anywhere on this path dwells, debounces or animates a position the
- * pointer is aiming at. Under reduced motion the transitions drop and every
- * signifier — the ring, the digit, the bolt, the dashed Move only row — stays.
+ * Every size and highlight change is immediate: the pointer and digit hit
+ * tests must always agree with the visible target, including under a stationary
+ * pointer. Reduced motion retains the same ring, digit, bolt and Move only row.
  */
 import type * as React from "react";
-import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
+import { AutomationIcon } from "@renderer/components/ui/icon";
+
 import { type Automation } from "@volli/shared";
 
+import { MENU_SEPARATOR } from "@renderer/components/ui/menu-classes";
 import { cn } from "@renderer/lib/utils";
 
 export interface ColumnOfferedPanelProps {
@@ -89,7 +90,6 @@ export function ColumnOfferedPanel({
       data-offered-inert={inert ? "true" : undefined}
       className={cn(
         "flex flex-col rounded-lg border border-border bg-popover shadow-overlay",
-        "transition-[gap,padding] duration-150 ease-out motion-reduce:transition-none",
         expanded ? "gap-1 p-1" : "gap-0 p-1",
       )}
     >
@@ -108,8 +108,8 @@ export function ColumnOfferedPanel({
           trailing={
             expanded && !inert && armedId === automation.id ? (
               <span className="flex shrink-0 items-center gap-1 text-label text-muted-foreground">
-                <LightningIcon weight="fill" className="size-3" />
-                default
+                <AutomationIcon aria-hidden className="size-3" />
+                Default
               </span>
             ) : null
           }
@@ -127,7 +127,8 @@ export function ColumnOfferedPanel({
         expanded={expanded}
         dashed
       />
-      <div className="border-t border-border px-2 py-1 text-label text-muted-foreground">
+      <div className={MENU_SEPARATOR} />
+      <div className="px-2 py-1 text-label text-muted-foreground">
         {expanded ? "Drop on a choice · Esc cancels" : "Press a digit · Hold ⌥ for drop targets"}
       </div>
     </div>
@@ -167,9 +168,9 @@ function OfferedRow({
       data-offered-row-inert={inert ? "true" : undefined}
       aria-disabled={inert ? "true" : undefined}
       aria-current={chosen ? "true" : undefined}
+      title={label}
       className={cn(
         "flex items-center gap-2 rounded-md border text-left text-ui",
-        "transition-[background-color,border-color,color,padding] duration-150 ease-out motion-reduce:transition-none",
         expanded ? "px-2 py-2" : "px-1 py-0",
         dashed && !chosen ? "border-dashed border-border" : "border-transparent",
         chosen
@@ -188,7 +189,9 @@ function OfferedRow({
       >
         {digit}
       </kbd>
-      <span className={cn("min-w-0 flex-1 truncate", expanded && "font-medium")}>{label}</span>
+      <span className={cn("min-w-0 flex-1", expanded ? "font-medium wrap-anywhere" : "truncate")}>
+        {label}
+      </span>
       {trailing}
     </div>
   );

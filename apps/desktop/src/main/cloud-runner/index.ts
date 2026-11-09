@@ -17,6 +17,11 @@
  * person starts a move — lazily, for that move — so the registration, the
  * sealed link and the record are the same code, and only the connection the
  * move never uses is absent.
+ *
+ * The report this Mac sends carries C1's `power` line (VC-1037): the
+ * Keep-working switch as `alwaysOn`, and the read power source. Main supplies
+ * both facts through `powerFacts`; a composition that has not wired the
+ * switch reports `unknown` and claims nothing.
  */
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -42,16 +47,39 @@ import {
   type CloudLaunch,
   type CloudLaunchDeployment,
 } from "@volli/shared";
-import type { RunnerBrowserCapability } from "@volli/shared/cloud";
+import {
+  RUNNER_REPORT_LIMITS,
+  type RunnerBrowserCapability,
+  type RunnerCapabilityReport,
+  type RunnerCapabilities,
+  type RunnerLocalCredential,
+} from "@volli/shared/cloud";
 
 import { convexMacRunnerBackend } from "./backend";
 import { runnerConnector, type RunnerConnectionDeps } from "./connection";
 import { inventoryRunnerLinkStore, type RunnerLinkInventory } from "./identity-store";
 import { createMacRunner, type MacRunner, type MacRunnerAccount } from "./mac-runner";
+import { NO_RUNNER_POWER_FACTS, runnerPowerCapability, type RunnerPowerFacts } from "./power";
 import { runnerRecordStore, type RunnerRecordRow } from "./record";
 
 export { CLOUD_RUNNER_APP_STATE_KEY } from "./record";
-export { holdWhileTurnsRun, NO_POWER_BLOCKER } from "./power";
+export {
+  createRunnerResidencyHold,
+  holdWhileTurnsRun,
+  NO_POWER_BLOCKER,
+  type RunnerPowerFacts,
+  type RunnerPowerSource,
+  type RunnerResidencyHold,
+} from "./power";
+export {
+  launchedIntoMenuBar,
+  runnerLoginItemSettings,
+  runnerLoginItemState,
+  syncRunnerLoginItem,
+  type RunnerLoginItemPort,
+  type RunnerLoginItemSettings,
+  type RunnerLoginItemState,
+} from "./login-item";
 export type { MacRunner } from "./mac-runner";
 
 /** `scutil --get ComputerName` ("Dana's MacBook Pro"), or `null` when it does not answer. */
@@ -151,6 +179,18 @@ export interface DesktopMacRunnerInput {
    * never handed one.
    */
   readonly jobCapabilities?: readonly string[];
+  /**
+   * "Keep this Mac working as a runner" and where its power comes from
+   * (VC-1037), read for C1's `capabilities.power` on every report. Absent:
+   * {@link NO_RUNNER_POWER_FACTS} — `unknown`, and no switch claimed.
+   */
+  readonly powerFacts?: () => RunnerPowerFacts;
+  /**
+   * The model credentials signed in on this Mac (VC-1037), read for the
+   * report's `localCredentials`: availability only, never a value. Absent:
+   * none reported.
+   */
+  readonly credentials?: () => Promise<readonly RunnerCredentialInfo[]>;
   /** VC-938 must supply its in-process issuer here before composing an embedded runner. */
   readonly tokens?: RunnerConnectionDeps["tokens"];
   /** Dual-locked power acceptance seam; absent in ordinary launches. */
@@ -161,9 +201,62 @@ export interface DesktopMacRunnerInput {
   };
 }
 
+/** One stored model credential's metadata, as Pi's credential store lists it. */
+export interface RunnerCredentialInfo {
+  readonly providerId: string;
+  readonly type: "api_key" | "oauth";
+}
+
+/**
+ * This Mac's model credentials as the report's availability list: provider id
+ * and kind, never a value or an expiry the store does not expose. Invalid ids
+ * (empty or over the wire limit) are left out so one odd `auth.json` entry
+ * cannot make the whole report unparseable, and the result is sorted and
+ * bounded so two identical credential sets are the same report.
+ */
+export function runnerLocalCredentials(
+  entries: readonly RunnerCredentialInfo[],
+): RunnerLocalCredential[] {
+  const seen = new Set<string>();
+  const credentials: RunnerLocalCredential[] = [];
+  for (const entry of entries) {
+    if (
+      entry.providerId === "" ||
+      entry.providerId.length > RUNNER_REPORT_LIMITS.text ||
+      seen.has(entry.providerId)
+    ) {
+      continue;
+    }
+    seen.add(entry.providerId);
+    credentials.push({
+      providerId: entry.providerId,
+      kind: entry.type === "oauth" ? "subscription" : "api_key",
+      expiresAt: null,
+    });
+  }
+  return credentials
+    .toSorted((left, right) =>
+      left.providerId < right.providerId ? -1 : left.providerId > right.providerId ? 1 : 0,
+    )
+    .slice(0, RUNNER_REPORT_LIMITS.localCredentials);
+}
+
+/** A credential store read that fails reports none: a report is never worth a connection. */
+async function reportLocalCredentials(
+  read: DesktopMacRunnerInput["credentials"],
+): Promise<RunnerLocalCredential[]> {
+  if (read === undefined) return [];
+  try {
+    return runnerLocalCredentials(await read());
+  } catch {
+    return [];
+  }
+}
+
 /** What this Mac reports about itself beyond the platform probe. */
 export function thisMacCapabilities(
   input: Pick<DesktopMacRunnerInput, "appVersion" | "browser" | "jobCapabilities">,
+  localCredentials: RunnerLocalCredential[] = [],
 ): RunnerHostCapabilities {
   return {
     version: input.appVersion,
@@ -174,8 +267,43 @@ export function thisMacCapabilities(
     maxConcurrentSessions: Math.max(1, os.availableParallelism()),
     // No platform tools are probed yet; the executed job kinds ride here.
     tools: [...(input.jobCapabilities ?? [])],
-    localCredentials: [],
+    localCredentials,
   };
+}
+
+/**
+ * C1's `capabilities.power` line (VC-1037): where this Mac's power comes from
+ * and whether the Keep-working switch is on. Never a promise about the wall:
+ * `source` is the reading at report time.
+ */
+function withRunnerPower(
+  report: RunnerCapabilityReport,
+  facts: RunnerPowerFacts,
+): RunnerCapabilityReport {
+  const capabilities: RunnerCapabilities = {
+    ...report.capabilities,
+    power: runnerPowerCapability(facts),
+  };
+  return { ...report, capabilities };
+}
+
+/**
+ * This Mac's capability report as the connection sends it: the platform probe
+ * plus C1's `power` line. `probe` is the seam a test fakes instead of running
+ * `git --version`; production always passes none.
+ */
+export async function thisMacReport(
+  input: Pick<
+    DesktopMacRunnerInput,
+    "appVersion" | "browser" | "jobCapabilities" | "powerFacts" | "credentials"
+  >,
+  probe: (
+    host: RunnerHostCapabilities,
+  ) => Promise<RunnerCapabilityReport> = probeRunnerCapabilities,
+): Promise<RunnerCapabilityReport> {
+  const localCredentials = await reportLocalCredentials(input.credentials);
+  const report = await probe(thisMacCapabilities(input, localCredentials));
+  return withRunnerPower(report, input.powerFacts?.() ?? NO_RUNNER_POWER_FACTS);
 }
 
 export function createDesktopMacRunner(input: DesktopMacRunnerInput): MacRunner {
@@ -209,7 +337,7 @@ export function createDesktopMacRunner(input: DesktopMacRunnerInput): MacRunner 
           input.dataDir,
         );
       },
-      readCapabilities: () => probeRunnerCapabilities(thisMacCapabilities(input)),
+      readCapabilities: () => thisMacReport(input),
       log: input.log,
     }),
     host: async () => ({

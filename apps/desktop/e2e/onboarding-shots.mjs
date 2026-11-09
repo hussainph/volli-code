@@ -7,11 +7,11 @@
  *
  *   01-first-boot.png          — empty profile: "Add your first project".
  *   02-connect-provider.png    — project added; board's Model Access first-run
- *                                block ("Connect a model provider to start").
+ *                                block ("No model provider").
  *   03-provider-menu.png       — the Sign in menu, providers listed.
  *   04-signin-key-step.png     — the provider's own key step (masked input).
  *   05-signed-in.png           — Model Access: the account row, signed in.
- *   06-choose-default.png      — board again: "Choose a default model to start."
+ *   06-choose-default.png      — board again: "No default model"
  *   07-board-ready.png         — default set: "Use Create & start…".
  *   08-new-ticket-composer.png — the composer, filled, Create & Start visible.
  *   09-kickoff-workspace.png   — after ⇧⌘↵ the composer closes and the board
@@ -43,6 +43,11 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import { join } from "node:path";
+import {
+  settingsPageOf,
+  assertSettingsWindow,
+  closeSettingsWindow,
+} from "./lib/settings-window.mjs";
 
 import {
   assertBuiltRendererLoaded,
@@ -98,11 +103,12 @@ const app = await launch({ dbPath, userDataDir, extraEnv: { HOME: home } });
 async function capture(page, name) {
   await page.mouse.move(4, 4); // park the pointer so no hover state ships
   await sleep(500);
-  const base64 = await app.evaluate(async ({ BrowserWindow }) => {
-    const win = BrowserWindow.getAllWindows()[0];
+  const base64 = await app.evaluate(async ({ BrowserWindow }, url) => {
+    const win = BrowserWindow.getAllWindows().find((window) => window.webContents.getURL() === url);
+    if (!win) throw new Error("capture window is closed");
     const image = await win.webContents.capturePage();
     return image.toPNG().toString("base64");
-  });
+  }, page.url());
   const file = join(OUT_DIR, name);
   await fs.writeFile(file, Buffer.from(base64, "base64"));
   return { ok: true, detail: file };
@@ -136,10 +142,10 @@ try {
   console.log("SKIP  add-project native picker — project seeded via seedProjects()");
 
   // ---- 02: board first-run block, no provider ------------------------------
-  await attempt(2, "02 board — 'Connect a model provider to start.'", async () => {
+  await attempt(2, "02 board — 'No model provider'", async () => {
     await waitUntil(
       "model first-run block",
-      async () => (await firstRunLine(page, "Connect a model provider to start.").count()) === 1,
+      async () => (await firstRunLine(page, "No model provider").count()) === 1,
       { timeout: 20000 },
     );
     return capture(page, "02-connect-provider.png");
@@ -157,39 +163,49 @@ try {
     return capture(page, "03-provider-menu.png");
   });
 
+  let settingsPage = null;
   // ---- 04: the provider's own key step (deep-linked into Settings) ---------
   await attempt(4, "04 sign-in key step (masked input)", async () => {
     await page.getByRole("menuitem", { name: PROVIDER_LABEL }).click();
-    const panel = page.getByTestId(`sign-in-${PROVIDER_ID}`);
+    settingsPage = await waitUntil(
+      "the provider's native Settings window",
+      () => settingsPageOf(app),
+      { timeout: 20000 },
+    );
+    await assertSettingsWindow(app, page, settingsPage);
+    const panel = settingsPage.getByTestId(`sign-in-${PROVIDER_ID}`);
     await panel.waitFor({ timeout: 20000 });
     await panel.locator("input").fill(FAKE_KEY);
     await sleep(300);
-    return capture(page, "04-signin-key-step.png");
+    return capture(settingsPage, "04-signin-key-step.png");
   });
 
   // ---- 05: signed in -------------------------------------------------------
   await attempt(5, "05 Model Access — account signed in", async () => {
-    await page
+    await settingsPage
       .getByTestId(`sign-in-${PROVIDER_ID}`)
       .getByRole("button", { name: "Continue", exact: true })
       .click();
     await waitUntil(
       "the account row offers Sign out",
       async () => {
-        const button = page
+        // The test id marks the row's name; its buttons are siblings, so the
+        // row is the shell one level up (see model-access-signin-smoke.mjs).
+        const button = settingsPage
           .getByTestId(`account-${PROVIDER_ID}`)
+          .locator("xpath=..")
           .getByRole("button", { name: "Sign out", exact: true });
         return (await button.count()) === 1;
       },
       { timeout: 20000 },
     );
-    return capture(page, "05-signed-in.png");
+    return capture(settingsPage, "05-signed-in.png");
   });
 
   // ---- 06: back on the board — choose a default ----------------------------
-  await attempt(6, "06 board — 'Choose a default model to start.'", async () => {
-    await page.keyboard.press("Escape");
-    const line = firstRunLine(page, "Choose a default model to start.");
+  await attempt(6, "06 board — 'No default model'", async () => {
+    await closeSettingsWindow(app, settingsPage);
+    const line = firstRunLine(page, "No default model");
     const appeared = await waitUntil(
       "choose-default line",
       async () => (await line.count()) === 1,
@@ -200,7 +216,7 @@ try {
       .then(() => true)
       .catch(() => false);
     if (!appeared) {
-      // Escape did not close Settings on this build — reload lands on Home.
+      // Re-read the workbench after the cross-window account update.
       await page.reload();
       await page.waitForLoadState("domcontentloaded");
       await waitUntil("choose-default line after reload", async () => (await line.count()) === 1, {

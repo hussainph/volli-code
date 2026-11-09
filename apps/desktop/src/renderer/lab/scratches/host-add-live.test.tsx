@@ -13,6 +13,8 @@ import * as scratch from "./host-add-live";
 vi.mock("sonner", () => ({ toast: Object.assign(vi.fn(), { error: vi.fn() }) }));
 vi.mock("@renderer/lib/app-state-storage", () => ({
   appStateStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+  // stores/ui and stores/style register preference defaults at module scope.
+  registerSharedPreferenceDefaults: () => {},
 }));
 
 let world: HostWorld;

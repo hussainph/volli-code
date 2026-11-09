@@ -1,11 +1,24 @@
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { appendBrowserTraceStep, newBrowserTrace, type BrowserTrace } from "@volli/shared";
 
 import { browserTraceDisk, browserTracesRoot } from "./trace-disk";
+
+/** Counts the trace records written, passing every call through to the real disk. */
+const written = vi.hoisted(() => ({ traces: 0 }));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    writeFile: (...args: Parameters<typeof actual.writeFile>) => {
+      if (String(args[0]).endsWith(".json.tmp")) written.traces += 1;
+      return actual.writeFile(...args);
+    },
+  };
+});
 
 let root: string;
 
@@ -53,12 +66,13 @@ describe("browserTraceDisk", () => {
     expect(browserTracesRoot("/data")).toBe(join("/data", "browser-traces"));
   });
 
-  it("writes a self-describing trace, and its frames through the picture disk's seam", () => {
+  it("writes a self-describing trace, and its frames through the picture disk's seam", async () => {
     const sink = browserTraceDisk(root);
 
     sink.writeTrace(trace());
     sink.frames.write(Buffer.from("jpg"), pictureRecord(FRAME, "image/jpeg"));
     sink.frames.write(Buffer.from("png"), pictureRecord(PNG_FRAME, "image/png"));
+    await sink.settled();
 
     expect(readdirSync(root).toSorted()).toEqual([`${TRACE}.json`, "frames"]);
     expect(readdirSync(join(root, "frames")).toSorted()).toEqual(
@@ -74,12 +88,13 @@ describe("browserTraceDisk", () => {
     expect(sink.frames.read(FRAME)).toEqual({ bytes: Buffer.from("jpg"), mime: "image/jpeg" });
   });
 
-  it("refuses to write a trace under any name that is not a UUID, and removes none", () => {
+  it("refuses to write a trace under any name that is not a UUID, and removes none", async () => {
     const sink = browserTraceDisk(root);
 
     expect(() => sink.writeTrace(trace("../escape"))).toThrow("UUIDs");
     sink.writeTrace(trace());
     sink.removeTrace("../escape");
+    await sink.settled();
     expect(sink.listTraces()).toHaveLength(1);
   });
 
@@ -89,9 +104,10 @@ describe("browserTraceDisk", () => {
     expect(sink.frames.list()).toEqual([]);
   });
 
-  it("sweeps what it cannot trust as it lists — a torn record, a renamed one, a crash's .tmp — and leaves what is not its own", () => {
+  it("sweeps what it cannot trust as it lists — a torn record, a renamed one, a crash's .tmp — and leaves what is not its own", async () => {
     const sink = browserTraceDisk(root);
     sink.writeTrace(trace());
+    await sink.settled();
     const torn = "7c6b5a4d-3e2f-4a1b-8c9d-0e1f2a3b4c5d.json";
     const renamed = "9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a.json";
     const leftover = "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e.json.tmp";
@@ -108,10 +124,60 @@ describe("browserTraceDisk", () => {
     );
   });
 
-  it("removes a trace record", () => {
+  it("removes a trace record", async () => {
+    const sink = browserTraceDisk(root);
+    sink.writeTrace(trace());
+    await sink.settled();
+    sink.removeTrace(TRACE);
+    expect(sink.listTraces()).toEqual([]);
+    await sink.settled();
+    expect(readdirSync(root)).toEqual([]);
+  });
+
+  it("writes off the caller's turn, coalescing a burst of steps into the newest record (VC-1082)", async () => {
+    const sink = browserTraceDisk(root);
+    written.traces = 0;
+    let latest = trace();
+    for (let step = 0; step < 20; step += 1) {
+      latest = appendBrowserTraceStep(latest, { ...latest.steps[0]!, at: 2_000 + step }).trace;
+      sink.writeTrace(latest);
+    }
+
+    // Nothing has landed yet, and the listing already answers the newest record.
+    expect(readdirSync(root)).toEqual([]);
+    expect(sink.listTraces()).toEqual([latest]);
+
+    await sink.settled();
+    expect(written.traces).toBe(1);
+    expect(readdirSync(root)).toEqual([`${TRACE}.json`]);
+    expect(browserTraceDisk(root).listTraces()).toEqual([latest]);
+  });
+
+  it("never lets a write queued before a removal land after it, and writes one queued after", async () => {
     const sink = browserTraceDisk(root);
     sink.writeTrace(trace());
     sink.removeTrace(TRACE);
     expect(sink.listTraces()).toEqual([]);
+    await sink.settled();
+    expect(readdirSync(root)).toEqual([]);
+
+    sink.writeTrace(trace());
+    await sink.settled();
+    sink.removeTrace(TRACE);
+    sink.writeTrace(trace());
+    expect(sink.listTraces()).toEqual([trace()]);
+    await sink.settled();
+    expect(browserTraceDisk(root).listTraces()).toEqual([trace()]);
+  });
+
+  it("logs a write the disk refused and keeps answering the record, never throwing at the caller", async () => {
+    // A directory where the record should be: the rename into place fails.
+    mkdirSync(join(root, `${TRACE}.json`));
+    const sink = browserTraceDisk(root);
+
+    expect(() => sink.writeTrace(trace())).not.toThrow();
+    await sink.settled();
+
+    expect(sink.listTraces()).toEqual([trace()]);
   });
 });

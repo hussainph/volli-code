@@ -1,0 +1,58 @@
+---
+import Legal from "../../layouts/Legal.astro";
+---
+
+<Legal
+  title="Preview Subprocessors"
+  description="Convex, Cloudflare, WorkOS and Google Workspace provide the backend, storage, sign-in, hosting and email for Volli’s invite-only preview."
+  path="/legal/subprocessors/"
+>
+  <p>
+    These are the service providers Volli uses to process data for the invite-only 0.3
+    preview. This is a preview list, not a list of planned integrations.
+  </p>
+  <ul>
+    <li>
+      <strong>Convex, Inc.</strong> — backend database and server functions. Processes
+      account, Workspace, membership, board, configuration and Session records,
+      credentials you choose to store, connected-account and repository metadata, and
+      device and runner metadata needed for the service.
+    </li>
+    <li>
+      <strong>Cloudflare, Inc.</strong> — website and docs hosting, and object storage for
+      synced Session transcript bodies, agent logs, attachments and move-staging uploads.
+      Processes uploaded content and connection information for requests to its services.
+    </li>
+    <li>
+      <strong>WorkOS, Inc.</strong> — AuthKit sign-in and authentication sessions. Processes
+      profile and identity information, email, and sign-in connection and session metadata.
+    </li>
+    <li>
+      <strong>Google Workspace (Google)</strong> — email for support, privacy, security and
+      legal correspondence. Processes sender and recipient details, messages, attachments
+      you send us and our replies. It does not receive your Workspace history merely
+      because you sign in.
+    </li>
+  </ul>
+  <p>
+    These providers may process data outside Canada, including in the United States and
+    on global networks. We make no region-specific storage promise for this preview.
+  </p>
+  <h2>Services you choose</h2>
+  <p>
+    Model providers, gateways, git hosts, MCP servers and other tools you connect are
+    services you direct, not additional Volli preview subprocessors. They can receive
+    prompts, code or other data you send, under your agreements with them. Your own machine
+    runs the preview's agent tools and calls the model provider or gateway you choose;
+    the preview does not use a Volli-operated model relay. GitHub also receives connection
+    information when our download page requests release information in your browser,
+    or the app checks for and downloads updates from GitHub Releases. Google or GitHub
+    also handles your sign-in identity when you choose it through WorkOS AuthKit, under
+    that identity provider's own terms.
+  </p>
+  <p>
+    We will update this list before adding a provider that processes preview data.
+    Questions or privacy requests can be sent to
+    <a href="mailto:privacy@volli.app">privacy@volli.app</a>.
+  </p>
+</Legal>

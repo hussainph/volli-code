@@ -99,7 +99,7 @@ afterEach(() => {
 });
 
 describe("bounded activity picture reads", () => {
-  it("reassembles a large real-disk payload after relaunch using only offset reads, not full reads", () => {
+  it("reassembles a large real-disk payload after relaunch using only offset reads, not full reads", async () => {
     const bytes = Buffer.alloc(8 * 1024 * 1024 + 7);
     for (let i = 0; i < bytes.length; i += 1) bytes[i] = i % 251;
     const disk = browserPictureDisk(root);
@@ -109,6 +109,7 @@ describe("bounded activity picture reads", () => {
         mimeType: "image/png",
       }),
     ).toBe(ID);
+    await disk.settled();
     const pictures = store(browserPictureDisk(root));
     resetIo(); // Sidecar reads at rehydration are not pixel reads.
     const chunks: string[] = [];
@@ -135,10 +136,11 @@ describe("bounded activity picture reads", () => {
     ).toBe(true);
   });
 
-  it("refuses other Sessions, unknown ids and malformed offsets before even opening the sink", () => {
+  it("refuses other Sessions, unknown ids and malformed offsets before even opening the sink", async () => {
     const disk = browserPictureDisk(root);
     disk.write(Buffer.from("pixels"), record());
     disk.write(Buffer.from("person"), record({ id: OTHER, ownerSessionId: null }));
+    await disk.settled();
     const pictures = store(disk);
     resetIo();
     expect(pictures.readActivityImage("other-session", ID)).toEqual(UNAVAILABLE);
@@ -166,7 +168,7 @@ describe("bounded activity picture reads", () => {
     expect(disk.readChunk!(OTHER, 0)?.bytes).toEqual(Buffer.from("person"));
   });
 
-  it("reads every persisted image MIME, including padded tails and empty images", () => {
+  it("reads every persisted image MIME, including padded tails and empty images", async () => {
     const disk = browserPictureDisk(root);
     for (const mime of [
       "image/jpeg",
@@ -186,9 +188,11 @@ describe("bounded activity picture reads", () => {
     }
     disk.write(Buffer.alloc(0), record());
     expect(store(disk).readActivityImage("session", ID)).toEqual(UNAVAILABLE);
+    await disk.settled();
+    expect(store(disk).readActivityImage("session", ID)).toEqual(UNAVAILABLE);
   });
 
-  it("keeps direct browser reads whole and live activity reads off disk", () => {
+  it("keeps direct browser reads whole and live activity reads off disk", async () => {
     const disk = browserPictureDisk(root);
     const pictures = store(disk, 1);
     const bytes = Buffer.from("live pixels");
@@ -199,6 +203,7 @@ describe("bounded activity picture reads", () => {
     expect(pictures.copyOf(ID)?.bytes).toEqual(bytes);
     expect(io.opens).toEqual([]);
     expect(io.fullReads).toBe(0);
+    await disk.settled();
     const relaunched = store(disk);
     resetIo();
     expect(relaunched.dataUrl(ID)).toBe(`data:image/png;base64,${bytes.toString("base64")}`);
@@ -244,9 +249,10 @@ describe("bounded activity picture reads", () => {
     expect(read).not.toHaveBeenCalled();
   });
 
-  it("refuses leaf symlinks and directories without reading their contents", () => {
+  it("refuses leaf symlinks and directories without reading their contents", async () => {
     const disk = browserPictureDisk(root);
     disk.write(Buffer.from("outside"), record({ id: OTHER }));
+    await disk.settled();
     symlinkSync(join(root, `${OTHER}.png`), join(root, `${ID}.png`));
     expect(disk.readChunk!(ID, 0)).toBeNull();
     expect(io.reads).toEqual([]);
@@ -257,10 +263,11 @@ describe("bounded activity picture reads", () => {
     expect(io.closes).toBe(1);
   });
 
-  it("completes short reads and closes descriptors on EOF, stat failures and read failures", () => {
+  it("completes short reads and closes descriptors on EOF, stat failures and read failures", async () => {
     const disk = browserPictureDisk(root);
     const bytes = Buffer.from("a short but complete picture");
     disk.write(bytes, record());
+    await disk.settled();
     io.shortReads = true;
     expect(disk.readChunk!(ID, 0)).toEqual({ bytes, byteLength: bytes.length });
     expect(io.reads.length).toBeGreaterThan(1);

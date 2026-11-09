@@ -12,6 +12,7 @@ import {
   type UserMessage,
 } from "@earendil-works/pi-ai";
 import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
+import { stream as anthropicStream } from "@earendil-works/pi-ai/api/anthropic-messages";
 import sharp from "sharp";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { fitImage, type ImageFit } from "./image-fit";
@@ -499,6 +500,134 @@ describe("the failures this guard exists to end", () => {
 });
 
 describe("withProviderSafeImages", () => {
+  const failedProgram: ToolResultMessage = {
+    role: "toolResult",
+    toolCallId: "call_1",
+    toolName: "codemode",
+    content: [
+      {
+        type: "text",
+        text: "Program failed in 0.2 s · 2 calls: 1 ok, 1 failed. 1 image(s) attached\nError: failed after screenshot",
+      },
+      { type: "text", text: "[browser screenshot]" },
+      image("c2NyZWVuc2hvdA=="),
+    ],
+    isError: true,
+    timestamp: 1,
+  };
+
+  it.each([
+    { name: "Code Mode failed program", result: failedProgram, model: opus, rewritten: true },
+    {
+      name: "MCP image-only error",
+      result: { ...failedProgram, toolName: "mcp_screenshot", content: [image("c2hvdA==")] },
+      model: opus,
+      rewritten: true,
+    },
+    {
+      name: "text-only error",
+      result: { ...failedProgram, content: [{ type: "text" as const, text: "Failed" }] },
+      model: opus,
+      rewritten: false,
+    },
+    {
+      name: "successful result with images",
+      result: { ...failedProgram, isError: false },
+      model: opus,
+      rewritten: false,
+    },
+    {
+      name: "non-Anthropic API, even with an Anthropic provider name",
+      result: failedProgram,
+      model: { ...opus, api: "openai-responses" },
+      rewritten: false,
+    },
+  ])(
+    "projects $name only when required, without changing history",
+    async ({ result, model, rewritten }) => {
+      const original = structuredClone(result);
+      const context = normalizeContext({ messages: [result] });
+      const inner = vi.fn(() => createAssistantMessageEventStream());
+      const guarded = withProviderSafeImages(inner, createProviderImageGuard({ fit: keepAll() }));
+
+      // Replay the same durable history, as Retry does. No prefix accumulates.
+      await guarded(model, context, {});
+      await guarded(model, context, {});
+      const requests = inner.mock.calls as unknown as Parameters<typeof guarded>[];
+      for (const [, sent] of requests) {
+        if (rewritten) {
+          expect(sent.messages[0]).toEqual({
+            ...original,
+            isError: false,
+            content: [{ type: "text", text: "The tool call failed." }, ...original.content],
+          });
+          expect(imagesOf(sent.messages)).toEqual(imagesOf([result]));
+        } else {
+          expect(sent.messages[0]).toBe(result);
+        }
+      }
+      expect(result).toEqual(original);
+      expect(context.messages[0]).toBe(result);
+    },
+  );
+
+  it("sends the repaired Code Mode history through Pi's real Anthropic converter", async () => {
+    let payload: unknown;
+    const client = {
+      beta: {
+        messages: {
+          create: (params: unknown) => ({
+            asResponse: async () => {
+              payload = params;
+              throw new Error("captured before network");
+            },
+          }),
+        },
+      },
+    };
+    const context = normalizeContext({
+      messages: [
+        user("take a screenshot"),
+        {
+          ...assistant,
+          stopReason: "toolUse",
+          content: [{ type: "toolCall", id: "call_1", name: "codemode", arguments: {} }],
+        },
+        failedProgram,
+      ],
+    });
+    const stream = await withProviderSafeImages(
+      (model, sent) =>
+        anthropicStream(model as Model<"anthropic-messages">, sent, { client: client as never }),
+      createProviderImageGuard({ fit: keepAll() }),
+    )(opus, context, {});
+    for await (const event of stream) void event;
+    expect(payload).toMatchObject({
+      messages: [
+        { role: "user" },
+        { role: "assistant" },
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              is_error: false,
+              content: [
+                { type: "text", text: "The tool call failed." },
+                ...failedProgram.content.slice(0, 2),
+                {
+                  type: "image",
+                  source: { type: "base64", media_type: "image/png", data: "c2NyZWVuc2hvdA==" },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(failedProgram.isError).toBe(true);
+  });
+
   it("hands the inner stream function the guarded transcript for the request's own model", async () => {
     const stream = createAssistantMessageEventStream();
     const inner = vi.fn(() => stream);

@@ -41,9 +41,12 @@ async function openTicketRail(page, displayId) {
   );
   const rail = page.locator("aside");
   const railTab = page.getByTestId("ticket-rail-tab-now");
-  const card = page.locator("article").filter({
-    has: page.locator("span.font-mono", { hasText: new RegExp(`^${displayId}$`) }),
-  });
+  const card = page
+    .locator("article")
+    .filter({ visible: true })
+    .filter({
+      has: page.locator("span.font-mono", { hasText: new RegExp(`^${displayId}$`) }),
+    });
   const landing = await waitUntil("board card or restored detail", async () => {
     if ((await railTab.count()) === 1) return "detail";
     if ((await card.count()) === 1) return "board";

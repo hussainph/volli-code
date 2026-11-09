@@ -11,6 +11,7 @@ import { scriptedProvider } from "../../../../agent-runtime/test-fixtures/script
 import { openVolliDb } from "../database-file";
 import { createSqliteSessionLedger } from "../../session-control/sqlite-ledger";
 import { closeStaleAttachments } from "../../session-runtime/boot-recovery";
+import { createBootRecoveryEngine } from "../../session-runtime/boot-recovery-reader";
 import { createPiNativeAdapter } from "../../session-runtime/pi-adapter";
 import {
   createFileTranscriptArtifactStore,
@@ -180,7 +181,7 @@ export async function recoveredPiQuestion(input: {
     const recovered = launch(false);
     const errors: unknown[] = [];
     await closeStaleAttachments({
-      engine: recovered.engine,
+      engine: createBootRecoveryEngine({ db, engine: recovered.engine }),
       reconcile: (request) => recovered.runtime.reconcile(request),
       projectIds: [projectId],
       newId: () => `head-boot-${clock++}`,

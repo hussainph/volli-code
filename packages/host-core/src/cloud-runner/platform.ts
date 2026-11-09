@@ -16,6 +16,7 @@ import {
   RUNNER_CAPABILITIES_VERSION,
   type RunnerBrowserCapability,
   type RunnerCapabilityReport,
+  type RunnerCapabilities,
   type RunnerHostFacts,
   type RunnerInstallMode,
   type RunnerLoad,
@@ -40,6 +41,8 @@ export interface PlatformProbe {
   freeBytes(path: string): number | null;
   /** `git --version`'s output, or `null` when git does not run. */
   gitVersion(): Promise<string | null>;
+  /** Whether the Docker client can reach its daemon. Optional for older probes. */
+  dockerAvailable?(): Promise<boolean>;
 }
 
 const MB = 1024 * 1024;
@@ -83,6 +86,17 @@ export const NODE_PLATFORM_PROBE: PlatformProbe = {
       execFile("git", ["--version"], { timeout: 5_000 }, (error, stdout) => {
         done(error ? null : stdout.trim());
       });
+    }),
+  dockerAvailable: () =>
+    new Promise((done) => {
+      execFile(
+        "docker",
+        ["info", "--format", "{{.ServerVersion}}"],
+        { timeout: 5_000 },
+        (error) => {
+          done(error === null);
+        },
+      );
     }),
 };
 
@@ -136,7 +150,9 @@ export interface RunnerHostCapabilities {
   installMode: RunnerInstallMode;
   terminals: boolean;
   browser: RunnerBrowserCapability;
-  docker: boolean;
+  /** An explicit override, else probe the local Docker daemon. */
+  docker?: boolean;
+  power?: RunnerCapabilities["power"];
   maxConcurrentSessions: number;
   /** Platform tools a Session may use (`xcode`, `simulator`, … on a Mac). */
   tools: string[];
@@ -147,6 +163,10 @@ export async function probeRunnerCapabilities(
   host: RunnerHostCapabilities,
   probe: PlatformProbe = NODE_PLATFORM_PROBE,
 ): Promise<RunnerCapabilityReport> {
+  const [git, docker] = await Promise.all([
+    probe.gitVersion(),
+    host.docker ?? probe.dockerAvailable?.() ?? false,
+  ]);
   return {
     version: host.version,
     platform: probeRunnerPlatform(probe),
@@ -156,8 +176,9 @@ export async function probeRunnerCapabilities(
       nodeVersion: probe.nodeVersion(),
       cpuCount: probe.cpus(),
       memTotalMb: Math.floor(probe.totalmem() / MB),
-      git: gitVersionOf(await probe.gitVersion()),
-      docker: host.docker,
+      git: gitVersionOf(git),
+      docker,
+      power: host.power ?? { source: "unknown", alwaysOn: false },
       terminals: host.terminals ? "available" : "unavailable",
       browser: host.browser,
       maxConcurrentSessions: host.maxConcurrentSessions,

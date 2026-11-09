@@ -1,4 +1,5 @@
 import { Worker } from "node:worker_threads";
+import { channel } from "node:diagnostics_channel";
 import {
   cpSync,
   existsSync,
@@ -177,6 +178,8 @@ describe("Storage restore staging and restart", () => {
       resourceLimits: { maxOldGenerationSizeMb: 192 },
       execArgv: ARGS,
     });
+    const diagnostics = channel("volli.test");
+    const workerThreadId = worker.threadId;
     const checkpoint = Promise.withResolvers<void>();
     const deadline = setTimeout(
       () => checkpoint.reject(new Error("Worker did not reach the crash checkpoint.")),
@@ -188,15 +191,21 @@ describe("Storage restore staging and restart", () => {
         checkpoint.reject(new Error("Worker exited before the crash checkpoint."));
     });
     worker.on("message", (message: { checkpoints?: number }) => {
-      if (message.checkpoints === 3) checkpoint.resolve();
+      if (message.checkpoints === 3) {
+        diagnostics.publish({ event: "restore-crash-checkpoint", workerThreadId });
+        checkpoint.resolve();
+      }
     });
     try {
       await checkpoint.promise;
       clearTimeout(deadline);
       expect(Atomics.load(new Int32Array(word), 0)).toBe(1);
+      diagnostics.publish({ event: "restore-crash-terminate", workerThreadId });
       expect(await worker.terminate()).toBe(1);
+      diagnostics.publish({ event: "restore-crash-terminated", workerThreadId });
     } finally {
       clearTimeout(deadline);
+      diagnostics.publish({ event: "restore-crash-cleanup", workerThreadId });
       await worker.terminate();
     }
     expect(readFileSync(profile.dbPath)).toEqual(before);
@@ -226,7 +235,10 @@ describe("Storage restore staging and restart", () => {
         ENTRY,
         { kind: "stage", root: profile.root, bundlePath, projectPaths: paths, now: 1800000000002 },
         abort.signal,
-        () => abort.abort(),
+        () => {
+          channel("volli.test").publish({ event: "restore-cancel-request" });
+          abort.abort();
+        },
         ARGS,
       ),
     ).rejects.toThrow("cancelled");

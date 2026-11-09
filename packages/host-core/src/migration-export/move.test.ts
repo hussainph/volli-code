@@ -1,17 +1,28 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
-import { afterEach, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { migrationDocument, MigrationRowError } from "@volli/shared/cloud";
 import {
+  longPiLine,
   writeMoveProfile,
   MOVE_IDS,
   type MoveFault,
 } from "../migration-dry-run/test-support/move-profile";
 import { SYNTHETIC_IDS as ids } from "../migration-dry-run/test-support/synthetic-profile";
 import { exportMigrationSnapshot, type MigrationExportManifest } from "./exporter";
+import { PI_MOVE_LINE_MAX_BYTES } from "./records";
 import { streamRecords } from "./test-support/export-files";
 import { verifyMigrationExport } from "./verify";
 import { createOrphanCleanupEngine } from "../worktree/cleanup-engine";
@@ -25,10 +36,15 @@ const roots: string[] = [];
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
-function fixture(artifacts = 3, fault?: MoveFault) {
+function fixture(artifacts = 3, fault?: MoveFault, piLongLineBytes?: number) {
   const root = mkdtempSync(join(tmpdir(), "volli-move-export-"));
   roots.push(root);
-  const profile = writeMoveProfile(root, { artifacts, fault, now: 1_800_000_000_000 });
+  const profile = writeMoveProfile(root, {
+    artifacts,
+    fault,
+    now: 1_800_000_000_000,
+    ...(piLongLineBytes === undefined ? {} : { piLongLineBytes }),
+  });
   return { root, ...profile };
 }
 function options(f: ReturnType<typeof fixture>, projectIds?: string[]) {
@@ -392,4 +408,377 @@ it("exports the profile step alone: personal settings and unbound Automations, n
   expect(entries.length).toBeGreaterThan(0);
   expect(new Set(entries.map((entry) => entry.level))).toEqual(new Set(["personal"]));
   expect(entries.map((entry) => entry.name)).toContain("Everywhere");
+});
+
+describe("a dry run's export (VC-1029)", () => {
+  it("measures the history a copy carries, checking it the same way, and stages none of it", async () => {
+    const f = fixture(256);
+    const copy = await exportMigrationSnapshot(options(f));
+    const measured = await exportMigrationSnapshot({
+      ...options(f),
+      outDir: join(f.root, "measured"),
+      measureHistory: true,
+    });
+    const history = measured.manifest.historyMeasured!;
+    const copied = streamRecords(copy.outDir, copy.manifest, "transcriptArtifacts");
+    const slices = streamRecords(copy.outDir, copy.manifest, "piLogs");
+    expect(history).toEqual({
+      transcripts: copied.length,
+      transcriptBytes: copied.reduce(
+        (sum, record) => sum + Buffer.byteLength(record.canonicalJson as string),
+        0,
+      ),
+      piSlices: slices.length,
+      piLogBytes: slices.reduce((sum, record) => sum + (record.sourceBytes as number), 0),
+    });
+    expect(history.transcripts).toBe(256);
+    expect(copy.manifest.historyMeasured).toBeUndefined();
+    for (const name of ["transcriptArtifacts", "piLogs"])
+      expect(measured.manifest.streams.find((stream) => stream.name === name)).toMatchObject({
+        records: 0,
+        bytes: 0,
+        chunks: [],
+      });
+    expect(existsSync(join(measured.outDir, "streams", "transcriptArtifacts"))).toBe(false);
+    expect(measured.manifest.piLogFiles).toEqual(copy.manifest.piLogFiles);
+    await expect(verifyMigrationExport(measured.outDir)).resolves.toMatchObject({
+      manifest: { historyMeasured: history },
+    });
+  }, 60000);
+  it.each(["transcript", "pi"] as const)(
+    "refuses a %s fault while measuring, exactly as a copy does",
+    async (fault) => {
+      const f = fixture(3, fault);
+      await expect(
+        exportMigrationSnapshot({ ...options(f), measureHistory: true }),
+      ).rejects.toMatchObject({
+        code: "source_corrupt",
+        message: expect.stringMatching(new RegExp(fault === "pi" ? "Pi attachment" : fault)),
+      });
+    },
+  );
+  it("refuses a measured manifest that claims a different coverage", async () => {
+    const f = fixture(8);
+    const { outDir, manifest } = await exportMigrationSnapshot({
+      ...options(f),
+      measureHistory: true,
+    });
+    const tampered = {
+      ...manifest,
+      historyMeasured: { ...manifest.historyMeasured!, transcripts: 7 },
+    };
+    writeFileSync(join(outDir, "manifest.json"), JSON.stringify(tampered));
+    await expect(verifyMigrationExport(outDir)).rejects.toThrow("Transcript digest coverage");
+  });
+  it.each([
+    ["transcripts", { transcripts: 1.5 }, "carries no history"],
+    ["transcriptBytes", { transcriptBytes: -0.5 }, "carries no history"],
+    ["piSlices", { piSlices: Number.NaN }, "carries no history"],
+    ["piLogBytes", { piLogBytes: 2 ** 60 }, "carries no history"],
+    ["Pi coverage", { piLogBytes: 1 }, "Pi log coverage is incomplete"],
+  ] as const)("refuses a measured manifest with a forged %s", async (_name, forged, message) => {
+    const f = fixture(2);
+    const { outDir, manifest } = await exportMigrationSnapshot({
+      ...options(f),
+      measureHistory: true,
+    });
+    const tampered = { ...manifest, historyMeasured: { ...manifest.historyMeasured!, ...forged } };
+    writeFileSync(join(outDir, "manifest.json"), JSON.stringify(tampered));
+    await expect(verifyMigrationExport(outDir)).rejects.toThrow(message);
+  });
+  it("refuses a measured manifest whose measure is not a record", async () => {
+    const f = fixture(2);
+    const { outDir, manifest } = await exportMigrationSnapshot({
+      ...options(f),
+      measureHistory: true,
+    });
+    writeFileSync(
+      join(outDir, "manifest.json"),
+      JSON.stringify({ ...manifest, historyMeasured: null }),
+    );
+    await expect(verifyMigrationExport(outDir)).rejects.toThrow("carries no history");
+  });
+  it("refuses a copy that claims to be a measure", async () => {
+    const f = fixture(2);
+    const { outDir, manifest } = await exportMigrationSnapshot(options(f));
+    const tampered = {
+      ...manifest,
+      historyMeasured: { transcripts: 2, transcriptBytes: 1, piSlices: 1, piLogBytes: 1 },
+    };
+    writeFileSync(join(outDir, "manifest.json"), JSON.stringify(tampered));
+    await expect(verifyMigrationExport(outDir)).rejects.toThrow("carries no history");
+  });
+  it("takes one snapshot for several projects: later exports link it instead of copying", async () => {
+    const f = fixture();
+    const kept = join(f.root, "kept.db");
+    const first = await exportMigrationSnapshot({
+      ...options(f),
+      outDir: join(f.root, "first"),
+      measureHistory: true,
+      sharedSnapshot: { keepAt: kept },
+    });
+    const later = exportMigrationSnapshot({
+      ...options(f, [MOVE_IDS.project]),
+      outDir: join(f.root, "second"),
+      measureHistory: true,
+      sharedSnapshot: { from: kept },
+      onProgress: (progress) => {
+        if (progress.phase !== "verifying") return;
+        const staged = join(f.root, "second.partial", "snapshot.db");
+        expect(statSync(staged).ino).toBe(statSync(kept).ino);
+      },
+    });
+    const second = await later;
+    expect(second.manifest.snapshotAt).toBe(first.manifest.snapshotAt);
+    expect(second.manifest.projectIds).toEqual([MOVE_IDS.project]);
+    expect(readdirSync(join(f.root, "second"))).not.toContain("snapshot.db");
+    expect(existsSync(kept)).toBe(true);
+    await expect(
+      exportMigrationSnapshot({
+        ...options(f, [MOVE_IDS.project]),
+        outDir: join(f.root, "third"),
+        sharedSnapshot: { from: join(f.root, "missing.db") },
+      }),
+    ).rejects.toMatchObject({ code: "source_unreadable" });
+    // A sidecar that does not say what it is, is not trusted.
+    writeFileSync(`${kept}.json`, JSON.stringify({ sourcePath: f.dbPath, snapshotAt: "soon" }));
+    await expect(
+      exportMigrationSnapshot({
+        ...options(f, [MOVE_IDS.project]),
+        outDir: join(f.root, "fifth"),
+        sharedSnapshot: { from: kept },
+      }),
+    ).rejects.toMatchObject({ code: "source_unreadable" });
+    // A kept snapshot of another database is never someone else's export.
+    const other = fixture();
+    await expect(
+      exportMigrationSnapshot({
+        ...options(other, [MOVE_IDS.project]),
+        outDir: join(other.root, "fourth"),
+        sharedSnapshot: { from: kept },
+      }),
+    ).rejects.toMatchObject({
+      code: "source_unreadable",
+      message: expect.stringMatching(/another/),
+    });
+  });
+});
+
+/** The artifact file the fixture wrote for its i-th transcript reference. */
+function artifactFile(f: ReturnType<typeof fixture>, i: number): string {
+  const db = new Database(f.dbPath, { readonly: true });
+  try {
+    const { payload } = db
+      .prepare("SELECT payload FROM session_events WHERE id = ?")
+      .get(`transcript:${i}`) as { payload: string };
+    const hex = (JSON.parse(payload) as { reference: { id: string } }).reference.id.slice(7);
+    return join(f.root, "session-transcripts", `${hex}.json${i % 2 ? ".gz" : ""}`);
+  } finally {
+    db.close();
+  }
+}
+
+describe("reading transcript artifacts ahead (VC-1029)", () => {
+  it.each([false, true])(
+    "refuses the first missing artifact in row order, with later reads in flight (measuring: %s)",
+    async (measureHistory) => {
+      const f = fixture(64);
+      // Rows 10 and 15 are both inside one read-ahead window; row 10 comes first.
+      rmSync(artifactFile(f, 15));
+      rmSync(artifactFile(f, 10));
+      const refusal = await exportMigrationSnapshot({ ...options(f), measureHistory }).then(
+        () => new Error("The export did not refuse."),
+        (error: unknown) => error as Error,
+      );
+      expect(refusal).toMatchObject({ code: "source_corrupt" });
+      expect(refusal.message).toMatch(new RegExp(`${ids.hotSession}:16 missing`));
+    },
+  );
+  it("stops an export cancelled while it reads history, leaving nothing published", async () => {
+    const f = fixture(64);
+    const controller = new AbortController();
+    await expect(
+      exportMigrationSnapshot({
+        ...options(f),
+        measureHistory: true,
+        signal: controller.signal,
+        onProgress: (progress) => {
+          if (progress.phase === "finalizing") controller.abort();
+        },
+      }),
+    ).rejects.toMatchObject({ code: "cancelled" });
+    expect(existsSync(join(f.root, "export"))).toBe(false);
+  });
+});
+
+const piFileOf = (f: ReturnType<typeof fixture>) =>
+  join(f.root, "pi-sessions", "--move--", "move-fixture.jsonl");
+
+/** The Pi stream's chunks and records, and the file its slices rebuild. */
+function piSlices(outDir: string, manifest: MigrationExportManifest) {
+  const stream = manifest.streams.find((s) => s.name === "piLogs")!;
+  const records = streamRecords(outDir, manifest, "piLogs");
+  return {
+    stream,
+    records,
+    rebuilt: Buffer.concat(records.map((r) => Buffer.from(r.base64, "base64"))),
+  };
+}
+const line = (row: Record<string, unknown>) => `${JSON.stringify(row)}\n`;
+const flipped = (base64: string, at: number) =>
+  `${base64.slice(0, at)}${base64[at] === "A" ? "B" : "A"}${base64.slice(at + 1)}`;
+
+describe("Pi lines longer than a slice (VC-1030)", () => {
+  const MiB = 1024 * 1024;
+
+  it.each([
+    ["2 MiB", 2 * MiB],
+    ["19 MB", 19_000_000],
+  ])(
+    "carries a %s line whole as a slice of its own, and verifies it",
+    async (_name, bytes) => {
+      const f = fixture(3, undefined, bytes);
+      const { outDir, manifest } = await exportMigrationSnapshot(options(f));
+      const { stream, records, rebuilt } = piSlices(outDir, manifest);
+      expect(rebuilt.equals(readFileSync(piFileOf(f)))).toBe(true);
+      const long = records.filter((r) => r.sourceBytes > MiB);
+      expect(long).toHaveLength(1);
+      expect(long[0]!.sourceBytes).toBe(bytes);
+      expect(Buffer.from(long[0]!.base64, "base64").toString()).toBe(longPiLine(bytes));
+      expect(long[0]!.sourceSha256).toBe(
+        createHash("sha256").update(longPiLine(bytes)).digest("hex"),
+      );
+      // Its own chunk, byte for byte what `JSON.stringify` writes for the record.
+      const chunk = stream.chunks.find((c) => readFileSync(join(outDir, c.file)).length > bytes)!;
+      expect(chunk.records).toBe(1);
+      expect(readFileSync(join(outDir, chunk.file), "utf8")).toBe(`${JSON.stringify(long[0])}\n`);
+      for (const record of records.filter((r) => r !== long[0]))
+        expect(record.sourceBytes).toBeLessThanOrEqual(MiB);
+      await expect(verifyMigrationExport(outDir)).resolves.toMatchObject({ manifest });
+      // A dry run measures the same file, slice for slice.
+      const measured = await exportMigrationSnapshot({
+        ...options(f),
+        outDir: join(f.root, "measured"),
+        measureHistory: true,
+      });
+      expect(measured.manifest.historyMeasured).toMatchObject({
+        piSlices: records.length,
+        piLogBytes: rebuilt.length,
+      });
+      await verifyMigrationExport(measured.outDir);
+    },
+    60_000,
+  );
+
+  it("carries a line of exactly the longest a move carries", async () => {
+    const f = fixture(1, undefined, PI_MOVE_LINE_MAX_BYTES);
+    const { outDir, manifest } = await exportMigrationSnapshot(options(f));
+    const { stream } = piSlices(outDir, manifest);
+    expect(stream.chunks.some((c) => c.records === 1 && c.bytes > PI_MOVE_LINE_MAX_BYTES)).toBe(
+      true,
+    );
+    await verifyMigrationExport(outDir);
+  }, 120_000);
+
+  it.each([false, true])(
+    "refuses a line just over that, naming the Session (measuring: %s)",
+    async (measureHistory) => {
+      const f = fixture(1, undefined, PI_MOVE_LINE_MAX_BYTES + 1);
+      await expect(
+        exportMigrationSnapshot({ ...options(f), measureHistory }),
+      ).rejects.toMatchObject({
+        code: "pi_log_too_large",
+        sessionId: ids.hotSession,
+        message: expect.stringContaining(ids.hotSession),
+      });
+      expect(existsSync(join(f.root, "export"))).toBe(false);
+    },
+    120_000,
+  );
+
+  it.each([false, true])(
+    "still refuses a log that ends partway through a line (measuring: %s)",
+    async (measureHistory) => {
+      const f = fixture(1, "piTruncated", 2 * MiB);
+      await expect(
+        exportMigrationSnapshot({ ...options(f), measureHistory }),
+      ).rejects.toMatchObject({ code: "pi_log_incomplete", sessionId: ids.hotSession });
+    },
+  );
+
+  /** Rewrites the long line's chunk (and its checksum), so only the record's own checks can catch it. */
+  async function tamperedLong(edit: (row: Record<string, unknown>) => string) {
+    const f = fixture(1, undefined, 2 * MiB);
+    const { outDir, manifest } = await exportMigrationSnapshot(options(f));
+    const stream = manifest.streams.find((s) => s.name === "piLogs")!;
+    const chunk = stream.chunks.find((c) => c.records === 1 && c.bytes > 2 * MiB)!;
+    const row = JSON.parse(readFileSync(join(outDir, chunk.file), "utf8")) as Record<
+      string,
+      unknown
+    >;
+    const bytes = Buffer.from(edit(row));
+    stream.bytes += bytes.length - chunk.bytes;
+    chunk.bytes = bytes.length;
+    chunk.sha256 = createHash("sha256").update(bytes).digest("hex");
+    writeFileSync(join(outDir, chunk.file), bytes);
+    writeFileSync(join(outDir, "manifest.json"), JSON.stringify(manifest));
+    return verifyMigrationExport(outDir);
+  }
+
+  it.each<[string, (row: Record<string, unknown>) => string, RegExp]>([
+    [
+      "a changed byte in the middle",
+      (row) =>
+        line({ ...row, base64: flipped(row.base64 as string, (row.base64 as string).length / 2) }),
+      /checksum mismatch/,
+    ],
+    ["a wrong source hash", (row) => line({ ...row, sourceSha256: "0".repeat(64) }), /mismatch/],
+    [
+      "a byte count that disagrees",
+      (row) => line({ ...row, sourceBytes: (row.sourceBytes as number) - 1 }),
+      /mismatch/,
+    ],
+    [
+      "a missing byte",
+      (row) => {
+        const body = Buffer.from(row.base64 as string, "base64");
+        return line({ ...row, base64: body.subarray(1).toString("base64") });
+      },
+      /mismatch/,
+    ],
+    [
+      "non-canonical base64",
+      (row) => line({ ...row, base64: `${row.base64 as string}=` }),
+      /mismatch/,
+    ],
+    [
+      "base64 that is not the last field",
+      (row) => {
+        const { base64, ...rest } = row;
+        return line({ base64, ...rest });
+      },
+      /not a record/,
+    ],
+    [
+      "fields that are not JSON",
+      (row) => line(row).replace('{"projectId":', '{"projectId":,'),
+      /not JSON/,
+    ],
+    ["something after the record", (row) => `${line(row).slice(0, -1)} \n`, /not a record/],
+    [
+      "two lines in one slice longer than a slice",
+      (row) => {
+        const body = Buffer.from(row.base64 as string, "base64");
+        body[MiB] = 0x0a;
+        return line({
+          ...row,
+          base64: body.toString("base64"),
+          sourceSha256: createHash("sha256").update(body).digest("hex"),
+        });
+      },
+      /out of bounds/,
+    ],
+  ])("refuses a long line's slice with %s", async (_name, edit, error) => {
+    await expect(tamperedLong(edit)).rejects.toThrow(error);
+  });
 });

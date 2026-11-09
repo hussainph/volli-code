@@ -52,6 +52,18 @@ function fixture() {
       save: (row) => {
         rows.set(row.sessionId, row);
       },
+      update: (row, expected) => {
+        const held = rows.get(row.sessionId);
+        if (
+          held?.ownerUserId !== row.ownerUserId ||
+          held.generation !== expected.generation ||
+          held.acceptedThrough !== expected.acceptedThrough
+        ) {
+          return false;
+        }
+        rows.set(row.sessionId, row);
+        return true;
+      },
     },
     ledger: { listEvents, latestEventSequence: () => events.length },
   });

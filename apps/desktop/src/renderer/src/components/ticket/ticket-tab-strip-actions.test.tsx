@@ -1,5 +1,11 @@
+// @vitest-environment jsdom
+import { act } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
+import { withOpenTabChooser } from "@renderer/test-utils/open-tab-chooser";
+import { ChromeBar } from "@renderer/components/chrome-bar";
+import { SidebarProvider } from "@renderer/components/ui/sidebar";
+import { useUiStore } from "@renderer/stores/ui";
 
 import { TicketTabStrip } from "./ticket-tabs";
 
@@ -30,13 +36,29 @@ function strip(creating: boolean, railCollapsed = false): string {
   );
 }
 
-describe("TicketTabStrip", () => {
-  it("keeps one-press chat creation on the strip", () => {
-    const html = strip(false);
+function chrome(collapsed = false): string {
+  const state = useUiStore.getInitialState();
+  const previous = state.railCollapsed;
+  // Zustand's bound hook closes over the vanilla API; its server snapshot is
+  // this initial object, not an overridden property on the bound hook.
+  state.railCollapsed = collapsed;
+  try {
+    return renderToStaticMarkup(
+      <SidebarProvider>
+        <ChromeBar />
+      </SidebarProvider>,
+    );
+  } finally {
+    state.railCollapsed = previous;
+  }
+}
 
-    expect(html).toContain('aria-label="New chat"');
-    expect(buttonTag(html, "New chat")).not.toContain('aria-haspopup="menu"');
-    expect(buttonTag(html, "Other things to open")).toContain('aria-haspopup="menu"');
+describe("TicketTabStrip", () => {
+  it("keeps one anchored creation chooser on the strip", () => {
+    const html = strip(false);
+    expect(html).toContain('aria-label="Open a tab"');
+    expect(buttonTag(html, "Open a tab")).toContain('aria-haspopup="menu"');
+    expect(html).not.toContain('aria-label="New chat"');
     expect(html).not.toContain('aria-label="New session"');
   });
 
@@ -47,7 +69,7 @@ describe("TicketTabStrip", () => {
     // moved into that menu (covered in `new-session-control.test.tsx`, where
     // the portalled rows are reachable), so no third button may appear here.
     expect(html).not.toContain('aria-label="New Browser Tab"');
-    expect(html.match(/<button/g)).toHaveLength(3); // two halves + rail toggle
+    expect(html.match(/<button/g)).toHaveLength(1); // chooser; inspection moved to window chrome
   });
 
   it("draws a live-titled, closable Browser Tab", () => {
@@ -142,32 +164,60 @@ describe("TicketTabStrip", () => {
     // not to belong to.
     const html = strip(false);
     const scroller = html.indexOf("overflow-x-auto");
-    const divider = html.indexOf("border-l");
-    const control = html.indexOf('aria-label="New chat"');
+    const divider = html.indexOf('data-slot="tab-actions"');
+    const control = html.indexOf('aria-label="Open a tab"');
 
     expect(scroller).toBeGreaterThan(-1);
     expect(divider).toBeGreaterThan(scroller);
     expect(control).toBeGreaterThan(divider);
   });
 
-  it("announces the chord, which now starts what this control starts", () => {
+  it("announces each chord beside its creation choice and wires the press", async () => {
     // ⌘T / ⌥⌘T resolve against the surface in front (lib/new-session-shortcut.ts),
     // so inside a ticket they mint a Session on THAT ticket — exactly what this
     // control mints. The rule is still "a menu may only advertise a key that does
     // what the item does"; what changed is that this mount now satisfies it.
-    expect(buttonTag(strip(false), "New chat")).toContain('aria-keyshortcuts="Meta+T"');
+    const chat = vi.fn();
+    await withOpenTabChooser(
+      <TicketTabStrip
+        projectId="project-1"
+        ticketId="ticket-1"
+        tabs={[{ id: "doc", kind: "body", label: "VC-6" }]}
+        activeTabId="doc"
+        creating={false}
+        onSelectTab={noop}
+        onCloseTab={noop}
+        onRenameSessionTab={noop}
+        onNewSession={noop}
+        onNewChat={chat}
+        railCollapsed={false}
+        onToggleRail={noop}
+        onNewBrowser={noop}
+      />,
+      async (menu) => {
+        const choices = [...menu.querySelectorAll<HTMLElement>('[role="menuitem"]')];
+        expect(choices.map((choice) => choice.textContent)).toEqual([
+          "Chat⌘T",
+          "Terminal⌥⌘T",
+          "Browser",
+        ]);
+        await act(async () => choices[0]!.click());
+        expect(chat).toHaveBeenCalledTimes(1);
+      },
+    );
   });
 
   it("disables both halves while a ticket session is booting", () => {
     const html = strip(true);
 
-    expect(buttonTag(html, "New chat")).toContain('disabled=""');
-    expect(buttonTag(html, "Other things to open")).toContain('disabled=""');
+    expect(buttonTag(html, "Open a tab")).toContain('disabled=""');
+    expect(html.match(/aria-label="Open a tab"/g)).toHaveLength(1);
   });
 
   it("puts the details-rail toggle in the corner, above the pane it collapses", () => {
-    expect(strip(false)).toContain('aria-label="Hide details rail"');
-    expect(strip(false, true)).toContain('aria-label="Show details rail"');
+    expect(strip(false)).not.toContain('aria-label="Hide details rail"');
+    expect(chrome()).toContain('aria-label="Hide details rail"');
+    expect(chrome(true)).toContain('aria-label="Show details rail"');
     // Terminal focus is drawn on the terminal PANE now (session-split-layout.tsx),
     // not on this strip and not on the chrome band: it acts on one pane, so it
     // lives on that pane and cannot appear where a terminal isn't.
@@ -177,12 +227,14 @@ describe("TicketTabStrip", () => {
   it("never disables the corner: the rail is always there to collapse", () => {
     // The old occupant was conditional on the active tab's kind, which is what
     // made the corner need a reserved slot and a fade in the first place.
-    expect(buttonTag(strip(false), "Hide details rail")).not.toContain('disabled=""');
+    expect(buttonTag(chrome(), "Hide details rail")).not.toContain('disabled=""');
+    expect(buttonTag(strip(true), "Open a tab")).toContain('disabled=""');
   });
 
   it("does not double up state on the corner control", () => {
     // The label already says which way the button goes; `aria-pressed` beside
     // it announces "Hide details rail, pressed" while the rail is showing.
-    expect(buttonTag(strip(false), "Hide details rail")).not.toContain("aria-pressed");
+    expect(buttonTag(chrome(), "Hide details rail")).not.toMatch(/\saria-pressed=/);
+    expect(buttonTag(chrome(true), "Show details rail")).not.toMatch(/\saria-pressed=/);
   });
 });

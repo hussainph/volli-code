@@ -347,3 +347,14 @@ describe("loadSkills", () => {
     }
   });
 });
+
+it("counts omitted candidate directories without claiming unread folders are skills", async () => {
+  const dir = makeSkillsDir();
+  for (let i = 0; i < 205; i++) mkdirSync(join(dir, `skill-${String(i).padStart(4, "0")}`));
+  writeFileSync(join(dir, "skill-0000", "SKILL.md"), "A readable skill");
+  const result = await readProjectSkills(dir);
+  expect(result).toMatchObject({ ok: true, omittedSkillDirectories: 5 });
+  if (result.ok) expect(result.skills).toHaveLength(1);
+  const both = await loadSkills({ projectSkillsDir: dir, globalSkillsDir: dir });
+  expect(both).toMatchObject({ ok: true, omittedSkillDirectories: 10 });
+});

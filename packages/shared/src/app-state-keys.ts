@@ -117,6 +117,12 @@ const EXACT = {
     reason:
       "Window background and mode main reads before the window exists (host-core db/theme-repo.ts); a cache of this device's resolved theme, meaningless off-device.",
   },
+  "volli:style": {
+    placement: "client-local",
+    owner: "stays",
+    reason:
+      "Client typography and motion preferences, with per-project typography overrides (stores/style.ts).",
+  },
   "volli:ui": {
     placement: "client-local",
     owner: "stays",
@@ -134,6 +140,11 @@ const EXACT = {
     owner: "stays",
     reason:
       "The selected project (stores/projects.ts); with several hosts it is this client's choice.",
+  },
+  "composer-runner-choices": {
+    placement: "client-local",
+    owner: "stays",
+    reason: "The last explicit composer runner choice per account and project on this device.",
   },
   "volli:chat-drafts": {
     placement: "client-local",
@@ -210,6 +221,12 @@ const EXACT = {
   },
 
   // ── host ──────────────────────────────────────────────────────────────────
+  "volli:mcp-global": {
+    placement: "host",
+    owner: "stays",
+    reason:
+      "This machine’s shared MCP configuration and legacy import identities; credentials stay in the sealed MCP store.",
+  },
   "volli:installation-id": {
     placement: "host",
     owner: "VC-572",

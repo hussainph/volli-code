@@ -15,6 +15,7 @@ import { recordSessionStartedOnce } from "../db/events-repo";
 import { getComment } from "../db/comments-repo";
 import { listAutomationsForProject } from "../db/automations-repo";
 import { loadSkills } from "../skills";
+import { readRepoInstructions, readTicketRepoInstructions } from "../repo-instructions";
 import { createHostAgentToolDoor, createHostAgentWatches } from "../agent-services";
 import {
   createRuntimeSessionFacade,
@@ -50,6 +51,10 @@ vi.mock("../db/events-repo", () => ({ recordSessionStartedOnce: vi.fn() }));
 vi.mock("../db/comments-repo", () => ({ getComment: vi.fn() }));
 vi.mock("../db/automations-repo", () => ({ listAutomationsForProject: vi.fn(() => []) }));
 vi.mock("../skills", () => ({ loadSkills: vi.fn() }));
+vi.mock("../repo-instructions", () => ({
+  readRepoInstructions: vi.fn(),
+  readTicketRepoInstructions: vi.fn(),
+}));
 vi.mock("../agent-services", () => ({
   createHostAgentToolDoor: vi.fn(),
   createHostAgentWatches: vi.fn(),
@@ -590,6 +595,78 @@ describe("facade captured ports and capability degradations", () => {
     expect(await skills.index("p", [])).toBeNull();
     vi.mocked(getProjectById).mockReturnValue({ path: "/repo", skillModes: { a: "off" } } as never);
     expect(await skills.index("p", [])).toBeNull();
+  });
+  it("reads repository instructions from the Session's own working copy as birth knows it", async () => {
+    const f = await fixture();
+    const skills = recoveredRuntimeSessionServices(f.ready).sessionSkills!;
+    const read = vi.mocked(readRepoInstructions);
+    read.mockImplementation(async (dir) => ({ name: "repository instructions", text: dir }));
+    const readTicket = vi.mocked(readTicketRepoInstructions);
+    readTicket.mockImplementation(async (_git, facts) => ({
+      name: "repository instructions",
+      text: `ticket ${facts.displayId}`,
+    }));
+    const instructions = async (ticketId: string | null) =>
+      (await skills.instructions!("p", ticketId))?.text;
+    vi.mocked(getProjectById).mockReturnValue({
+      id: "p",
+      path: "/repo",
+      ticketPrefix: "VC",
+      baseBranch: "trunk",
+    } as never);
+    // A Board or Project Session reads the project root.
+    expect(await instructions(null)).toBe("/repo");
+    vi.mocked(getTicket).mockReturnValue(undefined);
+    expect(await instructions("t")).toBe("/repo");
+    expect(readTicket).not.toHaveBeenCalled();
+    // A Ticket hands its board facts to the one reader that decides between
+    // its checkout, the ref the checkout will be cut from, and the root.
+    vi.mocked(getTicket).mockReturnValue({
+      ticketNumber: 7,
+      title: "Fix it",
+      usesWorktree: true,
+      worktreePath: null,
+      branch: null,
+      baseBranch: "release",
+    } as never);
+    expect(await instructions("t")).toBe("ticket VC-7");
+    expect(readTicket).toHaveBeenLastCalledWith(
+      expect.any(Function),
+      expect.objectContaining({
+        checkoutPath: "/repo",
+        projectId: "p",
+        displayId: "VC-7",
+        title: "Fix it",
+        usesWorktree: true,
+        worktreePath: null,
+        branch: null,
+        baseBranch: "release",
+        projectBaseBranch: "trunk",
+      }),
+    );
+    // A project that never chose a base hands none on; the reader resolves it.
+    vi.mocked(getProjectById).mockReturnValue({
+      id: "p",
+      path: "/repo",
+      ticketPrefix: "VC",
+    } as never);
+    expect(await instructions("t")).toBe("ticket VC-7");
+    expect(readTicket).toHaveBeenLastCalledWith(
+      expect.any(Function),
+      expect.objectContaining({ projectBaseBranch: null }),
+    );
+    // No project, no instructions — and the baseline's port is the same one.
+    vi.mocked(getProjectById).mockReturnValue(undefined);
+    expect(await skills.instructions!("p", null)).toBeNull();
+    expect(await recoveredSessionCommandPorts(f.ready).repoInstructions!("p", null)).toBeNull();
+    // A cloud project with no checkout on this machine reads nothing.
+    const cloud = await fixture({ projectPath: () => null });
+    vi.mocked(getProjectById).mockReturnValue({ path: "/cloud-identities/hash" } as never);
+    read.mockClear();
+    expect(
+      await recoveredRuntimeSessionServices(cloud.ready).sessionSkills!.instructions!("p", null),
+    ).toBeNull();
+    expect(read).not.toHaveBeenCalled();
   });
   it("reads cloud skills from the registered checkout, never a shadow placeholder", async () => {
     const projectPath = vi.fn((_projectId: string): string | null => "/registered/repo");

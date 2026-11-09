@@ -85,11 +85,13 @@ describe("SessionDetailPanel", () => {
     expect(html).toContain("VC-290 · Closed terminal history");
   });
 
-  it("says what was not saved, rather than showing an empty terminal", () => {
+  it("keeps the record concise, with accessible icon labels and no info box", () => {
     const html = panel({ record: record({ id: "s1" }), ticket: null, ticketPrefix: "VC" });
 
-    expect(html).toContain("Terminal output was not saved.");
-    expect(html).toContain("Last command was not recorded.");
+    expect(html).toContain('class="sr-only">Started');
+    expect(html).toContain('class="sr-only">Folder');
+    expect(html).not.toContain("Terminal output was not saved.");
+    expect(html).not.toContain("Last command was not recorded.");
   });
 
   it("prints exit code 0 for a clean exit and the exact code for a failure", () => {
@@ -211,7 +213,7 @@ describe("Session detail resolution states", () => {
   it("does not call a listing that has not answered yet a missing record", () => {
     const html = renderToStaticMarkup(<SessionDetailPending />);
 
-    expect(html).toContain("Loading this session’s record…");
+    expect(html).toContain("Loading this session’s record");
     expect(html).not.toContain("could not be found");
   });
 

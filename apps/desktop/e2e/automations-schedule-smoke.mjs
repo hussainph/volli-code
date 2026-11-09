@@ -53,6 +53,11 @@ import {
   seedProjects,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
+import {
+  assertSettingsWindow,
+  closeSettingsWindow,
+  settingsPageOf,
+} from "./lib/settings-window.mjs";
 
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("volli-automations-schedule-");
 const { attempt, must, summarize } = createRunner();
@@ -63,7 +68,7 @@ console.log("scratch:", scratch, "\n");
 const CURSOR_KEY = "volli:automation-schedule-cursors";
 const { schedule, cursor } = automationScheduleFixture(Date.now());
 // Independent expected copy, rather than comparing the UI's formatter to itself.
-const sentence = `Every day at ${String(schedule.hour).padStart(2, "0")}:30 ${schedule.timeZone}`;
+const frequencySentence = `Daily · ${String(schedule.hour).padStart(2, "0")}:30`;
 
 /** Reads the closed app's database directly — only ever between launches. */
 function withDb(work) {
@@ -76,11 +81,14 @@ function withDb(work) {
 }
 
 let app = null;
+let settingsPage = null;
 let exitCode = 1;
 try {
   const repoDir = await makeGitRepo(scratch);
 
   app = await launch({ dbPath, userDataDir });
+  // Match the macOS CI work area instead of inheriting the developer display.
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1024, 681));
   let page = await app.firstWindow();
   page.on("pageerror", (error) => console.log("[pageerror]", String(error).slice(0, 400)));
   assertBuiltRendererLoaded(page);
@@ -113,7 +121,10 @@ try {
   }
 
   async function openAutomationsPage() {
-    await page.getByRole("button", { name: "Automations", exact: true }).first().click();
+    await page
+      .locator('[data-sidebar-presentation="expanded"]')
+      .getByRole("button", { name: "Automations", exact: true })
+      .click();
     await page
       .getByRole("heading", { name: "Automations", exact: true })
       .waitFor({ timeout: 15000 });
@@ -132,14 +143,16 @@ try {
       const form = page.locator('[data-slot="automation-editor"]');
       await form.waitFor({ timeout: 15000 });
       await form.getByLabel("Name").fill("Nightly sweep");
-      await form.getByLabel("Instructions").fill("/review the day");
+      await form
+        .getByRole("textbox", { name: "Instructions", exact: true })
+        .fill("/review the day");
 
       // The Trigger's third answer. Everything the schedule needs is a
       // CONTROL — there is no text field that takes an expression, which is
       // what "no cron expression is accepted anywhere in the UI" means at the
       // only surface that authors one.
-      await form.getByRole("radio", { name: "On a schedule" }).click();
-      const preset = form.getByLabel("Schedule");
+      await form.getByRole("tab", { name: "Schedule", exact: true }).click();
+      const preset = form.getByRole("combobox", { name: "Frequency", exact: true });
       await preset.waitFor({ timeout: 10000 });
       // Through the preset control both ways, so this asserts the control
       // DRIVES the record rather than agreeing with a default. An hourly
@@ -147,9 +160,9 @@ try {
       // different one — the form cannot spell "hourly, at 09:00".
       await preset.click();
       await page.getByRole("option", { name: "Hourly" }).click();
-      await form.getByLabel("Minutes past the hour").waitFor({ timeout: 10000 });
+      await form.getByLabel("Minute", { exact: true }).waitFor({ timeout: 10000 });
       await preset.click();
-      await page.getByRole("option", { name: "Every day" }).click();
+      await page.getByRole("option", { name: "Daily", exact: true }).click();
       await form.getByLabel("Time", { exact: true }).click();
       await page.getByLabel("Hour", { exact: true }).fill(String(schedule.hour));
       await page.getByLabel("Minute", { exact: true }).fill("30");
@@ -166,10 +179,9 @@ try {
       await page.getByRole("option", { name: "Europe/London" }).first().click();
 
       const textFields = await form.locator('input:not([inputmode="numeric"]), textarea').count();
-      await form.getByRole("button", { name: "Create automation" }).click();
-      await page
-        .locator("[data-automation-rail-row]")
-        .filter({ hasText: "Nightly sweep" })
+      await form.getByRole("button", { name: "Create", exact: true }).click();
+      await form
+        .getByRole("heading", { name: "Nightly sweep", exact: true })
         .waitFor({ timeout: 15000 });
 
       const listed = await listedSchedule();
@@ -189,9 +201,12 @@ try {
   );
 
   await must(3, "the row reads as its sentence, with the stored zone shown", async () => {
-    const row = page.getByText(sentence);
-    await row.waitFor({ timeout: 15000 });
-    return { ok: true, detail: sentence };
+    const trigger = page
+      .locator('[data-slot="automation-editor"]')
+      .getByRole("region", { name: "Trigger", exact: true });
+    await trigger.getByText(frequencySentence, { exact: true }).waitFor({ timeout: 15000 });
+    await trigger.getByText("Europe/London", { exact: true }).waitFor();
+    return { ok: true, detail: await trigger.innerText() };
   });
 
   const automation = await listedSchedule();
@@ -199,7 +214,7 @@ try {
   await must(4, "the machine-local switch turns the schedule on here", async () => {
     // A machine fires nothing until someone turns something on there (VC-112),
     // so the switch is what puts this schedule in front of the timer at all.
-    await page.getByLabel("Automatic triggers on this machine: Nightly sweep").click();
+    await page.getByLabel("Automatic triggers on this Mac: Nightly sweep").click();
     const on = await waitUntil(
       "the enabled set to name this schedule",
       async () => {
@@ -242,6 +257,8 @@ try {
   }));
 
   app = await launch({ dbPath, userDataDir });
+  // Match the macOS CI work area instead of inheriting the developer display.
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1024, 681));
   page = await app.firstWindow();
   page.on("pageerror", (error) => console.log("[pageerror]", String(error).slice(0, 400)));
   await page.waitForLoadState("domcontentloaded");
@@ -295,7 +312,7 @@ try {
     const copy = await skipped.textContent();
     return {
       ok:
-        (copy ?? "").includes("Skipped \u2014 Volli wasn\u2019t running") &&
+        (copy ?? "").includes("Skipped · Volli was closed") &&
         (copy ?? "").includes("3 occurrences"),
       detail: copy ?? "skip row had no text",
     };
@@ -306,8 +323,12 @@ try {
     // the door refuses for that ordinary reason and Settings opens on Model
     // Access — which IS the evidence the click reached it.
     await page.getByLabel("Run Nightly sweep now").click();
-    const settings = page.getByRole("navigation", { name: "Settings categories" });
-    await settings.waitFor({ timeout: 20000 });
+    settingsPage = await waitUntil(
+      "the native Settings window for Model Access",
+      () => settingsPageOf(app),
+      { timeout: 20000 },
+    );
+    await assertSettingsWindow(app, page, settingsPage);
     return { ok: true, detail: "ran by hand, refused for the missing model" };
   });
 
@@ -325,9 +346,14 @@ try {
     // here would quietly make the by-hand Run a different piece of work from
     // the one the timer starts — on the very surface a person uses to check
     // what the schedule does.
-    await page.keyboard.press("Escape");
-    await openAutomationsPage();
-    await page.getByLabel("Run Nightly sweep", { exact: true }).click();
+    if (settingsPage !== null) {
+      await closeSettingsWindow(app, settingsPage);
+      settingsPage = null;
+    }
+    await page
+      .locator('[data-slot="automation-editor"]')
+      .getByRole("button", { name: "Run Nightly sweep", exact: true })
+      .click();
     const asksForATicket = await page
       .getByText("Run \u201cNightly sweep\u201d on")
       .waitFor({ timeout: 3000 })
@@ -336,7 +362,12 @@ try {
     if (asksForATicket) return { ok: false, detail: "it opened the Ticket dialog" };
     // Same evidence as step 8: the Project door was reached and refused for the
     // ordinary missing-model reason, whose recovery is Model Access.
-    await page.getByRole("navigation", { name: "Settings categories" }).waitFor({ timeout: 20000 });
+    settingsPage = await waitUntil(
+      "the native Settings window for Model Access",
+      () => settingsPageOf(app),
+      { timeout: 20000 },
+    );
+    await assertSettingsWindow(app, page, settingsPage);
     return { ok: true, detail: "Play went straight to the Project door" };
   });
 

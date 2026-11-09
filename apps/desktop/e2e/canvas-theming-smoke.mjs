@@ -10,7 +10,7 @@
  *     `Canvas` (1–3 positioned stops + vibrancy + grain) and an `Appearance`
  *     (light | dark | auto), each independently overridable per workspace. So
  *     the canvas is seeded by AUTHORING one through the real editor on
- *     Settings → Appearance (swatch, vibrancy, grain, a dragged stop), and the
+ *     Settings → Appearance (hex, vibrancy, grain, a dragged stop), and the
  *     appearance by the Mode control beside it.
  *   • THE WINDOW BACKGROUND IS NOT `--background` ANY MORE. It is the canvas's
  *     BASE FILL (`windowBackground` → `baseFillHex`), and with a canvas armed
@@ -61,94 +61,104 @@ import {
   sleep,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
+import { openSettingsWindow } from "./lib/settings-window.mjs";
 
 /**
  * The canvas pipeline's output for the SHIPPED DEFAULT canvas
- * (`DEFAULT_CANVAS` — one ember pool at 68%/30%, vibrancy 0.6, grain 0.15), in
+ * (`DEFAULT_CANVAS` — the three-stop Ember mesh, vibrancy 0.6, grain 0.15), in
  * each mode. The THIRD independent pin on these values: `derive.test.ts` pins
  * them against the color math, `globals.css` authors them for first paint, and
  * this table proves the running app actually renders them. All three move
  * together or one of them fails.
  *
+ * Since the tinted-neutrals work (VC-1129) the neutral rungs — rail, popover,
+ * muted, sidebar, the borders, the secondary ink, the veils — carry the
+ * canvas's light tint (`tintCanvasNeutral`), so they are no longer flat
+ * greys, and the light semantic-foreground poles re-solved to the black pole.
+ * Label ink is not one of them: `deriveLabelInk` keeps the neutral body
+ * chroma and hue in both modes, so it stays grey — only its lightness moves,
+ * following the re-solved secondary tier. Transcribed from the regenerated
+ * `globals.css`, as ever.
+ *
  * Veils are included because `applyThemeTokens` writes them in the same pass —
  * a veil left behind freezes the sidebar on the previous canvas's rung.
  */
 const DARK = {
-  "--rail": "#170f0b",
-  "--background": "#1c1310",
-  "--card": "#211815",
-  "--popover": "#251b18",
-  "--muted": "#271d1a",
-  "--accent": "#2d2220",
-  "--sidebar": "#211815",
-  "--foreground": "#e8e4e2",
-  "--muted-foreground": "#bdbab8",
-  "--sidebar-foreground": "#d0cdcb",
-  "--border": "#312623",
-  "--border-strong": "#423632",
-  "--sidebar-border": "#2d241f",
-  "--primary": "#b85d38",
+  "--rail": "#34241e",
+  "--background": "#1e1e1e",
+  "--card": "#1e1e1e",
+  "--popover": "#34241e",
+  "--muted": "#34241e",
+  "--accent": "#3e2920",
+  "--sidebar": "#34241e",
+  "--foreground": "#ededed",
+  "--muted-foreground": "#ead5cc",
+  "--sidebar-foreground": "#ededed",
+  "--border": "#4f3e37",
+  "--border-strong": "#6a5750",
+  "--sidebar-border": "#4f3e37",
+  "--primary": "#cd4d00",
   "--primary-foreground": "#ffffff",
-  "--primary-text": "#fc9a74",
-  "--ring": "#fc9a74",
-  "--destructive": "#ffa49f",
+  "--primary-text": "#ffc8b2",
+  "--ring": "#ffc8b2",
+  "--destructive": "#ffa5a0",
   "--destructive-foreground": "#290b0b",
-  "--positive": "#27d496",
+  "--positive": "#29d597",
   "--positive-foreground": "#001c10",
-  "--attention": "#ffaa2f",
+  "--attention": "#ffab33",
   "--attention-foreground": "#221200",
-  "--info": "#65c6ff",
+  "--info": "#68c7ff",
   "--info-foreground": "#001827",
-  "--sidebar-veil": "rgb(123 105 111 / 0.1)",
-  "--sidebar-accent-veil": "rgb(153 124 131 / 0.1)",
-  "--sidebar-border-veil": "rgb(153 144 121 / 0.1)",
+  "--sidebar-veil": "rgb(52 36 30 / 0.1)",
+  "--sidebar-accent-veil": "rgb(152 86 50 / 0.1)",
+  "--sidebar-border-veil": "rgb(255 255 255 / 0.1)",
   "--canvas-ink": "#fbf1ed",
-  "--canvas-ink-label": "#d2c8c5",
-  "--canvas-ink-muted": "#b6aca9",
+  "--canvas-ink-label": "#ece2de",
+  "--canvas-ink-muted": "#e1d8d4",
   "--lift-1": "transparent",
   "--lift-2": "rgb(251 241 237 / 0.03)",
-  "--label-ink": "#d5d1cf",
+  "--label-ink": "#e0e0e0",
 };
 
 const LIGHT = {
-  "--rail": "#edd1c6",
-  "--background": "#fdded2",
-  "--card": "#f4d4c8",
-  "--popover": "#f7d8cc",
-  "--muted": "#eacabd",
-  "--accent": "#dab9ad",
-  "--sidebar": "#e2c3b7",
-  "--foreground": "#120906",
-  "--muted-foreground": "#514541",
-  "--sidebar-foreground": "#080302",
-  "--border": "#d8b6a9",
-  "--border-strong": "#d5b2a5",
-  "--sidebar-border": "#ddbbad",
-  "--primary": "#b85d38",
+  "--rail": "#fde4db",
+  "--background": "#ffffff",
+  "--card": "#ffffff",
+  "--popover": "#fff9f6",
+  "--muted": "#fde4db",
+  "--accent": "#fdf1ec",
+  "--sidebar": "#fde4db",
+  "--foreground": "#272727",
+  "--muted-foreground": "#5a463f",
+  "--sidebar-foreground": "#272727",
+  "--border": "#e4ccc3",
+  "--border-strong": "#c0aaa1",
+  "--sidebar-border": "#e4ccc3",
+  "--primary": "#cd4d00",
   "--primary-foreground": "#ffffff",
-  "--primary-text": "#9c441e",
-  "--ring": "#9c441e",
-  "--destructive": "#9b1e28",
-  "--destructive-foreground": "#ffffff",
-  "--positive": "#005f40",
-  "--positive-foreground": "#ffffff",
-  "--attention": "#764900",
-  "--attention-foreground": "#ffffff",
-  "--info": "#005880",
-  "--info-foreground": "#ffffff",
-  "--sidebar-veil": "rgb(127 69 48 / 0.1)",
-  "--sidebar-accent-veil": "rgb(146 95 83 / 0.1)",
-  "--sidebar-border-veil": "rgb(176 115 83 / 0.1)",
+  "--primary-text": "#862f00",
+  "--ring": "#862f00",
+  "--destructive": "#d85959",
+  "--destructive-foreground": "#000000",
+  "--positive": "#009567",
+  "--positive-foreground": "#000000",
+  "--attention": "#b77400",
+  "--attention-foreground": "#000000",
+  "--info": "#008bc5",
+  "--info-foreground": "#000000",
+  "--sidebar-veil": "rgb(253 228 219 / 0.1)",
+  "--sidebar-accent-veil": "rgb(253 255 255 / 0.1)",
+  "--sidebar-border-veil": "rgb(3 0 0 / 0.1)",
   "--canvas-ink": "#1c110d",
-  "--canvas-ink-label": "#392c28",
-  "--canvas-ink-muted": "#4c3f3a",
+  "--canvas-ink-label": "#271b17",
+  "--canvas-ink-muted": "#2d211d",
   "--lift-1": "transparent",
-  "--lift-2": "rgb(253 222 210 / 0.175)",
-  "--label-ink": "#2f2521",
+  "--lift-2": "rgb(255 255 255 / 0.175)",
+  "--label-ink": "#3e3e3e",
 };
 
 /** The default canvas's base fill per mode — what the WINDOW edge is painted. */
-const BASE_FILL = { dark: "#481600", light: "#ff9970" };
+const BASE_FILL = { dark: "#45291e", light: "#f6d4c6" };
 
 /**
  * Swatches from the editor's own palette.
@@ -198,7 +208,7 @@ const NO_SCOPE_CHANGE_OBSERVE_MS = 700;
  * instead of the shared one fails here.
  */
 const CROSSFADE = { ms: 300, css: "0.3s" };
-const REDUCED_MOTION_CROSSFADE = { ms: 120, css: "0.12s" };
+// Reduced motion bypasses snapshot capture entirely, rather than shortening it.
 
 /**
  * The user's own ghostty config — seeded, then asserted byte-identical (#67).
@@ -278,12 +288,8 @@ function oklchL(hex) {
  * The best Lc ANY ink can score on `surface` — pure black or pure white,
  * whichever wins.
  *
- * Needed because one declared floor is physically unreachable and the engine
- * clamps rather than throwing: at light's
- * settled spread `--sidebar` lands at L 0.840, where even black scores 74.8
- * against a floor of 75. So the assertion that can actually be kept is "meets
- * its floor, or is AT its surface's ceiling" — which still catches anything
- * short for a reason other than physics.
+ * A floor can be capped by its surface's physical ceiling. Requiring the
+ * ceiling in that case still catches a shortfall unrelated to physics.
  */
 const ceilingOn = (surface) => Math.max(lc("#000000", surface), lc("#ffffff", surface));
 
@@ -387,10 +393,29 @@ const forceThemeSource = (app, source) =>
     return nativeTheme.shouldUseDarkColors;
   }, source);
 
-/** The window's own edge color, as Chromium paints it before/around the document. */
-const readWindowBackground = (app) =>
+/**
+ * One window's own edge color, as Chromium paints it before/around the
+ * document. `role` is explicit because the smoke now has two native windows:
+ * the workbench and the independent Settings BrowserWindow.
+ */
+const readWindowBackground = (app, role = "main") =>
   app
-    .evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getBackgroundColor())
+    .evaluate(({ BrowserWindow }, wanted) => {
+      // Serialized into Electron main; cannot capture the outer helper.
+      // oxlint-disable-next-line unicorn/consistent-function-scoping
+      const isSettings = (window) => {
+        try {
+          return new URL(window.webContents.getURL()).hash === "#settings";
+        } catch {
+          return false;
+        }
+      };
+      const window = BrowserWindow.getAllWindows().find(
+        (candidate) => (wanted === "settings") === isSettings(candidate),
+      );
+      if (window === undefined) throw new Error(`no ${wanted} BrowserWindow`);
+      return window.getBackgroundColor();
+    }, role)
     .then((value) => value.toLowerCase());
 
 /**
@@ -401,38 +426,55 @@ const readWindowBackground = (app) =>
  * than sleeping keeps the check about the value and not about the latency —
  * and it still fails, on the value it settled on, if the write never arrives.
  */
-const settledWindowBackground = (app, expected) =>
+const settledWindowBackground = (app, expected, role = "main") =>
   waitUntil(
-    `the window edge → ${expected}`,
-    async () => ((await readWindowBackground(app)) === expected ? expected : null),
+    `the ${role} window edge → ${expected}`,
+    async () => ((await readWindowBackground(app, role)) === expected ? expected : null),
     { timeout: 6000 },
-  ).catch(() => readWindowBackground(app));
+  ).catch(() => readWindowBackground(app, role));
 
 // ---- navigation -------------------------------------------------------------
 
-/** Opens Settings → Appearance from the sidebar footer. */
+/**
+ * The one rail Settings and Configure share. Its scope switch sits at the top:
+ * "All projects" pressed is the app-wide scope, unpressed is the project's.
+ */
+const settingsRail = (page) => page.getByRole("navigation", { name: "Settings categories" });
+
+/** Opens Settings → Appearance from the workbench sidebar footer. */
 async function openAppearanceSettings(page) {
-  await page.getByRole("button", { name: "Settings", exact: true }).first().click();
-  await page
-    .getByRole("navigation", { name: "Settings categories" })
-    .getByRole("button", { name: "Appearance", exact: true })
-    .click();
+  const settings = await openSettingsWindow(app, page);
+  const nav = settingsRail(settings);
+  // Settings reopens on the last page shown, which can be a project's
+  // Appearance; the app-wide one is in the other scope.
+  await nav.getByRole("button", { name: "All projects", exact: true }).click();
+  await nav.getByRole("button", { name: "All projects", pressed: true }).waitFor();
+  await nav.getByRole("button", { name: "Appearance", exact: true }).click();
   // Assert on a CONTROL, never on helper copy — the copy is free to be rewritten
   // (and this branch already stripped a pass of it).
-  await page.getByTestId("appearance-mode").waitFor();
+  await settings.getByTestId("appearance-mode").waitFor();
+  return settings;
 }
 
-/** Configure → Appearance for whichever project is selected. */
-async function openProjectAppearance(page) {
-  await page.getByRole("button", { name: "Configure", exact: true }).click();
-  await page
-    .getByRole("navigation", { name: "Configure categories" })
-    .getByRole("button", { name: "Appearance", exact: true })
+/** Settings → Project → Appearance for whichever project the workbench selected. */
+async function openProjectAppearance(page, projectName = null) {
+  const settings = await openSettingsWindow(app, page);
+  const nav = settingsRail(settings);
+  // The Settings window follows the workbench selection through its open IPC;
+  // wait for that project to land in the scope switch before choosing it.
+  if (projectName !== null)
+    await nav.getByRole("button", { name: projectName, exact: true }).waitFor();
+  await nav
+    .locator('[aria-label="Settings scope"] button[aria-pressed]')
+    .filter({ hasNotText: "All projects" })
     .click();
+  await nav.getByRole("button", { name: "All projects", pressed: false }).waitFor();
+  await nav.getByRole("button", { name: "Appearance", exact: true }).click();
   // Present in every state of the pane, and only once this project's scope has
   // hydrated (it renders a loading note with a Retry button until then). The
   // mode chip floats on the always-mounted editor pad post-VC-111.
-  await page.getByTestId("project-appearance-mode").waitFor();
+  await settings.getByTestId("project-appearance-mode").waitFor();
+  return settings;
 }
 
 /** One segmented control's button for `choice` (`data-choice` on the segment). */
@@ -451,7 +493,13 @@ const segment = (page, testId, choice) =>
 const canvasRevert = (page) =>
   page
     .getByTestId("project-appearance-canvas-row")
-    .getByRole("button", { name: /^Reset Canvas to the app-wide value/ });
+    .getByRole("button", { name: /^Reset Canvas to the global value/ });
+
+/** The revert opens a small popover; its one action is what clears the row. */
+async function revertCanvas(page) {
+  await canvasRevert(page).click();
+  await page.getByRole("button", { name: "Revert to global default", exact: true }).click();
+}
 
 /** One step up on the Terminal section's font-size stepper — one overlay write. */
 async function stepTerminalFontSize(page) {
@@ -461,47 +509,76 @@ async function stepTerminalFontSize(page) {
 // ---- the canvas editor ------------------------------------------------------
 
 /**
- * Sets the editor's native 0–1 track (Vibrancy) to an exact value and settles it.
+ * Sets one of the editor's 0–1 dials (Vibrancy, Grain) to an exact value and
+ * settles it.
  *
- * The native value setter plus a bubbling `input` event, rather than a mouse
- * drag on the track: React's `onChange` IS the `input` event, so this is the
- * same signal a drag produces, and it is the only way to land on an exact value
- * — a click on the track lands wherever the thumb geometry puts it, and the
- * assertion would have to be a tolerance instead of a number. The drag gesture
- * itself is exercised on the PAD, where position is the thing being tested.
+ * The dials are ARIA sliders driven from the keyboard: Home/End jump to 0/1 and
+ * each arrow moves one hundredth, which is the only way to land on an exact
+ * value — a drag lands wherever the pointer geometry puts it, and the assertion
+ * would have to be a tolerance instead of a number. The drag gesture itself is
+ * exercised on the PAD, where position is the thing being tested.
  *
- * `blur()` is the settle: `UnitSlider` writes on pointerup, keyup or blur, and a
- * synthetic input event produces none of the first two. It has to be FOCUSED
- * first or `blur()` is a no-op — React's `onBlur` rides `focusout`, which an
- * unfocused element never dispatches, and the observed failure is a preview that
- * paints and is never written.
+ * Arrows are held (repeated keydowns, one keyup) so the dial previews every
+ * step and writes once: the dial settles on keyup and on blur.
  */
 async function setSlider(page, label, value) {
   const slider = page.getByRole("slider", { name: label, exact: true });
-  await slider.evaluate((element, next) => {
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-    element.focus();
-    setter?.call(element, next);
-    element.dispatchEvent(new Event("input", { bubbles: true }));
-    element.dispatchEvent(new Event("change", { bubbles: true }));
-    element.blur();
-  }, value);
+  const target = Math.round(Number(value) * 100);
+  const fromTop = target >= 50;
+  const arrow = fromTop ? "ArrowDown" : "ArrowUp";
+  const steps = fromTop ? 100 - target : target;
+  await slider.scrollIntoViewIfNeeded();
+  await slider.focus();
+  await page.keyboard.press(fromTop ? "End" : "Home");
+  if (steps > 0) {
+    for (let i = 0; i < steps; i += 1) await page.keyboard.down(arrow);
+    await page.keyboard.up(arrow);
+  }
+  await slider.blur();
 }
 
 /**
- * Authors a canvas through the REAL editor: a preset swatch and both faders.
+ * Commits a primary colour through the editor's hex field as ONE discrete edit.
  *
- * Grain and vibrancy are matching native ranges flanking the pad. Both
- * unit values go through `setSlider`: previews on every `input`, one write on
- * settle.
+ * The value and the Enter that settles it are dispatched in the same task, so
+ * the preview and the write land inside one style recalc — the same property a
+ * single click on a colour has, which check 21's paint trace relies on.
+ */
+async function openAccentEditor(page) {
+  const field = page.getByRole("textbox", { name: "Primary colour hex" });
+  if (await field.isVisible()) return;
+  if (await page.locator('[data-slot="popover-content"][data-state="open"]').count())
+    await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Custom accent colour", exact: true }).click();
+  await field.waitFor({ state: "visible" });
+}
+
+async function commitPrimaryHex(page, hex) {
+  await openAccentEditor(page);
+  const field = page.getByRole("textbox", { name: "Primary colour hex" });
+  await field.scrollIntoViewIfNeeded();
+  await field.evaluate((element, next) => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    setter?.call(element, next);
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  }, hex);
+}
+
+/**
+ * Authors a canvas through the REAL editor: the primary hex and both dials.
+ *
+ * Grain and vibrancy are matching dials beside the pad. Both unit values go
+ * through `setSlider`: previews on every step, one write on settle.
  */
 async function authorCanvas(page, { hex, vibrancy, grain }) {
-  await page.getByRole("button", { name: hex, exact: true }).first().click();
+  await commitPrimaryHex(page, hex);
   await waitUntil(`the canvas to adopt ${hex}`, async () => {
     const stored = await storedGlobalCanvas(page);
     return stored?.stops[stored.primaryIndex]?.hex === hex;
   });
 
+  await page.keyboard.press("Escape"); // close Custom, not Settings
   await setSlider(page, "Vibrancy", vibrancy);
   await setSlider(page, "Grain", grain);
   await waitUntil("both controls to persist", async () => {
@@ -527,6 +604,8 @@ async function authorCanvas(page, { hex, vibrancy, grain }) {
  */
 async function dragPrimaryStop(page, { dx, dy }) {
   const orb = page.getByTestId("canvas-stop-orb-0");
+  if (!(await orb.isVisible()))
+    await page.getByRole("button", { name: "Edit canvas", exact: true }).click();
   await orb.scrollIntoViewIfNeeded();
   const box = await orb.boundingBox();
   if (box === null) throw new Error("the primary orb has no box");
@@ -734,23 +813,27 @@ const crossfadeBlendsAdditively = (trace) =>
   trace.resolved.oldBlend === "plus-lighter" && trace.resolved.newBlend === "plus-lighter";
 
 /**
- * Records every value `--background` settles on from now until it is read.
+ * Records every value `--canvas` settles on from now until it is read.
  *
  * `theme/apply.ts` writes the whole token set onto the root's inline style, so a
  * MutationObserver on that attribute sees every repaint — a bounce through
  * another canvas and back cannot slip between two polls, which is exactly what
  * the #123 regression looked like from the outside.
  */
-async function watchBackgroundPaints(page) {
+async function watchCanvasPaints(page) {
   await page.evaluate(() => {
     window.volliPaintObserver?.disconnect();
     const paints = [];
     window.volliPaints = paints;
     const record = () => {
       const value = document.documentElement.style
-        .getPropertyValue("--background")
+        .getPropertyValue("--canvas")
         .trim()
-        .toLowerCase();
+        .toLowerCase()
+        // Same normalization as readAppliedTokens; this callback is serialized
+        // into the renderer and cannot close over normalizeToken above.
+        .replace(/\s+/g, " ")
+        .replace(/\d*\.\d+/g, (number) => String(Number(number)));
       // Deduped against the last entry: one repaint writes every token, so the
       // observer fires many times for a single swap.
       if (value !== "" && paints.at(-1) !== value) paints.push(value);
@@ -762,7 +845,7 @@ async function watchBackgroundPaints(page) {
   });
 }
 
-const readBackgroundPaints = (page) => page.evaluate(() => window.volliPaints ?? []);
+const readCanvasPaints = (page) => page.evaluate(() => window.volliPaints ?? []);
 
 // ---- first paint ------------------------------------------------------------
 
@@ -810,12 +893,13 @@ const readFirstPaintTrace = (page) => page.evaluate(() => window.volliFirstPaint
 // ---- per-project scope ------------------------------------------------------
 
 /**
- * The two seeded workspaces. Names chosen for DISTINCT monograms ("AL"/"BE") —
- * the rail tile's accessible name is its monogram, so two projects that
- * initialled the same would make the tile locator ambiguous.
+ * The two seeded workspaces. Names chosen to be DISTINCT — the rail tile's
+ * accessible name is the project's name (its monogram is only the painted
+ * text), so two projects that shared a name would make the tile locator
+ * ambiguous.
  */
-const PROJECT_A = { id: "smoke-canvas-a", name: "Alpha", prefix: "ALP", monogram: "AL" };
-const PROJECT_B = { id: "smoke-canvas-b", name: "Beta", prefix: "BET", monogram: "BE" };
+const PROJECT_A = { id: "smoke-canvas-a", name: "Alpha", prefix: "ALP" };
+const PROJECT_B = { id: "smoke-canvas-b", name: "Beta", prefix: "BET" };
 
 /**
  * One workspace's rail tile. `.and(a real <button>)` because dnd-kit's sortable
@@ -823,9 +907,14 @@ const PROJECT_B = { id: "smoke-canvas-b", name: "Beta", prefix: "BET", monogram:
  * so the name alone matches two elements — and the wrapper does nothing on click.
  */
 const projectTile = (page, project) =>
-  page.getByRole("button", { name: project.monogram, exact: true }).and(page.locator("button"));
+  page.getByRole("button", { name: project.name, exact: true }).and(page.locator("button"));
 
-const selectProject = (page, project) => projectTile(page, project).click();
+const selectProject = async (page, project) => {
+  // Settings is nonmodal and lives in its own window; selecting a workspace in
+  // the workbench never closes it. The next Settings entry carries the new
+  // project id to that window.
+  await projectTile(page, project).click();
+};
 
 // ---- run --------------------------------------------------------------------
 
@@ -851,13 +940,14 @@ await assertProfileIsolated(app, userDataDir);
 await page.waitForLoadState("domcontentloaded");
 await sleep(1200);
 
+let settings = null;
 try {
   // ---- 1. the generated canvas token set, in DARK --------------------------
   // The appearance is pinned explicitly rather than left on `auto`: `auto`
   // resolves against the DEVELOPER'S system, so a table asserted under it would
   // pass or fail depending on whose Mac ran the smoke.
-  await openAppearanceSettings(page);
-  await segment(page, "appearance-mode", "dark").click();
+  settings = await openAppearanceSettings(page);
+  await segment(settings, "appearance-mode", "dark").click();
   await waitForToken(page, "--background", DARK["--background"]);
 
   await attempt(1, "every generated token reaches the live DOM in dark", async () => {
@@ -893,18 +983,23 @@ try {
     // every paint, so this waits on the round trip rather than sampling it —
     // and in doing so also proves that write reaches main.
     const windowBg = await settledWindowBackground(app, fill);
+    const settingsWindowBg = await settledWindowBackground(app, fill, "settings");
     return {
       // Both halves: the window IS the fill, AND the fill is genuinely not the
       // card rung — with a canvas armed those differ deliberately, and a check
       // that only asserted equality would still pass if the canvas collapsed.
-      ok: fill === BASE_FILL.dark && windowBg === fill && windowBg !== background,
-      detail: `window=${windowBg} fill=${fill} --background=${background}`,
+      ok:
+        fill === BASE_FILL.dark &&
+        windowBg === fill &&
+        windowBg !== background &&
+        settingsWindowBg === fill,
+      detail: `main=${windowBg} settings=${settingsWindowBg} fill=${fill} --background=${background}`,
     };
   });
 
   // ---- 2. the other mode ---------------------------------------------------
   await attempt(4, "Light paints the whole window, class and color-scheme with it", async () => {
-    await segment(page, "appearance-mode", "light").click();
+    await segment(settings, "appearance-mode", "light").click();
     const applied = await waitForToken(page, "--background", LIGHT["--background"]);
     const mode = await readMode(page);
     const tokens = await readAppliedTokens(page, Object.keys(LIGHT));
@@ -925,12 +1020,7 @@ try {
   await attempt(5, "APCA/ΔL floors hold on the applied light values", async () => {
     const t = await readAppliedTokens(page, Object.keys(LIGHT));
     const failures = [];
-    // `--sidebar-foreground` on `--sidebar` is the ONE floor light's settled
-    // spread puts physically out of reach (§7.1): `--sidebar` lands at L 0.840
-    // where even pure black scores 74.8 against a declared 75. So the assertion
-    // is "meets the floor, or is at its surface's ceiling" — which still fails
-    // anything short for a reason other than physics, and would name a NEW
-    // capped token if a retune ever created one.
+    // Honor a physical ceiling without accepting an avoidable shortfall.
     const floor = (label, text, surface, min) => {
       const actual = lc(t[text], t[surface]);
       if (actual >= min) return;
@@ -963,57 +1053,66 @@ try {
     ]);
     const fill = baseFillOf(canvas);
     const windowBg = await settledWindowBackground(app, fill);
+    const settingsWindowBg = await settledWindowBackground(app, fill, "settings");
     return {
-      ok: fill === BASE_FILL.light && windowBg === fill && windowBg !== background,
-      detail: `window=${windowBg} fill=${fill} --background=${background}`,
+      ok:
+        fill === BASE_FILL.light &&
+        windowBg === fill &&
+        windowBg !== background &&
+        settingsWindowBg === fill,
+      detail: `main=${windowBg} settings=${settingsWindowBg} fill=${fill} --background=${background}`,
     };
   });
 
   // ---- 3. the crossfade ----------------------------------------------------
-  await attempt(7, "a mode flip crossfades once, and cleans up after itself", async () => {
-    await watchScopeRepaint(page);
-    await segment(page, "appearance-mode", "dark").click();
-    await waitForToken(page, "--background", DARK["--background"]);
-    const during = await observedScopeRepaint(page);
-    const after = await settledScopeRepaint(page);
-    return {
-      ok:
-        crossfaded(during) &&
-        // The engine owns the teardown, and this is where that claim is kept
-        // honest: nothing may still be running once the swap has settled.
-        after.active === false &&
-        crossfadedOnce(after) &&
-        crossfadeRanFor(after, CROSSFADE) &&
-        crossfadeBlendsAdditively(after),
-      detail: `runs=${JSON.stringify(after.runs)} active=${after.active} anims=${JSON.stringify(after.anims)} resolved=${JSON.stringify(after.resolved)}`,
-    };
-  });
+  await attempt(
+    7,
+    "a mode flip crossfades once in Settings, and the workbench follows",
+    async () => {
+      await watchScopeRepaint(settings);
+      await segment(settings, "appearance-mode", "dark").click();
+      await waitForToken(settings, "--background", DARK["--background"]);
+      const during = await observedScopeRepaint(settings);
+      const after = await settledScopeRepaint(settings);
+      // The product window paints only the committed appearance; the crossfade
+      // assertion stays on the surface whose control made the change.
+      await waitForToken(page, "--background", DARK["--background"]);
+      return {
+        ok:
+          crossfaded(during) &&
+          // The engine owns the teardown, and this is where that claim is kept
+          // honest: nothing may still be running once the swap has settled.
+          after.active === false &&
+          crossfadedOnce(after) &&
+          crossfadeRanFor(after, CROSSFADE) &&
+          crossfadeBlendsAdditively(after),
+        detail: `runs=${JSON.stringify(after.runs)} active=${after.active} anims=${JSON.stringify(after.anims)} resolved=${JSON.stringify(after.resolved)}`,
+      };
+    },
+  );
 
-  await attempt(8, "reduced motion collapses the crossfade to its short ease", async () => {
-    // HIG: nothing here translates or scales, so the accessible treatment is the
-    // shortest honest ease rather than a hard cut. The media query moves ONE
-    // custom property and every animation on the swap reads it — a duration of
-    // 300 on any of them means a half of the crossfade has a timing of its own.
-    await page.emulateMedia({ reducedMotion: "reduce" });
-    await watchScopeRepaint(page);
-    await segment(page, "appearance-mode", "light").click();
-    await waitForToken(page, "--background", LIGHT["--background"]);
-    const during = await observedScopeRepaint(page);
-    const after = await settledScopeRepaint(page);
-    await page.emulateMedia({ reducedMotion: null });
-    return {
-      ok:
-        crossfaded(during) &&
-        crossfadedOnce(after) &&
-        crossfadeRanFor(after, REDUCED_MOTION_CROSSFADE),
-      detail: `runs=${JSON.stringify(after.runs)} anims=${JSON.stringify(after.anims)} resolved=${JSON.stringify(after.resolved)} expected=${JSON.stringify(REDUCED_MOTION_CROSSFADE)}`,
-    };
-  });
+  await attempt(
+    8,
+    "reduced motion repaints immediately without a snapshot or residual animation",
+    async () => {
+      await settings.emulateMedia({ reducedMotion: "reduce" });
+      await watchScopeRepaint(settings);
+      await segment(settings, "appearance-mode", "light").click();
+      await waitForToken(settings, "--background", LIGHT["--background"]);
+      const after = await settledScopeRepaint(settings, { observeMs: NO_SCOPE_CHANGE_OBSERVE_MS });
+      await settings.emulateMedia({ reducedMotion: null });
+      await waitForToken(page, "--background", LIGHT["--background"]);
+      return {
+        ok: !crossfaded(after) && after.anims.length === 0 && after.active === false,
+        detail: `runs=${JSON.stringify(after.runs)} anims=${JSON.stringify(after.anims)} active=${after.active}`,
+      };
+    },
+  );
 
   // ---- 4. the ghostty surfaces, which were meant to survive untouched -------
   await attempt(9, "committing a terminal setting writes Volli's own overlay", async () => {
-    await openAppearanceSettings(page);
-    await stepTerminalFontSize(page);
+    settings = await openAppearanceSettings(page);
+    await stepTerminalFontSize(settings);
     const written = await waitUntil("overlay written", () => pathExists(overlayPath)).then(
       () => true,
       () => false,
@@ -1041,7 +1140,8 @@ cursor-style = block
     await fs.writeFile(overlayPath, handEdited);
 
     const next = OVERLAY_FONT_SIZE + 1;
-    await stepTerminalFontSize(page);
+    settings = await openAppearanceSettings(page);
+    await stepTerminalFontSize(settings);
     await waitUntil("overlay rewritten", async () =>
       ((await readFileSafe(overlayPath)) ?? "").includes(`font-size = ${next}`),
     );
@@ -1058,33 +1158,53 @@ cursor-style = block
   });
 
   // ---- 5. authoring a canvas through the real editor ------------------------
-  await attempt(12, "the canvas editor repaints live and persists what it painted", async () => {
-    const before = await readAppliedTokens(page, ["--canvas", "--primary", "--background"]);
-    await authorCanvas(page, {
-      hex: AUTHORED_HEX,
-      vibrancy: AUTHORED_VIBRANCY,
-      grain: AUTHORED_GRAIN,
-    });
-    await dragPrimaryStop(page, { dx: -90, dy: 40 });
+  await attempt(
+    12,
+    "the canvas editor repaints live in Settings and persists what it painted",
+    async () => {
+      settings = await openAppearanceSettings(page);
+      const before = await readAppliedTokens(page, ["--canvas", "--primary", "--background"]);
+      const beforeSettings = await readAppliedTokens(settings, [
+        "--canvas",
+        "--primary",
+        "--background",
+      ]);
+      await authorCanvas(settings, {
+        hex: AUTHORED_HEX,
+        vibrancy: AUTHORED_VIBRANCY,
+        grain: AUTHORED_GRAIN,
+      });
+      const beforeDrag = await storedGlobalCanvas(page);
+      const originX = beforeDrag.stops[beforeDrag.primaryIndex].x;
+      await dragPrimaryStop(settings, { dx: -90, dy: 40 });
 
-    const stored = await waitUntil("the dragged stop to persist", async () => {
-      const canvas = await storedGlobalCanvas(page);
-      const stop = canvas?.stops[canvas.primaryIndex];
-      return stop !== undefined && Math.abs(stop.x - 0.68) > 0.02 ? canvas : null;
-    });
-    const after = await readAppliedTokens(page, ["--canvas", "--primary", "--background"]);
+      const stored = await waitUntil("the dragged stop to persist", async () => {
+        const canvas = await storedGlobalCanvas(page);
+        const stop = canvas?.stops[canvas.primaryIndex];
+        return stop !== undefined && Math.abs(stop.x - originX) > 0.02 ? canvas : null;
+      });
+      const afterSettings = await readAppliedTokens(settings, [
+        "--canvas",
+        "--primary",
+        "--background",
+      ]);
+      await waitForToken(page, "--canvas", afterSettings["--canvas"], { timeout: 10000 });
+      const after = await readAppliedTokens(page, ["--canvas", "--primary", "--background"]);
 
-    return {
-      ok:
-        stored.stops[stored.primaryIndex].hex === AUTHORED_HEX &&
-        Math.abs(stored.vibrancy - Number(AUTHORED_VIBRANCY)) < 0.005 &&
-        Math.abs(stored.grain - Number(AUTHORED_GRAIN)) < 0.005 &&
-        after["--primary"] !== before["--primary"] &&
-        after["--canvas"] !== before["--canvas"] &&
-        after["--background"] !== before["--background"],
-      detail: `stored=${JSON.stringify(stored)} --primary ${before["--primary"]}→${after["--primary"]}`,
-    };
-  });
+      return {
+        ok:
+          stored.stops[stored.primaryIndex].hex === AUTHORED_HEX &&
+          Math.abs(stored.vibrancy - Number(AUTHORED_VIBRANCY)) < 0.005 &&
+          Math.abs(stored.grain - Number(AUTHORED_GRAIN)) < 0.005 &&
+          beforeSettings["--canvas"] !== afterSettings["--canvas"] &&
+          afterSettings["--canvas"] === after["--canvas"] &&
+          after["--primary"] !== before["--primary"] &&
+          after["--canvas"] !== before["--canvas"] &&
+          after["--background"] === before["--background"],
+        detail: `stored=${JSON.stringify(stored)} --primary ${before["--primary"]}→${after["--primary"]} settings=${afterSettings["--primary"]}`,
+      };
+    },
+  );
 
   await attempt(13, "Escape in the hex field abandons the edit instead of saving it", async () => {
     // `cancelPreview` is the store's abandon path and had NO caller anywhere, so
@@ -1094,33 +1214,42 @@ cursor-style = block
     // — the window has to return to what is stored, and what is stored must not
     // have moved. Only reachable from the real app: the renderer's unit tests
     // render to static markup and cannot press a key.
-    const field = page.getByRole("textbox", { name: "Primary colour hex" });
-    const before = await readAppliedTokens(page, ["--background"]);
+    settings = await openAppearanceSettings(page);
+    await openAccentEditor(settings);
+    const field = settings.getByRole("textbox", { name: "Primary colour hex" });
+    const before = await readAppliedTokens(settings, ["--canvas"]);
+    const mainBefore = await readAppliedTokens(page, ["--canvas"]);
     const storedBefore = await storedGlobalCanvas(page);
     const keptHex = storedBefore.stops[storedBefore.primaryIndex].hex;
 
     await field.click();
     await field.fill(ABANDONED_HEX);
-    const previewed = await waitUntil("the typed colour to paint", async () => {
-      const now = await readAppliedTokens(page, ["--background"]);
-      return now["--background"] === before["--background"] ? null : now["--background"];
+    const previewed = await waitUntil("the typed colour to paint in Settings", async () => {
+      const now = await readAppliedTokens(settings, ["--canvas"]);
+      return now["--canvas"] === before["--canvas"] ? null : now["--canvas"];
     });
 
-    await page.keyboard.press("Escape");
+    await settings.keyboard.press("Escape");
 
     const restored = await waitUntil("the abandoned preview to come off", async () => {
-      const now = await readAppliedTokens(page, ["--background"]);
-      return now["--background"] === before["--background"] ? now["--background"] : null;
-    }).catch(async () => (await readAppliedTokens(page, ["--background"]))["--background"]);
+      const now = await readAppliedTokens(settings, ["--canvas"]);
+      return now["--canvas"] === before["--canvas"] ? now["--canvas"] : null;
+    }).catch(async () => (await readAppliedTokens(settings, ["--canvas"]))["--canvas"]);
     const storedAfter = await storedGlobalCanvas(page);
+    // Escape also dismisses the colour popover. Reopen it to check the
+    // restored field rather than waiting on a deliberately unmounted input.
+    await openAccentEditor(settings);
+    // The workbench never previews an uncommitted edit in another window.
+    const mainAfter = await readAppliedTokens(page, ["--canvas"]);
 
     return {
       ok:
-        previewed !== before["--background"] &&
-        restored === before["--background"] &&
+        previewed !== before["--canvas"] &&
+        restored === before["--canvas"] &&
+        mainAfter["--canvas"] === mainBefore["--canvas"] &&
         storedAfter.stops[storedAfter.primaryIndex].hex === keptHex &&
         (await field.inputValue()) === keptHex,
-      detail: `painted ${before["--background"]}→${previewed}→${restored} stored=${storedAfter.stops[storedAfter.primaryIndex].hex}`,
+      detail: `painted ${before["--canvas"]}→${previewed}→${restored} main=${mainAfter["--canvas"]} stored=${storedAfter.stops[storedAfter.primaryIndex].hex}`,
     };
   });
 
@@ -1132,6 +1261,7 @@ cursor-style = block
   await app.close();
   app = await launch({ dbPath, userDataDir, extraEnv: env });
   page = await app.firstWindow();
+  settings = null;
   await page.waitForLoadState("domcontentloaded");
 
   await attempt(14, "first paint carries the stored mode, with no dark frame", async () => {
@@ -1215,41 +1345,43 @@ cursor-style = block
     throw new Error(`seeded projects did not boot: ${JSON.stringify(Object.keys(byName))}`);
   }
 
-  const globalBackground = (await readAppliedTokens(page, ["--background"]))["--background"];
+  const globalCanvasPaint = (await readAppliedTokens(page, ["--canvas"]))["--canvas"];
 
   await attempt(16, "two seeded workspaces both start out inheriting", async () => {
-    const applied = await waitForToken(page, "--background", globalBackground);
+    const applied = await waitForToken(page, "--canvas", globalCanvasPaint);
     const stored = await storedTheme(page);
     return {
       ok:
-        applied === globalBackground &&
+        applied === globalCanvasPaint &&
         stored.projects[projectAId]?.canvas === null &&
         stored.projects[projectAId]?.appearance === null &&
         stored.projects[projectBId]?.canvas === null &&
         stored.projects[projectBId]?.appearance === null,
-      detail: `--background=${applied} rows=${JSON.stringify(stored.projects)}`,
+      detail: `--canvas=${applied} rows=${JSON.stringify(stored.projects)}`,
     };
   });
 
-  let projectBackground = null;
-  await attempt(17, "Configure → Appearance overrides ONE workspace's canvas", async () => {
+  let projectCanvasPaint = null;
+  await attempt(17, "Project → Appearance overrides ONE workspace's canvas", async () => {
     await selectProject(page, PROJECT_A);
-    await openProjectAppearance(page);
+    settings = await openProjectAppearance(page, PROJECT_A.name);
     // No Custom gate: the editor is already mounted on the EFFECTIVE canvas,
     // and merely opening the pane must store nothing — only the edit below
     // creates the override.
     const before = await storedTheme(page);
     const untouchedOnOpen = (before.projects[projectAId]?.canvas ?? null) === null;
 
-    await page.getByRole("button", { name: WORKSPACE_HEX, exact: true }).first().click();
-    projectBackground = await waitUntil(
+    await commitPrimaryHex(settings, WORKSPACE_HEX);
+    projectCanvasPaint = await waitUntil(
       "the workspace canvas to repaint",
       async () => {
-        const value = (await readAppliedTokens(page, ["--background"]))["--background"];
-        return value === globalBackground ? null : value;
+        const value = (await readAppliedTokens(page, ["--canvas"]))["--canvas"];
+        return value === globalCanvasPaint ? null : value;
       },
       { timeout: 6000 },
     );
+    const settingsFill = baseFillOf((await readAppliedTokens(settings, ["--canvas"]))["--canvas"]);
+    const settingsWindowBg = await settledWindowBackground(app, settingsFill, "settings");
 
     const stored = await storedTheme(page);
     return {
@@ -1258,27 +1390,28 @@ cursor-style = block
         stored.projects[projectAId]?.canvas?.stops[0]?.hex === WORKSPACE_HEX &&
         // The other workspace was never touched.
         stored.projects[projectBId]?.canvas === null &&
+        settingsWindowBg === settingsFill &&
         // …and neither was the global row.
         JSON.stringify(stored.canvas) === JSON.stringify(beforeRelaunch.stored.canvas),
-      detail: `untouchedOnOpen=${untouchedOnOpen} A=${JSON.stringify(stored.projects[projectAId])} B=${JSON.stringify(stored.projects[projectBId])}`,
+      detail: `untouchedOnOpen=${untouchedOnOpen} settingsEdge=${settingsWindowBg} A=${JSON.stringify(stored.projects[projectAId])} B=${JSON.stringify(stored.projects[projectBId])}`,
     };
   });
 
   await attempt(18, "switching to an inheriting workspace reverts, eased", async () => {
     await watchScopeRepaint(page);
     await selectProject(page, PROJECT_B);
-    const applied = await waitForToken(page, "--background", globalBackground, { timeout: 8000 });
+    const applied = await waitForToken(page, "--canvas", globalCanvasPaint, { timeout: 8000 });
     const during = await observedScopeRepaint(page);
     const after = await settledScopeRepaint(page);
     return {
-      ok: applied === globalBackground && crossfaded(during) && after.active === false,
-      detail: `--background=${applied} runs=${JSON.stringify(after.runs)} active=${after.active}`,
+      ok: applied === globalCanvasPaint && crossfaded(during) && after.active === false,
+      detail: `--canvas=${applied} runs=${JSON.stringify(after.runs)} active=${after.active}`,
     };
   });
 
   await attempt(19, "switching back re-applies the overriding workspace's canvas", async () => {
     await selectProject(page, PROJECT_A);
-    const applied = await waitForToken(page, "--background", projectBackground, { timeout: 8000 });
+    const applied = await waitForToken(page, "--canvas", projectCanvasPaint, { timeout: 8000 });
     // Read the row too, so a failure says WHICH of the two is wrong. The scope a
     // selection announces is built from the `projects` row the projects store is
     // holding (stores/projects.ts's selected-project listener reads
@@ -1289,8 +1422,8 @@ cursor-style = block
     // restart the very same override paints.
     const stored = await storedTheme(page);
     return {
-      ok: applied === projectBackground,
-      detail: `--background=${applied} (workspace canvas paints ${projectBackground}) storedRow=${JSON.stringify(stored.projects[projectAId])}`,
+      ok: applied === projectCanvasPaint,
+      detail: `--canvas=${applied} (workspace canvas paints ${projectCanvasPaint}) storedRow=${JSON.stringify(stored.projects[projectAId])}`,
     };
   });
 
@@ -1298,6 +1431,7 @@ cursor-style = block
   await app.close();
   app = await launch({ dbPath, userDataDir, extraEnv: env });
   page = await app.firstWindow();
+  settings = null;
   await page.waitForLoadState("domcontentloaded");
 
   await attempt(20, "a restored workspace selection boots INTO its override (#123)", async () => {
@@ -1306,11 +1440,11 @@ cursor-style = block
     // canvas. The regression this pins hydrated the global scope and never
     // re-read it for the restored workspace — correct in the database, invisible
     // in the window.
-    const applied = await waitForToken(page, "--background", projectBackground, { timeout: 10000 });
+    const applied = await waitForToken(page, "--canvas", projectCanvasPaint, { timeout: 10000 });
     const stored = await storedTheme(page);
     return {
-      ok: applied === projectBackground && stored.selectedProjectId === projectAId,
-      detail: `--background=${applied} selected=${stored.selectedProjectId === projectAId ? "Alpha" : JSON.stringify(stored.selectedProjectId)}`,
+      ok: applied === projectCanvasPaint && stored.selectedProjectId === projectAId,
+      detail: `--canvas=${applied} selected=${stored.selectedProjectId === projectAId ? "Alpha" : JSON.stringify(stored.selectedProjectId)}`,
     };
   });
 
@@ -1318,15 +1452,15 @@ cursor-style = block
     21,
     "an app-wide canvas change leaves the overriding workspace alone (#123)",
     async () => {
-      await openAppearanceSettings(page);
+      settings = await openAppearanceSettings(page);
       // Record the paints rather than sampling the end state: the regression was
       // a BOUNCE (main answered a global write with the GLOBAL scope and the
       // store adopts a payload whole), and a final-value check would grade a
       // window that visibly flickered as passing.
-      await watchBackgroundPaints(page);
+      await watchCanvasPaints(page);
       await watchScopeRepaint(page);
 
-      await page.getByRole("button", { name: REGLOBAL_HEX, exact: true }).first().click();
+      await commitPrimaryHex(settings, REGLOBAL_HEX);
       const globalCanvas = await waitUntil("the global canvas to change", async () => {
         const stored = await storedTheme(page);
         return stored.canvas?.stops[stored.canvas.primaryIndex]?.hex === REGLOBAL_HEX
@@ -1336,22 +1470,22 @@ cursor-style = block
       // This negative assertion needs an observation window, not an expected
       // rising edge. Keep recording through that window and wait for real idle.
       const armed = await settledScopeRepaint(page, { observeMs: NO_SCOPE_CHANGE_OBSERVE_MS });
-      const paints = await readBackgroundPaints(page);
+      const paints = await readCanvasPaints(page);
       const stored = await storedTheme(page);
       // At most ONE excursion is tolerated, and measured runs show zero. The
       // editor's every-edit-previews-first contract (canvas-editor.tsx)
-      // deliberately outranks both scopes, so pressing a swatch on the app-wide
+      // deliberately outranks both scopes, so committing a colour on the app-wide
       // editor could in principle flash the picked canvas over a workspace
       // override — but `commit()` runs the preview and the write in ONE task, so
       // the whole excursion is inside a single style recalc and never reaches a
       // frame. The bug this pins was a TERMINAL excursion: a departure that
       // never comes back. So the trace must END on the workspace's canvas, and
       // any departure must be one and the same look rather than a bounce.
-      const excursions = [...new Set(paints.filter((value) => value !== projectBackground))];
+      const excursions = [...new Set(paints.filter((value) => value !== projectCanvasPaint))];
       return {
         ok:
           globalCanvas !== null &&
-          paints.at(-1) === projectBackground &&
+          paints.at(-1) === projectCanvasPaint &&
           excursions.length <= 1 &&
           // No scope changed, so the crossfade has no business running.
           !crossfaded(armed) &&
@@ -1362,8 +1496,8 @@ cursor-style = block
   );
 
   await attempt(22, "Inherit puts the workspace back on the app-wide canvas", async () => {
-    await openProjectAppearance(page);
-    await canvasRevert(page).click();
+    settings = await openProjectAppearance(page, PROJECT_A.name);
+    await revertCanvas(settings);
     const stored = await waitUntil("the workspace row to clear", async () => {
       const state = await storedTheme(page);
       return state.projects[projectAId]?.canvas === null ? state : null;
@@ -1371,14 +1505,14 @@ cursor-style = block
     const applied = await waitUntil(
       "the window to repaint to the app-wide canvas",
       async () => {
-        const value = (await readAppliedTokens(page, ["--background"]))["--background"];
-        return value !== projectBackground ? value : null;
+        const value = (await readAppliedTokens(page, ["--canvas"]))["--canvas"];
+        return value !== projectCanvasPaint ? value : null;
       },
       { timeout: 8000 },
     );
     // The revert button IS the "overridden" signal now, so its ABSENCE is what
     // says the row went back to inheriting — there is no pressed pill to read.
-    const revertGone = (await canvasRevert(page).count()) === 0;
+    const revertGone = (await canvasRevert(settings).count()) === 0;
     // "Somewhere else" is not the claim — the claim is that A now paints what
     // any inheriting workspace paints. B has never been overridden, so it is the
     // reference: an all-inheriting workspace must read EXACTLY like one that was
@@ -1387,18 +1521,18 @@ cursor-style = block
     const onB = await waitUntil(
       "workspace B to settle on the app-wide canvas",
       async () => {
-        const value = (await readAppliedTokens(page, ["--background"]))["--background"];
+        const value = (await readAppliedTokens(page, ["--canvas"]))["--canvas"];
         return value === applied ? value : null;
       },
       { timeout: 8000 },
-    ).catch(async () => (await readAppliedTokens(page, ["--background"]))["--background"]);
+    ).catch(async () => (await readAppliedTokens(page, ["--canvas"]))["--canvas"]);
     return {
       ok:
         stored.projects[projectAId]?.canvas === null &&
-        applied !== projectBackground &&
+        applied !== projectCanvasPaint &&
         onB === applied &&
         revertGone,
-      detail: `--background=${applied} (was ${projectBackground}); inheriting Beta paints ${onB}; row=${JSON.stringify(stored.projects[projectAId])} revertGone=${revertGone}`,
+      detail: `--canvas=${applied} (was ${projectCanvasPaint}); inheriting Beta paints ${onB}; row=${JSON.stringify(stored.projects[projectAId])} revertGone=${revertGone}`,
     };
   });
 
@@ -1424,8 +1558,8 @@ cursor-style = block
     // app — so it read back the mode already painted. Picking Auto after an
     // explicit light or dark therefore repainted nothing at all, whatever the
     // system said.
-    await openAppearanceSettings(page);
-    await segment(page, "appearance-mode", "auto").click();
+    settings = await openAppearanceSettings(page);
+    await segment(settings, "appearance-mode", "auto").click();
     const prefersDark = await systemPrefersDark(app);
     const expected = prefersDark ? "dark" : "light";
     const mode = await waitUntil(

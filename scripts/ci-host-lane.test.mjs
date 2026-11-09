@@ -83,7 +83,13 @@ test("a PR runs exactly one macOS job; the extended lanes left ci.yml", () => {
   assert.deepEqual(macos, ["smoke-boot"]);
   assert.equal(jobs["smoke-rest"], undefined);
   assert.equal(jobs["smoke-cloud"], undefined);
-  assert.equal(workflow.concurrency["cancel-in-progress"], true);
+  // A PR's newer push supersedes its run; a main commit's run is never cancelled
+  // (the release guard needs ci.yml green on the exact commit it ships).
+  assert.equal(
+    workflow.concurrency["cancel-in-progress"],
+    "${{ github.event_name == 'pull_request' }}",
+  );
+  assert.match(workflow.concurrency.group, /github\.event_name == 'push' && github\.sha/);
 });
 
 test("gate accepts only success or the precise conditional skip", () => {
@@ -198,6 +204,7 @@ test("actual path classifier selects lanes and fails safe", () => {
       [".devcontainer/host/Dockerfile", "true", "true", "base"],
       [".devcontainer/host/devcontainer.json", "true", "true", "base"],
       [".github/workflows/ci.yml", "true", "true", "all"],
+      [".github/actions/setup-toolchain/action.yml", "true", "true", "all"],
       [".github/workflows/ci-extended.yml", "true", "false", "base"],
       ["scripts/ci-host-lane.test.mjs", "true", "true", "all"],
       ["scripts/check-host-electron-imports.mjs", "true", "true", "base"],
@@ -253,6 +260,8 @@ test("extended lanes run after merge, nightly and on demand — never as a PR ga
       ".github/workflows/ci-extended.yml",
       "apps/desktop/scripts/run-smokes.mjs",
       "apps/desktop/scripts/smoke-quiet-check.mjs",
+      // The older-app live lane's harness (VC-1019).
+      "scripts/convex-compat/**",
     ],
   });
   // A main run is never cancelled by the next merge; a PR's newer push may.
@@ -290,8 +299,9 @@ test("extended lanes run after merge, nightly and on demand — never as a PR ga
 test("cloud acceptance is macOS-only and separate from flag-off core e2e", () => {
   const job = extended.jobs["smoke-cloud"];
   assert.equal(job["runs-on"], "macos-15");
-  // One macOS slot at a time, and a red rest tier still runs it.
-  assert.equal(job.needs, "smoke-rest");
+  // Beside the other macOS lanes, never chained behind them, and run whatever
+  // another lane's outcome.
+  assert.equal(job.needs, undefined);
   assert.equal(job.if, "${{ !cancelled() }}");
   assert.equal(
     job.steps.find((step) => step.name === "Checkout").with.ref,
@@ -320,7 +330,7 @@ test("cloud acceptance is macOS-only and separate from flag-off core e2e", () =>
 test("cloud hostd is pinned and packaged before the Electron desktop install", () => {
   const steps = extended.jobs["smoke-cloud"].steps;
   const setup = steps.find((step) => step.name === "Setup Vite+");
-  assert.equal(setup.with["node-version-file"], ".nvmrc");
+  assert.equal(setup.uses, "./.github/actions/setup-toolchain");
   assert.equal(setup.with["run-install"], false);
   const hostInstall = steps.findIndex((step) => step.name === "Host-only install");
   const packaging = steps.findIndex((step) => step.name.startsWith("Package hostd"));
@@ -334,13 +344,22 @@ test("cloud hostd is pinned and packaged before the Electron desktop install", (
     "pnpm --filter volli-code --filter './packages/*' --filter './apps/hostd' install --frozen-lockfile",
   );
   assert.equal(steps[desktopInstall].run, "pnpm install --frozen-lockfile");
-  const pnpm = steps.find((step) => step.name === "Enable pinned pnpm").run;
-  assert.match(pnpm, /corepack.*enable.*pnpm/);
-  assert.match(pnpm, /packageManager/);
   const guard = steps.find((step) => step.name === "Check hostd target and desktop version").run;
   assert.match(guard, /process\.versions\.node.*cat \.nvmrc/);
   assert.match(guard, /process\.arch.*arm64/);
   assert.match(guard, /package\.json.*version.*apps\/desktop\/package\.json.*version/);
+});
+
+test("package lane rebuilds node-pty with pinned pnpm for the host Node", () => {
+  const rebuild = jobs["test-packages"].steps.find(
+    (step) => step.name === "Build node-pty for Node",
+  );
+  assert.equal(rebuild["working-directory"], "packages/host-core");
+  assert.match(rebuild.run, /npm_config_runtime=node/);
+  assert.match(rebuild.run, /npm_config_target="\$\(node -p 'process\.versions\.node'\)"/);
+  assert.match(rebuild.run, /pnpm rebuild node-pty/);
+  assert.doesNotMatch(rebuild.run, /vp rebuild/);
+  assert.match(rebuild.run, /node scripts\/probe-node-pty\.mjs/);
 });
 
 test("cloud artifact export uses the desktop version and requires archive plus checksum", () => {
@@ -409,7 +428,12 @@ function hostPackageDirectories(workspaceRoot) {
     { cwd: workspaceRoot },
   )
     .map((manifest) => dirname(manifest))
-    .filter((directory) => directory.startsWith("packages/") || directory === "apps/hostd")
+    .filter(
+      (directory) =>
+        directory.startsWith("packages/") ||
+        directory === "apps/hostd" ||
+        directory === "apps/runner",
+    )
     .toSorted();
 }
 
@@ -427,16 +451,75 @@ function assertHostCoverage(workspaceRoot) {
 test("existing and future host packages cannot silently omit the coverage script", () => {
   assertHostCoverage(root);
   assert.equal(
-    jobs["test-packages"].steps.find((step) => step.name === "Setup Vite+").with[
-      "node-version-file"
-    ],
-    ".nvmrc",
+    jobs["test-packages"].steps.find((step) => step.name === "Setup Vite+").uses,
+    "./.github/actions/setup-toolchain",
   );
-  const command = jobs["test-packages"].steps.at(-1).run;
+  const command = jobs["test-packages"].steps.find(
+    (step) => step.name === "Test protected coverage surface",
+  ).run;
   assert.ok(
     command.includes("--filter './packages/*' --filter './apps/*' --filter '!@volli/desktop'"),
   );
   assert.ok(command.includes("test:coverage"));
+});
+
+test("host coverage retains raw native output and worker diagnostics without hiding the gate", () => {
+  const steps = jobs["test-packages"].steps;
+  const coverage = steps.find((step) => step.name === "Test protected coverage surface");
+  assert.match(coverage.env.NODE_OPTIONS, /--require=.*\/scripts\/host-test-diagnostics\.cjs/u);
+  assert.match(coverage.env.VOLLI_TEST_DIAGNOSTICS, /\/\.tmp\/host-core-diagnostics$/u);
+  assert.match(coverage.run, /set -o pipefail/u);
+  assert.match(coverage.run, /2>&1/u);
+  assert.match(coverage.run, /node scripts\/capture-test-output\.cjs/u);
+  assert.doesNotMatch(coverage.run, /\| tee/u);
+  assert.match(coverage.run, /test:coverage --maxWorkers=\$\(nproc\)/u);
+  assert.equal(coverage["continue-on-error"], undefined);
+  const upload = steps.find((step) => step.name === "Upload host-core worker diagnostics");
+  assert.ok(steps.indexOf(upload) > steps.indexOf(coverage));
+  assert.equal(upload.if, "always()");
+  assert.equal(upload.with.path, ".tmp/host-core-diagnostics/");
+  assert.equal(upload.with["include-hidden-files"], true);
+  assert.equal(upload.with["retention-days"], 30);
+});
+
+test("desktop shards use the same bounded worker diagnostics without altering coverage policy", () => {
+  const steps = jobs["test-desktop"].steps;
+  const shard = steps.find((step) => step.name.startsWith("Run shard "));
+  assert.match(shard.env.NODE_OPTIONS, /--require=.*\/scripts\/host-test-diagnostics\.cjs/u);
+  assert.match(shard.env.VOLLI_TEST_DIAGNOSTICS, /\/\.tmp\/desktop-diagnostics$/u);
+  assert.match(shard.run, /set -o pipefail/u);
+  assert.match(shard.run, /node \.\.\/\.\.\/scripts\/capture-test-output\.cjs/u);
+  assert.doesNotMatch(shard.run, /\| tee/u);
+  for (const metric of ["statements", "branches", "functions", "lines"]) {
+    assert.ok(shard.run.includes(`--coverage.thresholds.${metric}=0`));
+  }
+  assert.match(shard.run, /--reporter=default --reporter=blob/u);
+  assert.equal(shard["continue-on-error"], undefined);
+  const upload = steps.find((step) => step.name === "Upload desktop worker diagnostics");
+  assert.equal(upload.if, "always()");
+  assert.equal(upload.with.path, ".tmp/desktop-diagnostics/");
+  assert.equal(upload.with["retention-days"], 30);
+  assert.ok(upload.with.name.includes("${{ matrix.shard }}"));
+  const config = readFileSync(join(root, "apps/desktop/vite.config.ts"), "utf8");
+  assert.ok(config.includes('setupFiles: [...diagnosticSetup, "test-setup.ts"]'));
+  assert.ok(config.includes('setupFiles: [...diagnosticSetup, "src/main/test-setup.ts"]'));
+});
+
+test("symbolization runs in the existing Linux job without consuming diagnostic or test failures", () => {
+  const steps = jobs["test-packages"].steps;
+  const symbols = steps.find((step) => step.id === "worker_symbols");
+  const coverage = steps.find((step) => step.name === "Test protected coverage surface");
+  assert.ok(steps.indexOf(symbols) > steps.findIndex((step) => step.name === "Setup Vite+"));
+  assert.ok(steps.indexOf(symbols) < steps.indexOf(coverage));
+  assert.match(symbols.run, /bash scripts\/symbolize-worker-stack\.sh/u);
+  assert.match(symbols.run, /set -o pipefail/u);
+  assert.match(symbols.run, /symbolization\.log" 65536/u);
+  assert.equal(symbols["continue-on-error"], undefined);
+  assert.equal(
+    coverage.if,
+    "${{ !cancelled() && (success() || steps.worker_symbols.outcome == 'failure') }}",
+  );
+  assert.equal(coverage["continue-on-error"], undefined);
 });
 
 test("workspace globs discover a newly added host package and require its coverage script", () => {
@@ -496,4 +579,125 @@ test("N-1 compatibility runs rolling and fixed downgrade promises from full hist
   const run = job.steps.at(-1).run;
   assert.ok(run.includes("src/db/n1-compatibility.test.ts"));
   assert.equal(job.steps.at(-1).env.VOLLI_N1_MANIFEST, "${{ steps.prepare.outputs.manifest }}");
+});
+
+test("the older-app live lane runs the newest shipped build against THIS commit's backend", () => {
+  const job = extended.jobs["older-app-live"];
+  // Linux and a short leash: these suites are plain Node, and a lane that
+  // cannot finish inside fifteen minutes is a broken lane, not a slow one.
+  assert.equal(job["runs-on"], "ubuntu-24.04");
+  assert.equal(job["timeout-minutes"], 15);
+  assert.equal(job.if, "${{ !cancelled() }}");
+  assert.equal(job.needs, undefined, "runs beside the smoke chain, not behind it");
+
+  // The checkout is the commit under test, with the tags the build is chosen
+  // from — never the tag itself: an older tree checked out over this one would
+  // make the backend older too, and prove nothing.
+  const checkout = job.steps.find((step) => step.name === "Checkout").with;
+  assert.equal(checkout["fetch-depth"], 0);
+  assert.equal(checkout.ref, undefined);
+  assert.equal(checkout["persist-credentials"], false);
+
+  // The build comes out of the tag; the backend and the deployed functions out
+  // of this checkout.
+  const prepare = job.steps.find((step) => step.id === "prepare");
+  assert.equal(prepare.name, "Materialize the newest shipped build");
+  assert.ok(prepare.run.includes("scripts/convex-compat/prepare-older-app.mjs --latest"));
+  assert.match(prepare.run, /tail -n 1 .*older-app-prepare\.log/);
+  const live = job.steps.find((step) => step.name.startsWith("Run that build's"));
+  assert.equal(live["working-directory"], "convex");
+  assert.ok(live.run.includes("fixture/with-backend.ts --deploy"));
+  assert.ok(live.run.includes("scripts/convex-compat/older-app-live.mjs"));
+  assert.ok(live.run.includes('--manifest "${{ steps.prepare.outputs.manifest }}"'));
+  // Required, so a missing fixture fails these suites instead of skipping them.
+  assert.equal(live.env.VOLLI_CLOUD_BOARD_LIVE_REQUIRED, "1");
+  assert.equal(live.env.VOLLI_CLOUD_SESSION_LIVE_REQUIRED, "1");
+
+  // The harness's own unit tests run before it, and its evidence is kept even
+  // when the run is red.
+  assert.equal(
+    job.steps.find((step) => step.name === "Harness unit tests").run,
+    "node --test scripts/convex-compat/*.test.mjs",
+  );
+  const upload = job.steps.at(-1);
+  assert.equal(upload.if, "always()");
+  assert.equal(upload.with["retention-days"], 30);
+  assert.ok(upload.with.path.includes("live-report.json"));
+
+  // And the one check that sums the lanes gates on it like every other.
+  assert.ok(extended.jobs.summary.needs.includes("older-app-live"));
+  assert.equal(
+    extended.jobs.summary.steps.find((step) => step.id === "report").env.OLDER_APP_LIVE,
+    "${{ needs.older-app-live.result }}",
+  );
+});
+
+/** A BYO lane's "is that ticket's work on this tree" step, and the steps it gates. */
+const presence = (job) => job.steps.find((step) => step.id === "present");
+const gated = (job) =>
+  job.steps.filter((step) => step.if === "steps.present.outputs.present == 'true'");
+const before = (job, step) => job.steps.indexOf(presence(job)) < job.steps.indexOf(step);
+
+test("the BYO lanes gate on merged work: pending is a notice, present-but-broken is red", () => {
+  // Built per architecture on native runners, as release.yml builds it, and
+  // never with a baked deployment: a test artifact links only via --server.
+  const artifact = extended.jobs["byo-runner-artifact"];
+  assert.equal(artifact.if, "${{ !cancelled() }}");
+  assert.deepEqual(
+    artifact.strategy.matrix.include.map((entry) => [entry.arch, entry.runner]),
+    [
+      ["x64", "ubuntu-24.04"],
+      ["arm64", "ubuntu-24.04-arm"],
+    ],
+  );
+  const build = artifact.steps.find((step) => step.name === "Build, package and boot the runner");
+  assert.ok(gated(artifact).includes(build) && before(artifact, build));
+  assert.ok(
+    build.run.includes("ci-build-artifact.sh") && build.run.includes("ci-boot-artifact.sh"),
+  );
+  assert.doesNotMatch(JSON.stringify(artifact), /VOLLI_BUILD_CONVEX/u);
+  const upload = artifact.steps.find((step) => step.name === "Upload the runner artifact");
+  assert.equal(upload.with["if-no-files-found"], "error");
+
+  // The matrix takes both artifacts; bootstrap-only only while install is absent.
+  const matrix = extended.jobs["byo-install-matrix"];
+  assert.equal(matrix.needs, "byo-runner-artifact");
+  assert.equal(matrix.if, "${{ !cancelled() }}");
+  assert.match(presence(matrix).run, /ci-install-matrix\.sh/u);
+  assert.match(presence(matrix).run, /ci-build-artifact\.sh/u);
+  assert.match(presence(matrix).run, /mode=--bootstrap-only/u);
+  assert.match(presence(matrix).run, /-d apps\/runner\/src\/install/u);
+  const run = matrix.steps.find((step) => step.name === "Run the install.sh matrix");
+  assert.ok(gated(matrix).includes(run) && before(matrix, run));
+  assert.equal(run.env.MODE, "${{ steps.present.outputs.mode }}");
+
+  // The acceptance itself: after the artifact, never hiding a missing one.
+  const byo = extended.jobs["byo-runner"];
+  assert.equal(byo.needs, "byo-runner-artifact");
+  assert.equal(byo.if, "${{ !cancelled() }}");
+  assert.ok(byo.steps.every((step) => step["continue-on-error"] === undefined));
+  const download = byo.steps.find((step) => step.name === "Download both runner artifacts");
+  assert.ok(gated(byo).includes(download) && before(byo, download));
+  const acceptance = byo.steps.find((step) => step.name === "Run the BYO runner acceptance");
+  assert.equal(acceptance["working-directory"], "convex");
+  assert.ok(acceptance.run.includes("fixture/with-backend.ts --deploy"));
+  assert.ok(acceptance.run.includes("../apps/runner/e2e/acceptance.mjs"));
+  // Every leg's work is on main: pending or blocked is red, not a pass.
+  assert.match(acceptance.run, /acceptance\.mjs --require-all$/u);
+  assert.equal(
+    byo.steps.find((step) => step.name.startsWith("Harness self-tests")).run,
+    "node --test scripts/fake-github/*.test.mjs apps/runner/e2e/lib/*.test.mjs",
+  );
+  assert.equal(byo.steps.at(-1).if, "always()");
+
+  // BYO-6's sheet rides the cloud-wake build; only its scrubbed report is kept.
+  const wake = extended.jobs["smoke-cloud-wake"];
+  const setup = wake.steps.find((step) => step.name.startsWith("Run the runner-setup acceptance"));
+  assert.deepEqual(Object.keys(setup.env), ["VOLLI_SMOKE_REPORT_DIR"]);
+  assert.match(setup.run, /if \[\[ ! -f "\$smoke" \]\]; then[\s\S]*exit 0/u);
+  assert.ok(wake.steps.at(-1).with.path.includes(setup.env.VOLLI_SMOKE_REPORT_DIR));
+
+  for (const job of ["byo-runner-artifact", "byo-install-matrix", "byo-runner"]) {
+    assert.ok(extended.jobs.summary.needs.includes(job), job);
+  }
 });

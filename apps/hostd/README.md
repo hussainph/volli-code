@@ -1,6 +1,11 @@
 # volli-hostd
 
-The headless Volli host (VC-562, Volli Cloud M1). It composes
+> **Superseded.** This README maintains the older headless host that is still in
+> the tree. It is not the current cloud architecture: the backend owns signed-in
+> Workspace state and Runners execute. See [Workspace authority and offline](../../docs/BOUNDARIES.md#workspace-authority-and-offline).
+> Fix compatibility issues here, but do not build new host-authority features.
+
+The headless Volli host. It composes
 `@volli/host-core` with headless ports, opens and migrates the database, and
 serves the agent Unix socket, so the `volli` CLI works against it unchanged.
 No window, no Electron: `scripts/check-host-electron-imports.mjs` gates this
@@ -482,7 +487,9 @@ volli-hostd-<version>-linux-x64/
   bin/volli-hostd       sh launcher: exec bin/node lib/hostd/hostd.cjs
   bin/volli             sh launcher for the volli CLI bundle
   lib/hostd/            hostd.cjs and its chunks: hostd, every @volli package
-                        and pure-JS dependencies, bundled by `vp pack`
+                        and pure-JS dependencies, bundled by `vp pack`; beside
+                        it web-extract-worker.cjs, the thread web_fetch parses
+                        HTML in
   lib/volli.cjs         the CLI bundle (packages/cli)
   lib/probe-natives.cjs loads and exercises every native under bin/node
   lib/probe-codemode.mjs executes the shipped sandbox worker and QuickJS wasm

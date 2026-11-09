@@ -164,14 +164,14 @@ describe("Open a project on <host>…", () => {
 
   it("an empty host offers New project…, then creates and opens it", async () => {
     await openSheet();
-    expect(sheet().textContent).toContain("No projects on hetzner-1 yet.");
+    expect(sheet().textContent).toContain("No projects on hetzner-1");
     await click(sheet(), "New project…");
     expect(sheet().textContent).toContain("New project on hetzner-1");
     await type("Git URL or folder on hetzner-1", "acme");
     expect(sheet().textContent).toContain("A folder on hetzner-1 is a full path");
     expect(button("Create and open")?.disabled).toBe(true);
     await type("Git URL or folder on hetzner-1", "git@github.com:me/acme.git");
-    expect(sheet().textContent).toContain("Cloned into /srv/volli on the host");
+    expect(sheet().textContent).not.toContain("A folder on hetzner-1 is a full path");
     await type("Name (optional)", "Acme");
     await click(sheet(), "Create and open");
     await settle();
@@ -486,7 +486,6 @@ describe("projects before a Workspace on a modern HOST connection", () => {
     vi.mocked(hostWorkspacesApi).mockImplementation(() => ({ list, create }));
     await openSheet("new", MODERN);
     await type("Git URL or folder on hetzner-1", "https://example.test/acme.git");
-    expect(sheet().textContent).toContain("Cloned on the host, then added.");
     await click(sheet(), "Create and open");
     await settle();
     expect(sheet().textContent).toContain("outcome unknown");

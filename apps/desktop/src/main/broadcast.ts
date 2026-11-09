@@ -16,7 +16,9 @@
  * Window-only facts — the OS appearance, the updater's state — are not host
  * events and are sent directly.
  */
-import { BrowserWindow } from "electron";
+import { BrowserWindow, type WebContents } from "electron";
+import { currentRendererId } from "./renderer-call";
+import { withMainSpan } from "@volli/host-core/log";
 import type { HostEventBus, HostEventMap, HostBroadcastEventTopic } from "@volli/host-core/ports";
 import type { PendingArmedRun } from "@volli/shared";
 import { createDataChangeCoalescer, type DataChangeScope } from "./data-change-coalescer";
@@ -31,11 +33,25 @@ import type {
   VolliIpcEvent,
 } from "../ipc/contract";
 
-/** Sends one message to every window whose page is still alive. */
+/**
+ * Sends one message to every window whose page is still alive. Each send
+ * serializes the payload on main, so the fan-out is timed as a `broadcast`
+ * span under its channel (VC-1090).
+ */
 function sendToEveryWindow(channel: VolliIpcEvent, payload: unknown): void {
+  withMainSpan({ door: "broadcast", operation: channel }, () => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (window.webContents.isDestroyed()) continue;
+      window.webContents.send(channel, payload);
+    }
+  });
+}
+
+/** Accepted device preferences reach every other renderer, without echoing the writer. */
+export function broadcastAppStateChanged(key: string, value: string, senderId: number): void {
   for (const window of BrowserWindow.getAllWindows()) {
-    if (window.webContents.isDestroyed()) continue;
-    window.webContents.send(channel, payload);
+    if (window.webContents.id === senderId || window.webContents.isDestroyed()) continue;
+    window.webContents.send("volli:app-state-changed" satisfies VolliIpcEvent, { key, value });
   }
 }
 
@@ -45,14 +61,35 @@ function sendToEveryWindow(channel: VolliIpcEvent, payload: unknown): void {
  * is only the instance that fans out to `BrowserWindow`, so a second consumer
  * with its own cadence can be given its own.
  */
-const dataChanges = createDataChangeCoalescer({
-  send(change) {
-    sendToEveryWindow("volli:data-changed", {
-      entity: "tickets",
-      ...change,
-    } satisfies DataChangedEvent);
-  },
-});
+const dataChanges = new Map<WebContents, ReturnType<typeof createDataChangeCoalescer>>();
+function queueDataChanged(change: DataChangeScope, excludeRendererId?: number): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    const contents = window.webContents;
+    if (
+      contents.isDestroyed() ||
+      (excludeRendererId !== undefined && contents.id === excludeRendererId)
+    )
+      continue;
+    let queue = dataChanges.get(contents);
+    if (queue === undefined) {
+      queue = createDataChangeCoalescer({
+        send(merged) {
+          dataChanges.delete(contents);
+          if (!contents.isDestroyed())
+            contents.send(
+              "volli:data-changed" satisfies VolliIpcEvent,
+              {
+                entity: "tickets",
+                ...merged,
+              } satisfies DataChangedEvent,
+            );
+        },
+      });
+      dataChanges.set(contents, queue);
+    }
+    queue.queue(change);
+  }
+}
 
 /**
  * Who else hears every `data-changed` the moment it is published, before the
@@ -73,7 +110,7 @@ export function tapDataChanged(listener: (change: DataChangeScope) => void): () 
 const WINDOW_DELIVERY: { [T in HostBroadcastEventTopic]: (payload: HostEventMap[T]) => void } = {
   "data-changed": (change) => {
     for (const tap of dataChangedTaps) tap(change);
-    dataChanges.queue(change);
+    queueDataChanged(change);
   },
   "session-activity": (notice) => sendToEveryWindow("volli:session-activity", notice),
   "sessions-interrupted": (event) => sendToEveryWindow("volli:sessions-interrupted", event),
@@ -92,6 +129,10 @@ export const windowEventBus: HostEventBus = {
   publish(topic, payload) {
     WINDOW_DELIVERY[topic](payload);
   },
+  publishToPeers(_topic, change) {
+    for (const tap of dataChangedTaps) tap(change);
+    queueDataChanged(change, currentRendererId());
+  },
 };
 
 /**
@@ -100,7 +141,7 @@ export const windowEventBus: HostEventBus = {
  * synchronous test body whether or not the handler queued anything at all.
  */
 export function flushDataChangedForTest(): void {
-  dataChanges.flush();
+  for (const queue of Array.from(dataChanges.values())) queue.flush();
 }
 
 /**
@@ -110,7 +151,8 @@ export function flushDataChangedForTest(): void {
  * window mock, carrying ids that test never created.
  */
 export function resetDataChangedForTest(): void {
-  dataChanges.dispose();
+  for (const queue of dataChanges.values()) queue.dispose();
+  dataChanges.clear();
 }
 
 /**

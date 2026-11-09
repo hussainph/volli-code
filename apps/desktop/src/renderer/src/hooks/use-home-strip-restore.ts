@@ -17,6 +17,7 @@ import {
   resolveHomeTabs,
   type HomeTabResolution,
 } from "@renderer/components/home/home-tabs";
+import { parseChatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 
 export interface HomeStripRestoreInput {
@@ -109,6 +110,10 @@ export function useHomeStripRestore(input: HomeStripRestoreInput): HomeTabResolu
   const adoptSessionIds =
     resolution.restore.kind === "adopt" ? resolution.restore.sessionIds : null;
 
+  /** The record's front tab, read at restore time rather than as a dependency. */
+  const recordedRef = React.useRef(recorded);
+  recordedRef.current = recorded;
+
   /**
    * Put the persisted strip back, or accept that what it named is gone.
    *
@@ -116,8 +121,14 @@ export function useHomeStripRestore(input: HomeStripRestoreInput): HomeTabResolu
    * own persisted tab, looped over the whole strip, and for the same reason: a
    * chat Session survives a relaunch, so a `chat:<id>` that names no open tab
    * is not evidence of anything until the durable listing has answered.
-   * Adopted in strip order, so the chats arrive in the order the arrangement
+   * Opened in strip order, so the chats arrive in the order the arrangement
    * then sorts them into anyway.
+   *
+   * Only the tab in front is ADOPTED (VC-515). Adopting every one put N
+   * snapshot reads and transcript folds on the switch's critical path and left
+   * each a permanent live stream; the rest attach when a pane shows them
+   * (`showChatSession`), and until then the strip labels them from the
+   * durable listing (`home-tab-descriptors`).
    *
    * The restore is finished when the resolution SETTLES, not when it adopts:
    * the render after an adopt finds those tabs open, and it is that render which
@@ -130,8 +141,9 @@ export function useHomeStripRestore(input: HomeStripRestoreInput): HomeTabResolu
       return;
     }
     const chat = useChatSessionsStore.getState();
+    const front = parseChatTabId(recordedRef.current);
     for (const sessionId of adoptSessionIds) {
-      chat.adoptChatSession(sessionId);
+      if (sessionId === front) chat.adoptChatSession(sessionId);
       chat.openChatTab(projectId, sessionId);
     }
   }, [projectId, restoreKind, adoptSessionIds]);

@@ -3,7 +3,7 @@
  * under Services. Only with the `cloud` experiment on (`settingsGroups`'s
  * `hosts` option); with it off the category does not exist.
  */
-import { HardDrivesIcon } from "@phosphor-icons/react/dist/csr/HardDrives";
+import { StorageIcon } from "@renderer/components/ui/icon";
 
 import { HOSTS_CATEGORY_KEY } from "@renderer/components/hosts/host-entry";
 
@@ -14,7 +14,7 @@ export function hostsCategory(): PrefCategory {
   return {
     key: HOSTS_CATEGORY_KEY,
     label: "Hosts",
-    icon: HardDrivesIcon,
+    icon: StorageIcon,
     keywords: [
       "host",
       "hosts",

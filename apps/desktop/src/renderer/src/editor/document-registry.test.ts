@@ -1316,8 +1316,84 @@ describe("DocumentRegistry — an agent rewrites a parked draft", () => {
   });
 });
 
+function bodyIdentity(ticketId: string): DocumentIdentity {
+  return { kind: "ticket-body", projectId: "project-1", ticketId };
+}
+
 describe("DocumentRegistry unsaved reporting", () => {
   const fileIdentity = (relPath: string): DocumentIdentity => ({ ...mainIdentity, relPath });
+
+  /**
+   * VC-1094: the New-ticket composer's body is a ticket-body document nothing
+   * ever saves — its draft cache keeps the text instead. Counted as unsaved, it
+   * outlived the composer and made every ⌘Q warn about a "Ticket description".
+   */
+  it("never reports a draft document, open or after its view has gone", () => {
+    const { registry } = makeRegistry();
+    const observed = vi.fn();
+    registry.observeUnsaved(observed);
+    const composer = registry.acquire({
+      identity: bodyIdentity("__composer_draft__"),
+      viewId: "composer:body",
+      seed: { value: "", revision: null },
+      savePolicy: "draft",
+    });
+
+    composer.model.applyEdit("Repro steps for the crash\n");
+    expect(composer.snapshot().dirty).toBe(false);
+    expect(registry.unsavedDocuments()).toEqual([]);
+
+    composer.release({ cursor: 1 });
+    expect(registry.unsavedDocuments()).toEqual([]);
+    expect(observed).not.toHaveBeenCalled();
+  });
+
+  /** The next open of the composer still shows what its draft cache restored. */
+  it("reseeds a parked draft document from the host on its next open", () => {
+    const { registry } = makeRegistry();
+    const first = registry.acquire({
+      identity: bodyIdentity("__composer_draft__"),
+      viewId: "composer:body",
+      seed: { value: "", revision: null },
+      savePolicy: "draft",
+    });
+    first.model.applyEdit("typed, then created\n");
+    first.release({ cursor: 1 });
+
+    const reopened = registry.acquire({
+      identity: bodyIdentity("__composer_draft__"),
+      viewId: "composer:body",
+      seed: { value: "restored draft\n", revision: null },
+      savePolicy: "draft",
+    });
+    expect(reopened.model.getValue()).toBe("restored draft\n");
+    expect(registry.unsavedDocuments()).toEqual([]);
+  });
+
+  /**
+   * A ticket description typed in the moments before its autosave lands is real
+   * unsaved work: ⌘Q must still ask about it, and stop asking once the write
+   * marks it saved.
+   */
+  it("reports an autosave document from its first edit until the host marks it saved", () => {
+    const { registry } = makeRegistry();
+    const body = registry.acquire({
+      identity: bodyIdentity("ticket-1"),
+      viewId: "ticket-body:ticket-1",
+      seed: { value: "", revision: null },
+      savePolicy: "autosave",
+    });
+
+    body.model.applyEdit("Half a sentence");
+    expect(registry.unsavedDocuments()).toEqual([bodyIdentity("ticket-1")]);
+
+    // The editor unmounts before the host's flush runs: the draft stays reported.
+    body.release({ cursor: 1 });
+    expect(registry.unsavedDocuments()).toEqual([bodyIdentity("ticket-1")]);
+
+    registry.peek(bodyIdentity("ticket-1"))?.markSaved(null);
+    expect(registry.unsavedDocuments()).toEqual([]);
+  });
 
   it("reports every dirty document and drops each one as it is saved", () => {
     const { registry } = makeRegistry();

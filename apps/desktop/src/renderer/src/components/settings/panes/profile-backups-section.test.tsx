@@ -62,7 +62,15 @@ function button(label: string) {
   if (!result) throw new Error(`No ${label} button`);
   return result;
 }
-describe("Storage profile backups", () => {
+describe("Profile backups", () => {
+  it("draws the first read with a loading mark, never as no backup", async () => {
+    mocks.status.mockReturnValue(new Promise(() => {}));
+    await mount();
+    expect(container.textContent).toContain("Loading");
+    expect(container.textContent).not.toContain("Loading…");
+    expect(container.textContent).not.toContain("No backup yet");
+    expect(button("Back up now").disabled).toBe(true);
+  });
   it("shows verified time and size; backup and Finder go through semantic commands", async () => {
     mocks.status.mockResolvedValue({
       ...idle,
@@ -83,7 +91,7 @@ describe("Storage profile backups", () => {
       notice: "Backup paused during a profile migration or move.",
     });
     await mount();
-    expect(button("Backing up…").disabled).toBe(true);
+    expect(button("Backing up").disabled).toBe(true);
     expect(container.querySelector('[role="status"]')?.textContent).toContain("paused");
   });
   it("keeps a skipped or failed manual backup visible", async () => {
@@ -97,14 +105,25 @@ describe("Storage profile backups", () => {
       "not enough free disk space",
     );
   });
-  it("reports unavailable history without pretending there is no backup", async () => {
+  it("reports unavailable history without pretending there is no backup, and retries", async () => {
     mocks.status.mockRejectedValueOnce(new Error("Backup history unavailable"));
     await mount();
     expect(container.textContent).toContain("Unavailable");
+    expect(container.textContent).not.toContain("No backup yet");
     expect(button("Back up now").disabled).toBe(true);
-    expect(container.querySelector('[role="status"]')?.textContent).toContain(
-      "Backup history unavailable",
-    );
+    const announced = container.querySelector('[role="status"]');
+    expect(announced?.textContent).toContain("Couldn't read backups");
+    expect(announced?.textContent).not.toContain("Backup history unavailable");
+    await act(async () => container.querySelector<HTMLElement>("details summary")?.click());
+    expect(container.querySelector("details")?.open).toBe(true);
+    expect(container.querySelector("details")?.textContent).toContain("Backup history unavailable");
+    expect(announced?.querySelector("button")).toBeNull();
+
+    await act(async () => button("Try again").click());
+    expect(mocks.status).toHaveBeenCalledTimes(2);
+    expect(container.textContent).toContain("No backup yet");
+    expect(container.textContent).not.toContain("Couldn't read backups");
+    expect(button("Back up now").disabled).toBe(false);
   });
   it("reports mutation failures", async () => {
     await mount();

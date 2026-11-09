@@ -7,6 +7,8 @@ import {
   resolveAccountConfig,
 } from "./index";
 import { tempInventory, testKeyPair } from "./test-support";
+import { previewAtLaunch } from "../preview-gate";
+import { chooseProductStore } from "../cloud-launch";
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -53,6 +55,9 @@ describe("desktop main's account composition", () => {
     const relaunch = vi.fn();
     const reportUnsavedWrites = vi.fn();
     const saveSnapshot = vi.fn();
+    const beforeSignOut = vi.fn(() => {
+      expect(service.snapshot().state).toBe("signed-in");
+    });
     const port = accountPort(
       service,
       {
@@ -61,6 +66,7 @@ describe("desktop main's account composition", () => {
         reportUnsavedWrites,
         saveSnapshot,
         readSnapshot: () => "{}",
+        beforeSignOut,
       },
       github,
     );
@@ -93,7 +99,9 @@ describe("desktop main's account composition", () => {
       "no Volli Cloud backend",
     );
     await port.cancelSignIn();
+    expect(beforeSignOut).not.toHaveBeenCalled();
     await port.signOut();
+    expect(beforeSignOut).toHaveBeenCalledOnce();
     stop();
     expect(frames).toEqual(["signed-out", "signing-in", "signed-in", "signed-out"]);
     expect(marker.clear).toHaveBeenCalled();
@@ -110,6 +118,60 @@ describe("desktop main's account composition", () => {
     );
     stopGithub();
     expect(opened).toHaveLength(1);
+  });
+
+  it("initialises local decoration on a markerless stable enrollment launch without opening Account or restoring credentials", async () => {
+    const temp = tempInventory();
+    cleanups.push(temp.dispose);
+    const inventoryRead = vi.spyOn(temp.inventory, "get");
+    const unlock = vi.fn(async () => {});
+    const config = resolveAccountConfig({
+      packaged: false,
+      env: {
+        VOLLI_WORKOS_CLIENT_ID: "client_markerless",
+        VOLLI_CONVEX_URL: "http://127.0.0.1:1",
+      },
+    });
+    expect(config.provider).not.toBeNull();
+    expect(config.backendUrl).not.toBeNull();
+    const account = createDesktopAccount({
+      config,
+      enabled: () => true,
+      inventory: temp.inventory,
+      unlockInventory: unlock,
+      openBrowser: vi.fn(),
+      log: log(),
+    });
+    cleanups.push(() => account.dispose());
+    const restoreAccount = vi.fn(async () => {
+      account.snapshot();
+      await account.settled();
+      return account.previewUserId();
+    });
+    // Main's actual launch gates: enrollment is available independently of
+    // cloud; a markerless stable launch deliberately never calls restoration.
+    const preview = await previewAtLaunch({
+      stable: true,
+      configured: true,
+      readMarker: () => null,
+      restoreAccount,
+    });
+    expect(preview).toBe(false);
+    expect(
+      chooseProductStore({
+        cloudFlag: preview,
+        readMarker: () => null,
+        backendUrl: config.backendUrl,
+        signInConfigured: config.provider !== null,
+      }),
+    ).toEqual({ store: "local" });
+    expect(account.sourceIconRestoring()).toBe(false);
+    expect(account.sourceIconOwner()).toMatch(/^[a-f0-9]{64}$/);
+    expect(account.sourceIconEpoch()).toMatch(/^[a-f0-9]{64}$/);
+    expect(restoreAccount).not.toHaveBeenCalled();
+    expect(inventoryRead).not.toHaveBeenCalled();
+    expect(unlock).not.toHaveBeenCalled();
+    inventoryRead.mockRestore();
   });
 
   it("logs a configuration it ignored, and answers an unconfigured build", async () => {

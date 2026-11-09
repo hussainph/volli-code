@@ -38,7 +38,7 @@ import type {
   SessionUsageWindow,
   SessionUsageSummary,
   Project,
-  SessionProjection,
+  SessionListingProjection,
 } from "@volli/shared";
 
 import { getTicketRow } from "../db/tickets-repo";
@@ -79,7 +79,7 @@ export function readSessionUsageWindow(value: unknown): SessionUsageWindow | nul
  * a cost verb that could not address one would refuse the common case.
  */
 function sessionForCostHandle(
-  projections: readonly SessionProjection[],
+  projections: readonly SessionListingProjection[],
   selector: unknown,
 ): { ok: true; sessionId: string } | { ok: false; response: AgentResponse } {
   if (typeof selector !== "string" || selector.length === 0) {
