@@ -5,8 +5,7 @@
  * person authors in Settings → Appearance — and it is painted at build time by
  * the app's own canvas engine in `@volli/shared`, so the light behind a still
  * of the app is the light that app actually wears. The palette is the release
- * film's (`apps/desktop/src/flute/kit/world.tsx`): the site and the film tell
- * the same release in the same colours.
+ * film's, so the site and the film tell the same release in the same colours.
  *
  * Only build-time code reads this module. Nothing here reaches the browser but
  * the CSS strings it produces.
