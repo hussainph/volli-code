@@ -13,7 +13,7 @@ A move alone does not start a Session. One case does: when a deliberate move
 brings a ticket into a column with an enabled, armed Automation, that Automation
 can start a fresh Ticket Session.
 
-![The Home Board for voltaic: five columns holding 24 tickets, with the navigation sidebar hidden and VLT-14 in Doing with composer and renderer labels.](../../../assets/screenshots/board.png)
+![Home Board with five task columns, ticket cards, filters, and the search field above the board.](../../../assets/screenshots/board.png)
 
 ## The columns
 
@@ -26,13 +26,13 @@ can start a fresh Ticket Session.
 
 ## List view
 
-Use the view control beside the ticket count to switch between **Board** and
-**List**. Board shows cards in columns; List shows the tickets as rows, grouped
+Use the view control beside the ticket count to switch between **Board view** and
+**List view**. Board view shows cards in columns; List view shows tickets as rows, grouped
 by column. Switching views keeps the current filters and sort order.
 
 ## Filtering and sorting
 
-Use **Priority** in the board header, or **Label** when the project has labels,
+Use **Priority** in the board header, or **Labels** when the project has labels,
 to narrow the visible tickets. Each filter accepts multiple values and matches
 any selected value. Select **Clear** to reset active filters.
 
@@ -46,10 +46,11 @@ Use the command palette (`⌘K`) to search tickets and Sessions across projects.
 ## What moves a ticket
 
 Drag a card to another column, or choose **Move to** from its context menu. In a
-Ticket view, changing **Status** under **Properties** also moves it. The
+Ticket view, changing **Status** beside the title in the **Ticket Body** tab
+also moves it. The
 `volli ticket move` command makes the same move from a terminal.
 
-A Deliberate move records the destination you chose, whoever made it: you or a
+A deliberate move records the destination you chose, whoever made it: you or a
 Ticket Session using `volli ticket move`. A Session's completion or blocked
 signal records its outcome; it does not change the ticket's status.
 

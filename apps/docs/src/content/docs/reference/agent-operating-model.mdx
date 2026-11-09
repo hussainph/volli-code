@@ -1,6 +1,6 @@
 ---
 title: Agent operating model
-description: Session roles, frozen tools, and how ticket commands differ from Session signals.
+description: Session roles, additive tool refreshes, delegation notices, and how ticket commands differ from Session signals.
 ---
 
 Use this page when you write instructions for an agent that runs in Volli. A
@@ -29,15 +29,33 @@ Starting a Session and moving a ticket are separate actions. A deliberate move
 into a column can also trigger an Automation that is enabled and armed for that
 column.
 
-## Frozen tools
+<span id="frozen-tools"></span>
 
-Volli records a Session's tool list when it creates the Session. Changes to
-project tool settings apply to new Sessions. Reopening an existing Session
-keeps its recorded tools.
+## Tool availability and refresh
+
+Volli records a Session's tools when it creates the Session. Later refreshes
+can add eligible tools without removing or renaming tools already recorded.
+Disabling a server or tool changes the selection for new Sessions; it does not
+remove that tool from an existing Session's record. A disabled MCP server still
+refuses calls until you enable it again.
+
+Tool declarations and the system prompt stay stable while the prompt cache is
+warm. Eligible additions become available at a cold turn, compaction, or a
+model switch. Selected tools that run only through Code Mode can become usable
+before the next program, without changing the warm prompt's declarations.
+Volli records the additions and tells the agent when it can use them.
+
+Reopening a Session preserves its recorded tools and additions. Start a new
+Session when you need a tool selection that excludes previously recorded
+tools. A delegated helper inherits its parent's current recorded MCP tools,
+including refreshed additions.
 
 A Board Session can receive project-management tools that a Ticket Session does
-not hold by default. Subagent Sessions cannot start or steer other Sessions and
-cannot ask you a question through `ask_user`.
+not hold by default. New Ticket Sessions include `session_send` for steering
+the subagents they delegated; a Board Session can steer any Session in its
+project. Older Ticket Sessions do not gain this steering permission through a
+refresh. Subagent Sessions cannot start or steer other Sessions and cannot ask
+you a question through `ask_user`.
 
 Run `volli help` inside the Session to see the tools it holds. Prompt
 instructions cannot grant a missing tool.
@@ -62,6 +80,22 @@ budgets and existing confirmations still use their normal question cards.
 
 If the Session keeps a todo list, `session done` and `session blocked` also
 leave its final list as a comment on its ticket.
+
+## Delegation and notices
+
+Give each delegated task a bounded goal and clear file ownership. Subagents
+share the parent's working directory, but keep separate conversations. They
+have no fixed execution time limit; they finish by answering or when stopped.
+
+The parent receives a notice with the subagent's final message. Long answers
+can be truncated in the notice; `volli session answer <handle>` reads the full
+answer. An idle parent gets a new turn for the notice; a working parent reads
+it during its turn.
+
+When available, the `watch` tool subscribes to Session and ticket changes and
+returns immediately. Starting or steering a Session also watches its next turn
+ending, completion or blocked signal, or stop. Use these notices instead of
+polling `session list` or parking a long-running shell command.
 
 ## Shell commands and named tools
 

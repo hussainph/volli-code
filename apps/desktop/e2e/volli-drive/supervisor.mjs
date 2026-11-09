@@ -679,11 +679,13 @@ async function boot() {
         : replies === undefined
           ? {}
           : {
-              // Tool-free refinements such as auto-title must not consume a scripted agent turn.
+              // Tool-free refinements such as auto-title must not consume a scripted
+              // agent turn. With --fake-tool-free-text they answer that fixed text;
+              // an absent spec field leaves undefined, so the default echo stands.
               script: (turn) =>
                 Array.isArray(turn.body.tools) && turn.body.tools.length > 0
                   ? replies.shift()
-                  : undefined,
+                  : spec.fakeToolFreeText,
             }),
       log: (record) => slog(`[fake-provider] ${JSON.stringify(record)}`),
     });
@@ -976,6 +978,24 @@ async function handle(cmd, args) {
   armIdle();
   void recordMembers();
   switch (cmd) {
+    case "readme-demo": {
+      if (
+        spec.fixture !== "empty" ||
+        spec.model !== "fake" ||
+        !Array.isArray(spec.fakeScript) ||
+        spec.fakeScript.length === 0 ||
+        spec.cloud ||
+        spec.deployment ||
+        spec.remoteAcceptance
+      ) {
+        throw new Error("README capture requires an empty, local scripted fake-model instance");
+      }
+      const { page } = await pickWindow("main");
+      const { captureReadmeDemo } = await import("./readme-demo.mjs");
+      const result = await captureReadmeDemo({ page, app, layout: L });
+      transcript({ cmd: "readme-demo", ...result });
+      return result;
+    }
     case "chat-window-bench": {
       const report = await guardedChatWindowBench({
         app,

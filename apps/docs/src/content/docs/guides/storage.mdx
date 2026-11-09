@@ -1,11 +1,11 @@
 ---
 title: Manage local storage
-description: Inspect leftover processes and worktree files, reclaim disk space, and understand what Volli's JSON export includes.
+description: Review cleanup, stop leftover processes, create and restore local profile backups, and export readable records from Volli.
 ---
 
-Open **Settings → Storage** to inspect local processes, worktrees, logs, and
-the database. Scan results let you review what an action would remove before
-you confirm it.
+Open **Settings → All projects → Storage** for retention, cleanup, running
+processes, and backup and restore. Database inspection and JSON export are
+under **Privacy & data**.
 
 ## Keep finished worktrees longer
 
@@ -20,50 +20,95 @@ difference between removal and archiving.
 ## Inspect leftover processes
 
 1. In **Running processes**, select **Look for processes no Session owns**.
-2. Read the ticket, command, age, and memory information for each result.
-3. Use **Reap** for a process you want to stop, or **Reap all** for the eligible
+2. Review each result's ticket, command, age, and memory information.
+3. Use **Reap** to stop an eligible process or **Reap all** for the eligible
    results.
 
-Some processes are listed without a removal action. **Reap under memory
-pressure** controls automatic cleanup of eligible leftover processes. Stopping
-a process and deleting its files are separate actions.
+Some processes appear without a removal action. **Reap under memory pressure**
+controls automatic cleanup of eligible leftovers. Stopping a process does not
+delete its files.
 
 ## Remove build artifacts
 
-In **Build artifacts**, scan for ignored dependency folders, build output, and
-caches. Review the results before confirming a trim. Volli protects local
-configuration and active or dirty worktrees. A trim keeps the checkout and
-its branch. You may need to reinstall dependencies before working there again.
+In **Clean up**, **Scan unused files** shows a summary. Select **Review
+cleanup** to inspect and confirm individual cleanup actions.
+
+In that dialog's **Build artifacts** section, use **Scan for build artifacts**
+to inspect ignored dependency folders, build output, and caches. Review the
+results before **Trim**. Volli protects local configuration and active or
+dirty worktrees. A trim keeps the checkout and branch, but you may need to
+reinstall dependencies before working there again.
+
+**Trim when a ticket is done** controls automatic build-artifact trimming.
 
 ## Remove orphaned logs and worktrees
 
-**Pi session logs** finds logs no longer referenced by a Session. **Orphaned
-worktrees** checks for checkout folders that no ticket owns. Review each scan
-before confirming cleanup. These scans cover the local installation, not only
-the selected project.
+The **Review cleanup** dialog also contains:
 
-If you change retention or the folders change after a scan, scan again before
-acting on an outdated result.
+- **Pi session logs**, where **Scan for orphaned Pi logs** finds logs no longer
+  referenced by a Session. **Saved tool output** shows the bounded store of
+  larger tool results.
+- **Orphaned worktrees**, where **Scan for orphaned worktrees** checks for
+  checkout folders that no ticket owns.
 
-## Export records for inspection
-
-1. In **Database → Export data as JSON**, select **Export…**.
-2. Read the confirmation and choose a location for the file.
-
-The export contains readable project, ticket, comment, Session, and label
-records. It excludes attachments and transcript files and has no restore path.
-**It is not a restorable backup.** **Reveal in Finder** shows the database's
-location but does not copy or back it up.
+Scans cover the local installation, not only the selected project. Review the
+results before confirming cleanup. If retention or the folders change after
+a scan, scan again before acting.
 
 ## Back up local data
 
-Keep your repositories and Volli's application-data folder in your normal Mac
-backup plan. Quit Volli before making a manual copy of its app-data folder.
-Copying only the SQLite file can miss recent writes and related files.
-Worktrees live separately and may contain uncommitted work that a pushed branch
-does not include.
+Volli creates local profile backups daily while it is running. In **Storage →
+Backups**, **Last backup** shows the latest completed backup and its size.
+Select **Back up now** for another snapshot, or **Show in Finder** to open the
+backup directory.
 
-See [Local and cloud data and network access](/reference/data-and-privacy/) for the two
-storage locations. The app does not currently expose a backup-bundle creation
-or restore control. Do not delete your profile expecting the JSON export to
-restore it.
+Automatic retention keeps up to seven recent daily snapshots and an older
+weekly snapshot. A failed or skipped attempt appears beside its recovery
+action; it does not replace the last successful backup.
+
+Backup bundles include board and Session history, saved Automations,
+settings, attachments, and transcript artifacts. They do not include:
+
+- Repository files or worktree folders, including uncommitted changes.
+- Credentials, provider sign-ins, or MCP tokens.
+- Browser captures and replay files, diagnostic logs, or runtime scratch.
+- Personal Command files in the current version of the bundle format.
+
+Keep repositories, personal Skills and Commands, and the backup directory in
+your normal Mac backup plan. Local bundles on the same disk do not protect
+against losing that disk. See [Local data and network
+access](/reference/data-and-privacy/) for storage locations.
+
+## Restore a backup
+
+Restoring replaces local history with the selected backup. It leaves project
+files in place. Keep any newer history you need before proceeding.
+
+1. In **Storage → Backups**, select **Restore…** beside a bundle, or use the
+   **Restore** row to choose a backup file.
+2. Volli checks the bundle. Review any reported problems before continuing.
+3. For each project, use **Choose…** to confirm its repository directory, then
+   select **Prepare restore**.
+4. When the dialog says **Ready to restore on restart**, review the credential
+   notice and select **Restart and restore**.
+
+Use **Cancel restore** to stop before restarting. After a restore, **Previous
+profile → Show in Finder** reveals the profile Volli replaced.
+
+Credentials already stored in the destination profile stay there. Credentials
+that existed only on the source machine must be supplied again. A backup does
+not restore live processes or the source machine's worktree paths.
+
+## Export records for inspection
+
+1. Open **Settings → All projects → Privacy & data**.
+2. In **Database → Export data as JSON**, select **Export…**.
+3. Read the confirmation and choose a location.
+
+The JSON export contains readable project, ticket, comment, Session, and label
+records. It excludes attachments and transcript files and cannot be restored.
+Use the backup bundles above for restoration.
+
+**Reveal in Finder** shows the database location without copying it. If you
+make a manual copy of the application-data folder, quit Volli first. Copying
+only the SQLite file can miss recent writes and related files.

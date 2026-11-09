@@ -13,19 +13,20 @@ come back without starting a duplicate.
 
 ## Start a chat
 
-Before you start a chat, set a default model in **Settings → Models**.
+Before you start a chat, set a default model in **Settings → All projects →
+Models**.
 
-- In **Home**, select **Chat** to start a Board chat. It works in the project's
-  main checkout and has no ticket of its own.
-- In a Ticket view, select **Chat** in **Sessions** to start a ticket
-  chat. It uses that ticket's selected destination: a **New worktree** or the
-  project's **Project checkout**.
+- In **Home**, select **Open a tab** (`+`), then **Chat**, to start a Board
+  chat. It works in the project's main checkout and has no ticket of its own.
+- In a Ticket view, use **Open a tab → Chat** to start a ticket chat. It uses
+  that ticket's selected destination: a **New worktree** or the project's
+  **Project checkout**.
 
-You can also choose **Chat** from the menu beside the **Chat** control. The
-composer opens as a **Chat Draft**, which has no history yet. Write the opening
-message and send it to create the Session. Opening a draft creates no Session
-and no worktree, and closing an empty draft leaves nothing behind. Your draft
-text and staged files stay when you navigate or reopen the app.
+You can also press `⌘T`. The composer opens a Chat Draft, which has no history
+yet. Write the opening message and select **Send** to create the Session.
+Opening a draft creates no Session and no worktree. Draft text and staged
+files survive navigation and relaunch while you keep the draft open. Closing
+an unsent draft discards it, including any text and staged files.
 
 <Aside type="note">
   Moving a ticket to **Doing** updates its status. It starts a Run only when an
@@ -35,10 +36,11 @@ text and staged files stay when you navigate or reopen the app.
 
 ## Send messages while the agent works
 
-While the agent works on a reply, **Queue** adds a message for later. Select
-**Steer** on a queued message, or press `⌘Enter` in the composer, to send an
-instruction into the current turn without interrupting it. **Remove** drops a
-queued message.
+While the agent works on a reply, **Queue** or Return adds a message for later.
+Select **Steer** on a queued message, or press `⌘Enter` in the composer, to send
+an instruction into the current turn without interrupting it. **Edit message**
+brings queued text and attachments back to the composer. The remove control
+drops a queued message. Use `⇧Enter` for a new line.
 
 Select **Stop turn** to interrupt the current response. This does not undo file
 edits or commands that already ran, so check the result before sending the
@@ -46,17 +48,53 @@ next instruction.
 
 ## Inspect Session activity
 
-The **Activity Island** appears above the composer when the Session has
-activity to show:
+The Activity Island appears above the composer when the Session has activity
+to show. Hover over a cluster to inspect it; click to keep its card open while
+you use its controls.
 
-- **Browser Tabs**: inspect pages the agent opened.
+- **Browser**: show pages beside the chat, return to a visible tab, or
+  close a page. Browser cards in the transcript also offer **Replay**. See
+  [Browser Tabs](/guides/browser-tabs/).
 - **Subagents**: peek at a Session the agent delegated work to, open it, or
   stop it. These children share the parent's working directory and have no row
   in the Session list.
 - **Plan**: read the agent's checklist and its completed-item count.
-- **Background shells**: inspect output from a dev server or another
+- **Shells**: inspect output from a dev server or another
   long-running command. These stop when the Session's connection ends; they do
   not survive a relaunch.
+
+## Read tool activity
+
+Expand an activity row to inspect the tool's arguments, output, and outcome.
+A failed tool call stays available in the transcript; it does not necessarily
+mean the whole turn failed. Web search rows link to the sources the agent
+found. Browser cards offer replay of the actions it recorded.
+
+Long conversations load a window of messages. Select **Show earlier** to read
+older history without starting another Session.
+
+## Background shells
+
+An agent can run a dev server, watch build, or another long command beside its
+turn. Open **Shells** in the Activity Island to inspect its output or stop it.
+Volli tells the agent when a background shell exits, so it does not need to
+keep checking for completion.
+
+To free a turn held by a running command, choose **Move to background** on its
+transcript row or press `⌃⇧B` while the chat has focus. The command keeps
+running and appears under **Shells**. The action is available only when there
+is a free background-shell slot. Shells stop when the Session's connection
+ends and do not survive restarting Volli.
+
+## Answer questions and credential requests
+
+A question card can contain several related questions. Choose an offered
+answer or type your own, then use the card's controls to send the answers.
+**Decline to answer** refuses the questions; stopping the turn is a separate
+action.
+
+Credentials have their own **Credential requested** field. Do not put a secret
+in a normal chat reply. See [Supply a Session credential](/guides/session-credentials/).
 
 ## Return to a Session
 
@@ -68,7 +106,21 @@ disconnected chat reconnects that Session instead of creating a second
 conversation.
 
 Closing a chat tab does not delete the Session. Starting a new chat creates a
-different Session.
+different Session. To keep a conversation beside a file, terminal, or Browser
+Tab, use [split view](/guides/split-view/).
+
+### Read activity and unread indicators
+
+A chat Session's provider logo identifies its model provider. Its activity
+indicator shows **Working**, **Waiting for you**, **Idle**, or **Interrupted**.
+An interrupted Session has a turn that stopped unexpectedly; open it to read
+the reason and available recovery action.
+
+The unread dot is separate from activity. It means a turn ended while you were
+not viewing that Session, or you marked it unread yourself. Opening the
+Session, viewing its conversation, or successfully replying marks it read.
+New turns and questions can move a Session up the list; streamed output does
+not continually reorder it.
 
 ## Peek at a Session without opening it
 
@@ -80,7 +132,8 @@ a ticket's folder instead to see that ticket's Sessions.
 - Select **Answer** on a waiting question, or **Send** to message a Session,
   to reply from the card. `⌘.` does the same for the card on screen. The reply
   goes to that Session; you stay where you were.
-- Select **Open session** to go to the full conversation.
+- Select **Open session** to open the Session's tab, or **View conversation**
+  to read its conversation in an overlay.
 - Press `Esc` to step back: out of the reply field, then the card.
 
 From the keyboard, focus a row and press `Space` to peek, and `Space` again to
@@ -89,8 +142,8 @@ Session as read; press `U` on a focused row to toggle its unread dot.
 
 ## Choose a terminal companion
 
-Choose **Terminal** from the menu beside **Chat** when you need a shell, or want
-to run a terminal app (a TUI) yourself. A terminal is a separate manual
+Choose **Open a tab → Terminal** when you need a shell or want to run a
+terminal app (a TUI) yourself. A terminal is a separate manual
 workflow, not a fallback when a chat cannot start. See
 [Terminal companions](/guides/terminal-companions/) for what it can do and what
 it keeps.

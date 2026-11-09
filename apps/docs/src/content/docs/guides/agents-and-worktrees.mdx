@@ -19,7 +19,7 @@ its own Git worktree, so changes stay on separate branches. See
 | **Board chat** | Project work that is not scoped to one ticket | The project's main checkout |
 | **Ticket chat** | One ticket and its brief | The ticket's worktree, or the main checkout if you choose **Project checkout** |
 
-Choose a default model in **Settings → Models** before you start a built-in
+Choose a default model in **Settings → All projects → Models** before you start a built-in
 chat. A ticket's destination can be changed between **New worktree** and
 **Project checkout** until its first worktree is created.
 
@@ -31,7 +31,7 @@ separate action.
 
 When a ticket uses a worktree, its first Session creates a separate Git worktree
 on a branch named `volli/<DISPLAY-ID>-<slug>`, such as
-`volli/VC-12-mcp-server`. Volli stores ticket worktrees under
+`volli/VLT-12-mcp-server`. Volli stores ticket worktrees under
 `~/.volli/worktrees/`.
 
 The base branch comes from the ticket's setting, the project's
@@ -39,7 +39,7 @@ The base branch comes from the ticket's setting, the project's
 worktree uses the refs already on your machine; it does not fetch first.
 
 In **Configure → Worktrees**, **Branch from** sets the default base branch.
-**Then run** sets a setup command, such as `pnpm install`. The setup runs once
+**Setup command** sets a setup command, such as `pnpm install`. The setup runs once
 in each new worktree, before the agent starts, whether the first Session there
 is a chat or a terminal. A terminal runs it in its shell, where you can watch
 it. A chat runs it in the background and starts once it finishes; if it fails
@@ -72,17 +72,17 @@ config/local.json
 You can inspect a ticket branch from a terminal companion:
 
 ```sh
-volli worktree status VC-12
-volli worktree diff VC-12
+volli worktree status VLT-12
+volli worktree diff VLT-12
 ```
 
 `worktree diff` compares the ticket branch with its base. With `--working-tree`,
 it shows uncommitted changes instead.
 
 To merge an available base ref into the ticket branch, run
-`volli worktree sync VC-12`. Sync does not fetch, wait for checks, or resolve
+`volli worktree sync VLT-12`. Sync does not fetch, wait for checks, or resolve
 conflicts for you. It leaves a conflicted merge in place;
-`volli worktree sync VC-12 --abort` undoes that merge. See [Review ticket
+`volli worktree sync VLT-12 --abort` undoes that merge. See [Review ticket
 changes](/guides/review-changes/) for the Diffs rail and repository actions.
 
 Separate branches can still change the same files. Run `volli conflicts` to
