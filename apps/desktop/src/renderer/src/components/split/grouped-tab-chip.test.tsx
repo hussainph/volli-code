@@ -9,6 +9,17 @@ import {
   HomePaneTabStrip,
   type HomeTabDescriptor,
 } from "@renderer/components/home/home-tab-strip";
+import { TicketPaneTabStrip } from "@renderer/components/ticket/ticket-tabs";
+import { providerMark } from "@renderer/components/models/model-identity";
+import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
+import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
+import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
+import {
+  EMPTY_SESSION_USAGE_SUMMARY,
+  type ChatSessionRecord,
+  type SessionPresentationProjection,
+} from "@volli/shared";
+import { seedSlice } from "@volli/session-presentation";
 import { ChatIcon } from "@renderer/components/ui/icon";
 import { Tab, TabStrip } from "@renderer/components/ui/tab-strip";
 import { GroupedTabList, groupTabItems, type TabGroup } from "./grouped-tab-chip";
@@ -69,6 +80,9 @@ beforeEach(() => {
       removeEventListener: noop,
     })),
   );
+  useProjectSessionsStore.setState({ byProject: {} });
+  useTicketSessionRecordsStore.setState({ byTicket: {} });
+  useChatSessionsStore.setState({ sessions: {} });
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -76,6 +90,9 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  useProjectSessionsStore.setState({ byProject: {} });
+  useTicketSessionRecordsStore.setState({ byTicket: {} });
+  useChatSessionsStore.setState({ sessions: {} });
   vi.unstubAllGlobals();
 });
 
@@ -390,5 +407,154 @@ describe("one capsule per group", () => {
     expect(chip.querySelectorAll(".group-icon-disc")).toHaveLength(3);
     expect(chip.textContent).toContain("+1");
     expect(chip.querySelectorAll('[role="tab"]')).toHaveLength(1);
+  });
+});
+
+function savedChat(providerId: string | null): ChatSessionRecord {
+  return {
+    sessionId: "one",
+    projectId: "project",
+    ticketId: null,
+    title: "Chat",
+    createdAt: 1,
+    adapterId: null,
+    live: false,
+    activity: "idle",
+    waitingOn: null,
+    outcome: null,
+    lastActivityAt: 1,
+    bornTicketless: true,
+    role: "project",
+    parentSessionId: null,
+    model: providerId === null ? null : { providerId, modelId: "test", reasoningLevel: "off" },
+  };
+}
+
+function saveProvider(providerId: string | null) {
+  const record = savedChat(providerId);
+  act(() => {
+    useProjectSessionsStore.setState({
+      byProject: { project: { terminal: [], chat: [record], provenance: {} } },
+    });
+    useTicketSessionRecordsStore.setState({
+      byTicket: {
+        ticket: [
+          {
+            kind: "chat",
+            record: { ...record, ticketId: "ticket" },
+            usage: EMPTY_SESSION_USAGE_SUMMARY,
+            provenance: { kind: "user" },
+          },
+        ],
+      },
+    });
+  });
+}
+
+function ticketGroup() {
+  act(() =>
+    root.render(
+      <TicketPaneTabStrip
+        label="Ticket tabs"
+        projectId="project"
+        ticketId="ticket"
+        tabs={[
+          { kind: "chat", id: chat.id, label: "Chat", status: "working" },
+          { kind: "browser", id: browser.id, label: "Page", browserTabId: "one" },
+        ]}
+        activeTabId={chat.id}
+        groups={[group]}
+        shownGroupId={group.id}
+        onSelectTab={noop}
+        onCloseTab={noop}
+        onRenameSessionTab={noop}
+      />,
+    ),
+  );
+}
+
+function expectProvider(node: Element, providerId: string) {
+  const mark = providerMark(providerId)!;
+  const svg = node.querySelector("svg")!;
+  expect(svg.getAttribute("fill")).toBe(mark.tint);
+  expect([...svg.querySelectorAll("path")].map((path) => path.getAttribute("d"))).toEqual(
+    mark.paths,
+  );
+}
+
+describe.each(["Home", "Ticket"] as const)("%s grouped chat artwork", (surface) => {
+  const mount = () => (surface === "Home" ? home(chat.id) : ticketGroup());
+
+  it("uses the saved provider in the disc, hover and dropdown, without changing names or other kinds", async () => {
+    saveProvider("anthropic");
+    mount();
+    const chip = container.querySelector('[data-slot="grouped-tab-chip"]')!;
+    const disc = chip.querySelector(".group-icon-disc")!;
+    expectProvider(disc, "anthropic");
+    expect(chip.querySelector(".group-icon-stack")?.getAttribute("aria-hidden")).toBe("true");
+    expect(chip.querySelector('[role="tab"]')?.getAttribute("aria-label")).toBe("Chat");
+    const otherIcons = [...chip.querySelectorAll(".group-icon-disc")]
+      .slice(1)
+      .map((node) => node.innerHTML);
+    // Changing the saved provider updates an already mounted chip.
+    saveProvider("openai-codex");
+    expectProvider(disc, "openai-codex");
+    expect(
+      [...chip.querySelectorAll(".group-icon-disc")].slice(1).map((node) => node.innerHTML),
+    ).toEqual(otherIcons);
+    await act(async () => {
+      chip.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
+      await new Promise((done) => setTimeout(done, 300));
+    });
+    const hover = document.querySelector('[data-slot="hover-card-content"]')!;
+    expectProvider(hover.querySelector(`[data-tab-id="${chat.id}"]`)!, "openai-codex");
+    await act(async () =>
+      chip
+        .querySelector('[aria-label="Actions for Chat"]')!
+        .dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })),
+    );
+    const dropdown = document.querySelector('[data-slot="dropdown-menu-content"]')!;
+    expectProvider(dropdown.querySelector(`[data-tab-id="${chat.id}"]`)!, "openai-codex");
+  });
+
+  it.each([null, "unknown-provider"])("keeps the chat fallback for provider %s", (providerId) => {
+    saveProvider(providerId);
+    mount();
+    const svg = container.querySelector(".group-icon-disc svg")!;
+    expect(svg.classList.contains("text-muted-foreground")).toBe(true);
+    expect(svg.getAttribute("fill")).not.toBe(providerMark("anthropic")!.tint);
+  });
+
+  it("prefers a resident model selection to the saved provider and reacts without remounting", () => {
+    saveProvider("anthropic");
+    mount();
+    const projection: SessionPresentationProjection = {
+      session: {
+        id: "one",
+        projectId: "project",
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: "Chat",
+        createdAt: 1,
+      },
+      status: "open",
+      liveExecutor: null,
+      attention: { active: [], primary: null },
+      interactions: { active: [], resolved: [] },
+      signal: null,
+      modelTier: null,
+      modelSelection: { providerId: "google", modelId: "test", reasoningLevel: "off" },
+      turnActive: false,
+      lastActivityAt: 1,
+      bornTicketless: true,
+      scheduledResume: null,
+    };
+    act(() =>
+      useChatSessionsStore.setState({ sessions: { one: { ...seedSlice("ready"), projection } } }),
+    );
+    expectProvider(container.querySelector(".group-icon-disc")!, "google");
+    act(() => useChatSessionsStore.setState({ sessions: {} }));
+    expectProvider(container.querySelector(".group-icon-disc")!, "anthropic");
   });
 });
