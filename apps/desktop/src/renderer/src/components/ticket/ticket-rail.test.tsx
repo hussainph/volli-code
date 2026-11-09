@@ -139,6 +139,21 @@ describe("TicketRail header", () => {
     expect(css).toMatch(/\*::-webkit-scrollbar \{\s*width: var\(--scrollbar-size\)/);
   });
 
+  it("yields empty Sessions artwork to the allocated height, keeping actions scrollable", () => {
+    const css = readFileSync(
+      path.join(fileURLToPath(new URL(".", import.meta.url)), "../../globals.css"),
+      "utf8",
+    );
+
+    expect(css).toMatch(/\.ticket-inspector-now \{\s*container: ticket-inspector-now \/ size;/);
+    expect(css).toMatch(
+      /@container ticket-inspector-now \(height < 520px\) \{\s*\[data-testid="ticket-sessions-peek"\] \.empty-art \{\s*display: none;/,
+    );
+    expect(css).toMatch(
+      /\.ticket-inspector-now \[data-testid="ticket-sessions-peek"\],[^{]+\{\s*min-height: 0;\s*overflow-y: auto;/,
+    );
+  });
+
   it("has no control that collapses the rail — that lives outside the panel", () => {
     const html = render();
 

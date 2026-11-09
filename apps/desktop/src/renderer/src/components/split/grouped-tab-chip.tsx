@@ -132,7 +132,7 @@ function GroupMemberRows<T extends { id: string }>({
         density="two-line"
         leading={<MemberIcon description={description} className="size-4 shrink-0" />}
         primary={label}
-        secondary={detail ?? status ?? undefined}
+        secondary={detail ?? undefined}
         trailing={
           status ? (
             <span className="text-label text-muted-foreground capitalize">{status}</span>

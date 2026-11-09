@@ -447,8 +447,8 @@ export function ComposerForm({
     // thing holding it open — so the composer stayed wide, overflowed its
     // `overflow-hidden` panel to the right, and only recovered when the next
     // open remounted the editor. `min-w-0` lets the column shrink below its
-    // content, which lets the host shrink, which is the resize Monaco's
-    // `automaticLayout` observer was waiting for.
+    // content, which lets the host shrink, which is the resize the document
+    // editor's layout observer was waiting for.
     <div
       // `commit-tray`, not the bare marker every other prompt surface carries:
       // this footer's three welded commits leave the settings run ~215px less
