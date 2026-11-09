@@ -108,15 +108,6 @@ export function PrimarySidebar({ previewProjectId }: { previewProjectId?: string
             {selected ? (
               <>
                 <NavList projectId={selected.id} />
-                <NavigatorSelector
-                  projectId={selected.id}
-                  active={content}
-                  onSelect={(next) => {
-                    rememberedContent.set(selected.id, next);
-                    setContents((previous) => new Map(previous).set(selected.id, next));
-                  }}
-                />
-
                 <React.Activity mode={filesVisible ? "visible" : "hidden"}>
                   <SidebarFiles project={selected} />
                 </React.Activity>
@@ -140,6 +131,16 @@ export function PrimarySidebar({ previewProjectId }: { previewProjectId?: string
 
             <SidebarFooter>
               <CloudMoveRailRow />
+              {selected ? (
+                <NavigatorSelector
+                  projectId={selected.id}
+                  active={content}
+                  onSelect={(next) => {
+                    rememberedContent.set(selected.id, next);
+                    setContents((previous) => new Map(previous).set(selected.id, next));
+                  }}
+                />
+              ) : null}
               {/* Settings keeps the wide row; the updater (VC-59) is the square
               beside it — a rare, occasionally-important control that must not
               compete with a daily one. UpdateButton renders null in dev and
@@ -166,7 +167,7 @@ const NAVIGATORS = [
   { key: "files", label: "Files", icon: FolderIcon },
 ] as const;
 
-/** Fixed navigator selector; the two independent scrollports remain mounted below it. */
+/** Pinned above Settings, outside the two independent resident scrollports. */
 function NavigatorSelector({
   projectId,
   active,
@@ -180,8 +181,8 @@ function NavigatorSelector({
   return (
     <div
       data-slot="navigator-selector"
-      // 22px drawing, 24px targets. Icon centres share the nav rows' 24px inset.
-      className="flex h-[22px] shrink-0 items-center gap-1 border-b border-sidebar-border/50 px-3"
+      // 22px drawing, 24px targets. The footer supplies the row's outer inset.
+      className="flex h-[22px] shrink-0 items-center gap-1 px-1"
     >
       <div role="tablist" aria-label="Sidebar content" className="flex h-[22px] items-center gap-1">
         {NAVIGATORS.map(({ key, label, icon: Icon }, index) => (
@@ -213,7 +214,7 @@ function NavigatorSelector({
                 <Icon className="size-3.5" />
               </button>
             </TooltipTrigger>
-            <TooltipContent side="bottom">{label}</TooltipContent>
+            <TooltipContent side="top">{label}</TooltipContent>
           </Tooltip>
         ))}
       </div>

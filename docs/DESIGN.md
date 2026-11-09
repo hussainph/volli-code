@@ -189,10 +189,11 @@ Sidebar header, rows, section names and footer share an 18px leading ink inset.
 The project name uses the 13/20px UI rung with the display family and semibold weight.
 Two-line primary rows are 46px, with a 20px identity tile and 2px row gaps.
 Selected navigation is a neutral ink fill, not an accent outline. The Sessions/Files
-choice is a fixed borderless icon row below Home/Automations: a 22px row with
-24px targets and 14px glyphs, accent-selected ink, tooltips and arrow-key navigation.
-The project header retains only name/key. The inspector keeps its regular
-selected-label `ViewSwitcher` pill; Automations uses its text variant. Other choices,
+choice is a pinned borderless icon row directly above Settings in the footer: a 22px row
+with 24px targets and 14px glyphs, accent-selected ink, upward tooltips and arrow-key
+navigation. The tab chooser sits beside it, outside both content scrollports. No divider
+separates Home/Automations from the content. The project header retains only name/key.
+The inspector keeps its regular selected-label `ViewSwitcher` pill; Automations uses its text variant. Other choices,
 including Board/List, keep compact native icon segments rather than adopting the
 inspector's pill.
 Home and Automations stay fixed; Active/Previous headings scroll with their list.
