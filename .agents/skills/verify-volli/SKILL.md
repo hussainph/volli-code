@@ -22,11 +22,13 @@ alias volli-drive='node apps/desktop/e2e/volli-drive/cli.mjs'
 volli-drive doctor                      # preflight, no id: is the bundle about to launch guarded?
 volli-drive launch                      # --fixture basic|empty  --model fake|env  (dev build only)
 volli-drive launch --fake-script replies.json  # scripted tool-enabled fake turns; refinements still echo
+volli-drive launch --fake-script replies.json --fake-tool-free-text "Board demo"
+        # same, but tool-free requests (auto-title) answer with that text instead of the echo
 ```
 
 `launch` builds first if the bundle is missing or predates the guard (`--no-build` refuses instead), then prints the instance id (`vd-xxxxxx`), the evidence dir, timings, memory and the guard status. 10–16 s to ready on an M-series Mac. Fixture `basic`: project **Drive Project** (prefix `DRV`), tickets DRV-1 (Todo), DRV-2 (Backlog), DRV-3 (Doing), DRV-4 (Needs Review), fake model pinned for `global` and `ticket` purposes.
 
-`--fake-script` takes a JSON array of the fake provider's replies (`{text?, toolCalls?}`), consumed only by tool-enabled agent requests. Tool-free auto-title requests do not consume the sequence. Use it to exercise real Browser tool calls or questions through the loopback provider, not to inject renderer state. It requires `--model fake` and cannot be combined with remote acceptance.
+`--fake-script` takes a JSON array of the fake provider's replies (`{text?, toolCalls?}`), consumed only by tool-enabled agent requests. Tool-free auto-title requests do not consume the sequence: they keep the default `fake-agent:` echo unless `--fake-tool-free-text <text>` (requires `--fake-script`) gives them one fixed reply, so scripted runs get predictable titles. Use it to exercise real Browser tool calls or questions through the loopback provider, not to inject renderer state. It requires `--model fake` and cannot be combined with remote acceptance.
 
 After changing desktop code, `pnpm run build` (≈15 s) and launch a fresh instance; a running instance never picks up new code.
 
