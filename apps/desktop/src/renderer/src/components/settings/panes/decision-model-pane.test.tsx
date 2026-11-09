@@ -27,6 +27,8 @@ vi.mock("@renderer/lib/app-state-storage", () => ({
     setItem: vi.fn((key: string, value: string) => receipts.set(key, value)),
   },
   flushPendingAppStateKey: vi.fn(async () => true),
+  // stores/ui and stores/style register preference defaults at module scope.
+  registerSharedPreferenceDefaults: () => {},
 }));
 
 const ZEN: DecisionModelCatalogEntry = {

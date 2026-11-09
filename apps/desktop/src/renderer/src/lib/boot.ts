@@ -668,8 +668,9 @@ export async function boot(
   const launch = await readBeforeDeadline(readLaunch, LOCAL_LAUNCH);
   adoptLaunch(launch);
   const selectedProjectId = resolveSelectedProjectId(payload.appState, payload.projects);
+  const settingsWindow = typeof window !== "undefined" && window.location?.hash === "#settings";
   if (launch.store === "cloud") {
-    return bootCloudLaunch(launch, payload, selectedProjectId);
+    return bootCloudLaunch(launch, payload, selectedProjectId, settingsWindow);
   }
   const remote = cloud ? decodeRemoteSelection(payload.appState[PROJECTS_UI_APP_STATE_KEY]) : null;
   // The last cloud launch's selection survives this launch's own (VC-889).
@@ -692,22 +693,25 @@ export async function boot(
   // listener hands it, and `volli:theme-state` for the terminal chain.
   await Promise.all([
     useUiStore.persist.rehydrate(),
-    useProjectUiStore.persist.rehydrate(),
-    useChatDraftsStore.persist.rehydrate(),
+    ...(!settingsWindow
+      ? [useProjectUiStore.persist.rehydrate(), useChatDraftsStore.persist.rehydrate()]
+      : []),
   ]);
   // Typed provisional Drafts are the one chat kind whose identity lives in
   // app_state rather than the Session listing. Reopen their tabs only after
   // both the Drafts and project UI layout have landed, so recorded `chat:<id>`
   // values resolve normally on the app's first render.
-  useChatSessionsStore
-    .getState()
-    .restoreProvisionalChatTabs(
-      useChatDraftsStore.getState().drafts,
-      new Set(
-        Object.values(payload.ticketsByProject).flatMap((tickets) => tickets.map(({ id }) => id)),
-      ),
-      new Set(payload.projects.map(({ id }) => id)),
-    );
+  // Settings must never become a second writer of a stale workbench draft map.
+  if (!settingsWindow)
+    useChatSessionsStore
+      .getState()
+      .restoreProvisionalChatTabs(
+        useChatDraftsStore.getState().drafts,
+        new Set(
+          Object.values(payload.ticketsByProject).flatMap((tickets) => tickets.map(({ id }) => id)),
+        ),
+        new Set(payload.projects.map(({ id }) => id)),
+      );
 
   if (remote !== null) {
     const stop = restoreRemoteSelection({
@@ -765,6 +769,7 @@ async function bootCloudLaunch(
   launch: Extract<CloudLaunch, { store: "cloud" }>,
   payload: BootstrapPayload,
   localSelection: string | null,
+  settingsWindow: boolean,
 ): Promise<BootResult> {
   const raw = payload.appState[PROJECTS_UI_APP_STATE_KEY];
   // A just-joined Workspace or moved project is a one-launch navigation intent.
@@ -808,12 +813,14 @@ async function bootCloudLaunch(
   installCloudBoardSource(source);
   await Promise.all([
     useUiStore.persist.rehydrate(),
-    useProjectUiStore.persist.rehydrate(),
-    useChatDraftsStore.persist.rehydrate(),
+    ...(!settingsWindow
+      ? [useProjectUiStore.persist.rehydrate(), useChatDraftsStore.persist.rehydrate()]
+      : []),
   ]);
-  // Local and other-account Drafts stay saved but hidden. Pending cloud
-  // starts regain their Retry/status tab as their projects arrive below.
-  const stopRunnerDraftTabs = followRunnerDraftTabs();
-  window.addEventListener?.("pagehide", stopRunnerDraftTabs, { once: true });
+  // Only the workbench restores pending starts; Settings owns no draft tabs.
+  if (!settingsWindow) {
+    const stopRunnerDraftTabs = followRunnerDraftTabs();
+    window.addEventListener?.("pagehide", stopRunnerDraftTabs, { once: true });
+  }
   return { ok: true };
 }

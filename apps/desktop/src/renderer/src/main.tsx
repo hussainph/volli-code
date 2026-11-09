@@ -166,8 +166,10 @@ async function main() {
   // off this reads the flag and does nothing else.
   const cloudLaunch = launchStore() === "cloud";
   if (cloudLaunch) {
-    const stopSessions = bindCloudSessions();
-    window.addEventListener("pagehide", stopSessions, { once: true });
+    if (!settingsWindow) {
+      const stopSessions = bindCloudSessions();
+      window.addEventListener("pagehide", stopSessions, { once: true });
+    }
     void startCloudBoard();
   } else void startBoardProtocolIfEnabled();
 
@@ -286,7 +288,7 @@ async function main() {
     // Sessions on a remote host (VC-713): their chat, listing and re-reads go
     // over each project's Workspace link while `cloud` is on; off, nothing is
     // registered and every Session is This Mac's.
-    bindRemoteSessionsWhileCloud();
+    if (!settingsWindow) bindRemoteSessionsWhileCloud();
     // Each connected remote host's log, in the one log viewer (VC-712): only
     // hosts that store lists, so nothing registers while `cloud` is off. The
     // page owns it: pagehide unregisters every source and stops its readings.

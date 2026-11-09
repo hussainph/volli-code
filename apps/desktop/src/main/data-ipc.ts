@@ -1166,9 +1166,10 @@ export function registerDataIpcHandlers(
         restoreAppState(db, key, previous);
         return { ok: false, error: errorMessage(error) };
       }
-      // Device preferences are shared; per-window navigation and drafts remain
-      // renderer-owned views. Other pages choose which preference keys to adopt.
-      broadcastAppStateChanged(key, accepted, sender.id);
+      // Only shared presentation snapshots use this generic write path.
+      // Theme/appearance and retention publish from their semantic handlers;
+      // drafts and workspace snapshots must not be serialized to peer windows.
+      if (isSharedPreferenceKey(key)) broadcastAppStateChanged(key, accepted, sender.id);
       return isSharedPreferenceKey(key) && baseValue !== undefined
         ? { ok: true, value: accepted }
         : { ok: true };

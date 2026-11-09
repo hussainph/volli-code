@@ -786,6 +786,12 @@ export const PROFILE_FILE_DECISIONS: readonly ProfileFileDecision[] = [
     reason: "Downloaded host installation artifacts; fetched and verified again when needed.",
   },
   {
+    area: "settings-window-frame.json*",
+    decision: "exclude",
+    reason:
+      "Settings window placement and its atomic-write temporary belong to this machine's displays; a restored machine starts with its own usable frame.",
+  },
+  {
     area: "remote-hosts.json",
     decision: "exclude",
     reason:

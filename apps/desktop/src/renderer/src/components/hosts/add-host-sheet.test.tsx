@@ -24,6 +24,8 @@ vi.mock("sonner", () => ({ toast, Toaster: () => null }));
 // These sheet tests have no persistence bridge; unrelated UI debounce must not toast.
 vi.mock("@renderer/lib/app-state-storage", () => ({
   appStateStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+  // stores/ui and stores/style register preference defaults at module scope.
+  registerSharedPreferenceDefaults: () => {},
 }));
 
 let world: HostWorld | null = null;
