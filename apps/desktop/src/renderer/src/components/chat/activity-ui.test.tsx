@@ -536,7 +536,11 @@ describe("expanded reasoning diagram liveness", () => {
     };
     try {
       await act(async () => draw(true));
-      await act(async () => container?.querySelector<HTMLButtonElement>('[data-slot="activity-bundle-header"]')?.click());
+      await act(async () =>
+        container
+          ?.querySelector<HTMLButtonElement>('[data-slot="activity-bundle-header"]')
+          ?.click(),
+      );
       // After opening the bundle, the final disclosure belongs to the
       // reasoning row, whose body is otherwise deliberately unmounted.
       const disclosure = [

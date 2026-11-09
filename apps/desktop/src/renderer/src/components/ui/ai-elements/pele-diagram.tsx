@@ -89,20 +89,23 @@ function fenced(source: string): string {
  * Validation and display each render once: the latter needs a fresh SVG prefix
  * for fullscreen/export as well as inline display, so SVG strings are not shared.
  *
- * Live work is sampled at 100 ms, with immediate final validation. On the
- * VC-357 real-scale fixture (1 ChatPlane / 1600 messages), an invented graph
- * streamed at 30 chunks/s over 120 two-paint scroll steps. Three samples
- * per arm: zero-delay/every-update dropped 15/3/10 frames, with one 149 ms long
- * task; 100 ms dropped 3/0/4, with one 58 ms task. All painted changing SVGs and
- * the full final graph. Sampling reduced distinct visible label sets from
- * 10/14/15 to 4/9/5: fewer transient layouts while groups/edges arrive.
+ * Live work is sampled at 100 ms, with immediate final validation. Re-measured
+ * through the guarded volli-drive bench on 79952778f: 1 real ChatPlane / 1600
+ * fixture messages, an invented graph at 30 chunks/s, 240 two-paint scroll steps.
+ * Three samples per arm: zero-delay/every-update dropped 114/17/37 frames,
+ * with 7/0/0 long tasks totalling 431/0/0 ms; 100 ms dropped 7/4/1 frames,
+ * with 1/1/0 tasks totalling 60/51/0 ms. All six painted changing, intersecting
+ * SVGs with the full final graph. Distinct visible label sets fell from
+ * 14/13/14 to 8/8/7: fewer transient layouts while groups/edges arrive.
  *
- * These are shared-host, hidden renderer-harness measurements, not idle app
- * timings or a causal speedup claim. An earlier five-sample exploratory run
- * had worse aggregate stalls at 100 ms under uncontrolled load. The decision
- * is to coalesce topology churn, not to claim faster frames from noisy data.
- * Reproduce with chat-window-bench.mjs --sessions 1 --turns 1600 --stream-only
- * --stream-content diagram --stream-samples 3 --diagram-sample-ms 0 (then 100).
+ * These are synthetic, shared-host samples, in one sequential order, not idle
+ * timings, GPU presentation latency or causal speedup evidence. RSS was higher
+ * in the 100 ms run; no memory improvement is claimed. The decision is to
+ * coalesce topology churn, not to promise faster frames from noisy data. Older
+ * direct-launch measurements are historical, not comparable to this harness.
+ * Reproduce with chat-window-bench.mjs --arm stream --sessions 1 --turns 1600
+ * --stream-content diagram --stream-samples 3 --stream-steps 240
+ * --diagram-sample-ms 0 (then 100), each with a fresh --output directory.
  */
 function PeleDiagram({ code, isIncomplete }: CustomRendererProps) {
   const context = useContext(StreamdownContext);
