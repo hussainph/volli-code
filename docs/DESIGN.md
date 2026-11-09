@@ -397,6 +397,31 @@ Saved legacy splits read back as one group, stacks kept. Group metadata is
 additive; `root` stays the shown group (or one pane) as a legacy tree, so older
 builds open the same workspace safely even when they cannot keep the groups.
 
+## Activity island · turn bead
+
+The current turn lives on the island, not in a transcript “Working” line. With no
+clusters it is one plain pill. Clusters grow beneath it before concave fillets
+form a sessile bead on the rim; emptying reverses the same path. A wide bead may
+overhang a narrow island. The former transcript row reserves 40px of clearance.
+With neither clusters nor a turn, there is no island.
+
+The shell is a drawn union in `--card`, outlined in `--border`, with a shadow
+from the generated shadow hue. No blur/threshold material or blurred text.
+The lively spring is stiffness 130, damping ratio .66. Done drains the bead with
+a small gulp; abort draws a .55s syrup thread, snaps, then pops. Alone, done
+fades to .85 scale; abort fades faster with a 4px drop. Reduced motion resizes
+instantly and crossfades the pill/island pictures instead of morphing.
+
+One life-sign per tier includes the turn: shimmer only on the muted verb, never
+on the shape or bold payload. A tool-call id stably chooses one activity-specific
+word; repeated picks advance within that pool. Idless events use its first word.
+A flash swells the same bead and returns to the verb, with one `mode="wait"`
+text channel. Words wait until their resized bead fits. Payloads truncate in the
+middle within 250px; typography stays on `text-ui`. Waiting for the person uses
+still foreground ink. Only a command's Run activity or reasoning escalates once,
+after 20 seconds of observed dwell. A persistent status region announces the
+semantic activity and full payload, not synonym changes, shimmer or layout ticks.
+
 ## The ticket rail (VC-406)
 
 The rail is the Ticket's hub, and its scope is the line that decides what goes on it: **everything

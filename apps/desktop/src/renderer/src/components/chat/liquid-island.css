@@ -1,0 +1,88 @@
+/* One drawn material. No blurred text, threshold filter or moving life-sign on the shape. */
+.liquid-island-shell {
+  position: relative;
+  height: 32px;
+  width: 32px;
+}
+.liquid-island-surface {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+.liquid-island-material {
+  /* The generated shadow's own hue, not black or a light-mode ink fallback. */
+  filter: drop-shadow(0 1px 2px color-mix(in srgb, var(--scrim) 35%, transparent))
+    drop-shadow(0 2px 6px color-mix(in srgb, var(--scrim) 45%, transparent));
+}
+.liquid-island-clusters {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  height: 32px;
+  width: max-content;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+}
+.liquid-island-label {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  white-space: pre;
+  color: var(--muted-foreground);
+  font-weight: 450;
+  visibility: hidden;
+}
+.liquid-island-label strong,
+.liquid-island-measure strong {
+  color: var(--foreground);
+  font-weight: 600;
+}
+.liquid-island-measure {
+  position: absolute;
+  width: max-content;
+  visibility: hidden;
+  pointer-events: none;
+  white-space: pre;
+  font-weight: 450;
+}
+.liquid-island-waiting .liquid-island-word {
+  color: var(--foreground);
+}
+.liquid-island-shimmer .liquid-island-word {
+  background: linear-gradient(
+    90deg,
+    var(--muted-foreground) 0%,
+    var(--muted-foreground) 40%,
+    var(--foreground) 50%,
+    var(--muted-foreground) 60%,
+    var(--muted-foreground) 100%
+  );
+  background-size: 250% 100%;
+  background-clip: text;
+  color: transparent;
+  animation: liquid-island-shimmer 1.8s linear infinite;
+}
+@keyframes liquid-island-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -50% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .liquid-island-shimmer .liquid-island-word {
+    animation: none;
+    background: none;
+    color: var(--muted-foreground);
+  }
+}

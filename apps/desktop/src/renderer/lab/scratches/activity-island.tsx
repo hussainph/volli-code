@@ -12,16 +12,13 @@
  * surface: the component draws here exactly as it will above the composer,
  * because it is the same component.
  *
- * What is settled (records on VC-248 and VC-249): clusters + now grammar, the
- * Lively spring, payload voice, popover hover with click-to-pin, hover-revealed
- * row actions, arming on. The dials below default to those verdicts through
- * `ACTIVITY_ISLAND_FEEL`; every other position is kept as a dial so the next
- * round can feel the difference, not read about it.
+ * Clusters + now grammar, payload voice, popover hover with click-to-pin,
+ * hover-revealed row actions and arming retain their feel dials. The approved
+ * liquid spring is fixed in the component; no lab dial pretends to tune it.
  *
- * Everything here is fixture-driven — no runtime, no bridge. The sim's verbs
- * are what the island's `ActivityIslandActions` will one day call into the
- * runtime; here each one is a reducer transition with a flash, so the pill
- * echoes the card the way it will when the wiring lands.
+ * Simulated wiring: everything here is fixture-driven — no runtime, no bridge.
+ * Card actions are reducer transitions; turn activity and exits are fixtures
+ * for the same liquid bead the app draws. No lab timer claims runtime state.
  */
 import * as React from "react";
 import { PlayIcon } from "@phosphor-icons/react";
@@ -32,7 +29,7 @@ import {
   type ActivityOutcome,
   type ModelSelection,
 } from "@volli/shared";
-import type { DynamicToolUIPart } from "ai";
+import type { DynamicToolUIPart, UIMessage } from "ai";
 
 import type { BundleRow } from "@volli/session-presentation";
 import {
@@ -49,6 +46,11 @@ import {
   planCount,
   planCurrent,
 } from "@volli/session-presentation";
+import {
+  escalateTurnActivity,
+  selectTurnActivity,
+  type TurnActivity,
+} from "@renderer/chat/turn-activity";
 import { ActivityIsland } from "@renderer/components/chat/activity-island-ui";
 import { ActivityBundle } from "@renderer/components/chat/activity-ui";
 import { GuardedResponse } from "@renderer/components/chat/markdown-boundary";
@@ -62,7 +64,7 @@ import { TooltipProvider } from "@renderer/components/ui/tooltip";
 
 export const title = "Activity Island · feel harness";
 export const note =
-  "The ported component over a simulated session — drivers, live transcript, and the feel dials the verdicts can be argued against";
+  "Simulated wiring — liquid turn activity, cluster arrivals, exits, live transcript, and feel dials";
 export const viewport = "stage" as const;
 
 /* ---------------------------------------------------------------- fixtures */
@@ -126,6 +128,176 @@ const MODELS: ComposerModel[] = [
   },
 ];
 
+// Simulated wiring: vocabulary fixtures exercise the production selector, not
+// a second implementation of call-id word selection or escalation.
+const ACTIVITY_FIXTURES = [
+  { key: "reason", label: "Reasoning" },
+  { key: "read", label: "Read" },
+  { key: "search", label: "Search" },
+  { key: "edit", label: "Edit" },
+  { key: "write", label: "Write" },
+  { key: "run", label: "Command" },
+  { key: "test", label: "Tests" },
+  { key: "build", label: "Build" },
+  { key: "web", label: "Web" },
+  { key: "browser", label: "Browser" },
+  { key: "shot", label: "Screenshot" },
+  { key: "delegate", label: "Delegate" },
+  { key: "awaitSub", label: "Wait on agents" },
+  { key: "reply", label: "Reply" },
+  { key: "compact", label: "Compact" },
+  { key: "install", label: "Install" },
+  { key: "git", label: "Git" },
+  { key: "code", label: "Code Mode" },
+  { key: "askUser", label: "Wait on user" },
+] as const;
+
+type ActivityFixture = (typeof ACTIVITY_FIXTURES)[number]["key"];
+
+type ToolFixture = Exclude<ActivityFixture, "reason" | "reply" | "compact" | "askUser">;
+
+const TOOL_FIXTURES: Record<
+  ToolFixture,
+  {
+    kind: ActivityKind;
+    nativeToolName: string;
+    input: "path" | "query" | "command" | "url" | "title" | null;
+    payload: readonly [string, string] | null;
+  }
+> = {
+  read: {
+    kind: "read-file",
+    nativeToolName: "read",
+    input: "path",
+    payload: [
+      "chat-plane.tsx",
+      "apps/desktop/src/renderer/src/components/chat/activity-island-ui.tsx",
+    ],
+  },
+  search: {
+    kind: "search",
+    nativeToolName: "search",
+    input: "query",
+    payload: ["useIsland", "TurnRunningMark|ReasoningLine in renderer/**"],
+  },
+  edit: {
+    kind: "edit-file",
+    nativeToolName: "edit",
+    input: "path",
+    payload: ["chat-plane.tsx", "packages/session-engine/src/executor-slot.ts"],
+  },
+  write: {
+    kind: "write-file",
+    nativeToolName: "write",
+    input: "path",
+    payload: ["island.css", "apps/desktop/src/renderer/lab/scratches/liquid-island.tsx"],
+  },
+  run: {
+    kind: "run-command",
+    nativeToolName: "bash",
+    input: "command",
+    payload: [
+      "node scripts/check.mjs",
+      "node scripts/check.mjs --project apps/desktop --format detailed --no-cache",
+    ],
+  },
+  test: {
+    kind: "run-command",
+    nativeToolName: "bash",
+    input: "command",
+    payload: ["vp test run", "vp test run src/components/chat/activity-island-ui.test.tsx"],
+  },
+  build: {
+    kind: "run-command",
+    nativeToolName: "bash",
+    input: "command",
+    payload: ["pnpm build", "vp run --filter @volli/session-engine typecheck"],
+  },
+  web: {
+    kind: "fetch-url",
+    nativeToolName: "web_search",
+    input: "query",
+    payload: [
+      "motion springs",
+      "developer.apple.com/design/human-interface-guidelines/live-activities",
+    ],
+  },
+  browser: {
+    kind: "browse",
+    nativeToolName: "browser_navigate",
+    input: "url",
+    payload: ["localhost:5407", "github.com/volli-dev/volli/pulls?q=is%3Aopen+island"],
+  },
+  shot: {
+    kind: "browse",
+    nativeToolName: "browser_screenshot",
+    input: "url",
+    payload: ["localhost:5407", "github.com/volli-dev/volli/pull/1161/files"],
+  },
+  delegate: {
+    kind: "delegate",
+    nativeToolName: "session_delegate",
+    input: "title",
+    payload: ["Explorer", "Reviewer (deep tier, second opinion)"],
+  },
+  awaitSub: { kind: "other", nativeToolName: "session_await", input: null, payload: null },
+  install: {
+    kind: "run-command",
+    nativeToolName: "bash",
+    input: "command",
+    payload: ["pnpm add zod", "pnpm add @phosphor-icons/react motion @radix-ui/react-popover"],
+  },
+  git: {
+    kind: "run-command",
+    nativeToolName: "bash",
+    input: "command",
+    payload: [
+      "git switch -c volli/VC-1167",
+      "git switch -c volli/VC-1167-liquid-island-hanging-activity-verb",
+    ],
+  },
+  code: { kind: "other", nativeToolName: "codemode", input: null, payload: null },
+};
+
+/** Simulated wiring: real transcript-shaped inputs through the app's pure selector. */
+function fixtureActivity(
+  fixture: ActivityFixture,
+  seq: number,
+  longPayload: boolean,
+  escalated = false,
+): TurnActivity {
+  let part: UIMessage["parts"][number] | null = null;
+  if (fixture === "reason") {
+    part = { type: "reasoning", state: "streaming", text: "Considering the next step." };
+  } else if (fixture === "reply") {
+    part = { type: "text", state: "streaming", text: "Here is what the audit found." };
+  } else if (fixture !== "compact" && fixture !== "askUser") {
+    const tool = TOOL_FIXTURES[fixture];
+    const payload = tool.payload?.[longPayload ? 1 : 0] ?? null;
+    part = {
+      ...activityTool(`verb-${seq}`, tool.kind, payload ?? tool.nativeToolName, "live", {
+        nativeToolName: tool.nativeToolName,
+      }),
+      input: tool.input ? { [tool.input]: payload } : {},
+    };
+  }
+  const activity = selectTurnActivity("liquid-lab", {
+    messages: [{ id: `fixture-${seq}`, role: "assistant", parts: part ? [part] : [] }],
+    working: true,
+    turnActive: true,
+    projection:
+      fixture === "askUser"
+        ? {
+            turnActive: true,
+            interactions: { active: [{ id: `question-${seq}`, kind: "question" }] },
+          }
+        : null,
+    liveCompaction: fixture === "compact" ? { throughSequence: seq } : null,
+  });
+  if (!activity) throw new Error("An active turn fixture must produce an activity");
+  return escalated ? escalateTurnActivity(activity) : activity;
+}
+
 /* ------------------------------------------------------------ sim reducer */
 
 /**
@@ -143,12 +315,39 @@ interface Sim extends ActivityIslandModel {
   plan: IslandPlan | null;
   shells: IslandShell[];
   flash: IslandFlash | null;
+  activity: TurnActivity | null;
+  activitySeq: number;
+  exitKind: "done" | "abort";
+  fixture: ActivityFixture;
+  longPayload: boolean;
+  escalated: boolean;
   seq: number;
 }
 
-const INITIAL_SIM: Sim = { tabs: [], agents: [], plan: null, shells: [], flash: null, seq: 1 };
+const INITIAL_SIM: Sim = {
+  tabs: [],
+  agents: [],
+  plan: null,
+  shells: [],
+  flash: null,
+  activity: null,
+  activitySeq: 0,
+  exitKind: "done",
+  fixture: "reason",
+  longPayload: false,
+  escalated: false,
+  seq: 1,
+};
 
 type SimAction =
+  | { type: "start-turn" }
+  | { type: "end-turn"; exitKind: "done" | "abort" }
+  | { type: "activity"; fixture: ActivityFixture }
+  | { type: "payload"; long: boolean }
+  | { type: "escalate" }
+  | { type: "flash" }
+  | { type: "fill-clusters" }
+  | { type: "empty-clusters" }
   | { type: "add-tab" }
   | { type: "settle-tabs" }
   | { type: "drop-tab" }
@@ -186,6 +385,81 @@ function flashed(sim: Sim, event: string, payload = ""): Sim {
 
 function simReducer(sim: Sim, action: SimAction): Sim {
   switch (action.type) {
+    case "start-turn":
+      return {
+        ...sim,
+        activity: fixtureActivity("reason", sim.seq, sim.longPayload),
+        activitySeq: sim.seq,
+        fixture: "reason",
+        escalated: false,
+        exitKind: "done",
+        flash: null,
+        seq: sim.seq + 1,
+      };
+    case "end-turn":
+      return { ...sim, activity: null, exitKind: action.exitKind, flash: null };
+    case "activity":
+      return {
+        ...sim,
+        activity: fixtureActivity(action.fixture, sim.seq, sim.longPayload),
+        activitySeq: sim.seq,
+        fixture: action.fixture,
+        escalated: false,
+        flash: null,
+        seq: sim.seq + 1,
+      };
+    case "payload":
+      return {
+        ...sim,
+        longPayload: action.long,
+        activity: sim.activity
+          ? fixtureActivity(sim.fixture, sim.activitySeq, action.long, sim.escalated)
+          : null,
+      };
+    case "escalate":
+      return sim.activity && (sim.fixture === "reason" || sim.fixture === "run")
+        ? {
+            ...sim,
+            activity: fixtureActivity(sim.fixture, sim.activitySeq, sim.longPayload, true),
+            escalated: true,
+          }
+        : sim;
+    case "flash":
+      return flashed(sim, "Tab opened", "github.com/volli");
+    case "fill-clusters":
+      // Simulated wiring: geometry-only transition, without an arrival flash
+      // obscuring the verb as the plain pill becomes a hanging bead.
+      return {
+        ...sim,
+        tabs: [
+          {
+            id: `tab-${sim.seq}`,
+            host: TAB_HOSTS[0],
+            state: "ready",
+            promoted: false,
+            surface: null,
+            owner: null,
+          },
+        ],
+        agents: [
+          {
+            id: `agent-${sim.seq + 1}`,
+            label: AGENT_LABELS[0],
+            progress: 0.35,
+            state: "working",
+            promoted: false,
+            model: AGENT_MODELS[0] ?? null,
+          },
+        ],
+        plan: { id: `plan-${sim.seq + 2}`, steps: [...PLAN_STEPS], done: 0 },
+        shells: [
+          { id: `shell-${sim.seq + 3}`, command: SHELL_COMMANDS[0], state: "running", code: null },
+        ],
+        flash: null,
+        seq: sim.seq + 4,
+      };
+    case "empty-clusters":
+      return { ...sim, tabs: [], agents: [], plan: null, shells: [], flash: null };
     case "add-tab": {
       const host = TAB_HOSTS[sim.tabs.length % TAB_HOSTS.length] ?? "localhost";
       const next = flashed(sim, "Opened", host);
@@ -600,6 +874,9 @@ export default function ActivityIslandHarness() {
 
   /* ------------------------------------------------ element mutators */
 
+  const startTurn = () => dispatch({ type: "start-turn" });
+  const endTurn = (exitKind: "done" | "abort") => dispatch({ type: "end-turn", exitKind });
+  const showActivity = (fixture: ActivityFixture) => dispatch({ type: "activity", fixture });
   const addTab = () => dispatch({ type: "add-tab" });
   const settleTabs = () => dispatch({ type: "settle-tabs" });
   const dropTab = () => dispatch({ type: "drop-tab" });
@@ -627,6 +904,7 @@ export default function ActivityIslandHarness() {
     const at = (ms: number, run: () => void) => {
       timers.current.push(window.setTimeout(run, ms));
     };
+    at(0, startTurn);
     at(300, startPlan);
     at(1400, addTab);
     at(2600, settleTabs);
@@ -645,6 +923,33 @@ export default function ActivityIslandHarness() {
     at(12600, completeAgent);
     at(13400, exitShells);
     at(14200, advancePlan);
+    at(15300, () => endTurn("done"));
+  };
+
+  /** Simulated wiring: the approved liquid lifecycle, without host side effects. */
+  const playLiquidDemo = () => {
+    reset();
+    const script: readonly [number, SimAction][] = [
+      [0, { type: "start-turn" }],
+      [1400, { type: "activity", fixture: "read" }],
+      [2800, { type: "fill-clusters" }],
+      [4400, { type: "activity", fixture: "search" }],
+      [5900, { type: "payload", long: true }],
+      [7400, { type: "activity", fixture: "run" }],
+      [9000, { type: "escalate" }],
+      [10800, { type: "activity", fixture: "askUser" }],
+      [12400, { type: "flash" }],
+      [15200, { type: "activity", fixture: "reply" }],
+      [16800, { type: "empty-clusters" }],
+      [18600, { type: "end-turn", exitKind: "done" }],
+      [20200, { type: "start-turn" }],
+      [21400, { type: "fill-clusters" }],
+      [23000, { type: "end-turn", exitKind: "abort" }],
+      [25200, { type: "empty-clusters" }],
+    ];
+    for (const [ms, action] of script) {
+      timers.current.push(window.setTimeout(() => dispatch(action), ms));
+    }
   };
 
   const dial = <K extends keyof ActivityIslandFeel>(key: K, value: ActivityIslandFeel[K]) =>
@@ -663,7 +968,14 @@ export default function ActivityIslandHarness() {
         >
           <ContentColumn className="flex min-h-0 flex-1 flex-col">
             <Feed sim={sim} />
-            <ActivityIsland model={sim} actions={actions} feel={feel} className="mb-2" />
+            <ActivityIsland
+              model={sim}
+              actions={actions}
+              feel={feel}
+              activity={sim.activity}
+              exitKind={sim.exitKind}
+              className="mb-2"
+            />
             <div className="pb-4">
               <SessionComposer
                 value={composerValue}
@@ -675,22 +987,97 @@ export default function ActivityIslandHarness() {
                   reasoningLevel: "high",
                 }}
                 onSelectionChange={() => undefined}
-                working={false}
+                working={sim.activity !== null}
                 ready
                 queued={[]}
                 onQueuedChange={() => undefined}
                 onSteerQueued={() => undefined}
                 onSubmit={() => setComposerValue("")}
-                onStop={() => undefined}
+                onStop={() => endTurn("abort")}
               />
             </div>
           </ContentColumn>
         </div>
 
+        {/* Simulated wiring: these controls drive fixtures, never a live Session. */}
+        <section className="flex flex-col gap-2">
+          <h2 className="text-label uppercase text-muted-foreground">
+            Liquid bead · Simulated wiring
+          </h2>
+          <div className="flex flex-wrap items-center gap-1">
+            <Button size="xs" variant="secondary" onClick={playLiquidDemo}>
+              <PlayIcon /> Liquid demo
+            </Button>
+            <Button size="xs" variant="ghost" onClick={startTurn}>
+              Start turn
+            </Button>
+            <Button size="xs" variant="ghost" onClick={() => dispatch({ type: "fill-clusters" })}>
+              Clusters arrive
+            </Button>
+            <Button size="xs" variant="ghost" onClick={() => dispatch({ type: "empty-clusters" })}>
+              Empty ledge
+            </Button>
+            <Button
+              size="xs"
+              variant="ghost"
+              disabled={!sim.activity}
+              onClick={() => endTurn("done")}
+            >
+              Done → absorb
+            </Button>
+            <Button
+              size="xs"
+              variant="ghost"
+              disabled={!sim.activity}
+              onClick={() => endTurn("abort")}
+            >
+              Abort → pinch off
+            </Button>
+            <Button size="xs" variant="ghost" onClick={() => dispatch({ type: "flash" })}>
+              Flash
+            </Button>
+          </div>
+          <div className="flex flex-wrap items-center gap-1">
+            {ACTIVITY_FIXTURES.map(({ key, label }) => (
+              <Button
+                key={key}
+                size="xs"
+                variant={sim.activity && sim.fixture === key ? "secondary" : "ghost"}
+                aria-pressed={sim.activity !== null && sim.fixture === key}
+                onClick={() => showActivity(key)}
+              >
+                {label}
+              </Button>
+            ))}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Segmented
+              ariaLabel="Simulated activity payload length"
+              size="sm"
+              value={sim.longPayload ? "long" : "short"}
+              options={[
+                { key: "short", label: "Short payload" },
+                { key: "long", label: "Long payload" },
+              ]}
+              onChange={(length) => dispatch({ type: "payload", long: length === "long" })}
+            />
+            <Button
+              size="xs"
+              variant="ghost"
+              disabled={!sim.activity || (sim.fixture !== "reason" && sim.fixture !== "run")}
+              onClick={() => dispatch({ type: "escalate" })}
+            >
+              Skip ahead · escalate
+            </Button>
+          </div>
+        </section>
+
         {/* ------------------------------------------------ drive it */}
         <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
           <section className="flex flex-col gap-2">
-            <h2 className="text-label uppercase text-muted-foreground">Drive the session</h2>
+            <h2 className="text-label uppercase text-muted-foreground">
+              Drive the session · Simulated wiring
+            </h2>
             <div className="flex flex-wrap items-center gap-1">
               <Button size="xs" variant="secondary" onClick={playDemo}>
                 <PlayIcon /> Play demo
@@ -780,19 +1167,21 @@ export default function ActivityIslandHarness() {
                 onChange={(hover) => dial("hover", hover)}
               />
             </Dial>
-            <Dial label="Now text">
-              <Segmented
-                ariaLabel="Now channel text voice"
-                value={feel.nowVoice}
-                size="sm"
-                options={[
-                  { key: "quiet", label: "Quiet" },
-                  { key: "payload", label: "Payload" },
-                  { key: "loud", label: "Loud" },
-                ]}
-                onChange={(nowVoice) => dial("nowVoice", nowVoice)}
-              />
-            </Dial>
+            {feel.grammar === "now-only" ? (
+              <Dial label="Inline text">
+                <Segmented
+                  ariaLabel="Inline channel text voice"
+                  value={feel.nowVoice}
+                  size="sm"
+                  options={[
+                    { key: "quiet", label: "Quiet" },
+                    { key: "payload", label: "Payload" },
+                    { key: "loud", label: "Loud" },
+                  ]}
+                  onChange={(nowVoice) => dial("nowVoice", nowVoice)}
+                />
+              </Dial>
+            ) : null}
             <Dial label="Row actions">
               <Segmented
                 ariaLabel="Card row action reveal"
@@ -806,24 +1195,6 @@ export default function ActivityIslandHarness() {
                 onChange={(reveal) => dial("reveal", reveal)}
               />
             </Dial>
-            <Slider
-              label="Spring duration"
-              value={feel.springDuration}
-              display={`${feel.springDuration.toFixed(2)}s`}
-              min={0.25}
-              max={0.8}
-              step={0.05}
-              onChange={(value) => dial("springDuration", value)}
-            />
-            <Slider
-              label="Spring bounce"
-              value={feel.springBounce}
-              display={feel.springBounce.toFixed(2)}
-              min={0}
-              max={0.4}
-              step={0.02}
-              onChange={(value) => dial("springBounce", value)}
-            />
             <Slider
               label="Flash hold"
               value={feel.flashHoldSeconds}
@@ -847,25 +1218,6 @@ export default function ActivityIslandHarness() {
                 onClick={() => dial("armDestructive", !feel.armDestructive)}
               >
                 Arm destructive
-              </Button>
-              <span className="ml-2 text-label text-muted-foreground">Presets</span>
-              <Button
-                size="xs"
-                variant="ghost"
-                onClick={() =>
-                  setFeel((current) => ({ ...current, springDuration: 0.55, springBounce: 0.25 }))
-                }
-              >
-                Lively
-              </Button>
-              <Button
-                size="xs"
-                variant="ghost"
-                onClick={() =>
-                  setFeel((current) => ({ ...current, springDuration: 0.35, springBounce: 0.08 }))
-                }
-              >
-                Crisp
               </Button>
               <Button size="xs" variant="ghost" onClick={() => setFeel(ACTIVITY_ISLAND_FEEL)}>
                 Verdicts

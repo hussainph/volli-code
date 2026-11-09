@@ -7,20 +7,20 @@
  * progressively: a glance at the pill, a hover for the card, a click to pin it
  * and work it, a row to promote its subject to a full surface. It consumes an
  * `ActivityIslandModel` and an `ActivityIslandActions` (`activity-island-
- * model.ts`) and nothing else; it is not mounted anywhere yet, and it knows no
- * store or bridge.
+ * model.ts`), plus the ephemeral turn activity. `ChatPlane` mounts it; it
+ * knows no store or bridge.
  *
  * What is settled, and why (decided live with the dev over several rounds;
  * the records are on VC-248 and VC-249 — do not re-litigate here):
  *
  *  • CLUSTERS + NOW. One cluster per element kind in the pill, in a fixed
- *    reading order, and a now channel — a drop that buds out of the pill
- *    upward on the island's spring, hangs while the announcement reads, and is
- *    reabsorbed. `mode="wait"` IS the metaphor: a new event waits for the old
- *    drop to return first.
- *  • ONE SPRING. Lively (0.55s / 0.25) drives pill layout, cluster presence
- *    and the drop, so a width morph, an entrance and a rise read as one
- *    material. Reduced motion collapses it to a fast fade.
+ *    reading order, and one sessile bead for the turn and now channel. A flash
+ *    swells that same bead, then returns to the verb. `mode="wait"` keeps
+ *    word changes to one drop. Alone, the turn is a plain pill; clusters
+ *    grow beneath it before fillets attach it to the rim.
+ *  • ONE SPRING. Lively (stiffness 130 / damping ratio .66) drives geometry
+ *    and cluster presence. Abort draws a slow .55s syrup thread before the
+ *    snap. Reduced motion uses instant sizes and a picture crossfade.
  *  • PAYLOAD VOICE. Every flash is `event · payload`; the event stays quiet
  *    and the payload — the thing that actually changed — carries the weight.
  *  • POPOVER HOVER, CLICK PINS. Hover is the glance channel (140ms leave-grace
@@ -38,17 +38,18 @@
  * Decided OUT, each tried and liked: a pill-level heartbeat (rented width that
  * read as blank when idle), orbs as the subagent group glyph (a second
  * working-state tier), a shimmer rim (every element already signs its own
- * status). ONE LIFE-SIGN PER TIER.
+ * status). ONE LIFE-SIGN PER TIER: clusters sign their subjects; the turn
+ * signs itself with shimmer on the verb only. The shell never pulses.
  *
  * FIVE LAWS, each learned from a bug seen in the running app:
  *  1. One life-sign per tier.
  *  2. Load-bearing geometry is INLINE STYLE, never a first-use utility — a
  *     stale Tailwind scan dropped one and served a silent lie.
- *  3. The now-drop's travel never crosses the pill's rim; stacking is never
- *     load-bearing.
+ *  3. The bead is an always-attached drawn union with the rim, not a floating
+ *     overlapping shell. Stacking never hides a seam; text never blurs.
  *  4. Only entering/leaving elements change pill width; drawings may change
  *     at will.
- *  5. No island when nothing to model.
+ *  5. No island when nothing to model — a running turn is itself a subject.
  *
  * TRAPS (inherited; each is marked at the line that avoids it): `mode="wait"`
  * on the ticker · no `layout` + string transforms (zombie exits) · clusters
@@ -85,7 +86,6 @@ import {
   agentsHeading,
   agentsLine,
   agentStateWord,
-  COMPOSER_STACK_SHELL,
   flashLine,
   type IslandAgent,
   ISLAND_AGENT_CHIP_CAP,
@@ -125,23 +125,12 @@ import { StatusDot } from "@renderer/components/ui/status-dot";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 import { cn } from "@renderer/lib/utils";
+import type { TurnActivity } from "@renderer/chat/turn-activity";
+import { LiquidIslandShell, LIQUID_SPRING, useLingeringTurn } from "./liquid-island-shell";
 
 /* ------------------------------------------------------------------ motion */
 
 const EASE_OUT = [0.23, 1, 0.32, 1] as const;
-
-/**
- * The gap the now-drop lives in, between the pill's top edge and the drop's
- * resting place.
- *
- * It is ONE constant because the drop's travel is measured against it. Law 3
- * says the travel never crosses the pill's rim, and the drop starts its rise
- * `y` px below its rest: with the gap at 8 and the rise hard-coded at 10, the
- * drop began 2px INSIDE the pill and only `zIndex: -1` hid the overlap — which
- * made stacking load-bearing, the very thing the same law forbids. Tying both
- * to this constant is what keeps the rule true when either number moves.
- */
-const DROP_GAP_PX = 8;
 
 /* ------------------------------------------------------------------- tone */
 
@@ -171,10 +160,8 @@ function islandTone(id: string): string {
 }
 
 /** The pill's one spring — reduced motion collapses it to a fast fade-scale. */
-function islandSpring(feel: ActivityIslandFeel, reduce: boolean) {
-  return reduce
-    ? ({ duration: 0.15, ease: EASE_OUT } as const)
-    : ({ type: "spring", duration: feel.springDuration, bounce: feel.springBounce } as const);
+function islandSpring(reduce: boolean) {
+  return reduce ? ({ duration: 0.15, ease: EASE_OUT } as const) : LIQUID_SPRING;
 }
 
 /**
@@ -204,11 +191,22 @@ function clusterPresence(reduce: boolean) {
  * the model's flash until a timer says that id has expired, so a new id shows
  * on the render that brings it and no effect ever sets state synchronously.
  */
-function useHeldFlash(flash: IslandFlash | null, holdSeconds: number): IslandFlash | null {
+function useHeldFlash(
+  flash: IslandFlash | null,
+  holdSeconds: number,
+  turnActive: boolean,
+): IslandFlash | null {
   const [expiredId, setExpiredId] = React.useState<string | null>(null);
   // Keyed on the id, not the object: a re-projection that hands the same
   // announcement in a new object must not restart its hold.
   const flashId = flash?.id ?? null;
+  const previousTurnActive = React.useRef(turnActive);
+  React.useLayoutEffect(() => {
+    // A flash borrows the turn's bead; it may never keep that turn alive or
+    // postpone its drain/pinch. Idle flashes still have their normal hold.
+    if (previousTurnActive.current && !turnActive && flashId !== null) setExpiredId(flashId);
+    previousTurnActive.current = turnActive;
+  }, [flashId, turnActive]);
   React.useEffect(() => {
     // No flash means nothing is expired. Without this the last expired id sat
     // in state for the life of the island, so a runtime that reused an id
@@ -1295,6 +1293,8 @@ function FlashText({ flash, voice }: { flash: IslandFlash; voice: IslandNowVoice
 export interface ActivityIslandProps {
   model: ActivityIslandModel;
   actions: ActivityIslandActions;
+  activity?: TurnActivity | null;
+  exitKind?: "done" | "abort";
   /** Overrides on the baked verdicts — for the lab harness's dials. */
   feel?: Partial<ActivityIslandFeel>;
   /**
@@ -1311,13 +1311,17 @@ export function ActivityIsland({
   actions,
   feel: feelOverride,
   className,
+  activity = null,
+  exitKind = "done",
 }: ActivityIslandProps) {
   const feel = resolveFeel(feelOverride);
   const osReduce = useReducedMotion();
   const reduce = osReduce || feel.forceReducedMotion;
-  const populated = !islandEmpty(model);
-  const flash = useHeldFlash(model.flash, feel.flashHoldSeconds);
-  const spring = islandSpring(feel, reduce);
+  const hasClusters = !islandEmpty(model);
+  const lingeringTurn = useLingeringTurn(activity !== null);
+  const populated = hasClusters || lingeringTurn;
+  const flash = useHeldFlash(model.flash, feel.flashHoldSeconds, activity !== null);
+  const spring = islandSpring(reduce);
 
   const clustersVisible = feel.grammar !== "now-only";
   /** clusters-now sends the channel to the drop; now-only keeps it inline. */
@@ -1367,6 +1371,11 @@ export function ActivityIsland({
               and "no island when nothing to model" has to mean no band of
               nothing either. The spacing rides the pill instead. */}
           <div className="flex justify-center" ref={centerRef}>
+            {/* Semantic activity, not synonym churn or percent ticks. This region
+                survives the whole turn, including word-fit and flash transitions. */}
+            <span role="status" className="sr-only">
+              {activity?.announcement ?? (hasClusters && drop ? flashLine(drop) : "")}
+            </span>
             <AnimatePresence initial={false}>
               {populated ? (
                 <motion.div
@@ -1393,88 +1402,14 @@ export function ActivityIsland({
                   data-activity-island=""
                   className={cn("relative will-change-transform", className)}
                 >
-                  {/* The now channel: a drop that buds off the pill upward, hangs
-                    while the message reads, and merges back. `mode="wait"` IS
-                    the metaphor: a new event waits for the old drop to return
-                    first. TWO hard rules, learned the hard way (a drop once sat
-                    at full opacity across the pill's face for its whole hold):
-                    • geometry is INLINE STYLE — `bottom-full`/`-z-10` are used
-                      nowhere else in the app, and a first-use utility a stale
-                      Tailwind scan drops is a silent lie; inline `bottom`/
-                      `zIndex` cannot be dropped.
-                    • the travel NEVER crosses the pill's top edge — the drop
-                      rises and fades entirely inside the gap, so no stacking
-                      rule in any browser decides what the reader sees. That is
-                      why the rise is `DROP_GAP_PX` and not a number of its own:
-                      the two must move together or the drop re-enters the pill.
-                      The wrapper carries no transform of its own
-                      (flex-centering, not translate), because Motion owns
-                      `transform` on the drop. */}
-                  {feel.grammar === "clusters-now" ? (
-                    <span
-                      // The one announcement channel, and the only live region on
-                      // this surface.
-                      role="status"
-                      className="pointer-events-none absolute inset-x-0 flex justify-center"
-                      style={{ bottom: "100%", paddingBottom: DROP_GAP_PX, zIndex: -1 }}
-                    >
-                      <AnimatePresence initial={false} mode="wait">
-                        {drop ? (
-                          <motion.span
-                            key={drop.id}
-                            data-island-flash=""
-                            initial={
-                              reduce
-                                ? { opacity: 0 }
-                                : { opacity: 0, y: DROP_GAP_PX, scale: 0.6, filter: "blur(2px)" }
-                            }
-                            animate={{ opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }}
-                            exit={
-                              reduce
-                                ? { opacity: 0, transition: { duration: 0.1 } }
-                                : {
-                                    opacity: 0,
-                                    y: DROP_GAP_PX,
-                                    scale: 0.55,
-                                    filter: "blur(2px)",
-                                    transition: { duration: 0.18, ease: EASE_OUT },
-                                  }
-                            }
-                            transition={
-                              reduce
-                                ? { duration: 0.15 }
-                                : {
-                                    y: spring,
-                                    scale: spring,
-                                    opacity: { duration: 0.15, ease: EASE_OUT },
-                                    filter: { duration: 0.18, ease: EASE_OUT },
-                                  }
-                            }
-                            style={{ originY: 1 }}
-                            className={cn(
-                              "flex h-7 max-w-72 items-center rounded-full px-2 text-ui",
-                              COMPOSER_STACK_SHELL,
-                            )}
-                          >
-                            <FlashText flash={drop} voice={feel.nowVoice} />
-                          </motion.span>
-                        ) : null}
-                      </AnimatePresence>
-                    </span>
-                  ) : null}
-                  {/* `rounded-full` over the stack shell's container radius (the
-                    `rounded` group is registered with tailwind-merge, so the
-                    later class wins); the inline `borderRadius` is what Motion
-                    corrects during the layout spring so the corners do not
-                    stretch mid-morph. */}
-                  <motion.div
-                    layout
-                    transition={spring}
-                    style={{ borderRadius: 999 }}
-                    className={cn(
-                      "flex h-8 items-center gap-2 rounded-full px-2",
-                      COMPOSER_STACK_SHELL,
-                    )}
+                  {/* The verb and transient flash share ONE bead. Its drawn union
+                      owns the shell; real cluster controls stay in a normal layer. */}
+                  <LiquidIslandShell
+                    activity={activity}
+                    flash={drop}
+                    populated={clusters.length > 0 || inlineVisible}
+                    exitKind={exitKind}
+                    reduce={reduce}
                   >
                     {/* Dividers travel WITH their cluster — each keyed wrapper
                       carries its own leading rule, so membership changes stay
@@ -1533,7 +1468,7 @@ export function ActivityIsland({
                         </motion.span>
                       ) : null}
                     </AnimatePresence>
-                  </motion.div>
+                  </LiquidIslandShell>
                 </motion.div>
               ) : null}
             </AnimatePresence>

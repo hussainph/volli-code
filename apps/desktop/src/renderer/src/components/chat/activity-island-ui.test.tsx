@@ -28,6 +28,7 @@ import {
 } from "@volli/session-presentation";
 
 import { ActivityIsland } from "./activity-island-ui";
+import { selectTurnActivity, type TurnActivity } from "@renderer/chat/turn-activity";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 
 let root: Root | null = null;
@@ -91,11 +92,12 @@ async function render(
   model: ActivityIslandModel,
   actions: ActivityIslandActions = actionsSpy(),
   feel: Partial<ActivityIslandFeel> = FEEL,
+  activity: TurnActivity | null = null,
 ) {
   await act(async () => {
     root?.render(
       <TooltipProvider delayDuration={0}>
-        <ActivityIsland model={model} actions={actions} feel={feel} />
+        <ActivityIsland model={model} actions={actions} feel={feel} activity={activity} />
       </TooltipProvider>,
     );
   });
@@ -236,6 +238,138 @@ describe("the empty rule", () => {
 
     await render({ ...EMPTY_ACTIVITY_ISLAND, tabs: [tab()] });
     expect(island()).not.toBeNull();
+  });
+});
+
+describe("the hanging turn", () => {
+  const thinking = selectTurnActivity("session", {
+    messages: [],
+    working: true,
+    turnActive: true,
+    projection: null,
+    liveCompaction: null,
+  })!;
+
+  it("is a plain pill on an empty island and announces semantic activity once", async () => {
+    await render(EMPTY_ACTIVITY_ISLAND, actionsSpy(), FEEL, thinking);
+    expect(island()).not.toBeNull();
+    expect(container?.querySelector('[data-liquid-island="pill"]')).not.toBeNull();
+    expect(container?.querySelector("[data-island-verb]")?.textContent).toBe("Mulling");
+    expect(container?.querySelectorAll('[role="status"]')).toHaveLength(1);
+    expect(container?.querySelector('[role="status"]')?.textContent).toBe("Reasoning");
+    expect(container?.textContent).not.toContain("Working");
+  });
+
+  it("keeps one shell as clusters arrive and empty without replacing the turn status", async () => {
+    await render(EMPTY_ACTIVITY_ISLAND, actionsSpy(), FEEL, thinking);
+    const material = container?.querySelector("[data-liquid-island]");
+    const status = container?.querySelector('[role="status"]');
+    await render({ ...EMPTY_ACTIVITY_ISLAND, tabs: [tab()] }, actionsSpy(), FEEL, thinking);
+    expect(container?.querySelector('[data-liquid-island="bead"]')).toBe(material);
+    expect(clusters()).toEqual(["tabs"]);
+    await render(EMPTY_ACTIVITY_ISLAND, actionsSpy(), FEEL, thinking);
+    expect(container?.querySelector('[data-liquid-island="pill"]')).toBe(material);
+    expect(container?.querySelector('[role="status"]')).toBe(status);
+  });
+
+  it("swells the same bead for a flash, then returns to the verb", async () => {
+    vi.useFakeTimers();
+    await render(
+      { ...EMPTY_ACTIVITY_ISLAND, flash: { id: "flash", event: "Opened", payload: "github.com" } },
+      actionsSpy(),
+      FEEL,
+      thinking,
+    );
+    const material = container?.querySelector("[data-liquid-island]");
+    expect(container?.querySelector("[data-island-flash]")?.textContent).toBe(
+      "Opened · github.com",
+    );
+    await act(async () => {
+      vi.advanceTimersByTime(1700);
+    });
+    expect(container?.querySelector("[data-island-flash]")).toBeNull();
+    expect(container?.querySelector("[data-liquid-island]")).toBe(material);
+    expect(container?.querySelector("[data-island-verb]")?.textContent).toBe("Mulling");
+    expect(container?.querySelector('[role="status"]')?.textContent).toBe("Reasoning");
+  });
+
+  it("ends the turn immediately even while a flash is held", async () => {
+    const model = {
+      ...EMPTY_ACTIVITY_ISLAND,
+      tabs: [tab()],
+      flash: { id: "exit-flash", event: "Opened", payload: "github.com" },
+    };
+    await render(model, actionsSpy(), FEEL, thinking);
+    expect(container?.querySelector("[data-island-flash]")).not.toBeNull();
+    await render(model);
+    expect(container?.querySelector("[data-island-flash]")).toBeNull();
+    expect(container?.querySelector('[role="status"]')?.textContent).toBe("");
+  });
+
+  it("keeps multiline commands on one visual line without changing the announcement", async () => {
+    const payload = 'for file in *.ts; do\n  cat "$file";\ndone';
+    await render(EMPTY_ACTIVITY_ISLAND, actionsSpy(), FEEL, {
+      key: "multiline",
+      activity: "run",
+      word: "Running",
+      payload,
+      waiting: false,
+      announcement: `Running ${payload}`,
+    });
+    expect(container?.querySelector("[data-island-verb]")?.textContent).toBe(
+      'Running for file in *.ts; do cat "$file"; done',
+    );
+    expect(container?.querySelector('[role="status"]')?.textContent).toBe(`Running ${payload}`);
+  });
+
+  it("crossfades the outgoing controls too, even after React removes their cluster", async () => {
+    const original = Object.getOwnPropertyDescriptor(Element.prototype, "animate");
+    Object.defineProperty(Element.prototype, "animate", {
+      configurable: true,
+      value: () => ({ cancel() {}, onfinish: null }),
+    });
+    try {
+      await render({ ...EMPTY_ACTIVITY_ISLAND, tabs: [tab()] }, actionsSpy(), FEEL, thinking);
+      await render(EMPTY_ACTIVITY_ISLAND, actionsSpy(), FEEL, thinking);
+      const ghost = container?.querySelector("[data-liquid-island-ghost]");
+      expect(ghost?.querySelector('[data-island-cluster="tabs"]')).not.toBeNull();
+      expect(ghost?.getAttribute("aria-hidden")).toBe("true");
+      expect((ghost as HTMLElement).inert).toBe(true);
+    } finally {
+      if (original) Object.defineProperty(Element.prototype, "animate", original);
+      else Reflect.deleteProperty(Element.prototype, "animate");
+    }
+  });
+
+  it("uses still ink for a question, never a shimmer", async () => {
+    await render(
+      EMPTY_ACTIVITY_ISLAND,
+      actionsSpy(),
+      { forceReducedMotion: false },
+      {
+        key: "ask",
+        activity: "askUser",
+        word: "Asking",
+        payload: null,
+        waiting: true,
+        announcement: "Waiting for you",
+      },
+    );
+    expect(container?.querySelector(".liquid-island-waiting")).not.toBeNull();
+    expect(container?.querySelector(".liquid-island-shimmer")).toBeNull();
+  });
+
+  it("retires an empty turn after the exit drawing instead of leaving a ledge", async () => {
+    vi.useFakeTimers();
+    await render(EMPTY_ACTIVITY_ISLAND, actionsSpy(), FEEL, thinking);
+    await render(EMPTY_ACTIVITY_ISLAND);
+    await act(async () => {
+      vi.advanceTimersByTime(1200);
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(200);
+    });
+    expect(island()).toBeNull();
   });
 });
 
