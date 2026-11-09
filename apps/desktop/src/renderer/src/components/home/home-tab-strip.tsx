@@ -28,6 +28,7 @@ import { CopyPathContextMenuItems } from "@renderer/components/files/copy-path-m
 import { HOME_BOARD_TAB_ID } from "@renderer/components/home/home-tabs";
 import { CloudCheckoutControl } from "@renderer/components/cloud-checkout/cloud-checkout-control";
 import { SessionGlyph } from "@renderer/components/sessions/session-glyph";
+import { ChatProviderIcon } from "@renderer/components/sessions/chat-provider-icon";
 import { providerIdentityOf, providerLabelOf } from "@renderer/components/models/model-identity";
 import { useModelCatalogue } from "@renderer/lib/use-model-catalogue";
 import { TabContextActions, type TabAction } from "@renderer/components/ui/tab-actions";
@@ -282,10 +283,17 @@ function reorderFor({ tabs, groups, onReorder }: HomeTabListProps) {
 }
 
 /** What a group chip's menu says about a Home tab. */
-function homeTabMenuLabel(tab: HomeTabDescriptor): TabMenuLabel {
+function homeTabMenuLabel(tab: HomeTabDescriptor, projectId: string): TabMenuLabel {
   if (tab.kind === "board") return { label: "Board", icon: BoardIcon };
   if (tab.kind === "terminal") return { label: tab.tab.title, icon: TerminalIcon };
-  if (tab.kind === "chat") return { label: tab.title, icon: ChatIcon, status: tab.status };
+  if (tab.kind === "chat") {
+    return {
+      label: tab.title,
+      icon: ChatIcon,
+      artwork: <ChatProviderIcon sessionId={tab.sessionId} projectId={projectId} />,
+      status: tab.status,
+    };
+  }
   if (tab.kind === "browser") {
     // Read when the menu opens: the address is the line that tells fifteen
     // localhost tabs apart, and the strip's descriptor does not carry it.
@@ -329,7 +337,7 @@ function HomeTabList({
       activeTabId={activeTabId}
       shownGroupId={shownGroupId}
       edgeTargets={groups !== undefined}
-      describe={homeTabMenuLabel}
+      describe={(tab) => homeTabMenuLabel(tab, projectId)}
       onSelect={onSelect}
       onUngroup={onUngroup}
       onClose={onClose}

@@ -928,7 +928,10 @@ function hostHandlerEntries(
             // The desktop window holds the committed board in its reply, so
             // only the detached trim's worktree change is pushed back to it.
             onMutation: (change) => {
-              if (call.origin === "desktop-window" && change.kind !== "worktree") return;
+              if (call.origin === "desktop-window" && change.kind !== "worktree") {
+                ports.events.publishToPeers?.("data-changed", change);
+                return;
+              }
               ports.events.publish("data-changed", change);
             },
             detachedWork: options.detachedWork,

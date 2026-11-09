@@ -69,6 +69,11 @@ import {
   makeScratch,
   seedProjects,
 } from "./lib/smoke-kit.mjs";
+import {
+  assertSettingsWindow,
+  closeSettingsWindow,
+  settingsPageOf,
+} from "./lib/settings-window.mjs";
 
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("volli-automations-rail-");
 const { attempt, must, summarize } = createRunner();
@@ -305,8 +310,15 @@ try {
     await armedOfferRow().first().click();
     await inspection().waitFor({ timeout: 15000 });
     await page.getByTestId("ticket-rail-automation-run").click();
-    await page.getByRole("navigation", { name: "Settings categories" }).waitFor({ timeout: 20000 });
-    await page.getByRole("button", { name: "Close Settings", exact: true }).click();
+    // The missing-model refusal opens Model Access in the native Settings
+    // window; the press itself is the evidence, so never click Settings again.
+    const settings = await waitUntil(
+      "the native Settings window for Model Access",
+      () => settingsPageOf(app),
+      { timeout: 20000 },
+    );
+    await assertSettingsWindow(app, page, settings);
+    await closeSettingsWindow(app, settings);
     await backToBoard();
     return { ok: true, detail: "ran the armed Automation, refused for the missing model" };
   });

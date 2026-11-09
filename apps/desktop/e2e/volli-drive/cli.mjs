@@ -90,6 +90,8 @@ const HELP = `volli-drive — drive an isolated, keychain-free live Volli build
   wait <id> --text t [--gone] [--timeout ms] [--find text]
   screenshot <id> [--name label] [--window w]
   windows <id>
+  settings-native <id> [--action state|watch|menu|close|frame] [--bounds JSON]
+                                   native Settings boundary; never activates a quiet window
   console <id> [--tail n] [--grep s]
   logs <id> [--tail n] [--grep s] [--trace id] [--follow] [--for ms]
   state <id> sql "<SELECT …>"      read-only query on the instance's database
@@ -684,6 +686,18 @@ async function main() {
       break;
     case "windows":
       for (const w of await call(id, "windows")) out(`${w.name}  "${w.title}"  ${w.url}`);
+      break;
+    case "settings-native":
+      out(
+        JSON.stringify(
+          await call(id, "settings-native", {
+            action: flags.action,
+            bounds: flags.bounds === undefined ? undefined : JSON.parse(flags.bounds),
+          }),
+          null,
+          2,
+        ),
+      );
       break;
     case "metrics": {
       const m = await call(id, "metrics");

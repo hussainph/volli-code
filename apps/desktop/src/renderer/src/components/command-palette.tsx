@@ -1,5 +1,6 @@
 import { EmptyState } from "@renderer/components/ui/empty-state";
 import * as React from "react";
+import { ChatProviderIcon } from "@renderer/components/sessions/chat-provider-icon";
 import { useShallow } from "zustand/react/shallow";
 import {
   type IconComponent as Icon,
@@ -646,7 +647,13 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                   className={PALETTE_ROW}
                 >
                   {item.sessionKind === "chat" ? (
-                    <ChatIcon aria-hidden className={PALETTE_ROW_ICON} />
+                    <span aria-hidden className={`inline-flex ${PALETTE_ROW_ICON}`}>
+                      <ChatProviderIcon
+                        sessionId={item.sessionId}
+                        projectId={item.projectId}
+                        ticketId={item.scope.kind === "ticket" ? item.scope.ticketId : undefined}
+                      />
+                    </span>
                   ) : (
                     <TerminalIcon aria-hidden className={PALETTE_ROW_ICON} />
                   )}

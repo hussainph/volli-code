@@ -4,7 +4,6 @@ import { AddFolderIcon } from "@renderer/components/ui/icon";
 import { AutomationsPage } from "@renderer/components/automations/automations-page";
 import { HomeSurface } from "@renderer/components/home/home-surface";
 import { CloudMoveReadOnlyBanner } from "@renderer/components/cloud-moves/cloud-moves";
-import { SettingsPanel } from "@renderer/components/settings/settings-panel";
 import { SessionEnvironmentAlert } from "@renderer/components/session-environment-alert";
 import { AutomationsOnly } from "@renderer/components/automations/automation-availability";
 import { LocalOnly } from "@renderer/components/hosts/local-only";
@@ -29,13 +28,11 @@ export function MainContent({ override }: { override?: ReactNode } = {}) {
     useUiStore.getState().requestConfigureCategory("overview");
     setActiveNav("home");
   }, [activeNav, setActiveNav]);
-  const settingsOpen = useUiStore((state) => state.settingsOpen);
 
   // Keep-alive seam (CLAUDE.md: never unmount a live terminal incidentally).
   // Home hosts the layer that owns every live PTY terminal in the app, so it is
   // ALWAYS mounted and merely hidden via CSS — switching nav, switching
-  // projects, or opening Settings must not tear its terminals down. Settings
-  // has no process lifetime, so it keeps plain conditional rendering.
+  // projects, or opening the separate Settings window must not tear its terminals down.
   const homeVisible = selected !== null && activeNav === "home";
 
   if (override !== undefined) {
@@ -55,7 +52,6 @@ export function MainContent({ override }: { override?: ReactNode } = {}) {
           top edge of whatever is below it. It is a fragment on purpose: it
           shares this flex column rather than nesting one inside it. */}
       <HomeSurface visible={homeVisible} />
-      {settingsOpen ? <SettingsPanel /> : null}
       {
         pending !== null ? (
           <div className={cn("flex-1", EMPTY_PAGE)} />

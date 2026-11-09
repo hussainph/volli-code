@@ -116,6 +116,8 @@ import { useProjectsStore } from "@renderer/stores/projects";
 import { useRetentionTtlStore } from "@renderer/stores/retention-ttl";
 import { useUiStore } from "@renderer/stores/ui";
 import { useProjectUiStore } from "@renderer/stores/project-ui";
+import { isSettingsWindow } from "@renderer/lib/settings-window";
+import { useCloudWorkspaceStore } from "@renderer/stores/cloud-board/workspace";
 
 /** Below a week, an automatic deletion is close enough to ask about. */
 const CONFIRM_BELOW_DAYS = 7;
@@ -1530,6 +1532,20 @@ function DirtyOrphanItem({
       return;
     }
     onFailure(null);
+    if (isSettingsWindow()) {
+      void window.api.settingsWindow
+        .openWorkspace({
+          kind: "ticket",
+          projectId,
+          ticketId,
+          workspaceId: useCloudWorkspaceStore.getState().workspace?.id,
+        })
+        .then((result) => {
+          if (!result.ok) onFailure({ action: "open", message: result.error });
+        })
+        .catch((error: unknown) => onFailure({ action: "open", message: errorMessage(error) }));
+      return;
+    }
     useProjectsStore.getState().select(projectId);
     useProjectUiStore.getState().openTicketView(projectId, ticketId, { tabId: TICKET_BODY_TAB_ID });
     useUiStore.getState().setSettingsOpen(false);

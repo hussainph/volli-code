@@ -32,6 +32,7 @@ import { startTranscriptStore } from "./lib/cloud-transcript-acceptance.mjs";
 import { createRegistry, instanceLayout, REPO } from "./lib/core.mjs";
 import { MOVE_PROJECT } from "./lib/fixtures.mjs";
 import { request } from "./lib/protocol.mjs";
+import { windowTargeting } from "./lib/window-targeting.mjs";
 import { hasActionableControl, visibleControls } from "./lib/remote-acceptance.mjs";
 
 const exec = promisify(execFile);
@@ -55,7 +56,7 @@ const proof = {
     "supervised restart",
   ],
 };
-let launched, drive, store;
+let launched, drive, driveWindows, store;
 let failed = false;
 const sql = async (query) =>
   JSON.parse(
@@ -130,10 +131,8 @@ async function closeSheet(name) {
     async () => !/heading "(?:Move|Moves) to Volli Cloud"/u.test((await drive("snapshot")).text),
     { timeout: 10_000, interval: 100 },
   );
-  // The move sheet has its own lifetime. Settings deliberately survives it;
-  // close that panel explicitly before returning to the underlying workspace.
-  if (visibleControls((await drive("snapshot")).text, "button", "Close Settings").length)
-    await click("button", "Close Settings");
+  // Only this modal sheet closes. Native Settings remains open, and the
+  // caller explicitly chooses Settings or the workbench for its next action.
 }
 async function assertPreflightCounts() {
   let prepared;
@@ -261,7 +260,10 @@ try {
   launched = JSON.parse(output.stdout);
   const entry = await createRegistry().get(launched.id);
   const layout = instanceLayout(entry.scratch, entry.evidence);
-  drive = (cmd, args = {}) => request(layout.driveSocket, cmd, args, { timeoutMs: 150_000 });
+  driveWindows = windowTargeting((cmd, args = {}) =>
+    request(layout.driveSocket, cmd, args, { timeoutMs: 150_000 }),
+  );
+  drive = driveWindows.call;
   proof.instance = { id: launched.id, evidence: launched.evidence };
   await step("Local ticket Session and worktree", async () => {
     await wait(MOVE_PROJECT.name);
@@ -298,7 +300,9 @@ try {
     return { entry: "project menu", dryRunOnly: true };
   });
   await step("Sign in, without leaving the local launch", async () => {
+    driveWindows.useMainWindow();
     await click("button", "Settings", { first: true });
+    await driveWindows.useSettingsWindow();
     await wait("Settings categories");
     await click("button", "Account", { first: true });
     await click("checkbox", "Accept Preview Agreement");
@@ -377,6 +381,7 @@ try {
       deadline,
     );
     await closeSheet("Close");
+    driveWindows.useMainWindow();
     await wait("Moving Move Project to Volli Cloud · Read-only");
     await click("button", "Home", { first: true });
     const navigation = await drive("snapshot");
@@ -587,7 +592,9 @@ try {
     await drive("screenshot", { name: "cloud-session-write-failed" });
   }
   await step("Re-arm moved Automations explicitly on this Mac", async () => {
+    driveWindows.useMainWindow();
     await click("button", "Settings", { first: true });
+    await driveWindows.useSettingsWindow();
     await wait("Settings categories");
     await click("button", "Volli Cloud", { first: true });
     await click("button", "Progress and local copies");
@@ -689,7 +696,9 @@ try {
     };
   });
   await step("Go back to local keeps the cloud copy and saves a readable export", async () => {
-    await click("button", "Settings", { first: true });
+    // Recovery continues in the retained native window, not through another
+    // Settings-opening command that could reset or conceal the surviving view.
+    await driveWindows.useSettingsWindow();
     await wait("Settings categories");
     await click("button", "Volli Cloud", { first: true });
     await click("button", "Progress and local copies");

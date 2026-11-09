@@ -33,16 +33,18 @@ vi.mock("electron", () => ({
     getPath: () => "/volli-test-userdata",
   },
   BrowserWindow: {
-    getAllWindows: () => [
-      {
+    getAllWindows: (() => {
+      const window = {
         webContents: {
+          id: 1,
           isDestroyed: () => false,
           send: (channel: string, payload: unknown) => {
             dataChangedSends.push({ channel, payload });
           },
         },
-      },
-    ],
+      };
+      return () => [window];
+    })(),
   },
   // The merge notification — a no-op class so `new Notification().show()` works.
   Notification: class {
@@ -65,7 +67,7 @@ import { createHostMaintenance } from "@volli/host-core/maintenance";
 import { worktreeDeps } from "@volli/host-core/worktree";
 import { HEADLESS_ATTENTION } from "@volli/host-core/ports";
 
-const fakeEvent = { sender: {} };
+const fakeEvent = { sender: { id: 0 } };
 
 function invoke<T>(channel: VolliIpcChannel, ...args: unknown[]): T {
   const handler = handlers.get(channel);
@@ -196,6 +198,10 @@ describe("volli:retention-ttl-get / -set", () => {
       days: 30,
     });
     expect(invoke<RetentionTtlResult>("volli:retention-ttl-get")).toEqual({ ok: true, days: 30 });
+    expect(dataChangedSends).toContainEqual({
+      channel: "volli:app-state-changed",
+      payload: { key: "volli:retention", value: '{"ttlDays":30}' },
+    });
     // A zero/negative TTL clamps to 1.
     expect(invoke<RetentionTtlResult>("volli:retention-ttl-set", { days: 0 })).toEqual({
       ok: true,

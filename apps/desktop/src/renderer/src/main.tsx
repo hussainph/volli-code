@@ -50,6 +50,13 @@ import { useUpdateStore } from "./stores/update";
 import { useProjectUiStore } from "./stores/project-ui";
 import { watchSystemAppearance } from "./theme/canvas-paint";
 import { initTerminalAppearance } from "./terminal/appearance";
+import {
+  acceptSettingsNavigation,
+  installSettingsWindowRouting,
+  isSettingsWindow,
+} from "./lib/settings-window";
+import { startWindowPreferenceSync } from "./lib/window-preferences";
+import { acceptWorkspaceNavigation } from "./lib/workspace-window-navigation";
 
 /** Interrupt toasts outlive sonner's ~4s default: an automated de-escalation
  *  must be seen, not glimpsed (same reasoning as `toastError`'s longer window). */
@@ -61,6 +68,10 @@ async function main() {
   // Its long frames and slow inputs, labelled by interaction (VC-1091).
   installRendererStallSignals();
   const root = createRoot(document.getElementById("root")!);
+  const settingsWindow = isSettingsWindow();
+  installSettingsWindowRouting();
+  const preferences = startWindowPreferenceSync();
+  window.addEventListener("pagehide", preferences.stop, { once: true });
 
   // Kick off the Ghostty-config fetch immediately, CONCURRENT with boot() —
   // it has no dependency on the SQLite bootstrap, and gating it behind the
@@ -95,6 +106,20 @@ async function main() {
   }
   if (!result.ok) {
     root.render(<BootErrorPanel error={result.error} />);
+    if (settingsWindow) {
+      // A broken bootstrap must be visible too, not an indefinitely hidden window.
+      void (async () => {
+        let pending = await window.api.settingsWindow.pendingNavigation();
+        while (pending.ok && pending.navigation !== null) {
+          const revision = pending.navigation.revision;
+          await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+          pending = await window.api.settingsWindow.ready(revision);
+          if (!pending.ok || pending.navigation?.revision === revision) break;
+        }
+      })().catch((error: unknown) =>
+        console.warn("[volli] couldn't show Settings failure:", error),
+      );
+    }
     return;
   }
 
@@ -108,6 +133,26 @@ async function main() {
     void useThemeStore.getState().hydrate();
   }
   await startStylePreferences();
+  preferences.activate();
+  if (settingsWindow) {
+    window.api.settingsWindow.onNavigate(acceptSettingsNavigation);
+    const pending = await window.api.settingsWindow.pendingNavigation();
+    if (!pending.ok) {
+      root.render(<BootErrorPanel error={pending.error} />);
+      return;
+    }
+    if (pending.navigation !== null) acceptSettingsNavigation(pending.navigation);
+  } else {
+    let received = false;
+    window.api.settingsWindow.onWorkspaceNavigate((navigation) => {
+      received = true;
+      acceptWorkspaceNavigation(navigation);
+    });
+    const pending = await window.api.settingsWindow.pendingWorkspaceNavigation();
+    if (!pending.ok) toastError(`Couldn't open workspace: ${pending.error}`);
+    else if (!received && pending.navigation !== null)
+      acceptWorkspaceNavigation(pending.navigation);
+  }
 
   root.render(
     <StrictMode>
@@ -131,7 +176,7 @@ async function main() {
   // agent sessions toasts where the mover is looking, with a jump-to-ticket
   // action. Fired for BOTH move choke points (renderer drag and socket/CLI).
   window.api.sessions.onInterrupted((event) => {
-    if (cloudLaunch) return;
+    if (cloudLaunch || settingsWindow) return;
     const model = interruptToastModel(
       event,
       useBoardStore.getState().ticketsByProject,
@@ -162,7 +207,7 @@ async function main() {
   // Session separately from its starter; only its action opens the new tab
   // (the same adopt + open pair the sidebar's chat rows make).
   window.api.sessions.onStarted((notice) => {
-    if (cloudLaunch) return;
+    if (cloudLaunch || settingsWindow) return;
     const model = sessionStartToastModel(notice);
     const target = model.target;
     toast(<SessionStartToastTitle notice={notice} />, {
@@ -192,33 +237,35 @@ async function main() {
   // every window closed opened this one, and its target has been waiting in
   // main ever since. Ordering the other way would drop a push that landed
   // between the read and the listener.
-  window.api.notifications.onActivated(
-    (target) => void activateNotificationTarget(target, desktopNotificationSurface),
-  );
-  window.api.notifications
-    .pendingActivation()
-    .then((pending) => {
-      if (pending.ok && pending.target !== null)
-        void activateNotificationTarget(pending.target, desktopNotificationSurface);
-    })
-    .catch((error: unknown) => {
-      // A click whose target could not be collected leaves the window open on
-      // whatever it was showing — which is where the click brought it anyway.
-      // There is no route the person can retry, but retain the diagnostic rather
-      // than silently losing the failure.
-      console.warn("[volli] couldn't collect notification activation:", error);
-    });
+  if (!settingsWindow) {
+    window.api.notifications.onActivated(
+      (target) => void activateNotificationTarget(target, desktopNotificationSurface),
+    );
+    window.api.notifications
+      .pendingActivation()
+      .then((pending) => {
+        if (pending.ok && pending.target !== null)
+          void activateNotificationTarget(pending.target, desktopNotificationSurface);
+      })
+      .catch((error: unknown) => {
+        // A click whose target could not be collected leaves the window open on
+        // whatever it was showing — which is where the click brought it anyway.
+        // There is no route the person can retry, but retain the diagnostic rather
+        // than silently losing the failure.
+        console.warn("[volli] couldn't collect notification activation:", error);
+      });
+  }
 
   // Self-update state (VC-59): subscribe FIRST, then prime with a one-time
   // read — a download that finished before this window existed must still
   // light the badge. The prime only fills an empty store: a push that raced
   // ahead of it is newer by construction and must not be clobbered.
-  window.api.updates.onState((state) => useUpdateStore.getState().receive(state));
+  window.api.updates.onState((state) => useUpdateStore.getState().receive(state, !settingsWindow));
   window.api.updates
     .state()
     .then((read) => {
       if (read.ok && useUpdateStore.getState().state === null) {
-        useUpdateStore.getState().receive(read.state);
+        useUpdateStore.getState().receive(read.state, !settingsWindow);
       }
     })
     .catch(() => {
@@ -252,7 +299,7 @@ async function main() {
   // whole snapshot; Cancel travels back to main with the exact arrival id.
   // Cloud arrivals come from the renderer’s Convex source. Never read or
   // subscribe to this Mac’s frozen countdowns in a cloud window.
-  if (!cloudLaunch) {
+  if (!cloudLaunch && !settingsWindow) {
     window.api.automations.onPendingArmedRunsChanged(receivePendingArmedRuns);
     window.api.automations.onPendingArmedRunSettled(announcePendingArmedRunSettlement);
     window.api.automations

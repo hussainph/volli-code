@@ -53,6 +53,11 @@ import {
   seedProjects,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
+import {
+  assertSettingsWindow,
+  closeSettingsWindow,
+  settingsPageOf,
+} from "./lib/settings-window.mjs";
 
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("volli-automations-schedule-");
 const { attempt, must, summarize } = createRunner();
@@ -76,6 +81,7 @@ function withDb(work) {
 }
 
 let app = null;
+let settingsPage = null;
 let exitCode = 1;
 try {
   const repoDir = await makeGitRepo(scratch);
@@ -317,8 +323,12 @@ try {
     // the door refuses for that ordinary reason and Settings opens on Model
     // Access — which IS the evidence the click reached it.
     await page.getByLabel("Run Nightly sweep now").click();
-    const settings = page.getByRole("navigation", { name: "Settings categories" });
-    await settings.waitFor({ timeout: 20000 });
+    settingsPage = await waitUntil(
+      "the native Settings window for Model Access",
+      () => settingsPageOf(app),
+      { timeout: 20000 },
+    );
+    await assertSettingsWindow(app, page, settingsPage);
     return { ok: true, detail: "ran by hand, refused for the missing model" };
   });
 
@@ -336,7 +346,10 @@ try {
     // here would quietly make the by-hand Run a different piece of work from
     // the one the timer starts — on the very surface a person uses to check
     // what the schedule does.
-    await page.getByRole("button", { name: "Close Settings", exact: true }).click();
+    if (settingsPage !== null) {
+      await closeSettingsWindow(app, settingsPage);
+      settingsPage = null;
+    }
     await page
       .locator('[data-slot="automation-editor"]')
       .getByRole("button", { name: "Run Nightly sweep", exact: true })
@@ -349,7 +362,12 @@ try {
     if (asksForATicket) return { ok: false, detail: "it opened the Ticket dialog" };
     // Same evidence as step 8: the Project door was reached and refused for the
     // ordinary missing-model reason, whose recovery is Model Access.
-    await page.getByRole("navigation", { name: "Settings categories" }).waitFor({ timeout: 20000 });
+    settingsPage = await waitUntil(
+      "the native Settings window for Model Access",
+      () => settingsPageOf(app),
+      { timeout: 20000 },
+    );
+    await assertSettingsWindow(app, page, settingsPage);
     return { ok: true, detail: "Play went straight to the Project door" };
   });
 

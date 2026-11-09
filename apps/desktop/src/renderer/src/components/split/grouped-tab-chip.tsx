@@ -38,6 +38,8 @@ export interface TabGroup {
 export interface TabMenuLabel {
   label: string;
   icon: Icon;
+  /** Optional vendor artwork, kept inside the existing icon box. */
+  artwork?: React.ReactNode;
   /**
    * The second line that tells two like tabs apart — a Browser Tab's
    * host:port/path, a File tab's folder. `null` when the title is enough.
@@ -96,6 +98,17 @@ export function groupTabItems<T extends { id: string }>(
 const EMPTY_ACTIONS: readonly TabAction[] = [];
 const noActions = () => EMPTY_ACTIONS;
 
+function MemberIcon({ description, className }: { description: TabMenuLabel; className: string }) {
+  const { icon: Mark, artwork } = description;
+  return artwork === undefined ? (
+    <Mark className={className} />
+  ) : (
+    <span aria-hidden className={`inline-flex shrink-0 ${className}`}>
+      {artwork}
+    </span>
+  );
+}
+
 /** The same two-line member rows serve hover inspection and the tab dropdown. */
 function GroupMemberRows<T extends { id: string }>({
   tabs,
@@ -110,13 +123,14 @@ function GroupMemberRows<T extends { id: string }>({
 }) {
   const dismiss = React.useContext(TabDropdownDismissContext);
   return tabs.map((tab) => {
-    const { label, icon: Mark, detail, status } = describe(tab);
+    const description = describe(tab);
+    const { label, detail, status } = description;
     return (
       <ListRow
         key={tab.id}
         data-tab-id={tab.id}
         density="two-line"
-        leading={<Mark className="size-4 shrink-0" />}
+        leading={<MemberIcon description={description} className="size-4 shrink-0" />}
         primary={label}
         secondary={detail ?? undefined}
         trailing={
@@ -227,14 +241,11 @@ function GroupedTabChip<T extends { id: string }>({
                   onClose={onClose ? () => tabs.forEach(onClose) : undefined}
                   leading={
                     <span className="group-icon-stack" aria-hidden>
-                      {tabs.slice(0, 3).map((tab) => {
-                        const Mark = describe(tab).icon;
-                        return (
-                          <span key={tab.id} className="group-icon-disc">
-                            <Mark className="size-3.5" />
-                          </span>
-                        );
-                      })}
+                      {tabs.slice(0, 3).map((tab) => (
+                        <span key={tab.id} className="group-icon-disc">
+                          <MemberIcon description={describe(tab)} className="size-3.5" />
+                        </span>
+                      ))}
                       {tabs.length > 3 ? (
                         <span className="text-label tabular-nums">+{tabs.length - 3}</span>
                       ) : null}
