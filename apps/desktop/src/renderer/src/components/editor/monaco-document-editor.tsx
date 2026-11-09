@@ -11,6 +11,7 @@ import {
   type DocumentModeAttachment,
 } from "@renderer/editor/document-mode-contribution";
 import { documentModeOptions } from "@renderer/editor/document-mode";
+import { createDocumentLayout } from "@renderer/editor/document-height";
 import type {
   DocumentLease,
   DocumentRevision,
@@ -198,10 +199,10 @@ export function applyDocumentExternalValue({
  * A document grows with its text. Monaco does not do that on its own — it fills
  * whatever box it is given and scrolls inside it, which is right for a file tab
  * and wrong for a ticket body sitting in a scrolling column. So the host's
- * height tracks `getContentHeight()`, and the editor is then laid out into the
- * host's `clientHeight` rather than into that number directly: `clientHeight` is
- * the CSS-CLAMPED box, so a caller's `min-h-*` / `max-h-*` classes — or an
- * inline `maxHeight` via `style` — keep working (the composer bounds its body
+ * height tracks `getContentHeight()` on mount, then in animation frames. One
+ * layout driver fits the editor to the CSS-CLAMPED host box (automaticLayout
+ * stays disabled), so a caller's `min-h-*` / `max-h-*` classes — or an inline
+ * `maxHeight` via `style` — keep working (the composer bounds its body
  * at 40vh and scrolls inside; the ticket body clamps over a policy cap and
  * expands on demand, VC-99) without this component knowing anything about them.
  */
@@ -424,16 +425,28 @@ export const MonacoDocumentEditor = React.forwardRef<
         // number the host cannot recover later — the CSS clamp erases it from
         // every measurable box.
         const editorView = view;
-        const fitToContent = (): void => {
-          if (paneResizeActive()) return;
-          const contentHeight = editorView.getContentHeight();
-          host.style.height = `${contentHeight}px`;
-          editorView.layout({ width: host.clientWidth, height: host.clientHeight });
-          liveRef.current.onContentHeightChange?.(contentHeight);
-        };
-        subscriptions.push(editorView.onDidContentSizeChange(fitToContent));
-        subscriptions.push({ dispose: observePaneLayout(host, fitToContent) });
-        fitToContent();
+        const documentLayout = createDocumentLayout({
+          getContentHeight: () => editorView.getContentHeight(),
+          setHeight: (px) => {
+            host.style.height = `${px}px`;
+          },
+          getHostSize: () => ({ width: host.clientWidth, height: host.clientHeight }),
+          layout: (size) => editorView.layout(size),
+          isResizeActive: paneResizeActive,
+          onContentHeightChange: (px) => liveRef.current.onContentHeightChange?.(px),
+          requestFrame: (callback) => requestAnimationFrame(callback),
+          cancelFrame: (id) => cancelAnimationFrame(id),
+        });
+        // Content-size dispatch and ResizeObserver only enqueue work: neither
+        // may re-enter a wrapping rebuild with partially updated projections.
+        subscriptions.push(
+          documentLayout,
+          editorView.onDidContentSizeChange(documentLayout.schedule),
+          { dispose: observePaneLayout(host, documentLayout.schedule) },
+        );
+        // This initial fit is outside Monaco dispatch. Subsequent notifications
+        // (including any from this fit) always take the deferred schedule path.
+        documentLayout.initialize();
 
         const model = lease.model;
         subscriptions.push(
@@ -575,10 +588,9 @@ export const MonacoDocumentEditor = React.forwardRef<
   }
 
   // `style` lands on the host because the host IS the editor's layout box: a
-  // caller's `maxHeight` has to clamp THIS element for `clientHeight` (what
-  // `fitToContent` lays the editor into) to read as the clamped box. React only
-  // ever writes the keys it sees here, so the imperative `height` that
-  // `fitToContent` sets is left alone across re-renders.
+  // caller's `maxHeight` has to clamp THIS element for documentLayout to
+  // measure the clamped box. React only ever writes the keys it sees here, so
+  // the imperative `height` it sets is left alone across re-renders.
   //
   // `data-monaco-status="loading"` from the FIRST frame, not only from the
   // mount effect that re-stamps it: the effect runs after paint, and the
