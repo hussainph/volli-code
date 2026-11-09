@@ -43,6 +43,8 @@ interface CommandPaletteSessionBase {
   projectName: string;
   sessionId: string;
   sessionKind: "terminal" | "chat";
+  /** Already held by the listing; icons must not rescan the roster. */
+  savedProviderId: string | null;
   title: string;
   ticketDisplayId: string | null;
   ticketTitle: string | null;
@@ -176,6 +178,7 @@ export function buildCommandPaletteItems(
         projectName: project.name,
         sessionId: tab.sessionId,
         sessionKind: "terminal",
+        savedProviderId: null,
         title: tab.title,
         scope: tab.scope,
         ticketDisplayId:
@@ -210,6 +213,7 @@ export function buildCommandPaletteItems(
       projectName: project.name,
       sessionId: record.id,
       sessionKind: "terminal",
+      savedProviderId: null,
       title: record.title,
       // The scope decision is the Session Presentation Contract's, not this
       // row's: the same record's detail asks `terminalHistoryScope` the same
@@ -244,6 +248,7 @@ export function buildCommandPaletteItems(
       projectName: project.name,
       sessionId: record.sessionId,
       sessionKind: "chat",
+      savedProviderId: record.model?.providerId ?? null,
       title: residentChatTitles[record.sessionId] ?? record.title,
       scope:
         record.ticketId === null

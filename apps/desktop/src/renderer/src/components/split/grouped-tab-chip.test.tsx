@@ -20,6 +20,8 @@ import {
   type SessionPresentationProjection,
 } from "@volli/shared";
 import { seedSlice } from "@volli/session-presentation";
+import { ChatProviderIcon } from "@renderer/components/sessions/chat-provider-icon";
+import { projectChatProviders, ticketChatProviders } from "@renderer/lib/session-provider-index";
 import { ChatIcon } from "@renderer/components/ui/icon";
 import { Tab, TabStrip } from "@renderer/components/ui/tab-strip";
 import { GroupedTabList, groupTabItems, type TabGroup } from "./grouped-tab-chip";
@@ -450,6 +452,62 @@ function saveProvider(providerId: string | null) {
     });
   });
 }
+
+it("indexes each roster once, not once per icon or unrelated store update", () => {
+  const rows = Array.from({ length: 1000 }, (_, index) => ({
+    ...savedChat("anthropic"),
+    sessionId: String(index),
+  }));
+  const ticketRows = rows.map((record) => ({
+    kind: "chat" as const,
+    record,
+    usage: EMPTY_SESSION_USAGE_SUMMARY,
+    provenance: { kind: "user" as const },
+  }));
+  const projectScan = vi.spyOn(rows, "map");
+  const ticketScan = vi.spyOn(ticketRows, "flatMap");
+  const projects = projectChatProviders(rows);
+  const tickets = ticketChatProviders(ticketRows);
+  for (const row of rows) {
+    expect(projectChatProviders(rows).get(row.sessionId)).toBe("anthropic");
+    expect(ticketChatProviders(ticketRows).get(row.sessionId)).toBe("anthropic");
+  }
+  expect(projectChatProviders(rows)).toBe(projects);
+  expect(ticketChatProviders(ticketRows)).toBe(tickets);
+  expect(projectScan).toHaveBeenCalledTimes(1);
+  expect(ticketScan).toHaveBeenCalledTimes(1);
+  expect(
+    projectChatProviders([{ ...savedChat(null), sessionId: "__proto__" }]).get("__proto__"),
+  ).toBeNull();
+  expect(projectChatProviders(undefined).size).toBe(0);
+  expect(ticketChatProviders(undefined).size).toBe(0);
+  // Icons consume row data; they must never independently read either roster.
+  act(() =>
+    root.render(
+      <>
+        {rows.map((row) => (
+          <ChatProviderIcon
+            key={row.sessionId}
+            sessionId={row.sessionId}
+            savedProviderId="anthropic"
+          />
+        ))}
+      </>,
+    ),
+  );
+  projectScan.mockClear();
+  ticketScan.mockClear();
+  act(() => {
+    useProjectSessionsStore.setState({
+      byProject: { other: { terminal: [], chat: rows, provenance: {} } },
+    });
+    useTicketSessionRecordsStore.setState({ byTicket: { other: ticketRows } });
+  });
+  expect(projectScan).not.toHaveBeenCalled();
+  expect(ticketScan).not.toHaveBeenCalled();
+  projectScan.mockRestore();
+  ticketScan.mockRestore();
+});
 
 function ticketGroup() {
   act(() =>

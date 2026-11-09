@@ -50,6 +50,8 @@ import { CopyPathContextMenuItems } from "@renderer/components/files/copy-path-m
 import { ExternalAppContextMenu } from "@renderer/components/files/external-app-menu";
 import { SessionGlyph } from "@renderer/components/sessions/session-glyph";
 import { ChatProviderIcon } from "@renderer/components/sessions/chat-provider-icon";
+import { projectChatProviders, ticketChatProviders } from "@renderer/lib/session-provider-index";
+import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
 import { providerIdentityOf, providerLabelOf } from "@renderer/components/models/model-identity";
 import { useModelCatalogue } from "@renderer/lib/use-model-catalogue";
 import { TabContextActions, type TabAction } from "@renderer/components/ui/tab-actions";
@@ -336,12 +338,11 @@ function TicketTab({
       ? null
       : (state.sessions[sessionId]?.projection?.modelSelection?.providerId ?? null),
   );
-  const savedProvider = useTicketSessionRecordsStore((state) => {
-    const row = state.byTicket[ticketId]?.find(
-      (entry) => entry.kind === "chat" && entry.record.sessionId === sessionId,
-    );
-    return row?.kind === "chat" ? (row.record.model?.providerId ?? null) : null;
-  });
+  const savedProvider = useTicketSessionRecordsStore((state) =>
+    sessionId === null
+      ? null
+      : (ticketChatProviders(state.byTicket[ticketId]).get(sessionId) ?? null),
+  );
   const providerId = liveProvider ?? savedProvider;
   const catalogue = useModelCatalogue();
   const providers = catalogue?.providers ?? [];
@@ -663,21 +664,20 @@ const TICKET_TAB_ICONS = {
 /** What a group chip's menu says about a ticket tab. */
 function ticketTabMenuLabel(
   tab: TicketTabDescriptor,
-  projectId: string,
-  ticketId: string,
+  projectProviders: ReadonlyMap<string, string | null>,
+  ticketProviders: ReadonlyMap<string, string | null>,
 ): TabMenuLabel {
   const icon = TICKET_TAB_ICONS[tab.kind];
   if (tab.kind === "chat") {
+    const sessionId = parseChatTabId(tab.id);
+    const savedProviderId =
+      sessionId === null
+        ? null
+        : (ticketProviders.get(sessionId) ?? projectProviders.get(sessionId) ?? null);
     return {
       label: tab.label,
       icon,
-      artwork: (
-        <ChatProviderIcon
-          sessionId={parseChatTabId(tab.id)}
-          projectId={projectId}
-          ticketId={ticketId}
-        />
-      ),
+      artwork: <ChatProviderIcon sessionId={sessionId} savedProviderId={savedProviderId} />,
       status: tab.status,
     };
   }
@@ -710,6 +710,12 @@ function TicketTabList({
   onRenameSessionTab,
 }: TicketTabListProps) {
   const [editingId, setEditingId] = React.useState<string | null>(null);
+  const projectProviders = useProjectSessionsStore((state) =>
+    projectChatProviders(state.byProject[projectId]?.chat),
+  );
+  const ticketProviders = useTicketSessionRecordsStore((state) =>
+    ticketChatProviders(state.byTicket[ticketId]),
+  );
   return (
     <GroupedTabList
       tabs={tabs}
@@ -717,7 +723,7 @@ function TicketTabList({
       activeTabId={activeTabId}
       shownGroupId={shownGroupId}
       edgeTargets={groups !== undefined}
-      describe={(tab) => ticketTabMenuLabel(tab, projectId, ticketId)}
+      describe={(tab) => ticketTabMenuLabel(tab, projectProviders, ticketProviders)}
       onSelect={(tab) => onSelectTab(tab.id)}
       onUngroup={onUngroup}
       onClose={onCloseTab}

@@ -238,6 +238,7 @@ function sessionItem(
     projectName: "Alpha",
     sessionId: "s1",
     sessionKind: "chat",
+    savedProviderId: null,
     title: "Plan the migration",
     scope: { kind: "project", projectId: "p1" },
     ticketDisplayId: null,

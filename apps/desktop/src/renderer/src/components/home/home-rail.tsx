@@ -558,7 +558,7 @@ function BoardSessionRow({
       leading={
         row.kind === "chat" ? (
           <span role="img" aria-label="Chat" className="inline-flex size-4 shrink-0">
-            <ChatProviderIcon sessionId={row.id} projectId={projectId} />
+            <ChatProviderIcon sessionId={row.id} savedProviderId={row.savedProviderId} />
           </span>
         ) : (
           <TerminalIcon aria-label="Terminal" className="size-4 shrink-0 text-muted-foreground" />
