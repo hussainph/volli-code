@@ -380,8 +380,18 @@ describe("the Change Set list in the accessibility tree", () => {
     // without this list implementing a keyboard model of its own.
     expect(row(PAIR_TEST).tagName).toBe("BUTTON");
     const actions = row(PAIR_TEST).nextElementSibling as HTMLElement;
-    expect(actions.className).not.toContain("absolute");
+    // Laid over the counts' fixed column at the row's right edge, never over the
+    // filename: at rest the counts sit flush right, and hover or focus swaps
+    // them for these controls in the same place.
+    expect(actions.className).toContain("absolute");
+    expect(actions.className).toContain("right-2");
     expect(actions.className).toContain("shrink-0");
+    const counts = item(PAIR_TEST).querySelector<HTMLElement>(
+      '[data-testid="ticket-changes-counts"]',
+    );
+    expect(counts?.className).toContain("w-[72px]");
+    expect(counts?.className).toContain("group-hover:opacity-0");
+    expect(counts?.className).toContain("group-focus-within:opacity-0");
     expect(actions.className).toContain("pointer-events-none");
     expect(actions.className).toContain("group-hover:pointer-events-auto");
     expect(actions.className).toContain("group-focus-within:pointer-events-auto");

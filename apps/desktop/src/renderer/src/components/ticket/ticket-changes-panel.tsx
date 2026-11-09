@@ -345,9 +345,14 @@ function ChangeRow({
               </span>
             }
             // A fixed column, so the numbers line up down the list and the
-            // filename's truncation point never moves with them.
+            // filename's truncation point never moves with them. It sits flush
+            // right at rest and hands its place to the hover actions, so a
+            // resting row reserves no blank strip for controls it isn't showing.
             trailing={
-              <span className="flex w-[72px] shrink-0 justify-end gap-1 text-ui tabular-nums">
+              <span
+                data-testid="ticket-changes-counts"
+                className="flex w-[72px] shrink-0 justify-end gap-1 text-ui tabular-nums transition-opacity duration-(--duration-menu-out) group-focus-within:opacity-0 group-hover:opacity-0 motion-reduce:transition-none"
+              >
                 {row.binary ? (
                   <span className="text-muted-foreground">Binary</span>
                 ) : row.insertions === null || row.deletions === null ? null : (
@@ -360,9 +365,17 @@ function ChangeRow({
                 )}
               </span>
             }
-            // A reserved sibling slot keeps hover actions out of the row's
-            // activation target, including its centre and truncated filename.
-            actions={<RailRowActions path={row.path} onOpen={onSelectRow} />}
+            // A sibling of the activation target, laid over the counts' column
+            // rather than beside it: hover or focus swaps the numbers for the
+            // controls in the same place (progressive disclosure), and the
+            // filename's truncation never moves.
+            actions={
+              <RailRowActions
+                path={row.path}
+                onOpen={onSelectRow}
+                className="absolute top-1/2 right-2 -translate-y-1/2"
+              />
+            }
           />
         </TooltipTrigger>
         <TooltipContent side="bottom" className="max-w-72 text-wrap font-mono">
