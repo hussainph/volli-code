@@ -33,7 +33,9 @@
 //   • `[plan]`          → a small markdown plan body
 //   • `script`          → a function `(turn) => reply | undefined` or an array of
 //                         replies consumed one per turn; a reply is a string or
-//                         `{ text?, toolCalls?, delayMs?, status?, error? }`.
+//                         `{ text?, toolCalls?, delayMs?, chunkDelayMs?, status?, error? }`.
+//                         chunkDelayMs overrides the server's inter-delta delay
+//                         for one reply (useful for paced renderer captures).
 //                         toolCalls is an array of { name, arguments } (an
 //                         object or JSON string); without text, a nonempty
 //                         toolCalls reply emits only function calls. Scripts
@@ -65,7 +67,7 @@ const PLAN_MARKER = /\[plan\]/i;
 
 /**
  * @typedef {{ name: string, arguments: Record<string, unknown>|string }} FakeToolCall
- * @typedef {{ text?: string, toolCalls?: FakeToolCall[], delayMs?: number, status?: number, error?: string }} FakeReply
+ * @typedef {{ text?: string, toolCalls?: FakeToolCall[], delayMs?: number, chunkDelayMs?: number, status?: number, error?: string }} FakeReply
  * @typedef {{ index: number, path: string, model: string|null, stream: boolean, text: string, body: any }} FakeTurn
  * @typedef {{
  *   at: number, method: string, path: string, model: string|null, stream: boolean|null,
@@ -308,7 +310,7 @@ export async function startFakeProvider(options = {}) {
         });
         for (const delta of chunk(item.arguments)) {
           send("response.function_call_arguments.delta", { ...address, delta });
-          await sleep(chunkDelayMs, () => closed);
+          await sleep(reply.chunkDelayMs ?? chunkDelayMs, () => closed);
           if (closed) return;
         }
         send("response.function_call_arguments.done", { ...address, arguments: item.arguments });
@@ -324,7 +326,7 @@ export async function startFakeProvider(options = {}) {
         });
         for (const delta of chunk(reply.text)) {
           send("response.output_text.delta", { ...contentAddress, delta });
-          await sleep(chunkDelayMs, () => closed);
+          await sleep(reply.chunkDelayMs ?? chunkDelayMs, () => closed);
           if (closed) return;
         }
         send("response.output_text.done", { ...contentAddress, text: reply.text });
@@ -454,6 +456,7 @@ function normalizeReply(raw, text, defaultDelayMs) {
     text: raw.text ?? (raw.toolCalls?.length > 0 ? "" : defaultReplyText(text)),
     ...(raw.toolCalls === undefined ? {} : { toolCalls: raw.toolCalls }),
     delayMs: raw.delayMs ?? fallbackDelay,
+    ...(raw.chunkDelayMs === undefined ? {} : { chunkDelayMs: raw.chunkDelayMs }),
     ...(raw.status === undefined ? {} : { status: raw.status }),
     ...(raw.error === undefined ? {} : { error: raw.error }),
   };

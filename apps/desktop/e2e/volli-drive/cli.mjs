@@ -55,6 +55,8 @@ const HELP = `volli-drive — drive an isolated, keychain-free live Volli build
 
   launch [--fixture basic|empty|move|empty-pane-left|empty-pane-right] [--model fake|env] [--idle-min 20]
          [--fake-script file.json] deterministic fake-provider reply sequence
+         [--fake-tool-free-text t] tool-free requests (auto-title) answer t while
+                                   a script runs, instead of the echo; needs --fake-script
          [--no-build] [--json]     start an instance (dev build only; packed
                                    apps are refused until VC-705); prints its
                                    id + evidence dir
@@ -213,6 +215,13 @@ async function launch(flags) {
     if (!Array.isArray(fakeScript))
       fail("--fake-script must contain a JSON array of fake-provider replies");
   }
+  let fakeToolFreeText;
+  if (flags.fakeToolFreeText !== undefined) {
+    if (!flags.fakeScript) fail("--fake-tool-free-text refines --fake-script and requires it");
+    if (typeof flags.fakeToolFreeText !== "string" || flags.fakeToolFreeText.trim() === "")
+      fail("--fake-tool-free-text needs non-empty text");
+    fakeToolFreeText = flags.fakeToolFreeText;
+  }
   let cloud = null;
   let cloudEnv = {};
   if (
@@ -278,6 +287,7 @@ async function launch(flags) {
     appBinary: null,
     remoteAcceptance,
     ...(fakeScript === undefined ? {} : { fakeScript }),
+    ...(fakeToolFreeText === undefined ? {} : { fakeToolFreeText }),
     cloud,
     deployment,
     bundle: BUILT_MAIN,

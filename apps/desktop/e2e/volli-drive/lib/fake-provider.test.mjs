@@ -334,6 +334,30 @@ const request = (provider, input, stream = false) =>
     body: JSON.stringify({ model: provider.modelId, input, stream }),
   });
 
+test("a scripted reply can pace both text and function-argument deltas", async () => {
+  const provider = await startFakeProvider({
+    chunkDelayMs: 0,
+    script: [
+      {
+        text: "abcdefgh",
+        toolCalls: [{ name: "read", arguments: { path: "file.ts" } }],
+        chunkDelayMs: 25,
+      },
+    ],
+  });
+  try {
+    const started = Date.now();
+    const res = await request(provider, "paced capture", true);
+    const body = await res.text();
+    assert.equal(res.status, 200);
+    assert.equal((body.match(/event: response.output_text.delta/g) ?? []).length, 4);
+    assert.equal((body.match(/event: response.function_call_arguments.delta/g) ?? []).length, 4);
+    assert.ok(Date.now() - started >= 190, "all eight deltas use the reply's 25ms delay");
+  } finally {
+    await provider.close();
+  }
+});
+
 describe("scripted Responses function calls", () => {
   const calls = [
     {
