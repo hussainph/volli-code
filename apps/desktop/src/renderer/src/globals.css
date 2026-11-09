@@ -3382,6 +3382,9 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
 
 /* The roster and automation offer each own overflow; metadata cannot push
  * either heading out of the inspector. Small collections keep natural height. */
+.ticket-inspector-now {
+  container: ticket-inspector-now / size;
+}
 .ticket-inspector-now > [data-testid="ticket-rail-properties"] {
   flex: none;
 }
@@ -3402,6 +3405,13 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
+}
+/* A half-height section needs room for its heading, reason and action before
+ * decoration. Query the allocated inspector, not the window or rail width. */
+@container ticket-inspector-now (height < 520px) {
+  [data-testid="ticket-sessions-peek"] .empty-art {
+    display: none;
+  }
 }
 .session-navigator [data-nav-height] :is(.list-row, [data-slot="sidebar-menu-button"]) {
   height: 100%;

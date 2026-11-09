@@ -1178,30 +1178,6 @@ export function TicketSessionsPanel({
             testId="ticket-sessions-error"
           />
         )}
-        {sessionsUnavailable === null &&
-        current.length === 0 &&
-        (!searching || filteredHistory.length === 0) &&
-        canClaimEmpty ? (
-          // Nothing to read, so the block is the sentence alone: the header's
-          // own control is 20px above it, and a second copy of the same act
-          // inside the empty frame would be the same offer twice in one glance.
-          // Gated on a read having LANDED — a refused one has proved nothing.
-          <PanelEmptyState
-            illustration="chat"
-            title={
-              searching
-                ? "No matching sessions"
-                : history.length > 0
-                  ? "No active sessions"
-                  : "No sessions"
-            }
-            action={
-              searching
-                ? { label: "Clear search", onAction: () => setRosterQuery("") }
-                : { label: "New chat", onAction: onNewChat, disabled: effectiveCreating }
-            }
-          />
-        ) : null}
         {/* ONE peek surface over both halves: the handlers go on the block that
             holds the rows, never on a row, so a press is still a drag or a
             click and rows keep their own props (`use-session-peek.tsx`). The
@@ -1213,6 +1189,28 @@ export function TicketSessionsPanel({
           {...peek.rowProps("rail")}
           {...peek.scrollProps}
         >
+          {sessionsUnavailable === null &&
+          current.length === 0 &&
+          (!searching || filteredHistory.length === 0) &&
+          canClaimEmpty ? (
+            // Only a landed read can claim empty. Keep its action in the roster's
+            // scroller, so a constrained inspector never clips an unreachable act.
+            <PanelEmptyState
+              illustration="chat"
+              title={
+                searching
+                  ? "No matching sessions"
+                  : history.length > 0
+                    ? "No active sessions"
+                    : "No sessions"
+              }
+              action={
+                searching
+                  ? { label: "Clear search", onAction: () => setRosterQuery("") }
+                  : { label: "New chat", onAction: onNewChat, disabled: effectiveCreating }
+              }
+            />
+          ) : null}
           {current.length > 0 ? (
             <SessionList rows={current} variant="current" {...listProps} />
           ) : null}

@@ -227,10 +227,8 @@ describe("the rail roster on the push path", () => {
   });
 
   it("says what is missing, once, only after the listing has answered with nothing", async () => {
-    // An empty roster is one inline sentence: the heading's own
-    // control sits 20px above it, so a second copy inside the frame would be
-    // the same offer twice in one glance. "Empty" is a listing that has
-    // ANSWERED with no rows — an unread one holds its box instead.
+    // "Empty" is a listing that has answered with no rows. Its action must
+    // share the bounded roster scroller rather than sit in a clipped sibling.
     await act(async () => {
       useSessionsStore.setState({ byOwner: {}, sessionOwner: {}, lastOutputAt: {} });
       useTicketSessionRecordsStore.setState({
@@ -245,6 +243,7 @@ describe("the rail roster on the push path", () => {
     const empty = container?.querySelector('[data-status="empty"]');
     expect(empty?.querySelector("h2")?.textContent).toBe("No sessions");
     expect(empty?.getAttribute("data-tier")).toBe("panel");
+    expect(empty?.closest('[data-testid="ticket-sessions-peek"]')).not.toBeNull();
     expect(empty?.querySelector("button")?.textContent).toBe("New chat");
     expect(container?.querySelectorAll('[aria-label="New chat"]').length).toBe(1);
   });

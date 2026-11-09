@@ -36,7 +36,8 @@ volli-drive wait vd-xxxx --text "fake-agent: hello drive" --timeout 30000
 volli-drive screenshot vd-xxxx --name ticket-chat
 ```
 - Project variant: `find "Home"` (sidebar nav, sidebar/nav-list.tsx:21), then the Home strip's `New chat`. The rest is the same.
-- The ticket screen has **two** `New chat` buttons: one in the strip and one in the rail's Sessions panel (e2e/lib/smoke-kit.mjs:1561-1584). Either starts a chat. Prefer the one next to tablist `Ticket tabs`.
+- The empty inspector's **New chat** action shares the bounded Sessions roster scroller. At short allocated heights its decorative illustration hides; the title and full action remain reachable. Verify with navigation and inspector pinned at 940×600 and 1280×800 in light/dark, then click the inspector action and send to verify the populated roster. This path was driven with the fake model; the completed ticket Session was confirmed through SQL and `session answer`.
+- The ticket tab strip and the Sessions heading offer **Open a tab**; the empty Sessions state also offers **New chat**. The inspector action starts the same provisional chat as the chooser's New chat item.
 - `Message` stays disabled until the composer is ready. If `type` is refused, `wait` and re-snapshot.
 
 ## Failed tool disclosure
