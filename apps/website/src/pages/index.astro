@@ -25,8 +25,8 @@ import Base from "../layouts/Base.astro";
 // "why not the agent app I already have?"
 const WHY = [
   {
-    title: "Separate ticket worktrees",
-    body: "Give each ticket its own worktree and branch, so agents on different tickets work in separate checkouts.",
+    title: "Agents never collide",
+    body: "Each ticket gets its own worktree and branch, so agents never write over each other's code.",
   },
   {
     title: "Diff to pull request",
@@ -56,7 +56,7 @@ const AGENTS = [
 ] as const;
 
 const description =
-  "Build like a team of twenty. Volli is a Mac app for building ambitious software with many coding agents, all at once. Give each ticket its own worktree and branch, and review its changes from the board.";
+  "Build like a team of twenty. Volli is a Mac app for building ambitious software with many coding agents, all at once. Every ticket runs in its own worktree and branch, so agents never collide — and every change lands on one board for review.";
 ---
 
 <Base
@@ -78,8 +78,8 @@ const description =
           />
           <p class="hero-lede hero-rise" style="--rise: 3">
             Volli is a Mac app for building ambitious software with many coding agents, all at
-            once. Give each ticket its own worktree and branch, and review its changes from
-            the board.
+            once. Every ticket runs in its own worktree and branch, so agents never collide —
+            and every change lands on one board for review.
           </p>
         </div>
         <div class="hero-action hero-rise" style="--rise: 4">
@@ -206,7 +206,7 @@ const description =
         still={still("models")}
         alt="Default models for board chats, ticket chats, and the Fast, Deep and Visual tiers."
         beats={[{ text: "Bring your" }, { text: "own tokens", bold: true }]}
-        body="Connect a supported model provider with your subscription or API key. Pick the right model for each task."
+        body="Connect any of 40+ model providers with the plan or API key you already have. Pick the right model for each task."
       />
 
       <Chapter
@@ -217,7 +217,7 @@ const description =
         still={still("armed")}
         alt="Three tickets land in a Doing column set to start agents; each shows an Implement countdown with a Cancel button."
         beats={[{ text: "Automate" }, { text: "the routine work", bold: true }]}
-        body="Save reusable instructions. Run them by hand, on a schedule while Volli is running, or when a ticket moves into an armed column."
+        body="Save a workflow once. Run it by hand, on a schedule, or whenever a ticket lands in a column."
       />
 
       <Chapter
