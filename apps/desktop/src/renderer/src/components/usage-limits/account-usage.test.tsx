@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * The usage row's notation, asserted where a screenshot cannot hold it still.
  *
@@ -16,7 +17,7 @@
  */
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
-import type { UsageLimits } from "@volli/shared";
+import { DEFAULT_CANVAS, deriveCanvasTokens, wcagContrast, type UsageLimits } from "@volli/shared";
 
 import { AccountUsage } from "./account-usage";
 
@@ -43,6 +44,33 @@ function withUsed(usedPercent: number): UsageLimits {
   return { ...LIMITS, windows: [{ ...LIMITS.windows[0]!, usedPercent }] };
 }
 
+describe("quota text contrast", () => {
+  it.each(["light", "dark"] as const)(
+    "keeps numeric percentages readable on %s usage surfaces",
+    (mode) => {
+      for (const hex of ["#e8652a", "#4653a2", "#18b6a4", "#f2d060", "#000000", "#ffffff"]) {
+        const tokens = deriveCanvasTokens(
+          { ...DEFAULT_CANVAS, stops: [{ hex, x: 0.3, y: 0.6 }] },
+          mode,
+        );
+        // Paper and the neutral floating-glass pools used by usage inspection;
+        // the row itself is transparent and must not borrow the arc's fill ink.
+        const surfaces = [
+          tokens["--card"],
+          tokens["--popover"],
+          ...(mode === "light" ? ["#e1e1e1", "#fbfbfb"] : ["#242424", "#3e3e3e"]),
+        ];
+        for (const surface of surfaces) {
+          expect(
+            wcagContrast(tokens["--foreground"], surface),
+            `${mode} ${hex} on ${surface}`,
+          ).toBeGreaterThanOrEqual(4.5);
+        }
+      }
+    },
+  );
+});
+
 describe("AccountUsage", () => {
   it("states the remaining share and the anchored countdown, and no pace words", () => {
     const html = renderToStaticMarkup(<AccountUsage limits={LIMITS} now={NOW} />);
@@ -52,19 +80,49 @@ describe("AccountUsage", () => {
     expect(html).not.toContain("pace");
   });
 
-  it("fills the bar with what is left and marks even spending at the time left", () => {
+  it("prints the remaining percentage only in the ring, while preserving its accessible summary", () => {
     const html = renderToStaticMarkup(<AccountUsage limits={LIMITS} now={NOW} />);
-    // On pace: the fill's edge and the hairline coincide at 40%.
-    expect(html).toContain("width:40%");
-    expect(html).toContain("left:40%");
-    expect(html).not.toContain("left:60%");
+    const visible = new DOMParser().parseFromString(html, "text/html").body.textContent ?? "";
+    expect(visible.match(/40%/g)).toHaveLength(1);
+    expect(visible).not.toContain("% left");
+    expect(html).toContain('aria-label="Session: 40% left, 40% of the window left, resets in 2h"');
   });
 
-  it("draws the hairline past the fill's edge when spending runs ahead", () => {
+  it.each([
+    [40, "normal", "var(--primary)", "var(--foreground)"],
+    [70, "attention", "var(--attention)", "var(--foreground)"],
+    [90, "critical", "var(--destructive)", "var(--foreground)"],
+  ])("separates %s%% usage text ink from the %s arc fill", (used, tone, stroke, textInk) => {
+    const html = renderToStaticMarkup(<AccountUsage limits={withUsed(used)} now={NOW} />);
+    const fragment = new DOMParser().parseFromString(html, "text/html");
+    expect(fragment.querySelector(`[data-tone="${tone}"]`)?.getAttribute("stroke")).toBe(stroke);
+    expect(fragment.querySelector('span[aria-hidden="true"]')?.getAttribute("style")).toBe(
+      `color:${textInk}`,
+    );
+  });
+
+  it("retains over-limit information because a zero ring cannot express the overage", () => {
+    const html = renderToStaticMarkup(<AccountUsage limits={withUsed(112)} now={NOW} />);
+    const visible = new DOMParser().parseFromString(html, "text/html").body.textContent ?? "";
+    expect(visible).toContain("0%");
+    expect(visible).toContain("12% over");
+    expect(visible).not.toContain("% left");
+    expect(html).toContain('aria-label="Session: 12% over,');
+  });
+
+  it("fills the ring with what is left and marks even spending at the time left", () => {
+    const html = renderToStaticMarkup(<AccountUsage limits={LIMITS} now={NOW} />);
+    // On pace: the fill's edge and the hairline coincide at 40%.
+    expect(html).toContain('stroke-dasharray="105.60000000000001 264"');
+    expect(html).toContain('data-time-left="40"');
+    expect(html).not.toContain('data-time-left="60"');
+  });
+
+  it("draws the time notch past the arc's end when spending runs ahead", () => {
     const html = renderToStaticMarkup(<AccountUsage limits={withUsed(70)} now={NOW} />);
     // 30% left, but 40% of the window still to come: the gap is the overrun.
-    expect(html).toContain("width:30%");
-    expect(html).toContain("left:40%");
+    expect(html).toContain('stroke-dasharray="79.2 264"');
+    expect(html).toContain('data-time-left="40"');
   });
 
   it("colours the fill by the tone rule: ordinary, attention, critical", () => {
@@ -81,8 +139,8 @@ describe("AccountUsage", () => {
       'data-tone="critical"',
     );
     const html = renderToStaticMarkup(<AccountUsage limits={withUsed(90)} now={NOW} />);
-    expect(html).toContain("bg-destructive");
-    expect(html).not.toContain("bg-primary");
+    expect(html).toContain('stroke="var(--destructive)"');
+    expect(html).not.toContain('stroke="var(--primary)"');
   });
 
   it("carries the row's facts in the bar's label and its title, and nothing else", () => {
@@ -105,20 +163,21 @@ describe("AccountUsage", () => {
   it("prints whole points however precisely the provider spoke", () => {
     const html = renderToStaticMarkup(<AccountUsage limits={withUsed(0.29 * 100)} now={NOW} />);
     expect(html).toContain("71% left");
-    expect(html).toContain("width:71%");
-    expect(html).not.toContain("71.0");
+    expect(html).toContain('stroke-dasharray="187.44 264"');
+    expect(html).not.toContain("71.000");
   });
 
   it("draws no fill once nothing is left, and no hairline off the bar once the reset has passed", () => {
     const spent = renderToStaticMarkup(<AccountUsage limits={withUsed(100)} now={NOW} />);
     expect(spent).toContain("0% left");
-    expect(spent).not.toContain("width:");
+    expect(spent).toContain('stroke-dasharray="0 264"');
+    expect(spent).toContain('stroke-linecap="butt"');
     const passed = renderToStaticMarkup(<AccountUsage limits={LIMITS} now={NOW + 3 * HOUR} />);
     expect(passed).toContain("resets now");
-    expect(passed).toContain("left:0%");
+    expect(passed).toContain('data-time-left="0"');
   });
 
-  it("still draws a window that states no reset — no countdown, no hairline", () => {
+  it("still draws a window that states no reset — no countdown, no time notch", () => {
     const bare: UsageLimits = {
       checkedAt: NOW,
       windows: [{ id: "seven_day_opus", kind: "weekly", label: "Weekly · Opus", usedPercent: 8 }],
@@ -127,7 +186,7 @@ describe("AccountUsage", () => {
     expect(html).toContain("Weekly · Opus");
     expect(html).toContain("92% left");
     expect(html).not.toContain("resets in");
-    expect(html).not.toContain("left:");
+    expect(html).not.toContain("data-time-left");
     expect(html).toContain('data-tone="normal"');
   });
 
@@ -148,10 +207,10 @@ describe("AccountUsage", () => {
         <AccountUsage limits={failed} now={NOW} />
       </>,
     );
-    expect(html).toContain("No subscription usage windows on this account.");
+    expect(html).toContain("No usage windows");
     // The failed line names its retry: the host's own Refresh.
-    expect(html).toContain("Usage limits couldn&#x27;t be read. Refresh to try again.");
-    expect(html).not.toContain("width:");
+    expect(html).toContain("Couldn&#x27;t read usage limits");
+    expect(html).not.toContain("stroke-dasharray");
     expect(html).not.toContain("% left");
   });
 

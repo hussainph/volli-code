@@ -4,6 +4,8 @@ import { errorMessage } from "@volli/shared";
 import { ItemRow, PrefRow } from "@renderer/components/settings/kit";
 import { Button } from "@renderer/components/ui/button";
 import { Badge } from "@renderer/components/ui/badge";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
+import { Notice } from "@renderer/components/ui/notice";
 import {
   Dialog,
   DialogContent,
@@ -16,6 +18,13 @@ import { formatFileSize } from "@renderer/components/attachments/attachment-mode
 import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
 import { toastError } from "@renderer/lib/toast";
 
+/**
+ * Restore a profile backup: the bundles on this machine, the staged restore
+ * dialog, and the previous profile a past restore kept.
+ *
+ * A failed status read is drawn as a failure with its retry, never as an
+ * empty inventory, so "no bundles" is only ever what the host said.
+ */
 export function BackupRestore() {
   const [status, setStatus] = React.useState<ProfileRestoreStatus | null>(null);
   const [failure, setFailure] = React.useState<string | null>(null);
@@ -24,28 +33,29 @@ export function BackupRestore() {
   const [pending, setPending] = React.useState(false);
   const epoch = React.useRef(0);
   const mutating = React.useRef(false);
-  React.useEffect(() => {
-    let active = true;
-    const load = async () => {
-      if (mutating.current) return;
-      const token = epoch.current;
-      try {
-        const next = await sessionRpcClient().backups.restoreStatus.query();
-        if (active && token === epoch.current) {
-          setStatus(next);
-          setFailure(null);
-        }
-      } catch (error) {
-        if (active && token === epoch.current) setFailure(errorMessage(error));
+  const active = React.useRef(true);
+  const load = React.useCallback(async () => {
+    if (mutating.current) return;
+    const token = epoch.current;
+    try {
+      const next = await sessionRpcClient().backups.restoreStatus.query();
+      if (active.current && token === epoch.current) {
+        setStatus(next);
+        setFailure(null);
       }
-    };
+    } catch (error) {
+      if (active.current && token === epoch.current) setFailure(errorMessage(error));
+    }
+  }, []);
+  React.useEffect(() => {
+    active.current = true;
     void load();
     const timer = window.setInterval(() => void load(), 1000);
     return () => {
-      active = false;
+      active.current = false;
       window.clearInterval(timer);
     };
-  }, []);
+  }, [load]);
   const mappingRevision = React.useRef<string | null>(null);
   const revision = status?.revision;
   const phase = status?.phase;
@@ -97,9 +107,18 @@ export function BackupRestore() {
         </Button>
       </PrefRow>
       {failure ? (
-        <p role="status" className="text-ui text-muted-foreground">
-          {failure}
-        </p>
+        <Notice
+          tone="error"
+          title="Couldn't read restore status"
+          detail={failure}
+          announce
+          className="m-4"
+          actions={
+            <Button size="xs" variant="outline" onClick={() => void load()}>
+              Try again
+            </Button>
+          }
+        />
       ) : null}
       {status?.bundles.map((bundle) => (
         <ItemRow
@@ -153,14 +172,13 @@ export function BackupRestore() {
           <DialogHeader>
             <DialogTitle>Restore backup</DialogTitle>
             <DialogDescription>
-              Restarting replaces local history with this backup, including changes made while
-              preparing the restore. The previous profile is kept. Project files are not changed.
+              Restarting replaces local history with this backup. Project files stay.
             </DialogDescription>
           </DialogHeader>
           {status?.selectedFile ? <p className="text-ui break-all">{status.selectedFile}</p> : null}
           {phase === "restarting" ? (
             <p role="status" className="text-ui">
-              Restarting…
+              <LoadingLabel>Restarting</LoadingLabel>
             </p>
           ) : null}
           {busy ? (
@@ -168,11 +186,11 @@ export function BackupRestore() {
               <progress aria-label="Restore progress" />
               <p className="text-ui">
                 {status?.paused
-                  ? "Restore paused while memory is under pressure."
+                  ? "Paused: low memory"
                   : phase === "checking"
-                    ? "Checking backup…"
-                    : "Preparing restore…"}{" "}
-                {status?.checkpoints ?? 0} checkpoints
+                    ? "Checking backup"
+                    : "Preparing restore"}
+                {` · ${status?.checkpoints ?? 0} checkpoints`}
               </p>
             </div>
           ) : null}
@@ -182,7 +200,7 @@ export function BackupRestore() {
                 <ItemRow
                   key={project.id}
                   name={project.name}
-                  meta={paths[project.id] || "Choose a local directory"}
+                  meta={paths[project.id] || "No directory"}
                 >
                   <Button
                     size="xs"
@@ -208,24 +226,30 @@ export function BackupRestore() {
             </div>
           ) : null}
           {status?.problems.length ? (
-            <div role="alert">
-              {status.problems.map((problem) => (
-                <p key={`${problem.kind}:${problem.message}`} className="text-ui">
-                  {problem.kind}: {problem.message}
-                </p>
+            <Notice
+              tone="error"
+              title="Couldn't restore this backup"
+              detail={status.problems.map((problem) => (
+                <span key={`${problem.kind}:${problem.message}`} className="block">
+                  {problem.message}
+                </span>
               ))}
-            </div>
+              // The problem kinds stay in the copied text for a support report.
+              copyText={status.problems
+                .map((problem) => `${problem.kind}: ${problem.message}`)
+                .join("\n")}
+              announce
+            />
           ) : null}
           {phase === "cancelled" ? (
             <p role="status" className="text-ui">
-              Restore cancelled. The current profile is unchanged.
+              Restore cancelled
             </p>
           ) : null}
           {phase === "ready" ? (
             <div role="status" className="space-y-2 text-ui">
-              <p>Ready to restore on restart.</p>
-              <p>{status?.credentialsMessage}</p>
-              <p>Previous profile backup will be kept.</p>
+              <p>Ready to restore on restart</p>
+              {status?.credentialsMessage ? <p>{status.credentialsMessage}</p> : null}
             </div>
           ) : null}
           <DialogFooter>

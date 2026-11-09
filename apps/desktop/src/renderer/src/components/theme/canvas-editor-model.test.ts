@@ -76,7 +76,7 @@ describe("swatchPageOf", () => {
 
 describe("droppedStopIndex", () => {
   it("has nothing to drop from a one-colour canvas", () => {
-    expect(droppedStopIndex(DEFAULT_CANVAS)).toBeNull();
+    expect(droppedStopIndex({ ...DEFAULT_CANVAS, stops: [DEFAULT_CANVAS.stops[0]] })).toBeNull();
   });
 
   it("drops the last stop", () => {

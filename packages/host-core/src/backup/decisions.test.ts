@@ -243,6 +243,18 @@ describe("profile file decisions", () => {
     expect(byArea.get(profileLogsRoot(""))?.decision).toBe("exclude");
   });
 
+  it("explicitly excludes source-icon decoration without changing portable included areas", () => {
+    const icons = PROFILE_FILE_DECISIONS.filter((entry) => entry.area === "source-icons");
+    expect(icons).toHaveLength(1);
+    expect(icons[0]).toMatchObject({ area: "source-icons", decision: "exclude" });
+    expect(icons[0]?.reason).toContain("Machine-local network-derived icon cache");
+    expect(
+      PROFILE_FILE_DECISIONS.filter((entry) => entry.decision === "include").map(
+        (entry) => entry.area,
+      ),
+    ).toEqual([blobsRoot(""), sessionTranscriptsRoot(""), globalCommandsRoot("")]);
+  });
+
   it("keeps machine-bound move artifacts out of portable restores alongside their journals", () => {
     expect(PROFILE_FILE_DECISIONS.find((entry) => entry.area === "cloud-moves")?.decision).toBe(
       "exclude",

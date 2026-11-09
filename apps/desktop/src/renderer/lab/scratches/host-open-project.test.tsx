@@ -12,6 +12,8 @@ import HostOpenProjectScratch, { api } from "./host-open-project";
 vi.mock("@renderer/components/hosts/hosts-chrome", () => ({ HostsChrome: () => null }));
 vi.mock("@renderer/lib/app-state-storage", () => ({
   appStateStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+  // stores/ui and stores/style register preference defaults at module scope.
+  registerSharedPreferenceDefaults: () => {},
 }));
 
 it("switches scenarios over production HOST IPC and restores stores/catalog on unmount", async () => {

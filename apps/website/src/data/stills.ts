@@ -1,6 +1,6 @@
 /**
  * The product stills (`src/assets/stills/<name>-{wide,tall}.webp`), captured
- * from the release film's scenes by `apps/desktop/scripts/film/web-stills.mjs`.
+ * from the release film's scenes with a transparent background.
  *
  * A still missing its tall (9:16) cut falls back to the wide one, so a page
  * never breaks on a capture that has not landed yet.

@@ -1,4 +1,5 @@
 import { ipcMain } from "electron";
+import { withRendererCall } from "./renderer-call";
 import type { WebContents } from "electron";
 import { hostLogger, withTrace } from "@volli/host-core/log";
 import { errorMessage, logErrorSummary } from "@volli/shared";
@@ -65,7 +66,7 @@ export function registerGuardedIpcHandlers<Cs extends keyof VolliInvokeContract>
       withTrace(null, { door: "ipc", operation: channel }, () => {
         if (!guard(args)) return { ok: false, error: invalidError };
         try {
-          const outcome = handler(...args, event.sender);
+          const outcome = withRendererCall(event.sender.id, () => handler(...args, event.sender));
           return outcome instanceof Promise
             ? outcome.catch((error: unknown) => failed(channel, error))
             : outcome;

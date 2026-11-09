@@ -375,11 +375,14 @@ function identityHash(input: string): string {
 }
 
 function safeSegment(value: string, fallback: string): string {
-  const cleaned = value
-    .normalize("NFKD")
-    .replace(/[^A-Za-z0-9_-]+/g, "_")
-    .replace(/^[_-]+|[_-]+$/g, "")
-    .toLowerCase();
+  const normalized = value.normalize("NFKD").replace(/[^A-Za-z0-9_-]+/g, "_");
+  // These segments are durable provider identities: preserve their exact trim
+  // semantics, but scan once rather than backtracking over a long trailing run.
+  let start = 0;
+  let end = normalized.length;
+  while (start < end && (normalized[start] === "_" || normalized[start] === "-")) start += 1;
+  while (end > start && (normalized[end - 1] === "_" || normalized[end - 1] === "-")) end -= 1;
+  const cleaned = normalized.slice(start, end).toLowerCase();
   return cleaned.length === 0 ? fallback : cleaned;
 }
 

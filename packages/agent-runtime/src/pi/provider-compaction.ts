@@ -27,6 +27,7 @@ import { sanitizeSurrogates } from "@earendil-works/pi-ai/utils/sanitize-unicode
 import type { SessionUsage } from "@volli/shared";
 import { Buffer } from "node:buffer";
 import { providerImageGuard } from "./provider-images";
+import { anthropicSafeToolResult } from "./provider-tool-results";
 import { costBasisForApi } from "./transcript";
 import { withoutSystemMessages } from "./transcript-context";
 
@@ -649,11 +650,12 @@ export function toAnthropicMessages(
       }
       for (const block of blocks) push("assistant", block);
     } else {
+      const result = anthropicSafeToolResult(message);
       push("user", {
         type: "tool_result",
-        tool_use_id: normalizeToolCallId(message.toolCallId),
-        is_error: message.isError,
-        content: anthropicToolResultContent(message.content),
+        tool_use_id: normalizeToolCallId(result.toolCallId),
+        is_error: result.isError,
+        content: anthropicToolResultContent(result.content),
       });
     }
   }

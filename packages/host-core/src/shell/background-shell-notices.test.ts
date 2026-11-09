@@ -47,6 +47,8 @@ function credentialRedactors(value: string) {
   return {
     redactOutput: (text: string) => store.redact(text),
     redactNoticeOutput: (text: string) => store.redactPartial(text),
+    // As the runner wires it: completed lines settle between chunks.
+    noticeRedactionVersion: () => store.redactionVersion,
   };
 }
 
@@ -448,6 +450,20 @@ describe("safe output and lifecycle", () => {
     await until(() => host.tailOf("sh-1")?.output.includes("safe") === true);
     expect(notices).toEqual([]);
     expect(host.tailOf("sh-1")?.output).toContain("‹secret:TOKEN›");
+  });
+
+  it("settles a chatty prefix and still withholds a stored value split across chunks", async () => {
+    const { host, notices } = harness(credentialRedactors("hunter2-the-stored-value"));
+    await start(
+      host,
+      "sleep 0.3; for i in $(seq 1 200); do echo \"compiled module $i\"; done; sleep 0.1; printf 'ready hunter2-the-'; sleep 0.2; printf 'stored-value\\n'; sleep 30",
+      { notifyOn: { pattern: "ready", regex: false } },
+    );
+    await until(() => matches(notices).length > 0);
+    expect(matches(notices)).toEqual([
+      expect.objectContaining({ line: "ready ‹secret: [redacted]" }),
+    ]);
+    expect(JSON.stringify(notices)).not.toContain("hunter2");
   });
 
   it("never matches or quotes a PEM body, including while the block is incomplete", async () => {

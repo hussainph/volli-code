@@ -21,7 +21,8 @@
  * for the same liquid bead the app draws. No lab timer claims runtime state.
  */
 import * as React from "react";
-import { PlayIcon } from "@phosphor-icons/react";
+import { PlayIcon } from "@renderer/components/ui/icon";
+
 import {
   ACTIVITY_METADATA_KEY,
   type ActivityDescriptor,

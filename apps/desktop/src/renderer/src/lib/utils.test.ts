@@ -3,6 +3,12 @@ import { describe, expect, it } from "vite-plus/test";
 import { cn } from "./utils";
 
 describe("cn", () => {
+  it("lets a measured surface override the default reading measure", () => {
+    expect(cn("max-w-content", "max-w-(--container-composer)")).toBe(
+      "max-w-(--container-composer)",
+    );
+    expect(cn("max-w-workbench", "max-w-full")).toBe("max-w-full");
+  });
   it("keeps a type-scale token beside a text color", () => {
     // The bug this file exists for: tailwind-merge does not know the design
     // language's custom font-size tokens, so before they were registered as a
@@ -21,5 +27,18 @@ describe("cn", () => {
     expect(cn("text-primary-text", "text-muted-foreground")).toBe("text-muted-foreground");
     expect(cn("text-ui", "text-primary-text")).toBe("text-ui text-primary-text");
     expect(cn("text-primary-text", "text-label")).toBe("text-primary-text text-label");
+  });
+});
+
+describe("control token overrides", () => {
+  it("merges control geometry with caller resets", () => {
+    expect(cn("h-control-default", "h-auto")).toBe("h-auto");
+    expect(cn("px-control-pad-default", "px-0")).toBe("px-0");
+    expect(cn("size-control-sm", "size-4")).toBe("size-4");
+  });
+
+  it("drops the compound field's inner control shadow", () => {
+    expect(cn("shadow-control", "shadow-none")).toBe("shadow-none");
+    expect(cn("shadow-control-pressed", "shadow-raised")).toBe("shadow-raised");
   });
 });

@@ -248,7 +248,7 @@ describe("the token-derived terminal fallback", () => {
 
     applyLightTokens();
 
-    expect(getCurrentAppearance().theme.colors.palette[1]).toEqual({ r: 0x9b, g: 0x1e, b: 0x28 });
+    expect(getCurrentAppearance().theme.colors.palette[1]).toEqual({ r: 0xd8, g: 0x59, b: 0x59 });
   });
 
   it("swaps the whole ANSI set when the background crosses over", () => {
@@ -260,7 +260,7 @@ describe("the token-derived terminal fallback", () => {
 
     applyLightTokens();
 
-    expect(getCurrentAppearance().theme.colors.palette[0]).toEqual({ r: 0x27, g: 0x27, b: 0x27 });
+    expect(getCurrentAppearance().theme.colors.palette[0]).toEqual({ r: 0x54, g: 0x54, b: 0x54 });
     expect(getCurrentAppearance().theme.name).toBe("Volli Light");
   });
 
@@ -334,10 +334,10 @@ describe("the token-derived terminal fallback", () => {
     refreshTerminalTokenTheme();
 
     const { colors } = getCurrentAppearance().theme;
-    expect(colors.background).toEqual({ r: 0xfd, g: 0xde, b: 0xd2 });
+    expect(colors.background).toEqual({ r: 0xff, g: 0xff, b: 0xff });
     // …and the palette follows that background rather than the stamped class,
     // so the two can never disagree.
-    expect(colors.palette[0]).toEqual({ r: 0x27, g: 0x27, b: 0x27 });
+    expect(colors.palette[0]).toEqual({ r: 0x54, g: 0x54, b: 0x54 });
   });
 
   // The stylesheet may not have applied when the module first reads tokens, so

@@ -41,6 +41,7 @@ import {
   startTerminalSession,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
+import { openSettingsWindow } from "./lib/settings-window.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -94,18 +95,19 @@ function homeFileTab(page, relPath) {
 
 /** Opens the actual Settings → Appearance control instead of bypassing the renderer store. */
 async function openAppearanceSettings(page) {
-  await page.getByRole("button", { name: "Settings", exact: true }).first().click();
-  await page
+  const settings = await openSettingsWindow(app, page);
+  await settings
     .getByRole("navigation", { name: "Settings categories" })
     .getByRole("button", { name: "Appearance", exact: true })
     .click();
-  await page.getByTestId("appearance-mode").waitFor();
+  await settings.getByTestId("appearance-mode").waitFor();
+  return settings;
 }
 
 /** Change appearance through the real segmented control and wait for its live paint. */
 async function setAppearance(page, appearance) {
-  await openAppearanceSettings(page);
-  const choice = page.getByTestId("appearance-mode").locator(`[data-choice="${appearance}"]`);
+  const settings = await openAppearanceSettings(page);
+  const choice = settings.getByTestId("appearance-mode").locator(`[data-choice="${appearance}"]`);
   if ((await choice.getAttribute("aria-pressed")) !== "true") await choice.click();
   await waitUntil(
     `<html> to wear the ${appearance} class`,

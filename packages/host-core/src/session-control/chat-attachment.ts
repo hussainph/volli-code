@@ -2,7 +2,7 @@ import { sessionListingActivity, sessionListingWaitingOn } from "@volli/shared";
 import type {
   ChatSessionRecord,
   SessionAttachmentProjection,
-  SessionProjection,
+  SessionListingProjection,
 } from "@volli/shared";
 
 /**
@@ -20,7 +20,7 @@ import type {
  * attachments at all, so that precedence has exactly one place to live.
  */
 export function chatSessionRecord(
-  projection: SessionProjection,
+  projection: SessionListingProjection,
   /**
    * Whether this process currently holds the attachment's executor binding.
    * Listing callers must supply this host fact: durable attachment openness is

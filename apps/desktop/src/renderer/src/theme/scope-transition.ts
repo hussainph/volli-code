@@ -32,10 +32,8 @@
  * │            presses anything — see {@link beginScopeRepaint} for why input
  * │            has to end the crossfade rather than play over it.
  * │
- * │ Reduced motion: globals.css's media query collapses the crossfade to 120ms.
- * │ Nothing translates or scales at any point, so there is no vestibular motion
- * │ to remove — the short ease IS the accessible option for a whole-window
- * │ brightness change, and it is over before it registers as animation.
+ * │ Reduced motion, app Motion off, keyboard and unknown changes bypass the
+ * │ capture entirely; a live preference change skips any capture in flight.
  * └───────────────────────────────────────────────────────────────────────────
  *
  * WHY A VIEW TRANSITION, and not the CSS transition this used to be. The old
@@ -73,6 +71,14 @@
  * WHEN a swap eases and what the swap is; it holds no duration of its own,
  * because a second copy of 300ms is a second crossfade waiting to drift.
  */
+
+import {
+  motionPreferenceSnapshot,
+  subscribeMotionPreference,
+} from "@renderer/hooks/use-reduced-motion";
+
+/** Ephemeral input provenance, never part of a stored theme payload. */
+export type ScopeRepaintOrigin = "keyboard" | "pointer" | "system";
 
 /** What the theme store knows about a repaint it is about to perform. */
 export interface ScopeRepaintInput {
@@ -172,7 +178,13 @@ let running: ViewTransition | null = null;
  * a keypress is unaffected by any of this (keyboard focus never leaves the live
  * DOM), and decaying scroll momentum would cut fades it has no opinion about.
  */
-export function beginScopeRepaint(applyTokens: () => void): void {
+export function beginScopeRepaint(applyTokens: () => void, origin?: ScopeRepaintOrigin): void {
+  const preference = motionPreferenceSnapshot();
+  if (origin !== "pointer" || preference.appOff || preference.systemReduce) {
+    disarmScopeRepaint();
+    applyTokens();
+    return;
+  }
   if (typeof document === "undefined" || typeof document.startViewTransition !== "function") {
     applyTokens();
     return;
@@ -189,6 +201,10 @@ export function beginScopeRepaint(applyTokens: () => void): void {
     transition.skipTransition();
   };
   host.addEventListener("pointerdown", yieldToInput, { capture: true, once: true });
+  const unsubscribe = subscribeMotionPreference(() => {
+    const current = motionPreferenceSnapshot();
+    if (current.appOff || current.systemReduce) transition.skipTransition();
+  });
   // `ready` REJECTS with an AbortError every time a transition is skipped, and
   // skipping is the ORDINARY path here: a second workspace hop inside 300ms
   // makes Chromium abandon the first one, which is exactly the behaviour we
@@ -203,6 +219,7 @@ export function beginScopeRepaint(applyTokens: () => void): void {
   // would leave the live one unskippable.
   const forget = (): void => {
     host.removeEventListener("pointerdown", yieldToInput, { capture: true });
+    unsubscribe();
     if (running === transition) running = null;
   };
   void transition.finished.then(forget, forget);

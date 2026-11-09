@@ -281,6 +281,21 @@ describe("current activity selection", () => {
       )?.payload,
     ).toBe("still-running");
   });
+  it.each([false, true])(
+    "lets a settled duplicate call win over a stale overlay (result first: %s)",
+    (resultFirst) => {
+      const live = tool("read", { path: "settled.ts" }, { id: "duplicate" });
+      const result = tool("read", { path: "settled.ts" }, { id: "duplicate", done: true });
+      const duplicate = resultFirst ? [result, live] : [live, result];
+      expect(selectTurnActivity("s", input(duplicate))?.activity).toBe("reason");
+      expect(
+        selectTurnActivity(
+          "s",
+          input([tool("read", { path: "still-running.ts" }, { id: "parallel" }), ...duplicate]),
+        )?.payload,
+      ).toBe("still-running.ts");
+    },
+  );
   it("does not leave earlier reasoning streaming when text follows it", () => {
     expect(
       selectTurnActivity(

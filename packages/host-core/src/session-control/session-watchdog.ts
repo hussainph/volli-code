@@ -51,6 +51,7 @@ import type { SessionEngine } from "@volli/session-engine";
 
 import type { NotificationRequest } from "@volli/shared";
 import { hostLogger } from "../log/root";
+import { withMainSpan } from "../log/context";
 
 const log = hostLogger("session-watchdog");
 
@@ -209,7 +210,11 @@ export function createSessionWatchdog(ports: SessionWatchdogPorts): SessionWatch
   return {
     start() {
       if (timer !== null) return;
-      timer = setInterval(() => void scan().catch(onError), intervalMs);
+      timer = setInterval(
+        () =>
+          void withMainSpan({ door: "timer", operation: "session-watchdog" }, scan).catch(onError),
+        intervalMs,
+      );
     },
     stop() {
       if (timer !== null) clearInterval(timer);

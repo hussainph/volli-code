@@ -51,7 +51,7 @@ describe("reapableIds", () => {
 
 describe("processSummary", () => {
   it("counts the two stances separately, because they are two different facts", () => {
-    expect(processSummary(true, null)).toBe("Looking…");
+    expect(processSummary(true, null)).toBe("Looking");
     expect(processSummary(false, null)).toBe("Not scanned");
     expect(processSummary(false, inventory([]))).toBe("None");
     expect(processSummary(false, inventory([candidate()]))).toBe("1 to reap");

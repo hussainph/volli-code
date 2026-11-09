@@ -2,8 +2,12 @@ import {
   cliVerbName,
   HARNESS_VOCABULARY,
   HELP_TOPIC_NAMES,
+  isPerfGrouping,
+  isPerfProcess,
   isSessionUsageGrouping,
   isSessionListState,
+  PERF_GROUPINGS,
+  PERF_PROCESSES,
   SESSION_LIST_STATES,
   isTicketPriority,
   isTicketSignalKind,
@@ -176,6 +180,22 @@ const usageGroupingValue: ValueParser = (raw) =>
     : {
         ok: false,
         message: `Unknown grouping ${JSON.stringify(raw)} (valid: ${SESSION_USAGE_GROUPINGS.join(", ")})`,
+      };
+
+const perfGroupingValue: ValueParser = (raw) =>
+  isPerfGrouping(raw)
+    ? { ok: true, value: raw }
+    : {
+        ok: false,
+        message: `Unknown grouping ${JSON.stringify(raw)} (valid: ${PERF_GROUPINGS.join(", ")})`,
+      };
+
+const perfProcessValue: ValueParser = (raw) =>
+  isPerfProcess(raw)
+    ? { ok: true, value: raw }
+    : {
+        ok: false,
+        message: `Unknown process ${JSON.stringify(raw)} (valid: ${PERF_PROCESSES.join(", ")})`,
       };
 
 /**
@@ -496,6 +516,42 @@ export const CLI_MECHANICS: Partial<Record<VerbKey, VerbMechanics>> = {
     options: {
       "--ticket": { kind: "value", key: "ticket" },
       "--project": { kind: "value", key: "project" },
+    },
+  },
+  // The perf store's reads (VC-1092). `--since` keeps the look-back unresolved,
+  // as `cost` does: main's clock governs the window.
+  "perf.top": {
+    options: {
+      "--since": { kind: "value", key: "since", parse: usageWindowValue },
+      "--by": { kind: "value", key: "by", parse: perfGroupingValue },
+      "--process": { kind: "value", key: "process", parse: perfProcessValue },
+      "--limit": { kind: "value", key: "limit", parse: positiveIntValue },
+    },
+  },
+  "perf.stalls": {
+    options: {
+      "--since": { kind: "value", key: "since", parse: usageWindowValue },
+      "--process": { kind: "value", key: "process", parse: perfProcessValue },
+      "--door": { kind: "value", key: "door" },
+      "--operation": { kind: "value", key: "operation" },
+      "--label": { kind: "value", key: "label" },
+      "--version": { kind: "value", key: "version" },
+      "--limit": { kind: "value", key: "limit", parse: positiveIntValue },
+    },
+  },
+  "perf.compare": {
+    options: {
+      "--version": { kind: "repeated", key: "versions" },
+      "--since": { kind: "value", key: "since", parse: usageWindowValue },
+      "--by": { kind: "value", key: "by", parse: perfGroupingValue },
+      "--process": { kind: "value", key: "process", parse: perfProcessValue },
+      "--limit": { kind: "value", key: "limit", parse: positiveIntValue },
+    },
+    finalize: (args) => {
+      const versions = args["versions"];
+      return Array.isArray(versions) && versions.length === 2
+        ? null
+        : "perf compare takes --version exactly twice: a, then b";
     },
   },
   "app.launch": {

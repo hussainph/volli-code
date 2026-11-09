@@ -56,6 +56,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { anthropicSafeToolResult } from "./provider-tool-results";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import type { Api, ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
 import {
@@ -343,9 +344,24 @@ export const providerImageGuard = createProviderImageGuard();
 
 /**
  * Run every request of a `streamFn` through the image guard, against the
- * model that request is actually going to.
+ * model that request is actually going to. Anthropic's error-result content
+ * restriction is projected here too, never back into the durable transcript.
  */
 export function withProviderSafeImages(inner: StreamFn, guard: ProviderImageGuard): StreamFn {
-  return async (model, context, options) =>
-    inner(model, { ...context, messages: await guard.sanitize(context.messages, model) }, options);
+  return async (model, context, options) => {
+    const messages = await guard.sanitize(context.messages, model);
+    return inner(
+      model,
+      {
+        ...context,
+        messages:
+          model.api === "anthropic-messages"
+            ? messages.map((message) =>
+                message.role === "toolResult" ? anthropicSafeToolResult(message) : message,
+              )
+            : messages,
+      },
+      options,
+    );
+  };
 }

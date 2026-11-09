@@ -1108,3 +1108,88 @@ it("opens session start argv only with explicit operator parsing", () => {
 function routerOnly(entry: VerbEntry): boolean {
   return entry.catalog !== undefined && !entry.accessModes.includes("cli");
 }
+
+describe("volli perf (VC-1092)", () => {
+  it("parses top with its window, grouping, process and limit", () => {
+    expect(
+      parseCliArgs([
+        "perf",
+        "top",
+        "--since",
+        "1h",
+        "--by",
+        "label",
+        "--process",
+        "renderer",
+        "--limit",
+        "5",
+        "--json",
+      ]),
+    ).toEqual({
+      ok: true,
+      invocation: {
+        command: "perf.top",
+        args: {
+          since: { kind: "duration", ms: 3_600_000 },
+          by: "label",
+          process: "renderer",
+          limit: 5,
+        },
+        json: true,
+      },
+    });
+  });
+
+  it("parses stalls with every filter", () => {
+    expect(
+      parseCliArgs([
+        "perf",
+        "stalls",
+        "--door",
+        "ipc",
+        "--operation",
+        "volli:board-load",
+        "--label",
+        "pane-switch",
+        "--version",
+        "0.3.0",
+      ]),
+    ).toMatchObject({
+      ok: true,
+      invocation: {
+        command: "perf.stalls",
+        args: {
+          door: "ipc",
+          operation: "volli:board-load",
+          label: "pane-switch",
+          version: "0.3.0",
+        },
+      },
+    });
+  });
+
+  it("takes compare's --version exactly twice", () => {
+    expect(parseCliArgs(["perf", "compare", "--version", "a", "--version", "b"])).toMatchObject({
+      ok: true,
+      invocation: { command: "perf.compare", args: { versions: ["a", "b"] } },
+    });
+    for (const argv of [
+      ["perf", "compare"],
+      ["perf", "compare", "--version", "a"],
+      ["perf", "compare", "--version", "a", "--version", "b", "--version", "c"],
+    ]) {
+      const result = parseCliArgs(argv);
+      if (result.ok) throw new Error("expected a usage error");
+      expect(result.message).toContain("--version exactly twice");
+    }
+  });
+
+  it("teaches the grouping and process vocabularies", () => {
+    const grouping = parseCliArgs(["perf", "top", "--by", "colour"]);
+    if (grouping.ok) throw new Error("expected a usage error");
+    expect(grouping.message).toContain("operation, door, label, version, session");
+    const process = parseCliArgs(["perf", "stalls", "--process", "gpu"]);
+    if (process.ok) throw new Error("expected a usage error");
+    expect(process.message).toContain("main, renderer");
+  });
+});

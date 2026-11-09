@@ -32,6 +32,7 @@ import {
   groupedPanes,
   groupForTab,
   paneForTab,
+  selectTab,
   SPLIT_VIEW_ROOT_PANE_ID,
   type SplitViewEdge,
   type SplitViewGroup,
@@ -232,8 +233,13 @@ export function useProvisionalChatTabs(
       unclaimed(chatTabId(id)),
   );
   const activeOverride = focusedDraft?.[0] ?? null;
-  const overlaySplitView = (state: SplitViewState): SplitViewState =>
-    overlayPlacements(state, renderPlacements);
+  const overlaySplitView = (state: SplitViewState): SplitViewState => {
+    const overlaid = overlayPlacements(state, renderPlacements);
+    // The Draft overlay owns this explicit, unrecorded selection as well as
+    // its assignment. A projection's missing-tab fallback must never select
+    // another pane on the overlay's behalf.
+    return activeOverride === null ? overlaid : selectTab(overlaid, chatTabId(activeOverride));
+  };
   const emptyTabIds = React.useMemo(
     () =>
       new Set(

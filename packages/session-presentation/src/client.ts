@@ -175,6 +175,17 @@ export interface AttachOptions {
  */
 export interface ChatSessionWrites {
   sessions: Readonly<Record<string, ChatSessionSlice>>;
+  /**
+   * Runs `run` and publishes every slice write it made as ONE store write
+   * (VC-515). The shared frame scheduler runs each frame's stream flushes
+   * inside it, so N streaming Sessions cost one notification of every
+   * subscriber rather than N. A write inside `run` addressed to a Session
+   * that is gone is still a no-op, and reads made inside `run` through the
+   * writes themselves see the writes staged before them. Must be a stable
+   * function — the scheduler groups flushes by its identity. Optional: a
+   * store without it publishes each flush on its own, as before.
+   */
+  batch?: FlushBatch;
   applyStream(
     sessionId: string,
     frames: readonly ChatSessionFrame[],
@@ -355,9 +366,20 @@ export interface FlushScheduler {
    * that record overwrite the clean slate its own flush just left and no batch
    * after it would ever be scheduled. The returned cancel retires a flush that
    * has not run.
+   *
+   * `batch`, when given, is the store's way of folding every flush that lands
+   * in the same frame into one published write (VC-515): a scheduler that runs
+   * several flushes together runs all those naming one `batch` inside a single
+   * call of it. A scheduler that runs each flush alone may ignore it.
    */
-  schedule(flush: () => void): () => void;
+  schedule(flush: () => void, batch?: FlushBatch): () => void;
 }
+
+/**
+ * Runs `run` — which may make many slice writes — and publishes them as one
+ * store write when it returns. {@link ChatSessionWrites.batch}.
+ */
+export type FlushBatch = (run: () => void) => void;
 
 /** How long a surface with no frame callbacks waits before folding anyway. */
 const HIDDEN_FLUSH_MS = 50;
@@ -386,22 +408,101 @@ export interface FlushHost {
  * is never going to run.
  */
 export function racingFlushScheduler(host: FlushHost): FlushScheduler {
+  let shared = sharedFrames.get(host);
+  if (shared === undefined) {
+    shared = sharedFrameScheduler(host);
+    sharedFrames.set(host, shared);
+  }
+  return shared;
+}
+
+/**
+ * One frame per window, shared by every client on it (VC-515).
+ *
+ * Each client used to race its own frame callback and timer, so N streaming
+ * Sessions meant N callbacks, N store writes and N selector passes over every
+ * mounted subscriber per frame. Keyed by host, every `racingFlushScheduler(window)`
+ * — the IPC, remote and cloud transports alike — hands out this one scheduler:
+ * the first flush scheduled in a frame arms the race, every later one joins it,
+ * and the flushes that name the same {@link FlushBatch} run inside one call of
+ * it, which is one published write.
+ */
+const sharedFrames = new WeakMap<FlushHost, FlushScheduler>();
+
+interface PendingFlush {
+  flush: () => void;
+  batch: FlushBatch | undefined;
+  cancelled: boolean;
+}
+
+function sharedFrameScheduler(host: FlushHost): FlushScheduler {
+  let pending: PendingFlush[] = [];
+  let armed: { frame: number; timer: number; generation: number } | null = null;
+  let generation = 0;
+  const disarm = () => {
+    if (armed === null) return;
+    host.cancelAnimationFrame(armed.frame);
+    host.clearTimeout(armed.timer);
+    armed = null;
+  };
+  const run = (due: number) => {
+    // A callback from a race already won (or disarmed) is stale: the frame it
+    // was armed for has flushed, and what is pending now belongs to the next.
+    if (armed === null || armed.generation !== due) return;
+    disarm();
+    const flushes = pending;
+    pending = [];
+    // Grouped by batch, in first-scheduled order, so one store's flushes
+    // publish as one write. A flush scheduled while these run (none does today:
+    // a client buffers until the next emission) arms the next frame.
+    const groups = new Map<FlushBatch | undefined, PendingFlush[]>();
+    for (const entry of flushes) {
+      const group = groups.get(entry.batch);
+      if (group === undefined) groups.set(entry.batch, [entry]);
+      else group.push(entry);
+    }
+    for (const [batch, entries] of groups) {
+      const runAll = () => {
+        for (const entry of entries) {
+          // A flush cancelled by an earlier one in this frame (its client
+          // disposed mid-frame) must not write.
+          if (entry.cancelled) continue;
+          entry.cancelled = true;
+          try {
+            entry.flush();
+          } catch (failure) {
+            // One client's throw must not strand the others' batches, as it
+            // could not when each ran in its own callback. Rethrown on its own
+            // task, where it still reaches the window's error reporting.
+            host.setTimeout(() => {
+              throw failure;
+            }, 0);
+          }
+        }
+      };
+      if (batch === undefined) runAll();
+      else batch(runAll);
+    }
+  };
   return {
-    schedule(flush) {
-      let settled = false;
-      const retire = () => {
-        settled = true;
-        host.cancelAnimationFrame(frame);
-        host.clearTimeout(timer);
+    schedule(flush, batch) {
+      const entry: PendingFlush = { flush, batch, cancelled: false };
+      pending.push(entry);
+      if (armed === null) {
+        generation += 1;
+        const due = generation;
+        armed = {
+          generation: due,
+          frame: host.requestAnimationFrame(() => run(due)),
+          timer: host.setTimeout(() => run(due), HIDDEN_FLUSH_MS),
+        };
+      }
+      return () => {
+        if (entry.cancelled) return;
+        entry.cancelled = true;
+        pending = pending.filter((candidate) => candidate !== entry);
+        if (pending.length === 0) disarm();
       };
-      const run = () => {
-        if (settled) return;
-        retire();
-        flush();
-      };
-      const frame = host.requestAnimationFrame(run);
-      const timer = host.setTimeout(run, HIDDEN_FLUSH_MS);
-      return retire;
     },
   };
 }
@@ -1256,7 +1357,7 @@ export class ChatSessionClient {
     if (this.#cancelFlush !== null) return;
     this.#cancelFlush = this.#scheduler.schedule(() => {
       this.#flush();
-    });
+    }, this.#writes().batch);
   }
 
   /**

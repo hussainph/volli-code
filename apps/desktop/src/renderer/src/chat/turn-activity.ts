@@ -361,7 +361,8 @@ export function selectTurnActivity(
   }
   const previous = new Map<TurnActivityKind, string>();
   const calls = new Map<string, string>();
-  let activeTool: TurnActivity | null = null;
+  const activeTools = new Map<string, TurnActivity>();
+  const settledCalls = new Set<string>();
   let tail: TurnActivity | null = null;
   let lastKey = boundary;
   for (const message of input.messages.slice(start)) {
@@ -379,9 +380,17 @@ export function selectTurnActivity(
           event.word ??
           calls.get(event.key) ??
           pickTurnActivityWord(event.activity, event.callId, previous.get(event.activity));
+        if (!calls.has(event.key)) previous.set(event.activity, word);
         calls.set(event.key, word);
-        previous.set(event.activity, word);
-        if (isRowActive(part)) activeTool = present(event, word);
+        // Match the transcript's work-window ownership: a durable result wins
+        // over an older running overlay of the same call, in either order.
+        if (!isRowActive(part)) {
+          settledCalls.add(event.key);
+          activeTools.delete(event.key);
+        } else if (!settledCalls.has(event.key)) {
+          activeTools.delete(event.key);
+          activeTools.set(event.key, present(event, word));
+        }
       } else if (part.type === "reasoning" && part.state === "streaming") {
         tail = present({ key, activity: "reason", payload: null }, TURN_ACTIVITY_POOLS.reason[0]);
       } else if (part.type === "text" && part.state === "streaming") {
@@ -390,7 +399,7 @@ export function selectTurnActivity(
     }
   }
   return (
-    activeTool ??
+    [...activeTools.values()].at(-1) ??
     tail ??
     present(
       { key: `${sessionId}:reason:${lastKey}`, activity: "reason", payload: null },

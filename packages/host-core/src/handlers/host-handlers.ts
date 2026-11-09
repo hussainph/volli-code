@@ -141,6 +141,8 @@ import type {
 } from "@volli/shared";
 import type { CloudCheckoutPort } from "./cloud-checkout-port";
 import type { BrowserPictureStore } from "../browser/picture-store";
+import type { SourceIconCache } from "../source-icons/cache";
+import type { SourceIconsWatchInput, SourceIconsSnapshot } from "@volli/shared";
 import type { HostSignIns } from "../host-sign-ins";
 import { withLogContext } from "../log/context";
 import type { LogRing } from "../log/ring";
@@ -262,6 +264,7 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures, AgentHand
     { sessionId: string; pictureId: string; offset?: number },
     { data: string | null; mimeType: string | null; nextOffset: number | null }
   >;
+  readonly "sourceIcons.watch": HostSubscriptionHandler<SourceIconsWatchInput, SourceIconsSnapshot>;
   readonly "session.projection": HostHandler<
     { sessionId: string },
     SessionRuntimeProjectionSnapshot
@@ -625,6 +628,7 @@ export interface HostHandlerOptions {
   readonly restore?: ProfileRestorePort | null;
   /** The same screenshot store Code Mode writes; absent means an explicit unavailable picture. */
   readonly pictures?: BrowserPictureStore;
+  readonly sourceIcons?: SourceIconCache;
   /** The recovered Session runtime, or null when this launch has none. */
   readonly runtime: SessionRuntime | null;
   /** The recovered Sessions facade, or null when this launch has none. */
@@ -924,7 +928,10 @@ function hostHandlerEntries(
             // The desktop window holds the committed board in its reply, so
             // only the detached trim's worktree change is pushed back to it.
             onMutation: (change) => {
-              if (call.origin === "desktop-window" && change.kind !== "worktree") return;
+              if (call.origin === "desktop-window" && change.kind !== "worktree") {
+                ports.events.publishToPeers?.("data-changed", change);
+                return;
+              }
               ports.events.publish("data-changed", change);
             },
             detachedWork: options.detachedWork,
@@ -1044,12 +1051,29 @@ function hostHandlerEntries(
     "modelAccess.setPickerView": (view) => writeModelPickerView(preferences(), view, now()),
     "session.snapshot": (input) => runtime().snapshot(input),
     "session.history": (input) => runtime().history(input),
-    "session.picture": ({ sessionId, pictureId, offset }) =>
-      options.pictures?.readActivityImage(sessionId, pictureId, offset) ?? {
+    "session.picture": ({ sessionId, pictureId, offset }, call) => {
+      const saved = options.pictures?.readActivityImage(sessionId, pictureId, offset) ?? {
         data: null,
         mimeType: null,
         nextOffset: null,
-      },
+      };
+      // Source icons are machine-local decoration, never an extension of the
+      // retired network transport or a local fallback for a remote Session.
+      if (saved.data !== null || call.origin !== "desktop-window" || call.actor.kind !== "user")
+        return saved;
+      return options.sourceIcons?.picture(sessionId, pictureId, offset) ?? saved;
+    },
+    "sourceIcons.watch": async (input, call, sink) => {
+      if (
+        options.sourceIcons === undefined ||
+        call.origin !== "desktop-window" ||
+        call.actor.kind !== "user"
+      )
+        throw new OperationUnavailableError("Source icons are unavailable on this host");
+      return options.sourceIcons.watch(input, (snapshot) => {
+        void sink.emit(snapshot);
+      });
+    },
     "session.projection": (input) => runtime().projection(input),
     "session.subscribe": (input, _call, sink) =>
       runtime().subscribe(

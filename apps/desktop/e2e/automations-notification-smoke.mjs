@@ -276,11 +276,12 @@ try {
       const form = page.locator('[data-slot="automation-editor"]');
       await form.waitFor({ timeout: 15000 });
       await form.getByLabel("Name").fill("Nightly sweep");
-      await form.getByLabel("Instructions").fill("/review the day");
-      await form.getByRole("button", { name: "Create automation" }).click();
-      await page
-        .locator("[data-automation-rail-row]")
-        .filter({ hasText: "Nightly sweep" })
+      await form
+        .getByRole("textbox", { name: "Instructions", exact: true })
+        .fill("/review the day");
+      await form.getByRole("button", { name: "Create", exact: true }).click();
+      await form
+        .getByRole("heading", { name: "Nightly sweep", exact: true })
         .waitFor({ timeout: 15000 });
 
       // And the Run door itself, on an Automation with no pin: it inherits,

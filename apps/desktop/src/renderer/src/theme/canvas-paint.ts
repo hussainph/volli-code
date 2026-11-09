@@ -25,10 +25,22 @@
 
 import {
   canvasBackground,
+  compositeHex,
+  effectiveStopHexes,
+  wcagContrast,
   canvasElevation,
   canvasInk,
   deriveCanvasTokens,
   deriveLabelInk,
+  focusRing,
+  readingBackings,
+  readingInk,
+  SECONDARY_FILL_ALPHA,
+  regularGlassBackdrop,
+  regularGlassTone,
+  writingGlass,
+  tintCanvasNeutral,
+  hexChannels,
   type Canvas,
   type ResolvedAppearance,
 } from "@volli/shared";
@@ -107,6 +119,41 @@ export const CANVAS_TOKEN_NAMES = [
   LABEL_VARIABLE,
   ...Object.values(SHADOW_VARIABLES),
   SCRIM_VARIABLE,
+  "--canvas-accent",
+  "--canvas-secondary-stop",
+  "--flow",
+  "--accent-tint",
+  "--accent-selected",
+  "--tertiary-foreground",
+  "--glass-fill",
+  "--glass-edge",
+  "--canvas-mesh",
+  "--glass-veil",
+  "--glass-pane-veil",
+  "--glass-writing-veil",
+  "--glass-tone",
+  "--glass-rim",
+  "--glass-ink",
+  "--glass-secondary",
+  "--fill-row-selected",
+  "--fill-row-hover",
+  "--fill-quaternary",
+  "--fill-secondary",
+  "--surface-quaternary",
+  "--surface-secondary",
+  "--wash-ink",
+  "--glass-wash-ink",
+  "--card-face",
+  "--card-shadow",
+  "--paper-shadow",
+  "--tab-selected-face",
+  "--control-face",
+  "--glass-outline-pressed",
+  "--writing-control-face",
+  "--writing-control-pressed",
+  "--control-bezel-shadow",
+  "--diff-added",
+  "--diff-removed",
 ] as const;
 
 export type CanvasTokenName = (typeof CANVAS_TOKEN_NAMES)[number];
@@ -116,6 +163,8 @@ export type CanvasTokens = Record<CanvasTokenName, string>;
 
 /** The two classes that name a resolved appearance on `<html>`. */
 const MODE_CLASSES = ["light", "dark"] as const;
+
+const translucent = (hex: string, alpha: number) => `rgb(${hexChannels(hex).join(" ")} / ${alpha})`;
 
 /**
  * Whether the system is currently asking for dark — the input `auto` resolves
@@ -156,6 +205,7 @@ export function systemPrefersDark(): boolean {
  * pool — so an ink chosen against the gradient alone would be chosen against
  * surfaces that are no longer the hardest ones on screen.
  */
+
 export function deriveCanvasPaint(
   canvas: Canvas,
   resolved: ResolvedAppearance,
@@ -163,8 +213,88 @@ export function deriveCanvasPaint(
   const tokens = deriveCanvasTokens(canvas, resolved);
   const elevation = canvasElevation(canvas, resolved, tokens);
   const { ink, inkLabel, inkMuted } = canvasInk(canvas, resolved, elevation.surfaces);
+  // Diff counts and gutter marks are reading ink, not status fills. Include
+  // both accent selection and the editor's material wash alongside actual glass.
+  const readingPools = [
+    compositeHex(resolved === "light" ? "#000000" : "#ffffff", 0.18, tokens["--card"]),
+    compositeHex(
+      tintCanvasNeutral(tokens["--foreground"], canvas, resolved),
+      0.22,
+      tokens["--card"],
+    ),
+    ...writingGlass(tokens["--popover"], resolved).pools,
+  ];
+  const diffInk = (status: string): string => readingInk(status, readingPools, resolved, 4.5);
+  const light = resolved === "light";
+  const neutral = (hex: string) => tintCanvasNeutral(hex, canvas, resolved);
+  const fillInk = neutral(tokens["--foreground"]);
+  // An object on paper has a known backing. Tint its final rung, rather than
+  // tinting near-white ink and then losing almost all chroma at 2.7/7.8% alpha.
+  // The alpha recipes remain separate for glass and overlays on arbitrary fills.
+  const paperSurface = (alpha: number) =>
+    neutral(compositeHex(tokens["--foreground"], alpha, tokens["--background"]));
+  const raisedFace = neutral(light ? "#fafafa" : "#2a2a2a");
+  const controlAlpha = 0.14;
+  const writingVeil = writingGlass(tokens["--popover"], resolved).veil;
+  const tertiaryInk = readingInk(neutral(light ? "#666666" : "#aaaaaa"), readingPools, resolved, 3);
+  const paneFill = light ? "#ffffff" : "#1a1a1c";
+  const paneAlpha = light ? 0.46 : 0.52;
+  // Solve meaningful glass text against every peak, not against neutral paper.
+  // Very pale authored dark canvases may need dark ink on their glass.
+  const glassPools = effectiveStopHexes(canvas, resolved).map((hex) =>
+    compositeHex(paneFill, paneAlpha, regularGlassBackdrop(hex, resolved)),
+  );
+  const contrast = (hex: string) =>
+    Math.min(...glassPools.map((surface) => wcagContrast(hex, surface)));
+  const darkInk = contrast("#171717") >= contrast("#f5f5f5");
+  const glassInkBase = darkInk ? "#171717" : "#f5f5f5";
+  // Optical occlusion/highlight, not another authored palette: pressing moves
+  // an outline face away from its ink, a shade under light ink and a highlight
+  // under dark ink, at the shared secondary coverage.
+  const outlinePressedInk = darkInk ? "#ffffff" : "#000000";
+  // Row washes and secondary ink are solved against the pane and its row
+  // fills. Control faces constrain only the foreground below, never row paint.
+  const rowInk = neutral(glassInkBase);
+  // RAIL_FOOTER's `bg-popover/30` (the navigation tests pin the class), under
+  // Browse files and PR, beside the direct pane for other navigation controls.
+  const railFooterWash = (surface: string) => compositeHex(tokens["--popover"], 0.3, surface);
+  const navigationBackings = glassPools.flatMap((surface) => [surface, railFooterWash(surface)]);
+  const glassReadingPools = glassPools.flatMap((surface) => [
+    surface,
+    compositeHex(rowInk, 0.047, surface),
+    // The 10% rail tile wash also bounds the 9% selected source-list row.
+    compositeHex(rowInk, 0.1, surface),
+  ]);
+  // Outline labels inherit glass foreground at rest and while pressed.
+  // Their actual control/pressed faces belong to this foreground solve only:
+  // no secondary text is drawn on them by the rail's outline callers.
+  const glassForegroundPools = [
+    ...glassReadingPools,
+    ...navigationBackings.flatMap((backing) => {
+      const control = light ? raisedFace : compositeHex(fillInk, controlAlpha, backing);
+      return [control, compositeHex(outlinePressedInk, SECONDARY_FILL_ALPHA, control)];
+    }),
+  ];
+  // Keep the canvas-chosen polarity and move only as far as contrast needs.
+  // readingInk is bounded at its pole; the actual-composite tests still require
+  // 4.5 there and expose a material constraint if no ink on this arm can pass.
+  const glassInk = readingInk(glassInkBase, glassForegroundPools, darkInk ? "light" : "dark", 4.5);
+  const glassSecondary = readingInk(
+    neutral(darkInk ? "#5a5a5a" : "#b9b9b9"),
+    glassReadingPools,
+    darkInk ? "light" : "dark",
+    4.5,
+  );
+  // The painted ring: one solve from the unsolved accent ink against every
+  // paper/writing-glass backing the shared ring clears plus navigation glass
+  // and the rail footer wash, so neither set can undo the other.
+  const ring = focusRing(
+    tokens["--primary-text"],
+    [...readingBackings(canvas, resolved, tokens), ...navigationBackings],
+    resolved,
+  );
   return {
-    tokens,
+    tokens: { ...tokens, "--ring": ring },
     canvasTokens: {
       [CANVAS_VARIABLE]: canvasBackground(canvas, resolved),
       [INK_VARIABLE]: ink,
@@ -180,6 +310,53 @@ export function deriveCanvasPaint(
       "--shadow-card": elevation.shadows.card,
       "--shadow-overlay": elevation.shadows.overlay,
       [SCRIM_VARIABLE]: elevation.scrim,
+      "--canvas-accent": canvas.stops[0].hex,
+      "--canvas-secondary-stop": (canvas.stops[1] ?? canvas.stops[0]).hex,
+      "--flow": `linear-gradient(120deg, ${canvas.stops.map((stop) => stop.hex).join(", ")}${canvas.stops.length === 1 ? `, ${canvas.stops[0].hex}` : ""})`,
+      "--accent-tint": `color-mix(in srgb, ${canvas.stops[0].hex} 10%, ${tokens["--card"]})`,
+      "--accent-selected": `color-mix(in srgb, ${canvas.stops[0].hex} 18%, ${tokens["--card"]})`,
+      "--tertiary-foreground": tertiaryInk,
+      "--glass-fill": tokens["--popover"],
+      "--glass-edge": light ? "rgb(0 0 0 / .11)" : "rgb(0 0 0 / .6)",
+      "--canvas-mesh": canvasBackground(canvas, resolved, false),
+      "--glass-veil": writingVeil,
+      "--glass-pane-veil": light ? "rgb(255 255 255 / .46)" : "rgb(26 26 28 / .52)",
+      // The same colour family as the paper beneath, not another canvas mesh.
+      "--glass-writing-veil": writingVeil,
+      "--glass-tone": regularGlassTone(resolved),
+      "--glass-rim": light
+        ? "linear-gradient(180deg, rgb(255 255 255 / .17), transparent 22%, transparent 78%, rgb(255 255 255 / .17))"
+        : "linear-gradient(180deg, rgb(255 255 255 / .21), transparent 22%, transparent 78%, rgb(255 255 255 / .21))",
+      "--glass-ink": glassInk,
+      "--glass-secondary": glassSecondary,
+      "--fill-row-selected": `color-mix(in oklab, ${rowInk} 9%, transparent)`,
+      "--fill-row-hover": `color-mix(in oklab, ${rowInk} 4.7%, transparent)`,
+      "--fill-quaternary": translucent(fillInk, 0.027),
+      "--fill-secondary": translucent(fillInk, SECONDARY_FILL_ALPHA),
+      "--surface-quaternary": paperSurface(0.027),
+      "--surface-secondary": paperSurface(0.078),
+      "--wash-ink": fillInk,
+      "--glass-wash-ink": rowInk,
+      "--card-face": raisedFace,
+      "--card-shadow": light
+        ? "0 1px 2px rgb(0 0 0 / .05), 0 0 0 .5px rgb(0 0 0 / .07)"
+        : "0 1px 2px rgb(0 0 0 / .35), 0 0 0 .5px rgb(255 255 255 / .06)",
+      "--control-face": light ? raisedFace : translucent(fillInk, controlAlpha),
+      "--glass-outline-pressed": translucent(outlinePressedInk, SECONDARY_FILL_ALPHA),
+      // Outline/secondary faces on floating writing glass (popovers, floating
+      // dialogs and alerts, the palette). Light keeps the opaque
+      // control face and shared press. Dark shades toward the pole opposite
+      // the light body ink at the same 14%/7.8% coverage, so neither face can
+      // fall below the bare writing glass the body ink already clears.
+      "--writing-control-face": light ? raisedFace : translucent("#000000", controlAlpha),
+      "--writing-control-pressed": translucent(light ? fillInk : "#000000", SECONDARY_FILL_ALPHA),
+      "--control-bezel-shadow": light
+        ? "0 .5px 1.5px rgb(0 0 0 / .16), 0 0 0 .5px rgb(0 0 0 / .09), inset 0 .5px 0 rgb(255 255 255 / 1)"
+        : "0 .5px 1.5px rgb(0 0 0 / .5), 0 0 0 .5px rgb(0 0 0 / .35), inset 0 .5px 0 rgb(255 255 255 / .14)",
+      "--tab-selected-face": light ? raisedFace : translucent(fillInk, 0.14),
+      "--paper-shadow": "0 1px 3px rgb(0 0 0 / .06), 0 0 0 .5px var(--glass-edge)",
+      "--diff-added": diffInk(tokens["--positive"]),
+      "--diff-removed": diffInk(tokens["--destructive"]),
     },
   };
 }

@@ -36,6 +36,7 @@ import { createTestSessionEngine, testProject } from "@volli/host-core/testing";
 
 import { api, internal } from "../functions/_generated/api";
 import { verifyS3Request } from "../fixture/s3-boundary.ts";
+import { scopeDeploymentEnv } from "../fixture/deployment-env.ts";
 import { connectBackend } from "../fixture/testing";
 import { enrollBackendPreview } from "./preview-fixtures";
 
@@ -49,20 +50,6 @@ export async function until(check: () => boolean | Promise<boolean>, label: stri
     if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${label}`);
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-}
-
-/** This is the fixture's throwaway admin key, never an account or runner credential. */
-async function deploymentEnv(values: Record<string, string>) {
-  const adminKey = process.env.VOLLI_CONVEX_ADMIN_KEY;
-  if (!adminKey) throw new Error("Run with the pinned backend fixture");
-  const response = await fetch(`${connectBackend().url}/api/update_environment_variables`, {
-    method: "POST",
-    headers: { authorization: `Convex ${adminKey}`, "content-type": "application/json" },
-    body: JSON.stringify({
-      changes: Object.entries(values).map(([name, value]) => ({ name, value })),
-    }),
-  });
-  if (!response.ok) throw new Error(`Setting fixture storage env: ${response.status}`);
 }
 
 export interface StoredObject {
@@ -84,7 +71,7 @@ const header = (req: IncomingMessage, name: string) => {
  */
 export async function startHistoryS3() {
   const bucket = "transcript-packing";
-  const accessKeyId = "fixture-history-access";
+  const accessKeyId = `history-${randomUUID()}`;
   const secretAccessKey = "fixture-history-secret";
   const region = "auto";
   const objects = new Map<string, StoredObject>();
@@ -103,7 +90,13 @@ export async function startHistoryS3() {
   const server = createServer(async (req, res) => {
     try {
       const url = new URL(req.url!, origin);
-      const key = verifyS3Request(req, url, { bucket, accessKeyId, secretAccessKey, region });
+      const key = verifyS3Request(req, url, {
+        endpoint: origin,
+        bucket,
+        accessKeyId,
+        secretAccessKey,
+        region,
+      });
       if (req.method === "GET") {
         const object = objects.get(key);
         res.writeHead(object ? 200 : 404);
@@ -149,10 +142,17 @@ export async function startHistoryS3() {
     VOLLI_S3_SECRET_ACCESS_KEY: secretAccessKey,
     VOLLI_S3_REGION: region,
   };
+  async function closeServer() {
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+      server.closeAllConnections();
+    });
+  }
+  let deployment: Awaited<ReturnType<typeof scopeDeploymentEnv>>;
   try {
-    await deploymentEnv(env);
+    deployment = await scopeDeploymentEnv(env);
   } catch (error) {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await closeServer();
     throw error;
   }
   return {
@@ -182,13 +182,10 @@ export async function startHistoryS3() {
     },
     async close() {
       for (const release of releases) release();
-      // The pinned fixture has no S3 env initially. Blank only this suite's
-      // five variables, leaving the shared deployment's auth/sealing intact.
       try {
-        await deploymentEnv(Object.fromEntries(Object.keys(env).map((name) => [name, ""])));
+        await deployment.restore();
       } finally {
-        server.closeAllConnections();
-        await new Promise<void>((resolve) => server.close(() => resolve()));
+        await closeServer();
       }
     },
   };

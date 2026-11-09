@@ -1,4 +1,5 @@
 import { baseNameOf } from "@volli/shared";
+import { EmptyState } from "@renderer/components/ui/empty-state";
 
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { cn } from "@renderer/lib/utils";
@@ -15,11 +16,11 @@ export function DiffStub({
 }) {
   return (
     <div data-testid="ticket-diff-stub" className={cn("min-h-0 flex-1", EMPTY_PAGE)}>
-      <p className="text-ui font-medium text-foreground">{stubReason}</p>
-      <p className="text-ui text-muted-foreground">{baseNameOf(path)}</p>
-      {previousPath !== null ? (
-        <p className="text-ui text-muted-foreground/70">← {previousPath}</p>
-      ) : null}
+      <EmptyState tier="page" illustration="file" status="unavailable" title={stubReason} />
+      <span className="sr-only">
+        {baseNameOf(path)}
+        {previousPath === null ? "" : ` ← ${previousPath}`}
+      </span>
     </div>
   );
 }

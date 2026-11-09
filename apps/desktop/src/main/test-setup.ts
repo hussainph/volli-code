@@ -1,7 +1,7 @@
 /**
  * What every main-process test file gets whether it asks or not.
  *
- * The one thing here is draining the data-change coalescer. Roughly fifteen
+ * The shared cleanup drains the data-change coalescer. Roughly fifteen
  * mutation sites queue an invalidation, several of them from handlers a test is
  * exercising for some other reason entirely, and the queue is module state that
  * outlives the test that filled it. Left alone it is delivered into the NEXT
@@ -14,10 +14,18 @@
  * delivered somewhere else.
  *
  * Imported dynamically so it resolves AFTER a test file's hoisted `vi.mock`
- * calls: `broadcast.ts` reaches Electron, and most of these files replace that
- * module wholesale.
+ * calls. `broadcast.ts` reaches Electron even when the test only uses pure
+ * code or injected native fakes. Supply a windowless default below; files
+ * exercising Electron adapters replace it with their own explicit mock.
  */
-import { afterEach } from "vite-plus/test";
+import { afterEach, vi } from "vite-plus/test";
+
+// Never load Electron's npm entrypoint in a plain-Node unit test: a missing
+// binary makes that import download it at runtime. Cleanup needs no windows.
+// Keep this narrow so tests using other native APIs must supply their own fake.
+vi.mock("electron", () => ({
+  BrowserWindow: { getAllWindows: () => [] },
+}));
 
 afterEach(async () => {
   const { resetDataChangedForTest } = await import("./broadcast");

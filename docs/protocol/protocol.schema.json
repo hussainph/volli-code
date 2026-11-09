@@ -7795,6 +7795,106 @@
               },
               "type": "array"
             },
+            "preflight": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "done": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "phase": {
+                      "enum": [
+                        "checking",
+                        "snapshot",
+                        "reading",
+                        "exporting",
+                        "history",
+                        "verifying",
+                        "planning",
+                        "sizing"
+                      ],
+                      "type": "string"
+                    },
+                    "projectCount": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "projectIndex": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "projectName": {
+                      "anyOf": [
+                        {
+                          "maxLength": 4096,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "startedAt": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "total": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "unit": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "records",
+                            "files"
+                          ],
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "phase",
+                    "projectIndex",
+                    "projectCount",
+                    "projectName",
+                    "done",
+                    "total",
+                    "unit",
+                    "startedAt"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "revision": {
               "maximum": 9007199254740991,
               "minimum": 0,
@@ -7843,6 +7943,7 @@
             "account",
             "workspaces",
             "unavailable",
+            "preflight",
             "moves"
           ],
           "type": "object"
@@ -8250,6 +8351,89 @@
           "type": "object"
         },
         "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "sourceIcons.watch": {
+        "compatibility": "host-command",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "origins": {
+              "items": {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              "maxItems": 32,
+              "type": "array"
+            },
+            "sessionId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "sessionId",
+            "origins"
+          ],
+          "type": "object"
+        },
+        "kind": "subscription",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "icons": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "origin": {
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "pictureId": {
+                    "anyOf": [
+                      {
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "registrableDomain": {
+                    "anyOf": [
+                      {
+                        "maxLength": 253,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "origin",
+                  "pictureId",
+                  "registrableDomain"
+                ],
+                "type": "object"
+              },
+              "maxItems": 32,
+              "type": "array"
+            }
+          },
+          "required": [
+            "icons"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "documented-yield",
         "voidOutput": false
       },
       "worktree.answerSetup": {
@@ -13164,6 +13348,14 @@
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
           "properties": {
+            "defaultMode": {
+              "enum": [
+                "off",
+                "both",
+                "only"
+              ],
+              "type": "string"
+            },
             "enabled": {
               "type": "boolean"
             },
@@ -13860,6 +14052,14 @@
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "properties": {
+            "defaultMode": {
+              "enum": [
+                "off",
+                "both",
+                "only"
+              ],
+              "type": "string"
+            },
             "enabled": {
               "type": "boolean"
             },
@@ -13892,6 +14092,14 @@
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
           "properties": {
+            "defaultMode": {
+              "enum": [
+                "off",
+                "both",
+                "only"
+              ],
+              "type": "string"
+            },
             "enabled": {
               "type": "boolean"
             },
@@ -14796,6 +15004,14 @@
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
           "properties": {
+            "defaultMode": {
+              "enum": [
+                "off",
+                "both",
+                "only"
+              ],
+              "type": "string"
+            },
             "enabled": {
               "type": "boolean"
             },
@@ -15492,6 +15708,14 @@
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "properties": {
+            "defaultMode": {
+              "enum": [
+                "off",
+                "both",
+                "only"
+              ],
+              "type": "string"
+            },
             "enabled": {
               "type": "boolean"
             },
@@ -15524,6 +15748,14 @@
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
           "properties": {
+            "defaultMode": {
+              "enum": [
+                "off",
+                "both",
+                "only"
+              ],
+              "type": "string"
+            },
             "enabled": {
               "type": "boolean"
             },

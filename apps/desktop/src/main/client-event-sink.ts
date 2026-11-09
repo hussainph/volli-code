@@ -1,6 +1,7 @@
 /** Exactly one requesting WebContents, adapted to a host-owned stream (VC-556). */
 import type { WebContents } from "electron";
 import type { HostClientEventSink } from "@volli/host-core/ports";
+import { withMainSpan } from "@volli/host-core/log";
 import type { VolliIpcEvent } from "../ipc/contract";
 import { onDocumentGone } from "./document-lifetime";
 
@@ -14,8 +15,12 @@ export function clientEventSink(contents: WebContents): HostClientEventSink {
     removeCloseListener: (listener) => {
       contents.removeListener("destroyed", listener);
     },
+    // One client's stream (terminal data, file watches), timed under its channel (VC-1090).
     publish(topic, payload) {
-      contents.send(`volli:${topic}` satisfies VolliIpcEvent, payload);
+      const channel = `volli:${topic}` satisfies VolliIpcEvent;
+      withMainSpan({ door: "broadcast", operation: channel }, () =>
+        contents.send(channel, payload),
+      );
     },
   };
 }

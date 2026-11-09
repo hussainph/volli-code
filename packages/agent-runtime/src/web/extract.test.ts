@@ -11,7 +11,37 @@
 
 import { describe, expect, it } from "vite-plus/test";
 
-import { extractReadableMarkdown, WEB_EXTRACT_LIMITS } from "./extract";
+import {
+  extractReadableMarkdown as extractOnThisThread,
+  WEB_EXTRACT_LIMITS,
+  type ExtractedDocument,
+  type WebExtractLimits,
+} from "./extract";
+import { createWorkerWebExtractor } from "./extract-worker";
+
+/**
+ * Every document this suite reads at the production limits, with what this
+ * thread made of it — or that it threw. The last block reads each one again
+ * through the worker a host runs extraction in, so the whole suite is also the
+ * proof that the worker path answers byte for byte the same.
+ */
+const readAtProductionLimits: Array<{ html: string; url: string; answer: string }> = [];
+
+function extractReadableMarkdown(
+  html: string,
+  url: string,
+  limits?: WebExtractLimits,
+): ExtractedDocument {
+  if (limits !== undefined) return extractOnThisThread(html, url, limits);
+  try {
+    const result = extractOnThisThread(html, url);
+    readAtProductionLimits.push({ html, url, answer: JSON.stringify(result) });
+    return result;
+  } catch (error) {
+    readAtProductionLimits.push({ html, url, answer: "threw" });
+    throw error;
+  }
+}
 
 /** A page whose article is unambiguous: prose in `main`, chrome everywhere else. */
 function page(): string {
@@ -730,4 +760,28 @@ describe("content a page has hidden from the person who looked at it", () => {
 
     expect(result.text).toContain("the-visible-sentence");
   });
+});
+
+// Declared last, so it runs after every read above has been recorded. Custom
+// limits stay on this thread: production never passes them, and the worker
+// protocol carries none.
+describe("the same documents, read in the worker a host runs extraction in", () => {
+  it("answers every one of them byte for byte as this thread did", async () => {
+    expect(readAtProductionLimits.length).toBeGreaterThan(30);
+    const extract = createWorkerWebExtractor(
+      new URL("./test-support/extract-worker-under-node.mjs", import.meta.url),
+      // Generous: this is the output under test, not the deadline, and a
+      // shared CI runner reads the 2 MiB fixtures slowly. One warm worker
+      // carries every read, and leaves a second after the last.
+      { deadlineMs: 60_000, idleMs: 1_000 },
+    );
+    const signal = new AbortController().signal;
+    for (const { html, url, answer } of readAtProductionLimits) {
+      const inWorker = await extract({ html, url, signal }).then(
+        (result) => JSON.stringify(result),
+        () => "threw",
+      );
+      expect(inWorker, url).toBe(answer);
+    }
+  }, 120_000);
 });

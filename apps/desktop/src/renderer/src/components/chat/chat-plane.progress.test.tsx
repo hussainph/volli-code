@@ -58,8 +58,8 @@ describe("the turn's reserved transcript row", () => {
 
 describe("calm message delivery timing", () => {
   it.each([
-    ["send", "Sending…"],
-    ["queue", "Queuing…"],
+    ["send", "Sending"],
+    ["queue", "Queuing"],
   ] as const)("delays %s state 600ms but never delays the words", async (delivery, copy) => {
     await render(
       <PendingMessage
@@ -74,6 +74,13 @@ describe("calm message delivery timing", () => {
     await advance(1);
     expect(footer()?.textContent).toBe(copy);
     expect(footer()?.closest(".is-user")).not.toBeNull();
+    // In flight wears the shared spinner, in the in-flow footer beside Copy —
+    // never an ellipsis, never a tab hung off the bubble.
+    expect(footer()?.querySelector("svg.animate-spin")).not.toBeNull();
+    const row = footer()?.closest('[data-slot="message-footer"]');
+    expect(row?.querySelector('[aria-label="Copy message"]')).not.toBeNull();
+    expect(row?.className).not.toContain("absolute");
+    expect(footer()?.className).not.toContain("absolute");
     expect(container.textContent).not.toContain("Pending");
   });
 
@@ -145,11 +152,14 @@ describe("calm message delivery timing", () => {
     expect(footer()).toBeNull();
     await advance(600);
     expect(footer()?.textContent).toBe("Queued");
+    // A settled state is a chip, not a spinner.
+    expect(footer()?.querySelector('[data-slot="badge"]')?.textContent).toBe("Queued");
+    expect(footer()?.querySelector("svg.animate-spin")).toBeNull();
   });
 
   it("shows a durable refusal immediately even if the local wait has not reached its delay", async () => {
     await render(
-      <ChatTurn messages={[user]} context={context} live={false} deliveryLabel="Sending…" />,
+      <ChatTurn messages={[user]} context={context} live={false} deliveryLabel="Sending" />,
     );
     await advance(100);
     expect(footer()).toBeNull();
@@ -161,6 +171,9 @@ describe("calm message delivery timing", () => {
       />,
     );
     expect(footer()?.textContent).toBe("Not delivered");
+    // A refusal is a quiet chip whose mark carries the alarm.
+    expect(footer()?.querySelector('[data-slot="badge"]')?.textContent).toBe("Not delivered");
+    expect(footer()?.querySelector(".text-destructive")).not.toBeNull();
   });
 
   it("starts a fresh delay when the same component receives a different message", async () => {
@@ -171,7 +184,7 @@ describe("calm message delivery timing", () => {
       />,
     );
     await advance(600);
-    expect(footer()?.textContent).toBe("Sending…");
+    expect(footer()?.textContent).toBe("Sending");
     await render(
       <PendingMessage
         message={{ id: "second", text: "Second", state: "sending", delivery: "send" }}
@@ -182,6 +195,6 @@ describe("calm message delivery timing", () => {
     await advance(599);
     expect(footer()).toBeNull();
     await advance(1);
-    expect(footer()?.textContent).toBe("Sending…");
+    expect(footer()?.textContent).toBe("Sending");
   });
 });

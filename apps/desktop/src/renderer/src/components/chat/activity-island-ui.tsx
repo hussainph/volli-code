@@ -51,33 +51,34 @@
  *     at will.
  *  5. No island when nothing to model — a running turn is itself a subject.
  *
- * TRAPS (inherited; each is marked at the line that avoids it): `mode="wait"`
- * on the ticker · no `layout` + string transforms (zombie exits) · clusters
- * under `popLayout` · `PopoverAnchor`, not `PopoverTrigger`, and
+ * TRAPS: `PopoverAnchor`, not `PopoverTrigger`, and
  * `onInteractOutside` exempts the anchor · cap card heights or Radix flips
  * them below the island · tooltips over stacked rows are pointer-transparent
  * (now `ui/tooltip.tsx`'s default).
  *
- * Material: `COMPOSER_STACK_SHELL` with the pill's own radius — the island is
- * a sibling of `ComposerInteractionStack`, sharing its chrome, never absorbing
- * it. Reduced motion via the app's `use-reduced-motion`.
+ * Material: `LiquidIslandShell` draws a single union in generated `--card`
+ * and `--border`, with the generated shadow hue. The island is a sibling of
+ * `ComposerInteractionStack`, never absorbing it. Disclosure cards retain the
+ * shared popover's glass. Reduced motion via the app's `use-reduced-motion`.
  */
 import * as React from "react";
+import { AnimatePresence, motion, MotionConfig } from "motion/react";
 import {
-  ArrowSquareOutIcon,
-  CheckCircleIcon,
+  ExternalIcon,
+  SuccessIcon,
   CircleIcon,
-  ProhibitIcon,
-  EyeIcon,
-  GlobeSimpleIcon,
-  type Icon as PhosphorIcon,
-  ListChecksIcon,
-  PushPinSimpleIcon,
+  BlockedIcon,
+  PreviewIcon,
+  GlobeIcon,
+  type IconComponent,
+  ChecklistIcon,
+  PinIcon,
   StopIcon,
-  TerminalWindowIcon,
-  UsersIcon,
-  XIcon,
-} from "@phosphor-icons/react";
+  TerminalIcon,
+  TeamIcon,
+  CloseIcon,
+} from "@renderer/components/ui/icon";
+
 import {
   type ActivityIslandActions,
   type ActivityIslandFeel,
@@ -115,7 +116,6 @@ import {
   tabsLoading,
   tabStateWord,
 } from "@volli/session-presentation";
-import { AnimatePresence, motion, MotionConfig } from "motion/react";
 
 import { AgentModelLine } from "@renderer/components/chat/agent-model-ui";
 import { Button } from "@renderer/components/ui/button";
@@ -287,9 +287,17 @@ interface CardFrame {
   reveal: IslandRevealMode;
   arm: boolean;
   togglePin(): void;
+  /** A card action deliberately navigated away from its owning pane. */
+  leaveFocus(): void;
 }
 
-const CARD_UNFRAMED: CardFrame = { pinned: false, reveal: "always", arm: false, togglePin() {} };
+const CARD_UNFRAMED: CardFrame = {
+  pinned: false,
+  reveal: "always",
+  arm: false,
+  togglePin() {},
+  leaveFocus() {},
+};
 const CardContext = React.createContext<CardFrame>(CARD_UNFRAMED);
 
 /** Cards act through the verbs directly — the clusters never learn them. */
@@ -459,6 +467,9 @@ function ClusterShell({
       reveal: feel.reveal,
       arm: feel.armDestructive,
       togglePin: () => coordination?.togglePin(id),
+      leaveFocus: () => {
+        interactedOutside.current = true;
+      },
     }),
     [pinned, feel.reveal, feel.armDestructive, coordination, id],
   );
@@ -537,7 +548,8 @@ function ClusterShell({
           sideOffset={10}
           collisionPadding={8}
           data-island-card={cluster}
-          className={cn("p-1 data-[state=closed]:duration-75", cardClassName ?? ISLAND_CARD_WIDTH)}
+          className={cn("flex flex-col p-1", cardClassName ?? ISLAND_CARD_WIDTH)}
+          bodyClassName="flex max-h-[calc(var(--radix-popover-content-available-height)-0.5rem)] flex-col overflow-hidden"
           style={
             measuredWidth === null
               ? undefined
@@ -586,7 +598,16 @@ function ClusterShell({
             interactedOutside.current = false;
             if (!restore) return;
             event.preventDefault();
-            anchorRef.current?.focus();
+            const anchor = anchorRef.current;
+            // Revealing a tab can hide the owning chat before this card's
+            // close autofocus runs. Focusing that resident-but-hidden anchor
+            // would focus its old pane and undo the destination just selected.
+            if (
+              anchor?.isConnected &&
+              anchor.checkVisibility?.({ checkVisibilityCSS: true }) !== false
+            ) {
+              anchor.focus();
+            }
           }}
           onMouseEnter={() => coordination.enter(id)}
           onMouseLeave={() => coordination.leave(id)}
@@ -631,15 +652,13 @@ function Card({
   glyph: Glyph,
   heading,
   children,
-}: React.PropsWithChildren<{ glyph: PhosphorIcon; heading: string }>) {
+}: React.PropsWithChildren<{ glyph: IconComponent; heading: string }>) {
   const frame = React.useContext(CardContext);
   return (
-    <div className="flex cursor-default flex-col select-none">
-      <div className="flex h-6 items-center gap-1.5 px-2">
+    <div className="flex min-h-0 cursor-default flex-col select-none">
+      <div className="flex h-6 shrink-0 items-center gap-1.5 px-2">
         <Glyph className="size-3.5 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 flex-1 truncate text-label font-medium text-muted-foreground uppercase">
-          {heading}
-        </span>
+        <h3 className="min-w-0 flex-1 truncate text-ui font-semibold text-foreground">{heading}</h3>
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
@@ -651,7 +670,7 @@ function Card({
               className={cn(frame.pinned && "text-primary hover:text-primary")}
               onClick={frame.togglePin}
             >
-              <PushPinSimpleIcon weight={frame.pinned ? "fill" : "regular"} />
+              <PinIcon />
             </Button>
           </TooltipTrigger>
           <TooltipContent side="top">{frame.pinned ? "Unpin · Esc" : "Pin open"}</TooltipContent>
@@ -676,27 +695,21 @@ function Card({
  */
 function CardRows({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
-    <div className={cn("flex max-h-72 flex-col overflow-y-auto", className)}>
-      <AnimatePresence mode="popLayout" initial={false}>
-        {children}
-      </AnimatePresence>
+    <div
+      data-island-rows=""
+      className={cn("flex min-h-0 max-h-72 flex-col overflow-y-auto overscroll-contain", className)}
+    >
+      {children}
     </div>
   );
 }
 
-/** A `ListRow` that enters, leaves and reflows as its subject does. */
-function CardRow({ reduce, ...row }: { reduce: boolean } & React.ComponentProps<typeof ListRow>) {
-  return (
-    <motion.div
-      layout
-      initial={reduce ? { opacity: 0 } : { opacity: 0, scale: 0.97 }}
-      animate={{ opacity: 1, scale: 1 }}
-      exit={reduce ? { opacity: 0 } : { opacity: 0, scale: 0.97 }}
-      transition={{ duration: 0.16, ease: EASE_OUT }}
-    >
-      <ListRow data-card-row="" {...row} />
-    </motion.div>
-  );
+/** Data rows update immediately, preserving their actions and focus targets. */
+function CardRow({
+  reduce: _reduce,
+  ...row
+}: { reduce: boolean } & React.ComponentProps<typeof ListRow>) {
+  return <ListRow data-card-row="" {...row} />;
 }
 
 /** The state word riding the name's line — `· loading`, `· 72%`, `· exit 137`. Nothing when there is nothing to say. */
@@ -724,8 +737,7 @@ function RowActions({ children }: React.PropsWithChildren) {
     <span
       className={cn(
         "flex shrink-0 items-center",
-        reveal === "hover" &&
-          "opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100",
+        reveal === "hover" && "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
       )}
     >
       {children}
@@ -828,8 +840,16 @@ function TabChip({ tab }: { tab: IslandTab }) {
 
 function TabsCard({ tabs, reduce }: { tabs: readonly IslandTab[]; reduce: boolean }) {
   const actions = useActions();
+  const frame = React.useContext(CardContext);
+  const promote = (id: string) => {
+    // The owning chat can remain visible beside the destination. Returning
+    // focus there when this card closes would nevertheless select that pane
+    // again, undoing Show tab's choice of the Browser pane.
+    frame.leaveFocus();
+    actions.promoteTab(id);
+  };
   return (
-    <Card glyph={GlobeSimpleIcon} heading={tabsHeading(tabs)}>
+    <Card glyph={GlobeIcon} heading={tabsHeading(tabs)}>
       <CardRows>
         {tabs
           .toSorted((a, b) => Number(Boolean(b.needsAttention)) - Number(Boolean(a.needsAttention)))
@@ -852,11 +872,11 @@ function TabsCard({ tabs, reduce }: { tabs: readonly IslandTab[]; reduce: boolea
                 }
                 title={`${showLabel}: ${tab.title ?? tab.host}\n${tab.detail ?? tab.host}`}
                 aria-label={`${showLabel}: ${tab.title ?? tab.host}`}
-                onActivate={() => actions.promoteTab(tab.id)}
+                onActivate={() => promote(tab.id)}
                 actions={
                   <span className="flex shrink-0 items-center">
-                    <ActionButton label={showLabel} onPress={() => actions.promoteTab(tab.id)}>
-                      <ArrowSquareOutIcon />
+                    <ActionButton label={showLabel} onPress={() => promote(tab.id)}>
+                      <ExternalIcon />
                     </ActionButton>
                     <ActionButton
                       label="Close tab"
@@ -864,7 +884,7 @@ function TabsCard({ tabs, reduce }: { tabs: readonly IslandTab[]; reduce: boolea
                       reversible
                       onPress={() => actions.closeTab(tab.id)}
                     >
-                      <XIcon />
+                      <CloseIcon />
                     </ActionButton>
                   </span>
                 }
@@ -879,7 +899,7 @@ function TabsCard({ tabs, reduce }: { tabs: readonly IslandTab[]; reduce: boolea
 function AgentsCard({ agents, reduce }: { agents: readonly IslandAgent[]; reduce: boolean }) {
   const actions = useActions();
   return (
-    <Card glyph={UsersIcon} heading={agentsHeading(agents)}>
+    <Card glyph={TeamIcon} heading={agentsHeading(agents)}>
       <CardRows>
         {agents.map((agent) => (
           <CardRow
@@ -903,18 +923,20 @@ function AgentsCard({ agents, reduce }: { agents: readonly IslandAgent[]; reduce
             // A row with no recorded policy draws no second line at all (the
             // component answers null), so the height is spent only by rows that
             // have something to say with it.
+            // Provider names belong to the mark's long-hover/focus tag, not
+            // this panel's policy line. Keep the shared caller for the peek too.
             secondary={<AgentModelLine agent={agent} />}
             onActivate={() => actions.peekAgent(agent.id)}
             actions={
               <RowActions>
                 <ActionButton label="Peek in overlay" onPress={() => actions.peekAgent(agent.id)}>
-                  <EyeIcon />
+                  <PreviewIcon />
                 </ActionButton>
                 <ActionButton
                   label={agent.promoted ? "Focus tab" : "Open as tab"}
                   onPress={() => actions.promoteAgent(agent.id)}
                 >
-                  <ArrowSquareOutIcon />
+                  <ExternalIcon />
                 </ActionButton>
                 {agent.state === "working" ? (
                   <ActionButton
@@ -923,7 +945,7 @@ function AgentsCard({ agents, reduce }: { agents: readonly IslandAgent[]; reduce
                     destructive
                     onPress={() => actions.stopAgent(agent.id)}
                   >
-                    <StopIcon weight="fill" />
+                    <StopIcon />
                   </ActionButton>
                 ) : null}
               </RowActions>
@@ -946,15 +968,14 @@ function AgentsCard({ agents, reduce }: { agents: readonly IslandAgent[]; reduce
  */
 function PlanCard({ plan, reduce }: { plan: IslandPlan; reduce: boolean }) {
   return (
-    <Card glyph={ListChecksIcon} heading={planHeading(plan)}>
+    <Card glyph={ChecklistIcon} heading={planHeading(plan)}>
       {/* Progress as a hairline under the header — the header's number says
           it, the bar lets a glance read it without parsing. */}
-      <div className="mx-2 mb-1 h-0.5 overflow-hidden rounded-full bg-border">
-        <motion.div
+      <div className="mx-2 mb-1 h-0.5 shrink-0 overflow-hidden rounded-full bg-border">
+        <div
+          data-island-progress=""
           className="h-full rounded-full bg-primary"
-          initial={false}
-          animate={{ width: `${planPercent(plan)}%` }}
-          transition={reduce ? { duration: 0.1 } : { type: "spring", duration: 0.55, bounce: 0 }}
+          style={{ transform: `scaleX(${planPercent(plan) / 100})`, transformOrigin: "left" }}
         />
       </div>
       {/* Compact rows and a scroll cap: a plan is the one list that can run
@@ -972,19 +993,16 @@ function PlanCard({ plan, reduce }: { plan: IslandPlan; reduce: boolean }) {
               className="py-1"
               leading={
                 state === "done" ? (
-                  <CheckCircleIcon weight="fill" className="size-3.5 shrink-0 text-primary" />
+                  <SuccessIcon className="size-3.5 shrink-0 text-primary" />
                 ) : state === "cancelled" ? (
                   // A step the model decided against (VC-6). Its own glyph,
                   // because the two it could have borrowed both lie: an empty
                   // circle reads as work still to come, and a tick reads as
                   // work that happened.
-                  <ProhibitIcon
-                    weight="regular"
-                    className="size-3.5 shrink-0 text-muted-foreground/50"
-                  />
+                  <BlockedIcon className="size-3.5 shrink-0 text-muted-foreground/50" />
                 ) : (
                   <CircleIcon
-                    weight={state === "current" ? "bold" : "regular"}
+                    strokeWidth={state === "current" ? 2.25 : 1.5}
                     className={cn(
                       "size-3.5 shrink-0",
                       state === "current" ? "text-primary" : "text-muted-foreground/50",
@@ -1024,7 +1042,7 @@ function PlanCard({ plan, reduce }: { plan: IslandPlan; reduce: boolean }) {
 function ShellsCard({ shells, reduce }: { shells: readonly IslandShell[]; reduce: boolean }) {
   const actions = useActions();
   return (
-    <Card glyph={TerminalWindowIcon} heading={shellsHeading(shells)}>
+    <Card glyph={TerminalIcon} heading={shellsHeading(shells)}>
       <CardRows>
         {shells.map((shell) => (
           <CardRow
@@ -1046,7 +1064,7 @@ function ShellsCard({ shells, reduce }: { shells: readonly IslandShell[]; reduce
             actions={
               <RowActions>
                 <ActionButton label="Open output" onPress={() => actions.openShell(shell.id)}>
-                  <ArrowSquareOutIcon />
+                  <ExternalIcon />
                 </ActionButton>
                 {shell.state === "running" ? (
                   <ActionButton
@@ -1055,7 +1073,7 @@ function ShellsCard({ shells, reduce }: { shells: readonly IslandShell[]; reduce
                     destructive
                     onPress={() => actions.killShell(shell.id)}
                   >
-                    <StopIcon weight="fill" />
+                    <StopIcon />
                   </ActionButton>
                 ) : null}
               </RowActions>
@@ -1100,7 +1118,7 @@ function TabsCluster({
             was loading. The arc overhangs via negative inset instead, which
             costs nothing while absent. */}
         <span className="relative flex shrink-0 items-center justify-center">
-          <GlobeSimpleIcon className="block size-3.5 text-muted-foreground" />
+          <GlobeIcon className="block size-3.5 text-muted-foreground" />
           {tabsLoading(tabs) ? <WorkingArc reduce={reduce} inset={3} /> : null}
         </span>
         {/* The count as an attribute too: the headless smoke asserts it, and
@@ -1140,9 +1158,7 @@ function AgentDot({
   className?: string;
 }) {
   return (
-    <motion.span
-      layout
-      {...clusterPresence(reduce)}
+    <span
       data-agent-state={agent.state}
       className={cn(
         "relative flex size-4 shrink-0 items-center justify-center rounded-full",
@@ -1161,7 +1177,7 @@ function AgentDot({
       {agent.state === "failed" ? (
         <span className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-destructive ring-2 ring-card" />
       ) : null}
-    </motion.span>
+    </span>
   );
 }
 
@@ -1213,12 +1229,12 @@ function PlanCluster({ plan, feel, reduce, columnWidth }: ClusterProps & { plan:
       columnWidth={columnWidth}
       detail={<PlanCard plan={plan} reduce={reduce} />}
     >
-      <motion.span layout {...clusterPresence(reduce)} className="flex items-center gap-1">
-        <ListChecksIcon className="size-3.5 text-muted-foreground" />
+      <span className="flex items-center gap-1">
+        <ChecklistIcon className="size-3.5 text-muted-foreground" />
         <span className="text-label font-medium tabular-nums text-foreground">
           {plan.done}/{plan.steps.length}
         </span>
-      </motion.span>
+      </span>
     </ClusterShell>
   );
 }
@@ -1238,13 +1254,10 @@ function ShellsCluster({
       columnWidth={columnWidth}
       detail={<ShellsCard shells={shells} reduce={reduce} />}
     >
-      {/* State lives IN the glyph — fill + primary while running, outline +
-          muted at rest. The corner badge died of geometry: a dot needs a
-          filled shape to sit on, and a line icon's corner gives it nothing.
-          The agent chips keep their badges — they are filled disks. */}
-      <motion.span layout {...clusterPresence(reduce)} className="flex items-center">
-        <TerminalWindowIcon
-          weight={running ? "fill" : "regular"}
+      {/* State lives in the ink: accent while running, muted at rest.
+          Both keep the same outline drawing, without a corner badge. */}
+      <span className="flex items-center">
+        <TerminalIcon
           data-running={running ? "" : undefined}
           className={cn(
             "size-3.5",
@@ -1252,7 +1265,7 @@ function ShellsCluster({
             running && !reduce && "animate-pulse",
           )}
         />
-      </motion.span>
+      </span>
     </ClusterShell>
   );
 }
@@ -1400,7 +1413,7 @@ export function ActivityIsland({
                   role="group"
                   aria-label="Agent activity"
                   data-activity-island=""
-                  className={cn("relative will-change-transform", className)}
+                  className={cn("relative isolate will-change-transform", className)}
                 >
                   {/* The verb and transient flash share ONE bead. Its drawn union
                       owns the shell; real cluster controls stay in a normal layer. */}

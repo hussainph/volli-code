@@ -6,8 +6,13 @@
  * renderer consumption.
  */
 
-import { safeStopMessage, type DiagnosticRedactionPort } from "./safe-diagnostic";
+import {
+  safeProgramErrorMessage,
+  safeStopMessage,
+  type DiagnosticRedactionPort,
+} from "./safe-diagnostic";
 import { projectCodeModePictures, type ActivityImagePersistence } from "./activity-images";
+import { redactCredentialText } from "./secrets";
 
 import type {
   ActivityBrowse,
@@ -139,9 +144,24 @@ export function mapPiActivity(
           ? readField(rawEvent, "result")
           : null;
     const input = normalizeInput(sourceInput);
+    const state = activityState(type, readField(rawEvent, "isError"));
+    const programFailure =
+      toolName === "codemode" && state === "failed"
+        ? codeModeFailure(sourceOutput, credentialRedaction)
+        : null;
+    const safeProgramOutput =
+      programFailure === null
+        ? sourceOutput
+        : {
+            ...recordOf(sourceOutput),
+            details: {
+              ...recordOf(readField(recordOf(sourceOutput), "details")),
+              errorCause: programFailure.errorCause,
+            },
+          };
     const output =
       toolName === "codemode"
-        ? normalizeCodeModeOutput(sourceOutput, context.persistImage)
+        ? normalizeCodeModeOutput(safeProgramOutput, context.persistImage)
         : normalizeActivityValue(
             toolName in BROWSER_TOOL_ACTION || isMcpToolId(toolName)
               ? withoutBinaryBytes(sourceOutput)
@@ -154,7 +174,6 @@ export function mapPiActivity(
     const endedAt =
       type === "tool_execution_end" ? timestampOf(readField(rawContext, "observedAt")) : null;
     const descriptor = descriptorFor(toolName, input, output, sourceOutput, startedAt, endedAt);
-    const state = activityState(type, readField(rawEvent, "isError"));
     const pictureContent = recordOf(output)?.content;
     const hasReturnedPictures =
       toolName === "codemode" &&
@@ -171,10 +190,11 @@ export function mapPiActivity(
       // translator-derived metadata field: N−1 then replays the identical
       // content-addressed artifact, and legacy failed markers remain unchanged.
       input:
-        state === "failed" && hasReturnedPictures
+        state === "failed" && (hasReturnedPictures || programFailure !== null)
           ? ({
               ...recordOf(normalizeActivityValue(input, 8 * 1024)),
-              "volli.activity.output": output,
+              ...(programFailure === null ? {} : { "volli.codemode.failure": programFailure }),
+              ...(hasReturnedPictures ? { "volli.activity.output": output } : {}),
             } as RuntimeActivityValue)
           : input,
       output,
@@ -184,9 +204,12 @@ export function mapPiActivity(
       ? {
           ...base,
           state,
-          error: hasReturnedPictures
-            ? `${failureText(output, descriptor.outcome?.summary ?? null, credentialRedaction).slice(0, 180)}\nCode Mode returned images. Display requires Volli 0.2.2 or newer; older builds omit them.`
-            : failureText(output, descriptor.outcome?.summary ?? null, credentialRedaction),
+          error:
+            programFailure !== null
+              ? `Program failed after ${programFailure.callCounts.succeeded} successful call${programFailure.callCounts.succeeded === 1 ? "" : "s"}. ${programFailure.errorCause}${hasReturnedPictures ? "\nCode Mode returned images. Display requires Volli 0.2.2 or newer; older builds omit them." : ""}`
+              : hasReturnedPictures
+                ? `${failureText(output, descriptor.outcome?.summary ?? null, credentialRedaction).slice(0, 180)}\nCode Mode returned images. Display requires Volli 0.2.2 or newer; older builds omit them.`
+                : failureText(output, descriptor.outcome?.summary ?? null, credentialRedaction),
         }
       : base;
   } catch {
@@ -542,6 +565,65 @@ function summaryFor(result: Record<string, RuntimeActivityValue> | null): string
     .filter((value): value is string => value !== null)
     .join("\n");
   return text.length > 0 ? boundSummaryText(text) : cleanSummaryText(readField(result, "summary"));
+}
+
+/** Reserved input data survives every shipped failed-activity translator, so
+ * recovery on N−1 derives the identical artifact. Do not add translator-derived
+ * metadata or change historical markers to carry these new facts. */
+function codeModeFailure(raw: unknown, redaction: DiagnosticRedactionPort) {
+  const details = recordOf(readField(recordOf(raw), "details"));
+  const cause = readField(details, "errorCause");
+  const stage = readField(details, "error");
+  const counts = recordOf(readField(details, "callCounts"));
+  if (
+    typeof cause !== "string" ||
+    typeof stage !== "string" ||
+    !["check", "script", "timeout", "aborted", "sandbox", "replay", "limit"].includes(stage) ||
+    counts === null
+  )
+    return null;
+  const { succeeded, failed, unfinished, replayed } = counts;
+  if (
+    ![succeeded, failed, unfinished, replayed].every(
+      (value) =>
+        typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= 20_000,
+    )
+  )
+    return null;
+  const nested = recordOf(readField(details, "nestedCalls"));
+  const calls = readField(nested, "calls");
+  const recorded = Array.isArray(calls) ? calls : [];
+  return {
+    version: 1,
+    stage,
+    errorCause: safeProgramErrorMessage(cause, redaction),
+    callCounts: {
+      succeeded: succeeded as number,
+      failed: failed as number,
+      unfinished: unfinished as number,
+      replayed: replayed as number,
+    },
+    nestedCalls: {
+      complete: readField(nested, "complete") === true && recorded.length <= 16,
+      calls: recorded.slice(0, 16).map((value) => {
+        const record = recordOf(value);
+        const name = stringOf(readField(record, "name")) ?? "unknown";
+        return {
+          // A frozen provider identifier is not diagnostic prose: long MCP
+          // names are legitimate, not opaque credential-looking sentences.
+          name: identifierOf(
+            redaction === undefined ? name : redactCredentialText(name, redaction),
+            "unknown",
+          ),
+          status: ["ok", "error", "unfinished"].includes(
+            stringOf(readField(record, "status")) ?? "",
+          )
+            ? stringOf(readField(record, "status"))
+            : "unfinished",
+        };
+      }),
+    },
+  };
 }
 
 function failureText(

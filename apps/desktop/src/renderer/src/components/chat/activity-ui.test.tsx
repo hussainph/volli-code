@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { ACTIVITY_METADATA_KEY, type ActivityDescriptor } from "@volli/shared";
+import type { BundleRow } from "@volli/session-presentation";
 import type { DynamicToolUIPart } from "ai";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -46,8 +47,7 @@ const bashRow: DynamicToolUIPart = {
   } as DynamicToolUIPart["toolMetadata"],
 };
 
-// A failed row opens the bundle on its own (`bundleNeedsAttention`), which is
-// how both tests below get the capped window into static markup with no click.
+// Failure is a summary fact, never a request to open the output.
 const failed: DynamicToolUIPart = {
   type: "dynamic-tool",
   toolName: "read",
@@ -58,11 +58,18 @@ const failed: DynamicToolUIPart = {
   toolMetadata: { [ACTIVITY_METADATA_KEY]: descriptor } as DynamicToolUIPart["toolMetadata"],
 };
 
-const openBundle = () =>
-  renderToStaticMarkup(<ActivityBundle rows={[{ kind: "tool", part: failed, key: "read-2" }]} />);
+const openBundle = () => {
+  act(() =>
+    root!.render(<ActivityBundle rows={[{ kind: "tool", part: failed, key: "read-2" }]} />),
+  );
+  act(() =>
+    container!.querySelector<HTMLButtonElement>('[data-slot="activity-bundle-header"]')!.click(),
+  );
+  return container!.innerHTML;
+};
 
 describe("collapsed live bundles", () => {
-  it("keeps thinking visible after a completed tool without duplicating it in an open bundle", () => {
+  it("keeps thinking visible in collapsed bundles even when a tool failed", () => {
     const thought = {
       kind: "reasoning" as const,
       key: "thought",
@@ -78,10 +85,12 @@ describe("collapsed live bundles", () => {
     );
     expect(collapsed).toContain("Checking the result");
     expect(collapsed.match(/animate-spin/g)).toHaveLength(1);
-    const expanded = renderToStaticMarkup(
+    const withFailure = renderToStaticMarkup(
       <ActivityBundle rows={[{ kind: "tool", part: failed, key: "read" }, thought]} />,
     );
-    expect(expanded.match(/Checking the result/g)).toHaveLength(1);
+    expect(withFailure).toContain('aria-expanded="false"');
+    expect(withFailure).toContain("1 failed");
+    expect(withFailure.match(/Checking the result/g)).toHaveLength(1);
     // Visibility arbitration needs browser layout; mounted tests cover the
     // single-indicator handoff once the expanded viewport is measured.
   });
@@ -126,32 +135,49 @@ describe("collapsed live bundles", () => {
     expect(html.match(/animate-spin/g)).toHaveLength(1);
     expect(html).toContain("Reading");
   });
-});
 
-describe("hard refusal", () => {
-  it("shows the host explanation without opening details or offering approval", () => {
-    const html = renderToStaticMarkup(
-      <ToolRow
-        part={{
-          type: "dynamic-tool",
-          toolName: "execute",
-          toolCallId: "hard-refusal",
-          state: "output-error",
-          input: { command: "curl -k https://example.com" },
-          errorText: "Volli refused this call.\nCertificate verification cannot be disabled.",
-          toolMetadata: {
-            [ACTIVITY_METADATA_KEY]: {
-              ...descriptor,
-              kind: "run-command",
-              nativeToolName: "execute",
-            },
-          } as DynamicToolUIPart["toolMetadata"],
-        }}
-      />,
-    );
-    expect(html).toContain("Certificate verification cannot be disabled.");
-    expect(html).not.toContain("Allow once");
-    expect(html).not.toContain('data-slot="approval-card"');
+  it("draws every progress mark as the shared Spinner in a fixed slot, stilled for reduced motion", () => {
+    const runningTool: DynamicToolUIPart = {
+      type: "dynamic-tool",
+      toolName: "read",
+      toolCallId: "read-live",
+      toolMetadata: row.toolMetadata,
+      state: "input-available",
+      input: { path: "src/session.ts" },
+    };
+    const thought = {
+      kind: "reasoning" as const,
+      key: "thought",
+      streaming: true,
+      part: { type: "reasoning" as const, text: "**Checking**", state: "streaming" as const },
+    };
+    const markup = [
+      // Collapsed header mark (untracked), then the two row marks (tracked).
+      renderToStaticMarkup(
+        <ActivityBundle rows={[{ kind: "tool", key: "t", part: runningTool }]} />,
+      ),
+      renderToStaticMarkup(<ToolRow part={runningTool} />),
+      renderToStaticMarkup(<ActivityBundle rows={[thought]} />),
+    ];
+    const slots = markup.map((html) => {
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      const spinners = doc.querySelectorAll("svg.animate-spin");
+      expect(spinners).toHaveLength(1);
+      const spinner = spinners[0]!;
+      // Decorative: the verb already says it, and no second status region appears.
+      expect(spinner.getAttribute("role")).toBe("presentation");
+      expect(spinner.getAttribute("aria-hidden")).toBe("true");
+      expect(doc.querySelector('[role="status"]')).toBeNull();
+      expect([...spinner.classList]).toEqual(
+        expect.arrayContaining(["size-full", "text-primary", "motion-reduce:animate-none"]),
+      );
+      const slot = spinner.parentElement!;
+      expect(slot.tagName).toBe("SPAN");
+      expect(slot.getAttribute("aria-hidden")).toBe("true");
+      expect(slot.className).toBe("flex size-3.5 shrink-0");
+      return slot.hasAttribute("data-activity-progress");
+    });
+    expect(slots).toEqual([false, true, true]);
   });
 });
 
@@ -216,6 +242,155 @@ describe("ActivityBundle scroll window", () => {
     // `pointer-events-none` would match the button primitive's `[&_svg]:` rule.)
     expect(html).not.toContain("pointer-events-none absolute");
     expect(html).not.toContain("gradient");
+  });
+});
+
+function thinkingPart(key: string, text: string, streaming = false): BundleRow {
+  return {
+    kind: "reasoning",
+    key,
+    streaming,
+    part: { type: "reasoning", text, state: streaming ? "streaming" : "done" },
+  };
+}
+
+describe("single Thinking row", () => {
+  const render = (rows: readonly BundleRow[], progressEnabled = true) =>
+    act(() => root!.render(<ActivityBundle rows={rows} progressEnabled={progressEnabled} />));
+
+  it("updates one stable row and keeps all original summaries and reasoning inspectable", () => {
+    const first = thinkingPart("first", "**Checking contrast**\n\nOriginal reasoning.");
+    render([first]);
+    const node = container!.querySelector('[data-slot="thinking-row"]');
+    act(() => container!.querySelector<HTMLButtonElement>('[aria-label="Show details"]')!.click());
+    const next = [first, thinkingPart("second", "**Checking dark mode**\n\nNext reasoning.", true)];
+    const original = JSON.stringify(next);
+    render(next);
+    expect(container!.querySelectorAll('[data-slot="thinking-row"]')).toHaveLength(1);
+    expect(container!.querySelector('[data-slot="thinking-row"]')).toBe(node);
+    expect(container!.querySelector('[aria-expanded="true"]')).not.toBeNull();
+    expect(container!.textContent).toContain("Thinking · Checking dark mode");
+    const audit = container!.querySelector('[aria-label="Reasoning history"]')!;
+    expect(audit.textContent).toContain("Checking contrast");
+    expect(audit.textContent).toContain("Original reasoning.");
+    expect(audit.textContent).toContain("Checking dark mode");
+    expect(audit.textContent).toContain("Next reasoning.");
+    expect(JSON.stringify(next)).toBe(original);
+    expect(node!.querySelector("[aria-live]")).toBeNull();
+    expect(node!.querySelector("[title]")).toBeNull();
+  });
+
+  it("coalesces summaries across intervening tools within the same bundle", () => {
+    render([
+      thinkingPart("first", "**First summary**"),
+      { kind: "tool", key: "tool", part: row },
+      thinkingPart("last", "**Latest summary**", true),
+    ]);
+    act(() =>
+      container!.querySelector<HTMLButtonElement>('[data-slot="activity-bundle-header"]')!.click(),
+    );
+    expect(container!.querySelectorAll('[data-slot="thinking-row"]')).toHaveLength(1);
+    expect(container!.textContent).toContain("Thinking · Latest summary");
+    expect(container!.querySelectorAll('[aria-label="Show details"]')).toHaveLength(2);
+  });
+
+  it("keeps the last complete provider heading during an unfinished update", () => {
+    render([
+      thinkingPart("first", "**Complete summary**"),
+      thinkingPart("last", "**Unfinished", true),
+    ]);
+    expect(container!.textContent).toContain("Thinking · Complete summary");
+    expect(container!.textContent).not.toContain("Unfinished");
+  });
+
+  it("uses neutral labels for freeform reasoning and historical playback, without mount-time clocks", () => {
+    render([thinkingPart("free", "ordinary **inline emphasis**", true)]);
+    expect(container!.textContent).toBe("Thinking");
+    render([thinkingPart("free", "**Recorded summary**", true)], false);
+    expect(container!.textContent).toBe("Thought");
+    expect(container!.querySelector(".animate-spin")).toBeNull();
+  });
+
+  it("does not draw an empty settled thought or merge independent windows", () => {
+    render([thinkingPart("empty", "  ")]);
+    expect(container!.querySelector('[data-slot="thinking-row"]')).toBeNull();
+    act(() =>
+      root!.render(
+        <>
+          <ActivityBundle rows={[thinkingPart("before", "**Before commentary**")]} />
+          <p>Visible commentary</p>
+          <ActivityBundle rows={[thinkingPart("after", "**After commentary**", true)]} />
+        </>,
+      ),
+    );
+    expect(container!.querySelectorAll('[data-slot="thinking-row"]')).toHaveLength(2);
+    expect(container!.textContent).toContain(
+      "ThoughtVisible commentaryThinking · After commentary",
+    );
+  });
+});
+
+describe("reader-owned bundle disclosure", () => {
+  const running: DynamicToolUIPart = {
+    type: "dynamic-tool",
+    toolName: row.toolName,
+    toolCallId: row.toolCallId,
+    toolMetadata: row.toolMetadata,
+    input: null,
+    state: "input-available",
+  };
+  const denied: DynamicToolUIPart = {
+    ...running,
+    state: "output-denied",
+    approval: { id: "denied-call", approved: false },
+  };
+  const header = () =>
+    container!.querySelector<HTMLButtonElement>('[data-slot="activity-bundle-header"]')!;
+  const render = (part: DynamicToolUIPart) => {
+    act(() => root!.render(<ActivityBundle rows={[{ kind: "tool", part, key: "stable-call" }]} />));
+  };
+
+  it.each([row, failed, denied])(
+    "starts collapsed for $state and preserves the original part",
+    (part) => {
+      const original = JSON.stringify(part);
+      render(part);
+      expect(header().getAttribute("aria-expanded")).toBe("false");
+      expect(container!.textContent).not.toContain("boom");
+      if (part.state === "output-error") expect(header().textContent).toContain("1 failed");
+      if (part.state === "output-denied") expect(header().textContent).toContain("1 denied");
+      expect(JSON.stringify(part)).toBe(original);
+    },
+  );
+
+  it("keeps closed on failure arrival without taking focus", () => {
+    render(running);
+    header().focus();
+    const focused = document.activeElement;
+    render(failed);
+    expect(header().getAttribute("aria-expanded")).toBe("false");
+    expect(header().textContent).toContain("1 failed");
+    expect(document.activeElement).toBe(focused);
+    expect(container!.textContent).not.toContain("boom");
+  });
+
+  it("keeps an explicit open choice through failure and a closed choice through recovery", () => {
+    render(running);
+    act(() => header().click());
+    expect(header().getAttribute("aria-expanded")).toBe("true");
+    render(failed);
+    expect(header().getAttribute("aria-expanded")).toBe("true");
+    // The individual call still starts collapsed, even in an explicitly open bundle.
+    expect(container!.textContent).not.toContain("boom");
+    const callDisclosure = container!.querySelector<HTMLButtonElement>(
+      'button[aria-label="Show details"]',
+    )!;
+    act(() => callDisclosure.click());
+    expect(container!.textContent).toContain("boom");
+    act(() => header().click());
+    render(row);
+    expect(header().getAttribute("aria-expanded")).toBe("false");
+    expect(container!.textContent).not.toContain("export {};");
   });
 });
 
@@ -324,6 +499,135 @@ const editTs: DynamicToolUIPart = {
   } as DynamicToolUIPart["toolMetadata"],
 };
 
+describe("failed tool disclosure", () => {
+  const bashError = "/bin/bash: -c: line 5: syntax error near unexpected token `('\n".repeat(80);
+  const refusal = "Volli refused this call.\nCertificate verification cannot be disabled.";
+  const outcome = {
+    exitCode: 2,
+    matchCount: null,
+    fileCount: null,
+    lineCount: null,
+    bytes: null,
+    addedLines: null,
+    removedLines: null,
+    diff: null,
+    summary: "Command failed (summary only)",
+  };
+  const cases: { name: string; part: DynamicToolUIPart; message: string }[] = [
+    { name: "failed read without presenter detail", part: failed, message: "boom" },
+    {
+      name: "failed bash with multiline output",
+      part: {
+        ...failed,
+        toolName: "bash",
+        input: bashRow.input,
+        errorText: bashError,
+        toolMetadata: {
+          [ACTIVITY_METADATA_KEY]: {
+            ...descriptor,
+            kind: "run-command",
+            nativeToolName: "bash",
+            outcome,
+          },
+        } as DynamicToolUIPart["toolMetadata"],
+      },
+      message: bashError,
+    },
+    {
+      name: "hard refusal",
+      part: {
+        ...failed,
+        input: bashRow.input,
+        toolMetadata: bashRow.toolMetadata,
+        errorText: refusal,
+      },
+      message: refusal,
+    },
+    {
+      name: "failed write with input content",
+      part: {
+        ...failed,
+        toolName: "write",
+        input: writeTs.input,
+        toolMetadata: writeTs.toolMetadata,
+        errorText: "Permission denied",
+      },
+      message: "Permission denied",
+    },
+    {
+      name: "denied call with only an outcome explanation",
+      part: {
+        type: "dynamic-tool",
+        toolName: "read",
+        toolCallId: "denied-read",
+        input: null,
+        state: "output-denied",
+        approval: { id: "legacy-denied", approved: false },
+        toolMetadata: {
+          [ACTIVITY_METADATA_KEY]: { ...descriptor, outcome: { ...outcome, summary: refusal } },
+        } as DynamicToolUIPart["toolMetadata"],
+      },
+      message: refusal,
+    },
+    {
+      name: "denied write does not show input as a successful result",
+      part: {
+        type: "dynamic-tool",
+        toolName: "write",
+        toolCallId: "denied-write",
+        input: writeTs.input,
+        state: "output-denied",
+        approval: { id: "legacy-denied-write", approved: false },
+        toolMetadata: {
+          [ACTIVITY_METADATA_KEY]: {
+            ...descriptor,
+            kind: "write-file",
+            nativeToolName: "write",
+            outcome: { ...outcome, summary: refusal },
+          },
+        } as DynamicToolUIPart["toolMetadata"],
+      },
+      message: refusal,
+    },
+  ];
+
+  it.each(cases)("keeps $name inside the capped disclosure", ({ part, message }) => {
+    act(() => root?.render(<ToolRow part={part} />));
+    expect(container?.textContent).not.toContain(message);
+    expect(container?.querySelector(".text-destructive")).not.toBeNull();
+    expect(container?.querySelector("[aria-expanded]")?.getAttribute("aria-expanded")).toBe(
+      "false",
+    );
+
+    act(() => container?.querySelector<HTMLButtonElement>('[aria-label="Show details"]')?.click());
+    const frames = Array.from(container?.querySelectorAll(".max-h-72") ?? []);
+    const output = frames.filter((frame) => frame.textContent === message);
+    expect(output).toHaveLength(1);
+    expect(output[0]?.className).toContain("overflow-auto");
+    expect(output[0]?.className).toContain("font-mono");
+    expect(output[0]?.className).toContain("whitespace-pre-wrap");
+    expect(container?.textContent).not.toContain("summary only");
+    expect(container?.textContent).not.toContain("export const created");
+    expect(container?.querySelector("[data-line]")).toBeNull();
+    expect(container?.textContent).not.toContain("Allow once");
+    expect(container?.querySelector('[data-slot="approval-card"]')).toBeNull();
+    if (part === cases[1]?.part) {
+      expect(frames[0]?.textContent).toBe("pnpm run typecheck &&\npnpm run test");
+    }
+
+    act(() => container?.querySelector<HTMLButtonElement>('[aria-label="Hide details"]')?.click());
+    expect(container?.textContent).not.toContain(message);
+    expect(container?.querySelector(".max-h-72")).toBeNull();
+  });
+
+  it("keeps successful output behind the same disclosure", () => {
+    act(() => root?.render(<ToolRow part={bashRow} />));
+    expect(container?.textContent).not.toContain("Typecheck passed");
+    act(() => container?.querySelector<HTMLButtonElement>('[aria-label="Show details"]')?.click());
+    expect(container?.textContent).toContain("Typecheck passed\nTests passed");
+  });
+});
+
 describe("ToolRow expanded detail colouring (VC-125)", () => {
   it(
     "colours a Read row's lines with the file's grammar and keeps the number column",
@@ -371,13 +675,13 @@ describe("ToolRow expanded detail colouring (VC-125)", () => {
 
       // Tokens carry the syntax colour, so the tint moves to a row wash and the
       // marker keeps the old text tint.
-      expect(added?.className).toContain("bg-primary/10");
-      expect(removed?.className).toContain("bg-destructive/10");
-      expect(context?.className).not.toMatch(/bg-(primary|destructive)\/10/);
+      expect(added?.className).toContain("transcript-diff-add");
+      expect(removed?.className).toContain("transcript-diff-remove");
+      expect(context?.className).not.toMatch(/transcript-diff-(add|remove)/);
       expect(added?.querySelector("[data-marker]")?.textContent).toBe("+");
-      expect(added?.querySelector("[data-marker]")?.className).toContain("text-primary-text");
+      expect(added?.querySelector("[data-marker]")?.className).toContain("text-diff-added");
       expect(removed?.querySelector("[data-marker]")?.textContent).toBe("-");
-      expect(removed?.querySelector("[data-marker]")?.className).toContain("text-destructive");
+      expect(removed?.querySelector("[data-marker]")?.className).toContain("text-diff-removed");
       for (const line of [removed, added, context]) {
         expect(line?.querySelectorAll(TOKEN_SELECTOR).length).toBeGreaterThan(1);
         // The marker itself is never a token.
@@ -504,7 +808,7 @@ describe("ToolRow copy control", () => {
     expect(html).toContain('class="min-w-0 truncate font-mono text-ui text-foreground"');
     expect(html).toContain("cursor-default hover:bg-muted/30 hover:text-foreground");
     expect(html).toContain('aria-label="Show details"');
-    expect(html).toContain('title="Show details"');
+    expect(html).not.toContain('title="Show details"');
     expect(html).toContain("size-5");
     expect(html).toContain("motion-reduce:transition-none opacity-100");
   });

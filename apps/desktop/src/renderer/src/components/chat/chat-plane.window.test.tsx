@@ -199,6 +199,9 @@ function provisionalChatStore(promote: () => Promise<boolean> = async () => true
     title: null,
   });
   store.getState().openChatTab(PROJECT, SESSION);
+  // A Draft whose tab outlives its provisional record is adopted when shown
+  // (VC-515); close it with the others so no client outlives the test.
+  hostStores.push(store);
   return { enqueue, promoteChatSession, store };
 }
 
@@ -514,6 +517,44 @@ describe("a provisional chat plane", () => {
       SESSION,
       expect.objectContaining({ text: "first durable words" }),
     );
+  });
+
+  it("types into the Draft without re-reading the document's styles per keystroke (VC-1079)", async () => {
+    vi.stubGlobal(
+      "api",
+      refusingBridge({
+        "sessions.starts": async () => ({ ok: true, startedAt: [] }),
+      }),
+    );
+    const { store } = provisionalChatStore();
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    const box = composer();
+    if (box === null) throw new Error("expected a composer");
+    // Charts now live in the overview popover. Keep the chart mounted so the
+    // typing guard still exercises its theme reads rather than an absent chart.
+    const overview = [...(container?.querySelectorAll("button") ?? [])].find((button) =>
+      button.textContent?.includes("Session overview"),
+    );
+    if (overview === undefined) throw new Error("expected Session overview");
+    await act(async () => overview.click());
+    expect(document.querySelector('[data-empty-visual="streak"]')).not.toBeNull();
+
+    // The empty state's chart reads its colours off the root. A keystroke is
+    // not a theme change, so typing must not read them again.
+    const styleReads = vi.spyOn(window, "getComputedStyle");
+    const typed = "one keystroke at a time";
+    for (let length = 1; length <= typed.length; length += 1) {
+      await act(async () => {
+        type(box, typed.slice(0, length));
+      });
+    }
+    expect(
+      styleReads.mock.calls.filter(([element]) => element === document.documentElement),
+    ).toHaveLength(0);
+    // The words still reach the box and the Draft, exactly as before.
+    expect(box.value).toBe(typed);
+    expect(useChatDraftsStore.getState().drafts[SESSION]?.text).toBe(typed);
+    expect(document.querySelector('[data-empty-visual="streak"]')).not.toBeNull();
   });
 
   it("retains the persisted first message until the host accepts its queued command", async () => {
@@ -936,7 +977,7 @@ describe("host-owned rows with cloud off", () => {
         '[aria-label="Remove queued message: host follow-up"]',
       ) ?? null;
     const actions = container?.querySelector<HTMLButtonElement>(
-      '[aria-label="Queued message actions: host follow-up"]',
+      '[aria-label="Edit queued message: host follow-up"]',
     );
     expect(remove()?.disabled).toBe(false);
     expect(actions?.disabled).toBe(false);
@@ -978,16 +1019,11 @@ describe("host-owned rows with cloud off", () => {
             .click(),
         );
       } else {
-        const trigger = container!.querySelector<HTMLButtonElement>(
-          '[aria-label="Queued message actions: host follow-up"]',
-        )!;
         await act(async () =>
-          trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+          container!
+            .querySelector<HTMLButtonElement>('[aria-label="Edit queued message: host follow-up"]')!
+            .click(),
         );
-        const item = [...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
-          (node) => node.textContent?.includes("Edit message"),
-        )!;
-        await act(async () => item.click());
       }
       await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
       await vi.waitFor(() => expect(store.getState().idleSends[SESSION]).toBeUndefined());
@@ -1098,20 +1134,13 @@ describe("host-owned rows with cloud off", () => {
       sizeBytes: 9,
     };
 
-    /** Opens the row's actions menu the way a keyboard does, and picks Edit. */
+    /** The one-action menu is now a direct pencil button. */
     async function editFromMenu(text: string): Promise<void> {
-      const trigger = container?.querySelector<HTMLButtonElement>(
-        `[aria-label="Queued message actions: ${text}"]`,
+      const button = container?.querySelector<HTMLButtonElement>(
+        `[aria-label="Edit queued message: ${text}"]`,
       );
-      if (trigger === null || trigger === undefined) throw new Error("expected row actions");
-      await act(async () =>
-        trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
-      );
-      const item = [...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
-        (node) => node.textContent?.includes("Edit message"),
-      );
-      if (item === undefined) throw new Error("expected Edit message");
-      await act(async () => item.click());
+      if (!button) throw new Error("expected Edit message");
+      await act(async () => button.click());
     }
 
     async function mountWithTyping(state: HostQueueRow["state"]) {
@@ -1593,7 +1622,7 @@ describe("a chat plane holding only the host's newest window (VC-315)", () => {
 
   // A height model alone (100 px a message) and no anchor positions: the
   // fallback the plane takes when it can see no anchor.
-  it("holds the reader's place when a page completes the first turn instead of adding a row", async () => {
+  it("holds the reader's place when older per-message rows are prepended", async () => {
     const { store, scroller } = await splitTurn();
     Object.defineProperty(scroller, "scrollHeight", {
       configurable: true,
@@ -1601,13 +1630,13 @@ describe("a chat plane holding only the host's newest window (VC-315)", () => {
     });
     Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 300 });
     scroller.scrollTop = 100;
-    expect(turnRows()).toBe(1);
+    expect(turnRows()).toBe(10);
 
     await act(async () => {
       earlierButton()!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     });
 
-    expect(turnRows()).toBe(1); // no new row: the turn got its older prefix
+    expect(turnRows()).toBe(20); // Each visible message owns its own row.
     expect(messageCount(store)).toBe(20);
     expect(scroller.scrollTop).toBe(1100);
   });
@@ -1654,7 +1683,7 @@ describe("a chat plane holding only the host's newest window (VC-315)", () => {
     // The anchors are the same nodes, kept through the page: the turn's
     // identity held while its prefix completed.
     layout(store, scroller);
-    expect(turnRows()).toBe(1);
+    expect(turnRows()).toBe(20);
     // "turn number 11" was 50 px into view at the top; 10 messages arrived above.
     expect(scroller.scrollTop).toBe(1150);
   });
@@ -1696,7 +1725,9 @@ describe("a chat plane holding only the host's newest window (VC-315)", () => {
     });
 
     expect(shows(0)).toBe(true);
-    expect(container!.querySelector(".is-assistant")).toBe(turn);
+    expect(
+      container!.querySelector('[data-transcript-anchor="u10:0"]')!.closest(".is-assistant"),
+    ).toBe(turn);
     expect(container!.querySelector('[data-transcript-anchor="u14:0"]')).toBe(segment);
   });
 
@@ -2174,13 +2205,12 @@ describe("VC-758 visible timeline regressions", () => {
     await mountPlane(store);
     expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
     await advanceProgressTime(600);
-    expect(container?.querySelector('[data-slot="message-delivery"]')?.textContent).toBe(
-      "Sending…",
-    );
+    expect(container?.querySelector('[data-slot="message-delivery"]')?.textContent).toBe("Sending");
     const clearance = turnClearance()!;
     const status = activityStatus();
     expect(clearance).not.toBeNull();
     expect(status?.textContent).toBe("Reasoning");
+
     expect(
       clearance.compareDocumentPosition(container!.querySelector(".is-user")!) &
         Node.DOCUMENT_POSITION_FOLLOWING,
@@ -2440,7 +2470,7 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
     const transcriptStatuses = container!.querySelectorAll('[role="log"] [role="status"]');
     if (announcement === "Compacting context") {
       expect(transcriptStatuses).toHaveLength(1);
-      expect(transcriptStatuses[0]?.textContent).toContain("Compacting context…");
+      expect(transcriptStatuses[0]?.textContent).toBe("Compacting context");
     } else {
       expect(transcriptStatuses).toHaveLength(0);
     }
@@ -2487,7 +2517,11 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
       // is the progress the reader actually sees.
       const summary = container?.querySelector(".is-assistant button[aria-expanded]");
       expect(summary).not.toBeNull();
-      expect(summary?.textContent).toContain("…");
+      // In flight wears the shared spinner beside the count, never an ellipsis.
+      expect(summary?.textContent).toContain("Working");
+      expect(summary?.textContent).not.toContain("…");
+      // The approved receipt uses a static clock, not a second live spinner.
+      expect(summary?.querySelector("svg")).not.toBeNull();
       expectActivity(status, "Running pnpm check");
 
       // The provider leaves the old thought marked streaming. Segmentation,
@@ -2605,7 +2639,7 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
     ).toBeTruthy();
     expectActivity(activityStatus()!, "Writing a reply");
     await advanceProgressTime(1_000);
-    expect(container?.textContent).not.toContain("Sending…");
+    expect(container?.textContent).not.toContain("Sending");
     await ingest(store, [
       committed(
         3,
@@ -2684,7 +2718,7 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
       expect(container?.querySelector('[data-slot="session-blocker"]')).toBeNull();
       await ingest(store, [boundary(2, "turn.completed")]);
       expect(container?.querySelectorAll('[data-slot="session-blocker"]')).toHaveLength(1);
-      const scroller = container!.querySelector('[role="log"]')!.firstElementChild as HTMLElement;
+      const scroller = container!.querySelector<HTMLElement>("[data-conversation-scroller]")!;
       Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 2000 });
       Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 300 });
       // Reading a nested scrollable message detaches following through the real
@@ -2753,9 +2787,7 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
       .holdMessage(SESSION, { id: message.id, text: "Still waiting", delivery: "send" });
     await mountPlane(store);
     await advanceProgressTime(600);
-    expect(container?.querySelector('[data-slot="message-delivery"]')?.textContent).toBe(
-      "Sending…",
-    );
+    expect(container?.querySelector('[data-slot="message-delivery"]')?.textContent).toBe("Sending");
     await ingest(store, [
       frame(
         1,
@@ -2844,9 +2876,7 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
     await advanceProgressTime(299);
     expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
     await advanceProgressTime(1);
-    expect(container?.querySelector('[data-slot="message-delivery"]')?.textContent).toBe(
-      "Queuing…",
-    );
+    expect(container?.querySelector('[data-slot="message-delivery"]')?.textContent).toBe("Queuing");
   });
 
   it.each(["reasoning", "text", "tool"] as const)(

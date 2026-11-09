@@ -39,7 +39,7 @@
  * `@volli/shared` next to `harnessLabel`, so every surface agrees.
  */
 import * as React from "react";
-import type { Icon, IconProps } from "@phosphor-icons/react";
+import { type IconComponent as Icon, type IconProps } from "@renderer/components/ui/icon";
 
 import { cn } from "@renderer/lib/utils";
 
@@ -185,7 +185,7 @@ export function HarnessTag({
 }
 
 /**
- * The same marks, shaped as Phosphor `Icon`s.
+ * The same marks, shaped as shared icon components.
  *
  * The house rule is that every context-menu action carries a neighbouring icon,
  * and the shared primitive enforces it by TYPE: `icon` is an `Icon`, rendered
@@ -201,17 +201,14 @@ export function HarnessTag({
 export const HARNESS_ICONS: Record<LabHarnessId, Icon> = Object.fromEntries(
   LAB_HARNESS_IDS.map((harnessId) => {
     const { paths, viewBox, tint } = IDENTITY[harnessId];
-    // The cast to `Icon` below lets callers pass Phosphor's own props, so the
-    // Icon-only ones are destructured away rather than spread: `weight` and
-    // `mirrored` are not SVG attributes (React warns and the DOM ignores them),
-    // and `color` would be overridden by `fill` anyway — a caller passing it
-    // should not be left believing it took.
+    // Identity paths retain their authored fill; symbol stroke and sizing
+    // props must not leak onto their SVG drawing.
     const Adapted = React.forwardRef<SVGSVGElement, IconProps>(function HarnessIcon(
-      { className, weight, mirrored, color, size, ...props },
+      { className, strokeWidth, alt, color, size, ...props },
       ref,
     ) {
-      void weight;
-      void mirrored;
+      void strokeWidth;
+      void alt;
       void color;
       return (
         <svg

@@ -1,9 +1,12 @@
-import { ArrowRightIcon } from "@phosphor-icons/react/dist/csr/ArrowRight";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
-import { CloudArrowDownIcon } from "@phosphor-icons/react/dist/csr/CloudArrowDown";
-import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
-import { GitBranchIcon } from "@phosphor-icons/react/dist/csr/GitBranch";
+import { Spinner } from "@renderer/components/ui/spinner";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
+import {
+  ChevronDownIcon,
+  CheckIcon,
+  CloudDownloadIcon,
+  BranchIcon,
+} from "@renderer/components/ui/icon";
+
 import * as React from "react";
 import { errorMessage } from "@volli/shared";
 
@@ -23,35 +26,22 @@ import {
   CommandItem,
   CommandList,
 } from "@renderer/components/ui/command";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from "@renderer/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
 import { cn } from "@renderer/lib/utils";
 import { notAvailableOn, remoteHostNow } from "@renderer/stores/remote-project";
 
 /**
- * The chip row's branch relationship: `base ▾ → destination ▾`.
+ * The base branch a new ticket's worktree starts from, picked in the
+ * composer's Options panel.
  *
- * It reads as a sentence because it is one — this ticket's work starts from
- * that ref and lands in that place. The two chips are independently clickable
- * and sit closer to each other (gap-1) than to the metadata chips (gap-1.5),
- * so the arrow binds them into one statement rather than three loose controls.
+ * The chip carries its VALUE in its accessible name ("Base branch: main"), not
+ * just its subject. The value is the whole point of a chip — a name of "Base
+ * branch" would tell a screen-reader user what the control is for and withhold
+ * the one thing it is showing.
  *
- * Both chips carry their VALUE in their accessible name ("Base branch: main"),
- * not just their subject. The value is the whole point of a chip — a name of
- * "Base branch" would tell a screen-reader user what the control is for and
- * withhold the one thing it is showing.
- *
- * When the destination is the project checkout there is no branch to create,
- * so the base chip and the arrow are not shown — a base ref would be a control
- * with nothing to act on. That is also why the base is never persisted for a
- * checkout ticket (see `submit.ts`'s `baseBranchFor`).
+ * A checkout ticket has no branch to create, so Options hides the chip and the
+ * base is never persisted for it (see `submit.ts`'s `baseBranchFor`).
  */
 
 /**
@@ -119,7 +109,7 @@ function BranchRows({
               // item's value LOWERCASED, and a branch name is case-sensitive.
               onSelect={() => onPick(option.name)}
             >
-              <GitBranchIcon
+              <BranchIcon
                 className={cn(
                   "size-3.5 shrink-0",
                   option.remote ? "text-muted-foreground" : "text-foreground",
@@ -127,7 +117,10 @@ function BranchRows({
               />
               <span className="truncate font-mono text-ui text-foreground">{option.name}</span>
               {option.name === value ? (
-                <CheckIcon weight="bold" className="ml-auto size-3.5 shrink-0 text-foreground" />
+                <CheckIcon
+                  strokeWidth={2.25}
+                  className="ml-auto size-3.5 shrink-0 text-foreground"
+                />
               ) : null}
             </CommandItem>
           ))}
@@ -156,7 +149,7 @@ function BranchListBody({
     // cannot say why it has nothing to offer.
     return (
       <div className="flex items-start gap-2 px-2 py-2 text-ui text-muted-foreground">
-        <CloudArrowDownIcon className="mt-px size-3.5 shrink-0" />
+        <CloudDownloadIcon className="mt-px size-3.5 shrink-0" />
         {state.error}
       </div>
     );
@@ -164,19 +157,21 @@ function BranchListBody({
   // Loading takes the empty geometry too: it holds the same slot a moment
   // earlier, and a different one would make the list jump as the read lands.
   if (state.status === "loading") {
-    return <div className={EMPTY_INLINE}>Reading branches…</div>;
+    return (
+      <div className={EMPTY_INLINE}>
+        <LoadingLabel>Reading branches</LoadingLabel>
+      </div>
+    );
   }
   if (groups.length === 0) {
     return (
-      <div className={EMPTY_INLINE}>
-        {query.trim() === "" ? "No branches" : "No matching branches"}
-      </div>
+      <div className="sr-only">{query.trim() === "" ? "No branches" : "No matching branches"}</div>
     );
   }
   return <BranchRows groups={groups} value={value} onPick={onPick} />;
 }
 
-function BaseBranchChip({
+export function BaseBranchChip({
   state,
   value,
   onChange,
@@ -214,15 +209,18 @@ function BaseBranchChip({
             what it will branch from, and "unknown" is the honest answer. */}
         <Button
           aria-label={`Base branch: ${label.spoken}`}
-          variant="ghost"
-          size="sm"
+          variant="inspector"
           className={cn(composerChipClass(), "min-w-0 flex-1 justify-start")}
         >
-          <GitBranchIcon />
+          {state.status === "loading" && value === null ? (
+            <Spinner aria-hidden role="presentation" />
+          ) : (
+            <BranchIcon />
+          )}
           <span className="min-w-0 truncate" title={label.text}>
             {label.text}
           </span>
-          <CaretDownIcon weight="bold" className="size-3" />
+          <ChevronDownIcon strokeWidth={2.25} className="ml-auto size-3" />
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-64 p-0">
@@ -253,77 +251,11 @@ function BaseBranchChip({
   );
 }
 
-/**
- * Where the ticket's work happens. The two options are the two the app can
- * actually honor: its own worktree off the chosen base, or the project's
- * existing checkout — which is `usesWorktree`, the same durable field the
- * footer's switch used to bind, now named by what it produces.
- */
-function DestinationChip({
-  usesWorktree,
-  onChange,
-}: {
-  usesWorktree: boolean;
-  onChange: (usesWorktree: boolean) => void;
-}) {
-  const label = usesWorktree ? "new worktree" : "project checkout";
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          aria-label={`Working destination: ${label}`}
-          variant="ghost"
-          size="sm"
-          className={composerChipClass()}
-        >
-          {usesWorktree ? null : <FolderOpenIcon />}
-          {label}
-          <CaretDownIcon weight="bold" className="size-3" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <DropdownMenuRadioGroup
-          value={usesWorktree ? "worktree" : "checkout"}
-          onValueChange={(next) => onChange(next === "worktree")}
-        >
-          <DropdownMenuRadioItem value="worktree">New worktree</DropdownMenuRadioItem>
-          <DropdownMenuRadioItem value="checkout">Project checkout</DropdownMenuRadioItem>
-        </DropdownMenuRadioGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
-/** The `base → destination` pair. One prop object: it is one statement. */
+/** The Options panel's branch fields, passed as one object. */
 export interface ComposerBranchRowProps {
   state: BranchListingState;
   baseBranch: string | null;
   onBaseBranchChange: (branch: string) => void;
   usesWorktree: boolean;
   onUsesWorktreeChange: (usesWorktree: boolean) => void;
-}
-
-export function ComposerBranchRow({
-  state,
-  baseBranch,
-  onBaseBranchChange,
-  usesWorktree,
-  onUsesWorktreeChange,
-}: ComposerBranchRowProps) {
-  return (
-    <div className="flex w-full min-w-0 items-center gap-1">
-      {usesWorktree ? (
-        <>
-          <BaseBranchChip state={state} value={baseBranch} onChange={onBaseBranchChange} />
-          <ArrowRightIcon
-            aria-hidden
-            weight="bold"
-            className="size-3 shrink-0 text-muted-foreground/50"
-          />
-        </>
-      ) : null}
-      <DestinationChip usesWorktree={usesWorktree} onChange={onUsesWorktreeChange} />
-    </div>
-  );
 }

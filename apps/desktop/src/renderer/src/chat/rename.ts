@@ -12,6 +12,7 @@
  * if the store refuses it.
  */
 import { errorMessage } from "@volli/shared";
+import { recordTitleChange } from "@renderer/chat/title-change";
 
 import { notAvailableOn } from "@renderer/components/hosts/use-remote-project";
 import { remoteHostOfSession } from "@renderer/lib/session-project";
@@ -61,6 +62,7 @@ export async function renameChatSession(
   }
 
   const previous = titlesOf(sessionId);
+  recordTitleChange(sessionId, trimmed, refineFrom !== undefined);
   writeTitle(sessionId, trimmed, previous);
 
   // The same door the terminal path uses, called directly rather than through
@@ -79,6 +81,7 @@ export async function renameChatSession(
   } catch (error) {
     toastError(`Rename failed: ${errorMessage(error)}`);
   }
+  recordTitleChange(sessionId, trimmed, false);
   restoreTitle(sessionId, trimmed, previous);
   return false;
 }

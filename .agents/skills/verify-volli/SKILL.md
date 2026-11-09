@@ -85,11 +85,16 @@ volli-drive act vd-xxxxxx --gen N --kind scroll --ref … --direction up
 volli-drive wait vd-xxxxxx --text "fake-agent: hello" [--gone] [--timeout 30000]
 volli-drive restore-restart vd-xxxxxx --gen N --ref f2e75 # real Restart and restore click, supervised local relaunch
 volli-drive screenshot vd-xxxxxx --name after-move   # prints the PNG path
+volli-drive windows vd-xxxxxx                       # #settings is a separate window
+volli-drive settings-native vd-xxxxxx --action watch # observe hidden creation → first reveal
+volli-drive settings-native vd-xxxxxx               # native bounds, menu and scoped paint
 ```
 
 - Every `act`/`wait`/`find` returns a **new generation**; pass the latest one. A stale generation or a ref the snapshot never showed is refused — re-snapshot, never guess.
+- Captures wait up to 10 s for non-empty aria content; `wait` uses its existing `--timeout` budget, including empty captures. An empty tree never means "found 0" or "gone": persistent emptiness fails with `empty snapshot` (a capture timing out before any tree returns is `snapshot readiness timeout`). Rejected raw trees survive as `snapshots/empty-<capture>-<attempt>-<window>.txt`; `snapshot-empty` / `snapshot-ready` transcript entries retain capture timing and counts. A non-empty boot error or missing control still fails the journey normally.
 - Refs look like `f2e75` (frame-prefixed). Prefer `find "<visible text or aria name>"` over printing the whole tree; `--find` on `act`/`wait`/`snapshot` filters the fresh tree the same way.
-- No drag kind and no right-click: use the product's keyboard paths (board cards: focus → `Space` → arrows → `Space`).
+- Settings actions take `--window window-N` from `windows`; main remains independently usable. `settings-native --action frame --bounds '{"x":180,"y":90,"width":820,"height":620}'` exercises native move/resize, and `--action close` invokes its native close path. `--action menu` uses the installed Settings menu callback. These never make a quiet window key. Synthetic ⌘W does not dispatch the macOS menu accelerator in a non-key window: verify the native close path and installed close role separately, and leave physical focus/⌘W/traffic-light review to the owner. `watch` records whether each Settings window was hidden at creation and its paint at native reveal; arm it before opening.
+- No drag kind and no right-click: use the product's keyboard paths (board cards: focus → `Space` → arrows → `Space`). File context menus can be opened with `press --key ContextMenu` after focusing a tree item (for example, `README.md`); `Shift+F10` may be ignored on macOS.
 - Elements behind a modal lose their refs (they are inert) — that is the app, not the tool.
 
 ## 4. Evidence — prove side effects, not just pixels

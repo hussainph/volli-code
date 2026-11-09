@@ -12,14 +12,24 @@ import { Badge } from "@renderer/components/ui/badge";
  * wrap onto a board card under a two-line title, where the standard `px-2 py-1`
  * makes a row of three labels the loudest thing on the card.
  */
-export function TagChip({ tag, color }: { tag: string; color?: string }) {
+export function TagChip({
+  tag,
+  color,
+  neutral = false,
+}: {
+  tag: string;
+  color?: string;
+  neutral?: boolean;
+}) {
   return (
     <Badge className="px-1 py-px">
-      <span
-        aria-hidden
-        className="size-1.5 shrink-0 rounded-full"
-        style={{ backgroundColor: color ?? tagColor(tag) }}
-      />
+      {neutral ? null : (
+        <span
+          aria-hidden
+          className="size-1.5 shrink-0 rounded-full"
+          style={{ backgroundColor: color ?? tagColor(tag) }}
+        />
+      )}
       {tag}
     </Badge>
   );

@@ -79,6 +79,12 @@ describe("one attachment affordance", () => {
     expect(html.match(/aria-label="Attach files"/g)).toHaveLength(1);
     expect(html.match(/type="file"/g)).toHaveLength(1);
     expect(html).toContain("multiple");
+    const markup = document.createElement("div");
+    markup.innerHTML = html;
+    const attach = markup.querySelector('[aria-label="Attach files"]');
+    expect(attach?.getAttribute("data-variant")).toBe("ghost");
+    expect(attach?.className).not.toContain("shadow-raised");
+    expect(attach?.getAttribute("data-size")).toBe("icon-sm");
     expect(html).not.toContain("Attach file reference");
     expect(html).not.toContain("Search files…");
   });
@@ -86,6 +92,23 @@ describe("one attachment affordance", () => {
     expect(render()).not.toContain('aria-label="Attach files"');
   });
 });
+
+it.each([false, true])(
+  "keeps the tonal start primary and regular Create when disabled=%s",
+  (disabled) => {
+    const markup = document.createElement("div");
+    markup.innerHTML = render({ disabled });
+    const create = markup.querySelector<HTMLButtonElement>('[data-testid="composer-create"]')!;
+    const start = markup.querySelector<HTMLButtonElement>('[data-testid="composer-kickoff"]')!;
+    const chooser = markup.querySelector('[data-testid="composer-launch-picker"]')!;
+    expect(create.dataset.variant).toBe("outline");
+    expect(start.dataset.variant).toBe("default");
+    expect(chooser.getAttribute("data-variant")).toBe("default");
+    expect(chooser.className).toContain("border-(--primary-text)/20");
+    expect(create.disabled).toBe(disabled);
+    expect(start.disabled).toBe(disabled);
+  },
+);
 
 it("offers both commits as buttons at rest, with no create-more switch", () => {
   const html = render();
@@ -104,7 +127,7 @@ it("offers creation, chat and the Automation chooser in a cloud launch", () => {
   expect(html).toContain('data-testid="composer-create"');
   expect(html).toContain('data-testid="composer-kickoff"');
   expect(html).toContain('data-testid="composer-launch-picker"');
-  expect(html).toContain("Automation");
+  expect(html).toContain('aria-label="Choose what starts"');
 });
 
 it("gives the unmodified chord to Create and the shifted one to the primary", () => {
@@ -169,7 +192,7 @@ it("changes mode without submitting, then commits the selected saved automation"
   expect(document.body.textContent).toContain("Doing");
   await act(async () => radio("Implement").click());
   expect(submit).not.toHaveBeenCalled();
-  expect(host.textContent).toContain("Saved runtime");
+  expect(host.textContent).toContain("Saved model");
   expect(host.querySelector('[aria-label^="Model:"]')).toBeNull();
   await act(async () =>
     host.querySelector<HTMLButtonElement>('[data-testid="composer-submit"]')!.click(),
@@ -178,6 +201,39 @@ it("changes mode without submitting, then commits the selected saved automation"
     kind: "automation",
     projectId: "p1",
     automationId: "a2",
+  });
+});
+
+it("wraps long automation names within their column group and keeps the saved choice intact", async () => {
+  const name = "Review the implementation and report every edge case before moving the ticket";
+  const change = vi.fn();
+  await act(async () =>
+    root.render(
+      <ComposerFooter
+        {...props}
+        onLaunchChange={change}
+        automationOffer={{
+          ...props.automationOffer,
+          groups: [{ ...GROUPS[0]!, automations: [automation("long", name)] }, GROUPS[1]!],
+        }}
+      />,
+    ),
+  );
+  await openMenu();
+  const item = radio(name);
+  const label = item.querySelector(`[title="${name}"]`)!;
+  expect(label.classList.contains("whitespace-normal")).toBe(true);
+  expect(label.classList.contains("break-words")).toBe(true);
+  expect(label.classList.contains("truncate")).toBe(false);
+  expect(item.closest('[data-slot="dropdown-menu-group"]')?.textContent).toContain(
+    "Todo · this column",
+  );
+  expect(item.className).not.toMatch(/\bh-\d/);
+  await act(async () => item.click());
+  expect(change).toHaveBeenCalledExactlyOnceWith({
+    kind: "automation",
+    projectId: "p1",
+    automationId: "long",
   });
 });
 
@@ -258,7 +314,7 @@ it("keeps the launch selector available without a catalogue", async () => {
   );
   await openMenu();
   expect(radio("Start chat")).toBeDefined();
-  expect(document.body.textContent).toContain("No ticket automations in this project.");
+  expect(document.body.textContent).toContain("No ticket automations");
 });
 
 it("does not claim an empty catalogue or expose cached runs while reading", () => {
@@ -268,4 +324,36 @@ it("does not claim an empty catalogue or expose cached runs while reading", () =
   expect(html).toContain("Reading automations");
   expect(html).not.toContain("No ticket automations");
   expect(html).not.toContain("Implement");
+});
+
+it("blocks only kickoff while cloud runner discovery is unresolved", async () => {
+  const runners = {
+    runners: [],
+    selected: null,
+    thisMacId: null,
+    loading: true,
+    error: null,
+    choose: () => {},
+  };
+  await act(async () => root.render(<ComposerFooter {...props} runners={runners} />));
+  expect(host.querySelector<HTMLButtonElement>('[data-testid="composer-kickoff"]')!.disabled).toBe(
+    true,
+  );
+  expect(host.querySelector<HTMLButtonElement>('[data-testid="composer-create"]')!.disabled).toBe(
+    false,
+  );
+  expect(host.textContent).toContain("Loading runners");
+  await act(async () =>
+    root.render(
+      <ComposerFooter
+        {...props}
+        runners={runners}
+        launch={{ kind: "automation", projectId: "p1", automationId: "a1" }}
+      />,
+    ),
+  );
+  expect(host.querySelector<HTMLButtonElement>('[data-testid="composer-submit"]')!.disabled).toBe(
+    false,
+  );
+  expect(host.textContent).not.toContain("Loading runners");
 });

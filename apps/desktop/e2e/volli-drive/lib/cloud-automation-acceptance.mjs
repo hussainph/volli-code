@@ -37,6 +37,7 @@ import { waitUntil } from "../../lib/smoke-kit.mjs";
 import { cleanQuitProblems } from "./cloud-acceptance.mjs";
 import { createRegistry, instanceLayout, REPO } from "./core.mjs";
 import { request } from "./protocol.mjs";
+import { windowTargeting } from "./window-targeting.mjs";
 import { hasActionableControl, visibleControls as controls } from "./remote-acceptance.mjs";
 
 const exec = promisify(execFile);
@@ -116,8 +117,10 @@ export function driveRequestBudget(command, timeout) {
  * reads as the person's steps rather than as Playwright.
  */
 export function driveInstance(label, socket) {
-  const call = (cmd, args = {}) =>
-    request(socket, cmd, args, { timeoutMs: driveRequestBudget(cmd, args.timeout) });
+  const windows = windowTargeting((cmd, args = {}) =>
+    request(socket, cmd, args, { timeoutMs: driveRequestBudget(cmd, args.timeout) }),
+  );
+  const call = windows.call;
   const snap = () => call("snapshot");
   const wait = async (text, timeout = 45_000) => (await call("wait", { text, timeout })).snapshot;
   const gone = async (text, timeout = 45_000) =>
@@ -137,6 +140,8 @@ export function driveInstance(label, socket) {
   return {
     label,
     call,
+    useMainWindow: windows.useMainWindow,
+    useSettingsWindow: windows.useSettingsWindow,
     snap,
     wait,
     gone,
@@ -168,6 +173,31 @@ export function driveInstance(label, socket) {
     },
     shot: (name) => call("screenshot", { name }),
   };
+}
+
+/** The compact detail hides the master list. Return through its real back
+ * control before selecting the name-only primary navigation row. */
+export async function openAutomationDefinition(drive, name) {
+  if (await drive.has("button", "All automations")) await drive.click("button", "All automations");
+  await drive.wait(`button "${name}"`, 30_000);
+  await drive.click("button", name);
+}
+
+/** Open the journey's sole Run for this Automation, not a title substring:
+ * its birth title also names the column chip and can already be stale after
+ * auto-title. The Session-only provenance survives that rename. No `first`:
+ * two matching Sessions are ambiguous and must fail, not open the wrong Run. */
+export async function finishRunTurn(drive, automationName, marker) {
+  await openProjectHome(drive, AUTOMATION_PROJECT.name);
+  const provenance = provenanceMarkCopy(automationName);
+  await waitUntil(
+    `${drive.label}: Run Session is listed`,
+    () => drive.has("button", provenance, { contains: true }),
+    { timeout: 60_000, interval: 200 },
+  );
+  await drive.click("button", provenance, { contains: true });
+  await drive.wait(marker, 120_000);
+  await drive.gone("Stop turn", 60_000);
 }
 
 /* ------------------------------------------------- launching and signing --- */
@@ -219,7 +249,9 @@ export async function launchCloudInstance({
 
 /** Settings → Account → the agreement → Continue with GitHub; the browser double completes it. */
 export async function signInCloud(drive) {
+  drive.useMainWindow();
   await drive.click("button", "Settings", { first: true });
+  await drive.useSettingsWindow();
   await drive.wait("Settings categories");
   await drive.click("button", "Account", { first: true });
   await drive.wait("Accept Preview Agreement");
@@ -246,6 +278,7 @@ export async function cloudRunnerState(drive) {
 
 /** The cloud project's Home on this Mac (where the checkout folder is chosen). */
 export async function openProjectHome(drive, projectName) {
+  drive.useMainWindow();
   await drive.wait(projectName, 60_000);
   if (await drive.has("button", projectName)) {
     await drive.click("button", projectName, { first: true });
@@ -255,6 +288,7 @@ export async function openProjectHome(drive, projectName) {
 
 /** Home → the Board tab: the project's card board, where a column is armed and a card moves. */
 export async function openBoard(drive) {
+  drive.useMainWindow();
   if (await drive.has("button", "Home")) await drive.click("button", "Home", { first: true });
   await drive.click("tab", "Board");
   await waitUntil(

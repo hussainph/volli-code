@@ -141,7 +141,7 @@ env -u npm_config_arch -u npm_config_target_arch \
     npm_config_target="$(node -p 'process.versions.node')" \
     npm_config_disturl=https://nodejs.org/download/release \
     npm_config_build_from_source=true \
-    vp rebuild node-pty
+    pnpm rebuild node-pty
 node scripts/probe-node-pty.mjs
 ```
 

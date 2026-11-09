@@ -146,68 +146,51 @@ consumer is the stub, so each relayed call logs
   100%.
 - **The contract test** (`test/worker.test.ts`) bundles the Worker with
   `wrangler deploy --dry-run`, exactly as it would deploy, and runs that bundle
-  in workerd through Miniflare. It uses the real queue and KV bindings, with a
-  It covers one call per API family end to end through the queue to the ingest endpoint (one with a provider that holds back its stream until the runner has read the first event, which proves nothing is buffered), the endpoint allowlist, the typed refusals and the KV kill switch. Miniflare's entry proxy does not pass
+  in workerd through Miniflare. It uses the real queue and KV bindings and
+  covers one call per API family through the queue to a fixture ingest endpoint.
+  One provider holds its stream until the runner reads the first event, proving
+  nothing is buffered. It also covers the endpoint allowlist, typed refusals and
+  KV kill switch. Miniflare's entry proxy does not pass
   a client disconnect on to the Worker, so cancellation is covered by the unit
   tests. Confirm it on a real deployment as well.
 
 CI runs both in `Test (packages)` (Linux), and typechecks the package in
 `Check + Build`.
 
-## Part 2: what the backend and runner still owe it
+## Product integration boundary
 
-The Worker is complete on its own side. These items wire it into the product:
+The Worker runs independently; it is not yet wired end to end into desktop
+Sessions. The backend already declares `modelConnections` in its schema and
+has the runner-token issuer. Neither is evidence that gateway grant issuance,
+usage ingestion or runner routing is connected. The following are integration
+contracts, not a release plan or a claim of shipped product behavior.
 
-- [ ] **Backend: connections.** A `modelConnections` table (scope
-      personal/project/workspace, kind, label, upstream base URL, `api`, extra
-      headers, sealed key + `kid`, key version, status). The https/public-host
-      check runs when a connection is saved (mirror `parseUpstreamBase`). No
-      query may ever return key material: clients see
-      `{label, kind, last4?, createdBy, rotatedAt, status}`.
-- [ ] **Backend: the issuer.** Add the Volli ES256 issuer and its JWKS route
-      (shared with runner tokens), then point `GATEWAY_ISSUER` /
-      `GATEWAY_JWKS_URL` at it.
-- [ ] **Backend: `resolveRoutes(sessionId)`** (personal > project > workspace,
-      admin policy over all) and **`POST /gateway/grant`** (runner token in;
-      checks runner ownership, membership, connection status; mints claims as
-      `parseGatewayGrantClaims` reads them, 10-minute lifetime).
-- [ ] **Backend: usage ingest.** An HTTP action at `USAGE_INGEST_URL` that takes
-      `{records: GatewayUsageRecord[]}`, checks `USAGE_INGEST_TOKEN`, writes
-      idempotently on `recordId` (validators built from `GATEWAY_APIS` and
-      `GATEWAY_USAGE_STATUSES`), accepts a batch even when it rejects single
-      records (the consumer retries whole batches), prices records from the model catalog
-      (`costBasis: "gateway-metered"`) and rolls up `usageDaily`.
-- [ ] **Backend: the kill switch.** Writes `grant:` / `conn:` entries to the
-      `REVOCATIONS` KV namespace when a member is removed, a connection is
-      disabled or a key leaks, and a `conn:<id>:kv:<n>` entry when a key
-      rotation retires version `n`.
-- [ ] **Client: sealing.** Seal pasted keys to the gateway's published public key
-      with the `src/sealed-key.ts` format. Move `hpke.ts` + `sealed-key.ts` into
-      a shared package when the client takes it up (they are WebCrypto-only).
-- [ ] **Runner types.** The runner-side `Route`, `GrantSource` and
-      `withConnectionRoutes` types land with their first caller (AGENTS.md:
-      every export has a production caller). The shared wire types are already
-      in `@volli/shared/cloud`.
-- [ ] **Runner: the route table and `GrantSource`.** Cache the grant and refresh
-      it at about ⅔ of its lifetime. On `refresh-grant` codes, refresh and retry
-      the call once.
-- [ ] **Runner: the Pi stream wrapper.** For relay routes, one per-Session
-      wrapper sets `model.baseUrl` to `<gateway>/v1/c/<connectionId>`,
-      `options.apiKey` to the current grant, and `x-volli-call-id` to the id
-      already on the runner's `usage.recorded` fact. Non-Session model calls
-      (compaction, titling, decision models, the usage-limit probe) take the same
-      routes through one facade. The model picker lists Pi's local availability
-      together with the connection projection.
-- [ ] **Runner: error mapping.** Map `GATEWAY_ERRORS[code].recovery` onto the
-      runtime's classes. Add an `isGatewayErrorCode` guard to
-      `@volli/shared/cloud` when the runner first needs one.
-- [ ] **Deploy.** Create the Cloudflare account, the queue, the dead-letter queue
-      and the KV namespace (add its `id` to `wrangler.json`). Set the secrets and
-      a route (`gateway.<domain>`). Measure relay latency and confirm
-      disconnect cancellation there.
-- [ ] **Later.** Google (`x-goog-api-key`, `usageMetadata`), Bedrock (SigV4
-      re-signing or STS), Anthropic 1-hour cache writes as their own count
-      (`cache_creation.ephemeral_1h_input_tokens`, priced differently), streaming
-      non-chat request bodies through instead of buffering them, per-member rate
-      limits via the rate-limit binding,
-      budgets (`402 volli_budget_exceeded`), DPoP-bound grants, and direct mode.
+- **Connections and grants.** Connection resolution respects
+  `personal > project > Workspace` precedence and admin policy. Saving an upstream
+  applies the same HTTPS/public-host admission as `parseUpstreamBase`. Clients
+  receive sanitized connection metadata, never key material. A gateway grant
+  requires a runner token, runner ownership, membership and an enabled connection;
+  it must match `parseGatewayGrantClaims`, including its ten-minute lifetime and
+  issuer/JWKS.
+- **Key sealing and revocation.** Client sealing uses `src/sealed-key.ts` and
+  `src/hpke.ts` (WebCrypto). The runner carries ciphertext, not the provider key.
+  Member removal, connection disablement or compromise revokes the appropriate
+  `grant:` / `conn:` entries in KV; rotation retires `conn:<id>:kv:<n>`.
+- **Usage ingest.** `USAGE_INGEST_URL` accepts authenticated batches of
+  `GatewayUsageRecord`, idempotent on `recordId`. Validation uses
+  `GATEWAY_APIS` and `GATEWAY_USAGE_STATUSES`; rejecting an individual record
+  must not prevent acceptance of valid records when the consumer retries a batch.
+  Catalog pricing and rollups belong to the backend, not the Worker.
+- **Runner routing.** A per-Session route points Pi at
+  `<gateway>/v1/c/<connectionId>`, supplies the grant as `options.apiKey` and
+  joins `x-volli-call-id` to the Session's `usage.recorded` fact. The same
+  routing boundary covers compaction, titling, decisions and usage probes; the
+  picker combines local availability with sanitized connection metadata.
+  Grants refresh before expiry (about two-thirds of their lifetime). A
+  `refresh-grant` refusal permits one refresh and retry; other recoveries follow
+  `GATEWAY_ERRORS`. No silent fallback to another connection is allowed.
+- **Deployment.** The queue, dead-letter queue, KV binding, sealing keyring,
+  issuer/JWKS, authenticated ingest and public route are required configuration.
+  Without an ingest URL the consumer is a local stub, not durable usage storage.
+  Real-deployment disconnect cancellation needs separate verification; Miniflare
+  does not prove it.

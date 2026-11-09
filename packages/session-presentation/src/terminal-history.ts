@@ -19,8 +19,7 @@
  *
  * It lives in the Session Presentation Contract rather than in one client
  * because these are the historical-summary and available-control decisions the
- * contract exists to make (CONTEXT.md: "Session Surface Model … historical
- * summaries that a client may render"). Desktop, mobile and a future web client
+ * contract exists to make (CONTEXT.md#session-surface-model). Desktop, mobile and a future web client
  * must not each decide independently whether an exit nobody saw was fine, or
  * whether a deleted ticket may be recreated into. Framework-neutral by
  * construction — this package has no DOM, no React and no Electron — so the

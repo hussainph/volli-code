@@ -166,7 +166,7 @@ export function createHostSessionServices(
     void publishSessionListingRow(
       {
         db,
-        getSession: (query) => sessionEngine.getSession(query),
+        getSessionListing: (query) => sessionEngine.getSessionListing(query),
         liveAttachmentIds: () =>
           new Set(runtime.openNativeBindings().map((binding) => binding.attachmentId)),
         publish: publishSessionActivity,

@@ -36,6 +36,7 @@ import {
   HARNESS_VIOLATION_EXIT_CODE,
   RECORDED_SHELL_METHODS,
   SAFE_STORAGE_METHODS,
+  REPO,
   assertLaunchable,
   bundleCarriesGuard,
   createRegistry,
@@ -47,6 +48,7 @@ import {
   ownedProcesses,
   processIdentity,
   processTable,
+  readSnapshot,
   snapshotRefs,
 } from "./lib/core.mjs";
 import {
@@ -66,6 +68,7 @@ import {
 import { seedFixture } from "./lib/fixtures.mjs";
 import { serve } from "./lib/protocol.mjs";
 import { quitNativeWindow, reopenNativeWindow } from "./lib/native-window-lifecycle.mjs";
+import { settingsNative } from "./lib/settings-native.mjs";
 import {
   assertAcceptanceRunner,
   acceptanceScript,
@@ -73,6 +76,8 @@ import {
   prepareRemoteAcceptance,
 } from "./lib/remote-acceptance.mjs";
 
+import { guardedChatWindowBench } from "./lib/chat-window-bench.mjs";
+import { stopResult } from "./lib/stop-result.mjs";
 import { assertRestoreRestart } from "./lib/restore-acceptance.mjs";
 import { deploymentElectronEnv, recordedWorkosSignIn } from "./lib/deployment.mjs";
 
@@ -139,6 +144,7 @@ let launchEnv = null;
 const cloud = spec.cloud ? cloudFixtureFromSupervisorEnv(process.env) : null;
 if (spec.cloud && cloud === null) throw new Error("a cloud instance needs the fixture env");
 let generation = 0;
+let captureCounter = 0;
 let current = { generation: 0, window: null, refs: new Set() };
 let shotCounter = 0;
 let lastCommandAt = Date.now();
@@ -193,14 +199,44 @@ function wireWindow(page) {
 
 // ---- snapshot / act ----------------------------------------------------------
 
-async function snapshot({ window, depth } = {}) {
+async function snapshot({ window, depth, timeout, waitForText, gone } = {}) {
   const { page, name } = await pickWindow(window);
-  const text = await page.ariaSnapshot({ mode: "ai", ...(depth ? { depth: Number(depth) } : {}) });
+  // Even a rejected aria capture can replace Playwright's ref registry. Do not
+  // leave the previous generation actionable if this capture fails.
+  current = { generation, window: null, refs: new Set() };
+  const capture = ++captureCounter;
+  const { text, ...readiness } = await readSnapshot(page, {
+    depth,
+    timeout,
+    waitForText,
+    gone,
+    onEmpty: (raw, timing) => {
+      const path = join(L.snapshotsDir, `empty-${capture}-${timing.attempt}-${name}.txt`);
+      writeFileSync(path, raw);
+      transcript({
+        cmd: "snapshot-empty",
+        capture,
+        window: name,
+        path,
+        url: page.url(),
+        ...timing,
+      });
+    },
+  });
   generation += 1;
   current = { generation, window: name, refs: snapshotRefs(text) };
   const path = join(L.snapshotsDir, `gen-${String(generation).padStart(4, "0")}-${name}.txt`);
   writeFileSync(path, text);
-  return { generation, window: name, url: page.url(), title: await page.title(), path, text };
+  transcript({ cmd: "snapshot-ready", capture, generation, window: name, path, ...readiness });
+  return {
+    generation,
+    window: name,
+    url: page.url(),
+    title: await page.title(),
+    path,
+    text,
+    readiness,
+  };
 }
 
 const ACT_KINDS = new Set(["click", "type", "press", "select", "hover", "scroll", "wait"]);
@@ -279,19 +315,9 @@ async function act(args) {
 
 async function waitFor({ text, gone = false, timeout = 15_000, window }) {
   if (!text) throw new Error("wait needs --text");
-  const { page } = await pickWindow(window);
   const started = performance.now();
-  const needle = String(text).toLowerCase();
-  await waitUntil(
-    `"${text}" to ${gone ? "disappear" : "appear"}`,
-    async () => {
-      const tree = (await page.ariaSnapshot({ mode: "ai" })).toLowerCase();
-      return gone ? !tree.includes(needle) : tree.includes(needle);
-    },
-    { timeout: Number(timeout), interval: 200 },
-  );
+  const fresh = await snapshot({ window, waitForText: text, gone, timeout: Number(timeout) });
   const ms = Math.round(performance.now() - started);
-  const fresh = await snapshot({ window });
   transcript({ cmd: "wait", text, gone, ms, nextGeneration: fresh.generation });
   return { waitedMs: ms, snapshot: fresh };
 }
@@ -694,6 +720,33 @@ async function boot() {
           reasoningLevel: provider.reasoningLevel,
         }
       : null,
+    {
+      flushClientState: () =>
+        app.evaluate(async ({ BrowserWindow, ipcMain }) => {
+          const window = BrowserWindow.getAllWindows().find((candidate) =>
+            candidate.webContents.getURL().startsWith("volli-app:"),
+          );
+          if (!window) throw new Error("fixture window disappeared before flush");
+          const requestId = `drive-fixture-${Date.now()}`;
+          await new Promise((resolveFlush, rejectFlush) => {
+            const cleanup = () => {
+              clearTimeout(timer);
+              ipcMain.removeListener("volli:client-state-flushed", acked);
+            };
+            const acked = (event, id) => {
+              if (event.sender.id !== window.webContents.id || id !== requestId) return;
+              cleanup();
+              resolveFlush();
+            };
+            const timer = setTimeout(() => {
+              cleanup();
+              rejectFlush(new Error("fixture client-state flush timed out"));
+            }, 10000);
+            ipcMain.on("volli:client-state-flushed", acked);
+            window.webContents.send("volli:client-state-flush", requestId);
+          });
+        }),
+    },
   );
   mark("fixtureSeeded");
   await waitUntil("the app's agent socket", () => pathExists(L.appSocket), { timeout: 30_000 });
@@ -923,6 +976,34 @@ async function handle(cmd, args) {
   armIdle();
   void recordMembers();
   switch (cmd) {
+    case "chat-window-bench": {
+      const report = await guardedChatWindowBench({
+        app,
+        spec,
+        layout: L,
+        repo: REPO,
+        settings: args.settings,
+        doctor,
+        expire: async (reason) => {
+          await finalize(reason);
+          process.exit(1);
+        },
+      });
+      const guardAfter = await doctor();
+      if (!guardAfter.ok) throw new Error(`bench guard failed: ${guardAfter.problems.join("; ")}`);
+      report.guardAfter = guardAfter;
+      writeFileSync(
+        join(L.evidence, "chat-window-bench.json"),
+        `${JSON.stringify(report, null, 2)}\n`,
+      );
+      transcript({
+        cmd,
+        arm: args.settings?.arm,
+        guard: report.guard.ok,
+        guardAfter: guardAfter.ok,
+      });
+      return report;
+    }
     case "acceptance-fixture":
       if (!remoteFixture) throw new Error("Not a remote acceptance instance");
       return { projectPath: remoteFixture.projectPath, originPath: remoteFixture.originPath };
@@ -951,6 +1032,11 @@ async function handle(cmd, args) {
       const ready = acceptanceWorkspaceReady(result.data);
       transcript({ cmd: "acceptance-workspace", ready });
       return { ready };
+    }
+    case "settings-native": {
+      const result = await settingsNative(app, args);
+      transcript({ cmd, action: args.action ?? "state", ...result });
+      return result;
     }
     case "native-quit": {
       // The real application's native Quit menu item, not the menu-bar test
@@ -1087,7 +1173,7 @@ async function handle(cmd, args) {
         keepScratch: Boolean(args.keepScratch),
       });
       setTimeout(() => process.exit(0), 100);
-      return { manifest: L.manifest, evidence: L.evidence, leftovers: manifest?.leftovers ?? [] };
+      return stopResult(manifest, { manifestPath: L.manifest, evidence: L.evidence });
     }
     default:
       throw new Error(`unknown command ${cmd}`);

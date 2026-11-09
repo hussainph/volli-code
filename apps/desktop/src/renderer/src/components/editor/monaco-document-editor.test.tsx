@@ -28,7 +28,7 @@ describe("applyDocumentExternalValue", () => {
  * Static markup only sees the pre-Monaco frame — the mount effect never runs
  * under `react-dom/server` — but that frame renders the HOST element, and the
  * host is the whole point: it is the editor's layout box, so a caller's
- * `maxHeight` must be on it for `fitToContent`'s `clientHeight` read to see a
+ * `maxHeight` must be on it for documentLayout's `clientHeight` read to see a
  * clamped box. Threading `style` only to the Monaco-unavailable `<pre>`
  * fallback (which real runs never reach) left VC-99's body clamp inert, so pin
  * the host here.

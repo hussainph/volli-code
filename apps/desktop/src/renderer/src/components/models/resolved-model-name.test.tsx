@@ -28,7 +28,7 @@ function expectModelMark(markup: string): void {
   container.innerHTML = markup;
   const caption = container.querySelector('[data-slot="model-name"]');
   expect(caption).not.toBeNull();
-  expect(caption?.parentElement?.querySelector(":scope > svg[aria-hidden] path")).not.toBeNull();
+  expect(caption?.parentElement?.querySelector("svg[aria-hidden] path")).not.toBeNull();
 }
 
 describe("ResolvedModelName", () => {
@@ -47,7 +47,7 @@ describe("ResolvedModelName", () => {
     const markup = renderToStaticMarkup(
       <ResolvedModelName selection={selection} providerLabel="Anthropic" />,
     );
-    expect(markup).toContain("· Anthropic");
+    expect(markup).toContain('aria-label="Anthropic"');
   });
 
   it("matches the full gateway ID and provider rather than splitting model IDs", () => {
@@ -82,10 +82,10 @@ describe("ResolvedModelName", () => {
       ],
     };
     const markup = renderToStaticMarkup(
-      <ResolvedModelName selection={selection} providerLabel="Stale label" alwaysProvider />,
+      <ResolvedModelName selection={selection} providerLabel="Stale label" />,
     );
     expect(markup).toContain("Claude Opus 4.1");
-    expect(markup).toContain("· Anthropic");
+    expect(markup).toContain('aria-label="Anthropic"');
     expect(markup).not.toContain("Wrong account");
     expect(markup).not.toContain("Stale label");
   });
@@ -96,13 +96,13 @@ describe("ResolvedModelName", () => {
       <ResolvedModelName selection={selection} providerLabel="Anthropic" trailing="High effort" />,
     );
     expect(markup).toContain("claude-opus-4-1");
-    expect(markup).toContain("· Anthropic");
+    expect(markup).toContain('aria-label="Anthropic"');
     expect(markup).toContain("· High effort");
     expectModelMark(markup);
     const emptyProvider = renderToStaticMarkup(
       <ResolvedModelName selection={selection} providerLabel="" />,
     );
-    expect(emptyProvider).toContain("· anthropic");
+    expect(emptyProvider).toContain('aria-label="anthropic"');
   });
 
   it("uses the same resolved identity on helper rows, with a separate effort gauge", () => {

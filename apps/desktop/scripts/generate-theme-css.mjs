@@ -115,7 +115,8 @@ const NOTES = {
     "The canvas accent fill and label solved together for APCA Lc 60 AND\n" +
     "   WCAG AA 4.5:1. Vibrancy still supplies hue/chroma; lightness yields\n" +
     "   to legibility. The pair is shared by both appearances.",
-  "--primary-text": "The accent solved to APCA Lc 60 on the card for body-sized accent text.",
+  "--primary-text":
+    "Accent ink solved against the stronger selected paper tint for body-sized text.",
   "--ring":
     "Opaque surface-legible accent ink, re-solved in each appearance. Do not\n" +
     "   dilute focus indicators: the shipped control surfaces require 3:1.",
@@ -124,9 +125,9 @@ const NOTES = {
     "   and gone by convention, so their HUE never follows the canvas — a red\n" +
     "   canvas would otherwise make “delete” indistinguishable from “primary”.\n" +
     "   Everything else about them is solved against the card at APCA Lc 65, so\n" +
-    "   all four read at one weight in either appearance, and each label is\n" +
-    "   whichever of white or a near-black tint of its own hue wins on the fill\n" +
-    "   — which is why they flip polarity between the two blocks.",
+    "   all four read at one weight in either appearance. Labels prefer the\n" +
+    "   perceptual white/near-black pair, falling back to a neutral ink pole\n" +
+    "   where needed to retain small-text WCAG AA without moving the fill.",
   "--rail": "Two-tier sidebar depth: rail darkest, panel between rail and content.",
   "--sidebar-veil":
     "Veils (#74). The canvas paints the whole window behind the chrome, so the\n" +
@@ -135,7 +136,7 @@ const NOTES = {
     "   at 10% over the surface named beside it, composites to the opaque token\n" +
     "   above byte-exactly.",
   "--canvas":
-    "THE CANVAS ITSELF, and the ten values derived alongside it\n" +
+    "THE CANVAS ITSELF, and the values derived alongside it\n" +
     "   (`CANVAS_TOKEN_NAMES`, renderer/src/theme/canvas-paint.ts). The gradient\n" +
     "   is a `background` value, grain layer included, so the window can paint\n" +
     "   itself before any JS runs.",
@@ -149,6 +150,20 @@ const NOTES = {
     "   takes a share of zero — the frame reads as a frame only if it is\n" +
     "   uniform — so it is `transparent` by design, not by omission.",
   "--label-ink": "The card's micro-label tier, between body and secondary.",
+  "--surface-quaternary":
+    "Opaque objects on neutral paper: composite the 2.7% / 7.8% neutral rung\n" +
+    "   first, then tint its final face. The translucent fill tokens remain\n" +
+    "   separate for glass and overlays on arbitrary underlying colours.",
+  "--wash-ink":
+    "Tinted material paint, not text. Navigation substitutes glass-wash-ink\n" +
+    "   to follow its own ink polarity; bare canvas substitutes the adaptive\n" +
+    "   --canvas-ink. Body foreground remains neutral.",
+  "--writing-control-face":
+    "Outline/secondary buttons on floating writing glass: light keeps the opaque\n" +
+    "   control face and shared press; dark shades opposite the body ink.",
+  "--glass-outline-pressed":
+    "Navigation outline press only: 7.8% optical shade/highlight opposite\n" +
+    "   the navigation ink. Paper and other control variants retain their fills.",
   "--shadow-raised": "The three shadow tiers: raised on a surface, the card, and overlays.",
   "--scrim":
     "The overlay wash (dialogs, sheets, the palette): the shadow's own ink\n" +

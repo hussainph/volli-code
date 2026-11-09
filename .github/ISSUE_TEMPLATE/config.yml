@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation
+    url: https://docs.volli.app
+    about: Guides for installing Volli, running agent chats, and reviewing changes.
+  - name: Report a security vulnerability
+    url: https://github.com/hussainph/volli-code/security/advisories/new
+    about: Please report security issues privately, not as a public issue.

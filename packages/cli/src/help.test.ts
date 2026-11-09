@@ -27,8 +27,13 @@ describe("bareHelpText", () => {
     // a Ticket Session does NOT hold these verbs and so has no schema to read,
     // which is exactly the reader "a wrong door beats no door" is written for.
     // VC-485 adds session show and discoverable fleet/body flags.
-    expect(text.length).toBeLessThanOrEqual(3500);
-    expect(estTokens(text)).toBeLessThanOrEqual(875);
+    //
+    // Raised from 3,500 by VC-1092 for the perf store's three read verbs
+    // (`perf top`, `perf stalls`, `perf compare`), on the same ruling: they
+    // are a CLI-only read tier with no tool schema, so an agent hill-climbing
+    // performance that cannot see them here greps log files instead.
+    expect(text.length).toBeLessThanOrEqual(3850);
+    expect(estTokens(text)).toBeLessThanOrEqual(962);
     for (const group of ["Read", "Write", "Session", "App"]) {
       expect(text).toContain(`${group}\n`);
     }
@@ -61,6 +66,17 @@ describe("renderHelp command detail", () => {
       expect(detail.length, `${name} chars`).toBeLessThanOrEqual(1800);
       expect(estTokens(detail), `${name} est tokens`).toBeLessThanOrEqual(450);
     }
+  });
+
+  it.each(["top", "stalls", "compare"])("documents LoAF limits for perf %s", (command) => {
+    const detail = renderHelp(["perf", command]);
+    expect(detail).toContain("unknown, not zero");
+    expect(detail).toContain("Compositor/GPU/backdrop-filter raster is mostly outside LoAF");
+    expect(detail).toContain(
+      "Small script + big render suggests investigating materials, not proof",
+    );
+    expect(detail).toContain("overlap");
+    if (command !== "stalls") expect(detail).toContain("measuredFrames");
   });
 
   it("renders a rich write command with a compact usage, full options, values, and notes", () => {

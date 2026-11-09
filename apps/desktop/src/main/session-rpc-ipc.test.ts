@@ -1,9 +1,11 @@
+import { deserialize, serialize } from "node:v8";
 import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vite-plus/test";
 import type { SessionRuntime, SessionStreamFrame } from "@volli/session-engine";
 
-const { handlers, listeners } = vi.hoisted(() => ({
+const { handlers, listeners, windows } = vi.hoisted(() => ({
   handlers: new Map<string, (...args: never[]) => unknown>(),
   listeners: new Map<string, (...args: never[]) => unknown>(),
+  windows: [] as { webContents: FakeSender }[],
 }));
 const { terminalStream, routerCallers } = vi.hoisted(() => ({
   terminalStream: { current: null as AsyncIterable<readonly [string, unknown]> | null },
@@ -12,6 +14,7 @@ const { terminalStream, routerCallers } = vi.hoisted(() => ({
 }));
 
 vi.mock("electron", () => ({
+  BrowserWindow: { getAllWindows: () => windows },
   ipcMain: {
     handle(channel: string, handler: (...args: never[]) => unknown) {
       handlers.set(channel, handler);
@@ -58,6 +61,7 @@ import {
 import type { IpcResponse } from "@volli/host-protocol/ipc";
 
 import { LOCAL_DESKTOP_CALLER } from "@volli/session-rpc";
+import { currentRendererId } from "./renderer-call";
 import { captureHostLog } from "@volli/host-core/testing";
 
 import { sessionHandlersFrom, type LegacySessionPorts } from "@volli/session-rpc/testing";
@@ -237,6 +241,11 @@ function invoke(owner: FakeSender, request: unknown): Promise<IpcResponse> {
   ) as Promise<IpcResponse>;
 }
 
+/** Electron's structured-clone boundary, used by the accepted-change contract below. */
+function wire<T>(value: T): T {
+  return deserialize(serialize(value)) as T;
+}
+
 function cancel(event: { sender: FakeSender }, subscriptionId: unknown): void {
   const listener = listeners.get(SESSION_RPC_CANCEL_CHANNEL);
   if (!listener) throw new Error("Session RPC cancellation handler is not registered");
@@ -248,6 +257,7 @@ beforeEach(() => {
   listeners.clear();
   terminalStream.current = null;
   routerCallers.length = 0;
+  windows.length = 0;
 });
 
 describe("registerSessionRpcIpcHandlers", () => {
@@ -290,6 +300,96 @@ describe("registerSessionRpcIpcHandlers", () => {
     expect(routerCallers).toEqual([LOCAL_DESKTOP_CALLER, LOCAL_DESKTOP_CALLER]);
     expect(routerCallers.every((caller) => caller === LOCAL_DESKTOP_CALLER)).toBe(true);
     await registration.close();
+  });
+
+  it("keeps concurrent renderer identities independent through real RPC dispatch and async effects", async () => {
+    const fixture = runtimeFixture();
+    let releaseFirst!: () => void;
+    let releaseSecond!: () => void;
+    let firstEntered!: () => void;
+    let secondEntered!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const secondGate = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+    const firstStarted = new Promise<void>((resolve) => {
+      firstEntered = resolve;
+    });
+    const secondStarted = new Promise<void>((resolve) => {
+      secondEntered = resolve;
+    });
+    const observed: Array<{
+      sessionId: string;
+      phase: "start" | "effect";
+      rendererId: number | undefined;
+    }> = [];
+    const runtime: SessionRuntime = {
+      ...fixture.runtime,
+      snapshot: async (input) => {
+        observed.push({
+          sessionId: input.sessionId,
+          phase: "start",
+          rendererId: currentRendererId(),
+        });
+        if (input.sessionId === "session-1") {
+          firstEntered();
+          await firstGate;
+        } else {
+          secondEntered();
+          await secondGate;
+        }
+        // Device-local effects read the transport identity after asynchronous
+        // work too, rather than accepting a renderer id in the request body.
+        observed.push({
+          sessionId: input.sessionId,
+          phase: "effect",
+          rendererId: currentRendererId(),
+        });
+        return fixture.runtime.snapshot(input);
+      },
+    };
+    const registration = registerSessionRpcIpcHandlers({ runtime });
+    expect(currentRendererId()).toBeUndefined();
+    const first = invoke(sender(101), {
+      path: "session.snapshot",
+      type: "query",
+      input: { sessionId: "session-1" },
+    });
+    const second = invoke(sender(202), {
+      path: "session.snapshot",
+      type: "query",
+      input: { sessionId: "session-2" },
+    });
+    try {
+      await Promise.all([firstStarted, secondStarted]);
+      expect(currentRendererId()).toBeUndefined();
+      // Complete the second renderer first while the first call stays parked.
+      releaseSecond();
+      await expect(second).resolves.toMatchObject({ ok: true });
+      expect(currentRendererId()).toBeUndefined();
+      expect(observed.filter((entry) => entry.sessionId === "session-1")).toEqual([
+        { sessionId: "session-1", phase: "start", rendererId: 101 },
+      ]);
+      releaseFirst();
+      await expect(first).resolves.toMatchObject({ ok: true });
+      expect(observed.filter((entry) => entry.sessionId === "session-1")).toEqual([
+        { sessionId: "session-1", phase: "start", rendererId: 101 },
+        { sessionId: "session-1", phase: "effect", rendererId: 101 },
+      ]);
+      expect(observed.filter((entry) => entry.sessionId === "session-2")).toEqual([
+        { sessionId: "session-2", phase: "start", rendererId: 202 },
+        { sessionId: "session-2", phase: "effect", rendererId: 202 },
+      ]);
+      await Promise.resolve();
+      expect(currentRendererId()).toBeUndefined();
+    } finally {
+      releaseFirst();
+      releaseSecond();
+      await Promise.allSettled([first, second]);
+      await registration.close();
+    }
   });
 
   it("routes a query through the Session tRPC router and marks diagnostics as Electron IPC", async () => {
@@ -982,6 +1082,74 @@ describe("registerSessionRpcIpcHandlers", () => {
     await registration.close();
   });
 
+  it("notifies only live peers after accepted Model Access writes through the real IPC codec", async () => {
+    const owner = sender(1);
+    const peer = sender(2);
+    const gone = sender(3);
+    gone.destroy();
+    windows.push(...[owner, peer, gone].map((webContents) => ({ webContents })));
+    const accepted = Promise.withResolvers<void>();
+    let fail = false;
+    const registration = registerSessionRpcIpcHandlers({
+      runtime: {},
+      writeModelAccessDefault: async () => {
+        await accepted.promise;
+        if (fail) throw new Error("Default refused");
+        return EMPTY_MODEL_ACCESS_DEFAULTS;
+      },
+      writeHiddenModels: () => {
+        if (fail) throw new Error("Visibility refused");
+      },
+      inspectModelAccess: async () => ({ observedAt: 42, providers: [], models: [] }),
+    });
+    const request = (path: string, type: string, input: unknown) =>
+      invoke(owner, wire({ path, type, input })).then(wire);
+    try {
+      const pending = request("modelAccess.setDefault", "mutation", {
+        purpose: "ticket",
+        selection: null,
+      });
+      expect(peer.send).not.toHaveBeenCalled();
+      accepted.resolve();
+      expect(await pending).toEqual({ ok: true, data: EMPTY_MODEL_ACCESS_DEFAULTS });
+      expect(wire(peer.send.mock.calls)).toEqual([["volli:model-access-changed"]]);
+      expect(owner.send).not.toHaveBeenCalled();
+      expect(gone.send).not.toHaveBeenCalled();
+
+      peer.send.mockClear();
+      expect(await request("modelAccess.setHiddenModels", "mutation", [])).toEqual({
+        ok: true,
+        data: [],
+      });
+      expect(wire(peer.send.mock.calls)).toEqual([["volli:model-access-changed"]]);
+      peer.send.mockClear();
+      expect(await request("modelAccess.inspect", "query", {})).toMatchObject({ ok: true });
+      expect(peer.send).not.toHaveBeenCalled();
+      expect(await request("modelAccess.inspect", "query", { refresh: true })).toMatchObject({
+        ok: true,
+      });
+      expect(wire(peer.send.mock.calls)).toEqual([["volli:model-access-changed"]]);
+
+      peer.send.mockClear();
+      fail = true;
+      expect(
+        await request("modelAccess.setDefault", "mutation", { purpose: "ticket", selection: null }),
+      ).toMatchObject({ ok: false });
+      expect(await request("modelAccess.setHiddenModels", "mutation", [])).toMatchObject({
+        ok: false,
+      });
+      expect(
+        await request("modelAccess.setDefault", "mutation", {
+          purpose: "invalid",
+          selection: null,
+        }),
+      ).toMatchObject({ ok: false });
+      expect(peer.send).not.toHaveBeenCalled();
+    } finally {
+      await registration.close();
+    }
+  });
+
   it("routes product-owned Model Access inspection over IPC", async () => {
     const fixture = runtimeFixture();
     const calls: unknown[] = [];
@@ -1111,7 +1279,11 @@ describe("registerSessionRpcIpcHandlers", () => {
     await expect(
       invoke(sender(), { path: "modelAccess.codeModePolicy", type: "query", input: undefined }),
     ).resolves.toEqual({ ok: true, data: stored });
-    const saved = { enabled: false, models: { "openai-codex/gpt-5.5": "both" } };
+    const saved = {
+      enabled: true,
+      defaultMode: "both",
+      models: { "openai-codex/gpt-5.5": "only" },
+    };
     await expect(
       invoke(sender(), { path: "modelAccess.setCodeModePolicy", type: "mutation", input: saved }),
     ).resolves.toEqual({ ok: true, data: saved });
