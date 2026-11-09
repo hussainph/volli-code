@@ -36,6 +36,8 @@ import {
 } from "@volli/shared";
 
 import { extractInProcess, WebExtractError, type WebExtractor } from "./extract-worker";
+import type { SourceIconRaster } from "./source-icon-decoder";
+import { sameOriginIconUrl } from "./source-icon-target";
 import {
   GITHUB_API_HOST,
   githubDirectoryFor,
@@ -517,7 +519,18 @@ export interface SafeWebFetch {
 }
 
 /** Seams a test replaces. Production supplies none of them. */
+export interface ReadSourceIconCandidate {
+  readonly origin: string;
+  readonly url: string;
+}
+
+// A receipt exists only for an already successful live HTML read. Weak keys
+// retain no page or candidate; no history/renderer shape can recreate one.
+const iconReadReceipts = new WeakMap<object, number>();
+
 export interface SafeWebFetchOptions {
+  /** Synchronous enqueue of bounded metadata only; never awaited or included in tool output. */
+  onSourceIcon?: (candidate: ReadSourceIconCandidate, signal: AbortSignal) => void;
   resolve?: WebAddressResolver;
   open?: WebRequestOpener;
   /**
@@ -629,6 +642,7 @@ function requestOptions(
   url: URL,
   addresses: readonly WebFetchAddress[],
   limits: WebFetchLimits,
+  accept?: string,
 ): WebRequestOptions {
   return {
     protocol: `${target.scheme}:`,
@@ -655,9 +669,10 @@ function requestOptions(
       // documentation says every client should send and what keeps its
       // answers in the stable JSON shape the directory listing reads.
       accept:
-        target.hostname === GITHUB_API_HOST
+        accept ??
+        (target.hostname === GITHUB_API_HOST
           ? "application/vnd.github+json, application/json;q=0.9, */*;q=0.1"
-          : "text/markdown, text/plain;q=0.9, text/html;q=0.8, */*;q=0.1",
+          : "text/markdown, text/plain;q=0.9, text/html;q=0.8, */*;q=0.1"),
       // Identity only. A compressed body is a decompression bound this slice
       // has not written, and asking for one Volli cannot police is careless.
       "accept-encoding": "identity",
@@ -714,6 +729,7 @@ async function document(
   rewrite: GithubRead | undefined,
   extract: WebExtractor,
   signal: AbortSignal,
+  onSourceIcon?: SafeWebFetchOptions["onSourceIcon"],
 ): Promise<SafeWebFetchResult> {
   // A rewrite speaks for GitHub only when GitHub is what answered. If the
   // rewritten URL redirected to some other public host, that host's bytes are
@@ -756,6 +772,7 @@ async function document(
 
   let text: string;
   let truncated: boolean;
+  let sourceIconUrl: string | undefined;
   // Whether the text itself already stops at one of this module's own bounds
   // (extraction's), which the character bound below then cuts further.
   let bounded = false;
@@ -795,6 +812,7 @@ async function document(
       );
     }
     text = extracted.text;
+    sourceIconUrl = extracted.sourceIconUrl;
     bounded = extracted.truncated;
     truncated = extracted.truncated || extracted.text.length > limits.textChars;
     returned = "markdown";
@@ -825,6 +843,18 @@ async function document(
   // Over the character bound, the text the bound cut travels beside the cut
   // copy (VC-237): the model reads the cut copy, and the runtime saves this.
   const cut = text.length > limits.textChars;
+  if (sourceIconUrl !== undefined && onSourceIcon !== undefined && !signal.aborted) {
+    const candidateUrl = sameOriginIconUrl(sourceIconUrl, target.url);
+    if (candidateUrl !== null) {
+      const candidate = Object.freeze({ origin: url.origin, url: candidateUrl });
+      iconReadReceipts.set(candidate, Date.now() + 60_000);
+      try {
+        onSourceIcon(candidate, signal);
+      } catch {
+        /* Decoration never changes a successful read. */
+      }
+    }
+  }
   return {
     requestedUrl,
     finalUrl: target.url,
@@ -931,12 +961,16 @@ function statusRefusal(
  * policy decision and this function performs no policy. The loop above takes
  * the location back through admission, resolution and pinning from the top.
  */
-type HopResult =
-  | { outcome: "document"; document: SafeWebFetchResult }
+type HopResult<Result> =
+  | { outcome: "document"; document: Result }
   | { outcome: "redirect"; location: string };
 
-/** Build the fetcher. */
-export function createSafeWebFetch(options: SafeWebFetchOptions = {}): SafeWebFetch {
+/** One implementation of admission, DNS pinning, redirects, headers and byte bounds. */
+function createSafeReader<Result>(
+  options: SafeWebFetchOptions,
+  readResponse: (...args: Parameters<typeof document>) => Promise<Result>,
+  profile: { github?: boolean; accept?: string; checkTarget?(href: string): void } = {},
+): { fetch(input: { url: string; signal: AbortSignal }): Promise<Result> } {
   const resolve = options.resolve ?? resolveWebAddresses;
   const open = options.open ?? openWebRequest;
   const limits = options.limits ?? WEB_FETCH_LIMITS;
@@ -957,7 +991,8 @@ export function createSafeWebFetch(options: SafeWebFetchOptions = {}): SafeWebFe
     signal: AbortSignal,
     started: number,
     rewrite: GithubRead | undefined,
-  ): Promise<HopResult> {
+  ): Promise<HopResult<Result>> {
+    profile.checkTarget?.(href);
     const admission = admitWebTarget(href);
     if (admission.outcome === "refuse") {
       throw new WebFetchRefusal(admission.rule, admission.reason);
@@ -976,6 +1011,7 @@ export function createSafeWebFetch(options: SafeWebFetchOptions = {}): SafeWebFe
       );
     }
     const addresses = pinAddresses(target.hostname, answers);
+    profile.checkTarget?.(href);
     // Asked twice, because resolution takes real time and the listener that
     // watches for a withdrawal is only installed once the request exists. A
     // turn interrupted inside that window would otherwise still open a socket
@@ -994,8 +1030,11 @@ export function createSafeWebFetch(options: SafeWebFetchOptions = {}): SafeWebFe
     // original input.
     const url = new URL(target.url);
 
-    return await new Promise<HopResult>((settle, refuse) => {
-      const request = open(target.scheme, requestOptions(target, url, addresses, limits));
+    return await new Promise<HopResult<Result>>((settle, refuse) => {
+      const request = open(
+        target.scheme,
+        requestOptions(target, url, addresses, limits, profile.accept),
+      );
 
       // Two deadlines rather than an inactivity timer: a host that answers a
       // byte at a time is never idle, and would hold a socket open forever
@@ -1154,7 +1193,7 @@ export function createSafeWebFetch(options: SafeWebFetchOptions = {}): SafeWebFe
           chunks.push(chunk);
         });
         response.on("end", () => {
-          document(
+          readResponse(
             requestedUrl,
             target,
             url,
@@ -1164,6 +1203,7 @@ export function createSafeWebFetch(options: SafeWebFetchOptions = {}): SafeWebFe
             rewrite,
             extract,
             signal,
+            options.onSourceIcon,
           ).then((read) => settle({ outcome: "document", document: read }), refuse);
         });
       });
@@ -1192,7 +1232,7 @@ export function createSafeWebFetch(options: SafeWebFetchOptions = {}): SafeWebFe
       // A GitHub page whose content lives somewhere readable is read there.
       // The rewritten URL is only a starting point: the first hop admits,
       // resolves and pins it like any URL a caller could have named.
-      const github = githubRead(new URL(requestedUrl));
+      const github = profile.github === false ? undefined : githubRead(new URL(requestedUrl));
 
       // Every URL this read has already been sent to. A redirect back to one of
       // them is a loop, and a loop that is merely bounded by the hop count
@@ -1244,6 +1284,92 @@ export function createSafeWebFetch(options: SafeWebFetchOptions = {}): SafeWebFe
         scheme = destination.protocol === "https:" ? "https" : "http";
       }
     },
+  };
+}
+
+/** The text tool's contract and headers are unchanged. */
+export function createSafeWebFetch(options: SafeWebFetchOptions = {}): SafeWebFetch {
+  return createSafeReader(options, document);
+}
+
+/** Internal host port: consumes a one-use receipt, never an arbitrary icon URL. */
+export function createSourceIconFetch(options: Pick<SafeWebFetchOptions, "resolve" | "open"> = {}) {
+  let resolving = false;
+  const resolveIconAddress: WebAddressResolver = async (hostname) => {
+    // node:dns cannot cancel an OS lookup. Keep ONE outstanding lookup even
+    // when its caller already timed out, rather than piling up native jobs.
+    if (resolving)
+      throw new WebFetchRefusal("fetch.unresolvable", "An icon lookup is still pending");
+    resolving = true;
+    try {
+      return await (options.resolve ?? resolveWebAddresses)(hostname);
+    } finally {
+      resolving = false;
+    }
+  };
+  return async (
+    candidate: ReadSourceIconCandidate,
+    signal: AbortSignal,
+    stillAuthorized: () => boolean,
+  ): Promise<SourceIconRaster | null> => {
+    const expiresAt = iconReadReceipts.get(candidate);
+    iconReadReceipts.delete(candidate);
+    if (expiresAt === undefined || expiresAt <= Date.now() || signal.aborted || !stillAuthorized())
+      return null;
+    const reader = createSafeReader<SourceIconRaster>(
+      {
+        ...options,
+        resolve: resolveIconAddress,
+        limits: {
+          ...WEB_FETCH_LIMITS,
+          bodyBytes: 256 * 1024,
+          headerMs: 3_000,
+          totalMs: 3_000,
+          maxRedirects: 2,
+        },
+      },
+      async (_requested, _target, _url, response, bytes) => {
+        const { media } = contentType(response);
+        if (media !== "image/png" && media !== "image/jpeg" && media !== "image/webp") {
+          throw new WebFetchRefusal("fetch.type", "Not a supported raster icon");
+        }
+        return { bytes: Uint8Array.from(bytes), mime: media };
+      },
+      {
+        github: false,
+        accept: "image/png, image/jpeg, image/webp",
+        checkTarget: (href) => {
+          if (!stillAuthorized())
+            throw new WebFetchRefusal("fetch.cancelled", "The icon read is no longer authorized");
+          if (sameOriginIconUrl(href, candidate.origin) === null) {
+            throw new WebFetchRefusal("fetch.redirect", "The icon left the authorized origin");
+          }
+        },
+      },
+    );
+    // Include DNS and cancellation in the wall-clock budget too. A late DNS
+    // answer sees the aborted signal before opening any connection.
+    const abort = new AbortController();
+    const combined = AbortSignal.any([signal, abort.signal]);
+    return await new Promise<SourceIconRaster | null>((resolve) => {
+      let finished = false;
+      const finish = (result: SourceIconRaster | null): void => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(deadline);
+        combined.removeEventListener("abort", cancelled);
+        abort.abort();
+        resolve(result);
+      };
+      const cancelled = (): void => finish(null);
+      const deadline = setTimeout(cancelled, 3_000);
+      combined.addEventListener("abort", cancelled, { once: true });
+      if (combined.aborted) return finish(null);
+      void reader.fetch({ url: candidate.url, signal: combined }).then(
+        (raster) => finish(combined.aborted ? null : raster),
+        () => finish(null),
+      );
+    });
   };
 }
 

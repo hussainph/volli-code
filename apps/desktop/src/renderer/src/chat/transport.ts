@@ -7,6 +7,7 @@
  * is anything the core needs to know.
  */
 import { racingFlushScheduler, type ChatSessionTransport } from "@volli/session-presentation";
+import type { SourceIconsWatchInput, SourceIconsSnapshot } from "@volli/shared";
 
 import { hostNotConnected, remoteOwnerOf } from "@renderer/lib/remote-owners";
 import { closedRemoteTransport, type RemoteSessionClient } from "@renderer/lib/remote-session-wire";
@@ -130,6 +131,60 @@ export function sessionCommandFor(projectId: string | null): SessionCommandDoor 
     return () => Promise.reject(new Error(hostNotConnected(owner.hostName)));
   }
   return (input) => client.session.command.mutate(input);
+}
+
+/** The transcript context's cache-only source-icon subscription seam. */
+export interface TranscriptSourceIconsTransport {
+  watch(
+    input: SourceIconsWatchInput,
+    onSnapshot: (snapshot: SourceIconsSnapshot) => void,
+  ): () => void;
+}
+
+/** Local decoration only. Never route a remote/cloud Session to this Mac. */
+export function sourceIconsFor(projectId: string | null): TranscriptSourceIconsTransport | null {
+  const local = () => launchStore() !== "cloud" && remoteOwnerOf(projectId) === null;
+  if (!local()) return null;
+  return {
+    watch(input, onSnapshot) {
+      let cancelled = false;
+      let subscription: { unsubscribe(): void } | undefined;
+      const origins = [...input.origins];
+      const missing = (): void => {
+        if (!cancelled)
+          onSnapshot({
+            icons: origins.map((origin) => ({ origin, pictureId: null, registrableDomain: null })),
+          });
+      };
+      // Setup may cross asynchronous bridge initialization. Cancellation owns
+      // both halves: late frames are ignored and a late handle is closed once.
+      void Promise.resolve()
+        .then(() => {
+          if (cancelled || !local()) return undefined;
+          return sessionRpcClient().sourceIcons.watch.subscribe(
+            { sessionId: input.sessionId, origins },
+            {
+              onData: (snapshot) => {
+                if (!cancelled && local()) onSnapshot(snapshot);
+              },
+              onError: missing,
+            },
+          );
+        })
+        .then((opened) => {
+          if (opened === undefined) return;
+          if (cancelled) opened.unsubscribe();
+          else subscription = opened;
+        })
+        .catch(missing);
+      return () => {
+        if (cancelled) return;
+        cancelled = true;
+        subscription?.unsubscribe();
+        subscription = undefined;
+      };
+    },
+  };
 }
 
 /** Saved images belong to the Session's host, never This Mac by fallback. */

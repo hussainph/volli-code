@@ -1,3 +1,4 @@
+import { HelpTag } from "@renderer/components/ui/help-tag";
 import type { SVGProps } from "react";
 import { providerMark } from "@renderer/components/models/model-identity";
 
@@ -9,6 +10,14 @@ export type ProviderArtwork = NonNullable<ReturnType<typeof providerMark>> & {
 
 /** The same provider artwork used by model identity and the chrome meter. */
 export function ProviderGlyph({ id, label }: { id: string; label: string }) {
+  return (
+    <HelpTag label={label}>
+      <ProviderArtworkGlyph id={id} label={label} />
+    </HelpTag>
+  );
+}
+
+function ProviderArtworkGlyph({ id, label }: { id: string; label: string }) {
   const mark: ProviderArtwork | null = providerMark(id);
   if (mark === null)
     return (

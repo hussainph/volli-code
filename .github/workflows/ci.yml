@@ -336,6 +336,7 @@ jobs:
           apps/desktop/e2e/volli-drive/lib/cloud-acceptance.test.mjs
           apps/desktop/e2e/volli-drive/lib/cloud-automation-acceptance.test.mjs
           apps/desktop/e2e/volli-drive/lib/cloud-transcript-acceptance.test.mjs
+          apps/desktop/e2e/bench/chat-window/integration.test.mjs
 
       # Every workspace manifest must declare the license the root declares
       # (VC-411). Not expressible as a lint rule, so it is its own step.
@@ -370,7 +371,7 @@ jobs:
         run: |
           node scripts/check-host-electron-imports.mjs --self-test
           node scripts/check-host-electron-imports.mjs
-          node --test scripts/ci-host-lane.test.mjs scripts/setup-toolchain.test.mjs scripts/host-test-diagnostics.test.mjs
+          node --test scripts/ci-host-lane.test.mjs scripts/setup-toolchain.test.mjs scripts/host-test-diagnostics.test.mjs scripts/worker-node-archive.test.mjs
 
       # The encoded design system (the tokens ARE the spec, not a document).
       # `vp check` is fmt + lint. These source-specific guards run separately
@@ -772,6 +773,15 @@ jobs:
       - name: Probe Chromium's sandbox under the hostd unit
         run: sudo apps/hostd/scripts/probe-chromium-sandbox.sh /usr/lib/volli-chromium/chrome "$(id -un)"
 
+      # Immutable optimization only: the symbolizer revalidates every restored
+      # archive. No prefix restore keys, fallback, or advisory diagnostic gate.
+      - name: Restore the pinned worker Node archive
+        id: worker-node-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .tmp/worker-node-archive/13c8f1384f72ada969d164b8de7ebacd55f3fb18a97ea86abd9b7ebdb6c77c26.tar.gz
+          key: worker-node-archive-linux-x64-13c8f1384f72ada969d164b8de7ebacd55f3fb18a97ea86abd9b7ebdb6c77c26
+
       - name: Symbolize retained worker frames (read-only)
         id: worker_symbols
         env:
@@ -781,6 +791,13 @@ jobs:
           set -o pipefail
           bash scripts/symbolize-worker-stack.sh "$VOLLI_TEST_DIAGNOSTICS" 2>&1 \
             | node scripts/capture-test-output.cjs "$VOLLI_TEST_DIAGNOSTICS/symbolization.log" 65536
+
+      - name: Save the verified worker Node archive
+        if: ${{ steps.worker_symbols.outcome == 'success' && steps.worker-node-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .tmp/worker-node-archive/13c8f1384f72ada969d164b8de7ebacd55f3fb18a97ea86abd9b7ebdb6c77c26.tar.gz
+          key: ${{ steps.worker-node-cache.outputs.cache-primary-key }}
 
       # A diagnostic failure stays red, but must not prevent the actual tests
       # from running or hide their exit status. Earlier setup failures still skip.

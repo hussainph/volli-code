@@ -8,11 +8,12 @@
  * Stalls are machine state (the Store rule allows SQLite for that), but
  * nothing about them belongs to the profile's durable data: they are not
  * backed up (`perf.db*` is excluded in `backup/decisions.ts`), never
- * migrated with the profile's registry, never read by an older build, and the
- * file can be deleted at any time to start over. A separate file keeps all of
- * that true without a `volli.db` migration, and keeps these writes off the
- * profile database's WAL. SQLite rather than a rolling JSONL file because the
- * reads are aggregations over a time window — an index on `at` answers them
+ * migrated with the profile's registry, and the file can be deleted at any
+ * time to start over. Older builds can still read and write it, so schema
+ * changes must remain expand-only and nullable. A separate file avoids a
+ * `volli.db` migration and keeps these writes off the profile database's WAL.
+ * SQLite rather than a rolling JSONL file because the reads are aggregations
+ * over a time window — an index on `at` answers them
  * without parsing every line ever written.
  *
  * **Off the hot path.** {@link PerfStore.record} only pushes onto an
@@ -42,7 +43,13 @@
 import { join } from "node:path";
 
 import Database from "better-sqlite3";
-import type { PerfProcess } from "@volli/shared";
+import {
+  rendererScriptInvoker,
+  rendererStallFile,
+  rendererStallFunction,
+  rendererStallMs,
+  type PerfProcess,
+} from "@volli/shared";
 
 import { hostLogger } from "../log/root";
 import type { PerfRun, PerfStallRecord } from "./report";
@@ -81,7 +88,7 @@ export const PERF_STORE_BOUNDS: PerfStoreBounds = Object.freeze({
 });
 
 /** The newest layout this build writes (`PRAGMA user_version`). */
-export const PERF_STORE_SCHEMA_VERSION = 1;
+export const PERF_STORE_SCHEMA_VERSION = 2;
 
 /** Characters a stored identifier keeps: every real door, operation or label is far shorter. */
 export const PERF_FIELD_MAX = 160;
@@ -99,6 +106,18 @@ export interface PerfStallInput {
   readonly windowId?: number | null;
   readonly durationMs: number;
   readonly hint?: string | null;
+  /** Total attributed script duration, not just the longest script. */
+  readonly scriptTotalMs?: number;
+  readonly blockingMs?: number;
+  /** Inclusive render start to frame end. */
+  readonly renderMs?: number;
+  /** Style/layout start to frame end; a subset of renderMs. */
+  readonly styleLayoutMs?: number;
+  readonly scriptFile?: string;
+  readonly scriptFunction?: string;
+  readonly scriptInvoker?: string;
+  /** The longest attributed script's duration. */
+  readonly scriptMs?: number;
 }
 
 export interface PerfStallFilter {
@@ -203,6 +222,34 @@ const SCHEMA = `
   CREATE INDEX IF NOT EXISTS stalls_at ON stalls (at);
 `;
 
+/** Nullable additions let a v1 writer continue inserting its original columns. */
+const V2_COLUMNS = {
+  script_total_ms: "REAL",
+  blocking_ms: "REAL",
+  render_ms: "REAL",
+  style_layout_ms: "REAL",
+  script_file: "TEXT",
+  script_function: "TEXT",
+  script_invoker: "TEXT",
+  script_ms: "REAL",
+} as const;
+
+function upgradeSchema(db: Database.Database): void {
+  db.transaction(() => {
+    db.exec(SCHEMA);
+    const columns = new Set(
+      (db.pragma("table_info(stalls)") as { name: string }[]).map((column) => column.name),
+    );
+    for (const [name, type] of Object.entries(V2_COLUMNS)) {
+      if (!columns.has(name)) db.exec(`ALTER TABLE stalls ADD COLUMN ${name} ${type}`);
+    }
+    const version = db.pragma("user_version", { simple: true });
+    if (typeof version !== "number" || version < PERF_STORE_SCHEMA_VERSION) {
+      db.pragma(`user_version = ${PERF_STORE_SCHEMA_VERSION}`);
+    }
+  })();
+}
+
 interface StallRow {
   at: number;
   process: PerfProcess;
@@ -214,13 +261,23 @@ interface StallRow {
   window_id: number | null;
   duration_ms: number;
   hint: string | null;
+  script_total_ms: number | null;
+  blocking_ms: number | null;
+  render_ms: number | null;
+  style_layout_ms: number | null;
+  script_file: string | null;
+  script_function: string | null;
+  script_invoker: string | null;
+  script_ms: number | null;
   version: string;
   build: string | null;
 }
 
 /** The columns a stall row is read back with, its run's version and build included. */
 const COLUMNS = `s.at, s.process, s.kind, s.door, s.operation, s.label, s.session_id,
-  s.window_id, s.duration_ms, s.hint, r.version, r.build`;
+  s.window_id, s.duration_ms, s.hint, s.script_total_ms, s.blocking_ms, s.render_ms,
+  s.style_layout_ms, s.script_file, s.script_function, s.script_invoker, s.script_ms,
+  r.version, r.build`;
 
 /** Rows a chunked read takes per turn of the event loop. */
 export const PERF_READ_CHUNK = 1_000;
@@ -237,6 +294,14 @@ function stallRecord(row: StallRow): PerfStallRecord {
     windowId: row.window_id,
     durationMs: row.duration_ms,
     hint: row.hint,
+    ...(row.script_total_ms === null ? {} : { scriptTotalMs: row.script_total_ms }),
+    ...(row.blocking_ms === null ? {} : { blockingMs: row.blocking_ms }),
+    ...(row.render_ms === null ? {} : { renderMs: row.render_ms }),
+    ...(row.style_layout_ms === null ? {} : { styleLayoutMs: row.style_layout_ms }),
+    ...(row.script_file === null ? {} : { scriptFile: row.script_file }),
+    ...(row.script_function === null ? {} : { scriptFunction: row.script_function }),
+    ...(row.script_invoker === null ? {} : { scriptInvoker: row.script_invoker }),
+    ...(row.script_ms === null ? {} : { scriptMs: row.script_ms }),
     version: row.version,
     build: row.build,
   };
@@ -297,11 +362,7 @@ export function openPerfStore(options: PerfStoreOptions): PerfStore | null {
     db = new Database(options.path, { timeout: 0 });
     db.pragma("journal_mode = WAL");
     db.pragma("synchronous = NORMAL");
-    db.exec(SCHEMA);
-    const version = db.pragma("user_version", { simple: true });
-    if (typeof version !== "number" || version < PERF_STORE_SCHEMA_VERSION) {
-      db.pragma(`user_version = ${PERF_STORE_SCHEMA_VERSION}`);
-    }
+    upgradeSchema(db);
   } catch (error) {
     log.warn("perf store unavailable", { stage: "open", error: errorName(error) });
     return null;
@@ -332,8 +393,9 @@ function createStore(
   );
 
   const insert = db.prepare(
-    `INSERT INTO stalls (run_id, at, process, kind, door, operation, label, session_id, window_id, duration_ms, hint)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO stalls (run_id, at, process, kind, door, operation, label, session_id, window_id, duration_ms, hint,
+       script_total_ms, blocking_ms, render_ms, style_layout_ms, script_file, script_function, script_invoker, script_ms)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const touch = db.prepare("UPDATE runs SET last_seen_at = ? WHERE id = ?");
   const countRows = db.prepare("SELECT COUNT(*) AS n FROM stalls");
@@ -368,6 +430,14 @@ function createStore(
         typeof stall.windowId === "number" ? stall.windowId : null,
         Math.max(0, Math.round(stall.durationMs)),
         clipOrNull(stall.hint),
+        rendererStallMs(stall.scriptTotalMs),
+        rendererStallMs(stall.blockingMs),
+        rendererStallMs(stall.renderMs),
+        rendererStallMs(stall.styleLayoutMs),
+        stall.scriptFile === undefined ? null : rendererStallFile(stall.scriptFile),
+        rendererStallFunction(stall.scriptFunction) ?? null,
+        stall.scriptInvoker === undefined ? null : rendererScriptInvoker(stall.scriptInvoker),
+        rendererStallMs(stall.scriptMs),
       );
     }
     rows += batch.length;

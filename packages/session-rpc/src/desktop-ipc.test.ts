@@ -161,6 +161,7 @@ describe("the desktop's IPC exposure", () => {
       "runners.removeThisMac",
       "checkouts.status",
       "checkouts.chooseFolder",
+      "sourceIcons.watch",
     ]);
   });
 

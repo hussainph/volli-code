@@ -27,9 +27,20 @@ done
 url='https://github.com/actions/node-versions/releases/download/24.22.1-39619001896/node-24.22.1-linux-x64.tar.gz'
 expected='13c8f1384f72ada969d164b8de7ebacd55f3fb18a97ea86abd9b7ebdb6c77c26'
 printf 'archive_source=%s\narchive_sha256_expected=%s\n' "$url" "$expected"
-curl --disable --fail --silent --location --proto '=https' --proto-redir '=https' \
-  --max-time 90 --max-filesize 134217728 "$url" -o "$work/node.tar.gz" \
-  || fail archive_download_failed
+job_node="$(command -v node)" || fail job_node_missing
+cache="${VOLLI_WORKER_NODE_ARCHIVE:-.tmp/worker-node-archive/$expected.tar.gz}"
+cache_miss=0
+if node scripts/worker-node-archive.mjs restore "$cache" "$work/node.tar.gz" "$expected"; then
+  printf 'archive_cache=verified_hit\n'
+else
+  code=$?
+  (( code == 2 )) || exit 1
+  cache_miss=1
+  printf 'archive_cache=miss\n'
+  curl --disable --fail --silent --location --proto '=https' --proto-redir '=https' \
+    --max-time 90 --max-filesize 134217728 "$url" -o "$work/node.tar.gz" \
+    || fail archive_download_failed
+fi
 actual="$(sha256sum "$work/node.tar.gz" | awk '{print $1}')"
 printf 'archive_sha256_actual=%s\n' "$actual"
 [[ "$actual" == "$expected" ]] || fail archive_checksum_mismatch
@@ -37,12 +48,15 @@ member="$(tar -tzf "$work/node.tar.gz" | awk '/(^|\/)bin\/node$/ {n++; path=$0} 
   || fail archive_binary_missing
 [[ "$member" != /* && "/$member/" != *'/../'* ]] || fail unsafe_archive_member
 tar -xOzf "$work/node.tar.gz" -- "$member" > "$work/node" || fail archive_extract_failed
-job_node="$(command -v node)" || fail job_node_missing
 archive_binary_sha="$(sha256sum "$work/node" | awk '{print $1}')"
 job_binary_sha="$(sha256sum "$job_node" | awk '{print $1}')"
 printf 'archive_node_sha256=%s\njob_node_sha256=%s\n' "$archive_binary_sha" "$job_binary_sha"
 cmp -s "$work/node" "$job_node" || fail job_binary_identity_mismatch
 printf 'binary_identity=verified_exact_match\n'
+# Never publish partial downloads, unsafe members or a different Node binary.
+if (( cache_miss )); then
+  node scripts/worker-node-archive.mjs publish "$cache" "$work/node.tar.gz" "$expected" || exit 1
+fi
 readelf -n "$job_node" > "$work/notes" || fail readelf_failed
 build_id="$(awk '/Build ID:/ {print $3; found=1} END {if(!found) exit 1}' "$work/notes")" \
   || fail build_id_unavailable

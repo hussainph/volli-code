@@ -42,6 +42,42 @@ names, never content:
 Every row also carries the Session it ran for (when one is known, printed as
 its short handle) and the build that recorded it.
 
+### Renderer long-frame signals
+
+Long Animation Frame (LoAF) rows optionally carry these flat fields in
+`volli perf stalls --json`; text output names the same measurements:
+
+| Field | Meaning |
+| --- | --- |
+| `scriptTotalMs` | Sum of durations of the scripts Chromium attributed to the frame. Absent when no scripts were attributed, **not zero**. |
+| `blockingMs` | Chromium's blocking duration for the frame. |
+| `renderMs` | `renderStart` → frame end, **inclusive** of style/layout. This existing field's meaning is unchanged. |
+| `styleLayoutMs` | `styleAndLayoutStart` → frame end: a **subset** of `renderMs`, not an independent additive phase. |
+| `scriptMs` | Duration of the longest attributed script. |
+| `scriptFile`, `scriptFunction`, `scriptInvoker` | That script's safe file basename, sanitized function name and closed invoker category. Never a raw source URL or free-text invoker. |
+
+These are overlapping signals, **not a sum-to-total breakdown**. Script
+execution, GC and forced style/layout can overlap; render includes the
+style/layout subset. Do not add them together or infer a missing value by
+subtracting other signals from frame duration.
+
+Attribution is also a browser capability limit: packaged Chromium's custom
+`volli-app://` renderer currently supplies no script attribution. A packaged
+frame can therefore have a large duration or render measurement with no
+`scriptTotalMs` or top script. That is **unknown script time**, not evidence
+that no JavaScript ran. An explicit `scriptTotalMs: 0`, when present, is a
+measured zero; absence remains absence. Preserve the renderer's origin and
+security boundary: this instrumentation does not rehost it on loopback to
+obtain attribution.
+
+LoAF describes renderer main-thread work, not the whole rendering pipeline.
+Compositor/GPU work and backdrop-filter raster cost are mostly outside its
+visibility. Small **measured** script time plus large inclusive render time
+suggests investigating materials (blur, transparency, backdrop filters),
+not proof that materials caused the stall. Use a rendering trace or controlled
+materials experiment to test that hypothesis. Missing script attribution does
+not qualify as small measured script time.
+
 ## Where it lives
 
 `<userData>/perf.db` (for a dev build, the `-dev` profile's). It is a
@@ -87,6 +123,39 @@ since 2026-11-01T09:00:00.000Z  observed 5h 12m  86 stalls, 41,230 ms  7,929.62 
 - A large `unattributed` share means main ran work no door or span names.
   `volli perf stalls --operation unattributed` lists the hints; add a span at
   the call site they point to before trying to fix it.
+
+### Comparing renderer signals
+
+`perf top` and each side of `perf compare` include an optional `loaf` summary
+without another flag. Its `script`, `blocking`, `render` and `styleLayout`
+metrics each contain `{ measuredFrames, totalMs, msPerHour }`. For example:
+
+```json
+{
+  "loaf": {
+    "script": { "measuredFrames": 0, "totalMs": null, "msPerHour": null },
+    "blocking": { "measuredFrames": 2, "totalMs": 0, "msPerHour": 0 },
+    "render": { "measuredFrames": 2, "totalMs": 180, "msPerHour": 90 },
+    "styleLayout": { "measuredFrames": 1, "totalMs": 60, "msPerHour": 30 }
+  }
+}
+```
+
+The summary covers only renderer `long-animation-frame` rows in the selected
+window/process/build, before the group limit. Main stalls, slow inputs and
+long-task fallback rows do not contribute. Each metric counts only frames
+where that field was actually present. Old rows without measurements never
+become false zeros. If no metric was measured, the entire summary is absent;
+within a present summary an unmeasured metric has count 0 and null totals
+(text: `unknown`). An explicitly measured zero has a positive count and a zero
+total. Rates are null when no runtime was observed.
+
+`msPerHour` divides the measured total by the answer's observed runtime (each
+build's own runtime in `compare`), not by measured-frame count. It does not
+estimate time in unmeasured frames. Compare coverage as well as rates: a
+version with absent script attribution cannot establish a script improvement
+against an attributed version. Render remains inclusive and style/layout its
+subset in both JSON and text; these metrics are never added into one total.
 
 ## Measuring a fix
 
