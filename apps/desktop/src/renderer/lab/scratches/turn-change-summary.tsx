@@ -1,12 +1,12 @@
 /** A transcript-only exploration. The diff hand-off and all turn facts are fixtures. */
 import * as React from "react";
 import {
-  CheckCircleIcon,
-  CaretDownIcon,
-  CaretRightIcon,
-  FileCodeIcon,
-  XCircleIcon,
-} from "@phosphor-icons/react";
+  SuccessIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  CodeFileIcon,
+  ErrorIcon,
+} from "@renderer/components/ui/icon";
 import {
   ACTIVITY_METADATA_KEY,
   type ActivityDescriptor,
@@ -136,14 +136,14 @@ function TurnReceipt({
               aria-label={`Open diff for ${file.path}, ${file.status}, +${file.added} −${file.removed}`}
               className="flex w-full items-center gap-2 px-4 py-2 text-left text-ui hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring"
             >
-              <FileCodeIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+              <CodeFileIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
               <span className="min-w-0 flex-1 truncate">
                 <span className="text-muted-foreground">{file.path.slice(0, slash + 1)}</span>
                 {file.path.slice(slash + 1)}
               </span>
               <span className="shrink-0 text-label text-muted-foreground">{file.status}</span>
               <Stats added={file.added} removed={file.removed} />
-              <CaretRightIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" />
+              <ChevronRightIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" />
             </button>
           );
         })}
@@ -154,7 +154,7 @@ function TurnReceipt({
             aria-expanded={expanded}
             className="flex items-center gap-1 px-4 py-2 text-label text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
           >
-            <CaretDownIcon aria-hidden className={expanded ? "size-3 rotate-180" : "size-3"} />
+            <ChevronDownIcon aria-hidden className={expanded ? "size-3 rotate-180" : "size-3"} />
             {expanded ? "Show less" : `Show ${changes.length - 4} more files`}
           </button>
         ) : null}
@@ -164,9 +164,9 @@ function TurnReceipt({
         {verification.map((check) => (
           <div key={check.command} className="flex items-center gap-2 py-1 text-ui">
             {check.exit === 0 ? (
-              <CheckCircleIcon aria-hidden className="size-4 shrink-0 text-positive" />
+              <SuccessIcon aria-hidden className="size-4 shrink-0 text-positive" />
             ) : (
-              <XCircleIcon aria-hidden weight="fill" className="size-4 shrink-0 text-destructive" />
+              <ErrorIcon aria-hidden className="size-4 shrink-0 text-destructive" />
             )}
             <code className="min-w-0 flex-1 truncate text-label" title={check.command}>
               {check.command}
