@@ -537,6 +537,42 @@ function recordingLog() {
   });
   return { log, lines };
 }
+async function dryRunAt(artifacts: number) {
+  const fixture = setup({ artifacts });
+  const { log, lines } = recordingLog();
+  const preflightRoot = join(fixture.workRoot, "preflight");
+  const staged: { files: string[]; inodes: number[]; bytes: number }[] = [];
+  const seen: CloudMovePreflightProgress[] = [];
+  const startedAt = performance.now();
+  const answered = await fixture.run(
+    { projectIds: [ALPHA, CAFE] },
+    {
+      log,
+      onProgress: (progress) => {
+        seen.push(progress);
+        if (progress.phase !== "verifying" && progress.phase !== "planning") return;
+        // What the scratch holds once a project's export is published.
+        const files: string[] = [];
+        const walk = (directory: string) => {
+          for (const entry of readdirSync(directory, { withFileTypes: true })) {
+            const path = join(directory, entry.name);
+            if (entry.isDirectory()) walk(path);
+            else files.push(path.slice(preflightRoot.length));
+          }
+        };
+        walk(preflightRoot);
+        const kept = files.filter((file) => file.endsWith("/snapshot.db"));
+        staged.push({
+          files,
+          inodes: kept.map((file) => statSync(join(preflightRoot, file)).ino),
+          bytes: bytesUnder(preflightRoot),
+        });
+      },
+    },
+  );
+  const elapsed = performance.now() - startedAt;
+  return { fixture, answered, lines, seen, staged, elapsed };
+}
 
 describe("a dry run at scale (VC-1029)", () => {
   /**
@@ -551,43 +587,6 @@ describe("a dry run at scale (VC-1029)", () => {
    */
   const OWNER_ARTIFACTS = 582_366;
   const PER_ARTIFACT_BUDGET_MS = ((5 * 60_000) / OWNER_ARTIFACTS) * 5;
-
-  async function dryRunAt(artifacts: number) {
-    const fixture = setup({ artifacts });
-    const { log, lines } = recordingLog();
-    const preflightRoot = join(fixture.workRoot, "preflight");
-    const staged: { files: string[]; inodes: number[]; bytes: number }[] = [];
-    const seen: CloudMovePreflightProgress[] = [];
-    const startedAt = performance.now();
-    const answered = await fixture.run(
-      { projectIds: [ALPHA, CAFE] },
-      {
-        log,
-        onProgress: (progress) => {
-          seen.push(progress);
-          if (progress.phase !== "verifying" && progress.phase !== "planning") return;
-          // What the scratch holds once a project's export is published.
-          const files: string[] = [];
-          const walk = (directory: string) => {
-            for (const entry of readdirSync(directory, { withFileTypes: true })) {
-              const path = join(directory, entry.name);
-              if (entry.isDirectory()) walk(path);
-              else files.push(path.slice(preflightRoot.length));
-            }
-          };
-          walk(preflightRoot);
-          const kept = files.filter((file) => file.endsWith("/snapshot.db"));
-          staged.push({
-            files,
-            inodes: kept.map((file) => statSync(join(preflightRoot, file)).ino),
-            bytes: bytesUnder(preflightRoot),
-          });
-        },
-      },
-    );
-    const elapsed = performance.now() - startedAt;
-    return { fixture, answered, lines, seen, staged, elapsed };
-  }
 
   it("takes one snapshot, stages no history, and logs every phase without content", async () => {
     const { fixture, answered, lines, seen, staged } = await dryRunAt(4096);

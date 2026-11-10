@@ -1044,26 +1044,24 @@ describe("DocumentRegistry", () => {
     expect(registry.unsavedDocuments()).toEqual([]);
   });
 });
+const fileIdentity = (relPath: string): DocumentIdentity => ({ ...mainIdentity, relPath });
+/** Opens `relPath`, leaves a cursor behind, and releases it into the cold set. */
+function openAndPark(
+  registry: DocumentRegistry<FakeModel, { cursor: number }>,
+  relPath: string,
+): void {
+  const view = registry.acquire({
+    identity: fileIdentity(relPath),
+    viewId: "file",
+    seed: { value: `// ${relPath}\n`, revision: 1 },
+    savePolicy: "explicit",
+  });
+  view.release({ cursor: 1 });
+}
 
 // A viewless, clean entry that remembers a cursor is retained — issue #133: it
 // must be retained BOUNDEDLY, or a session's worth of baselines never leaves.
 describe("DocumentRegistry cold retention", () => {
-  const fileIdentity = (relPath: string): DocumentIdentity => ({ ...mainIdentity, relPath });
-
-  /** Opens `relPath`, leaves a cursor behind, and releases it into the cold set. */
-  function openAndPark(
-    registry: DocumentRegistry<FakeModel, { cursor: number }>,
-    relPath: string,
-  ): void {
-    const view = registry.acquire({
-      identity: fileIdentity(relPath),
-      viewId: "file",
-      seed: { value: `// ${relPath}\n`, revision: 1 },
-      savePolicy: "explicit",
-    });
-    view.release({ cursor: 1 });
-  }
-
   it("evicts the least recently parked document once the cap is exceeded", () => {
     const { registry } = makeRegistry(2);
 
@@ -1319,10 +1317,9 @@ describe("DocumentRegistry — an agent rewrites a parked draft", () => {
 function bodyIdentity(ticketId: string): DocumentIdentity {
   return { kind: "ticket-body", projectId: "project-1", ticketId };
 }
+const unsavedFileIdentity = (relPath: string): DocumentIdentity => ({ ...mainIdentity, relPath });
 
 describe("DocumentRegistry unsaved reporting", () => {
-  const fileIdentity = (relPath: string): DocumentIdentity => ({ ...mainIdentity, relPath });
-
   /**
    * VC-1094: the New-ticket composer's body is a ticket-body document nothing
    * ever saves — its draft cache keeps the text instead. Counted as unsaved, it
@@ -1398,13 +1395,13 @@ describe("DocumentRegistry unsaved reporting", () => {
   it("reports every dirty document and drops each one as it is saved", () => {
     const { registry } = makeRegistry();
     const first = registry.acquire({
-      identity: fileIdentity("train.py"),
+      identity: unsavedFileIdentity("train.py"),
       viewId: "file",
       seed: { value: "epochs = 1\n", revision: 1 },
       savePolicy: "explicit",
     });
     const second = registry.acquire({
-      identity: fileIdentity("model.py"),
+      identity: unsavedFileIdentity("model.py"),
       viewId: "file",
       seed: { value: "layers = 2\n", revision: 1 },
       savePolicy: "explicit",
@@ -1415,19 +1412,19 @@ describe("DocumentRegistry unsaved reporting", () => {
     first.model.applyEdit("epochs = 30\n");
     second.model.applyEdit("layers = 24\n");
     expect(registry.unsavedDocuments()).toEqual([
-      fileIdentity("train.py"),
-      fileIdentity("model.py"),
+      unsavedFileIdentity("train.py"),
+      unsavedFileIdentity("model.py"),
     ]);
 
     first.markSaved(2);
-    expect(registry.unsavedDocuments()).toEqual([fileIdentity("model.py")]);
+    expect(registry.unsavedDocuments()).toEqual([unsavedFileIdentity("model.py")]);
   });
 
   /** A parked draft is exactly the one a quit would silently destroy. */
   it("still reports a dirty document whose view has been released", () => {
     const { registry } = makeRegistry();
     const file = registry.acquire({
-      identity: fileIdentity("train.py"),
+      identity: unsavedFileIdentity("train.py"),
       viewId: "file",
       seed: { value: "epochs = 1\n", revision: 1 },
       savePolicy: "explicit",
@@ -1435,7 +1432,7 @@ describe("DocumentRegistry unsaved reporting", () => {
     file.model.applyEdit("epochs = 30\n");
     file.release({ cursor: 1 });
 
-    expect(registry.unsavedDocuments()).toEqual([fileIdentity("train.py")]);
+    expect(registry.unsavedDocuments()).toEqual([unsavedFileIdentity("train.py")]);
   });
 
   it("notifies observers on each dirty transition and never in between", () => {
@@ -1443,7 +1440,7 @@ describe("DocumentRegistry unsaved reporting", () => {
     const observed = vi.fn();
     const subscription = registry.observeUnsaved(observed);
     const file = registry.acquire({
-      identity: fileIdentity("train.py"),
+      identity: unsavedFileIdentity("train.py"),
       viewId: "file",
       seed: { value: "epochs = 1\n", revision: 1 },
       savePolicy: "explicit",
@@ -1472,7 +1469,7 @@ describe("DocumentRegistry unsaved reporting", () => {
   it("decides dirtiness from the model's length before building its value", () => {
     const { registry, models } = makeRegistry();
     const file = registry.acquire({
-      identity: fileIdentity("train.py"),
+      identity: unsavedFileIdentity("train.py"),
       viewId: "file",
       seed: { value: "epochs = 1\n", revision: 1 },
       savePolicy: "explicit",

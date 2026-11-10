@@ -657,6 +657,65 @@ function rectAt(top: number, height: number): DOMRect {
     toJSON: () => ({}),
   } as DOMRect;
 }
+/** The mounted slice, as `first..last`. */
+function mountedSlice(): string {
+  const ids = mountedIds();
+  return `${ids[0]}..${ids.at(-1)}`;
+}
+
+/** A card's offset in the scroller's CONTENT, laid out from the rendered DOM. */
+function contentOffsetOf(id: string): number | null {
+  let y = 0;
+  for (const child of dropzone().children) {
+    const node = child as HTMLElement;
+    if (node.dataset.columnSpacer !== undefined) {
+      y += Number.parseFloat(node.style.height) + GAP;
+      continue;
+    }
+    const slot = node.matches("[data-board-ticket-slot]")
+      ? node
+      : node.querySelector<HTMLElement>("[data-board-ticket-slot]");
+    const slotId = slot?.dataset.boardTicketSlot;
+    if (slotId === undefined) continue;
+    if (slotId === id) return y;
+    y += heightOf(slotId) + GAP;
+  }
+  return null;
+}
+
+/** Each child of the list as layout sees it: a spacer's height, or a card. */
+function contentKey(): string {
+  return [...dropzone().children]
+    .map((child) => {
+      const node = child as HTMLElement;
+      if (node.dataset.columnSpacer !== undefined) return node.style.height;
+      return (
+        node.querySelector<HTMLElement>("[data-board-ticket-slot]")?.dataset.boardTicketSlot ??
+        node.dataset.boardTicketSlot ??
+        ""
+      );
+    })
+    .join();
+}
+/**
+ * Scroll to `to`, then deliver one `scroll` per frame while anchoring keeps
+ * moving the offset. Answers how many frames the window moved on.
+ */
+async function scrollAnchored(to: number): Promise<number> {
+  let before = mountedSlice();
+  scroller().scrollTop = to;
+  let moves = 0;
+  for (let frame = 0; frame < FRAMES; frame++) {
+    await act(async () => {
+      scroller().dispatchEvent(new Event("scroll"));
+    });
+    const now = mountedSlice();
+    if (now === before) break;
+    moves += 1;
+    before = now;
+  }
+  return moves;
+}
 
 describe("a column the browser scroll-anchors", () => {
   let restore: (() => void) | null = null;
@@ -668,41 +727,6 @@ describe("a column the browser scroll-anchors", () => {
   let laidOut = "";
   /** How many times anchoring actually moved `scrollTop`. */
   let adjustments = 0;
-
-  /** Each child of the list as layout sees it: a spacer's height, or a card. */
-  function contentKey(): string {
-    return [...dropzone().children]
-      .map((child) => {
-        const node = child as HTMLElement;
-        if (node.dataset.columnSpacer !== undefined) return node.style.height;
-        return (
-          node.querySelector<HTMLElement>("[data-board-ticket-slot]")?.dataset.boardTicketSlot ??
-          node.dataset.boardTicketSlot ??
-          ""
-        );
-      })
-      .join();
-  }
-
-  /** A card's offset in the scroller's CONTENT, laid out from the rendered DOM. */
-  function contentOffsetOf(id: string): number | null {
-    let y = 0;
-    for (const child of dropzone().children) {
-      const node = child as HTMLElement;
-      if (node.dataset.columnSpacer !== undefined) {
-        y += Number.parseFloat(node.style.height) + GAP;
-        continue;
-      }
-      const slot = node.matches("[data-board-ticket-slot]")
-        ? node
-        : node.querySelector<HTMLElement>("[data-board-ticket-slot]");
-      const slotId = slot?.dataset.boardTicketSlot;
-      if (slotId === undefined) continue;
-      if (slotId === id) return y;
-      y += heightOf(slotId) + GAP;
-    }
-    return null;
-  }
 
   /** The first mounted card whose bottom edge is below the fold. */
   function cardInView(): { id: string; at: number } | null {
@@ -772,32 +796,6 @@ describe("a column the browser scroll-anchors", () => {
         anchor = cardInView();
       },
     });
-  }
-
-  /** The mounted slice, as `first..last`. */
-  function mountedSlice(): string {
-    const ids = mountedIds();
-    return `${ids[0]}..${ids.at(-1)}`;
-  }
-
-  /**
-   * Scroll to `to`, then deliver one `scroll` per frame while anchoring keeps
-   * moving the offset. Answers how many frames the window moved on.
-   */
-  async function scrollAnchored(to: number): Promise<number> {
-    let before = mountedSlice();
-    scroller().scrollTop = to;
-    let moves = 0;
-    for (let frame = 0; frame < FRAMES; frame++) {
-      await act(async () => {
-        scroller().dispatchEvent(new Event("scroll"));
-      });
-      const now = mountedSlice();
-      if (now === before) break;
-      moves += 1;
-      before = now;
-    }
-    return moves;
   }
 
   it.each([1200, 1500, 2500, 4000])(

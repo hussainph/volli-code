@@ -915,6 +915,14 @@ describe("a provisional chat plane", () => {
     await vi.waitFor(() => expect(attach).toHaveBeenCalledOnce());
   });
 });
+/** The one-action menu is now a direct pencil button. */
+async function editFromMenu(text: string): Promise<void> {
+  const button = container?.querySelector<HTMLButtonElement>(
+    `[aria-label="Edit queued message: ${text}"]`,
+  );
+  if (!button) throw new Error("expected Edit message");
+  await act(async () => button.click());
+}
 
 describe("host-owned rows with cloud off", () => {
   it("waits for cancellation before Backspace restores text and preserves typing during the wait", async () => {
@@ -1133,15 +1141,6 @@ describe("host-owned rows with cloud off", () => {
       mime: "image/png",
       sizeBytes: 9,
     };
-
-    /** The one-action menu is now a direct pencil button. */
-    async function editFromMenu(text: string): Promise<void> {
-      const button = container?.querySelector<HTMLButtonElement>(
-        `[aria-label="Edit queued message: ${text}"]`,
-      );
-      if (!button) throw new Error("expected Edit message");
-      await act(async () => button.click());
-    }
 
     async function mountWithTyping(state: HostQueueRow["state"]) {
       useChatDraftsStore.getState().setDraftAttachments(SESSION, [staged]);
@@ -1459,74 +1458,154 @@ describe("a chat plane holding a long transcript", () => {
     expect(turnRows()).toBe(TRANSCRIPT_TAIL_ROWS + TRANSCRIPT_PAGE_ROWS);
   });
 });
+const messageCount = (store: ReturnType<typeof chatStore>) =>
+  store.getState().sessions[SESSION]!.transcript.messages.length;
 
-describe("a chat plane holding only the host's newest window (VC-315)", () => {
-  /** Turn `index` as a durable frame at sequence `index + 1`. */
-  const turnFrame = (index: number): ChatSessionFrame =>
-    ({
+/** Turn `index` as a durable frame at sequence `index + 1`. */
+const turnFrame = (index: number): ChatSessionFrame =>
+  ({
+    sessionId: SESSION,
+    sequence: index + 1,
+    event: {
+      id: `event-${index + 1}`,
       sessionId: SESSION,
       sequence: index + 1,
-      event: {
-        id: `event-${index + 1}`,
-        sessionId: SESSION,
-        sequence: index + 1,
-        occurredAt: index,
-        recordedAt: index,
-        provenance: {
-          source: { kind: "system", id: "session-runtime", detail: null },
-          venue: null,
-        },
-        payload: {
-          kind: "transcript.referenced",
-          attachmentId: null,
-          turnId: null,
-          reference: { id: `sha256:${index}`, mediaType: null, digest: null },
-        },
+      occurredAt: index,
+      recordedAt: index,
+      provenance: {
+        source: { kind: "system", id: "session-runtime", detail: null },
+        venue: null,
       },
-      transcript: { message: transcript(index + 1)[index]! },
-    }) as never;
-  const frames = (from: number, to: number) =>
-    Array.from({ length: to - from }, (_value, offset) => turnFrame(from + offset));
-
-  /**
-   * A store holding turns [`from`, TOTAL) with the host's cursor above them,
-   * and a resident client whose host answers pages of `PAGE` turns.
-   */
-  function windowedStore(from: number, total: number, page: number) {
-    const store = chatStore([]);
-    const held = appendFrames({ ...EMPTY_TRANSCRIPT, before: from + 1 }, frames(from, total));
-    store.setState((state) => ({
-      sessions: { [SESSION]: { ...state.sessions[SESSION]!, transcript: held } },
-    }));
-    const requests: number[] = [];
-    const rpc = {
-      session: {
-        history: {
-          query: async ({ before }: { before: number }) => {
-            requests.push(before);
-            const start = Math.max(0, before - 1 - page);
-            return { frames: frames(start, before - 1), before: start > 0 ? start + 1 : null };
-          },
-        },
+      payload: {
+        kind: "transcript.referenced",
+        attachmentId: null,
+        turnId: null,
+        reference: { id: `sha256:${index}`, mediaType: null, digest: null },
       },
-    } as unknown as ChatSessionRpc;
-    getOrCreateChatClient(SESSION, {
-      rpc,
-      store,
-      scheduler: { schedule: () => () => undefined },
-      newCommandId: () => "command",
-      createSession: async () => {
-        throw new Error("not under test");
-      },
-      attachSession: async () => {
-        throw new Error("not under test");
-      },
-      notify: () => undefined,
-      renameSession: () => undefined,
-    });
-    return { store, requests };
+    },
+    transcript: { message: transcript(index + 1)[index]! },
+  }) as never;
+/**
+ * A layout model with anchors in it: message `i` of the transcript is 100 px
+ * tall at `i * 100`, and an anchor's box is its message's, moved by the
+ * scroll. `drawnBelow` is height the live tail grew by at the bottom.
+ */
+function layout(store: ReturnType<typeof chatStore>, scroller: HTMLElement) {
+  const state = { drawnBelow: 0 };
+  const index = (key: string) =>
+    store
+      .getState()
+      .sessions[SESSION]!.transcript.messages.findIndex(({ id }) => key.startsWith(`${id}:`));
+  Object.defineProperty(scroller, "scrollHeight", {
+    configurable: true,
+    get: () => messageCount(store) * 100 + state.drawnBelow,
+  });
+  Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 300 });
+  scroller.getBoundingClientRect = () => ({ top: 0, bottom: 300 }) as DOMRect;
+  for (const node of container!.querySelectorAll<HTMLElement>("[data-transcript-anchor]")) {
+    node.getBoundingClientRect = () => {
+      const top = index(node.dataset["transcriptAnchor"]!) * 100 - scroller.scrollTop;
+      return { top, bottom: top + 100 } as DOMRect;
+    };
   }
+  return state;
+}
 
+const turnFrames = (from: number, to: number) =>
+  Array.from({ length: to - from }, (_value, offset) => turnFrame(from + offset));
+/** Frames [`from`, `to`) as assistant messages: one grouped turn, split by the window. */
+const assistantFrames = (from: number, to: number) =>
+  turnFrames(from, to).map((frame) =>
+    Object.assign({}, frame, {
+      transcript: {
+        message: Object.assign({}, frame.transcript!.message, { role: "assistant" as const }),
+      },
+    }),
+  );
+
+/**
+ * A store holding turns [`from`, TOTAL) with the host's cursor above them,
+ * and a resident client whose host answers pages of `PAGE` turns.
+ */
+function windowedStore(from: number, total: number, page: number) {
+  const store = chatStore([]);
+  const held = appendFrames({ ...EMPTY_TRANSCRIPT, before: from + 1 }, turnFrames(from, total));
+  store.setState((state) => ({
+    sessions: { [SESSION]: { ...state.sessions[SESSION]!, transcript: held } },
+  }));
+  const requests: number[] = [];
+  const rpc = {
+    session: {
+      history: {
+        query: async ({ before }: { before: number }) => {
+          requests.push(before);
+          const start = Math.max(0, before - 1 - page);
+          return { frames: turnFrames(start, before - 1), before: start > 0 ? start + 1 : null };
+        },
+      },
+    },
+  } as unknown as ChatSessionRpc;
+  getOrCreateChatClient(SESSION, {
+    rpc,
+    store,
+    scheduler: { schedule: () => () => undefined },
+    newCommandId: () => "command",
+    createSession: async () => {
+      throw new Error("not under test");
+    },
+    attachSession: async () => {
+      throw new Error("not under test");
+    },
+    notify: () => undefined,
+    renameSession: () => undefined,
+  });
+  return { store, requests };
+}
+/**
+ * The plane over one assistant turn the window began partway through
+ * (sequences 11..20), whose host answers the rest of it (1..10) in one page.
+ */
+async function splitTurn(onPage?: () => void) {
+  const store = chatStore([]);
+  store.setState((state) => ({
+    sessions: {
+      [SESSION]: {
+        ...state.sessions[SESSION]!,
+        transcript: appendFrames({ ...EMPTY_TRANSCRIPT, before: 11 }, assistantFrames(10, 20)),
+      },
+    },
+  }));
+  const rpc = {
+    session: {
+      history: {
+        query: async () => {
+          onPage?.();
+          return { frames: assistantFrames(0, 10), before: null };
+        },
+      },
+    },
+  } as unknown as ChatSessionRpc;
+  getOrCreateChatClient(SESSION, {
+    rpc,
+    store,
+    scheduler: { schedule: () => () => undefined },
+    newCommandId: () => "command",
+    createSession: async () => {
+      throw new Error("not under test");
+    },
+    attachSession: async () => {
+      throw new Error("not under test");
+    },
+    notify: () => undefined,
+    renameSession: () => undefined,
+  });
+  await mountPlane(store);
+  const scroller = container!.querySelector<HTMLElement>('[style*="scrollbar-gutter"]')!;
+  expect(scroller).not.toBeNull();
+  return { store, scroller };
+}
+
+describe("a chat plane holding only the host's newest window (VC-315)", () => {
   afterEach(() => {
     disposeChatClient(SESSION);
   });
@@ -1563,63 +1642,6 @@ describe("a chat plane holding only the host's newest window (VC-315)", () => {
     expect(store.getState().sessions[SESSION]?.transcript.before).toBeNull();
   });
 
-  /** Frames [`from`, `to`) as assistant messages: one grouped turn, split by the window. */
-  const assistantFrames = (from: number, to: number) =>
-    frames(from, to).map((frame) =>
-      Object.assign({}, frame, {
-        transcript: {
-          message: Object.assign({}, frame.transcript!.message, { role: "assistant" as const }),
-        },
-      }),
-    );
-
-  /**
-   * The plane over one assistant turn the window began partway through
-   * (sequences 11..20), whose host answers the rest of it (1..10) in one page.
-   */
-  async function splitTurn(onPage?: () => void) {
-    const store = chatStore([]);
-    store.setState((state) => ({
-      sessions: {
-        [SESSION]: {
-          ...state.sessions[SESSION]!,
-          transcript: appendFrames({ ...EMPTY_TRANSCRIPT, before: 11 }, assistantFrames(10, 20)),
-        },
-      },
-    }));
-    const rpc = {
-      session: {
-        history: {
-          query: async () => {
-            onPage?.();
-            return { frames: assistantFrames(0, 10), before: null };
-          },
-        },
-      },
-    } as unknown as ChatSessionRpc;
-    getOrCreateChatClient(SESSION, {
-      rpc,
-      store,
-      scheduler: { schedule: () => () => undefined },
-      newCommandId: () => "command",
-      createSession: async () => {
-        throw new Error("not under test");
-      },
-      attachSession: async () => {
-        throw new Error("not under test");
-      },
-      notify: () => undefined,
-      renameSession: () => undefined,
-    });
-    await mountPlane(store);
-    const scroller = container!.querySelector<HTMLElement>('[style*="scrollbar-gutter"]')!;
-    expect(scroller).not.toBeNull();
-    return { store, scroller };
-  }
-
-  const messageCount = (store: ReturnType<typeof chatStore>) =>
-    store.getState().sessions[SESSION]!.transcript.messages.length;
-
   // A height model alone (100 px a message) and no anchor positions: the
   // fallback the plane takes when it can see no anchor.
   it("holds the reader's place when older per-message rows are prepended", async () => {
@@ -1640,32 +1662,6 @@ describe("a chat plane holding only the host's newest window (VC-315)", () => {
     expect(messageCount(store)).toBe(20);
     expect(scroller.scrollTop).toBe(1100);
   });
-
-  /**
-   * A layout model with anchors in it: message `i` of the transcript is 100 px
-   * tall at `i * 100`, and an anchor's box is its message's, moved by the
-   * scroll. `drawnBelow` is height the live tail grew by at the bottom.
-   */
-  function layout(store: ReturnType<typeof chatStore>, scroller: HTMLElement) {
-    const state = { drawnBelow: 0 };
-    const index = (key: string) =>
-      store
-        .getState()
-        .sessions[SESSION]!.transcript.messages.findIndex(({ id }) => key.startsWith(`${id}:`));
-    Object.defineProperty(scroller, "scrollHeight", {
-      configurable: true,
-      get: () => messageCount(store) * 100 + state.drawnBelow,
-    });
-    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 300 });
-    scroller.getBoundingClientRect = () => ({ top: 0, bottom: 300 }) as DOMRect;
-    for (const node of container!.querySelectorAll<HTMLElement>("[data-transcript-anchor]")) {
-      node.getBoundingClientRect = () => {
-        const top = index(node.dataset["transcriptAnchor"]!) * 100 - scroller.scrollTop;
-        return { top, bottom: top + 100 } as DOMRect;
-      };
-    }
-    return state;
-  }
 
   it("puts the anchor the reader saw back where it was, even with the tail growing below", async () => {
     let state: { drawnBelow: number } | null = null;
@@ -2387,101 +2383,143 @@ async function advanceProgressTime(ms: number) {
 function liveAssistantMessage(parts: UIMessage["parts"]): UIMessage {
   return { id: "assistant", role: "assistant", parts };
 }
+function expectActivity(status: Element, announcement: string) {
+  expect(activityStatus()).toBe(status);
+  expect(status.textContent).toBe(announcement);
+  // InteractionStack has a separate live region; count only the island's siblings.
+  expect(status.parentElement?.querySelectorAll(':scope > [role="status"]')).toHaveLength(1);
+  const transcriptStatuses = container!.querySelectorAll('[role="log"] [role="status"]');
+  if (announcement === "Compacting context") {
+    expect(transcriptStatuses).toHaveLength(1);
+    expect(transcriptStatuses[0]?.textContent).toBe("Compacting context");
+  } else {
+    expect(transcriptStatuses).toHaveLength(0);
+  }
+  expect(container!.querySelectorAll("[data-island-verb]")).toHaveLength(1);
+  const clearance = turnClearance();
+  expect(clearance).not.toBeNull();
+  expect(clearance?.hasAttribute("aria-hidden")).toBe(true);
+  expect(clearance?.hasAttribute("role")).toBe(false);
+  expect(clearance?.textContent).toBe("");
+}
+
+async function ingest(
+  store: ReturnType<typeof chatStore>,
+  frames: ChatSessionFrame[] = [],
+  overlays: SessionStreamOverlay[] = [],
+  compactions: SessionStreamCompactionProgress[] = [],
+) {
+  await act(async () =>
+    store.setState((state) => {
+      const slice = state.sessions[SESSION]!;
+      const folded = appendFrames(slice.transcript, frames, overlays, compactions);
+      return {
+        sessions: {
+          ...state.sessions,
+          [SESSION]: {
+            ...slice,
+            transcript: folded,
+            lifecycle: folded.turnActive ? "working" : "ready",
+          },
+        },
+      };
+    }),
+  );
+}
+
+const overlay = (throughSequence: number, message: UIMessage): SessionStreamOverlay => ({
+  kind: "overlay",
+  sessionId: SESSION,
+  throughSequence,
+  messageId: message.id,
+  delta: {
+    op: "reset",
+    message: {
+      id: message.id,
+      role: message.role,
+      parts: message.parts.map((part, index) => ({ key: `part-${index}`, part })),
+    },
+  },
+});
+
+function progressFrame(
+  sequence: number,
+  payload: NonNullable<ChatSessionFrame["event"]>["payload"],
+  message: UIMessage | null = null,
+): ChatSessionFrame {
+  return {
+    sessionId: SESSION,
+    sequence,
+    event: {
+      id: `progress-${sequence}`,
+      sessionId: SESSION,
+      sequence,
+      occurredAt: sequence,
+      recordedAt: sequence,
+      attachmentId: "attachment",
+      commandId: null,
+      provenance: { source: { kind: "system", id: "runtime", detail: null }, venue: null },
+      payload,
+    },
+    transcript: message === null ? null : { message },
+  };
+}
+const submitted = (sequence: number, commandId: string, message: UIMessage) =>
+  progressFrame(
+    sequence,
+    {
+      kind: "command.recorded",
+      command: {
+        id: commandId,
+        sessionId: SESSION,
+        createdAt: 0,
+        route: null,
+        intent: {
+          kind: "message.submit",
+          reference: { id: `artifact-${sequence}`, mediaType: null, digest: null },
+        },
+      },
+    },
+    message,
+  );
+
+const receipt = (sequence: number, status: "accepted" | "rejected" | "unreconciled") =>
+  progressFrame(sequence, {
+    kind: "command.receipt.recorded",
+    receipt: {
+      id: `receipt-${sequence}`,
+      commandId: "kickoff-command",
+      recordedAt: sequence,
+      sequence,
+      ...(status === "accepted"
+        ? {
+            status,
+            acceptedAt: sequence,
+            result: { kind: "message.submitted" as const, sessionId: SESSION },
+          }
+        : status === "rejected"
+          ? { status, code: "failure", detail: "refused" }
+          : { status, detail: "turn failed" }),
+    },
+  });
+
+const committed = (sequence: number, message: UIMessage) =>
+  progressFrame(
+    sequence,
+    {
+      kind: "transcript.referenced",
+      attachmentId: "attachment",
+      turnId: "turn",
+      reference: { id: `artifact-${sequence}`, mediaType: null, digest: null },
+    },
+    message,
+  );
+
+const boundary = (sequence: number, kind: "turn.started" | "turn.completed") =>
+  progressFrame(sequence, { kind, attachmentId: "attachment", turnId: "turn" });
 
 /** Real stream folds, rather than a mocked progress flag on the mark. */
 describe("VC-769 one progress indicator through the live ChatPlane projection", () => {
-  function frame(
-    sequence: number,
-    payload: NonNullable<ChatSessionFrame["event"]>["payload"],
-    message: UIMessage | null = null,
-  ): ChatSessionFrame {
-    return {
-      sessionId: SESSION,
-      sequence,
-      event: {
-        id: `progress-${sequence}`,
-        sessionId: SESSION,
-        sequence,
-        occurredAt: sequence,
-        recordedAt: sequence,
-        attachmentId: "attachment",
-        commandId: null,
-        provenance: { source: { kind: "system", id: "runtime", detail: null }, venue: null },
-        payload,
-      },
-      transcript: message === null ? null : { message },
-    };
-  }
-  const boundary = (sequence: number, kind: "turn.started" | "turn.completed") =>
-    frame(sequence, { kind, attachmentId: "attachment", turnId: "turn" });
-  const committed = (sequence: number, message: UIMessage) =>
-    frame(
-      sequence,
-      {
-        kind: "transcript.referenced",
-        attachmentId: "attachment",
-        turnId: "turn",
-        reference: { id: `artifact-${sequence}`, mediaType: null, digest: null },
-      },
-      message,
-    );
-  const overlay = (throughSequence: number, message: UIMessage): SessionStreamOverlay => ({
-    kind: "overlay",
-    sessionId: SESSION,
-    throughSequence,
-    messageId: message.id,
-    delta: {
-      op: "reset",
-      message: {
-        id: message.id,
-        role: message.role,
-        parts: message.parts.map((part, index) => ({ key: `part-${index}`, part })),
-      },
-    },
-  });
-  async function ingest(
-    store: ReturnType<typeof chatStore>,
-    frames: ChatSessionFrame[] = [],
-    overlays: SessionStreamOverlay[] = [],
-    compactions: SessionStreamCompactionProgress[] = [],
-  ) {
-    await act(async () =>
-      store.setState((state) => {
-        const slice = state.sessions[SESSION]!;
-        const folded = appendFrames(slice.transcript, frames, overlays, compactions);
-        return {
-          sessions: {
-            ...state.sessions,
-            [SESSION]: {
-              ...slice,
-              transcript: folded,
-              lifecycle: folded.turnActive ? "working" : "ready",
-            },
-          },
-        };
-      }),
-    );
-  }
-  function expectActivity(status: Element, announcement: string) {
-    expect(activityStatus()).toBe(status);
-    expect(status.textContent).toBe(announcement);
-    // InteractionStack has a separate live region; count only the island's siblings.
-    expect(status.parentElement?.querySelectorAll(':scope > [role="status"]')).toHaveLength(1);
-    const transcriptStatuses = container!.querySelectorAll('[role="log"] [role="status"]');
-    if (announcement === "Compacting context") {
-      expect(transcriptStatuses).toHaveLength(1);
-      expect(transcriptStatuses[0]?.textContent).toBe("Compacting context");
-    } else {
-      expect(transcriptStatuses).toHaveLength(0);
-    }
-    expect(container!.querySelectorAll("[data-island-verb]")).toHaveLength(1);
-    const clearance = turnClearance();
-    expect(clearance).not.toBeNull();
-    expect(clearance?.hasAttribute("aria-hidden")).toBe(true);
-    expect(clearance?.hasAttribute("role")).toBe(false);
-    expect(clearance?.textContent).toBe("");
-  }
-
   it("walks thinking → tool → gap → text → end without losing the accessible turn or doubling progress", async () => {
     vi.useFakeTimers();
     try {
@@ -2576,7 +2614,7 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
     parts: [{ type: "text", text: "host-started kickoff" }],
   };
   const recorded = (sequence = 1) =>
-    frame(
+    progressFrame(
       sequence,
       {
         kind: "command.recorded",
@@ -2593,25 +2631,6 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
       },
       kickoff,
     );
-  const receipt = (sequence: number, status: "accepted" | "rejected" | "unreconciled") =>
-    frame(sequence, {
-      kind: "command.receipt.recorded",
-      receipt: {
-        id: `receipt-${sequence}`,
-        commandId: "kickoff-command",
-        recordedAt: sequence,
-        sequence,
-        ...(status === "accepted"
-          ? {
-              status,
-              acceptedAt: sequence,
-              result: { kind: "message.submitted" as const, sessionId: SESSION },
-            }
-          : status === "rejected"
-            ? { status, code: "failure", detail: "refused" }
-            : { status, detail: "turn failed" }),
-      },
-    });
 
   it("keeps an agent-started durable kickoff above the streaming reply and clearance, regardless of receipt timing", async () => {
     vi.useFakeTimers();
@@ -2789,7 +2808,7 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
     await advanceProgressTime(600);
     expect(container?.querySelector('[data-slot="message-delivery"]')?.textContent).toBe("Sending");
     await ingest(store, [
-      frame(
+      progressFrame(
         1,
         {
           kind: "command.recorded",
@@ -2813,25 +2832,6 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
     await advanceProgressTime(1_000);
     expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
   });
-
-  const submitted = (sequence: number, commandId: string, message: UIMessage) =>
-    frame(
-      sequence,
-      {
-        kind: "command.recorded",
-        command: {
-          id: commandId,
-          sessionId: SESSION,
-          createdAt: 0,
-          route: null,
-          intent: {
-            kind: "message.submit",
-            reference: { id: `artifact-${sequence}`, mediaType: null, digest: null },
-          },
-        },
-      },
-      message,
-    );
 
   it("retires a local wait before its delay when the host takes ownership", async () => {
     vi.useFakeTimers();

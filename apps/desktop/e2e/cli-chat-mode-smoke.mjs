@@ -234,6 +234,20 @@ async function main() {
         return { ok: chatTabLabel !== null, detail: chatTabLabel };
       },
     );
+    // The stamp is POLLED, not read once. `git worktree add` creates the
+    // directory several steps before `ensure` persists the identity, and
+    // since VC-16 that pipeline is async — so main serves this very
+    // `bootstrap()` mid-pipeline and a single read races the stamp. The old
+    // read-immediately worked only because a synchronous `ensure` blocked
+    // every IPC until it finished, which is the freeze that was fixed.
+    const readStamp = async () =>
+      page.evaluate(async (pid) => {
+        const boot = await window.api.data.bootstrap();
+        if (!boot.ok) return null;
+        return (
+          (boot.data.ticketsByProject?.[pid] ?? []).find((t) => t.worktreePath !== null) ?? null
+        );
+      }, projectId);
 
     // Carried over from the retired session-chat-smoke.mjs: a chat on
     // a worktree ticket must attach against the materialized worktree, not
@@ -247,20 +261,6 @@ async function main() {
         await captureFailureEvidence(page, mainStdout, mainStderr, "worktree-absent");
         throw error;
       });
-      // The stamp is POLLED, not read once. `git worktree add` creates the
-      // directory several steps before `ensure` persists the identity, and
-      // since VC-16 that pipeline is async — so main serves this very
-      // `bootstrap()` mid-pipeline and a single read races the stamp. The old
-      // read-immediately worked only because a synchronous `ensure` blocked
-      // every IPC until it finished, which is the freeze that was fixed.
-      const readStamp = async () =>
-        page.evaluate(async (pid) => {
-          const boot = await window.api.data.bootstrap();
-          if (!boot.ok) return null;
-          return (
-            (boot.data.ticketsByProject?.[pid] ?? []).find((t) => t.worktreePath !== null) ?? null
-          );
-        }, projectId);
       const row = await waitUntil(
         "the ticket's worktree identity to be stamped",
         async () => {

@@ -105,6 +105,11 @@ function refusal(run: () => unknown): string {
   }
   throw new Error("expected a refusal, and got none");
 }
+const refusalOf = (options: RunnerInstallOptions) => refusal(() => runnerInstallCommand(options));
+
+const withName = (name: string) => runnerInstallCommand({ ...base, name });
+
+const withServer = (server: string | null) => runnerInstallCommand({ ...base, server });
 
 describe("runnerInstallCommand", () => {
   it("pins one immutable release script and spells each variant's flags", () => {
@@ -138,8 +143,6 @@ describe("runnerInstallCommand", () => {
   });
 
   it("adds --server only off the packaged default and --name only when someone typed one", () => {
-    const withName = (name: string) => runnerInstallCommand({ ...base, name });
-    const withServer = (server: string | null) => runnerInstallCommand({ ...base, server });
     expect(withName("")).toBe(`curl -fsSL ${SCRIPT_URL} | sh -s -- --token '${TOKEN}' --user`);
     expect(withName("   ")).toBe(withName(""));
     expect(withServer(null)).not.toContain("--server");
@@ -222,8 +225,6 @@ describe("runnerInstallCommand", () => {
       expect(message, label).toMatch(/^Runner install: /);
       expect(message, label).not.toContain(TOKEN);
     }
-    const refusalOf = (options: RunnerInstallOptions) =>
-      refusal(() => runnerInstallCommand(options));
     expect(refusalOf({ ...base, appVersion: "0.3" })).toContain("not a release version");
     expect(refusalOf({ ...base, server: "http://a.b" })).toContain("must be https");
     expect(refusalOf({ ...base, token: "" })).toContain("token is empty");

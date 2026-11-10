@@ -480,14 +480,14 @@ async function caseControl(run) {
   await checkpoint(run, "post10s", { role: "boundary" });
   await checkpoint(run, "final", { role: "final" });
 }
+const setWindowSize = (size) =>
+  app.evaluate(({ BrowserWindow }, s) => {
+    BrowserWindow.getAllWindows()[0].setContentSize(s.w, s.h);
+  }, size);
 
 async function caseResize(run) {
   const wide = { w: winInfo.width + 560, h: winInfo.height };
   const narrow = { w: Math.max(640, winInfo.width - 460), h: winInfo.height };
-  const set = (size) =>
-    app.evaluate(({ BrowserWindow }, s) => {
-      BrowserWindow.getAllWindows()[0].setContentSize(s.w, s.h);
-    }, size);
 
   const sequence = [];
   for (let i = 1; i <= 3; i += 1) sequence.push([`wide${i}`, wide], [`narrow${i}`, narrow]);
@@ -497,7 +497,7 @@ async function caseResize(run) {
   // and a leg that is only sampled the first time cannot show a drift that
   // starts on the third.
   for (const [label, size] of sequence) {
-    await set(size);
+    await setWindowSize(size);
     await sleep(900);
     await checkpoint(run, `resize-${label}`, { role: "boundary", extra: { size } });
   }

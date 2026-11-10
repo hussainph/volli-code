@@ -944,42 +944,43 @@ describe("the unread axis", () => {
     expect(merged.read).toEqual({ c1: { unreadSince: 1 } });
   });
 });
+function seeded(rows: Partial<ProjectSessionRows> = {}) {
+  const store = createProjectSessionsStore();
+  store.setState({
+    byProject: {
+      p1: {
+        terminal: [record()],
+        chat: [chatRecord(), chatRecord({ sessionId: "c2" })],
+        provenance: {},
+        read: {},
+        ...rows,
+      },
+    },
+    listingState: { p1: "loaded" },
+  });
+  return store;
+}
+
+const terminalRow = (overrides: Partial<SessionRecord> = {}): SessionListingRow => ({
+  kind: "terminal",
+  record: record(overrides),
+  usage: EMPTY_SESSION_USAGE_SUMMARY,
+  provenance: PERSON_STARTED,
+});
+
+const pushedChat = (overrides: Partial<ChatSessionRecord> = {}): SessionListingRow => ({
+  kind: "chat",
+  record: chatRecord(overrides),
+  usage: EMPTY_SESSION_USAGE_SUMMARY,
+  provenance: PERSON_STARTED,
+});
 
 describe("batched activity (VC-1078)", () => {
-  const pushedChat = (overrides: Partial<ChatSessionRecord> = {}): SessionListingRow => ({
-    kind: "chat",
-    record: chatRecord(overrides),
-    usage: EMPTY_SESSION_USAGE_SUMMARY,
-    provenance: PERSON_STARTED,
-  });
-  const terminalRow = (overrides: Partial<SessionRecord> = {}): SessionListingRow => ({
-    kind: "terminal",
-    record: record(overrides),
-    usage: EMPTY_SESSION_USAGE_SUMMARY,
-    provenance: PERSON_STARTED,
-  });
   const run = {
     kind: "automation",
     automationRunId: null,
     automationName: "Nightly sweep",
   } as const;
-
-  function seeded(rows: Partial<ProjectSessionRows> = {}) {
-    const store = createProjectSessionsStore();
-    store.setState({
-      byProject: {
-        p1: {
-          terminal: [record()],
-          chat: [chatRecord(), chatRecord({ sessionId: "c2" })],
-          provenance: {},
-          read: {},
-          ...rows,
-        },
-      },
-      listingState: { p1: "loaded" },
-    });
-    return store;
-  }
 
   afterEach(() => {
     vi.useRealTimers();

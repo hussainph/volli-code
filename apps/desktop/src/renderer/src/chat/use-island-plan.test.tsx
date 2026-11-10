@@ -157,6 +157,23 @@ describe("useIslandPlan", () => {
     expect(seen.at(-1)).toBe(first);
   });
 });
+function seedWindow(
+  store: ReturnType<typeof createChatSessionsStore>,
+  messages: readonly UIMessage[],
+  todoList: SessionTodoList | undefined,
+) {
+  store.setState({
+    sessions: {
+      [SESSION_ID]: {
+        projection: (todoList === undefined ? {} : { todoList }) as never,
+        transcript: { ...EMPTY_TRANSCRIPT, before: 40, durableMessages: messages },
+        lifecycle: "ready",
+        sessionError: null,
+        queue: [],
+      },
+    },
+  });
+}
 
 /**
  * A bounded open (VC-315): the plan
@@ -169,24 +186,6 @@ describe("useIslandPlan on a Session holding only its newest window", () => {
     role: "assistant",
     parts: [{ type: "text", text: "later work" }],
   }));
-
-  function seedWindow(
-    store: ReturnType<typeof createChatSessionsStore>,
-    messages: readonly UIMessage[],
-    todoList: SessionTodoList | undefined,
-  ) {
-    store.setState({
-      sessions: {
-        [SESSION_ID]: {
-          projection: (todoList === undefined ? {} : { todoList }) as never,
-          transcript: { ...EMPTY_TRANSCRIPT, before: 40, durableMessages: messages },
-          lifecycle: "ready",
-          sessionError: null,
-          queue: [],
-        },
-      },
-    });
-  }
 
   it("does not forget the current plan because the window no longer holds its call", async () => {
     const store = createChatSessionsStore(noTransport);

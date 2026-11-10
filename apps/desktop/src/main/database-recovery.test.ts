@@ -598,29 +598,28 @@ describe("DatabaseRecovery", () => {
     expectFileBytes(clean, bytes);
   });
 });
+/** A clean copy stamped past this build's head, with the given floor. */
+function newerBackup(floor: number, modifiedAt: number): string {
+  const path = backup(head, "newer", modifiedAt);
+  const db = new Database(path);
+  try {
+    db.pragma(`user_version = ${head + 1}`);
+    db.prepare("INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, 1)").run(
+      MIN_READER_VERSION_KEY,
+      String(floor),
+    );
+    db.pragma("wal_checkpoint(TRUNCATE)");
+  } finally {
+    db.close();
+  }
+  // Same name family a newer build's migration leaves behind.
+  const renamed = `${dbPath}.backup-v${head + 1}`;
+  renameSync(path, renamed);
+  utimesSync(renamed, modifiedAt, modifiedAt);
+  return renamed;
+}
 
 describe("a safety copy from a newer Volli (VC-602)", () => {
-  /** A clean copy stamped past this build's head, with the given floor. */
-  function newerBackup(floor: number, modifiedAt: number): string {
-    const path = backup(head, "newer", modifiedAt);
-    const db = new Database(path);
-    try {
-      db.pragma(`user_version = ${head + 1}`);
-      db.prepare("INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, 1)").run(
-        MIN_READER_VERSION_KEY,
-        String(floor),
-      );
-      db.pragma("wal_checkpoint(TRUNCATE)");
-    } finally {
-      db.close();
-    }
-    // Same name family a newer build's migration leaves behind.
-    const renamed = `${dbPath}.backup-v${head + 1}`;
-    renameSync(path, renamed);
-    utimesSync(renamed, modifiedAt, modifiedAt);
-    return renamed;
-  }
-
   // Keep a real v1 -> head restore after rejecting the newer copy. Its full
   // migration, checkpoint and fsync work needs headroom on loaded CI.
   it("is listed as newer and passed over for the newest copy this build can open", () => {
@@ -650,21 +649,20 @@ describe("a safety copy from a newer Volli (VC-602)", () => {
     }
   });
 });
+function register(degraded = true, fault: "unreadable" | "newer-version" = "unreadable") {
+  const restart = vi.fn();
+  const quit = vi.fn();
+  registerDatabaseRecoveryIpcHandlers({
+    recovery,
+    degraded,
+    fault,
+    restart,
+    quit,
+  });
+  return Object.assign(restart, { quit });
+}
 
 describe("database recovery IPC", () => {
-  function register(degraded = true, fault: "unreadable" | "newer-version" = "unreadable") {
-    const restart = vi.fn();
-    const quit = vi.fn();
-    registerDatabaseRecoveryIpcHandlers({
-      recovery,
-      degraded,
-      fault,
-      restart,
-      quit,
-    });
-    return Object.assign(restart, { quit });
-  }
-
   it("names the fault and quits on request, only while degraded (VC-602)", () => {
     const degraded = register(true, "newer-version");
     expect(invoke("volli:database-recovery-fault")).toEqual({ ok: true, fault: "newer-version" });

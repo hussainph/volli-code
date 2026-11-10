@@ -947,17 +947,16 @@ function slotTag(html: string, slot: string): string | null {
 function footerMarkup(html: string): string {
   return html.slice(html.indexOf('data-slot="interaction-footer"'));
 }
+// VC-288/A10. At 150% zoom in a split, the pane the card stands in is around
+// 320 CSS px wide, and this footer was a single `nowrap` line: the withdraw
+// control, the notice, and a `shrink-0` cluster of two or three actions on
+// the right. `ui/button.tsx` gives every button `shrink-0 whitespace-nowrap`,
+// so nothing in that row could give — the cluster ran past the card's right
+// edge and `overflow-hidden` on the shell cut it off. The primary action was
+// what the clipping reached first, because it is last in the row.
+const walk = () => ask([askPrompt(), askPrompt({ id: "prompt:1", label: "And the tag?" })]);
 
 describe("the footer at a pane's narrowest", () => {
-  // VC-288/A10. At 150% zoom in a split, the pane the card stands in is around
-  // 320 CSS px wide, and this footer was a single `nowrap` line: the withdraw
-  // control, the notice, and a `shrink-0` cluster of two or three actions on
-  // the right. `ui/button.tsx` gives every button `shrink-0 whitespace-nowrap`,
-  // so nothing in that row could give — the cluster ran past the card's right
-  // edge and `overflow-hidden` on the shell cut it off. The primary action was
-  // what the clipping reached first, because it is last in the row.
-  const walk = () => ask([askPrompt(), askPrompt({ id: "prompt:1", label: "And the tag?" })]);
-
   it("lets both footers take a second line rather than clip an action", () => {
     const cases: readonly (readonly [string, string])[] = [
       [

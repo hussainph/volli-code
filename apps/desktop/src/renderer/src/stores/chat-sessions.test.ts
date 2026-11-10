@@ -1667,14 +1667,13 @@ describe("writes addressed to a Session that is gone", () => {
     expect(store.getState().sessions).toEqual({});
   });
 });
+function seeded() {
+  const edge = fixture();
+  edge.store.getState().adoptChatSession("durable-9");
+  return { ...edge, slice: () => edge.store.getState().sessions["durable-9"]! };
+}
 
 describe("retitle", () => {
-  function seeded() {
-    const edge = fixture();
-    edge.store.getState().adoptChatSession("durable-9");
-    return { ...edge, slice: () => edge.store.getState().sessions["durable-9"]! };
-  }
-
   it("moves the title the surface reads, ahead of the stream", () => {
     const { store, slice } = seeded();
     store.getState().setProjection("durable-9", projection);
@@ -1724,16 +1723,15 @@ describe("the in-flight flag", () => {
     expect(store.getState().starting).toBe(raised);
   });
 });
+function seededSlice() {
+  const edge = fixture();
+  edge.store.getState().adoptChatSession("durable-9");
+  return { ...edge, slice: () => edge.store.getState().sessions["durable-9"]! };
+}
 
 describe("the slice", () => {
-  function seeded() {
-    const edge = fixture();
-    edge.store.getState().adoptChatSession("durable-9");
-    return { ...edge, slice: () => edge.store.getState().sessions["durable-9"]! };
-  }
-
   it("keeps its identity for a batch that folded to nothing", () => {
-    const { store, slice } = seeded();
+    const { store, slice } = seededSlice();
     const before = slice();
 
     store.getState().applyStream("durable-9", [], []);
@@ -1742,14 +1740,14 @@ describe("the slice", () => {
   });
 
   it("delegates an empty history page without replacing the resident slice", () => {
-    const { store, slice } = seeded();
+    const { store, slice } = seededSlice();
     const before = slice();
     store.getState().prependHistory("durable-9", 7, { frames: [], before: null });
     expect(slice()).toBe(before);
   });
 
   it("latches starting until a command settles it", () => {
-    const { store, slice } = seeded();
+    const { store, slice } = seededSlice();
 
     store.getState().attaching("durable-9");
     store.getState().setProjection("durable-9", projection);
@@ -1761,7 +1759,7 @@ describe("the slice", () => {
   });
 
   it("latches an error until a command clears it", () => {
-    const { store, slice } = seeded();
+    const { store, slice } = seededSlice();
 
     store.getState().settle("durable-9", "Lost the Session stream: socket hang up");
     store.getState().setProjection("durable-9", projection);
@@ -1776,7 +1774,7 @@ describe("the slice", () => {
   });
 
   it("settles a cleared failure onto whatever the stream is already saying", () => {
-    const { store, slice } = seeded();
+    const { store, slice } = seededSlice();
     store.getState().setProjection("durable-9", {
       ...projection,
       liveExecutor: { id: "attach-1" },
@@ -1801,7 +1799,7 @@ describe("the slice", () => {
   });
 
   it("marks a delivered message working while the stream has said nothing since", () => {
-    const { store, slice } = seeded();
+    const { store, slice } = seededSlice();
 
     store.getState().delivered("durable-9", slice().transcript.turnEpoch);
 
@@ -1813,7 +1811,7 @@ describe("the slice", () => {
     // reply routinely lands behind its own turn.completed. Latching on it left
     // the composer showing Stop and stranded every queued message behind a
     // turn that was over.
-    const { store, slice } = seeded();
+    const { store, slice } = seededSlice();
     const epoch = slice().transcript.turnEpoch;
     store.getState().setProjection("durable-9", {
       ...projection,
@@ -1896,21 +1894,20 @@ describe("the host-owned queue with cloud off", () => {
     expect(store.getState().sessions["durable-9"]?.queue).toEqual([]);
   });
 });
+// The notify and renameSession seams are desktop glue (VC-169): the client
+// core names them, and THIS store is where the desktop answers with
+// toastError and renameChatSession. Both are driven end-to-end through a
+// registry client so the wrappers attach() builds are the thing tested.
+async function adoptedDescribed() {
+  const edge = fixture();
+  edge.store.getState().adoptChatSession("durable-9");
+  await vi.waitFor(() => {
+    expect(edge.store.getState().sessions["durable-9"]?.projection).not.toBeNull();
+  });
+  return edge;
+}
 
 describe("the deps attach() wires", () => {
-  // The notify and renameSession seams are desktop glue (VC-169): the client
-  // core names them, and THIS store is where the desktop answers with
-  // toastError and renameChatSession. Both are driven end-to-end through a
-  // registry client so the wrappers attach() builds are the thing tested.
-  async function adoptedDescribed() {
-    const edge = fixture();
-    edge.store.getState().adoptChatSession("durable-9");
-    await vi.waitFor(() => {
-      expect(edge.store.getState().sessions["durable-9"]?.projection).not.toBeNull();
-    });
-    return edge;
-  }
-
   it("routes the client's auto-title through the shared rename path", async () => {
     const renameMock = vi.fn().mockResolvedValue({ ok: true });
     vi.stubGlobal("window", { api: { sessions: { rename: renameMock } } });
@@ -2601,21 +2598,20 @@ describe("dropChatTabs", () => {
     expect(store.getState().openTabs).toBe(before);
   });
 });
+function routed() {
+  const local = fakeTransport();
+  const remote = fakeTransport();
+  const asked: (string | null)[] = [];
+  const store = createChatSessionsStore((projectId) => {
+    asked.push(projectId);
+    return projectId === "remote" ? remote.transport : local.transport;
+  });
+  opened.push(store);
+  return { asked, local, remote, store };
+}
 
 describe("a Session's transport follows its project (VC-713)", () => {
   const experimentsBefore = useExperimentsStore.getState().snapshot;
-
-  function routed() {
-    const local = fakeTransport();
-    const remote = fakeTransport();
-    const asked: (string | null)[] = [];
-    const store = createChatSessionsStore((projectId) => {
-      asked.push(projectId);
-      return projectId === "remote" ? remote.transport : local.transport;
-    });
-    opened.push(store);
-    return { asked, local, remote, store };
-  }
 
   afterEach(() => {
     useProjectSessionsStore.setState({ byProject: {} });
@@ -2826,16 +2822,15 @@ describe("resident idle-send shadows", () => {
 const settleMicrotasks = async () => {
   for (let turn = 0; turn < 10; turn += 1) await Promise.resolve();
 };
+async function twoResident() {
+  const edge = fixture();
+  edge.store.getState().adoptChatSession("s-a", "p1");
+  edge.store.getState().adoptChatSession("s-b", "p1");
+  await settleMicrotasks();
+  return edge;
+}
 
 describe("batch (VC-515)", () => {
-  async function twoResident() {
-    const edge = fixture();
-    edge.store.getState().adoptChatSession("s-a", "p1");
-    edge.store.getState().adoptChatSession("s-b", "p1");
-    await settleMicrotasks();
-    return edge;
-  }
-
   it("publishes every client's write in one frame as one store write", async () => {
     const { store } = await twoResident();
     let writes = 0;
@@ -3012,27 +3007,26 @@ function listing(rows: readonly Partial<ChatSessionRecord>[]) {
     },
   });
 }
+/** `count` Sessions adopted in order, every snapshot answered: all idle, none shown. */
+async function residents(count: number) {
+  vi.useFakeTimers();
+  const edge = fixture();
+  const sessionIds = ids(count);
+  for (const sessionId of sessionIds) edge.store.getState().adoptChatSession(sessionId, "p1");
+  await settleMicrotasks();
+  for (const sessionId of sessionIds) {
+    expect(edge.store.getState().sessions[sessionId]?.projection).not.toBeNull();
+  }
+  const sweep = sweepResidency;
+  const live = () => sessionIds.filter((sessionId) => getChatClient(sessionId) !== undefined);
+  return { ...edge, sessionIds, sweep, live };
+}
 
 describe("chat client residency (VC-515)", () => {
   afterEach(() => {
     vi.useRealTimers();
     useProjectSessionsStore.setState({ byProject: {} });
   });
-
-  /** `count` Sessions adopted in order, every snapshot answered: all idle, none shown. */
-  async function residents(count: number) {
-    vi.useFakeTimers();
-    const edge = fixture();
-    const sessionIds = ids(count);
-    for (const sessionId of sessionIds) edge.store.getState().adoptChatSession(sessionId, "p1");
-    await settleMicrotasks();
-    for (const sessionId of sessionIds) {
-      expect(edge.store.getState().sessions[sessionId]?.projection).not.toBeNull();
-    }
-    const sweep = sweepResidency;
-    const live = () => sessionIds.filter((sessionId) => getChatClient(sessionId) !== undefined);
-    return { ...edge, sessionIds, sweep, live };
-  }
 
   it("keeps every client while the hidden idle ones are within the cap", async () => {
     const { sweep, live, sessionIds } = await residents(MAX_HIDDEN_IDLE_CLIENTS);

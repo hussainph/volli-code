@@ -1082,6 +1082,14 @@ async function main() {
     if (!results.find((result) => result.n === 6)?.ok || sessionId === null) {
       throw new Error("turn start check failed — app stopped before evidence");
     }
+    const readStamp = async () =>
+      page.evaluate(async (pid) => {
+        const boot = await window.api.data.bootstrap();
+        if (!boot.ok) return null;
+        return (
+          (boot.data.ticketsByProject?.[pid] ?? []).find((t) => t.worktreePath !== null) ?? null
+        );
+      }, projectId);
 
     // Carried over from the retired session-chat-smoke.mjs, but deliberately
     // AFTER Send now: a provisional Draft earns no checkout. Promotion must
@@ -1095,14 +1103,6 @@ async function main() {
         await abortMainBeforeEvidence(page, "worktree-absent");
         throw error;
       });
-      const readStamp = async () =>
-        page.evaluate(async (pid) => {
-          const boot = await window.api.data.bootstrap();
-          if (!boot.ok) return null;
-          return (
-            (boot.data.ticketsByProject?.[pid] ?? []).find((t) => t.worktreePath !== null) ?? null
-          );
-        }, projectId);
       const row = await waitUntil(
         "the ticket's worktree identity to be stamped",
         async () => {

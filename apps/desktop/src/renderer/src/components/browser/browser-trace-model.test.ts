@@ -74,11 +74,10 @@ describe("traceIndexAtOffset", () => {
     expect(traceIndexAtOffset(10, 100, 0)).toBe(0);
   });
 });
+const run = (tabId: string, seqs: number[]) =>
+  seqs.map((seq) => frame(tabId, { seq, at: seq * 1_000 }));
 
 describe("followTraceIndex", () => {
-  const run = (tabId: string, seqs: number[]) =>
-    seqs.map((seq) => frame(tabId, { seq, at: seq * 1_000 }));
-
   it("follows the newest step when the person was watching it", () => {
     expect(followTraceIndex(4, run("a", [0, 1, 2, 3, 4]), run("a", [0, 1, 2, 3, 4, 5, 6, 7]))).toBe(
       7,

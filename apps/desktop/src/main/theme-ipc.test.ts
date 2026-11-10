@@ -371,6 +371,32 @@ describe("volli:theme-terminal-overlay-write", () => {
     ).toEqual({ ok: false, error: "Unknown project" });
   });
 });
+/** Registers the handlers with {@link desktopThemeHooks} over fake surfaces. */
+function setupDesktopSurfaces(db: Database.Database = ctx.db) {
+  const windows = ["main", "settings"].map((role, index) => {
+    const window = {
+      id: index + 10,
+      webContents: { id: index + 1 },
+      setBackgroundColor: vi.fn(),
+      once: (_event: string, close: () => void) => closeWindows.push(close),
+    };
+    registerAppWindow(window as unknown as BrowserWindow, role === "main" ? "main" : "settings");
+    return window;
+  });
+  const browserTabs = { setThemeBackground: vi.fn() };
+  const hooks: ThemeIpcHooks = desktopThemeHooks({ windows: () => windows, browserTabs });
+  const deps = {
+    fs: defaultFsDeps(userDataDir),
+    now: Date.now,
+    appearance: () => "dark" as const,
+  };
+  registerThemeIpcHandlers(
+    { ok: true, db },
+    { ...deps, fs: { ...deps.fs, homeDir: join(userDataDir, "fake-home"), env: {} } },
+    hooks,
+  );
+  return { windows, browserTabs, hooks };
+}
 
 describe("canvas writes (migration 014)", () => {
   const canvas: Canvas = {
@@ -508,33 +534,6 @@ describe("canvas writes (migration 014)", () => {
     });
     expect(getGlobalAppearance(ctx.db)).toBeNull();
   });
-
-  /** Registers the handlers with {@link desktopThemeHooks} over fake surfaces. */
-  function setupDesktopSurfaces(db: Database.Database = ctx.db) {
-    const windows = ["main", "settings"].map((role, index) => {
-      const window = {
-        id: index + 10,
-        webContents: { id: index + 1 },
-        setBackgroundColor: vi.fn(),
-        once: (_event: string, close: () => void) => closeWindows.push(close),
-      };
-      registerAppWindow(window as unknown as BrowserWindow, role === "main" ? "main" : "settings");
-      return window;
-    });
-    const browserTabs = { setThemeBackground: vi.fn() };
-    const hooks: ThemeIpcHooks = desktopThemeHooks({ windows: () => windows, browserTabs });
-    const deps = {
-      fs: defaultFsDeps(userDataDir),
-      now: Date.now,
-      appearance: () => "dark" as const,
-    };
-    registerThemeIpcHandlers(
-      { ok: true, db },
-      { ...deps, fs: { ...deps.fs, homeDir: join(userDataDir, "fake-home"), env: {} } },
-      hooks,
-    );
-    return { windows, browserTabs, hooks };
-  }
 
   const EDGE = "#f4efe9";
   const PLANE = "#fdded2";

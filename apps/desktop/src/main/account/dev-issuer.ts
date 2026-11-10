@@ -93,6 +93,8 @@ function json(response: ServerResponse, status: number, body: unknown): void {
   response.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
   response.end(JSON.stringify(body));
 }
+const refuseGrant = (response: ServerResponse, description: string): void =>
+  json(response, 400, { error: "invalid_grant", error_description: description });
 
 /** Starts the issuer on a free loopback port. */
 export async function startDevIssuer(options: DevIssuerOptions): Promise<DevIssuer> {
@@ -161,8 +163,6 @@ export async function startDevIssuer(options: DevIssuerOptions): Promise<DevIssu
       expires_in: options.accessTtlSeconds ?? ACCESS_TTL_SECONDS,
     });
   };
-  const refuse = (response: ServerResponse, description: string): void =>
-    json(response, 400, { error: "invalid_grant", error_description: description });
 
   const authorize = (url: URL, response: ServerResponse): void => {
     const redirectUri = url.searchParams.get("redirect_uri") ?? "";
@@ -206,7 +206,7 @@ export async function startDevIssuer(options: DevIssuerOptions): Promise<DevIssu
           pending.redirectUri !== form.get("redirect_uri") ||
           pkceChallenge(form.get("code_verifier") ?? "") !== pending.challenge
         ) {
-          refuse(response, "The code is unknown, used, expired or not this verifier's.");
+          refuseGrant(response, "The code is unknown, used, expired or not this verifier's.");
           return;
         }
         grant(response, { sub: subject, sid: `dev_session_${randomUUID()}` });
@@ -215,7 +215,7 @@ export async function startDevIssuer(options: DevIssuerOptions): Promise<DevIssu
       case "refresh_token": {
         const granted = redeem(form.get("refresh_token") ?? "");
         if (granted === null) {
-          refuse(response, "The refresh token is unknown, expired or already used.");
+          refuseGrant(response, "The refresh token is unknown, expired or already used.");
           return;
         }
         grant(response, granted);

@@ -178,6 +178,14 @@ describe("resident inspector", () => {
     );
   });
 });
+const draw = (portal: HTMLDivElement | null) =>
+  root.render(
+    <InspectorHostContext.Provider value={portal}>
+      <InspectorShell enabled owner="home">
+        Pinned inspector
+      </InspectorShell>
+    </InspectorHostContext.Provider>,
+  );
 
 describe("inspector shell placement", () => {
   it("reserves the pinned width when its portal host arrives after the first commit", async () => {
@@ -189,14 +197,6 @@ describe("inspector shell placement", () => {
     const outlet = document.createElement("div");
     shell.append(paper, outlet);
     document.body.append(shell);
-    const draw = (portal: HTMLDivElement | null) =>
-      root.render(
-        <InspectorHostContext.Provider value={portal}>
-          <InspectorShell enabled owner="home">
-            Pinned inspector
-          </InspectorShell>
-        </InspectorHostContext.Provider>,
-      );
     try {
       await act(async () => draw(null));
       expect(shell.style.getPropertyValue("--right-pane-push")).toBe("");

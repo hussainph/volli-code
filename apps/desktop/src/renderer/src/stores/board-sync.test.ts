@@ -2376,27 +2376,26 @@ describe("per-surface commands", () => {
     expect(await removing).toEqual({ ok: true, answer: "gone" });
   });
 });
+function storeOver(host: FakeHost, sync: Partial<BoardSyncOptions>) {
+  const kill = vi.fn(async () => ({ ok: true }));
+  vi.stubGlobal("window", { api: { terminal: { kill } } });
+  useSessionsStore.setState({ byOwner: {}, sessionOwner: {}, lastOutputAt: {}, starting: {} });
+  const store = createBoardStore();
+  const { view } = recorder();
+  view.paint.mockImplementation((...args) => store.getState().paintBoard(...args));
+  const started = startBoardProtocol({
+    client: {} as never,
+    view,
+    sync: { transport: host, ...sync },
+  });
+  return { kill, store, view, sync: started.sync };
+}
 
 describe("an archive's side effects run once, on its first proof", () => {
   afterEach(() => {
     stopBoardProtocol();
     vi.unstubAllGlobals();
   });
-
-  function storeOver(host: FakeHost, sync: Partial<BoardSyncOptions>) {
-    const kill = vi.fn(async () => ({ ok: true }));
-    vi.stubGlobal("window", { api: { terminal: { kill } } });
-    useSessionsStore.setState({ byOwner: {}, sessionOwner: {}, lastOutputAt: {}, starting: {} });
-    const store = createBoardStore();
-    const { view } = recorder();
-    view.paint.mockImplementation((...args) => store.getState().paintBoard(...args));
-    const started = startBoardProtocol({
-      client: {} as never,
-      view,
-      sync: { transport: host, ...sync },
-    });
-    return { kill, store, view, sync: started.sync };
-  }
 
   it.each(["archive", "delete"] as const)(
     "%s kills a Session once after a lost reply and a same-id retry",

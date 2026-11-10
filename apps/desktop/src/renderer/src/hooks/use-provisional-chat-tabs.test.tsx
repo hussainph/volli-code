@@ -331,31 +331,33 @@ const persisted = (s: ReturnType<typeof surface>) => [...s.data.values()].join()
 
 for (const ticket of [false, true]) {
   const permanent = ticket ? "doc" : "board";
-  describe(`provisional Drafts in tab groups — ${ticket ? "Ticket" : "Home"}`, () => {
-    const preview = (s: ReturnType<typeof surface>) => {
-      if (ticket) s.store.getState().previewTicketFile("project-1", s.ownerId, "readme.md");
-      else s.store.getState().previewHomeFile("project-1", "readme.md");
-    };
-    const select = (s: ReturnType<typeof surface>, tabId: string) => {
-      if (ticket) s.store.getState().setTicketActiveTab("project-1", s.ownerId, tabId);
-      else s.store.getState().setHomeActiveTab("project-1", tabId);
-    };
-    /** A live Browser Tab no group holds, selected full width: the group hides. */
-    const showOrdinary = (s: ReturnType<typeof surface>) => {
-      useBrowserTabsStore.getState().receive(s.browser);
-      select(s, "browser:browser-1");
-    };
-    const openSecond = (s: ReturnType<typeof surface>) => {
-      useChatDraftsStore.getState().openProvisional("draft-2", {
-        projectId: "project-1",
-        ticketId: ticket ? s.ownerId : null,
-        title: null,
-        operationId: "op-2",
-      });
-      useChatSessionsStore.getState().openChatTab(s.ownerId, "draft-2");
-      useChatSessionsStore.getState().setProvisionalActive(s.ownerId, "draft-2");
-    };
+  const openSecond = (s: ReturnType<typeof surface>) => {
+    useChatDraftsStore.getState().openProvisional("draft-2", {
+      projectId: "project-1",
+      ticketId: ticket ? s.ownerId : null,
+      title: null,
+      operationId: "op-2",
+    });
+    useChatSessionsStore.getState().openChatTab(s.ownerId, "draft-2");
+    useChatSessionsStore.getState().setProvisionalActive(s.ownerId, "draft-2");
+  };
 
+  const select = (s: ReturnType<typeof surface>, tabId: string) => {
+    if (ticket) s.store.getState().setTicketActiveTab("project-1", s.ownerId, tabId);
+    else s.store.getState().setHomeActiveTab("project-1", tabId);
+  };
+
+  const preview = (s: ReturnType<typeof surface>) => {
+    if (ticket) s.store.getState().previewTicketFile("project-1", s.ownerId, "readme.md");
+    else s.store.getState().previewHomeFile("project-1", "readme.md");
+  };
+  /** A live Browser Tab no group holds, selected full width: the group hides. */
+  const showOrdinary = (s: ReturnType<typeof surface>) => {
+    useBrowserTabsStore.getState().receive(s.browser);
+    select(s, "browser:browser-1");
+  };
+
+  describe(`provisional Drafts in tab groups — ${ticket ? "Ticket" : "Home"}`, () => {
     it("renders a new Draft in the focused pane without recording its identity", () => {
       const s = surface(ticket);
       expect(s.view().groupId).toBe("n2");
@@ -710,21 +712,21 @@ for (const ticket of [false, true]) {
 
 for (const ticket of [false, true]) {
   const permanent = ticket ? "doc" : "board";
-  describe(`${ticket ? "Ticket" : "Home"} top-strip edge grouping with Drafts`, () => {
-    /** The Draft full width, beside an ordinary Browser Tab and no group at all. */
-    const setup = async () => {
-      const s = surface(ticket);
-      act(() => {
-        s.closePane(DRAFT_PANE);
-        s.provisional().releaseActive();
-      });
-      await act(async () => {
-        await s.createBrowser();
-      });
-      expect(s.readSplitView()).toBeNull();
-      return s;
-    };
+  /** The Draft full width, beside an ordinary Browser Tab and no group at all. */
+  const setup = async () => {
+    const s = surface(ticket);
+    act(() => {
+      s.closePane(DRAFT_PANE);
+      s.provisional().releaseActive();
+    });
+    await act(async () => {
+      await s.createBrowser();
+    });
+    expect(s.readSplitView()).toBeNull();
+    return s;
+  };
 
+  describe(`${ticket ? "Ticket" : "Home"} top-strip edge grouping with Drafts`, () => {
     it("rides a dragged Draft into an empty pane opened on the target's edge", async () => {
       const s = await setup();
       act(() => s.provisional().groupTabs("browser:browser-1", DRAFT_TAB, "left", s.writeGroup));

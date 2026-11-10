@@ -119,6 +119,7 @@ async function waitForTokens(timeoutMs = 8_000): Promise<void> {
 
 const query = (selector: string) => container?.querySelector(selector) ?? null;
 const text = () => container?.textContent ?? "";
+const copyButton = () => container?.querySelector<HTMLButtonElement>(COPY);
 
 describe("markdown while a Turn is open", () => {
   it("keeps an unterminated fence readable, framed and unhighlighted", async () => {
@@ -166,7 +167,6 @@ describe("markdown while a Turn is open", () => {
     // A fenced block's final newline is part of the source Streamdown copies.
     const source = 'export const copied = "Volli";\nconsole.log(copied);\n';
     const markdown = `\`\`\`ts\n${source}\`\`\``;
-    const copyButton = () => container?.querySelector<HTMLButtonElement>(COPY);
 
     await draw(<MessageResponse isAnimating>{markdown}</MessageResponse>);
     expect(copyButton()?.disabled).toBe(true);

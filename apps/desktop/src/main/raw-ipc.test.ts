@@ -103,15 +103,14 @@ describe("the raw IPC door (VC-1090)", () => {
     ]);
   });
 });
+/** A WebContents whose `send` serializes slowly, as a large payload would. */
+const slowContents = () => ({
+  id: 7,
+  isDestroyed: () => false,
+  send: vi.fn(() => block(40)),
+});
 
 describe("the fan-out to windows (VC-1090)", () => {
-  /** A WebContents whose `send` serializes slowly, as a large payload would. */
-  const slowContents = () => ({
-    id: 7,
-    isDestroyed: () => false,
-    send: vi.fn(() => block(40)),
-  });
-
   it("times a broadcast to every window and one client's stream as broadcast spans", () => {
     const contents = slowContents();
     windows.splice(0, windows.length, { webContents: contents });

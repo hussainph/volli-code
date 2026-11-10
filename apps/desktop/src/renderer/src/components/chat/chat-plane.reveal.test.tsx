@@ -40,23 +40,23 @@ const PROJECT = "p1";
 const ATTENTION = "attention-1";
 
 const REFUSED = { ok: false, error: "not stubbed" } as const;
+const refusingBridgeNode = (path: string[]): unknown =>
+  new Proxy(() => {}, {
+    get(_target, key) {
+      if (typeof key !== "string" || key === "then") return undefined;
+      return refusingBridgeNode([...path, key]);
+    },
+    apply(_target, _this, args) {
+      const name = path.at(-1) ?? "";
+      if (name.startsWith("on")) return () => {};
+      if (name === "pathForFile") return String(args[0]);
+      return Promise.resolve(REFUSED);
+    },
+  });
 
 /** A bridge that refuses every invoke and subscribes to nothing, by shape. */
 function refusingBridge(): unknown {
-  const node = (path: string[]): unknown =>
-    new Proxy(() => {}, {
-      get(_target, key) {
-        if (typeof key !== "string" || key === "then") return undefined;
-        return node([...path, key]);
-      },
-      apply(_target, _this, args) {
-        const name = path.at(-1) ?? "";
-        if (name.startsWith("on")) return () => {};
-        if (name === "pathForFile") return String(args[0]);
-        return Promise.resolve(REFUSED);
-      },
-    });
-  return node([]);
+  return refusingBridgeNode([]);
 }
 
 const disconnected = {

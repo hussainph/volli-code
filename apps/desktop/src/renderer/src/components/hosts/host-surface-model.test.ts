@@ -29,6 +29,10 @@ function host(link: HostLinkView, overrides: Partial<HostRecord> = {}): HostReco
 }
 
 const OFFLINE: HostLinkView = { status: "offline", since: SINCE, retryAt: NOW + 7_200 };
+const line = (link: HostLinkView, version: string | null = null) => {
+  const surface = hostSurface(host(link, { version }), NOW);
+  return [surface?.tone, surface?.line, surface?.action?.kind];
+};
 
 describe("the Island's words", () => {
   it("names a missing project with Forget, and other refusals by code", () => {
@@ -105,10 +109,6 @@ describe("the Island's words", () => {
   });
 
   it("says each incompatibility in one line with its one recovery", () => {
-    const line = (link: HostLinkView, version: string | null = null) => {
-      const surface = hostSurface(host(link, { version }), NOW);
-      return [surface?.tone, surface?.line, surface?.action?.kind];
-    };
     expect(
       line({ status: "incompatible", reason: "host-too-old", requiredVersion: "0.3.0" }),
     ).toEqual(["attention", "hetzner-1 needs Volli host 0.3.0 · Read-only", "update-host"]);

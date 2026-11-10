@@ -180,36 +180,35 @@ describe("findInSnapshot", () => {
     assert.deepEqual([...snapshotRefs(tree)], ["e1", "e2", "e3", "e4", "e5", "e6", "e7", "f2e8"]);
   });
 });
+function fakeCapturePage(trees) {
+  let clock = 0;
+  const calls = [];
+  const pauses = [];
+  const empty = [];
+  const page = {
+    url: () => "volli-app://bundle/index.html",
+    ariaSnapshot: async (options) => {
+      calls.push(options);
+      return trees[Math.min(calls.length - 1, trees.length - 1)];
+    },
+  };
+  const options = {
+    now: () => clock,
+    pause: async (ms) => {
+      pauses.push(ms);
+      clock += ms;
+    },
+    onEmpty: (text, timing) => {
+      const path = join(dir, `empty-${timing.attempt}.txt`);
+      writeFileSync(path, text);
+      empty.push({ text, path, ...timing });
+    },
+  };
+  return { page, options, calls, pauses, empty, advance: (ms) => (clock += ms) };
+}
 
 describe("snapshot capture readiness", () => {
   const ready = '- button "Host: This Mac" [ref=f2e8]';
-
-  function fakeCapturePage(trees) {
-    let clock = 0;
-    const calls = [];
-    const pauses = [];
-    const empty = [];
-    const page = {
-      url: () => "volli-app://bundle/index.html",
-      ariaSnapshot: async (options) => {
-        calls.push(options);
-        return trees[Math.min(calls.length - 1, trees.length - 1)];
-      },
-    };
-    const options = {
-      now: () => clock,
-      pause: async (ms) => {
-        pauses.push(ms);
-        clock += ms;
-      },
-      onEmpty: (text, timing) => {
-        const path = join(dir, `empty-${timing.attempt}.txt`);
-        writeFileSync(path, text);
-        empty.push({ text, path, ...timing });
-      },
-    };
-    return { page, options, calls, pauses, empty, advance: (ms) => (clock += ms) };
-  }
 
   it("returns an already rendered tree immediately, preserving depth and refs", async () => {
     const { page, options, calls, pauses, empty } = fakeCapturePage([ready]);
@@ -488,20 +487,19 @@ const GUARDED =
   '"volli-harness-containment:v1"; "volli-harness-shell-recorder:v1"';
 
 const dev = (bundle) => ({ build: "dev", appBinary: null, bundle });
+function fixture() {
+  const appDir = join(dir, "app");
+  mkdirSync(join(appDir, "dist-electron"), { recursive: true });
+  writeFileSync(join(appDir, "package.json"), JSON.stringify({ main: "dist-electron/main.cjs" }));
+  const bundle = join(appDir, "dist-electron", "main.cjs");
+  writeFileSync(bundle, GUARDED);
+  const source = join(appDir, "src.ts");
+  writeFileSync(source, "");
+  utimesSync(source, new Date(1_000_000), new Date(1_000_000));
+  return { appDir, bundle, source, opts: { env: {}, bundle, appDir, sources: [source] } };
+}
 
 describe("launchProblems (the one launch gate)", () => {
-  function fixture() {
-    const appDir = join(dir, "app");
-    mkdirSync(join(appDir, "dist-electron"), { recursive: true });
-    writeFileSync(join(appDir, "package.json"), JSON.stringify({ main: "dist-electron/main.cjs" }));
-    const bundle = join(appDir, "dist-electron", "main.cjs");
-    writeFileSync(bundle, GUARDED);
-    const source = join(appDir, "src.ts");
-    writeFileSync(source, "");
-    utimesSync(source, new Date(1_000_000), new Date(1_000_000));
-    return { appDir, bundle, source, opts: { env: {}, bundle, appDir, sources: [source] } };
-  }
-
   it("passes a current, guarded dev bundle", () => {
     const { bundle, opts } = fixture();
     assert.deepEqual(launchProblems(dev(bundle), opts), []);

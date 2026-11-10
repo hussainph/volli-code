@@ -268,6 +268,8 @@ describe("waiting is recovery copy, in plain words", () => {
     expect(seen.message).not.toContain(RAW);
   });
 });
+const copy = (code: string) =>
+  describeMove(row({ state: "rolled_back", failure: failure(code) })).message;
 
 describe("a failure is a code, never prose", () => {
   it("settles a deliberate cancellation quietly but keeps an unaddressed failed move visible", () => {
@@ -294,8 +296,6 @@ describe("a failure is a code, never prose", () => {
   });
 
   it("tells a retry from an already-moved project and from ended preview access", () => {
-    const copy = (code: string) =>
-      describeMove(row({ state: "rolled_back", failure: failure(code) })).message;
     const already = copy("already_migrated");
     const waitlisted = copy("preview_waitlisted");
     const agreement = copy("preview_agreement_required");

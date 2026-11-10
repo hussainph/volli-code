@@ -353,6 +353,9 @@ function installAnimations(): () => void {
 const STYLES = readFileSync(resolvePath(import.meta.dirname, "../../globals.css"), "utf8");
 const BOUNCY = STYLES.match(/--spring-bouncy:\s*([^;]+);/)![1]!.trim();
 const BOUNCY_DURATION = STYLES.match(/--duration-bouncy:\s*([^;]+);/)![1]!.trim();
+function measured(this: Element) {
+  return domRect(layoutBoxes().findLast(([node]) => node === this)?.[1] ?? NO_BOX);
+}
 
 function installLayout(): () => void {
   const realRect = Element.prototype.getBoundingClientRect;
@@ -360,9 +363,7 @@ function installLayout(): () => void {
   const element = Element.prototype as unknown as Record<string, unknown>;
   for (const name of ["scrollBy", "scrollTo", "scrollIntoView"]) element[name] = () => {};
 
-  Element.prototype.getBoundingClientRect = function measured(this: Element) {
-    return domRect(layoutBoxes().findLast(([node]) => node === this)?.[1] ?? NO_BOX);
-  };
+  Element.prototype.getBoundingClientRect = measured;
 
   window.getComputedStyle = ((node: Element, pseudo?: string | null) => {
     const style = realStyle(node as HTMLElement, pseudo ?? undefined);
@@ -923,6 +924,11 @@ function slotNamed(ticketId: string): Element {
   if (found === null) throw new Error(`no slot for ${ticketId}`);
   return found;
 }
+// The board defers the group write by one animation frame so dnd-kit can
+// tear its observers down first; the slide is played in the layout
+// effect of the commit that write causes.
+const slides = (): AnimateCall[] =>
+  animateCalls.filter((call) => call.element.hasAttribute("data-board-ticket-slot"));
 
 /**
  * The multi-drop slide (VC-665). The e2e smoke's 8.5 proves a dropped group
@@ -1032,11 +1038,6 @@ describe("a group of cards released into another column", () => {
       holdSlotAnimations = true;
 
       await dragTodoCardIntoDoing();
-      // The board defers the group write by one animation frame so dnd-kit can
-      // tear its observers down first; the slide is played in the layout
-      // effect of the commit that write causes.
-      const slides = (): AnimateCall[] =>
-        animateCalls.filter((call) => call.element.hasAttribute("data-board-ticket-slot"));
       for (let wait = 0; wait < 50 && slides().length < 2; wait += 1) {
         await act(async () => {
           await new Promise((resolve) => setTimeout(resolve, 20));
@@ -1278,6 +1279,17 @@ function writeControls(): HTMLButtonElement[] {
     (button) => button.textContent?.trim() === "New" || button.hasAttribute("data-column-arming"),
   );
 }
+async function pressAndTravel(): Promise<void> {
+  const card = columnNamed("todo").querySelector("article");
+  const grip = card?.parentElement;
+  if (!card || !grip) throw new Error("no card in Todo");
+  const from = centre(card);
+  await act(async () => {
+    grip.dispatchEvent(pointerEvent("pointerdown", from));
+  });
+  await move({ x: from.x, y: from.y + 6 });
+}
+
 /**
  * Read-only (VC-576): while the project's host cannot serve, a move is a
  * write like any other — no card lifts, and the column's create and arm
@@ -1302,17 +1314,6 @@ describe("a read-only board", () => {
     detach = null;
     useExperimentsStore.setState({ snapshot: null });
   });
-
-  async function pressAndTravel(): Promise<void> {
-    const card = columnNamed("todo").querySelector("article");
-    const grip = card?.parentElement;
-    if (!card || !grip) throw new Error("no card in Todo");
-    const from = centre(card);
-    await act(async () => {
-      grip.dispatchEvent(pointerEvent("pointerdown", from));
-    });
-    await move({ x: from.x, y: from.y + 6 });
-  }
 
   it(
     "lifts no card, moves nothing, and stands New and Arm down",

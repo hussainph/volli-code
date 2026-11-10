@@ -340,6 +340,16 @@ describe("a notification click that named an Attention (VC-295)", () => {
     );
   });
 });
+const recorded = () => {
+  const acted: string[] = [];
+  const acts: SessionBlockerActs = {
+    ...ACTS,
+    retryRuntime: () => acted.push("retry"),
+    scheduleResume: (input) => acted.push(`schedule ${JSON.stringify(input)}`),
+    cancelScheduledResume: (scheduleId) => acted.push(`cancel ${scheduleId}`),
+  };
+  return { acted, acts };
+};
 
 describe("sessionBlocker", () => {
   it("reports a failed delivery even while a card is still on screen", () => {
@@ -880,16 +890,6 @@ describe("sessionBlocker", () => {
   describe("a run stopped on a spent allowance", () => {
     const NOW = Date.UTC(2026, 8, 10, 1, 0);
     const RESET = NOW + 3 * 60 * 60_000;
-    const recorded = () => {
-      const acted: string[] = [];
-      const acts: SessionBlockerActs = {
-        ...ACTS,
-        retryRuntime: () => acted.push("retry"),
-        scheduleResume: (input) => acted.push(`schedule ${JSON.stringify(input)}`),
-        cancelScheduledResume: (scheduleId) => acted.push(`cancel ${scheduleId}`),
-      };
-      return { acted, acts };
-    };
 
     it("offers Resume at the reset beside Retry, and schedules nothing until chosen", () => {
       const { acted, acts } = recorded();

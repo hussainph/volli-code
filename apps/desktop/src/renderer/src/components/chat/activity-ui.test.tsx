@@ -253,11 +253,10 @@ function thinkingPart(key: string, text: string, streaming = false): BundleRow {
     part: { type: "reasoning", text, state: streaming ? "streaming" : "done" },
   };
 }
+const render = (rows: readonly BundleRow[], progressEnabled = true) =>
+  act(() => root!.render(<ActivityBundle rows={rows} progressEnabled={progressEnabled} />));
 
 describe("single Thinking row", () => {
-  const render = (rows: readonly BundleRow[], progressEnabled = true) =>
-    act(() => root!.render(<ActivityBundle rows={rows} progressEnabled={progressEnabled} />));
-
   it("updates one stable row and keeps all original summaries and reasoning inspectable", () => {
     const first = thinkingPart("first", "**Checking contrast**\n\nOriginal reasoning.");
     render([first]);
@@ -329,6 +328,12 @@ describe("single Thinking row", () => {
     );
   });
 });
+const renderToolPart = (part: DynamicToolUIPart) => {
+  act(() => root!.render(<ActivityBundle rows={[{ kind: "tool", part, key: "stable-call" }]} />));
+};
+
+const header = () =>
+  container!.querySelector<HTMLButtonElement>('[data-slot="activity-bundle-header"]')!;
 
 describe("reader-owned bundle disclosure", () => {
   const running: DynamicToolUIPart = {
@@ -344,17 +349,12 @@ describe("reader-owned bundle disclosure", () => {
     state: "output-denied",
     approval: { id: "denied-call", approved: false },
   };
-  const header = () =>
-    container!.querySelector<HTMLButtonElement>('[data-slot="activity-bundle-header"]')!;
-  const render = (part: DynamicToolUIPart) => {
-    act(() => root!.render(<ActivityBundle rows={[{ kind: "tool", part, key: "stable-call" }]} />));
-  };
 
   it.each([row, failed, denied])(
     "starts collapsed for $state and preserves the original part",
     (part) => {
       const original = JSON.stringify(part);
-      render(part);
+      renderToolPart(part);
       expect(header().getAttribute("aria-expanded")).toBe("false");
       expect(container!.textContent).not.toContain("boom");
       if (part.state === "output-error") expect(header().textContent).toContain("1 failed");
@@ -364,10 +364,10 @@ describe("reader-owned bundle disclosure", () => {
   );
 
   it("keeps closed on failure arrival without taking focus", () => {
-    render(running);
+    renderToolPart(running);
     header().focus();
     const focused = document.activeElement;
-    render(failed);
+    renderToolPart(failed);
     expect(header().getAttribute("aria-expanded")).toBe("false");
     expect(header().textContent).toContain("1 failed");
     expect(document.activeElement).toBe(focused);
@@ -375,10 +375,10 @@ describe("reader-owned bundle disclosure", () => {
   });
 
   it("keeps an explicit open choice through failure and a closed choice through recovery", () => {
-    render(running);
+    renderToolPart(running);
     act(() => header().click());
     expect(header().getAttribute("aria-expanded")).toBe("true");
-    render(failed);
+    renderToolPart(failed);
     expect(header().getAttribute("aria-expanded")).toBe("true");
     // The individual call still starts collapsed, even in an explicitly open bundle.
     expect(container!.textContent).not.toContain("boom");
@@ -388,7 +388,7 @@ describe("reader-owned bundle disclosure", () => {
     act(() => callDisclosure.click());
     expect(container!.textContent).toContain("boom");
     act(() => header().click());
-    render(row);
+    renderToolPart(row);
     expect(header().getAttribute("aria-expanded")).toBe("false");
     expect(container!.textContent).not.toContain("export {};");
   });

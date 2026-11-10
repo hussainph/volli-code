@@ -88,10 +88,10 @@ function input(field: HTMLTextAreaElement, text: string) {
   Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(field, text);
   field.dispatchEvent(new Event("input", { bubbles: true }));
 }
+const updatePreparedDraft = (value: string) => draw(value, updatePreparedDraft);
 
 it("first focus and typing stay native; preparation and latest backward selection adoption each wait for idle", async () => {
-  const update = (value: string) => draw(value, update);
-  await act(async () => draw("Draft", update));
+  await act(async () => draw("Draft", updatePreparedDraft));
   const field = host.querySelector("textarea")!;
   expect(state.props).toBeUndefined();
   await act(async () => field.focus());
@@ -120,10 +120,10 @@ it("first focus and typing stay native; preparation and latest backward selectio
   );
   expect(state.props?.value).toBe(field.value);
 });
+const updateComposingDraft = (value: string) => draw(value, updateComposingDraft);
 
 it("keeps IME live through compositionend, final input and its next frame without stealing focus", async () => {
-  const update = (value: string) => draw(value, update);
-  await act(async () => draw("", update));
+  await act(async () => draw("", updateComposingDraft));
   const field = host.querySelector("textarea")!;
   await act(async () => field.focus());
   await nextIdle();

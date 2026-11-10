@@ -573,6 +573,11 @@ describe("Pi native adapter identity", () => {
     expect(composition().adapter.durableIdNamespace).toBe("pi");
   });
 });
+const compactionPolicy: NonNullable<PiAdapterOptions["compactionPolicy"]> = () =>
+  unusedRuntimeOption("compactionPolicy");
+
+const persistActivityImage: NonNullable<PiAdapterOptions["persistActivityImage"]> = () =>
+  unusedRuntimeOption("persistActivityImage");
 
 describe("Pi runtime host", () => {
   it("owns Model Access and attachment through one runtime instance", async () => {
@@ -675,16 +680,12 @@ describe("Pi runtime host", () => {
       PiAdapterOptions["catalogs"]
     >;
     const catalogReady = Promise.resolve();
-    const compactionPolicy: NonNullable<PiAdapterOptions["compactionPolicy"]> = () =>
-      unusedRuntimeOption("compactionPolicy");
     const observability = { sentinel: "observability" } as unknown as NonNullable<
       PiAdapterOptions["observability"]
     >;
     const connectivity = { sentinel: "connectivity" } as unknown as NonNullable<
       PiAdapterOptions["connectivity"]
     >;
-    const persistActivityImage: NonNullable<PiAdapterOptions["persistActivityImage"]> = () =>
-      unusedRuntimeOption("persistActivityImage");
     const usageLimits: NonNullable<PiAdapterOptions["usageLimits"]> = {
       fetch: async () => unusedRuntimeOption("usageLimits"),
     };

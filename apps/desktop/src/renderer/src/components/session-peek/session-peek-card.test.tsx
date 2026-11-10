@@ -468,23 +468,22 @@ describe("the question a pinned card answers (§3.3)", () => {
     expect(button("Answer")).toBeDefined();
   });
 });
+/**
+ * React tracks a field's last value on the node, so assigning `.value`
+ * directly is deduped and no `onChange` ever fires. Going through the
+ * prototype's own setter is what the tracker cannot see.
+ */
+function type(text: string): void {
+  const field = container.querySelector("textarea");
+  if (field === null) throw new Error("no message field");
+  const setValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+  act(() => {
+    setValue?.call(field, text);
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
 
 describe("a message", () => {
-  /**
-   * React tracks a field's last value on the node, so assigning `.value`
-   * directly is deduped and no `onChange` ever fires. Going through the
-   * prototype's own setter is what the tracker cannot see.
-   */
-  function type(text: string): void {
-    const field = container.querySelector("textarea");
-    if (field === null) throw new Error("no message field");
-    const setValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
-    act(() => {
-      setValue?.call(field, text);
-      field.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-  }
-
   it("has nothing to send until something is typed", () => {
     render({ pinned: true });
     expect(button(/Send/).disabled).toBe(true);

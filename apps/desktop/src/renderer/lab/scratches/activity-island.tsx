@@ -898,13 +898,13 @@ export default function ActivityIslandHarness() {
     timers.current = [];
     dispatch({ type: "reset" });
   };
+  const at = (ms: number, run: () => void) => {
+    timers.current.push(window.setTimeout(run, ms));
+  };
 
   /** A scripted session so morphing is judged as a sequence, not a pose. */
   const playDemo = () => {
     reset();
-    const at = (ms: number, run: () => void) => {
-      timers.current.push(window.setTimeout(run, ms));
-    };
     at(0, startTurn);
     at(300, startPlan);
     at(1400, addTab);

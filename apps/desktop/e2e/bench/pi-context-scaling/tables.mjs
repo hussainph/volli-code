@@ -27,6 +27,7 @@ const pooled = (stat, digits = 2) => {
 const label = (arm) => (arm.bound === 0 ? "control (0)" : `${arm.bound}`);
 const history = (arm) => (arm.bound === 0 ? "—" : `${arm.historyEntries}`);
 const DAGGER_NOTE = `† fewer than ${P95_MIN_SAMPLES} samples: the nearest-rank p95 is the maximum, not a tail estimate.`;
+const fitCell = (fit) => (fit === null ? "—" : `${fixed(fit.slope, 3)} (${fixed(fit.r2, 2)})`);
 
 export function markdownTables(aggregate) {
   const arms = aggregate.arms;
@@ -134,10 +135,9 @@ export function markdownTables(aggregate) {
     "|---:|---|---|---|---|",
   );
   const fits = aggregate.fits;
-  const cell = (fit) => (fit === null ? "—" : `${fixed(fit.slope, 3)} (${fixed(fit.r2, 2)})`);
   for (const [index, row] of fits.mainHeapUsedMiB.entries()) {
     lines.push(
-      `| ${row.historyEntries} | ${cell(row.fit)} | ${cell(fits.mainFootprintMiB[index].fit)} | ${cell(fits.mainWorkingSetMiB[index].fit)} | ${cell(fits.mainRssMiB[index].fit)} |`,
+      `| ${row.historyEntries} | ${fitCell(row.fit)} | ${fitCell(fits.mainFootprintMiB[index].fit)} | ${fitCell(fits.mainWorkingSetMiB[index].fit)} | ${fitCell(fits.mainRssMiB[index].fit)} |`,
     );
   }
   if (aggregate.hostLoad) {

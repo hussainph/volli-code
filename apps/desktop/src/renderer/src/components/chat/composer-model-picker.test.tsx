@@ -599,6 +599,23 @@ describe("an auto-picked model", () => {
     expect(document.querySelector('[data-testid="model-pill-auto"]')).toBeNull();
   });
 });
+async function renderLocked(input: { disabled?: boolean; models?: typeof MODELS } = {}) {
+  container = document.createElement("div");
+  document.body.append(container);
+  root = createRoot(container);
+  await act(async () => {
+    root?.render(
+      <ModelPill
+        models={offerableModels(input.models ?? MODELS, PROVIDERS, [])}
+        selection={{ providerId: "anthropic", modelId: "sonnet", reasoningLevel: "medium" }}
+        selectionTier="Fast"
+        disabled={input.disabled ?? true}
+        onChange={() => undefined}
+      />,
+    );
+  });
+  return container.querySelector<HTMLElement>('[data-testid="model-pill"]');
+}
 
 /**
  * The selection is readable WITHOUT BEING ABLE TO CHANGE IT AT ALL (VC-288).
@@ -609,24 +626,6 @@ describe("an auto-picked model", () => {
  * allowed to change it.
  */
 describe("reading it while the selection is frozen", () => {
-  async function renderLocked(input: { disabled?: boolean; models?: typeof MODELS } = {}) {
-    container = document.createElement("div");
-    document.body.append(container);
-    root = createRoot(container);
-    await act(async () => {
-      root?.render(
-        <ModelPill
-          models={offerableModels(input.models ?? MODELS, PROVIDERS, [])}
-          selection={{ providerId: "anthropic", modelId: "sonnet", reasoningLevel: "medium" }}
-          selectionTier="Fast"
-          disabled={input.disabled ?? true}
-          onChange={() => undefined}
-        />,
-      );
-    });
-    return container.querySelector<HTMLElement>('[data-testid="model-pill"]');
-  }
-
   it("stays a focus stop while a turn is working, and reveals the whole identity there", async () => {
     const pill = await renderLocked({ disabled: true });
 

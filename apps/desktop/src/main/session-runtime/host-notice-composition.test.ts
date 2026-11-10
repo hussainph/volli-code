@@ -32,6 +32,25 @@ function tempDir(prefix: string): string {
   dirs.push(dir);
   return dir;
 }
+/** The real constructor, with desktop's deps; only the test's timing knobs differ. */
+function backgroundShells(secrets: SecretService, options: { preview: boolean }) {
+  const notices: BackgroundShellNotice[] = [];
+  const shellHost = new BackgroundShellHost({
+    redactOutput: (text) => secrets.store.redact(text),
+    ...(options.preview
+      ? { redactNoticeOutput: (text: string) => secrets.store.redactPartial(text) }
+      : {}),
+    onNotice: (notice) => notices.push(notice),
+    publishState: () => {},
+    publishRemoved: () => {},
+    createId: () => "sh-1",
+    settleMs: 150,
+    killGraceMs: 200,
+    exitNoticeGraceMs: 40,
+  });
+  shells.push(shellHost);
+  return { shellHost, notices };
+}
 
 describe("desktop background-shell notice redaction", () => {
   const owner: BackgroundShellOwner = {
@@ -60,25 +79,6 @@ describe("desktop background-shell notice redaction", () => {
     );
     secrets.store.put({ name: "TOKEN", value, scope: "session", sessionId: owner.sessionId });
     return secrets;
-  }
-  /** The real constructor, with desktop's deps; only the test's timing knobs differ. */
-  function backgroundShells(secrets: SecretService, options: { preview: boolean }) {
-    const notices: BackgroundShellNotice[] = [];
-    const shellHost = new BackgroundShellHost({
-      redactOutput: (text) => secrets.store.redact(text),
-      ...(options.preview
-        ? { redactNoticeOutput: (text: string) => secrets.store.redactPartial(text) }
-        : {}),
-      onNotice: (notice) => notices.push(notice),
-      publishState: () => {},
-      publishRemoved: () => {},
-      createId: () => "sh-1",
-      settleMs: 150,
-      killGraceMs: 200,
-      exitNoticeGraceMs: 40,
-    });
-    shells.push(shellHost);
-    return { shellHost, notices };
   }
   /** A stored two-line credential whose first line arrives one chunk before the second. */
   async function splitCredentialRun(options: { preview: boolean }) {

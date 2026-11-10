@@ -828,23 +828,22 @@ describe("the pinned card's question (§3.3)", () => {
     expect(card()?.querySelector("textarea")).not.toBeNull();
   });
 });
+async function pinQuestion(): Promise<void> {
+  vi.mocked(PORTS.readContent).mockResolvedValue(LOCAL);
+  resident([
+    {
+      ...QUESTION,
+      prompts: [{ ...QUESTION.prompts![0]!, custom: true }],
+    },
+  ]);
+  await render({ rowIds: [SESSION_ROW] });
+  await pressSpace(rowButton(SESSION_ROW));
+  await pressSpace(rowButton(SESSION_ROW));
+  expect(card()?.getAttribute("role")).toBe("dialog");
+  expect(card()?.textContent).toContain("Recompute on scroll end");
+}
 
 describe("explicitly closing a pinned question card", () => {
-  async function pinQuestion(): Promise<void> {
-    vi.mocked(PORTS.readContent).mockResolvedValue(LOCAL);
-    resident([
-      {
-        ...QUESTION,
-        prompts: [{ ...QUESTION.prompts![0]!, custom: true }],
-      },
-    ]);
-    await render({ rowIds: [SESSION_ROW] });
-    await pressSpace(rowButton(SESSION_ROW));
-    await pressSpace(rowButton(SESSION_ROW));
-    expect(card()?.getAttribute("role")).toBe("dialog");
-    expect(card()?.textContent).toContain("Recompute on scroll end");
-  }
-
   it("closes when View conversation navigates away", async () => {
     await pinQuestion();
     await act(async () => {

@@ -340,6 +340,14 @@ describe("ensure", () => {
     expect(store.getState().byTicket.t1).toEqual([terminalRow()]);
   });
 });
+async function seeded(
+  rows: SessionListingRow[],
+): Promise<ReturnType<typeof createTicketSessionRecordsStore>> {
+  stubListForTicket(() => Promise.resolve({ ok: true, sessions: rows }));
+  const store = createTicketSessionRecordsStore();
+  await store.getState().refresh("t1");
+  return store;
+}
 
 /**
  * The push path: `volli:session-activity` carries the same `SessionListingRow`
@@ -348,15 +356,6 @@ describe("ensure", () => {
  * the cross-kind crossing, the drop rules, and the subscribe wiring.
  */
 describe("applyActivity", () => {
-  async function seeded(
-    rows: SessionListingRow[],
-  ): Promise<ReturnType<typeof createTicketSessionRecordsStore>> {
-    stubListForTicket(() => Promise.resolve({ ok: true, sessions: rows }));
-    const store = createTicketSessionRecordsStore();
-    await store.getState().refresh("t1");
-    return store;
-  }
-
   it("adds a created Session's row, newest first like the baseline", async () => {
     const store = await seeded([terminalRow({ id: "s1", createdAt: 1 })]);
 

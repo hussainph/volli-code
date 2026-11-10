@@ -214,29 +214,28 @@ describe("installHarnessGuard when refused", () => {
     expect(app.commandLine.appendSwitch).not.toHaveBeenCalled();
   });
 });
+function install(overrides: { defer?: (fn: () => void) => void } = {}) {
+  const app = fakeApp(join(dir, "ud"));
+  const safeStorage = fakeSafeStorage();
+  const originals = { ...safeStorage };
+  const shell = fakeShell();
+  const shellOriginals = { ...shell };
+  const log = vi.fn();
+  const guard = installHarnessGuard({
+    env: harnessEnv(dir),
+    app,
+    safeStorage,
+    shell,
+    ownerHome: OWNER_HOME,
+    log,
+    pid: 4242,
+    now: () => 1000,
+    defer: overrides.defer ?? ((fn) => fn()),
+  });
+  return { app, safeStorage, originals, shell, shellOriginals, log, guard };
+}
 
 describe("installHarnessGuard when on", () => {
-  function install(overrides: { defer?: (fn: () => void) => void } = {}) {
-    const app = fakeApp(join(dir, "ud"));
-    const safeStorage = fakeSafeStorage();
-    const originals = { ...safeStorage };
-    const shell = fakeShell();
-    const shellOriginals = { ...shell };
-    const log = vi.fn();
-    const guard = installHarnessGuard({
-      env: harnessEnv(dir),
-      app,
-      safeStorage,
-      shell,
-      ownerHome: OWNER_HOME,
-      log,
-      pid: 4242,
-      now: () => 1000,
-      defer: overrides.defer ?? ((fn) => fn()),
-    });
-    return { app, safeStorage, originals, shell, shellOriginals, log, guard };
-  }
-
   it("traps every safeStorage method, and no call reaches the real one", async () => {
     const { safeStorage, originals } = install();
     expect(keychainTrapped(safeStorage)).toBe(true);
@@ -342,23 +341,22 @@ describe("installHarnessGuard when on", () => {
     ]);
   });
 });
+function attempt(env: Record<string, string | undefined>, opts: { packaged?: boolean } = {}) {
+  const app = { ...fakeApp(join(dir, "ud")), isPackaged: opts.packaged ?? false };
+  const safeStorage = fakeSafeStorage();
+  const before = { ...safeStorage };
+  const shell = fakeShell();
+  const shellBefore = { ...shell };
+  let error: unknown = null;
+  try {
+    installHarnessGuard({ env, app, safeStorage, shell, ownerHome: OWNER_HOME, log: () => {} });
+  } catch (caught) {
+    error = caught;
+  }
+  return { app, error, safeStorage, before, shell, shellBefore };
+}
 
 describe("installHarnessGuard containment refusals", () => {
-  function attempt(env: Record<string, string | undefined>, opts: { packaged?: boolean } = {}) {
-    const app = { ...fakeApp(join(dir, "ud")), isPackaged: opts.packaged ?? false };
-    const safeStorage = fakeSafeStorage();
-    const before = { ...safeStorage };
-    const shell = fakeShell();
-    const shellBefore = { ...shell };
-    let error: unknown = null;
-    try {
-      installHarnessGuard({ env, app, safeStorage, shell, ownerHome: OWNER_HOME, log: () => {} });
-    } catch (caught) {
-      error = caught;
-    }
-    return { app, error, safeStorage, before, shell, shellBefore };
-  }
-
   it("refuses to boot, before trapping anything, when a home path leaves scratch", () => {
     const result = attempt({ ...harnessEnv(dir), VOLLI_AGENT_HOME: OWNER_HOME });
     expect(String(result.error)).toMatch(/VOLLI_AGENT_HOME .* outside the scratch root/);

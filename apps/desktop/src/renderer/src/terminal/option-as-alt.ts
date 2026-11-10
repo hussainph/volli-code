@@ -120,6 +120,19 @@ let uninstallAltSideTracker: (() => void) | null = null;
 export function heldAltSides(): { left: boolean; right: boolean } {
   return { left: leftAltHeld, right: rightAltHeld };
 }
+const clearAltSides = (): void => {
+  leftAltHeld = false;
+  rightAltHeld = false;
+};
+
+const recordAltSide = (event: KeyboardEvent, held: boolean): void => {
+  if (event.key !== "Alt") return;
+  if (event.location === DOM_KEY_LOCATION_LEFT) leftAltHeld = held;
+  else if (event.location === DOM_KEY_LOCATION_RIGHT) rightAltHeld = held;
+};
+const onKeyUp = (event: KeyboardEvent): void => recordAltSide(event, false);
+
+const onKeyDown = (event: KeyboardEvent): void => recordAltSide(event, true);
 
 /**
  * Window-capture listeners recording which Option side is held. Installed
@@ -129,24 +142,13 @@ export function heldAltSides(): { left: boolean; right: boolean } {
 export function installAltSideTracker(target: Window): void {
   if (trackerInstalled) return;
   trackerInstalled = true;
-  const record = (event: KeyboardEvent, held: boolean): void => {
-    if (event.key !== "Alt") return;
-    if (event.location === DOM_KEY_LOCATION_LEFT) leftAltHeld = held;
-    else if (event.location === DOM_KEY_LOCATION_RIGHT) rightAltHeld = held;
-  };
-  const onKeyDown = (event: KeyboardEvent): void => record(event, true);
-  const onKeyUp = (event: KeyboardEvent): void => record(event, false);
-  const onBlur = (): void => {
-    leftAltHeld = false;
-    rightAltHeld = false;
-  };
   target.addEventListener("keydown", onKeyDown, true);
   target.addEventListener("keyup", onKeyUp, true);
-  target.addEventListener("blur", onBlur);
+  target.addEventListener("blur", clearAltSides);
   uninstallAltSideTracker = () => {
     target.removeEventListener("keydown", onKeyDown, true);
     target.removeEventListener("keyup", onKeyUp, true);
-    target.removeEventListener("blur", onBlur);
+    target.removeEventListener("blur", clearAltSides);
   };
 }
 

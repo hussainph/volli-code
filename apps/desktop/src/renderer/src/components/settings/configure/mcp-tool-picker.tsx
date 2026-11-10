@@ -81,6 +81,44 @@ function dealTabStop(list: HTMLElement | null, holder: string | null): void {
 function checkedState(selection: McpSelection): boolean | "indeterminate" {
   return selection === "all" ? true : selection === "some" ? "indeterminate" : false;
 }
+function onToolListKeyDown(event: React.KeyboardEvent<HTMLDivElement>): void {
+  const target = event.target as HTMLElement;
+  const stops = [
+    ...event.currentTarget.querySelectorAll<HTMLButtonElement>(`[${ROVE}]:not(:disabled)`),
+  ];
+  if (
+    event.key === "ArrowLeft" &&
+    target.hasAttribute("data-details") &&
+    !target.hasAttribute(ROVE)
+  ) {
+    event.preventDefault();
+    target.closest('[role="listitem"]')?.querySelector<HTMLElement>(`[${ROVE}]`)?.focus();
+    return;
+  }
+  const at = stops.indexOf(target as HTMLButtonElement);
+  if (at < 0) return;
+  if (event.key === "ArrowRight") {
+    const details = target
+      .closest('[role="listitem"]')
+      ?.querySelector<HTMLElement>("[data-details]");
+    if (details !== null && details !== undefined) {
+      event.preventDefault();
+      details.focus();
+    }
+    return;
+  }
+  const moves: Record<string, number> = {
+    ArrowDown: Math.min(stops.length - 1, at + 1),
+    ArrowUp: Math.max(0, at - 1),
+    Home: 0,
+    End: stops.length - 1,
+  };
+  const next = moves[event.key];
+  if (next === undefined) return;
+  event.preventDefault();
+  // Focusing scrolls the list to it; nothing else has to.
+  stops[next]?.focus();
+}
 
 export function McpToolPicker({
   serverName,
@@ -147,45 +185,6 @@ export function McpToolPicker({
     });
   }
 
-  function onKeyDown(event: React.KeyboardEvent<HTMLDivElement>): void {
-    const target = event.target as HTMLElement;
-    const stops = [
-      ...event.currentTarget.querySelectorAll<HTMLButtonElement>(`[${ROVE}]:not(:disabled)`),
-    ];
-    if (
-      event.key === "ArrowLeft" &&
-      target.hasAttribute("data-details") &&
-      !target.hasAttribute(ROVE)
-    ) {
-      event.preventDefault();
-      target.closest('[role="listitem"]')?.querySelector<HTMLElement>(`[${ROVE}]`)?.focus();
-      return;
-    }
-    const at = stops.indexOf(target as HTMLButtonElement);
-    if (at < 0) return;
-    if (event.key === "ArrowRight") {
-      const details = target
-        .closest('[role="listitem"]')
-        ?.querySelector<HTMLElement>("[data-details]");
-      if (details !== null && details !== undefined) {
-        event.preventDefault();
-        details.focus();
-      }
-      return;
-    }
-    const moves: Record<string, number> = {
-      ArrowDown: Math.min(stops.length - 1, at + 1),
-      ArrowUp: Math.max(0, at - 1),
-      Home: 0,
-      End: stops.length - 1,
-    };
-    const next = moves[event.key];
-    if (next === undefined) return;
-    event.preventDefault();
-    // Focusing scrolls the list to it; nothing else has to.
-    stops[next]?.focus();
-  }
-
   return (
     <div ref={root} className="flex min-h-0 flex-1 flex-col gap-2">
       <div
@@ -221,7 +220,7 @@ export function McpToolPicker({
       <div
         ref={list}
         className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border/50"
-        onKeyDown={onKeyDown}
+        onKeyDown={onToolListKeyDown}
         onFocus={(event) => {
           const key = (event.target as HTMLElement).getAttribute(ROVE);
           if (key === null) return;

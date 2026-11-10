@@ -379,6 +379,9 @@ describe("startBoardProtocol / stopBoardProtocol", () => {
     });
   });
 });
+const refuse = () => {
+  throw hostError("BAD_REQUEST", "refused");
+};
 
 // ---- boardApi -------------------------------------------------------------------------------
 
@@ -622,9 +625,6 @@ describe("the protocol facade", () => {
   });
 
   it("reads the message off a refusal of every write", async () => {
-    const refuse = () => {
-      throw hostError("BAD_REQUEST", "refused");
-    };
     const { client } = fakeBoard({
       "board.createComment": refuse,
       "board.updateComment": refuse,
