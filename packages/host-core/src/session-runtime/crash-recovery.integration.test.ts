@@ -887,24 +887,24 @@ describe("crash recovery through the durable Pi binding (VC-753)", () => {
 const userTexts = (messages: readonly { role: string }[], text: string) =>
   messages.filter((message) => message.role === "user" && JSON.stringify(message).includes(text));
 
+async function resume(current: Launch, recovered: BootRecoveredTurns) {
+  await resumeRecoveredTurns(
+    {
+      projection: async (sessionId) => (await current.host.projection({ sessionId })).projection,
+      ticketSessions: async () => [],
+      resumeBoundary: (input) => current.host.resumeBoundary(input),
+      pendingTurnStarts: () => current.host.pendingTurnStarts(),
+      command: (request) => current.host.command(request),
+      shouldStop: () => false,
+      now: () => clock,
+    },
+    recovered,
+  );
+}
+
 // The same production path, continued: a relaunch judges each turn it
 // recovered and continues the safe ones through the retry door (VC-450).
 describe("restart resume through the durable Pi binding (VC-450)", () => {
-  async function resume(current: Launch, recovered: BootRecoveredTurns) {
-    await resumeRecoveredTurns(
-      {
-        projection: async (sessionId) => (await current.host.projection({ sessionId })).projection,
-        ticketSessions: async () => [],
-        resumeBoundary: (input) => current.host.resumeBoundary(input),
-        pendingTurnStarts: () => current.host.pendingTurnStarts(),
-        command: (request) => current.host.command(request),
-        shouldStop: () => false,
-        now: () => clock,
-      },
-      recovered,
-    );
-  }
-
   it("continues a turn lost while the model was answering, without sending the message again", async () => {
     const f = fixture();
     const stalled = Promise.withResolvers<void>();

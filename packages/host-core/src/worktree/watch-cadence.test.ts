@@ -137,11 +137,14 @@ it("runs on the shipped timings these cases are written against", () => {
   expect(QUIET_MAX).toBe(15 * MINUTE);
 });
 
-describe("pollRetention — per-ticket read schedule", () => {
-  function deps(net: ReturnType<typeof scriptedNet>, clock: { now: number }): RetentionPollPorts {
-    return { db: ctx.db, net: net.run, now: () => clock.now, notify: () => {} };
-  }
+function cadenceDeps(
+  net: ReturnType<typeof scriptedNet>,
+  clock: { now: number },
+): RetentionPollPorts {
+  return { db: ctx.db, net: net.run, now: () => clock.now, notify: () => {} };
+}
 
+describe("pollRetention — per-ticket read schedule", () => {
   it("doubles a quiet ticket's delay up to the ceiling, and reads a changed row at once", async () => {
     const id = seed({ status: "backlog" });
     const net = quietNet();
@@ -150,7 +153,7 @@ describe("pollRetention — per-ticket read schedule", () => {
     const readsAt: number[] = [];
     for (let minute = 0; minute <= 40; minute += 1) {
       const before = net.calls.length;
-      await pollRetention(deps(net, clock), store);
+      await pollRetention(cadenceDeps(net, clock), store);
       if (net.calls.length > before) readsAt.push(minute);
       clock.now += MINUTE;
     }
@@ -159,7 +162,7 @@ describe("pollRetention — per-ticket read schedule", () => {
     // A move rewrites the row: the next cycle reads it, whatever the backoff.
     updateTicketPositionStatus(ctx.db, id, "needs_review", 0, clock.now);
     const before = net.calls.length;
-    await pollRetention(deps(net, clock), store);
+    await pollRetention(cadenceDeps(net, clock), store);
     expect(net.calls.length).toBe(before + 1);
   });
 
@@ -171,7 +174,7 @@ describe("pollRetention — per-ticket read schedule", () => {
     const clock = { now: T0 };
     const store = createRetentionStore();
     for (let minute = 0; minute < 5; minute += 1) {
-      await pollRetention(deps(net, clock), store);
+      await pollRetention(cadenceDeps(net, clock), store);
       clock.now += MINUTE;
     }
     expect(net.calls).toHaveLength(5);
@@ -187,7 +190,7 @@ describe("pollRetention — per-ticket read schedule", () => {
     const clock = { now: T0 };
     const store = createRetentionStore();
     // A cycle where one read fails and another succeeds still wakes in a minute.
-    const first = await pollRetention(deps(net, clock), store);
+    const first = await pollRetention(cadenceDeps(net, clock), store);
     expect(first.failed).toBe(1);
     expect(first.nextDueInMs).toBe(MINUTE);
 
@@ -195,7 +198,7 @@ describe("pollRetention — per-ticket read schedule", () => {
     for (let minute = 1; minute <= 40; minute += 1) {
       clock.now += MINUTE;
       const before = net.calls.filter((call) => call.args[1] === "view").length;
-      await pollRetention(deps(net, clock), store);
+      await pollRetention(cadenceDeps(net, clock), store);
       if (net.calls.filter((call) => call.args[1] === "view").length > before) {
         failedAt.push(minute);
       }
@@ -208,18 +211,18 @@ describe("pollRetention — per-ticket read schedule", () => {
     const net = quietNet();
     const clock = { now: T0 };
     const store = createRetentionStore();
-    await pollRetention(deps(net, clock), store);
+    await pollRetention(cadenceDeps(net, clock), store);
     clock.now += MINUTE;
-    await pollRetention(deps(net, clock), store);
+    await pollRetention(cadenceDeps(net, clock), store);
     // Backed off to two minutes; thirty seconds later a person looks.
     clock.now += 30_000;
-    await pollRetention(deps(net, clock), store, { present: true });
+    await pollRetention(cadenceDeps(net, clock), store, { present: true });
     expect(net.calls).toHaveLength(2);
     // Past the interval, a person looking reads it before its backoff would.
     clock.now += 30_000;
-    await pollRetention(deps(net, clock), store);
+    await pollRetention(cadenceDeps(net, clock), store);
     expect(net.calls).toHaveLength(2);
-    await pollRetention(deps(net, clock), store, { present: true });
+    await pollRetention(cadenceDeps(net, clock), store, { present: true });
     expect(net.calls).toHaveLength(3);
   });
 
@@ -230,56 +233,53 @@ describe("pollRetention — per-ticket read schedule", () => {
     const net = quietNet();
     const clock = { now: T0 };
     const store = createRetentionStore();
-    const first = await pollRetention(deps(net, clock), store);
+    const first = await pollRetention(cadenceDeps(net, clock), store);
     // Only the closed PR is read, once; a closed PR is terminal, so it is not
     // scheduled again.
     expect(net.calls).toHaveLength(1);
     expect(first.nextDueInMs).toBeNull();
     clock.now += HOUR;
-    await pollRetention(deps(net, clock), store);
+    await pollRetention(cadenceDeps(net, clock), store);
     expect(net.calls).toHaveLength(1);
     expect(store.reads.size).toBe(0);
   });
 });
 
-describe("pollRetention — what a skipped read may still decide", () => {
-  /** A Done ticket inside the discovery grace and past a one-day TTL: reclaimable by dwell. */
-  function reclaimable(): {
-    id: string;
-    reclaimAsks: { n: number };
-    reclaim: RetentionPollPorts["reclaim"];
-  } {
-    setRetentionTtlDays(ctx.db, 1, T0);
-    const id = "r1";
-    const worktreePath = join(root, "wt-r1");
-    mkdirSync(worktreePath);
-    insertTicket(
-      ctx.db,
-      testTicket("p1", { id, status: "done", worktreePath, branch: "volli/r1" }),
-    );
-    recordTicketEvent(
-      ctx.db,
-      id,
-      { kind: "status_changed", from: "needs_review", to: "done" },
-      T0 - 2 * DAY,
-    );
-    const reclaimAsks = { n: 0 };
-    return {
-      id,
-      reclaimAsks,
-      reclaim: {
-        worktree: { db: ctx.db, gitAsync: async () => "", blobsRoot: "unused" },
-        now: () => T0,
-        // Asked only once the verdict says reclaim; answering "busy" keeps the
-        // folder, so the count is exactly how often a deletion was on the table.
-        busyWorktreeSites: async (directory) => {
-          reclaimAsks.n += 1;
-          return [{ directory, surface: "terminal" }];
-        },
+/** A Done ticket inside the discovery grace and past a one-day TTL: reclaimable by dwell. */
+function reclaimable(): {
+  id: string;
+  reclaimAsks: { n: number };
+  reclaim: RetentionPollPorts["reclaim"];
+} {
+  setRetentionTtlDays(ctx.db, 1, T0);
+  const id = "r1";
+  const worktreePath = join(root, "wt-r1");
+  mkdirSync(worktreePath);
+  insertTicket(ctx.db, testTicket("p1", { id, status: "done", worktreePath, branch: "volli/r1" }));
+  recordTicketEvent(
+    ctx.db,
+    id,
+    { kind: "status_changed", from: "needs_review", to: "done" },
+    T0 - 2 * DAY,
+  );
+  const reclaimAsks = { n: 0 };
+  return {
+    id,
+    reclaimAsks,
+    reclaim: {
+      worktree: { db: ctx.db, gitAsync: async () => "", blobsRoot: "unused" },
+      now: () => T0,
+      // Asked only once the verdict says reclaim; answering "busy" keeps the
+      // folder, so the count is exactly how often a deletion was on the table.
+      busyWorktreeSites: async (directory) => {
+        reclaimAsks.n += 1;
+        return [{ directory, surface: "terminal" }];
       },
-    };
-  }
+    },
+  };
+}
 
+describe("pollRetention — what a skipped read may still decide", () => {
   it('does not reclaim on an earlier cycle\'s "no PR": only on the cycle whose discovery is fresh', async () => {
     const { reclaimAsks, reclaim } = reclaimable();
     const net = quietNet();

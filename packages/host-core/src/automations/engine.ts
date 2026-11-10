@@ -459,6 +459,58 @@ export interface AutomationEngine {
   markDeliveryDelivered(input: { runId: string }): Promise<void>;
 }
 
+function replay<T>(
+  tx: AutomationLedgerTransaction,
+  commandId: string,
+  expected: AutomationReceiptResult["kind"],
+  select: (result: AutomationReceiptResult) => T | null,
+): AutomationCommandOutcome<T> {
+  const receipts = tx.listReceipts(commandId);
+  const latest = receipts.at(-1);
+  if (latest === undefined) {
+    throw new AutomationEngineConflictError(
+      `Automation command ${commandId} has no durable receipt`,
+    );
+  }
+  const value = select(readResult(latest.result));
+  if (value !== null) return { ok: true, value, receipt: publicReceipt(latest), replayed: true };
+  if (latest.result.kind === "automation.not-found") {
+    return {
+      ok: false,
+      error: "Unknown automation",
+      receipt: publicReceipt(latest),
+      replayed: true,
+    };
+  }
+  if (latest.result.kind === "automation.run.rejected") {
+    return {
+      ok: false,
+      code: latest.result.code,
+      error: latest.result.error,
+      receipt: publicReceipt(latest),
+      replayed: true,
+    };
+  }
+  throw new AutomationEngineConflictError(
+    `Automation command ${commandId} has ${latest.result.kind}, expected ${expected}`,
+  );
+}
+
+function existingCommand(
+  tx: AutomationLedgerTransaction,
+  commandId: string,
+  intent: AutomationCommandIntent,
+): AutomationCommand | null {
+  const existing = tx.getCommand(commandId);
+  if (existing === null) return null;
+  if (!sameJson(readIntent(existing.intent), readIntent(intent))) {
+    throw new AutomationEngineConflictError(
+      `Automation command ${commandId} was already accepted with different intent`,
+    );
+  }
+  return existing;
+}
+
 /**
  * The transport-neutral Automation command/event/projection core.
  *
@@ -497,58 +549,6 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
     tx.appendReceipt(stored);
     tx.appendEvent(
       event(stored.commandId, "command.receipt.recorded", { receipt: stored }, stored.recordedAt),
-    );
-  }
-
-  function existingCommand(
-    tx: AutomationLedgerTransaction,
-    commandId: string,
-    intent: AutomationCommandIntent,
-  ): AutomationCommand | null {
-    const existing = tx.getCommand(commandId);
-    if (existing === null) return null;
-    if (!sameJson(readIntent(existing.intent), readIntent(intent))) {
-      throw new AutomationEngineConflictError(
-        `Automation command ${commandId} was already accepted with different intent`,
-      );
-    }
-    return existing;
-  }
-
-  function replay<T>(
-    tx: AutomationLedgerTransaction,
-    commandId: string,
-    expected: AutomationReceiptResult["kind"],
-    select: (result: AutomationReceiptResult) => T | null,
-  ): AutomationCommandOutcome<T> {
-    const receipts = tx.listReceipts(commandId);
-    const latest = receipts.at(-1);
-    if (latest === undefined) {
-      throw new AutomationEngineConflictError(
-        `Automation command ${commandId} has no durable receipt`,
-      );
-    }
-    const value = select(readResult(latest.result));
-    if (value !== null) return { ok: true, value, receipt: publicReceipt(latest), replayed: true };
-    if (latest.result.kind === "automation.not-found") {
-      return {
-        ok: false,
-        error: "Unknown automation",
-        receipt: publicReceipt(latest),
-        replayed: true,
-      };
-    }
-    if (latest.result.kind === "automation.run.rejected") {
-      return {
-        ok: false,
-        code: latest.result.code,
-        error: latest.result.error,
-        receipt: publicReceipt(latest),
-        replayed: true,
-      };
-    }
-    throw new AutomationEngineConflictError(
-      `Automation command ${commandId} has ${latest.result.kind}, expected ${expected}`,
     );
   }
 

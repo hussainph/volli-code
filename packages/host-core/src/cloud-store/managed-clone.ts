@@ -163,6 +163,23 @@ function httpOrigin(remoteUrl: string): { origin: string; host: string } | null 
   return { origin: `${url.protocol}//${url.host}/`, host: url.host };
 }
 
+/**
+ * Whether the main worktree is in place. A directory a crashed `worktree
+ * add` left empty is removed so it can be added again; one holding anything
+ * else is never touched.
+ */
+async function mainWorktreeReady(directory: string): Promise<boolean> {
+  if (existsSync(join(directory, ".git"))) return true;
+  if (!existsSync(directory)) return false;
+  if ((await readdir(directory)).length > 0) {
+    throw new ManagedCloneUnavailable(
+      `${directory} is not a working copy of this repository; move it aside and try again.`,
+    );
+  }
+  await rmdir(directory);
+  return false;
+}
+
 export function createManagedClones(options: ManagedCloneOptions) {
   const git = options.git ?? createRunnerGit();
   const flights = new Map<string, Promise<{ checkoutPath: string; created: boolean }>>();
@@ -272,23 +289,6 @@ export function createManagedClones(options: ManagedCloneOptions) {
     );
     if (!behind) return;
     await git(["checkout", "--quiet", "--detach", start], { cwd: directory });
-  }
-
-  /**
-   * Whether the main worktree is in place. A directory a crashed `worktree
-   * add` left empty is removed so it can be added again; one holding anything
-   * else is never touched.
-   */
-  async function mainWorktreeReady(directory: string): Promise<boolean> {
-    if (existsSync(join(directory, ".git"))) return true;
-    if (!existsSync(directory)) return false;
-    if ((await readdir(directory)).length > 0) {
-      throw new ManagedCloneUnavailable(
-        `${directory} is not a working copy of this repository; move it aside and try again.`,
-      );
-    }
-    await rmdir(directory);
-    return false;
   }
 
   async function run(input: ManagedCloneRequest) {

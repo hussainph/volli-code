@@ -636,6 +636,10 @@ describe("the HOST relay (VC-722)", () => {
   });
 });
 
+function ticketed() {
+  insertTicket(ctx.db, testTicket(PROJECT, { id: "ticket-one", ticketNumber: 1 }));
+}
+
 describe("Session commands", () => {
   it("passes each runtime command through, fixing what a person's door may say", async () => {
     const runtime = {
@@ -756,10 +760,6 @@ describe("Session commands", () => {
       throughSequence: 2,
       model: { providerId: "test", modelId: "m", reasoningLevel: "off" as const },
     };
-
-    function ticketed() {
-      insertTicket(ctx.db, testTicket(PROJECT, { id: "ticket-one", ticketNumber: 1 }));
-    }
 
     it("starts the Session, sends its kickoff and announces it, as the call's actor", async () => {
       ticketed();
@@ -1395,14 +1395,14 @@ describe("remote hosts commands", () => {
   });
 });
 
+function changes(): Omit<DataChangedEvent, "entity">[] {
+  return publish.mock.calls
+    .filter(([topic]) => topic === "data-changed")
+    .map(([, change]) => change as Omit<DataChangedEvent, "entity">);
+}
+
 describe("ticket.move, the whole command", () => {
   const SESSION: TicketEventActor = { kind: "session", sessionId: "s-1", ticketId: null };
-
-  function changes(): Omit<DataChangedEvent, "entity">[] {
-    return publish.mock.calls
-      .filter(([topic]) => topic === "data-changed")
-      .map(([, change]) => change as Omit<DataChangedEvent, "entity">);
-  }
 
   it("moves, records the armed arrival, and publishes the change for any other caller", async () => {
     ticket("t-1");
@@ -1619,6 +1619,27 @@ describe("Browser page shortcuts", () => {
   });
 });
 
+const accountCalls = (map: ReturnType<typeof handlers>): (() => unknown)[] => [
+  () => map["account.snapshot"](undefined, WINDOW),
+  () => map["account.subscribe"](undefined, WINDOW, sink()),
+  () => map["account.signIn"]({ connection: "github" }, WINDOW),
+  () => map["account.cancelSignIn"](undefined, WINDOW),
+  () => map["account.signOut"](undefined, WINDOW),
+  () => map["account.requestDeletion"](undefined, WINDOW),
+  () => map["account.cancelDeletion"](undefined, WINDOW),
+  () => map["account.accessToken"]({ force: false }, WINDOW),
+  () => map["cloud.launch"](undefined, WINDOW),
+  () => map["cloud.relaunch"](undefined, WINDOW),
+  () => map["cloud.reportUnsavedWrites"]({ count: 1 }, WINDOW),
+  () => map["cloud.saveSnapshot"]({ text: "{}" }, WINDOW),
+  () => map["cloud.readSnapshot"](undefined, WINDOW),
+  () => map["account.githubSubscribe"](undefined, WINDOW, sink()),
+  () => map["account.githubConnect"](undefined, WINDOW),
+  () => map["account.githubInstall"](undefined, WINDOW),
+  () => map["account.githubCancel"](undefined, WINDOW),
+  () => map["account.githubDisconnect"](undefined, WINDOW),
+];
+
 // The Volli Cloud account (VC-884): desktop main's account service, through
 // its port; absent everywhere else.
 describe("the Volli Cloud account", () => {
@@ -1630,30 +1651,9 @@ describe("the Volli Cloud account", () => {
     failure: null,
   } as const;
 
-  const everyCall = (map: ReturnType<typeof handlers>): (() => unknown)[] => [
-    () => map["account.snapshot"](undefined, WINDOW),
-    () => map["account.subscribe"](undefined, WINDOW, sink()),
-    () => map["account.signIn"]({ connection: "github" }, WINDOW),
-    () => map["account.cancelSignIn"](undefined, WINDOW),
-    () => map["account.signOut"](undefined, WINDOW),
-    () => map["account.requestDeletion"](undefined, WINDOW),
-    () => map["account.cancelDeletion"](undefined, WINDOW),
-    () => map["account.accessToken"]({ force: false }, WINDOW),
-    () => map["cloud.launch"](undefined, WINDOW),
-    () => map["cloud.relaunch"](undefined, WINDOW),
-    () => map["cloud.reportUnsavedWrites"]({ count: 1 }, WINDOW),
-    () => map["cloud.saveSnapshot"]({ text: "{}" }, WINDOW),
-    () => map["cloud.readSnapshot"](undefined, WINDOW),
-    () => map["account.githubSubscribe"](undefined, WINDOW, sink()),
-    () => map["account.githubConnect"](undefined, WINDOW),
-    () => map["account.githubInstall"](undefined, WINDOW),
-    () => map["account.githubCancel"](undefined, WINDOW),
-    () => map["account.githubDisconnect"](undefined, WINDOW),
-  ];
-
   it("answers unavailable for every key on a host with no account service (hostd)", async () => {
     for (const map of [handlers(), handlers({ account: null })]) {
-      for (const call of everyCall(map)) {
+      for (const call of accountCalls(map)) {
         expect(await unavailable(call)).toBe("Accounts are unavailable on this host");
       }
     }
@@ -1791,6 +1791,13 @@ describe("the Volli Cloud account", () => {
   });
 });
 
+const runnerCalls = (map: ReturnType<typeof handlers>): (() => unknown)[] => [
+  () => map["runners.thisMac"](undefined, WINDOW),
+  () => map["runners.subscribeThisMac"](undefined, WINDOW, sink()),
+  () => map["runners.addThisMac"](undefined, WINDOW),
+  () => map["runners.removeThisMac"](undefined, WINDOW),
+];
+
 // This Mac as a runner (VC-895): desktop main's Mac runner, through its port;
 // absent everywhere else.
 describe("this Mac as a runner", () => {
@@ -1804,16 +1811,9 @@ describe("this Mac as a runner", () => {
     message: null,
   } as const;
 
-  const everyCall = (map: ReturnType<typeof handlers>): (() => unknown)[] => [
-    () => map["runners.thisMac"](undefined, WINDOW),
-    () => map["runners.subscribeThisMac"](undefined, WINDOW, sink()),
-    () => map["runners.addThisMac"](undefined, WINDOW),
-    () => map["runners.removeThisMac"](undefined, WINDOW),
-  ];
-
   it("answers unavailable for every key on a host with no Mac runner (hostd)", async () => {
     for (const map of [handlers(), handlers({ runners: null })]) {
-      for (const call of everyCall(map)) {
+      for (const call of runnerCalls(map)) {
         expect(await unavailable(call)).toBe("Runners are unavailable on this host");
       }
     }

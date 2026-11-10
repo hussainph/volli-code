@@ -752,6 +752,60 @@ describe("column Trigger and arming (migration 031)", () => {
     expect(getSkippedOccurrence(ctx.db, "nope")).toBeUndefined();
   });
 
+  /** Two records in one project whose work interleaves in time. */
+  function twoRecords() {
+    const { project, ticket, session } = seeded();
+    const review = createAutomation(
+      ctx.db,
+      {
+        projectId: project.id,
+        name: "Review sweep",
+        instructions: "/review",
+        trigger: NO_AUTOMATION_TRIGGER,
+        runtime: null,
+      },
+      1000,
+    );
+    const nightly = createAutomation(
+      ctx.db,
+      {
+        projectId: project.id,
+        name: "Nightly sweep",
+        instructions: "/sweep",
+        trigger: NIGHTLY,
+        runtime: null,
+      },
+      1000,
+    );
+    const runFor = (automation: { id: string; name: string }, at: number) =>
+      recordAutomationRun(
+        ctx.db,
+        {
+          automationId: automation.id,
+          automationName: automation.name,
+          ticketId: ticket.id,
+          sessionId: session.id,
+          model: PIN,
+        },
+        at,
+      );
+    const skipFor = (automation: { id: string; name: string }, id: string, dueAt: number) => {
+      const record = {
+        id,
+        automationId: automation.id,
+        automationName: automation.name,
+        projectId: project.id,
+        dueAt,
+        missedCount: 1,
+        reason: { kind: "app-closed" as const },
+        recordedAt: dueAt + 1,
+      };
+      insertSkippedOccurrence(ctx.db, record);
+      return record;
+    };
+    return { project, ticket, session, review, nightly, runFor, skipFor };
+  }
+
   /**
    * The editor's own history, scoped by main (VC-297).
    *
@@ -761,60 +815,6 @@ describe("column Trigger and arming (migration 031)", () => {
    * got this wrong could not be caught by a client test.
    */
   describe("one Automation's history inside one project", () => {
-    /** Two records in one project whose work interleaves in time. */
-    function twoRecords() {
-      const { project, ticket, session } = seeded();
-      const review = createAutomation(
-        ctx.db,
-        {
-          projectId: project.id,
-          name: "Review sweep",
-          instructions: "/review",
-          trigger: NO_AUTOMATION_TRIGGER,
-          runtime: null,
-        },
-        1000,
-      );
-      const nightly = createAutomation(
-        ctx.db,
-        {
-          projectId: project.id,
-          name: "Nightly sweep",
-          instructions: "/sweep",
-          trigger: NIGHTLY,
-          runtime: null,
-        },
-        1000,
-      );
-      const runFor = (automation: { id: string; name: string }, at: number) =>
-        recordAutomationRun(
-          ctx.db,
-          {
-            automationId: automation.id,
-            automationName: automation.name,
-            ticketId: ticket.id,
-            sessionId: session.id,
-            model: PIN,
-          },
-          at,
-        );
-      const skipFor = (automation: { id: string; name: string }, id: string, dueAt: number) => {
-        const record = {
-          id,
-          automationId: automation.id,
-          automationName: automation.name,
-          projectId: project.id,
-          dueAt,
-          missedCount: 1,
-          reason: { kind: "app-closed" as const },
-          recordedAt: dueAt + 1,
-        };
-        insertSkippedOccurrence(ctx.db, record);
-        return record;
-      };
-      return { project, ticket, session, review, nightly, runFor, skipFor };
-    }
-
     it("answers each record with its OWN Runs and skips, newest first", () => {
       const { project, review, nightly, runFor, skipFor } = twoRecords();
       // Interleaved on purpose: a read that merely truncated the project's
@@ -1244,35 +1244,35 @@ describe("Run attendance (VC-133)", () => {
   });
 });
 
-describe("column order (migration 034)", () => {
-  /** One project with two Automations offered in Doing, for the rank to arrange. */
-  function twoOffered() {
-    const { project } = seeded();
-    const first = createAutomation(
-      ctx.db,
-      {
-        projectId: project.id,
-        name: "A",
-        instructions: "x",
-        trigger: { kind: "columns", columns: ["doing"] },
-        runtime: null,
-      },
-      1000,
-    );
-    const second = createAutomation(
-      ctx.db,
-      {
-        projectId: project.id,
-        name: "B",
-        instructions: "x",
-        trigger: { kind: "columns", columns: ["doing"] },
-        runtime: null,
-      },
-      1000,
-    );
-    return { project, first, second };
-  }
+/** One project with two Automations offered in Doing, for the rank to arrange. */
+function twoOffered() {
+  const { project } = seeded();
+  const first = createAutomation(
+    ctx.db,
+    {
+      projectId: project.id,
+      name: "A",
+      instructions: "x",
+      trigger: { kind: "columns", columns: ["doing"] },
+      runtime: null,
+    },
+    1000,
+  );
+  const second = createAutomation(
+    ctx.db,
+    {
+      projectId: project.id,
+      name: "B",
+      instructions: "x",
+      trigger: { kind: "columns", columns: ["doing"] },
+      runtime: null,
+    },
+    1000,
+  );
+  return { project, first, second };
+}
 
+describe("column order (migration 034)", () => {
   it("round-trips one column's rank and replaces it whole on the next write", () => {
     const { project, first, second } = twoOffered();
 

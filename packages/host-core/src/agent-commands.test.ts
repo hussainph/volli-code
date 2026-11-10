@@ -253,6 +253,324 @@ function recordNotice(
   return { delivered: true };
 }
 
+/**
+ * A project with `done` Done tickets and `active` not-Done tickets, every one
+ * of them holding a retained worktree whose working tree is dirty on the same
+ * file. Ticket numbers 1..done are Done; the rest are active.
+ */
+const doneAndActiveScenario = (done: number, active: number) => {
+  ctx = openTestDb();
+  insertProject(
+    ctx.db,
+    testProject({
+      id: "project-one",
+      name: "Volli Code",
+      path: "/repo/volli",
+      ticketPrefix: "VC",
+    }),
+  );
+  const statuses = ["backlog", "todo", "doing", "needs_review"] as const;
+  for (let number = 1; number <= done + active; number += 1) {
+    insertTicket(
+      ctx.db,
+      testTicket("project-one", {
+        id: `ticket-${number}`,
+        ticketNumber: number,
+        status: number <= done ? "done" : statuses[number % statuses.length]!,
+        order: number,
+        worktreePath: `/wt/VC-${number}`,
+        branch: `volli/VC-${number}-work`,
+        baseBranch: "main",
+      }),
+    );
+  }
+  return scriptedReadOnlyGit((args) => {
+    if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
+    if (args[0] === "merge-base") return "base-sha\n";
+    // Every worktree, Done or not, has the same uncommitted edit (the diff
+    // against the base includes the working tree) and the same new file.
+    if (args[0] === "diff") return rawModified(["src/shared.ts"]);
+    if (args[0] === "status") return "? src/new.ts\u0000";
+    return "";
+  });
+};
+
+// ---- conflicts, the file-collision radar (VC-185, VC-89 slice 3) ---------
+
+/**
+ * A project with `count` ticket worktrees, each answering its own complete
+ * Change Set path list keyed by the cwd git was invoked in.
+ */
+const radarScenario = (
+  touched: Readonly<Record<string, readonly string[]>>,
+): ReturnType<typeof createAgentCommandService> => {
+  ctx = openTestDb();
+  insertProject(
+    ctx.db,
+    testProject({
+      id: "project-one",
+      name: "Volli Code",
+      path: "/repo/volli",
+      ticketPrefix: "VC",
+    }),
+  );
+  for (const [index, [display, paths]] of Object.entries(touched).entries()) {
+    const number = Number.parseInt(display.split("-")[1]!, 10);
+    insertTicket(
+      ctx.db,
+      testTicket("project-one", {
+        id: `ticket-${number}`,
+        ticketNumber: number,
+        title: `Ticket ${display}`,
+        order: index,
+        worktreePath: `/wt/${display}`,
+        branch: `volli/${display}-work`,
+        baseBranch: "main",
+      }),
+    );
+    void paths;
+  }
+  const { gitAsync } = scriptedReadOnlyGit((args, cwd) => {
+    if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
+    if (args[0] === "merge-base") return "base-sha\n";
+    if (args[0] === "diff" && args.includes("--raw")) {
+      const display = cwd.slice("/wt/".length);
+      return rawModified(touched[display] ?? []);
+    }
+    if (args[0] === "status") return "";
+    return "";
+  });
+  return createAgentCommandService({
+    db: ctx.db,
+    appVersion: "1.0.0",
+    now: () => 100,
+    gitAsync,
+    worktreeExists: () => true,
+  });
+};
+
+const worktreeRequest = (
+  cmd: "worktree.status" | "worktree.diff",
+  args: Record<string, unknown> = {},
+): AgentRequest => ({ v: 1, cmd, args, ctx: { cwd: "/wt/VC-1", env: ACTING_ENV } });
+
+// ---- worktree.status / worktree.diff (issue #80) ------------------------
+
+/** Seeds one VC-1 ticket (internal id `ticket-one`) with an active worktree. */
+const seedWorktreeTicket = async (
+  service: ReturnType<typeof createAgentCommandService>,
+  fields: Record<string, unknown> = {},
+): Promise<void> => {
+  await service.execute({
+    v: 1,
+    cmd: "ticket.create",
+    args: { title: "Ship" },
+    ctx: { cwd: "/repo/volli", env: ACTING_ENV },
+  });
+  updateTicketFieldsCommand(
+    ctx.db,
+    {
+      ticketId: "ticket-one",
+      worktreePath: "/wt/VC-1",
+      branch: "volli/VC-1-ship",
+      baseBranch: "main",
+      ...fields,
+    },
+    { now: 100, actor: { kind: "user" } },
+  );
+};
+
+/** A project + one seeded VC-1 worktree, with git scripted by the caller. */
+const syncScenario = async (
+  handler: (args: readonly string[], cwd: string) => string,
+  checkedOutBranch = "volli/VC-1-ship",
+  extra: Partial<AgentCommandServiceOptions> = {},
+): Promise<{
+  service: ReturnType<typeof createAgentCommandService>;
+  calls: { args: readonly string[]; cwd: string }[];
+}> => {
+  ctx = openTestDb();
+  insertProject(
+    ctx.db,
+    testProject({
+      id: "project-one",
+      name: "Volli Code",
+      path: "/repo/volli",
+      ticketPrefix: "VC",
+    }),
+  );
+  const { gitAsync, calls } = scriptedGit((args, cwd) => {
+    if (args[0] === "branch" && args[1] === "--show-current") return `${checkedOutBranch}\n`;
+    return handler(args, cwd);
+  });
+  const service = createAgentCommandService({
+    db: ctx.db,
+    appVersion: "1.0.0",
+    now: () => 100,
+    newId: () => "ticket-one",
+    gitAsync,
+    worktreeExists: () => true,
+    ...extra,
+  });
+  await seedWorktreeTicket(service);
+  return { service, calls };
+};
+
+/**
+ * A worktree scenario whose git waits on a gate the case opens, behind a read
+ * service on a frozen clock: every call the case starts before opening the
+ * gate lands inside the share window, whatever the machine's speed (VC-788).
+ */
+const burstScenario = async (handler: (args: readonly string[]) => string) => {
+  ctx = openTestDb();
+  insertProject(
+    ctx.db,
+    testProject({
+      id: "project-one",
+      name: "Volli Code",
+      path: "/repo/volli",
+      ticketPrefix: "VC",
+    }),
+  );
+  const { gitAsync: scripted, calls } = scriptedReadOnlyGit(handler);
+  let open!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  const gitAsync = async (args: readonly string[], cwd: string): Promise<string> => {
+    await gate;
+    return scripted(args, cwd);
+  };
+  const worktreeReads = createWorktreeReadService({
+    deps: () => ({ db: ctx.db, gitAsync, worktreeExists: alwaysExists }),
+    now: () => 0,
+  });
+  const service = createAgentCommandService({
+    db: ctx.db,
+    appVersion: "1.0.0",
+    now: () => 100,
+    newId: () => "ticket-one",
+    gitAsync,
+    worktreeExists: alwaysExists,
+    worktreeReads,
+  });
+  await seedWorktreeTicket(service);
+  const statusReads = vi.spyOn(worktreeReads, "readStatus");
+  const diffReads = vi.spyOn(worktreeReads, "readDiff");
+  /** Starts the requests together, waits until each reached its read, then opens git. */
+  const burst = async (requests: AgentRequest[]): Promise<AgentResponse[]> => {
+    const pending = Promise.all(requests.map((request) => service.execute(request)));
+    await vi.waitFor(() => {
+      expect(statusReads.mock.calls.length + diffReads.mock.calls.length).toBe(requests.length);
+    });
+    open();
+    return pending;
+  };
+  return { service, calls, burst };
+};
+
+function harnessService(): {
+  create: (harness: unknown) => Promise<AgentResponse>;
+  update: (harness: unknown) => Promise<AgentResponse>;
+} {
+  ctx = openTestDb();
+  insertProject(
+    ctx.db,
+    testProject({ id: "p1", name: "Alpha", path: "/repo/alpha", ticketPrefix: "AL" }),
+  );
+  let seq = 0;
+  const service = createAgentCommandService({
+    db: ctx.db,
+    appVersion: "1.0.0",
+    newId: () => `t${(seq += 1)}`,
+  });
+  const base = { cwd: "/repo/alpha", env: ACTING_ENV } as const;
+  return {
+    create: (harness) =>
+      service.execute({
+        v: 1,
+        cmd: "ticket.create",
+        args: { project: "AL", title: "X", harness },
+        ctx: base,
+      }),
+    update: async (harness) => {
+      await service.execute({
+        v: 1,
+        cmd: "ticket.create",
+        args: { project: "AL", title: "Seed" },
+        ctx: base,
+      });
+      return await service.execute({
+        v: 1,
+        cmd: "ticket.update",
+        args: { id: "AL-1", harness },
+        ctx: base,
+      });
+    },
+  };
+}
+
+function register(slug: string, decision: "trusted" | "blocked"): void {
+  recordHarnessTrust(
+    ctx.db,
+    {
+      slug,
+      manifestPath: `/home/dev/.agents/harnesses/${slug}/harness.json`,
+      manifestSha256: "a1",
+      decision,
+      declaredEvents: [],
+    },
+    1000,
+  );
+}
+
+/** Builds a service whose interrupt seam records its calls and returns `ids`. */
+function serviceWithInterrupt(ids: string[]) {
+  ctx = openTestDb();
+  insertProject(
+    ctx.db,
+    testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+  );
+  let id = 0;
+  let timestamp = 100;
+  const interruptedTickets: string[] = [];
+  const service = createAgentCommandService({
+    db: ctx.db,
+    appVersion: "1.2.3",
+    now: () => timestamp++,
+    newId: () => `ticket-${++id}`,
+    interruptTicketSessions: (ticketId) => {
+      interruptedTickets.push(ticketId);
+      return ids;
+    },
+  });
+  const exec = (cmd: AgentRequest["cmd"], args: Record<string, unknown>) =>
+    service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: ACTING_ENV } });
+  return { exec, interruptedTickets };
+}
+
+/** A service whose Deliberate-move seam records what it was told. */
+function serviceWithDeliberateMoves() {
+  ctx = openTestDb();
+  insertProject(
+    ctx.db,
+    testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+  );
+  let id = 0;
+  let timestamp = 100;
+  const moves: unknown[] = [];
+  const service = createAgentCommandService({
+    db: ctx.db,
+    appVersion: "1.2.3",
+    now: () => timestamp++,
+    newId: () => `ticket-${++id}`,
+    onDeliberateMove: (notice) => moves.push(notice),
+  });
+  const exec = (cmd: AgentRequest["cmd"], args: Record<string, unknown>) =>
+    service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: ACTING_ENV } });
+  return { exec, moves };
+}
+
 describe("agent command service", () => {
   it("creates a ticket through display-id-only input and output", async () => {
     ctx = openTestDb();
@@ -917,28 +1235,6 @@ describe("agent command service", () => {
   });
 
   describe("ticket.move is a Deliberate move (VC-128)", () => {
-    /** A service whose Deliberate-move seam records what it was told. */
-    function serviceWithDeliberateMoves() {
-      ctx = openTestDb();
-      insertProject(
-        ctx.db,
-        testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
-      );
-      let id = 0;
-      let timestamp = 100;
-      const moves: unknown[] = [];
-      const service = createAgentCommandService({
-        db: ctx.db,
-        appVersion: "1.2.3",
-        now: () => timestamp++,
-        newId: () => `ticket-${++id}`,
-        onDeliberateMove: (notice) => moves.push(notice),
-      });
-      const exec = (cmd: AgentRequest["cmd"], args: Record<string, unknown>) =>
-        service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: ACTING_ENV } });
-      return { exec, moves };
-    }
-
     it("announces the columns it left and entered, which a re-read cannot recover", async () => {
       const { exec, moves } = serviceWithDeliberateMoves();
       await exec("ticket.create", { title: "T", status: "todo" });
@@ -1085,31 +1381,6 @@ describe("agent command service", () => {
   });
 
   describe("ticket.move backward-move interrupt (issue #78)", () => {
-    /** Builds a service whose interrupt seam records its calls and returns `ids`. */
-    function serviceWithInterrupt(ids: string[]) {
-      ctx = openTestDb();
-      insertProject(
-        ctx.db,
-        testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
-      );
-      let id = 0;
-      let timestamp = 100;
-      const interruptedTickets: string[] = [];
-      const service = createAgentCommandService({
-        db: ctx.db,
-        appVersion: "1.2.3",
-        now: () => timestamp++,
-        newId: () => `ticket-${++id}`,
-        interruptTicketSessions: (ticketId) => {
-          interruptedTickets.push(ticketId);
-          return ids;
-        },
-      });
-      const exec = (cmd: AgentRequest["cmd"], args: Record<string, unknown>) =>
-        service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: ACTING_ENV } });
-      return { exec, interruptedTickets };
-    }
-
     it("interrupts live terminals without adding planner history on a doing→todo move", async () => {
       const { exec, interruptedTickets } = serviceWithInterrupt(["s1", "s2"]);
       await exec("ticket.create", { title: "T", status: "doing" });
@@ -2147,61 +2418,6 @@ describe("agent command service", () => {
   // slug's shape, so every question about whether a name means anything — and
   // whether a human ruled on it — is settled here, against the registry.
   describe("the harness a create/update may name", () => {
-    function harnessService(): {
-      create: (harness: unknown) => Promise<AgentResponse>;
-      update: (harness: unknown) => Promise<AgentResponse>;
-    } {
-      ctx = openTestDb();
-      insertProject(
-        ctx.db,
-        testProject({ id: "p1", name: "Alpha", path: "/repo/alpha", ticketPrefix: "AL" }),
-      );
-      let seq = 0;
-      const service = createAgentCommandService({
-        db: ctx.db,
-        appVersion: "1.0.0",
-        newId: () => `t${(seq += 1)}`,
-      });
-      const base = { cwd: "/repo/alpha", env: ACTING_ENV } as const;
-      return {
-        create: (harness) =>
-          service.execute({
-            v: 1,
-            cmd: "ticket.create",
-            args: { project: "AL", title: "X", harness },
-            ctx: base,
-          }),
-        update: async (harness) => {
-          await service.execute({
-            v: 1,
-            cmd: "ticket.create",
-            args: { project: "AL", title: "Seed" },
-            ctx: base,
-          });
-          return await service.execute({
-            v: 1,
-            cmd: "ticket.update",
-            args: { id: "AL-1", harness },
-            ctx: base,
-          });
-        },
-      };
-    }
-
-    function register(slug: string, decision: "trusted" | "blocked"): void {
-      recordHarnessTrust(
-        ctx.db,
-        {
-          slug,
-          manifestPath: `/home/dev/.agents/harnesses/${slug}/harness.json`,
-          manifestSha256: "a1",
-          decision,
-          declaredEvents: [],
-        },
-        1000,
-      );
-    }
-
     it("refuses a name no slug could ever be, and enumerates what one could", async () => {
       const { create, update } = harnessService();
       const message =
@@ -5084,32 +5300,6 @@ describe("agent command service", () => {
     });
   });
 
-  // ---- worktree.status / worktree.diff (issue #80) ------------------------
-
-  /** Seeds one VC-1 ticket (internal id `ticket-one`) with an active worktree. */
-  const seedWorktreeTicket = async (
-    service: ReturnType<typeof createAgentCommandService>,
-    fields: Record<string, unknown> = {},
-  ): Promise<void> => {
-    await service.execute({
-      v: 1,
-      cmd: "ticket.create",
-      args: { title: "Ship" },
-      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
-    });
-    updateTicketFieldsCommand(
-      ctx.db,
-      {
-        ticketId: "ticket-one",
-        worktreePath: "/wt/VC-1",
-        branch: "volli/VC-1-ship",
-        baseBranch: "main",
-        ...fields,
-      },
-      { now: 100, actor: { kind: "user" } },
-    );
-  };
-
   it("composes a worktree status report from the ticket owning the cwd", async () => {
     ctx = openTestDb();
     insertProject(
@@ -5306,64 +5496,6 @@ describe("agent command service", () => {
     });
     expect(noContext).toMatchObject({ ok: false, error: { code: "CONTEXT_REQUIRED" } });
   });
-
-  /**
-   * A worktree scenario whose git waits on a gate the case opens, behind a read
-   * service on a frozen clock: every call the case starts before opening the
-   * gate lands inside the share window, whatever the machine's speed (VC-788).
-   */
-  const burstScenario = async (handler: (args: readonly string[]) => string) => {
-    ctx = openTestDb();
-    insertProject(
-      ctx.db,
-      testProject({
-        id: "project-one",
-        name: "Volli Code",
-        path: "/repo/volli",
-        ticketPrefix: "VC",
-      }),
-    );
-    const { gitAsync: scripted, calls } = scriptedReadOnlyGit(handler);
-    let open!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      open = resolve;
-    });
-    const gitAsync = async (args: readonly string[], cwd: string): Promise<string> => {
-      await gate;
-      return scripted(args, cwd);
-    };
-    const worktreeReads = createWorktreeReadService({
-      deps: () => ({ db: ctx.db, gitAsync, worktreeExists: alwaysExists }),
-      now: () => 0,
-    });
-    const service = createAgentCommandService({
-      db: ctx.db,
-      appVersion: "1.0.0",
-      now: () => 100,
-      newId: () => "ticket-one",
-      gitAsync,
-      worktreeExists: alwaysExists,
-      worktreeReads,
-    });
-    await seedWorktreeTicket(service);
-    const statusReads = vi.spyOn(worktreeReads, "readStatus");
-    const diffReads = vi.spyOn(worktreeReads, "readDiff");
-    /** Starts the requests together, waits until each reached its read, then opens git. */
-    const burst = async (requests: AgentRequest[]): Promise<AgentResponse[]> => {
-      const pending = Promise.all(requests.map((request) => service.execute(request)));
-      await vi.waitFor(() => {
-        expect(statusReads.mock.calls.length + diffReads.mock.calls.length).toBe(requests.length);
-      });
-      open();
-      return pending;
-    };
-    return { service, calls, burst };
-  };
-
-  const worktreeRequest = (
-    cmd: "worktree.status" | "worktree.diff",
-    args: Record<string, unknown> = {},
-  ): AgentRequest => ({ v: 1, cmd, args, ctx: { cwd: "/wt/VC-1", env: ACTING_ENV } });
 
   it("runs one git read set for two `worktree status` calls in one burst", async () => {
     const { service, calls, burst } = await burstScenario((args) => {
@@ -5666,42 +5798,6 @@ describe("agent command service", () => {
 
   /** Every git subcommand that reaches a remote. The sync verb may run none. */
   const NETWORK_SUBCOMMANDS = ["fetch", "pull", "push", "ls-remote", "clone"];
-
-  /** A project + one seeded VC-1 worktree, with git scripted by the caller. */
-  const syncScenario = async (
-    handler: (args: readonly string[], cwd: string) => string,
-    checkedOutBranch = "volli/VC-1-ship",
-    extra: Partial<AgentCommandServiceOptions> = {},
-  ): Promise<{
-    service: ReturnType<typeof createAgentCommandService>;
-    calls: { args: readonly string[]; cwd: string }[];
-  }> => {
-    ctx = openTestDb();
-    insertProject(
-      ctx.db,
-      testProject({
-        id: "project-one",
-        name: "Volli Code",
-        path: "/repo/volli",
-        ticketPrefix: "VC",
-      }),
-    );
-    const { gitAsync, calls } = scriptedGit((args, cwd) => {
-      if (args[0] === "branch" && args[1] === "--show-current") return `${checkedOutBranch}\n`;
-      return handler(args, cwd);
-    });
-    const service = createAgentCommandService({
-      db: ctx.db,
-      appVersion: "1.0.0",
-      now: () => 100,
-      newId: () => "ticket-one",
-      gitAsync,
-      worktreeExists: () => true,
-      ...extra,
-    });
-    await seedWorktreeTicket(service);
-    return { service, calls };
-  };
 
   it("retires the rail's last-known snapshot when a merge lands", async () => {
     let head = "aaaaaaa";
@@ -6074,60 +6170,6 @@ describe("agent command service", () => {
     expect(calls).toEqual([]);
   });
 
-  // ---- conflicts, the file-collision radar (VC-185, VC-89 slice 3) ---------
-
-  /**
-   * A project with `count` ticket worktrees, each answering its own complete
-   * Change Set path list keyed by the cwd git was invoked in.
-   */
-  const radarScenario = (
-    touched: Readonly<Record<string, readonly string[]>>,
-  ): ReturnType<typeof createAgentCommandService> => {
-    ctx = openTestDb();
-    insertProject(
-      ctx.db,
-      testProject({
-        id: "project-one",
-        name: "Volli Code",
-        path: "/repo/volli",
-        ticketPrefix: "VC",
-      }),
-    );
-    for (const [index, [display, paths]] of Object.entries(touched).entries()) {
-      const number = Number.parseInt(display.split("-")[1]!, 10);
-      insertTicket(
-        ctx.db,
-        testTicket("project-one", {
-          id: `ticket-${number}`,
-          ticketNumber: number,
-          title: `Ticket ${display}`,
-          order: index,
-          worktreePath: `/wt/${display}`,
-          branch: `volli/${display}-work`,
-          baseBranch: "main",
-        }),
-      );
-      void paths;
-    }
-    const { gitAsync } = scriptedReadOnlyGit((args, cwd) => {
-      if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
-      if (args[0] === "merge-base") return "base-sha\n";
-      if (args[0] === "diff" && args.includes("--raw")) {
-        const display = cwd.slice("/wt/".length);
-        return rawModified(touched[display] ?? []);
-      }
-      if (args[0] === "status") return "";
-      return "";
-    });
-    return createAgentCommandService({
-      db: ctx.db,
-      appVersion: "1.0.0",
-      now: () => 100,
-      gitAsync,
-      worktreeExists: () => true,
-    });
-  };
-
   it("prints an overlap matrix across active worktrees, for any caller", async () => {
     const service = radarScenario({
       "VC-65": ["src/chat-plane.tsx", "src/only-65.ts"],
@@ -6371,48 +6413,6 @@ describe("agent command service", () => {
     // reports "no collisions" for a collision it never looked at.
     expect(data.skipped.map((entry) => entry.ticket)).toEqual(["VC-2"]);
   });
-
-  /**
-   * A project with `done` Done tickets and `active` not-Done tickets, every one
-   * of them holding a retained worktree whose working tree is dirty on the same
-   * file. Ticket numbers 1..done are Done; the rest are active.
-   */
-  const doneAndActiveScenario = (done: number, active: number) => {
-    ctx = openTestDb();
-    insertProject(
-      ctx.db,
-      testProject({
-        id: "project-one",
-        name: "Volli Code",
-        path: "/repo/volli",
-        ticketPrefix: "VC",
-      }),
-    );
-    const statuses = ["backlog", "todo", "doing", "needs_review"] as const;
-    for (let number = 1; number <= done + active; number += 1) {
-      insertTicket(
-        ctx.db,
-        testTicket("project-one", {
-          id: `ticket-${number}`,
-          ticketNumber: number,
-          status: number <= done ? "done" : statuses[number % statuses.length]!,
-          order: number,
-          worktreePath: `/wt/VC-${number}`,
-          branch: `volli/VC-${number}-work`,
-          baseBranch: "main",
-        }),
-      );
-    }
-    return scriptedReadOnlyGit((args) => {
-      if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
-      if (args[0] === "merge-base") return "base-sha\n";
-      // Every worktree, Done or not, has the same uncommitted edit (the diff
-      // against the base includes the working tree) and the same new file.
-      if (args[0] === "diff") return rawModified(["src/shared.ts"]);
-      if (args[0] === "status") return "? src/new.ts\u0000";
-      return "";
-    });
-  };
 
   it("scans only the worktrees of tickets that are not Done (VC-802)", async () => {
     const scripted = doneAndActiveScenario(200, 30);
@@ -6716,6 +6716,39 @@ function sessionCheckOf(response: AgentResponse): DoctorCheck {
   return check;
 }
 
+function doctorService(options: Partial<Parameters<typeof createAgentCommandService>[0]> = {}) {
+  ctx = openTestDb();
+  const service = createAgentCommandService({
+    db: ctx.db,
+    appVersion: "1.2.3",
+    now: () => 4242,
+    doctorFacts: async () => ({
+      binDir: "/ud/bin",
+      wrappers: { claude: "/ud/bin/claude" },
+      refused: [],
+      shellInitDir: "/ud/shell/zsh",
+      shellInitPresent: true,
+      shimPath: "/ud/bin/volli",
+      liveSessionIds: [],
+      reporting: [],
+      skillConflicts: [],
+    }),
+    ...options,
+  });
+  return (args: Record<string, unknown>) =>
+    service.execute({ v: 1, cmd: "doctor", args, ctx: { cwd: "/repo", env: ACTING_ENV } });
+}
+
+/** The check with this id, or a helpful failure. */
+async function checkFrom(args: Record<string, unknown>, id: string) {
+  const response = await doctorService()(args);
+  if (!response.ok) throw new Error("expected ok");
+  const { checks } = response.data as { checks: DoctorCheck[] };
+  const found = checks.find((check) => check.id === id);
+  if (found === undefined) throw new Error(`no ${id} check in ${checks.map((c) => c.id).join()}`);
+  return found;
+}
+
 describe("doctor", () => {
   const observation = {
     pathEntries: ["/ud/bin", "/usr/bin"],
@@ -6723,29 +6756,6 @@ describe("doctor", () => {
     resolved: { claude: "/ud/bin/claude" },
     volliPath: "/ud/bin/volli",
   };
-
-  function doctorService(options: Partial<Parameters<typeof createAgentCommandService>[0]> = {}) {
-    ctx = openTestDb();
-    const service = createAgentCommandService({
-      db: ctx.db,
-      appVersion: "1.2.3",
-      now: () => 4242,
-      doctorFacts: async () => ({
-        binDir: "/ud/bin",
-        wrappers: { claude: "/ud/bin/claude" },
-        refused: [],
-        shellInitDir: "/ud/shell/zsh",
-        shellInitPresent: true,
-        shimPath: "/ud/bin/volli",
-        liveSessionIds: [],
-        reporting: [],
-        skillConflicts: [],
-      }),
-      ...options,
-    });
-    return (args: Record<string, unknown>) =>
-      service.execute({ v: 1, cmd: "doctor", args, ctx: { cwd: "/repo", env: ACTING_ENV } });
-  }
 
   it("returns a check per finding, with a summary", async () => {
     const response = await doctorService()(observation);
@@ -6770,16 +6780,6 @@ describe("doctor", () => {
       expect(await doctor(args)).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
     }
   });
-
-  /** The check with this id, or a helpful failure. */
-  async function checkFrom(args: Record<string, unknown>, id: string) {
-    const response = await doctorService()(args);
-    if (!response.ok) throw new Error("expected ok");
-    const { checks } = response.data as { checks: DoctorCheck[] };
-    const found = checks.find((check) => check.id === id);
-    if (found === undefined) throw new Error(`no ${id} check in ${checks.map((c) => c.id).join()}`);
-    return found;
-  }
 
   it("reports the same token-authenticated Session that can write as live, then an ended one", async () => {
     ctx = openTestDb();
@@ -7261,86 +7261,86 @@ describe("composeProjectBrief", () => {
   });
 });
 
-describe("model.list", () => {
-  /**
-   * The door under test with the seam faked out: `model.list` owns the bounded
-   * read, the auth-available filter, and the default report; the snapshot itself is
-   * `inspectPiModelAccess`'s contract, tested beside it in agent-runtime.
-   */
-  function modelListHarness(
-    overrides: {
-      snapshot?: ModelAccessSnapshot;
-      inspect?: AgentCommandServiceOptions["inspectModelAccess"];
-      withoutSeam?: boolean;
-      timeoutMs?: number;
-    } = {},
-  ) {
-    ctx = openTestDb();
-    const snapshot: ModelAccessSnapshot = overrides.snapshot ?? {
-      observedAt: 900,
-      providers: [
-        {
-          id: "anthropic",
-          label: "Anthropic",
-          state: "available",
-          accountLabel: null,
-          billingSource: "subscription",
-          recovery: null,
-          signIn: [],
-          hasStoredCredential: true,
-        },
-        {
-          id: "openai-codex",
-          label: "OpenAI Codex",
-          state: "authentication-required",
-          accountLabel: null,
-          billingSource: "unknown",
-          recovery: { kind: "sign-in" },
-          signIn: [],
-          hasStoredCredential: false,
-        },
-      ],
-      models: [
-        {
-          providerId: "anthropic",
-          modelId: "claude-opus-5",
-          label: "Claude Opus 5",
-          state: "available",
-          reasoningLevels: ["low", "medium", "high"],
-          acceptsImageInput: true,
-        },
-        {
-          providerId: "anthropic",
-          modelId: "claude-legacy",
-          label: "Claude Legacy",
-          state: "unavailable",
-          reasoningLevels: ["off"],
-          acceptsImageInput: true,
-        },
-        {
-          providerId: "openai-codex",
-          modelId: "gpt-5.6-terra",
-          label: "Terra",
-          state: "authentication-required",
-          reasoningLevels: ["medium", "high", "xhigh"],
-          acceptsImageInput: true,
-        },
-      ],
-    };
-    const service = createAgentCommandService({
-      db: ctx.db,
-      appVersion: "1.2.3",
-      now: () => 1_000,
-      ...(overrides.withoutSeam
-        ? {}
-        : { inspectModelAccess: overrides.inspect ?? (async () => snapshot) }),
-      ...(overrides.timeoutMs !== undefined ? { modelAccessTimeoutMs: overrides.timeoutMs } : {}),
-    });
-    const execute = (args: Record<string, unknown> = {}) =>
-      service.execute({ v: 1, cmd: "model.list", args, ctx: { cwd: "/outside", env: ACTING_ENV } });
-    return { execute };
-  }
+/**
+ * The door under test with the seam faked out: `model.list` owns the bounded
+ * read, the auth-available filter, and the default report; the snapshot itself is
+ * `inspectPiModelAccess`'s contract, tested beside it in agent-runtime.
+ */
+function modelListHarness(
+  overrides: {
+    snapshot?: ModelAccessSnapshot;
+    inspect?: AgentCommandServiceOptions["inspectModelAccess"];
+    withoutSeam?: boolean;
+    timeoutMs?: number;
+  } = {},
+) {
+  ctx = openTestDb();
+  const snapshot: ModelAccessSnapshot = overrides.snapshot ?? {
+    observedAt: 900,
+    providers: [
+      {
+        id: "anthropic",
+        label: "Anthropic",
+        state: "available",
+        accountLabel: null,
+        billingSource: "subscription",
+        recovery: null,
+        signIn: [],
+        hasStoredCredential: true,
+      },
+      {
+        id: "openai-codex",
+        label: "OpenAI Codex",
+        state: "authentication-required",
+        accountLabel: null,
+        billingSource: "unknown",
+        recovery: { kind: "sign-in" },
+        signIn: [],
+        hasStoredCredential: false,
+      },
+    ],
+    models: [
+      {
+        providerId: "anthropic",
+        modelId: "claude-opus-5",
+        label: "Claude Opus 5",
+        state: "available",
+        reasoningLevels: ["low", "medium", "high"],
+        acceptsImageInput: true,
+      },
+      {
+        providerId: "anthropic",
+        modelId: "claude-legacy",
+        label: "Claude Legacy",
+        state: "unavailable",
+        reasoningLevels: ["off"],
+        acceptsImageInput: true,
+      },
+      {
+        providerId: "openai-codex",
+        modelId: "gpt-5.6-terra",
+        label: "Terra",
+        state: "authentication-required",
+        reasoningLevels: ["medium", "high", "xhigh"],
+        acceptsImageInput: true,
+      },
+    ],
+  };
+  const service = createAgentCommandService({
+    db: ctx.db,
+    appVersion: "1.2.3",
+    now: () => 1_000,
+    ...(overrides.withoutSeam
+      ? {}
+      : { inspectModelAccess: overrides.inspect ?? (async () => snapshot) }),
+    ...(overrides.timeoutMs !== undefined ? { modelAccessTimeoutMs: overrides.timeoutMs } : {}),
+  });
+  const execute = (args: Record<string, unknown> = {}) =>
+    service.execute({ v: 1, cmd: "model.list", args, ctx: { cwd: "/outside", env: ACTING_ENV } });
+  return { execute };
+}
 
+describe("model.list", () => {
   /** The tier table an unconfigured profile reports: six rows, nothing resolved. */
   const UNSET_TIERS = [
     {
@@ -7812,19 +7812,19 @@ describe("reads over a session the socket did not start", () => {
   });
 });
 
-describe("worktree scope, told honestly to the agent (VC-98)", () => {
-  function projectFixture(): void {
-    insertProject(
-      ctx.db,
-      testProject({
-        id: "project-one",
-        name: "Volli Code",
-        path: "/repo/volli",
-        ticketPrefix: "VC",
-      }),
-    );
-  }
+function projectFixture(): void {
+  insertProject(
+    ctx.db,
+    testProject({
+      id: "project-one",
+      name: "Volli Code",
+      path: "/repo/volli",
+      ticketPrefix: "VC",
+    }),
+  );
+}
 
+describe("worktree scope, told honestly to the agent (VC-98)", () => {
   it("tells a worktree-scoped ticket that one is coming, not to move the board", async () => {
     ctx = openTestDb();
     projectFixture();
@@ -8012,30 +8012,30 @@ function metered(over: Partial<SessionUsage> = {}): SessionUsage {
   };
 }
 
+async function seeded(now: () => number = () => 10_000) {
+  ctx = openTestDb();
+  insertProject(
+    ctx.db,
+    testProject({ id: "p1", name: "Volli Code", path: "/repo/volli", ticketPrefix: "VC" }),
+  );
+  insertTicket(ctx.db, testTicket("p1", { id: "t1", ticketNumber: 1, usesWorktree: false }));
+  const sessionEngine = createTestSessionEngine(ctx.db, { now });
+  const service = createAgentCommandService({
+    db: ctx.db,
+    appVersion: "1.2.3",
+    now,
+    sessionEngine,
+  });
+  const execute = (args: Record<string, unknown>) =>
+    service.execute({ v: 1, cmd: "cost", args, ctx: { cwd: "/repo/volli", env: ACTING_ENV } });
+  return { sessionEngine, execute };
+}
+
 describe("volli cost", () => {
   const provenance = {
     source: { kind: "system" as const, id: "test", detail: null },
     venue: { id: "local", kind: "local" as const },
   };
-
-  async function seeded(now: () => number = () => 10_000) {
-    ctx = openTestDb();
-    insertProject(
-      ctx.db,
-      testProject({ id: "p1", name: "Volli Code", path: "/repo/volli", ticketPrefix: "VC" }),
-    );
-    insertTicket(ctx.db, testTicket("p1", { id: "t1", ticketNumber: 1, usesWorktree: false }));
-    const sessionEngine = createTestSessionEngine(ctx.db, { now });
-    const service = createAgentCommandService({
-      db: ctx.db,
-      appVersion: "1.2.3",
-      now,
-      sessionEngine,
-    });
-    const execute = (args: Record<string, unknown>) =>
-      service.execute({ v: 1, cmd: "cost", args, ctx: { cwd: "/repo/volli", env: ACTING_ENV } });
-    return { sessionEngine, execute };
-  }
 
   async function meteredSession(
     sessionEngine: SessionEngine,
@@ -8312,6 +8312,44 @@ describe("the ticket wake bus", () => {
   });
 });
 
+function liveLabelNames(): string[] {
+  return (
+    ctx.db.prepare("SELECT name FROM labels WHERE merged_into_id IS NULL ORDER BY name").all() as {
+      name: string;
+    }[]
+  ).map((row) => row.name);
+}
+
+async function projectWithDriftedLabels() {
+  ctx = openTestDb();
+  insertProject(
+    ctx.db,
+    testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+  );
+  let ticketNumber = 0;
+  const onMutation = vi.fn();
+  const service = createAgentCommandService({
+    db: ctx.db,
+    appVersion: "1.2.3",
+    now: () => 1_000,
+    newId: () => `ticket-${++ticketNumber}`,
+    onMutation,
+  });
+  const execute = (cmd: AgentRequest["cmd"], args: Record<string, unknown>) =>
+    service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: ACTING_ENV } });
+
+  await execute("ticket.create", { title: "One", labels: ["frontend"] });
+  await execute("ticket.create", { title: "Two", labels: ["front-end"] });
+  // Wears BOTH spellings: the merge must leave it wearing one label, not
+  // fail on the junction's primary key.
+  await execute("ticket.create", { title: "Three", labels: ["frontend", "front-end"] });
+  await execute("ticket.create", { title: "Four", labels: ["infra"] });
+  await execute("ticket.create", { title: "Archived", labels: ["front-end"] });
+  archiveTicketCommand(ctx.db, "ticket-5", { now: 1_000, actor: { kind: "user" } });
+  onMutation.mockClear();
+  return { execute, onMutation };
+}
+
 /**
  * `volli label merge` — the cleanup tool for a vocabulary that drifted
  * (VC-310).
@@ -8323,44 +8361,6 @@ describe("the ticket wake bus", () => {
  * `--dry-run` a caller must remember. The retired row remains as an alias.
  */
 describe("label merge", () => {
-  async function projectWithDriftedLabels() {
-    ctx = openTestDb();
-    insertProject(
-      ctx.db,
-      testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
-    );
-    let ticketNumber = 0;
-    const onMutation = vi.fn();
-    const service = createAgentCommandService({
-      db: ctx.db,
-      appVersion: "1.2.3",
-      now: () => 1_000,
-      newId: () => `ticket-${++ticketNumber}`,
-      onMutation,
-    });
-    const execute = (cmd: AgentRequest["cmd"], args: Record<string, unknown>) =>
-      service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: ACTING_ENV } });
-
-    await execute("ticket.create", { title: "One", labels: ["frontend"] });
-    await execute("ticket.create", { title: "Two", labels: ["front-end"] });
-    // Wears BOTH spellings: the merge must leave it wearing one label, not
-    // fail on the junction's primary key.
-    await execute("ticket.create", { title: "Three", labels: ["frontend", "front-end"] });
-    await execute("ticket.create", { title: "Four", labels: ["infra"] });
-    await execute("ticket.create", { title: "Archived", labels: ["front-end"] });
-    archiveTicketCommand(ctx.db, "ticket-5", { now: 1_000, actor: { kind: "user" } });
-    onMutation.mockClear();
-    return { execute, onMutation };
-  }
-
-  function liveLabelNames(): string[] {
-    return (
-      ctx.db
-        .prepare("SELECT name FROM labels WHERE merged_into_id IS NULL ORDER BY name")
-        .all() as { name: string }[]
-    ).map((row) => row.name);
-  }
-
   it("previews live and archived Tickets and writes or announces nothing", async () => {
     const { execute, onMutation } = await projectWithDriftedLabels();
 

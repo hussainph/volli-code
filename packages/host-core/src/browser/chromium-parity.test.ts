@@ -43,6 +43,30 @@ function percentile(values: number[], p: number): number {
 const round = (value: number): number => Math.round(value * 10) / 10;
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** The first frame taken after `since`, bounded. */
+const frameAfter = async (frames: Consumer, since: number): Promise<number> => {
+  const deadline = performance.now() + 2_000;
+  for (;;) {
+    const arrived = frames.arrivals.find((at) => at > since);
+    if (arrived !== undefined) return arrived;
+    if (performance.now() > deadline) throw new Error("no screencast frame followed the input");
+    await sleep(1);
+  }
+};
+
+/** Waits until no frame has come for `quietMs`: the page is at rest. */
+const quiet = async (frames: Consumer, quietMs = 150): Promise<void> => {
+  for (let i = 0; i < 100; i += 1) {
+    if (performance.now() - (frames.arrivals.at(-1) ?? 0) >= quietMs) return;
+    await sleep(quietMs / 3);
+  }
+};
+
+const summary = (samples: number[]) => ({
+  p50: round(percentile(samples, 0.5)),
+  p95: round(percentile(samples, 0.95)),
+});
+
 describe.skipIf(chromium === null)("Chromium viewer parity bench", () => {
   let fixture: BrowserFixture;
   let profileRoot: string;
@@ -98,30 +122,6 @@ describe.skipIf(chromium === null)("Chromium viewer parity bench", () => {
       if (rest) await quiet(frames);
       return { tabId: tab.tabId, frames };
     };
-
-    /** The first frame taken after `since`, bounded. */
-    const frameAfter = async (frames: Consumer, since: number): Promise<number> => {
-      const deadline = performance.now() + 2_000;
-      for (;;) {
-        const arrived = frames.arrivals.find((at) => at > since);
-        if (arrived !== undefined) return arrived;
-        if (performance.now() > deadline) throw new Error("no screencast frame followed the input");
-        await sleep(1);
-      }
-    };
-
-    /** Waits until no frame has come for `quietMs`: the page is at rest. */
-    const quiet = async (frames: Consumer, quietMs = 150): Promise<void> => {
-      for (let i = 0; i < 100; i += 1) {
-        if (performance.now() - (frames.arrivals.at(-1) ?? 0) >= quietMs) return;
-        await sleep(quietMs / 3);
-      }
-    };
-
-    const summary = (samples: number[]) => ({
-      p50: round(percentile(samples, 0.5)),
-      p95: round(percentile(samples, 0.95)),
-    });
 
     it("measures click and typing input to frame", async () => {
       const { tabId, frames } = await show("/latency");

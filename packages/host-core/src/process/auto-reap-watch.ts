@@ -88,10 +88,11 @@ export function createAutoReapWatch(
     return run;
   };
 
+  const timedTick = () => withMainSpan({ door: "timer", operation: "orphan-auto-reap" }, tick);
+
   return {
     start() {
       if (interval !== null) return;
-      const timedTick = () => withMainSpan({ door: "timer", operation: "orphan-auto-reap" }, tick);
       first = setTimeout(timedTick, firstDelayMs);
       interval = setInterval(timedTick, intervalMs);
       // Neither timer may hold the app open: this is housekeeping, and an

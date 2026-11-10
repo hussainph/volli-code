@@ -76,6 +76,8 @@ function door(fields: Record<string, string>, ms: number): void {
 
 const stalls = () => records.filter((record) => record.msg === "main stall");
 
+const loads = () => records.filter((record) => record.msg === "main stall load");
+
 describe("the main stall monitor", () => {
   it("defaults to a 200 ms threshold, an hourly roll-up and the performance clock", () => {
     expect(MAIN_STALL_DEFAULTS).toMatchObject({ thresholdMs: 200, summaryIntervalMs: 3_600_000 });
@@ -469,7 +471,6 @@ describe("the main stall monitor", () => {
     door({ door: "ipc", operation: "a" }, 200);
     door({ door: "agent-socket", operation: "b" }, 600);
     blockThenTick(0);
-    const loads = () => records.filter((record) => record.msg === "main stall load");
     expect(loads()).toEqual([
       expect.objectContaining({
         level: "info",

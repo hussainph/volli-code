@@ -1029,13 +1029,13 @@ describe("refusals", () => {
   });
 });
 
-describe("verifyMigrationExport", () => {
-  async function exported() {
-    const { outDir, manifest } = await exportMigrationSnapshot(options());
-    const chunk = manifest.streams.find((stream) => stream.name === "tickets")!.chunks[0]!;
-    return { outDir, manifest, chunk };
-  }
+async function exported() {
+  const { outDir, manifest } = await exportMigrationSnapshot(options());
+  const chunk = manifest.streams.find((stream) => stream.name === "tickets")!.chunks[0]!;
+  return { outDir, manifest, chunk };
+}
 
+describe("verifyMigrationExport", () => {
   it("names a tampered chunk", async () => {
     const { outDir, chunk } = await exported();
     const path = join(outDir, chunk.file);

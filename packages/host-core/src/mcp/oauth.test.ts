@@ -160,6 +160,21 @@ async function signedInServer(h: ReturnType<typeof harness>, server: McpServerDr
   return saved.server;
 }
 
+function freezeP1(): void {
+  ctx.db.exec(`
+        INSERT INTO cloud_move_queues VALUES ('q', 'u', 'w', 'r', 1, 0, 'pending', NULL, 'running', 1, 1);
+        INSERT INTO cloud_moves (move_id, queue_id, project_id, position, user_id, workspace_id,
+          runner_id, state, app_version, mapper_version, created_at, updated_at)
+        VALUES ('m', 'q', 'p1', 0, 'u', 'w', 'r', 'frozen', 'test', 3, 1, 1);
+      `);
+}
+
+/** The person approves in the browser, after a move froze the project. */
+const frozenInTheBrowser = async (url: string) => {
+  freezeP1();
+  await approveInBrowser(url);
+};
+
 describe("signing in to a remote MCP server", () => {
   it("signs in with dynamic client registration and PKCE, storing tokens only in the user-only file", async () => {
     fixture = await startOAuthFixture();
@@ -481,21 +496,6 @@ describe("signing in to a remote MCP server", () => {
   });
 
   describe("a project a move freezes (VC-1016)", () => {
-    function freezeP1(): void {
-      ctx.db.exec(`
-        INSERT INTO cloud_move_queues VALUES ('q', 'u', 'w', 'r', 1, 0, 'pending', NULL, 'running', 1, 1);
-        INSERT INTO cloud_moves (move_id, queue_id, project_id, position, user_id, workspace_id,
-          runner_id, state, app_version, mapper_version, created_at, updated_at)
-        VALUES ('m', 'q', 'p1', 0, 'u', 'w', 'r', 'frozen', 'test', 3, 1, 1);
-      `);
-    }
-
-    /** The person approves in the browser, after a move froze the project. */
-    const frozenInTheBrowser = async (url: string) => {
-      freezeP1();
-      await approveInBrowser(url);
-    };
-
     it("stores no tokens for a saved server when the move lands while the person is in the browser", async () => {
       fixture = await startOAuthFixture();
       const h = harness({ browser: frozenInTheBrowser });

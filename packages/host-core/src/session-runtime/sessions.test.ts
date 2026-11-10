@@ -77,6 +77,18 @@ function sessions(
   };
 }
 
+const timedOut = (request: SessionRuntimeCommandRequest): SessionRuntimeCommandResult => {
+  const rejected = result(request, "rejected");
+  return {
+    ...rejected,
+    receipt: {
+      ...rejected.receipt!,
+      code: "queue_admission_timeout",
+      detail: "queue_admission_timeout: executor attach did not finish.",
+    } as SessionRuntimeCommandResult["receipt"],
+  };
+};
+
 describe("Sessions", () => {
   it.each([
     { actor: undefined, expected: { kind: "user" } },
@@ -1493,18 +1505,6 @@ describe("Sessions", () => {
   });
 
   describe("a start whose attach outlasted its admission bound (VC-1099)", () => {
-    const timedOut = (request: SessionRuntimeCommandRequest): SessionRuntimeCommandResult => {
-      const rejected = result(request, "rejected");
-      return {
-        ...rejected,
-        receipt: {
-          ...rejected.receipt!,
-          code: "queue_admission_timeout",
-          detail: "queue_admission_timeout: executor attach did not finish.",
-        } as SessionRuntimeCommandResult["receipt"],
-      };
-    };
-
     it("retries the attach once, under a command derived from the start's", async () => {
       const commands: SessionRuntimeCommandRequest[] = [];
       const { sessions: door } = sessions({

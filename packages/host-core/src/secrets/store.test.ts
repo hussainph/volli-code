@@ -727,25 +727,25 @@ describe("validation and non-disclosure", () => {
   });
 });
 
-describe("SecretStore when stored credentials are locked (VC-641)", () => {
-  function lockedCodec(): SecretKeyPort {
-    const inner = codec();
-    let locked = false;
-    return {
-      ...inner,
-      decryptString: vi.fn((value: Buffer) => {
-        if (locked) throw new SecretKeyUnavailableError("unavailable", "The keychain is locked.");
-        return inner.decryptString(value);
-      }),
-      lock: () => {
-        locked = true;
-      },
-      unlock: () => {
-        locked = false;
-      },
-    } as SecretKeyPort & { lock(): void; unlock(): void };
-  }
+function lockedCodec(): SecretKeyPort {
+  const inner = codec();
+  let locked = false;
+  return {
+    ...inner,
+    decryptString: vi.fn((value: Buffer) => {
+      if (locked) throw new SecretKeyUnavailableError("unavailable", "The keychain is locked.");
+      return inner.decryptString(value);
+    }),
+    lock: () => {
+      locked = true;
+    },
+    unlock: () => {
+      locked = false;
+    },
+  } as SecretKeyPort & { lock(): void; unlock(): void };
+}
 
+describe("SecretStore when stored credentials are locked (VC-641)", () => {
   it("reports empty with no sealed file and ready once something is sealed", () => {
     expect(store.status()).toEqual({ state: "empty", reason: null, unavailable: [] });
     expect(store.problem()).toBeNull();

@@ -226,6 +226,18 @@ const noticeIntent = (value: ReturnType<typeof backendNotice>) => ({
   compose: vi.fn(() => value),
 });
 
+function owned() {
+  const f = fixture();
+  const put = vi.fn(async (value: unknown) => value);
+  // Before construction: the scoped outbox copies the raw one's methods.
+  Object.assign(f.outbox, { put, pending: async () => [] });
+  const owner = createSessionRuntimeLifecycle({
+    ...f.options,
+    ownsSession: (id) => id === "mine",
+  });
+  return { f, put, owner };
+}
+
 describe("Session lifecycle port ordering (replaces desktop source scans)", () => {
   it("holds downgraded queues before boot event writes and explains them with existing Attention", async () => {
     const f = fixture();
@@ -850,18 +862,6 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
   });
 
   describe("backend-queued host notices (VC-887)", () => {
-    function owned() {
-      const f = fixture();
-      const put = vi.fn(async (value: unknown) => value);
-      // Before construction: the scoped outbox copies the raw one's methods.
-      Object.assign(f.outbox, { put, pending: async () => [] });
-      const owner = createSessionRuntimeLifecycle({
-        ...f.options,
-        ownsSession: (id) => id === "mine",
-      });
-      return { f, put, owner };
-    }
-
     it("commits a never-held id, then delivers it behind recovery", async () => {
       const { f, put, owner } = owned();
       const gate = deferred();

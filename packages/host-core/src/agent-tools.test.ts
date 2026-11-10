@@ -49,20 +49,20 @@ afterEach(async () => {
   root = undefined;
 });
 
-describe("resolveOnPath", () => {
-  /** Two bin dirs, each holding an executable named `command`. */
-  async function twoBins(command: string): Promise<{ first: string; second: string }> {
-    root = await mkdtemp(join(tmpdir(), "volli-resolve-"));
-    const first = join(root, "first");
-    const second = join(root, "second");
-    for (const dir of [first, second]) {
-      await mkdir(dir);
-      await writeFile(join(dir, command), "#!/bin/sh\n");
-      await chmod(join(dir, command), 0o755);
-    }
-    return { first, second };
+/** Two bin dirs, each holding an executable named `command`. */
+async function twoBins(command: string): Promise<{ first: string; second: string }> {
+  root = await mkdtemp(join(tmpdir(), "volli-resolve-"));
+  const first = join(root, "first");
+  const second = join(root, "second");
+  for (const dir of [first, second]) {
+    await mkdir(dir);
+    await writeFile(join(dir, command), "#!/bin/sh\n");
+    await chmod(join(dir, command), 0o755);
   }
+  return { first, second };
+}
 
+describe("resolveOnPath", () => {
   it("answers with the first executable of that name, as a shell would", async () => {
     const { first, second } = await twoBins("my-harness");
 
@@ -98,17 +98,17 @@ describe("detectInstalledHarnesses", () => {
   });
 });
 
-describe("detectHarnesses", () => {
-  /** A bin directory holding one executable named after a first-class harness. */
-  async function binWith(command: string): Promise<string> {
-    root = await mkdtemp(join(tmpdir(), "volli-detect-login-"));
-    const bin = join(root, "bin");
-    await mkdir(bin);
-    await writeFile(join(bin, command), "#!/bin/sh\n");
-    await chmod(join(bin, command), 0o755);
-    return bin;
-  }
+/** A bin directory holding one executable named after a first-class harness. */
+async function binWith(command: string): Promise<string> {
+  root = await mkdtemp(join(tmpdir(), "volli-detect-login-"));
+  const bin = join(root, "bin");
+  await mkdir(bin);
+  await writeFile(join(bin, command), "#!/bin/sh\n");
+  await chmod(join(bin, command), 0o755);
+  return bin;
+}
 
+describe("detectHarnesses", () => {
   it("finds a harness on the login shell's PATH that the app's own PATH cannot see", async () => {
     const bin = await binWith("codex");
     // What a Finder or Dock launch actually inherits: launchd's PATH, which

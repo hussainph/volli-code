@@ -717,23 +717,24 @@ function failedSweep(
   return { result, failures, onRecovered, onError };
 }
 
+const lostSession = () => session("s", [attachment({ id: "pi-1", adapterId: "pi" })], true);
+
 // VC-926: a reconcile can fail after the executor rebuilt the binding and
 // replayed how the lost turn ended. The listing predates that replay, so the
 // sweep reads the ledger again before it decides the turn is lost.
 describe("closeStaleAttachments → a reconcile that failed (VC-926)", () => {
-  const lost = () => session("s", [attachment({ id: "pi-1", adapterId: "pi" })], true);
   const conflict = Object.assign(new Error("Command c already has a terminal receipt"), {
     name: "SessionEngineConflictError",
   });
 
   it("keeps a rebuilt attachment whose executor already ended the turn, for restart resume", async () => {
     const target = recorder(
-      { p: [lost()] },
+      { p: [lostSession()] },
       undefined,
       async () => {
         throw conflict;
       },
-      async () => ({ ...lost(), turnActive: false }),
+      async () => ({ ...lostSession(), turnActive: false }),
     );
     const outcome = failedSweep(target, (id) => id === "pi-1");
     await expect(outcome.result).resolves.toBe(0);
@@ -755,7 +756,7 @@ describe("closeStaleAttachments → a reconcile that failed (VC-926)", () => {
   });
 
   it("closes a rebuilt attachment whose turn is still open, saying why", async () => {
-    const target = recorder({ p: [lost()] }, undefined, async () => {
+    const target = recorder({ p: [lostSession()] }, undefined, async () => {
       throw conflict;
     });
     const outcome = failedSweep(target, () => true);
@@ -779,12 +780,12 @@ describe("closeStaleAttachments → a reconcile that failed (VC-926)", () => {
     });
     // Whatever the ledger says now, an executor that is not live recovered nothing.
     const target = recorder(
-      { p: [lost()] },
+      { p: [lostSession()] },
       undefined,
       async () => {
         throw timeout;
       },
-      async () => ({ ...lost(), turnActive: false }),
+      async () => ({ ...lostSession(), turnActive: false }),
     );
     const outcome = failedSweep(target, () => false);
     await expect(outcome.result).resolves.toBe(1);
@@ -812,12 +813,12 @@ describe("closeStaleAttachments → a reconcile that failed (VC-926)", () => {
 
   it("counts every failure as unrebuildable when the host cannot say whether a binding is live", async () => {
     const target = recorder(
-      { p: [lost()] },
+      { p: [lostSession()] },
       undefined,
       async () => {
         throw conflict;
       },
-      async () => ({ ...lost(), turnActive: false }),
+      async () => ({ ...lostSession(), turnActive: false }),
     );
     const outcome = failedSweep(target, undefined);
     await expect(outcome.result).resolves.toBe(1);
@@ -832,14 +833,14 @@ describe("closeStaleAttachments → a reconcile that failed (VC-926)", () => {
     [
       "closed the attachment",
       async () => ({
-        ...lost(),
+        ...lostSession(),
         turnActive: false,
         attachments: [attachment({ id: "pi-1", adapterId: "pi", status: "closed" as const })],
       }),
     ],
   ])("treats the turn as still open when the Session %s", async (_case, current) => {
     const target = recorder(
-      { p: [lost()] },
+      { p: [lostSession()] },
       undefined,
       async () => {
         throw conflict;
@@ -858,14 +859,14 @@ describe("closeStaleAttachments → a reconcile that failed (VC-926)", () => {
   it("starts nothing more when the host closes while it rereads the ledger", async () => {
     let closing = false;
     const target = recorder(
-      { p: [lost()] },
+      { p: [lostSession()] },
       undefined,
       async () => {
         throw conflict;
       },
       async () => {
         closing = true;
-        return lost();
+        return lostSession();
       },
     );
     const failures: BootRecoveryFailure[] = [];
@@ -901,10 +902,11 @@ function recoverySweep(target: Recorder, shouldStop?: () => boolean) {
   });
   return { result, onRecovered };
 }
-describe("closeStaleAttachments → the turns a restart resume may continue (VC-450)", () => {
-  const pi = (id: string, status: BootRecoveryAttachment["status"] = "open") =>
-    attachment({ id, adapterId: "pi", status });
 
+const pi = (id: string, status: BootRecoveryAttachment["status"] = "open") =>
+  attachment({ id, adapterId: "pi", status });
+
+describe("closeStaleAttachments → the turns a restart resume may continue (VC-450)", () => {
   it("names every turn it rebuilt, and when the lost process was last alive", async () => {
     const target = recorder(
       {

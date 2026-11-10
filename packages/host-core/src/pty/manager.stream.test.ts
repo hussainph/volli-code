@@ -388,6 +388,41 @@ describe("ownership by client id (VC-509, VC-560)", () => {
   });
 });
 
+async function runnerOf(hostRunner: RunnerIdentity | undefined, venue?: RunnerIdentity) {
+  const host: PtyManagerPorts = {
+    ...(hostRunner === undefined ? {} : { venue: hostRunner }),
+    events: { publish: () => {} },
+    worktreeDeps: () => {
+      throw new Error("a Board Session never asks for a worktree");
+    },
+    ensureHarnessWorkspaceFiles: async () => ({ refused: [] }),
+  };
+  const engine = createTestSessionEngine(testDb.db);
+  const built = new PtyManager({
+    host,
+    db: testDb.db,
+    dbError: "",
+    sessionEngine: engine,
+    parkConfig: parkConfigFromEnv({ VOLLI_PARK_DISABLE: "1" }, process.platform),
+    ...(venue === undefined ? {} : { venue }),
+  });
+  spawn.mockReturnValueOnce(makeFakePty());
+  const created = await built.create(makeClient("v").sink, {
+    workspaceId: "w",
+    cwd: root,
+    cols: 80,
+    rows: 24,
+  });
+  if (!created.ok) throw new Error(created.error);
+  const projection = await engine.getSession({ sessionId: created.sessionId });
+  const events = await engine.listEvents({ sessionId: created.sessionId });
+  built.killAll();
+  return {
+    attachment: projection!.attachments[0]!.venue,
+    events: [...new Set(events.map((event) => event.provenance.venue?.id))],
+  };
+}
+
 describe("construction options (VC-627)", () => {
   it("keeps the type-level construction shape", () => {
     expect([requiredOptionKeys, engineStaysNullable, oneOptionsObject]).toEqual([true, true, true]);
@@ -416,41 +451,6 @@ describe("construction options (VC-627)", () => {
     ).toEqual({ ok: false, error: "database failed to open" });
     expect(spawn).not.toHaveBeenCalled();
   });
-
-  async function runnerOf(hostRunner: RunnerIdentity | undefined, venue?: RunnerIdentity) {
-    const host: PtyManagerPorts = {
-      ...(hostRunner === undefined ? {} : { venue: hostRunner }),
-      events: { publish: () => {} },
-      worktreeDeps: () => {
-        throw new Error("a Board Session never asks for a worktree");
-      },
-      ensureHarnessWorkspaceFiles: async () => ({ refused: [] }),
-    };
-    const engine = createTestSessionEngine(testDb.db);
-    const built = new PtyManager({
-      host,
-      db: testDb.db,
-      dbError: "",
-      sessionEngine: engine,
-      parkConfig: parkConfigFromEnv({ VOLLI_PARK_DISABLE: "1" }, process.platform),
-      ...(venue === undefined ? {} : { venue }),
-    });
-    spawn.mockReturnValueOnce(makeFakePty());
-    const created = await built.create(makeClient("v").sink, {
-      workspaceId: "w",
-      cwd: root,
-      cols: 80,
-      rows: 24,
-    });
-    if (!created.ok) throw new Error(created.error);
-    const projection = await engine.getSession({ sessionId: created.sessionId });
-    const events = await engine.listEvents({ sessionId: created.sessionId });
-    built.killAll();
-    return {
-      attachment: projection!.attachments[0]!.venue,
-      events: [...new Set(events.map((event) => event.provenance.venue?.id))],
-    };
-  }
 
   it("records an explicit venue option over the host's", async () => {
     expect(

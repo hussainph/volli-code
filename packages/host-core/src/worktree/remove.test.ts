@@ -552,22 +552,22 @@ function forgottenGit(unregistered: string) {
   });
 }
 
+/** A stranded checkout inside the container the project owns, with files in it. */
+function seedStranded(home: string): string {
+  const container = join(home, ".volli", "worktrees", projectContainerName("/repo", "proj-1"));
+  const wt = join(container, "VC-1-stranded");
+  mkdirSync(wt, { recursive: true });
+  writeFileSync(join(wt, "note.txt"), "work");
+  seed(wt);
+  return wt;
+}
+
 // VC-113: the state a half-finished removal leaves behind — the checkout is
 // still on disk, but git has forgotten it. `git worktree remove` refuses such a
 // path in BOTH modes, so before this fallback the ticket could not be cleared
 // from anywhere in the app: not from the rail, not from Settings (which skips
 // DB-known paths), not by recreating (reconcile refuses to write over it).
 describe("remove — a directory git has forgotten", () => {
-  /** A stranded checkout inside the container the project owns, with files in it. */
-  function seedStranded(home: string): string {
-    const container = join(home, ".volli", "worktrees", projectContainerName("/repo", "proj-1"));
-    const wt = join(container, "VC-1-stranded");
-    mkdirSync(wt, { recursive: true });
-    writeFileSync(join(wt, "note.txt"), "work");
-    seed(wt);
-    return wt;
-  }
-
   it("deletes the folder itself once the user confirms, and clears the stamp", async () => {
     const home = tempDir("home");
     const wt = seedStranded(home);

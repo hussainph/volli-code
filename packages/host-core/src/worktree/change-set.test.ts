@@ -601,6 +601,15 @@ describe("changeSetSnapshot — unified outcome", () => {
   });
 });
 
+const snapshotWith = async (count: number) => {
+  const { gitAsync } = scriptedChangeSetGit({
+    status: z(...Array.from({ length: count }, (_, i) => `? f${i}.txt`)),
+  });
+  const result = await changeSetSnapshot(gitAsync, { worktreePath: "/wt", baseBranch: "main" });
+  expect(result.ok).toBe(true);
+  return result.ok ? result.value.revision : "";
+};
+
 describe("changeSetSnapshot — file cap", () => {
   it("keeps the whole list when it fits under the cap", async () => {
     const paths = Array.from({ length: 3 }, (_, i) => `f${i}.txt`);
@@ -644,15 +653,6 @@ describe("changeSetSnapshot — file cap", () => {
   });
 
   it("moves the revision when files grow past the cap", async () => {
-    const snapshotWith = async (count: number) => {
-      const { gitAsync } = scriptedChangeSetGit({
-        status: z(...Array.from({ length: count }, (_, i) => `? f${i}.txt`)),
-      });
-      const result = await changeSetSnapshot(gitAsync, { worktreePath: "/wt", baseBranch: "main" });
-      expect(result.ok).toBe(true);
-      return result.ok ? result.value.revision : "";
-    };
-
     // Both snapshots carry an identical capped `files`; only the hidden tail
     // differs, so without the total in the fingerprint this would read as "no
     // change" and the list would never refresh.

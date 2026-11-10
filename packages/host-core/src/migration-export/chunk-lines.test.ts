@@ -20,20 +20,20 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
-describe("scanChunkLines", () => {
-  const scan = async (content: Buffer | string, fail?: number) => {
-    const path = join(root, "chunk.ndjson");
-    writeFileSync(path, content);
-    const lines: string[] = [];
-    const scanned = await scanChunkLines(path, Buffer.byteLength(content), (index) =>
-      wholeLine((text) => {
-        if (index === fail) throw new Error(`line ${index}`);
-        lines.push(text);
-      }),
-    );
-    return { ...scanned, lines: scanned.lines, texts: lines };
-  };
+const scan = async (content: Buffer | string, fail?: number) => {
+  const path = join(root, "chunk.ndjson");
+  writeFileSync(path, content);
+  const lines: string[] = [];
+  const scanned = await scanChunkLines(path, Buffer.byteLength(content), (index) =>
+    wholeLine((text) => {
+      if (index === fail) throw new Error(`line ${index}`);
+      lines.push(text);
+    }),
+  );
+  return { ...scanned, lines: scanned.lines, texts: lines };
+};
 
+describe("scanChunkLines", () => {
   it("hands on every line, the empty ones and the ones across blocks", async () => {
     const long = "x".repeat(2 * MiB + 3);
     const content = `a\n\n${long}\nb\n`;

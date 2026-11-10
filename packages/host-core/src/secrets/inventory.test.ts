@@ -571,15 +571,15 @@ describe("SealedInventory", () => {
   });
 });
 
-describe("SealedInventory across processes", () => {
-  const command = (kind: string, extra: Record<string, unknown>) => ({
-    kind,
-    path,
-    key: keyPath,
-    family: "web-search",
-    ...extra,
-  });
+const command = (kind: string, extra: Record<string, unknown>) => ({
+  kind,
+  path,
+  key: keyPath,
+  family: "web-search",
+  ...extra,
+});
 
+describe("SealedInventory across processes", () => {
   it("merges concurrent writers' records: no update is lost", async () => {
     const parent = open();
     parent.put("web-search", { provider: "parent" }, "p");

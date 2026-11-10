@@ -157,27 +157,27 @@ describe("planProjectCreate", () => {
   });
 });
 
+function removedProject(path: string): void {
+  insertProject(
+    ctx.db,
+    testProject({ id: "old", name: "Old", path, ticketPrefix: "OL", baseBranch: "trunk" }),
+  );
+  insertTicket(ctx.db, testTicket("old", { id: "t1", ticketNumber: 4 }));
+  ctx.db.prepare("UPDATE projects SET next_ticket_number = 5 WHERE id = 'old'").run();
+  ctx.db
+    .prepare(
+      "INSERT INTO sessions (id, project_id, ticket_id, title, created_at) VALUES ('s1', 'old', 't1', 's1', 1)",
+    )
+    .run();
+  insertProject(ctx.db, testProject({ id: "other", path: "/other", ticketPrefix: "OT" }));
+  detachProject(ctx.db, "old", 3);
+}
+
 /**
  * VC-822: removing a project detaches it, so adding its folder again finds the
  * same row and puts it back on the rail with everything it held.
  */
 describe("re-adding a removed project's folder", () => {
-  function removedProject(path: string): void {
-    insertProject(
-      ctx.db,
-      testProject({ id: "old", name: "Old", path, ticketPrefix: "OL", baseBranch: "trunk" }),
-    );
-    insertTicket(ctx.db, testTicket("old", { id: "t1", ticketNumber: 4 }));
-    ctx.db.prepare("UPDATE projects SET next_ticket_number = 5 WHERE id = 'old'").run();
-    ctx.db
-      .prepare(
-        "INSERT INTO sessions (id, project_id, ticket_id, title, created_at) VALUES ('s1', 'old', 't1', 's1', 1)",
-      )
-      .run();
-    insertProject(ctx.db, testProject({ id: "other", path: "/other", ticketPrefix: "OT" }));
-    detachProject(ctx.db, "old", 3);
-  }
-
   it("re-attaches the same project, its tickets, Sessions and counter included", async () => {
     const path = dir("old");
     removedProject(path);

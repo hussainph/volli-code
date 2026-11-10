@@ -864,6 +864,38 @@ describe("createAgentBrowserPort find (VC-364)", () => {
   });
 });
 
+/**
+ * A port over one tab whose page answers as `page` says. `onClick` runs when
+ * a click's mouse-up reaches the page — the moment a real page reacts.
+ */
+function over(
+  page: { tree: () => object; hang?: string },
+  onClick: (tabs: Map<string, BrowserTabState>) => void = () => undefined,
+  onPreviewFrame?: CdpTransport["onPreviewFrame"],
+) {
+  const fake = fakeHost([state({ tabId: "mine", createdBy: "session" })]);
+  const browser = createAgentBrowserPort({
+    host: fake.host,
+    scope: { projectId: "p1", ticketId: "t1" },
+    session: ME,
+    transportFor: () => ({
+      send: async (method, params) => {
+        if (method === page.hang) return await new Promise<never>(() => undefined);
+        if (method === "Accessibility.getFullAXTree") return page.tree();
+        if (method === "DOM.getBoxModel") return BUTTON_BOX;
+        if ((params as { type?: string } | undefined)?.type === "mouseReleased") {
+          onClick(fake.tabs);
+        }
+        return {};
+      },
+      ...(onPreviewFrame === undefined ? {} : { onPreviewFrame }),
+    }),
+    waitForLoad: async () => undefined,
+    holdAwake: () => () => undefined,
+  });
+  return { port: browser, tabs: fake.tabs, navigated: fake.navigated };
+}
+
 describe("createAgentBrowserPort empty pages, timeouts and act evidence (VC-277)", () => {
   /** A blank document: Chromium's root and nothing under it. */
   const EMPTY_TREE = {
@@ -878,38 +910,6 @@ describe("createAgentBrowserPort empty pages, timeouts and act evidence (VC-277)
       { nodeId: "3", ignored: false, role: { value: "dialog" }, name: { value: "Composer" } },
     ],
   };
-
-  /**
-   * A port over one tab whose page answers as `page` says. `onClick` runs when
-   * a click's mouse-up reaches the page — the moment a real page reacts.
-   */
-  function over(
-    page: { tree: () => object; hang?: string },
-    onClick: (tabs: Map<string, BrowserTabState>) => void = () => undefined,
-    onPreviewFrame?: CdpTransport["onPreviewFrame"],
-  ) {
-    const fake = fakeHost([state({ tabId: "mine", createdBy: "session" })]);
-    const browser = createAgentBrowserPort({
-      host: fake.host,
-      scope: { projectId: "p1", ticketId: "t1" },
-      session: ME,
-      transportFor: () => ({
-        send: async (method, params) => {
-          if (method === page.hang) return await new Promise<never>(() => undefined);
-          if (method === "Accessibility.getFullAXTree") return page.tree();
-          if (method === "DOM.getBoxModel") return BUTTON_BOX;
-          if ((params as { type?: string } | undefined)?.type === "mouseReleased") {
-            onClick(fake.tabs);
-          }
-          return {};
-        },
-        ...(onPreviewFrame === undefined ? {} : { onPreviewFrame }),
-      }),
-      waitForLoad: async () => undefined,
-      holdAwake: () => () => undefined,
-    });
-    return { port: browser, tabs: fake.tabs, navigated: fake.navigated };
-  }
 
   it("says a page with no accessible structure is empty, on a read and on a navigation", async () => {
     const { port: blank } = over({ tree: () => EMPTY_TREE });
@@ -1179,30 +1179,30 @@ describe("createAgentBrowserPort empty pages, timeouts and act evidence (VC-277)
   });
 });
 
-describe("Browser port concurrent calls and teardown", () => {
-  function harness() {
-    const host = fakeHost([state({ tabId: "one" }), state({ tabId: "two" })]).host;
-    const ready = Promise.withResolvers<void>();
-    const disposed = vi.fn();
-    const base = transportFor();
-    const send = vi.fn(base.send);
-    const createTransport = vi.fn(() => ({
-      ...base,
-      send,
-      ensureReady: () => ready.promise,
-      dispose: disposed,
-    }));
-    const browser = createAgentBrowserPort({
-      host,
-      scope: { projectId: "p1", ticketId: null },
-      session: ME,
-      transportFor: createTransport,
-      waitForLoad: async () => undefined,
-      holdAwake: () => () => undefined,
-    });
-    return { port: browser, ready, disposed, createTransport, send, host };
-  }
+function concurrentHarness() {
+  const host = fakeHost([state({ tabId: "one" }), state({ tabId: "two" })]).host;
+  const ready = Promise.withResolvers<void>();
+  const disposed = vi.fn();
+  const base = transportFor();
+  const send = vi.fn(base.send);
+  const createTransport = vi.fn(() => ({
+    ...base,
+    send,
+    ensureReady: () => ready.promise,
+    dispose: disposed,
+  }));
+  const browser = createAgentBrowserPort({
+    host,
+    scope: { projectId: "p1", ticketId: null },
+    session: ME,
+    transportFor: createTransport,
+    waitForLoad: async () => undefined,
+    holdAwake: () => () => undefined,
+  });
+  return { port: browser, ready, disposed, createTransport, send, host };
+}
 
+describe("Browser port concurrent calls and teardown", () => {
   it("reports the live nonzero generation on the first debugger-enable timeout", async () => {
     vi.useFakeTimers();
     try {
@@ -1238,7 +1238,7 @@ describe("Browser port concurrent calls and teardown", () => {
   });
 
   it("serializes one tab's snapshots through one controller and one ref ledger", async () => {
-    const h = harness();
+    const h = concurrentHarness();
     const first = h.port.snapshot({ tabId: "one", signal });
     const second = h.port.snapshot({ tabId: "one", signal });
     await vi.waitFor(() => expect(h.createTransport).toHaveBeenCalled());
@@ -1252,7 +1252,7 @@ describe("Browser port concurrent calls and teardown", () => {
   });
 
   it("keeps different tabs concurrent", async () => {
-    const h = harness();
+    const h = concurrentHarness();
     const first = h.port.snapshot({ tabId: "one", signal });
     const second = h.port.snapshot({ tabId: "two", signal });
     await vi.waitFor(() => expect(h.createTransport).toHaveBeenCalledTimes(2));
@@ -1262,7 +1262,7 @@ describe("Browser port concurrent calls and teardown", () => {
   });
 
   it("withdraws queued work without letting the next call jump the running call", async () => {
-    const h = harness();
+    const h = concurrentHarness();
     const first = h.port.snapshot({ tabId: "one", signal });
     const cancelled = new AbortController();
     const second = h.port.snapshot({ tabId: "one", signal: cancelled.signal });
@@ -1584,7 +1584,7 @@ describe("Browser port concurrent calls and teardown", () => {
   });
 
   it("disposal withdraws readiness and prevents later calls resurrecting the port", async () => {
-    const h = harness();
+    const h = concurrentHarness();
     const first = h.port.snapshot({ tabId: "one", signal });
     const rejected = expect(first).rejects.toThrow(/disposed/i);
     await vi.waitFor(() => expect(h.createTransport).toHaveBeenCalledTimes(1));
@@ -1941,31 +1941,31 @@ describe("createAgentBrowserPort holds (VC-239)", () => {
   });
 });
 
-describe("createAgentBrowserPort traces (VC-453)", () => {
-  /** A port over the fake host with the trace door wired, recording what it hears. */
-  function tracing(
-    tabs: BrowserTabState[],
-    options: { declineCapture?: boolean } = {},
-    override: Partial<AgentBrowserBackend> = {},
-  ) {
-    const fake = fakeHost(tabs, options);
-    const steps: BrowserTraceStepInput[] = [];
-    const host: AgentBrowserBackend = {
-      ...fake.host,
-      ...override,
-      recordTraceStep: (step) => steps.push(step),
-    };
-    const traced = createAgentBrowserPort({
-      host,
-      scope: { projectId: "p1", ticketId: "t1" },
-      session: ME,
-      transportFor,
-      waitForLoad: async () => {},
-      holdAwake: () => () => {},
-    });
-    return { port: traced, steps, fake };
-  }
+/** A port over the fake host with the trace door wired, recording what it hears. */
+function tracing(
+  tabs: BrowserTabState[],
+  options: { declineCapture?: boolean } = {},
+  override: Partial<AgentBrowserBackend> = {},
+) {
+  const fake = fakeHost(tabs, options);
+  const steps: BrowserTraceStepInput[] = [];
+  const host: AgentBrowserBackend = {
+    ...fake.host,
+    ...override,
+    recordTraceStep: (step) => steps.push(step),
+  };
+  const traced = createAgentBrowserPort({
+    host,
+    scope: { projectId: "p1", ticketId: "t1" },
+    session: ME,
+    transportFor,
+    waitForLoad: async () => {},
+    holdAwake: () => () => {},
+  });
+  return { port: traced, steps, fake };
+}
 
+describe("createAgentBrowserPort traces (VC-453)", () => {
   it("hears every call against a tab in the order they settled — reads and finds too — with the page's name for the target", async () => {
     const { port: traced, steps } = tracing([]);
 

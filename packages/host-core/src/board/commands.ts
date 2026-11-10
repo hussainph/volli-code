@@ -406,6 +406,30 @@ export function ticketSummary(ticket: Ticket): TicketSummary {
   return summary;
 }
 
+const ticketChanges = (
+  ticket: Ticket,
+  commandId: string | undefined,
+  extra: { checkoutMoved?: boolean } = {},
+): BoardChange[] => [
+  {
+    kind: "ticket",
+    op: "upsert",
+    id: ticket.id,
+    projectId: ticket.projectId,
+    ticket: ticketSummary(ticket),
+    ...(commandId === undefined ? {} : { commandId }),
+    ...extra,
+  },
+  {
+    kind: "ticketEvent",
+    op: "upsert",
+    id: ticket.id,
+    projectId: ticket.projectId,
+    ticketId: ticket.id,
+    ...(commandId === undefined ? {} : { commandId }),
+  },
+];
+
 /** Builds the Board module's handlers from the host's services. */
 export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerSignatures {
   const { feed, now } = options;
@@ -512,30 +536,6 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
   /** The project a ticket belongs to, for its receipt key; null when it is gone. */
   const projectOfTicket = (ticketId: string): string | null =>
     getTicketRow(board(), ticketId)?.project_id ?? null;
-
-  const ticketChanges = (
-    ticket: Ticket,
-    commandId: string | undefined,
-    extra: { checkoutMoved?: boolean } = {},
-  ): BoardChange[] => [
-    {
-      kind: "ticket",
-      op: "upsert",
-      id: ticket.id,
-      projectId: ticket.projectId,
-      ticket: ticketSummary(ticket),
-      ...(commandId === undefined ? {} : { commandId }),
-      ...extra,
-    },
-    {
-      kind: "ticketEvent",
-      op: "upsert",
-      id: ticket.id,
-      projectId: ticket.projectId,
-      ticketId: ticket.id,
-      ...(commandId === undefined ? {} : { commandId }),
-    },
-  ];
 
   const projectWrite = (
     operation: string,

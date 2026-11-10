@@ -82,6 +82,8 @@ function job(
   } as unknown as ClaimedJob;
 }
 
+const owns = (id: string) => id === WATCHER;
+
 async function fixture() {
   opened = openTestDb();
   const { db } = opened;
@@ -103,7 +105,6 @@ async function fixture() {
       ownerUserId,
     });
   }
-  const owns = (id: string) => id === WATCHER;
   // The real SQLite outbox, scoped to this launch's owner as the lifecycle scopes it.
   const outbox = scopeSqliteHostNoticeOutbox(
     db,

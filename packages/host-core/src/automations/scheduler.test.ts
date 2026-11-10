@@ -433,21 +433,21 @@ describe("a skip and a silence never look the same", () => {
   });
 });
 
-describe("a crash between a Run and its cursor", () => {
-  /**
-   * The window: the Run door accepted the occurrence's Run, then the process
-   * died before the cursor moved. Modelled as an `advanceCursor` that never
-   * lands, after which a NEW scheduler opens over the same cursors and ledger.
-   */
-  async function crashAfterRunAccepted(nextDue: number): Promise<Harness> {
-    const h = harness({ now: nextDue, cursors: { a1: nextDue - 1 } });
-    h.ports.advanceCursor = () => Promise.reject(new Error("process killed"));
-    await h.scheduler.start();
-    expect(h.runs.map((run) => run.commandId)).toEqual([scheduleRunCommandId("a1", nextDue)]);
-    expect(h.cursors["a1"]).toBe(nextDue - 1);
-    return h;
-  }
+/**
+ * The window: the Run door accepted the occurrence's Run, then the process
+ * died before the cursor moved. Modelled as an `advanceCursor` that never
+ * lands, after which a NEW scheduler opens over the same cursors and ledger.
+ */
+async function crashAfterRunAccepted(nextDue: number): Promise<Harness> {
+  const h = harness({ now: nextDue, cursors: { a1: nextDue - 1 } });
+  h.ports.advanceCursor = () => Promise.reject(new Error("process killed"));
+  await h.scheduler.start();
+  expect(h.runs.map((run) => run.commandId)).toEqual([scheduleRunCommandId("a1", nextDue)]);
+  expect(h.cursors["a1"]).toBe(nextDue - 1);
+  return h;
+}
 
+describe("a crash between a Run and its cursor", () => {
   it("does not record the occurrence that ran as missed on relaunch", async () => {
     const nextDue = due(Date.parse("2026-06-10T12:00:00Z"));
     const crashed = await crashAfterRunAccepted(nextDue);

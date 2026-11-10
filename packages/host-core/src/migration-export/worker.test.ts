@@ -65,6 +65,16 @@ function script(name: string, source: string): URL {
   return pathToFileURL(path);
 }
 
+const failing = (name: string, sessionId: unknown) =>
+  runMigrationExportInWorker(
+    script(
+      name,
+      `import { parentPort } from "node:worker_threads";
+           parentPort.postMessage(${JSON.stringify({ type: "failed", code: "pi_log_too_large", message: "too large", sessionId })});`,
+    ),
+    request(),
+  );
+
 describe("runMigrationExportInWorker", () => {
   it("exports in a worker thread with progress, matching the in-thread export", async () => {
     const progress: MigrationExportProgress[] = [];
@@ -156,15 +166,6 @@ describe("runMigrationExportInWorker", () => {
   });
 
   it("carries the Session a refusal names across the thread, and nothing else in its place", async () => {
-    const failing = (name: string, sessionId: unknown) =>
-      runMigrationExportInWorker(
-        script(
-          name,
-          `import { parentPort } from "node:worker_threads";
-           parentPort.postMessage(${JSON.stringify({ type: "failed", code: "pi_log_too_large", message: "too large", sessionId })});`,
-        ),
-        request(),
-      );
     await expect(failing("named.mjs", "session-1")).rejects.toMatchObject({
       code: "pi_log_too_large",
       sessionId: "session-1",

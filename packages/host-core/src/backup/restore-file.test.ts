@@ -142,11 +142,12 @@ function birthOwners(db: Database.Database): unknown[] {
   return db.prepare("SELECT * FROM session_birth_owners ORDER BY session_id").all();
 }
 
+const normalize = (root: string): Record<string, unknown> =>
+  JSON.parse(
+    JSON.stringify(dumpDatabase(join(root, "volli.db"))).replaceAll(root, "<target>"),
+  ) as Record<string, unknown>;
+
 function expectSameDatabase([memoryRoot, fileRoot]: [string, string]): void {
-  const normalize = (root: string): Record<string, unknown> =>
-    JSON.parse(
-      JSON.stringify(dumpDatabase(join(root, "volli.db"))).replaceAll(root, "<target>"),
-    ) as Record<string, unknown>;
   const memory = normalize(memoryRoot);
   const file = normalize(fileRoot);
   expect(Object.keys(file)).toEqual(Object.keys(memory));

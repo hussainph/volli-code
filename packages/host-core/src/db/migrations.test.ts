@@ -2955,6 +2955,16 @@ function schema(db: Database.Database): Array<{ name: string; sql: string }> {
   ).map(({ name, sql }) => ({ name, sql: sql.replace(/ IF NOT EXISTS /g, " ") }));
 }
 
+/** A fresh install's schema, to converge against. */
+function freshSchema(): Array<{ name: string; sql: string }> {
+  const freshPath = tempDbPath();
+  const fresh = openRawDb(freshPath);
+  migrate(fresh, freshPath);
+  const shape = schema(fresh);
+  fresh.close();
+  return shape;
+}
+
 describe("migrate — 035, the blobs reconciler (VC-220)", () => {
   it("lands the tables a skipped 020 owed, and converges on the fresh schema", () => {
     const dbPath = tempDbPath();
@@ -3055,16 +3065,6 @@ describe("migrate — 035, the blobs reconciler (VC-220)", () => {
    * equals a fresh install's — because those are the two ways this can go wrong.
    */
   describe("partial profiles", () => {
-    /** A fresh install's schema, to converge against. */
-    function freshSchema(): Array<{ name: string; sql: string }> {
-      const freshPath = tempDbPath();
-      const fresh = openRawDb(freshPath);
-      migrate(fresh, freshPath);
-      const shape = schema(fresh);
-      fresh.close();
-      return shape;
-    }
-
     it("lands `blob_links` under a lineage that has only `blobs`", () => {
       const dbPath = tempDbPath();
       const db = buildPartial020Lineage(dbPath, { surgery: "DROP TABLE blob_links;" });

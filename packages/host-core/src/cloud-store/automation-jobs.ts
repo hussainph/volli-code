@@ -150,25 +150,25 @@ interface FirstMessage {
   automationName: string | null;
 }
 
+async function firstMessage(
+  ports: AutomationRunSessions,
+  projectId: string,
+  instructions: string,
+  automationName: string | null,
+): Promise<FirstMessage> {
+  let supply: AutomationPromptSupply = { templates: [], skills: [] };
+  try {
+    supply = await ports.promptSupply(projectId);
+  } catch (error) {
+    // Composer behaviour: an unreadable supply leaves the literal text.
+    log.warn("Automation Run could not read the prompt supply", { projectId, error });
+  }
+  const expanded = expandCommandInvocation(instructions, supply.templates, supply.skills);
+  return { text: expanded.text, resources: expanded.resources, automationName };
+}
+
 export function createAutomationRunExecutor(options: AutomationRunJobOptions): JobExecutor {
   const newOperationId = options.newOperationId ?? randomUUID;
-
-  async function firstMessage(
-    ports: AutomationRunSessions,
-    projectId: string,
-    instructions: string,
-    automationName: string | null,
-  ): Promise<FirstMessage> {
-    let supply: AutomationPromptSupply = { templates: [], skills: [] };
-    try {
-      supply = await ports.promptSupply(projectId);
-    } catch (error) {
-      // Composer behaviour: an unreadable supply leaves the literal text.
-      log.warn("Automation Run could not read the prompt supply", { projectId, error });
-    }
-    const expanded = expandCommandInvocation(instructions, supply.templates, supply.skills);
-    return { text: expanded.text, resources: expanded.resources, automationName };
-  }
 
   async function deliver(
     ports: AutomationRunSessions,

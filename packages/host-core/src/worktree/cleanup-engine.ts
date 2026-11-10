@@ -422,6 +422,10 @@ function sameRequest(
   return recorded.size === asked.size && [...asked].every((id) => recorded.has(id));
 }
 
+function foldFor(tx: OrphanCleanupLedgerTransaction, commandId: string): OrphanCleanupRun | null {
+  return foldCleanupRun(tx.listFacts(commandId));
+}
+
 /** The transport-neutral cleanup command core. */
 export function createOrphanCleanupEngine(ports: OrphanCleanupEnginePorts): OrphanCleanupEngine {
   const fact = (
@@ -436,10 +440,6 @@ export function createOrphanCleanupEngine(ports: OrphanCleanupEnginePorts): Orph
     tx.appendFact(
       fact(receipt.commandId, "command.receipt.recorded", { receipt }, receipt.recordedAt),
     );
-  }
-
-  function foldFor(tx: OrphanCleanupLedgerTransaction, commandId: string): OrphanCleanupRun | null {
-    return foldCleanupRun(tx.listFacts(commandId));
   }
 
   /** Appends one fact to an already-accepted command; a stray command id is a no-op. */

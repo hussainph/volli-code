@@ -23,39 +23,39 @@ interface FakeClient {
   }[];
 }
 
-vi.mock("convex/browser", () => ({
-  // A constructor function: `new` returns the object it builds.
-  ConvexClient: function FakeConvexClient(url: string, options: unknown) {
-    const client: FakeClient = {
-      url,
-      options,
-      token: null,
-      connected: false,
-      listener: null,
-      mutation: vi.fn(async (_ref: unknown, args: unknown) => ({ echoed: args })),
-      query: vi.fn(async (_ref: unknown, args: unknown) => ({ context: args })),
-      close: vi.fn(async () => {}),
-      queries: [],
-    };
-    clients.made.push(client);
-    return {
-      setAuth: (token: unknown) => (client.token = token),
-      mutation: client.mutation,
-      ...(clients.queriesAvailable ? { query: client.query } : {}),
-      onUpdate: (ref: unknown, args: unknown, callback: (value: unknown) => void) => {
-        const off = vi.fn();
-        client.queries.push({ ref, args, callback, off });
-        return off;
-      },
-      connectionState: () => ({ isWebSocketConnected: client.connected }),
-      subscribeToConnectionState: (listener: FakeClient["listener"]) => {
-        client.listener = listener;
-        return () => (client.listener = null);
-      },
-      close: client.close,
-    };
-  },
-}));
+// A constructor function: `new` returns the object it builds.
+function FakeConvexClient(url: string, options: unknown) {
+  const client: FakeClient = {
+    url,
+    options,
+    token: null,
+    connected: false,
+    listener: null,
+    mutation: vi.fn(async (_ref: unknown, args: unknown) => ({ echoed: args })),
+    query: vi.fn(async (_ref: unknown, args: unknown) => ({ context: args })),
+    close: vi.fn(async () => {}),
+    queries: [],
+  };
+  clients.made.push(client);
+  return {
+    setAuth: (token: unknown) => (client.token = token),
+    mutation: client.mutation,
+    ...(clients.queriesAvailable ? { query: client.query } : {}),
+    onUpdate: (ref: unknown, args: unknown, callback: (value: unknown) => void) => {
+      const off = vi.fn();
+      client.queries.push({ ref, args, callback, off });
+      return off;
+    },
+    connectionState: () => ({ isWebSocketConnected: client.connected }),
+    subscribeToConnectionState: (listener: FakeClient["listener"]) => {
+      client.listener = listener;
+      return () => (client.listener = null);
+    },
+    close: client.close,
+  };
+}
+
+vi.mock("convex/browser", () => ({ ConvexClient: FakeConvexClient }));
 
 const { convexBackendConnection } = await import("./convex-connection");
 type ConvexClientModule = import("./convex-connection").ConvexClientModule;

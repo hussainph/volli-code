@@ -376,53 +376,53 @@ describe("ensure — success", () => {
   });
 });
 
+/**
+ * A git whose `worktree add` leaves `atAdd(path)` behind, and whose listing
+ * reports that path registered once it was added — what a real add leaves
+ * for the Retry to reconcile to `already-present`.
+ */
+function addingGit(projectPath: string, atAdd: (path: string) => void) {
+  let added: string | null = null;
+  return scriptedGit((args) => {
+    if (args[0] === "worktree" && args[1] === "list") {
+      const main = `worktree ${projectPath}\nHEAD abc\nbranch refs/heads/main\n`;
+      return added === null
+        ? main
+        : `${main}worktree ${added}\nHEAD def\nbranch refs/heads/${BRANCH}\n`;
+    }
+    if (args[0] === "rev-parse" && args[1] === "--verify") {
+      if (args[3] === "refs/heads/main" || added !== null) return "sha\n";
+      throw new Error("no such ref");
+    }
+    if (args[0] === "worktree" && args[1] === "add") {
+      added = args[4]!;
+      atAdd(added);
+    }
+    return "";
+  });
+}
+
+/** Seeds the ticket in a project whose setup command is `setupCommand`. */
+function seedWithSetup(projectPath: string, setupCommand: string | null) {
+  const project = testProject({
+    id: "proj-abcdef12",
+    path: projectPath,
+    baseBranch: "main",
+    setupCommand,
+  });
+  insertProject(ctx.db, project);
+  insertTicket(
+    ctx.db,
+    testTicket(project.id, {
+      id: "ticket-1",
+      ticketNumber: 12,
+      title: "MCP server",
+      status: "doing",
+    }),
+  );
+}
+
 describe("ensure — first-run steps are a durable fact of the worktree (VC-835)", () => {
-  /** Seeds the ticket in a project whose setup command is `setupCommand`. */
-  function seedWithSetup(projectPath: string, setupCommand: string | null) {
-    const project = testProject({
-      id: "proj-abcdef12",
-      path: projectPath,
-      baseBranch: "main",
-      setupCommand,
-    });
-    insertProject(ctx.db, project);
-    insertTicket(
-      ctx.db,
-      testTicket(project.id, {
-        id: "ticket-1",
-        ticketNumber: 12,
-        title: "MCP server",
-        status: "doing",
-      }),
-    );
-  }
-
-  /**
-   * A git whose `worktree add` leaves `atAdd(path)` behind, and whose listing
-   * reports that path registered once it was added — what a real add leaves
-   * for the Retry to reconcile to `already-present`.
-   */
-  function addingGit(projectPath: string, atAdd: (path: string) => void) {
-    let added: string | null = null;
-    return scriptedGit((args) => {
-      if (args[0] === "worktree" && args[1] === "list") {
-        const main = `worktree ${projectPath}\nHEAD abc\nbranch refs/heads/main\n`;
-        return added === null
-          ? main
-          : `${main}worktree ${added}\nHEAD def\nbranch refs/heads/${BRANCH}\n`;
-      }
-      if (args[0] === "rev-parse" && args[1] === "--verify") {
-        if (args[3] === "refs/heads/main" || added !== null) return "sha\n";
-        throw new Error("no such ref");
-      }
-      if (args[0] === "worktree" && args[1] === "add") {
-        added = args[4]!;
-        atAdd(added);
-      }
-      return "";
-    });
-  }
-
   it("owes the setup run on a creation whose project has a setup command", async () => {
     const projectPath = tempDir("proj");
     seedWithSetup(projectPath, "touch .setup-ran");
@@ -1079,23 +1079,23 @@ describe("ensure — the ticket's worktree on another branch, against a real rep
   });
 });
 
-describe("explicit-input materialization", () => {
-  function facts(checkoutPath: string, worktreePath: string): EnsureFacts {
-    return {
-      ticketId: "cloud-only-ticket",
-      projectId: "cloud-only-project",
-      checkoutPath,
-      displayId: "VC-12",
-      title: "MCP server",
-      usesWorktree: true,
-      worktreePath,
-      branch: BRANCH,
-      baseBranch: "main",
-      projectBaseBranch: "main",
-      setupCommand: null,
-    };
-  }
+function facts(checkoutPath: string, worktreePath: string): EnsureFacts {
+  return {
+    ticketId: "cloud-only-ticket",
+    projectId: "cloud-only-project",
+    checkoutPath,
+    displayId: "VC-12",
+    title: "MCP server",
+    usesWorktree: true,
+    worktreePath,
+    branch: BRANCH,
+    baseBranch: "main",
+    projectBaseBranch: "main",
+    setupCommand: null,
+  };
+}
 
+describe("explicit-input materialization", () => {
   it("runs the real git/copy pipeline with no board rows and reuses its stamp", async () => {
     const checkoutPath = tempDir("explicit-repo");
     const home = tempDir("explicit-home");

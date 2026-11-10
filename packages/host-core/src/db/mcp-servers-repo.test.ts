@@ -221,11 +221,11 @@ describe("MCP server provenance (VC-380)", () => {
   });
 });
 
-describe("machine-wide MCP fold-in", () => {
-  function otherProject() {
-    insertProject(ctx.db, testProject({ id: "p2", name: "Other project", path: "/repo/other" }));
-  }
+function otherProject() {
+  insertProject(ctx.db, testProject({ id: "p2", name: "Other project", path: "/repo/other" }));
+}
 
+describe("machine-wide MCP fold-in", () => {
   it("unions project rows, deduplicates identical definitions and retains conflicting names", () => {
     otherProject();
     putMcpServer(ctx.db, record());

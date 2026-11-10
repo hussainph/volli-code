@@ -116,6 +116,16 @@ function reportPath(relative: string, directory: boolean): string {
   return directory ? `${relative}/` : relative;
 }
 
+// git's listing OVERLAPS: with `--directory` it reports a wholly-ignored
+// `certs/` and, when a pattern matches the file directly, `certs/local.pem`
+// as well. Both would otherwise be planned, double-counting bytes and
+// reporting one path twice — so a removal a shallower one covers is dropped.
+function covers(outer: string, inner: string): boolean {
+  const a = normalizeRelative(outer);
+  const b = normalizeRelative(inner);
+  return a === b || b.startsWith(`${a}/`);
+}
+
 /**
  * Plans every candidate and, unless this is a dry run, removes what may go.
  * Runs on the worker thread; synchronous throughout.
@@ -281,16 +291,6 @@ function walkAndTrim(request: TrimWalkRequest, fs: WalkFs, path: WalkPath): Trim
       kept.push(...plan.kept);
     }
   }
-
-  // git's listing OVERLAPS: with `--directory` it reports a wholly-ignored
-  // `certs/` and, when a pattern matches the file directly, `certs/local.pem`
-  // as well. Both would otherwise be planned, double-counting bytes and
-  // reporting one path twice — so a removal a shallower one covers is dropped.
-  const covers = (outer: string, inner: string): boolean => {
-    const a = normalizeRelative(outer);
-    const b = normalizeRelative(inner);
-    return a === b || b.startsWith(`${a}/`);
-  };
   const byDepth = removed.toSorted(
     (a, b) => a.path.split("/").length - b.path.split("/").length || a.path.localeCompare(b.path),
   );
@@ -344,6 +344,7 @@ const WORKER_FUNCTIONS = [
   normalizeRelative,
   keepReasonFor,
   reportPath,
+  covers,
   walkAndTrim,
 ] as const;
 

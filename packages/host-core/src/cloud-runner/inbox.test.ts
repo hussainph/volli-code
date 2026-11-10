@@ -95,6 +95,18 @@ function manualTimers() {
   };
 }
 
+const sameSessionJob = (id: string) => {
+  const claimed = job(id);
+  (claimed.job as { sessionId: string | null }).sessionId = "s1";
+  return claimed;
+};
+
+const sessionJob = (id: string, sessionId: string | null) => {
+  const claimed = job(id);
+  (claimed.job as { sessionId: string | null }).sessionId = sessionId;
+  return claimed;
+};
+
 describe("the inbox worker", () => {
   it("claims, runs the registered executor, journals the outcome before reporting it, then forgets it", async () => {
     const inbox = fakeInbox([[job("j1")]]);
@@ -570,13 +582,13 @@ describe("the inbox worker", () => {
   });
 
   it("runs one Session's jobs one at a time in claim order, other jobs alongside", async () => {
-    const session = (id: string, sessionId: string | null) => {
-      const claimed = job(id);
-      (claimed.job as { sessionId: string | null }).sessionId = sessionId;
-      return claimed;
-    };
     const inbox = fakeInbox([
-      [session("a1", "s1"), session("a2", "s1"), session("b1", "s2"), session("x", null)],
+      [
+        sessionJob("a1", "s1"),
+        sessionJob("a2", "s1"),
+        sessionJob("b1", "s2"),
+        sessionJob("x", null),
+      ],
     ]);
     const timers = manualTimers();
     const worker = createInboxWorker({
@@ -610,12 +622,7 @@ describe("the inbox worker", () => {
   });
 
   it("a job whose lease is taken away while it waits in its lane does not run", async () => {
-    const session = (id: string) => {
-      const claimed = job(id);
-      (claimed.job as { sessionId: string | null }).sessionId = "s1";
-      return claimed;
-    };
-    const inbox = fakeInbox([[session("a1"), session("a2")]]);
+    const inbox = fakeInbox([[sameSessionJob("a1"), sameSessionJob("a2")]]);
     const worker = createInboxWorker({
       backend: inbox.backend,
       journal: memoryJournal().store,

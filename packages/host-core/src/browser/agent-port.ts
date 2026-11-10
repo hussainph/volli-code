@@ -269,6 +269,20 @@ function heldRefusal(tabId: string, holder: BrowserTabHolder): BrowserRefusal {
   );
 }
 
+/**
+ * Runs one call against a resolved tab, and tells any refusal inside it
+ * which page it was aimed at. A refusal raised deeper — a stale generation
+ * in the controller, an unknown ref — knows the rule but not the tab, and
+ * without this the transcript row would name a bare `e5` and no page.
+ */
+const refusalsOn = async <T>(tab: BrowserTabState, run: () => Promise<T>): Promise<T> => {
+  try {
+    return await run();
+  } catch (error) {
+    throw error instanceof BrowserRefusal ? error.onPage(pageOf(tab)) : error;
+  }
+};
+
 export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentBrowserPort {
   const lifetime = new AbortController();
   const owner = JSON.stringify([options.session.sessionId, options.session.attachmentId]);
@@ -324,20 +338,6 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
     const release = wakes.get(tabId);
     wakes.delete(tabId);
     release?.();
-  };
-
-  /**
-   * Runs one call against a resolved tab, and tells any refusal inside it
-   * which page it was aimed at. A refusal raised deeper — a stale generation
-   * in the controller, an unknown ref — knows the rule but not the tab, and
-   * without this the transcript row would name a bare `e5` and no page.
-   */
-  const refusalsOn = async <T>(tab: BrowserTabState, run: () => Promise<T>): Promise<T> => {
-    try {
-      return await run();
-    } catch (error) {
-      throw error instanceof BrowserRefusal ? error.onPage(pageOf(tab)) : error;
-    }
   };
 
   const ownedHere = (tab: BrowserTabState): boolean =>

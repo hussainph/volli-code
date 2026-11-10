@@ -313,49 +313,49 @@ describe("follow-up clean-close round trips", () => {
   });
 });
 
-/** One process can inspect only its launch scope; the marker still protects the next account. */
-describe("owner-scoped clean-close watermarks", () => {
-  async function twoQueues() {
-    const f = await setup();
-    const provenance = {
-      source: { kind: "system" as const, id: "test", detail: null },
-      venue: { id: "local", kind: "local" as const },
-    };
-    const other = await f.engine.createSession({
-      commandId: "other",
-      projectId: "project",
-      ticketId: null,
-      role: "project",
-      parentSessionId: null,
-      title: null,
+async function twoQueues() {
+  const f = await setup();
+  const provenance = {
+    source: { kind: "system" as const, id: "test", detail: null },
+    venue: { id: "local", kind: "local" as const },
+  };
+  const other = await f.engine.createSession({
+    commandId: "other",
+    projectId: "project",
+    ticketId: null,
+    role: "project",
+    parentSessionId: null,
+    title: null,
+    provenance,
+  });
+  await createSqliteSessionFollowUpLedger(fixture.db).transaction(other.session.id, (state) => {
+    state.revision = 1;
+    state.entries.push({
+      id: "other-message",
+      commandId: "other-queue",
+      deliveryCommandId: "other-delivery",
+      state: "queued",
+      message: { id: "other-message", role: "user", parts: [{ type: "text", text: "other" }] },
+    });
+  });
+  const stateOf = (id: string) =>
+    (
+      fixture.db
+        .prepare("SELECT state FROM session_follow_up_queue WHERE session_id = ?")
+        .get(id) as { state: string }
+    ).state;
+  const advance = (id: string, commandId: string) =>
+    f.engine.submit({
+      commandId,
+      sessionId: id,
+      intent: { kind: "session.retitle", title: commandId },
       provenance,
     });
-    await createSqliteSessionFollowUpLedger(fixture.db).transaction(other.session.id, (state) => {
-      state.revision = 1;
-      state.entries.push({
-        id: "other-message",
-        commandId: "other-queue",
-        deliveryCommandId: "other-delivery",
-        state: "queued",
-        message: { id: "other-message", role: "user", parts: [{ type: "text", text: "other" }] },
-      });
-    });
-    const stateOf = (id: string) =>
-      (
-        fixture.db
-          .prepare("SELECT state FROM session_follow_up_queue WHERE session_id = ?")
-          .get(id) as { state: string }
-      ).state;
-    const advance = (id: string, commandId: string) =>
-      f.engine.submit({
-        commandId,
-        sessionId: id,
-        intent: { kind: "session.retitle", title: commandId },
-        provenance,
-      });
-    return { ...f, otherId: other.session.id, stateOf, advance };
-  }
+  return { ...f, otherId: other.session.id, stateOf, advance };
+}
 
+/** One process can inspect only its launch scope; the marker still protects the next account. */
+describe("owner-scoped clean-close watermarks", () => {
   it("holds only the current owner's stale queue and preserves the foreign sentinel across clean close", async () => {
     const f = await twoQueues();
     stampFollowUpCleanClose(fixture.db, 100);

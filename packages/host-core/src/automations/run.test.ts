@@ -229,6 +229,46 @@ async function savedAutomation(
   return created.value;
 }
 
+/**
+ * Seeds `count` earlier Runs of `automationId` whose Sessions are quiet by
+ * their durable facts: each structured attachment opened and closed, and no
+ * turn, question or user-blocking Attention left open. This is what months
+ * of a finished hourly schedule leave behind.
+ */
+function seedQuietRuns(h: Harness, automationId: string, count: number): string[] {
+  const sessionIds: string[] = [];
+  const insertSessionRow = ctx.db.prepare(
+    `INSERT INTO sessions (id, project_id, ticket_id, role, title, created_at)
+       VALUES (?, ?, NULL, 'project', 'Finished Run', ?)`,
+  );
+  const insertClosedAttachment = ctx.db.prepare(
+    `INSERT INTO session_attachments
+         (id, session_id, adapter_id, venue_id, venue_kind, continuity, native_id,
+          native_detail, observed_kind, failure, created_sequence, closed_sequence)
+       VALUES (?, ?, 'pi', 'local', 'local', 'fresh', NULL, NULL, 'opened', NULL, 1, 2)`,
+  );
+  ctx.db.transaction(() => {
+    for (let index = 0; index < count; index += 1) {
+      const sessionId = `quiet-session-${index}`;
+      insertSessionRow.run(sessionId, h.projectId, index);
+      insertClosedAttachment.run(`quiet-attachment-${index}`, sessionId);
+      recordAutomationRun(
+        ctx.db,
+        {
+          automationId,
+          automationName: "Two-opinion review",
+          ticketId: null,
+          sessionId,
+          model: RESOLVED,
+        },
+        index,
+      );
+      sessionIds.push(sessionId);
+    }
+  })();
+  return sessionIds;
+}
+
 describe("createAutomationRunner", () => {
   it("accepts one durable Run plan, mints exactly one fresh Session, and delivers the composer's expansion", async () => {
     const h = harness();
@@ -1386,46 +1426,6 @@ describe("createAutomationRunner", () => {
     expect(outcome.ok).toBe(true);
     expect(h.creates).toHaveLength(2);
   });
-
-  /**
-   * Seeds `count` earlier Runs of `automationId` whose Sessions are quiet by
-   * their durable facts: each structured attachment opened and closed, and no
-   * turn, question or user-blocking Attention left open. This is what months
-   * of a finished hourly schedule leave behind.
-   */
-  function seedQuietRuns(h: Harness, automationId: string, count: number): string[] {
-    const sessionIds: string[] = [];
-    const insertSessionRow = ctx.db.prepare(
-      `INSERT INTO sessions (id, project_id, ticket_id, role, title, created_at)
-       VALUES (?, ?, NULL, 'project', 'Finished Run', ?)`,
-    );
-    const insertClosedAttachment = ctx.db.prepare(
-      `INSERT INTO session_attachments
-         (id, session_id, adapter_id, venue_id, venue_kind, continuity, native_id,
-          native_detail, observed_kind, failure, created_sequence, closed_sequence)
-       VALUES (?, ?, 'pi', 'local', 'local', 'fresh', NULL, NULL, 'opened', NULL, 1, 2)`,
-    );
-    ctx.db.transaction(() => {
-      for (let index = 0; index < count; index += 1) {
-        const sessionId = `quiet-session-${index}`;
-        insertSessionRow.run(sessionId, h.projectId, index);
-        insertClosedAttachment.run(`quiet-attachment-${index}`, sessionId);
-        recordAutomationRun(
-          ctx.db,
-          {
-            automationId,
-            automationName: "Two-opinion review",
-            ticketId: null,
-            sessionId,
-            model: RESOLVED,
-          },
-          index,
-        );
-        sessionIds.push(sessionId);
-      }
-    })();
-    return sessionIds;
-  }
 
   it("reads only the Runs that could still be live, however long the schedule has run (VC-816)", async () => {
     // 5,000 quiet Runs: about seven months of an hourly schedule. Before

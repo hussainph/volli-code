@@ -67,14 +67,14 @@ describe("the retired global editor theme id", () => {
   });
 });
 
-describe("project theme override", () => {
-  function seedProject(): string {
-    ctx = openTestDb();
-    const project = testProject();
-    insertProject(ctx.db, project);
-    return project.id;
-  }
+function seedProject(): string {
+  ctx = openTestDb();
+  const project = testProject();
+  insertProject(ctx.db, project);
+  return project.id;
+}
 
+describe("project theme override", () => {
   it("inherits on every surface by default", () => {
     const id = seedProject();
     expect(getProjectById(ctx.db, id)?.themeOverride).toBeNull();
@@ -368,16 +368,16 @@ describe("first-paint hint (app_state kv)", () => {
   });
 });
 
-describe("project canvas + appearance (migration 014)", () => {
-  function seedProject(): string {
-    ctx = openTestDb();
-    const project = testProject();
-    insertProject(ctx.db, project);
-    return project.id;
-  }
+function seedCanvasProject(): string {
+  ctx = openTestDb();
+  const project = testProject();
+  insertProject(ctx.db, project);
+  return project.id;
+}
 
+describe("project canvas + appearance (migration 014)", () => {
   it("inherits both halves by default", () => {
-    const id = seedProject();
+    const id = seedCanvasProject();
     const project = getProjectById(ctx.db, id);
 
     expect(project?.themeCanvas).toBeNull();
@@ -385,7 +385,7 @@ describe("project canvas + appearance (migration 014)", () => {
   });
 
   it("round-trips a project's own canvas", () => {
-    const id = seedProject();
+    const id = seedCanvasProject();
     const canvas = testCanvas({ vibrancy: 0.3 });
 
     const updated = updateProjectCanvas(ctx.db, id, canvas, 1000);
@@ -395,7 +395,7 @@ describe("project canvas + appearance (migration 014)", () => {
   });
 
   it("never persists a resolved token set on the project row either", () => {
-    const id = seedProject();
+    const id = seedCanvasProject();
     const smuggled = { ...testCanvas(), tokens: { "--background": "#000000" } } as Canvas;
 
     updateProjectCanvas(ctx.db, id, smuggled, 1000);
@@ -408,7 +408,7 @@ describe("project canvas + appearance (migration 014)", () => {
   });
 
   it("scopes the canvas and the appearance separately", () => {
-    const id = seedProject();
+    const id = seedCanvasProject();
 
     updateProjectCanvas(ctx.db, id, testCanvas(), 1000);
     const afterAppearance = updateProjectAppearance(ctx.db, id, "light", 2000);
@@ -423,21 +423,21 @@ describe("project canvas + appearance (migration 014)", () => {
   });
 
   it("clears back to inheriting on null", () => {
-    const id = seedProject();
+    const id = seedCanvasProject();
     updateProjectAppearance(ctx.db, id, "dark", 1000);
 
     expect(updateProjectAppearance(ctx.db, id, null, 2000)?.themeAppearance).toBeNull();
   });
 
   it("degrades a corrupt stored canvas to inheriting rather than throwing", () => {
-    const id = seedProject();
+    const id = seedCanvasProject();
     ctx.db.prepare("UPDATE projects SET theme_canvas = ? WHERE id = ?").run("{ not json", id);
 
     expect(getProjectById(ctx.db, id)?.themeCanvas).toBeNull();
   });
 
   it("bumps row_version and updated_at like every other project write", () => {
-    const id = seedProject();
+    const id = seedCanvasProject();
     const before = ctx.db.prepare("SELECT row_version FROM projects WHERE id = ?").get(id) as {
       row_version: number;
     };
@@ -450,7 +450,7 @@ describe("project canvas + appearance (migration 014)", () => {
   });
 
   it("is a no-op for an unknown project", () => {
-    seedProject();
+    seedCanvasProject();
     expect(updateProjectCanvas(ctx.db, "nope", testCanvas(), 1000)).toBeUndefined();
     expect(updateProjectAppearance(ctx.db, "nope", "dark", 1000)).toBeUndefined();
   });

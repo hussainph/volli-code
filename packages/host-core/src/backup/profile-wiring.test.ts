@@ -494,10 +494,10 @@ describe("profile wiring against the backup register (VC-829)", () => {
     ]);
   });
 
-  it("follows constants and templates, and leaves non-roots and Chromium's profile alone", () => {
-    const probe = (path: string, text: string): string[] =>
-      undecided(profileWiring([{ path, text }]));
+  const probe = (path: string, text: string): string[] =>
+    undecided(profileWiring([{ path, text }]));
 
+  it("follows constants and templates, and leaves non-roots and Chromium's profile alone", () => {
     expect(
       probe(
         "apps/hostd/src/probe.ts",

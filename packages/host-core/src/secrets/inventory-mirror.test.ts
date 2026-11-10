@@ -68,6 +68,11 @@ function plaintext(keyring: CredentialKeyring = fileCredentialKeyring({ path: ke
   };
 }
 
+const entry = (token: string): MirrorSnapshot => ({
+  entries: [{ selector: { provider: "p" }, value: { token } }],
+  receipt: { source: SOURCE, revision: 1 },
+});
+
 describe("SealedInventory.mirror", { timeout: 30_000 }, () => {
   it("writes nothing and makes no key for an empty source with no file", () => {
     const outcome = open().mirror("web-search", () => snapshot(0, {}));
@@ -177,10 +182,6 @@ describe("SealedInventory.mirror", { timeout: 30_000 }, () => {
 
   it("compares object values by content for families that hold records", () => {
     const inventory = open();
-    const entry = (token: string): MirrorSnapshot => ({
-      entries: [{ selector: { provider: "p" }, value: { token } }],
-      receipt: { source: SOURCE, revision: 1 },
-    });
     expect(inventory.mirror("pi-provider", () => entry("a")).kind).toBe("sealed");
     expect(inventory.mirror("pi-provider", () => entry("a")).kind).toBe("current");
     expect(inventory.mirror("pi-provider", () => entry("b")).kind).toBe("sealed");

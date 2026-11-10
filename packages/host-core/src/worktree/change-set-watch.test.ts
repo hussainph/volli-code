@@ -117,14 +117,15 @@ describe("WorktreeChangeWatchManager", () => {
     vi.useRealTimers();
   });
 
+  const watchFn: WorktreeWatchFn = (path, options, cb) => {
+    const watcher = makeFakeWatcher();
+    watchCalls.push({ path, options, cb, watcher });
+    return watcher;
+  };
+
   function makeManager(
     overrides: Omit<WorktreeChangeWatchOptions, "watch"> = {},
   ): WorktreeChangeWatchManager {
-    const watchFn: WorktreeWatchFn = (path, options, cb) => {
-      const watcher = makeFakeWatcher();
-      watchCalls.push({ path, options, cb, watcher });
-      return watcher;
-    };
     return new WorktreeChangeWatchManager({
       watch: watchFn,
       debounceMs: WATCH_DEBOUNCE_MS,

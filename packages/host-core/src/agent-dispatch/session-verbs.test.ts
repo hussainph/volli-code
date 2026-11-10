@@ -53,6 +53,10 @@ function data(response: AgentResponse): Record<string, unknown> {
   if (!response.ok) throw new Error(response.error.message);
   return response.data as Record<string, unknown>;
 }
+
+const listedSessionIds = (response: AgentResponse) =>
+  (data(response)["sessions"] as { id: string }[]).map((s) => s.id);
+
 function fixture(observeTerminal = false, projects?: () => readonly Project[]) {
   db = openTestDb();
   insertProject(
@@ -150,8 +154,6 @@ function fixture(observeTerminal = false, projects?: () => readonly Project[]) {
         },
       });
   };
-  const ids = (response: AgentResponse) =>
-    (data(response)["sessions"] as { id: string }[]).map((s) => s.id);
   // A router's Workspace-scoped read (VC-663, D4): the map's own entry for the
   // verb, which the service served (VC-894), under an admit-all policy.
   const readInWorkspace = (
@@ -166,7 +168,7 @@ function fixture(observeTerminal = false, projects?: () => readonly Project[]) {
       { workspaceId, args },
       { actor: { kind: "user" } },
     ) as Promise<AgentResponse>;
-  return { engine, read, readInWorkspace, create, active, ids, service };
+  return { engine, read, readInWorkspace, create, active, ids: listedSessionIds, service };
 }
 
 describe("session roster and detail", () => {
@@ -697,45 +699,46 @@ describe("session roster and detail", () => {
   });
 });
 
+/** One turn the way the runtime records it: the door's command, then the turn it opened. */
+async function turn(
+  f: ReturnType<typeof fixture>,
+  sessionId: string,
+  turnId: string,
+  origin: SessionOrigin | null,
+) {
+  await f.engine.submit({
+    commandId: `message-${turnId}`,
+    sessionId,
+    intent: {
+      kind: "message.submit",
+      reference: { id: `reference-${turnId}`, mediaType: null, digest: null },
+    },
+    provenance: {
+      source: {
+        kind: "user",
+        id: "test",
+        detail: origin === null ? null : { sessionOrigin: origin },
+      },
+      venue: { id: "local", kind: "local" },
+    },
+  });
+  const projection = (await f.engine.getSession({ sessionId }))!;
+  await f.engine.observe({
+    id: `turn-${turnId}`,
+    kind: "turn.started",
+    sessionId,
+    attachmentId: projection.attachments.find((attachment) => attachment.status === "open")!.id,
+    occurredAt: 9 * DAY,
+    provenance,
+    turnId,
+  });
+}
+
+const sessionRow = (response: AgentResponse, handle: string) =>
+  (data(response)["sessions"] as Record<string, unknown>[]).find((row) => row["id"] === handle);
+
 describe("who started and who resumed a Session", () => {
   const RUN = "3f2a1b2c-0000-4000-8000-00000000aaaa";
-  const sessionRow = (response: AgentResponse, handle: string) =>
-    (data(response)["sessions"] as Record<string, unknown>[]).find((row) => row["id"] === handle);
-
-  /** One turn the way the runtime records it: the door's command, then the turn it opened. */
-  async function turn(
-    f: ReturnType<typeof fixture>,
-    sessionId: string,
-    turnId: string,
-    origin: SessionOrigin | null,
-  ) {
-    await f.engine.submit({
-      commandId: `message-${turnId}`,
-      sessionId,
-      intent: {
-        kind: "message.submit",
-        reference: { id: `reference-${turnId}`, mediaType: null, digest: null },
-      },
-      provenance: {
-        source: {
-          kind: "user",
-          id: "test",
-          detail: origin === null ? null : { sessionOrigin: origin },
-        },
-        venue: { id: "local", kind: "local" },
-      },
-    });
-    const projection = (await f.engine.getSession({ sessionId }))!;
-    await f.engine.observe({
-      id: `turn-${turnId}`,
-      kind: "turn.started",
-      sessionId,
-      attachmentId: projection.attachments.find((attachment) => attachment.status === "open")!.id,
-      occurredAt: 9 * DAY,
-      provenance,
-      turnId,
-    });
-  }
   let attachmentNumber = 0;
   async function attach(
     f: ReturnType<typeof fixture>,
@@ -1299,6 +1302,25 @@ const attachmentFor = (sessionId: string, attachmentId = `attachment-${sessionId
 const message = (id: string, text: string) =>
   ({ id, role: "user", parts: [{ type: "text", text }] }) as StoredSessionFollowUp["message"];
 
+const seedQueue = (sessionId: string, entries: StoredSessionFollowUp[]) =>
+  createSqliteSessionFollowUpLedger(db.db).transaction(sessionId, (state) => {
+    state.entries.push(...entries);
+    state.revision += 1;
+  });
+
+const queued = (
+  id: string,
+  state: StoredSessionFollowUp["state"],
+  extra: Partial<StoredSessionFollowUp> = {},
+): StoredSessionFollowUp => ({
+  id,
+  commandId: `command-${id}`,
+  deliveryCommandId: `delivery-${id}`,
+  state,
+  message: message(id, `text of ${id}`),
+  ...extra,
+});
+
 // VC-758: `session peek` answers the runtime facts a reader needs to explain a
 // quiet, stopped or ended chat. Each case writes through the real engine and
 // SQLite ledger, and the queue is read through the same SQLite follow-up
@@ -1365,23 +1387,6 @@ describe("session peek runtime facts (VC-758)", () => {
     });
   const peek = async (f: Fixture, id: string, args: Record<string, unknown> = {}) =>
     data(await f.read("session.peek", { id: id.slice(0, 8), ...args }));
-  const queued = (
-    id: string,
-    state: StoredSessionFollowUp["state"],
-    extra: Partial<StoredSessionFollowUp> = {},
-  ): StoredSessionFollowUp => ({
-    id,
-    commandId: `command-${id}`,
-    deliveryCommandId: `delivery-${id}`,
-    state,
-    message: message(id, `text of ${id}`),
-    ...extra,
-  });
-  const seedQueue = (sessionId: string, entries: StoredSessionFollowUp[]) =>
-    createSqliteSessionFollowUpLedger(db.db).transaction(sessionId, (state) => {
-      state.entries.push(...entries);
-      state.revision += 1;
-    });
 
   it.each([
     ["auth_required", "Sign-in required", "Open settings"],

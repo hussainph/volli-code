@@ -103,6 +103,22 @@ describe("a disk that fills", () => {
   });
 });
 
+async function cancelledExportAt(name: string): Promise<string> {
+  const controller = new AbortController();
+  await expect(
+    exportMigrationSnapshot(
+      options({
+        outDir: join(work, name),
+        signal: controller.signal,
+        onProgress: (report) => {
+          if (report.phase === "exporting") controller.abort();
+        },
+      }),
+    ),
+  ).rejects.toMatchObject({ code: "cancelled" });
+  return stagingDirOf(join(work, name));
+}
+
 describe("a damaged staging area", () => {
   it("re-snapshots when state.json is from another format or its snapshot is gone", async () => {
     const staging = await cancelledExport();
@@ -115,22 +131,6 @@ describe("a damaged staging area", () => {
     const result = await exportMigrationSnapshot(options({ outDir: join(work, "again") }));
     expect(result.resumed).toBe(false);
   });
-
-  async function cancelledExportAt(name: string): Promise<string> {
-    const controller = new AbortController();
-    await expect(
-      exportMigrationSnapshot(
-        options({
-          outDir: join(work, name),
-          signal: controller.signal,
-          onProgress: (report) => {
-            if (report.phase === "exporting") controller.abort();
-          },
-        }),
-      ),
-    ).rejects.toMatchObject({ code: "cancelled" });
-    return stagingDirOf(join(work, name));
-  }
 
   it("surfaces filesystem faults it cannot explain", async () => {
     const staging = await cancelledExport();
