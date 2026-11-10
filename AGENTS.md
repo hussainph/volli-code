@@ -87,8 +87,8 @@ CI owns the full suite, coverage thresholds and smoke lanes; `CI gate` sums ever
 - **Watch CI without `sleep` loops**: one blocking `gh pr checks <pr> --watch --fail-fast`. On red, read only the failing log (`gh run view <run-id> --log-failed`), fix that, push once.
 - **Hand off at PR-open**: move the ticket to review and name the PR. If CI goes red later, fix it on the same branch.
 - **Merge only on request and on green**: `gh pr merge <pr> --merge --match-head-commit <sha>`. Never `--auto`.
-- **Red main**: the same step failing on two unrelated PRs is a `main` breakage. Say so in the ticket; don't fix it in your diff. A red `CI extended` on main blocks releases: ticket it and fix it on its own branch, don't re-run until green.
-- Before merging a PR that changes a smoke journey's area or the cloud path, dispatch `gh workflow run ci-extended.yml --ref <branch>`. New `*-smoke.mjs` files join the extended lane automatically.
+- **Red main**: the same step failing on two unrelated PRs is a `main` breakage. Say so in the ticket; don't fix it in your diff.
+- **Extended at release**: release runs `ci-extended.yml` on the exact shipped commit and requires success before tagging, signing or publishing, unless `require_green=false` is explicitly chosen. A red extended run at release blocks the release: ticket it and fix it on its own branch, don't re-run until green. Extended does not run on main pushes or nightly; path-filtered lane-definition PRs and manual dispatch remain. Dispatching a risky branch (`gh workflow run ci-extended.yml --ref <branch>`) is an exception, not a routine pre-merge requirement. New `*-smoke.mjs` files join the extended lane automatically.
 - Smoke retries, quarantine and consolidation follow `docs/development/smoke-tests.md`. Never delete smoke coverage without maintainer approval.
 
 ## Session environment

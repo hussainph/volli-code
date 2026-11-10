@@ -51,12 +51,12 @@ name: CI
 #     unsigned-packaging check.
 #   - The EXTENDED lanes moved, not deleted: the rest smoke tier (every other
 #     non-quarantined journey) and flag-on cloud acceptance run in
-#     ci-extended.yml on every main push, nightly, and on demand for any branch
-#     (`gh workflow run ci-extended.yml --ref <branch>`). Their results are
-#     visible on the commit, they do not gate PRs, and the release workflow
-#     requires them green on the commit it releases. N-1's fixed and rolling
-#     tags (release, latest-canary, v0.2.1, v0.2.2-canary.1) run here on main
-#     pushes and nightly, and on a PR only when it touches the data layer the
+#     ci-extended.yml only at release time (plus lane-definition PRs). A manual
+#     dispatch for a risky branch is an exception, not a pre-merge requirement.
+#     Release calls extended on its exact SHA before tagging/signing/publishing.
+#     N-1's fixed and rolling tags (release, latest-canary, v0.2.1,
+#     v0.2.2-canary.1) run sequentially in one job here on main pushes and
+#     nightly, and on a PR only when it touches the data layer the
 #     older builds read back (migrations, backup/restore, ledger, blobs) or the
 #     N-1 harness — where a change can break an older build yet pass against
 #     the base. Anything else is caught on the merge. Measured repeat flakers stay in
@@ -139,7 +139,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Every N-1 lane, and the one a PR always runs. The matrix reads its
+          # Every N-1 lane, and the one a PR always runs. The job reads its
           # list from here, so this is the one place a lane is added.
           n1_all='["release","latest-canary","base","v0.2.1","v0.2.2-canary.1"]'
           n1_pr='["base"]'
@@ -369,7 +369,7 @@ jobs:
       # The BYO runner acceptance lane's harness (VC-1043): the fake GitHub,
       # the release server and the leg runner. The lane itself runs in
       # ci-extended.yml; its harness is checked here so a break is caught
-      # before merge, not as a red CI extended on main.
+      # before merge, not when CI extended blocks a release.
       - name: Test the BYO acceptance harness
         run: node --test scripts/fake-github/*.test.mjs apps/runner/e2e/lib/*.test.mjs
 
@@ -935,7 +935,7 @@ jobs:
   # floor. That is the author rule above MIGRATIONS in
   # packages/host-core/src/db/migrations.ts, checked against a real older
   # build instead of only the author's word. Rolling and fixed N-1s, in
-  # parallel — all of them on main pushes and nightly, and on a PR only when
+  # sequence in one job — all on main pushes and nightly, and on a PR only when
   # Scope sees migration or N-1 harness inputs change (else `base` alone):
   #   - release: the newest vX.Y.Z tag, the build external users run and drop
   #     back to. Also holds the release policy: no floor raise may land while
@@ -953,14 +953,10 @@ jobs:
   # (scripts/n1/prepare.mjs), so neither its code nor its dependencies come
   # from this checkout. fetch-depth 0 brings the tags and the base commit.
   n1-compat:
-    name: N-1 compatibility (${{ matrix.lane }})
+    name: N-1 compatibility
     needs: changes
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        lane: ${{ fromJSON(needs.changes.outputs.n1-lanes) }}
+    timeout-minutes: 75
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -974,43 +970,67 @@ jobs:
           cache: true
           run-install: true
 
-      - name: Prepare N-1
-        id: prepare
+      - name: Run selected N-1 lanes sequentially
         shell: bash
         env:
-          LANE: ${{ matrix.lane }}
+          LANES: ${{ needs.changes.outputs.n1-lanes }}
           EVENT: ${{ github.event_name }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PUSH_BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
-          if [[ "$LANE" == "release" ]]; then
-            args=(--release)
-          elif [[ "$LANE" == "latest-canary" ]]; then
-            args=(--canary)
-          elif [[ "$LANE" == "v0.2.1" || "$LANE" == "v0.2.2-canary.1" ]]; then
-            args=(--ref "$LANE")
-          else
-            case "$EVENT" in
-              pull_request) base="$PR_BASE" ;;
-              push) base="$PUSH_BEFORE" ;;
-              *) base="" ;;
-            esac
-            # A new branch's push has no `before`; fall back to the first parent.
-            if [[ -z "$base" || "$base" =~ ^0+$ ]]; then base="$(git rev-parse HEAD^1)"; fi
-            args=(--ref "$base")
-          fi
-          node packages/host-core/scripts/n1/prepare.mjs "${args[@]}" --out "$RUNNER_TEMP/n1" | tee "$RUNNER_TEMP/n1-prepare.log"
-          manifest="$(tail -n 1 "$RUNNER_TEMP/n1-prepare.log")"
-          test -f "$manifest"
-          echo "manifest=$manifest" >> "$GITHUB_OUTPUT"
-          head -n -1 "$RUNNER_TEMP/n1-prepare.log" | tail -n 1 >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Run N-1 against this build's head
-        working-directory: packages/host-core
-        env:
-          VOLLI_N1_MANIFEST: ${{ steps.prepare.outputs.manifest }}
-        run: vp test run src/db/n1-compatibility.test.ts --maxWorkers=$(nproc)
+          lanes="$(jq -er '.[]' <<< "$LANES")"
+          status=0
+          {
+            echo "### N-1 compatibility"
+            echo
+            echo "| Lane | Result |"
+            echo "|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for LANE in $lanes; do
+            echo "::group::N-1 $LANE"
+            # A subshell with errexit, not a function in an `if`: a failed
+            # prepare must stop this lane, but never suppress later lanes.
+            set +e
+            (
+              set -euo pipefail
+              if [[ "$LANE" == "release" ]]; then
+                args=(--release)
+              elif [[ "$LANE" == "latest-canary" ]]; then
+                args=(--canary)
+              elif [[ "$LANE" == "v0.2.1" || "$LANE" == "v0.2.2-canary.1" ]]; then
+                args=(--ref "$LANE")
+              elif [[ "$LANE" == "base" ]]; then
+                case "$EVENT" in
+                  pull_request) base="$PR_BASE" ;;
+                  push) base="$PUSH_BEFORE" ;;
+                  *) base="" ;;
+                esac
+                # A new branch's push has no `before`; use the first parent.
+                if [[ -z "$base" || "$base" =~ ^0+$ ]]; then base="$(git rev-parse HEAD^1)"; fi
+                args=(--ref "$base")
+              else
+                echo "::error::Unknown N-1 lane '$LANE'"
+                exit 1
+              fi
+              node packages/host-core/scripts/n1/prepare.mjs "${args[@]}" --out "$RUNNER_TEMP/n1" | tee "$RUNNER_TEMP/n1-prepare.log"
+              manifest="$(tail -n 1 "$RUNNER_TEMP/n1-prepare.log")"
+              test -f "$manifest"
+              cd packages/host-core
+              VOLLI_N1_MANIFEST="$manifest" vp test run src/db/n1-compatibility.test.ts --maxWorkers="$(nproc)"
+            )
+            result=$?
+            set -e
+            echo "::endgroup::"
+            if [[ "$result" == 0 ]]; then
+              echo "| $LANE | success |" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "::error::N-1 $LANE failed (exit $result)"
+              echo "| $LANE | failure (exit $result) |" >> "$GITHUB_STEP_SUMMARY"
+              status=1
+            fi
+          done
+          exit "$status"
 
   # The Linux host image, then the hostd artifact built inside it (VC-562):
   # Node = .nvmrc and bookworm's glibc, natives compiled there, then booted
@@ -1080,7 +1100,7 @@ jobs:
   # Core e2e: boot/board, session/composer, CLI round-trip, DB recovery and
   # theming, plus the macOS-only licence assertions and the unsigned-packaging
   # check. The ONE macOS job a PR runs (VC-934); the rest smoke tier and cloud
-  # acceptance run in ci-extended.yml after merge.
+  # acceptance run in ci-extended.yml at release time.
   smoke-boot:
     name: Smoke (core e2e)
     needs: changes
