@@ -20,7 +20,6 @@
  *    where a person can see that and re-pin.
  */
 import {
-  AUTOMATION_SCHEDULE_LATE_GRACE_MS,
   automationOwnership,
   automationTriggerColumns,
   automationTriggerSchedule,
@@ -30,7 +29,6 @@ import {
   isTicketStatus,
   modelTierRow,
   nextScheduleOccurrence,
-  scheduleSentence,
   TICKET_STATUS_LABELS,
   UNBOUND_RUN_LABEL,
 } from "@volli/shared";
@@ -55,7 +53,7 @@ import type {
  * and is therefore never one of the answers — the Trigger says only what
  * *else* starts an Automation.
  */
-export const MANUAL_TRIGGER_LABEL = "Only when I run it";
+export const MANUAL_TRIGGER_LABEL = "Manual only";
 
 /**
  * What a switched-off Automation says where it is OFFERED in a menu row — the
@@ -94,7 +92,28 @@ export function triggerLabel(trigger: AutomationTrigger): string {
   // easily lost: a reader who cannot see the zone cannot tell whether 21:00 is
   // theirs, and travelling is exactly when that matters.
   const schedule = automationTriggerSchedule(trigger);
-  if (schedule !== null) return scheduleSentence(schedule);
+  if (schedule !== null) {
+    const time =
+      schedule.preset === "hourly"
+        ? `:${String(schedule.minute).padStart(2, "0")}`
+        : `${String(schedule.hour).padStart(2, "0")}:${String(schedule.minute).padStart(2, "0")}`;
+    // Complete recurrence phrases are localization units, not weekday + English suffix.
+    const recurrence =
+      schedule.preset === "weekly"
+        ? (
+            {
+              monday: "Mondays",
+              tuesday: "Tuesdays",
+              wednesday: "Wednesdays",
+              thursday: "Thursdays",
+              friday: "Fridays",
+              saturday: "Saturdays",
+              sunday: "Sundays",
+            } as const
+          )[schedule.weekday]
+        : ({ hourly: "Hourly", daily: "Daily", weekdays: "Weekdays" } as const)[schedule.preset];
+    return `${recurrence} · ${time} · ${schedule.timeZone}`;
+  }
   const columns = automationTriggerColumns(trigger);
   if (columns.length === 0) return MANUAL_TRIGGER_LABEL;
   // The same verb the editor's second choice uses, finished by the columns —
@@ -107,9 +126,10 @@ export function triggerLabel(trigger: AutomationTrigger): string {
  * it, and it leads with `/skill` on purpose: VC-112 asks for a placeholder
  * that "pushes toward `/skill` rather than prose", because the reusable half
  * of an Automation belongs in git as a Skill, where it is reviewed in a pull
- * request and travels between machines on its own.
+ * request and travels between machines on its own. One plain clause, with no
+ * ellipsis or dash: a placeholder is read at a glance.
  */
-export const INSTRUCTIONS_PLACEHOLDER = "/skill … — or @ a file. Keep the prose in the Skill.";
+export const INSTRUCTIONS_PLACEHOLDER = "/skill to run a Skill, or @ to add a file";
 
 /** Where an Automation is listed. The two words the Ownership control uses. */
 export function ownershipLabel(automation: Pick<Automation, "projectId">): string {
@@ -141,7 +161,7 @@ function modelPairLabel(pair: { modelId: string; reasoningLevel: string }): stri
  * {@link runModelLabel} is where a Run says it.
  */
 export function runtimeLabel(runtime: AutomationRuntime): string {
-  if (runtime === null) return "Default model";
+  if (runtime === null) return "Project default";
   if (isAutomationRuntimeTier(runtime)) return modelTierRow(runtime.tier).label;
   if (!isAutomationRuntimePin(runtime)) return "Unreadable runtime";
   return modelPairLabel(runtime);
@@ -202,7 +222,7 @@ export function runStartLabel(run: Pick<AutomationRun, "attendance">): string {
 /**
  * What an EMPTY history says — or `null` while it does not yet know (VC-297).
  *
- * "Nothing has run this Automation yet" is a claim about the past, and a cache
+ * "No runs yet" is a claim about the past, and a cache
  * that has never been read cannot make it. Each scope is its own read now, so
  * a cold cache is the ordinary state every time the reader picks another
  * record — and answering that with a sentence would state a fact the very next
@@ -210,13 +230,11 @@ export function runStartLabel(run: Pick<AutomationRun, "attendance">): string {
  * scoped read (`ticket-rail-automations.tsx`): say nothing until you know.
  *
  * `loaded` therefore means READ, not non-empty. An empty answer that landed is
- * a real answer and gets its sentence; silence gets silence.
+ * a real answer and gets its label; silence gets silence.
  */
-export function historyEmptyCopy(automationId: string | null, loaded: boolean): string | null {
+export function historyEmptyCopy(loaded: boolean): string | null {
   if (!loaded) return null;
-  return automationId === null
-    ? "Nothing has run in this project yet."
-    : "Nothing has run this Automation yet.";
+  return "No runs yet";
 }
 
 /**
@@ -403,17 +421,17 @@ export function automationHistory(
 export function skipReasonLabel(skip: Pick<AutomationSkippedOccurrence, "reason">): string {
   switch (skip.reason.kind) {
     case "app-closed":
-      return "Skipped — Volli wasn’t running";
+      return "Skipped · Volli was closed";
     // Said as what was observed rather than as a cause: the app WAS running and
     // still did not reach the due time — a sleeping machine, a busy one, a
     // suspended process. Printing "Volli wasn't running" here would be a
     // sentence the reader could disprove.
     case "not-observed":
-      return "Skipped — Volli didn’t wake in time";
+      return "Skipped · Volli didn’t wake in time";
     case "run-refused":
-      return `Skipped — ${skip.reason.error}`;
+      return `Skipped · ${skip.reason.error}`;
     case "unknown":
-      return "Skipped — reason unreadable";
+      return "Skipped · Reason unavailable";
   }
 }
 
@@ -460,21 +478,29 @@ export function nextScheduledRun(input: {
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
-    timeZone: input.timeZone,
-    timeZoneName: "short",
+    timeZone: input.schedule.timeZone,
+    hour12: false,
   });
-  return { at, label: `Next: ${reading}` };
+  return { at, label: `Next · ${reading} · ${input.schedule.timeZone}` };
 }
 
-/**
- * When a due time becomes a Skipped occurrence, said once at the schedule
- * control (VC-298).
- *
- * The grace is the host timer's own constant rather than a number typed here,
- * so the sentence cannot promise a window the scheduler does not keep. A due
- * time outside it is recorded as a Skipped occurrence in Run history, never
- * replayed.
- */
-export const SCHEDULE_SKIPPED_OCCURRENCE_POLICY = `Runs up to ${
-  AUTOMATION_SCHEDULE_LATE_GRACE_MS / 60_000
-} min late; skipped if Volli is closed or the Mac is asleep`;
+/** Display groups never change a column's independent authored rank. */
+export function groupByTrigger(automations: readonly Automation[], query: string) {
+  const needle = query.trim().toLocaleLowerCase();
+  const matches = automations.filter((row) =>
+    `${row.name} ${triggerLabel(row.trigger)}`.toLocaleLowerCase().includes(needle),
+  );
+  return (
+    [
+      { kind: "schedule", label: "Schedules" },
+      { kind: "columns", label: "Columns" },
+      { kind: "none", label: "Manual" },
+    ] as const
+  ).map((group) => ({
+    kind: group.kind,
+    label: group.label,
+    automations: matches
+      .filter((row) => row.trigger.kind === group.kind)
+      .toSorted((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id)),
+  }));
+}

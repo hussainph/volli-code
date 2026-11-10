@@ -52,6 +52,11 @@ import {
   waitUntil,
   HOME_TAB_STRIP,
 } from "./lib/smoke-kit.mjs";
+import {
+  assertSettingsWindow,
+  closeSettingsWindow,
+  settingsPageOf,
+} from "./lib/settings-window.mjs";
 
 const PROJECT = { id: "composer-verbs-project", name: "Composer Verbs", prefix: "CV" };
 
@@ -82,25 +87,21 @@ const toasts = (page) => page.locator("[data-sonner-toast]");
  * single category name breaks again the next time the taxonomy moves. The
  * `<nav>` and its accessible name are the surface's stable identity.
  */
-async function settingsOpen(page) {
-  return (await page.getByRole("navigation", { name: "Settings categories" }).count()) >= 1;
-}
+/** The launched Electron app, bound before any check drives Settings. */
+let appRef = null;
+const settingsOpen = () => settingsPageOf(appRef) !== null;
 
 /**
  * Put the chat back in front, whatever the last check left up.
  *
- * Leaving Settings is a nav press, and Home comes back on whichever tab it was
- * last showing rather than necessarily this Session's — so the chat tab is
- * clicked by name rather than assumed. Every check starts here, so none of
- * them inherits the surface another one navigated to.
+ * Settings is a separate native window now, so there is no nav press that
+ * dismisses it. A leftover window is closed through its own close path; the
+ * chat tab is then clicked by name rather than assumed. Every check starts
+ * here, so none of them inherits a surface another one navigated to.
  */
 async function focusChat(page) {
-  if (await settingsOpen(page)) {
-    await page.getByRole("button", { name: "Home", exact: true }).first().click();
-    await waitUntil("Settings to close", async () => !(await settingsOpen(page)), {
-      timeout: 10000,
-    });
-  }
+  const settings = settingsPageOf(appRef);
+  if (settings !== null) await closeSettingsWindow(appRef, settings);
   if ((await composer(page).count()) === 0) {
     await tabStrip(page, HOME_TAB_STRIP).getByRole("tab", { name: /Chat/ }).first().click();
   }
@@ -153,6 +154,7 @@ async function main() {
   const projectDir = await makeGitRepo(scratch, "composer-verbs-project-");
 
   const app = await launch({ dbPath, userDataDir, extraEnv: { HOME: fakeHome } });
+  appRef = app;
   const page = await app.firstWindow();
   await page.waitForLoadState("domcontentloaded");
   await assertProfileIsolated(app, userDataDir);
@@ -202,7 +204,12 @@ async function main() {
       await typeDraft(page, "/settings");
       await submitDraft(page);
       try {
-        await waitUntil("Settings to open", () => settingsOpen(page), { timeout: 10000 });
+        const settings = await waitUntil(
+          "the native Settings window to open",
+          () => settingsPageOf(appRef),
+          { timeout: 10000 },
+        );
+        await assertSettingsWindow(appRef, page, settings);
         // Read the draft while Settings is up: the box is still mounted
         // behind it, and what is pinned here is that the act took the words.
         const draft = await composer(page).inputValue();
@@ -211,6 +218,8 @@ async function main() {
         }
         return { ok: true, detail: `settingsOpened=true draftCleared=true` };
       } finally {
+        const settings = settingsPageOf(appRef);
+        if (settings !== null) await closeSettingsWindow(appRef, settings);
         await focusChat(page);
       }
     });
@@ -233,11 +242,14 @@ async function main() {
     });
 
     await attempt(4, "trailing words on a verb that reads none refuse, and keep them", async () => {
+      // A Settings window left from check 2 would make the negative below a
+      // lie; it was closed there, and this asserts the baseline again.
+      if (settingsOpen()) throw new Error("a Settings window was already open before the refusal");
       await typeDraft(page, "/settings please");
       await submitDraft(page);
       await sleep(700);
       const said = await toastTexts(page);
-      const ranAnyway = await settingsOpen(page);
+      const ranAnyway = settingsOpen();
       const draft = ranAnyway ? "<settings opened>" : await composer(page).inputValue();
       try {
         if (!said.some((line) => line.includes("takes no instructions"))) {

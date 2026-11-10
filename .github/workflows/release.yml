@@ -7,8 +7,12 @@ name: Release
 # with the generated pin, publishing workflow artifacts only. Dry runs never
 # bump versions, tag, sign desktop, or publish a release. Real dispatches bump
 # root and desktop versions together; tag pushes require that bump beforehand.
-# A tag pushed with GITHUB_TOKEN cannot trigger another workflow. Switching to
-# a PAT or deploy key would trigger both publishing paths and must be reviewed.
+# A tag pushed with GITHUB_TOKEN cannot trigger another workflow, so the
+# button's tag stays on GITHUB_TOKEN: pushing it with a PAT or deploy key would
+# start the tag path too and publish twice. Only the bump commit goes to main
+# over SSH with RELEASE_DEPLOY_KEY (VC-1057), the one actor main's ruleset lets
+# past its required "CI gate" check. That push does start ci.yml,
+# ci-extended.yml and codeql.yml on main, as merges do.
 #
 # Build, staple, verify, then upload: uploading while the staple hook writes
 # can corrupt the distributed DMG even when the local file passes validation.
@@ -23,13 +27,16 @@ name: Release
 #   APPLE_API_KEY_P8: App Store Connect API key
 #   APPLE_API_KEY_ID: API key identifier
 #   APPLE_API_ISSUER: API issuer identifier
+#   RELEASE_DEPLOY_KEY: private half of a write deploy key, held in the
+#     main-only `release` environment, never repo-wide; button releases only
+#     (see docs/runbooks/hostd-release.md); dry runs and tags never read it
 # Missing credentials fail preflight rather than falling back to ad-hoc signing.
 #
-# Hyphenated tags are prereleases (EP_PRE_RELEASE=true); only canary-enabled
-# installs follow them. Bare tags produce drafts; publish the draft after
-# reviewing its release notes to put it on the updater feed. Pre-create the
-# release once, then upload into it to avoid races between publisher instances.
-# Reruns replace owned assets and remove stale ones.
+# Every tag starts as a draft, invisible to the public updater feed. Upload
+# the complete signed/stapled asset set and verify its downloaded bytes before
+# publishing hyphenated tags as prereleases. Bare tags stay manual drafts.
+# Published-tag reruns verify only; draft reruns replace assets and remove stale
+# ones. Finally check the public latest-mac.yml URL without authentication.
 # The updater reads the release feed unauthenticated: keep it publicly readable.
 
 on:
@@ -67,14 +74,28 @@ jobs:
     permissions:
       contents: write
     if: github.event_name == 'workflow_dispatch' && !inputs.dry_run
+    # The deploy key can bypass main's ruleset, so it lives in an environment
+    # only main may deploy from, not in repo secrets a branch could read.
+    environment: release
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
       tag: ${{ steps.resolve.outputs.tag }}
       version: ${{ steps.resolve.outputs.version }}
     steps:
+      # Before anything else, so a missing key costs no guard runs and can
+      # never leave a bump half-done. Dry runs and tag pushes skip this job.
+      - name: "Guard: release deploy key present"
+        env:
+          RELEASE_DEPLOY_KEY: ${{ secrets.RELEASE_DEPLOY_KEY }}
+        run: |
+          if [ -z "$RELEASE_DEPLOY_KEY" ]; then
+            echo "::error::Missing secret RELEASE_DEPLOY_KEY — main's ruleset requires 'CI gate', and only the release deploy key may push the version bump past it. Set it in the 'release' environment per docs/runbooks/hostd-release.md, or run a dry run (no key needed)."
+            exit 1
+          fi
+
       # persist-credentials stays TRUE here, unlike every other checkout in
-      # this repo: this job's whole purpose is to push back to main.
+      # this repo: the tag is pushed back with GITHUB_TOKEN (see the header).
       - name: Checkout main
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -87,6 +108,14 @@ jobs:
       # workflows: ci.yml is the PR gate, and ci-extended.yml carries the
       # smoke journeys and cloud acceptance that left that gate (VC-934), so a
       # release still needs every journey green on the commit it ships.
+      #
+      # ci.yml must be green on this exact SHA (it is ~10 minutes). The long
+      # ci-extended.yml may instead be green on a first-parent ancestor when
+      # every file changed since that ancestor is inert prose/website — the
+      # same `inert` set ci.yml's Scope uses to skip core e2e — so a docs
+      # merge does not cost a full extended cycle before a release. Anything
+      # outside that set (source, packages, e2e, workflows, manifests) still
+      # needs extended green on the exact SHA.
       - name: "Guard: CI is green on this commit"
         if: inputs.require_green
         env:
@@ -95,20 +124,41 @@ jobs:
           set -euo pipefail
           sha="$(git rev-parse HEAD)"
           echo "releasing $sha"
-          for workflow in ci.yml ci-extended.yml; do
+          inert='^(docs/|reference/|lessons/|assets/|apps/website/|apps/docs/|\.github/ISSUE_TEMPLATE/|[^/]*\.md$|LICENSE$)'
+          green_on() { # <workflow> <sha> -> 0 when a completed run on <sha> succeeded
+            local conclusions
             conclusions=$(gh api \
-              "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs?head_sha=${sha}&status=completed" \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/$1/runs?head_sha=$2&status=completed" \
               -q '.workflow_runs[].conclusion' || true)
-            if [ -z "$conclusions" ]; then
-              echo "::error::No completed $workflow run for $sha. Wait for it to finish on main (or start one: gh workflow run $workflow --ref main), or re-run with require_green=false if you know why it is missing."
-              exit 1
+            grep -qx success <<<"$conclusions"
+          }
+          if ! green_on ci.yml "$sha"; then
+            echo "::error::ci.yml is not green on $sha. Wait for it to finish on main (or start one: gh workflow run ci.yml --ref main), or re-run with require_green=false if you know why it is missing."
+            exit 1
+          fi
+          echo "ci.yml is green on $sha"
+          if green_on ci-extended.yml "$sha"; then
+            echo "ci-extended.yml is green on $sha"
+            exit 0
+          fi
+          # Walk back along main's first parents to the newest commit whose
+          # extended run succeeded, then require everything since it to be inert.
+          for base in $(git rev-list --first-parent --max-count=30 "$sha"); do
+            [ "$base" = "$sha" ] && continue
+            green_on ci-extended.yml "$base" || continue
+            changed="$(git diff --name-only "$base" "$sha")"
+            live="$(grep -vE "$inert" <<<"$changed" || true)"
+            if [ -z "$live" ]; then
+              echo "ci-extended.yml is green on ancestor $base; everything since is inert:"
+              sed 's/^/  /' <<<"$changed"
+              exit 0
             fi
-            if ! grep -qx success <<<"$conclusions"; then
-              echo "::error::$workflow did not succeed on $sha (saw: $(tr '\n' ' ' <<<"$conclusions")). Fix main before releasing."
-              exit 1
-            fi
-            echo "$workflow is green on $sha"
+            echo "::error::ci-extended.yml is not green on $sha. The newest green ancestor $base is followed by non-inert changes:"
+            sed 's/^/  /' <<<"$live"
+            exit 1
           done
+          echo "::error::ci-extended.yml is not green on $sha or on any of its last 30 first-parent ancestors. Wait for it on main, or re-run with require_green=false if you know why it is missing."
+          exit 1
 
       - name: Resolve version
         id: resolve
@@ -157,6 +207,7 @@ jobs:
         env:
           VERSION: ${{ steps.resolve.outputs.version }}
           TAG: ${{ steps.resolve.outputs.tag }}
+          RELEASE_DEPLOY_KEY: ${{ secrets.RELEASE_DEPLOY_KEY }}
         run: |
           set -euo pipefail
           for f in package.json apps/desktop/package.json; do
@@ -170,12 +221,25 @@ jobs:
           git add package.json apps/desktop/package.json
           git commit -m "chore(release): $VERSION"
           git tag "$TAG"
-          # Push the branch first: if main moved while this job ran, this is a
-          # non-fast-forward and the ruleset rejects it, so the run fails here
-          # having pushed no tag and released nothing. Re-run to pick up the
-          # new head.
-          git push origin HEAD:main
-          git push origin "$TAG"
+          # main requires "CI gate" on an up-to-date head, which a commit made
+          # here cannot have, so the bump goes over SSH as the deploy key the
+          # ruleset bypasses. Pinned to GitHub's published ed25519 host key
+          # (api.github.com/meta); the key file lives only for this step.
+          key="$RUNNER_TEMP/release_deploy_key"
+          trap 'rm -f "$key"' EXIT
+          (umask 077 && printf '%s\n' "$RELEASE_DEPLOY_KEY" > "$key")
+          printf '%s\n' "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" > "$RUNNER_TEMP/github_known_hosts"
+          ssh_command="ssh -i '$key' -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o UserKnownHostsFile='$RUNNER_TEMP/github_known_hosts'"
+          # Push the branch first, without force: if main moved while this job
+          # ran, git refuses the non-fast-forward itself (the deploy key
+          # bypasses the ruleset, so the ruleset is no longer what stops it),
+          # and the run fails here having pushed no tag and released nothing.
+          # Re-run to pick up the new head.
+          GIT_SSH_COMMAND="$ssh_command" \
+            git push "git@github.com:${GITHUB_REPOSITORY}.git" HEAD:refs/heads/main
+          rm -f "$key"
+          # The tag stays on GITHUB_TOKEN so it does not also start the tag path.
+          git push origin "refs/tags/$TAG"
 
   # Resolve once, so every hostd target and desktop use exactly the same ref.
   # Dry runs always use the selected branch; they never enter prepare/release.
@@ -238,9 +302,8 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
       - name: Setup Vite+
         if: steps.scope.outputs.tag != ''
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        uses: ./.github/actions/setup-toolchain
         with:
-          node-version-file: package.json
           cache: true
           run-install: true
       - name: Capture public peer through real adapters
@@ -414,24 +477,9 @@ jobs:
       # the packager copies this Node into the archive and refuses any other.
       # No dependency cache: a release build installs from the lockfile alone.
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        uses: ./.github/actions/setup-toolchain
         with:
-          node-version-file: .nvmrc
           run-install: false
-      # The packager and the integration test call `pnpm` itself, which
-      # setup-vp does not put on PATH. Enable it the way the Linux host image
-      # does (corepack, at package.json's packageManager), from the corepack
-      # shipped with this exact Node.
-      - name: Enable pinned pnpm
-        run: |
-          set -euo pipefail
-          node_bin="$(dirname "$(node -p process.execPath)")"
-          mkdir -p "$RUNNER_TEMP/pnpm-bin"
-          "$node_bin/corepack" enable --install-directory "$RUNNER_TEMP/pnpm-bin" pnpm
-          echo "$RUNNER_TEMP/pnpm-bin" >> "$GITHUB_PATH"
-          export PATH="$RUNNER_TEMP/pnpm-bin:$PATH"
-          expected="$(node -p 'require("./package.json").packageManager.split("@")[1]')"
-          test "$(pnpm --version)" = "$expected"
       - name: Check runner architecture
         env:
           ARCH: ${{ matrix.arch }}
@@ -485,9 +533,8 @@ jobs:
           ref: ${{ needs.hostd-ref.outputs.ref }}
           persist-credentials: false
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        uses: ./.github/actions/setup-toolchain
         with:
-          node-version-file: package.json
           run-install: false
       # Two explicit patterns rather than hostd-*, which would also match
       # hostd-release-assets on a re-run.
@@ -539,11 +586,121 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  runner:
+    name: Package runner (linux-${{ matrix.arch }})
+    needs: [prepare, hostd-ref]
+    if: always() && !cancelled() && needs.hostd-ref.result == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout resolved ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.hostd-ref.outputs.ref }}
+          persist-credentials: false
+      - name: Build runner ABI-baseline image
+        run: docker build --file .devcontainer/runner-build/Dockerfile --tag volli-runner-build .
+      - name: Package and boot runner
+        env:
+          ARCH: ${{ matrix.arch }}
+          # An unfinished command-registry build can prove packaging in a dry
+          # run, but must never reach a published runner release/channel feed.
+          ALLOW_SKELETON: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+          VOLLI_BUILD_CONVEX_URL: ${{ vars.VOLLI_BUILD_CONVEX_URL }}
+          VOLLI_BUILD_CONVEX_SITE_URL: ${{ vars.VOLLI_BUILD_CONVEX_SITE_URL }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/runner"
+          chmod 0777 "$RUNNER_TEMP/runner"
+          docker run --rm -e EXPECTED_ARCH="$ARCH" volli-runner-build sh -ec \
+            'test "$(node -p process.arch)" = "$EXPECTED_ARCH"'
+          docker run --rm -e VOLLI_BUILD_CONVEX_URL -e VOLLI_BUILD_CONVEX_SITE_URL \
+            -v "$PWD:/src:ro" -v "$RUNNER_TEMP/runner:/out" volli-runner-build \
+            bash /src/apps/runner/scripts/ci-build-artifact.sh
+          docker run --rm -i -e ALLOW_SKELETON="$ALLOW_SKELETON" -v "$RUNNER_TEMP/runner:/out:ro" volli-runner-build \
+            bash -s < apps/runner/scripts/ci-boot-artifact.sh
+      - name: Upload runner architecture assets
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: runner-linux-${{ matrix.arch }}
+          path: |
+            ${{ runner.temp }}/runner/*.tar.gz
+            ${{ runner.temp }}/runner/*.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  runner-assets:
+    name: Verify runner release assets
+    needs: [hostd-ref, runner]
+    if: always() && !cancelled() && needs.runner.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout resolved ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.hostd-ref.outputs.ref }}
+          persist-credentials: false
+      # This job runs only Node scripts, with no dependencies or Vite binary.
+      - name: Setup pinned Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+      - name: Download runner architecture assets
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: runner-linux-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/runner-assets
+      - name: Generate runner manifest and stamped installer
+        run: |
+          node scripts/runner-release-manifest.mjs --assets "$RUNNER_TEMP/runner-assets"
+          cd "$RUNNER_TEMP/runner-assets"
+          sha256sum -c volli-runner-SHA256SUMS
+          cat volli-runner-manifest.json >> "$GITHUB_STEP_SUMMARY"
+      - name: Sign runner provenance
+        if: github.event_name != 'workflow_dispatch' || !inputs.dry_run
+        id: provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            ${{ runner.temp }}/runner-assets/*.tar.gz
+            ${{ runner.temp }}/runner-assets/volli-runner-manifest.json
+            ${{ runner.temp }}/runner-assets/volli-runner-install.sh
+            ${{ runner.temp }}/runner-assets/volli-runner-SHA256SUMS
+      - name: Collect runner signature bundle
+        if: github.event_name != 'workflow_dispatch' || !inputs.dry_run
+        env:
+          BUNDLE_PATH: ${{ steps.provenance.outputs.bundle-path }}
+        run: cp "$BUNDLE_PATH" "$RUNNER_TEMP/runner-assets/volli-runner-provenance.sigstore.json"
+      - name: Upload complete runner release asset set
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: runner-release-assets
+          path: ${{ runner.temp }}/runner-assets/*
+          if-no-files-found: error
+          retention-days: 14
+
   dry-run-desktop:
     name: Dry-run desktop build with hostd pin (no signing or publishing)
-    needs: [hostd-assets]
+    needs: [hostd-assets, runner-assets]
     if: >-
-      always() && !cancelled() && needs.hostd-assets.result == 'success' &&
+      always() && !cancelled() && needs.runner-assets.result == 'success' && needs.hostd-assets.result == 'success' &&
       github.event_name == 'workflow_dispatch' && inputs.dry_run
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -560,9 +717,8 @@ jobs:
           name: hostd-release-assets
           path: ${{ runner.temp }}/hostd-assets
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        uses: ./.github/actions/setup-toolchain
         with:
-          node-version-file: package.json
           cache: true
           run-install: true
       - name: Build desktop with verified hostd pin
@@ -596,9 +752,9 @@ jobs:
     # requires same-release assets. After a failure use "Re-run all jobs", not
     # "re-run failed jobs" (actions/download-artifact#486, cross-attempt 404s).
     # Button-mode prepare is not idempotent: it may bump again on a full rerun.
-    needs: [prepare, hostd-assets]
+    needs: [prepare, hostd-assets, runner-assets]
     if: >-
-      always() && !cancelled() && needs.hostd-assets.result == 'success' &&
+      always() && !cancelled() && needs.runner-assets.result == 'success' && needs.hostd-assets.result == 'success' &&
       (github.event_name != 'workflow_dispatch' || !inputs.dry_run) &&
       (needs.prepare.result == 'success' || needs.prepare.result == 'skipped')
     # arm64, matching the arm64-only target list in electron-builder.yml.
@@ -641,13 +797,14 @@ jobs:
             echo "::error::root package.json is $root but apps/desktop/package.json is $pkg — bump both together."
             exit 1
           fi
-          # Channel routing (see header): hyphenated = prerelease tag, goes
-          # live immediately; bare = stable, drafted for manual publish.
+          # Both channels remain private until their complete assets verify.
+          # Only prereleases then publish automatically; stable stays manual.
+          echo "EP_DRAFT=true" >> "$GITHUB_ENV"
           if [[ "$version" == *-* ]]; then
             echo "EP_PRE_RELEASE=true" >> "$GITHUB_ENV"
-            echo "prerelease tag — will publish live as a GitHub pre-release"
+            echo "prerelease tag — draft until uploaded assets verify"
           else
-            echo "bare tag — will be created as a draft (edit notes, then publish)"
+            echo "bare tag — draft for manual publication after verification"
           fi
 
       - name: "Guard: tag is on main"
@@ -723,8 +880,8 @@ jobs:
           fi
           echo "CSC_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
 
-      # Download and verify before creating a live canary pre-release: missing
-      # or corrupt hostd inputs must not leave an empty release behind.
+      # Download and verify before creating even a draft: missing or corrupt
+      # hostd inputs must not leave an empty release behind.
       - name: Download verified hostd release assets
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -745,36 +902,36 @@ jobs:
           done
           shasum -a 256 -c SHA256SUMS
 
-      # Seed the release for this tag before electron-builder runs, so its
-      # racing publisher instances all find and reuse one release instead of
-      # each trying to create it (see header). Hyphenated tag = live
-      # pre-release, bare tag = draft. Skips if a release already exists
-      # (re-run safety).
+      - name: Download verified runner release assets
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: runner-release-assets
+          path: ${{ runner.temp }}/runner-assets
+      - name: Verify runner release asset set
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/runner-assets"
+          shasum -a 256 -c volli-runner-SHA256SUMS
+          shopt -s nullglob
+          runnerFiles=(volli-runner-*.tar.gz volli-runner-*.tar.gz.sha256 volli-runner-SHA256SUMS volli-runner-manifest.json volli-runner-install.sh volli-runner-provenance.sigstore.json)
+          [ "${#runnerFiles[@]}" -eq 8 ] || { echo "::error::runner release asset set incomplete"; exit 1; }
+          for asset in "${runnerFiles[@]}"; do
+            [ -s "$asset" ] || { echo "::error::runner release asset missing or empty: $asset"; exit 1; }
+          done
+
+      # Drafts are not discoverable by updater clients while building or
+      # attaching assets. Reuse an existing draft without changing its notes.
       - name: Pre-create GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          version="${REF_NAME#v}"
-          existing=$(curl -sf -H "Authorization: Bearer $GH_TOKEN" \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases?per_page=100" |
-            jq -r --arg t "$REF_NAME" '[.[] | select(.tag_name == $t)] | length')
-          if [ "$existing" -gt 0 ]; then
-            echo "release for $REF_NAME already exists — electron-builder will upload into it"
-            exit 0
-          fi
-          if [[ "$version" == *-* ]]; then draft=false; prerelease=true; else draft=true; prerelease=false; fi
-          curl -sf -X POST -H "Authorization: Bearer $GH_TOKEN" \
-            -d "{\"tag_name\":\"$REF_NAME\",\"name\":\"$version\",\"draft\":$draft,\"prerelease\":$prerelease}" \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases" > /dev/null
-          echo "created $([ "$draft" = true ] && echo draft || echo "live pre-release") release for $REF_NAME"
+        run: node scripts/release-publication.mjs prepare
 
       # Mirrors ci.yml. run-install triggers apps/desktop's postinstall
       # (rebuild:native) — proven to survive on the macOS image by ci.yml's
       # desktop-smoke lane.
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
+        uses: ./.github/actions/setup-toolchain
         with:
-          node-version-file: package.json
           cache: true
           run-install: true
 
@@ -891,6 +1048,9 @@ jobs:
           cp "$RUNNER_TEMP/hostd-assets/"* .
           hostdFiles=(volli-hostd-*.tar.gz volli-hostd-*.tar.gz.sha256 SHA256SUMS hostd-release-manifest.json hostd-provenance.sigstore.json)
           files+=("${hostdFiles[@]}")
+          cp "$RUNNER_TEMP/runner-assets/"* .
+          runnerFiles=(volli-runner-*.tar.gz volli-runner-*.tar.gz.sha256 volli-runner-SHA256SUMS volli-runner-manifest.json volli-runner-install.sh volli-runner-provenance.sigstore.json)
+          files+=("${runnerFiles[@]}")
 
           # latest-mac.yml must describe the dmg about to be uploaded, but
           # electron-builder builds that entry while it builds the dmg, and the
@@ -925,27 +1085,10 @@ jobs:
           fi
           echo "latest-mac.yml dmg entry synced to ${dmgs[0]}"
 
-          # Drop anything already on this release that is not part of the set
-          # about to go up, so re-running a job — or refreshing a draft whose
-          # assets predate the rename above — replaces assets instead of
-          # colliding with them.
-          while read -r name; do
-            [ -n "$name" ] || continue
-            # VC-727's advisory job attaches this after publication. Preserve
-            # a prior capture if that job fails on a re-run.
-            [ "$name" != canary-peer.json ] || continue
-            keep=false
-            for f in "${files[@]}"; do
-              if [ "$name" = "$f" ]; then keep=true; break; fi
-            done
-            if [ "$keep" = false ]; then
-              echo "removing asset not in this build: $name"
-              gh release delete-asset "$REF_NAME" "$name" --yes
-            fi
-          done < <(gh release view "$REF_NAME" --json assets -q '.assets[].name')
-
-          gh release upload "$REF_NAME" "${files[@]}" --clobber
-          echo "published to $REF_NAME: ${files[*]}"
+          # Replace assets only on a draft, download and compare every upload,
+          # then publish canaries. Stable drafts stay manual. A published-tag
+          # rerun verifies without mutating live assets (including peer capture).
+          node ../../../scripts/release-publication.mjs upload . "${files[@]}"
 
       - name: Scrub credentials
         if: always()

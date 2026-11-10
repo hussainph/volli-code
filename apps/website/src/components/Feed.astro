@@ -16,7 +16,7 @@
  * zero spring, no newest-first cycling.
  */
 interface Props {
-  rows: readonly string[];
+  rows: readonly { title: string; ticket: string }[];
   label: string;
 }
 
@@ -25,7 +25,7 @@ const { rows, label } = Astro.props;
 
 <ul class="feed" aria-label={label} style={`--feed-count: ${rows.length}`}>
   {
-    rows.map((title, index) => (
+    rows.map(({ title, ticket }, index) => (
       <li class="feed-row" style={`--row: ${index}`}>
         <span class="feed-glyph" aria-hidden="true">
           <svg viewBox="0 0 16 16" width="14" height="14" fill="none">
@@ -41,7 +41,7 @@ const { rows, label } = Astro.props;
         <span class="feed-text">
           <span class="feed-title">{title}</span>
           <span class="feed-meta">
-            No ticket · just now<span class="visually-hidden"> · working</span>
+            {ticket} · just now<span class="visually-hidden"> · working</span>
           </span>
         </span>
       </li>

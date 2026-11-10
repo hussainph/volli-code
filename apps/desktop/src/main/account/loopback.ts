@@ -30,13 +30,17 @@ export interface LoopbackCallback {
 
 export class CallbackAbortedError extends Error {
   readonly code = "callback-aborted";
-  constructor(readonly reason: "cancelled" | "timed-out") {
+  // A declared field, not a parameter property: Node's type stripping loads this file
+  // directly for volli-drive's staging-token helper.
+  readonly reason: "cancelled" | "timed-out";
+  constructor(reason: "cancelled" | "timed-out") {
     super(
       reason === "timed-out"
         ? "The browser sign-in took too long. Try again."
         : "The browser sign-in was cancelled.",
     );
     this.name = "CallbackAbortedError";
+    this.reason = reason;
   }
 }
 

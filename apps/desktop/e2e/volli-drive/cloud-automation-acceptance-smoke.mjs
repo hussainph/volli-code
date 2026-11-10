@@ -98,9 +98,11 @@ import {
   cloudRunnerState,
   coalescingProblems,
   hourlyBackdateAt,
+  finishRunTurn,
   launchCloudInstance,
   openBoard,
   openProjectHome,
+  openAutomationDefinition,
   provenanceMarkCopy,
   runStatusCounts,
   runsOnRunner,
@@ -199,21 +201,6 @@ async function runnerStatus(fixture, token, runnerId) {
 async function runsFor(fixture, token, projectId, automationId) {
   const runs = await automationRuns({ convexUrl: fixture.convexUrl, token, projectId });
   return runs.filter((run) => run.automationId === automationId);
-}
-
-/** Backend acceptance can beat the renderer subscription. Wait for the actual
- * Session control before clicking; the unique reply marker proves which turn finished. */
-async function finishRunTurn(drive, session, marker) {
-  await openProjectHome(drive, AUTOMATION_PROJECT.name);
-  const title = session.title ?? "Chat";
-  await waitUntil(
-    `${drive.label}: Run Session is listed`,
-    () => drive.has("button", title, { contains: true }),
-    { timeout: 60_000, interval: 200 },
-  );
-  await drive.click("button", title, { contains: true, first: true });
-  await drive.wait(marker, 120_000);
-  await drive.gone("Stop turn", 60_000);
 }
 
 async function journey(fixture, store, evidenceDir) {
@@ -350,21 +337,24 @@ async function journey(fixture, store, evidenceDir) {
     // An empty board column is a pill; expanding it focuses its new-ticket
     // composer and blur collapses it again, so it is not a stable arming door.
     await macA.drive.click("button", "Automations", { first: true });
-    await macA.drive.click("button", DOING_AUTOMATION.name, { contains: true, first: true });
+    await openAutomationDefinition(macA.drive, DOING_AUTOMATION.name);
     await macA.drive.wait("Arm Doing", 30_000);
     // The person arms Doing on this Mac (the picker's default).
     await macA.drive.click("button", "Arm Doing");
-    await macA.drive.wait("Arrives in Doing", 30_000);
-    await macA.drive.click("button", DOING_AUTOMATION.name);
+    // The column caption is plain text; the actual arming choice is a named
+    // button in the open popover, not an invented heading role.
+    await macA.drive.wait(`button "Arm Doing with ${DOING_AUTOMATION.name}"`, 30_000);
+    await macA.drive.click("button", `Arm Doing with ${DOING_AUTOMATION.name}`);
     await macA.drive.pressKey("Escape");
     await macA.drive.wait(`Doing runs ${DOING_AUTOMATION.name} on ${nameA}`, 30_000);
-    // Select the schedule in the same page's rail, then its own Armed switch.
-    await macA.drive.click("button", SCHEDULE_AUTOMATION.name, { contains: true, first: true });
+    // At compact widths the detail hides the rail. Go back to the real list,
+    // then choose the schedule's primary row before its own Armed switch.
+    await openAutomationDefinition(macA.drive, SCHEDULE_AUTOMATION.name);
     await macA.drive.wait(`Armed: ${SCHEDULE_AUTOMATION.name}`, 30_000);
     await macA.drive.click("switch", `Armed: ${SCHEDULE_AUTOMATION.name}`);
     // Armed and not paused: the editor's own next-occurrence line, from the
     // backend's cursor rather than from a client computation.
-    await macA.drive.wait("Next:", 30_000);
+    await macA.drive.wait("Next ·", 30_000);
     const armings = await automationArmings({
       convexUrl: fixture.convexUrl,
       token: token(),
@@ -461,7 +451,7 @@ async function journey(fixture, store, evidenceDir) {
     await macB.drive.wait(provenanceMarkCopy(DOING_AUTOMATION.name), 60_000);
     // Finish the first scripted turn before the sleep/wake schedule turn can
     // consume the next reply in this instance's ordered fake-provider queue.
-    await finishRunTurn(macA.drive, session, ARRIVAL_TURN_MARKER);
+    await finishRunTurn(macA.drive, DOING_AUTOMATION.name, ARRIVAL_TURN_MARKER);
     return {
       detail: `Run ${arrivalRun.id.slice(0, 8)} started on ${nameA}; shared Session ${arrivalRun.sessionId.slice(
         0,
@@ -497,7 +487,7 @@ async function journey(fixture, store, evidenceDir) {
     assert.equal(after.runs[0].missedCount, null, "a waiting Run already claims a missed count");
     // Mac B reads the waiting Run in the project's own Run history.
     await macB.drive.click("button", "Automations");
-    await macB.drive.click("button", "Project activity");
+    await macB.drive.click("button", "History");
     await macB.drive.wait(waitingForAsleepCopy(nameA), 60_000);
     evidence.firstOccurrence = {
       runId: after.runs[0].id,
@@ -606,7 +596,7 @@ async function journey(fixture, store, evidenceDir) {
     await macB.drive.gone(waitingForAsleepCopy(nameA), 60_000);
     // 'started' is not a finished model turn. Consume the second scripted reply
     // before creating the caller whose next reply must be the tool call.
-    await finishRunTurn(macA.drive, session, SCHEDULE_TURN_MARKER);
+    await finishRunTurn(macA.drive, SCHEDULE_AUTOMATION.name, SCHEDULE_TURN_MARKER);
     evidence.started = {
       runId: started.id,
       sessionId: started.sessionId,
@@ -637,7 +627,8 @@ async function journey(fixture, store, evidenceDir) {
     // turn, so the reply queue's `automation_run` call lands here and nowhere
     // else. The tool turn carries no text; its continuation does.
     await openProjectHome(macA.drive, AUTOMATION_PROJECT.name);
-    await macA.drive.click("button", "New chat", { first: true });
+    await macA.drive.click("button", "Open a tab", { first: true });
+    await macA.drive.click("menuitem", "Chat ⌘T");
     await waitUntil(
       "Mac A: the Message box is ready",
       async () => hasActionableControl(await macA.drive.text(), "textbox", "Message"),

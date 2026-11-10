@@ -12,6 +12,7 @@ import {
 } from "@volli/session-engine";
 import { LOCAL_RUNNER, type SessionEvent } from "@volli/shared";
 import type { BackendLink } from "../cloud-runner/backend-link";
+import { encodeDrainEvent } from "../cloud-runner/drain";
 import type { RunnerPresence } from "../cloud-runner/presence";
 import { sqliteDrainCursorStore } from "../cloud-runner/sqlite-stores";
 import { sqliteDrainLedger } from "../session-control/sqlite-ledger";
@@ -179,6 +180,7 @@ async function fixture(
       runnerToken: async () => "runner-token",
     };
   let complete = true;
+  const ledger = sqliteDrainLedger(db.db);
   const publish = (backendUrl = "http://127.0.0.1:1") =>
     createCloudTranscriptPublisher({
       current: () => live,
@@ -186,7 +188,7 @@ async function fixture(
       engine: cloud!.engine,
       ownerUserId: "owner",
       piDirectory: () => join(dirname(db.dbPath), "pi-sessions"),
-      ledger: sqliteDrainLedger(db.db),
+      ledger,
       cursors: sqliteDrainCursorStore(db.db),
       redaction: {
         step: (window, from, final) => secretStore.redactStreamStep(window, from, final),
@@ -205,6 +207,7 @@ async function fixture(
     listeners,
     offWatched,
     secretStore,
+    ledger,
     publish,
     incomplete: () => {
       complete = false;
@@ -225,6 +228,62 @@ async function fixture(
 }
 
 describe("the runner's transcript producer composition", () => {
+  it("replays the exact birth with its own gate bytes, without acknowledging the reference on a failed replay", async () => {
+    const f = await fixture();
+    const publish = f.publish();
+    const request = { ...f.request, events: [f.request.events.at(-1)!] };
+    const birth = encodeDrainEvent(f.events[0]!);
+    const mutate = vi.spyOn(f.link, "mutate");
+    const failed = new Error("birth acknowledgement lost");
+    mutate.mockRejectedValueOnce(failed);
+    await expect(publish(request, f.callOptions)).rejects.toBe(failed);
+    expect(f.bodies.size).toBe(0);
+    expect(mutate).toHaveBeenCalledExactlyOnceWith(
+      "sessions:accept",
+      {
+        ...request,
+        events: [birth],
+      },
+      {
+        ...f.callOptions,
+        bytes: Buffer.byteLength(birth, "utf8"),
+      },
+    );
+    await expect(publish(request, f.callOptions)).resolves.toMatchObject({
+      acceptedThrough: f.events.at(-1)!.sequence,
+    });
+    expect(f.bodies.get(f.reference.id)).toBe(canonicalJson(f.artifact));
+  });
+
+  it("fails closed without a sequence-one birth rather than staging an unregistered body", async () => {
+    const f = await fixture();
+    const publish = f.publish();
+    vi.spyOn(f.ledger, "listEvents").mockReturnValue([f.events[1]!]);
+    await expect(
+      publish({ ...f.request, events: [f.request.events.at(-1)!] }, f.callOptions),
+    ).rejects.toThrow("The Session's first fact is unavailable.");
+    expect(f.calls).toEqual([]);
+    expect(f.bodies.size).toBe(0);
+  });
+
+  it.each(["not_claimed", "stale_claim"])(
+    "preserves a real %s fence after registration",
+    async (code) => {
+      const f = await fixture();
+      const cursors = sqliteDrainCursorStore(db.db);
+      cursors.save({ ...cursors.get(SESSION)!, acceptedThrough: 1 });
+      vi.spyOn(f.link, "mutate").mockRejectedValueOnce(
+        Object.assign(new Error(code), {
+          data: { code },
+        }),
+      );
+      await expect(
+        f.publish()({ ...f.request, events: [f.request.events.at(-1)!] }, f.callOptions),
+      ).rejects.toMatchObject({ data: { code: "fenced" } });
+      expect(f.bodies.size).toBe(0);
+    },
+  );
+
   it.each(["transcript.referenced", "message.submit", "interaction.resolve"] as const)(
     "stages an offline birth batch's %s body after registration and before its reference",
     async (kind) => {

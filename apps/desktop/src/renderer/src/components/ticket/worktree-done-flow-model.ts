@@ -113,7 +113,7 @@ export interface DoneFlowView {
 }
 
 // Disabled-reason copy — one source of truth so the view and tests agree.
-const REASON_LOADING = "Loading…";
+const REASON_LOADING = "Loading";
 const REASON_NO_CHANGES = "No changes vs base yet";
 const REASON_BASE_UNRESOLVED = "Base branch not resolved";
 const REASON_SEQUENCER = "Merge in progress. Finish it in the terminal.";
@@ -236,7 +236,7 @@ export function resolveDoneFlow(
 ): DoneFlowView {
   if (stage !== "idle") {
     const primaryBase = resolvePrimary(status, prUrl);
-    const busyLabel = stage === "committing" ? "Committing…" : "Pushing…";
+    const busyLabel = stage === "committing" ? "Committing" : "Pushing";
     return {
       primary: { ...primaryBase, label: busyLabel, disabled: true, reason: null },
       menu: {

@@ -15,14 +15,14 @@ import { describeBusy, type PendingClose } from "@renderer/terminal/close-guard"
  * terminals is still running a foreground process. Controlled purely by a
  * {@link PendingClose} (null = closed) so one instance serves every close
  * surface. Title/confirm-label/verb are overridable: the ticket-archive gate
- * reuses it with "Archive ticket?" / "Archive Anyway" / "Archiving".
+ * reuses it with "Archive ticket?" / "Archive anyway" / "Archiving".
  */
 export function ConfirmCloseDialog({
   pending,
   onConfirm,
   onCancel,
   title = "Close terminal?",
-  confirmLabel = "Close Anyway",
+  confirmLabel = "Close anyway",
   verb = "Closing",
 }: {
   pending: PendingClose | null;

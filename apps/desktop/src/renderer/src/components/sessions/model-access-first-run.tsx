@@ -12,23 +12,13 @@
  * screen there — see that file for why the app needs one proactive auth surface
  * at all.
  *
- * Two shapes of the same block. No available models means no provider is
- * signed in, so the primary act is choosing WHO to sign in to — the menu deep
- * links into Model Access with that provider's flow started. Available models
- * with no default means sign-in already happened and only the choice is
- * missing, so the one act is the pane where it is made.
+ * The empty surface has one recovery: Model Access. Its provider rows retain
+ * provider-specific sign-in, and its default picker resolves the other case.
  */
-import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
-import * as React from "react";
-import type { ModelAccessProvider } from "@volli/shared";
+import { EmptyState } from "@renderer/components/ui/empty-state";
 
-import { Button } from "@renderer/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@renderer/components/ui/dropdown-menu";
+import * as React from "react";
+
 import { useModelAccessClient } from "@renderer/lib/model-access-client";
 import { useUiStore } from "@renderer/stores/ui";
 
@@ -72,7 +62,6 @@ export function useModelAccessReady(active: boolean): boolean | null {
 export function ModelAccessFirstRun() {
   const client = useModelAccessClient();
   const setSettingsOpen = useUiStore((state) => state.setSettingsOpen);
-  const [providers, setProviders] = React.useState<readonly ModelAccessProvider[]>([]);
   const [signedIn, setSignedIn] = React.useState(false);
   const inspect = client?.inspect;
 
@@ -82,7 +71,6 @@ export function ModelAccessFirstRun() {
     void inspect({})
       .then((access) => {
         if (!current) return;
-        setProviders(access.providers);
         setSignedIn(access.models.some((model) => model.state === "available"));
       })
       .catch(() => {
@@ -93,45 +81,13 @@ export function ModelAccessFirstRun() {
     };
   }, [inspect]);
 
-  const signInOptions = React.useMemo(
-    () =>
-      providers
-        .filter((provider) => provider.signIn.length > 0)
-        .toSorted((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true })),
-    [providers],
-  );
-
   return (
-    <>
-      <CpuIcon className="size-8 text-muted-foreground" />
-      <p className="text-sm text-muted-foreground">
-        {signedIn ? "Choose a default model to start." : "Connect a model provider to start."}
-      </p>
-      <div className="flex items-center gap-2">
-        {!signedIn && signInOptions.length > 0 ? (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button>Sign in</Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="max-h-72 overflow-y-auto">
-              {signInOptions.map((provider) => (
-                <DropdownMenuItem
-                  key={provider.id}
-                  onSelect={() => setSettingsOpen(true, "model-access", provider.id)}
-                >
-                  {provider.label}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        ) : null}
-        <Button
-          variant={!signedIn && signInOptions.length > 0 ? "ghost" : "default"}
-          onClick={() => setSettingsOpen(true, "model-access")}
-        >
-          Model Access
-        </Button>
-      </div>
-    </>
+    <EmptyState
+      tier="page"
+      illustration="mcp"
+      status="unavailable"
+      title={signedIn ? "No default model" : "No model provider"}
+      action={{ label: "Model Access", onAction: () => setSettingsOpen(true, "model-access") }}
+    />
   );
 }

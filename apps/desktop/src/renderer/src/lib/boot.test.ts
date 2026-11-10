@@ -47,6 +47,7 @@ import {
   type BootStorage,
 } from "./boot";
 import { takeBootNotice } from "./boot-notice";
+import { acceptAppStateValue, appStateStorage, flushAllPendingAppState } from "./app-state-storage";
 
 // The real client unless a test says otherwise: only the `cloud` flag read is stubbed.
 vi.mock("./session-rpc-ipc-link", async (importOriginal) => {
@@ -547,6 +548,94 @@ describe("boot", () => {
   });
 });
 
+describe("Settings workbench draft isolation", () => {
+  it.each(["local", "cloud"] as const)(
+    "does not restore or persist drafts in a %s Settings boot",
+    async (mode) => {
+      const save = vi.fn(async (_key: string, _value: string) => ({ ok: true }));
+      const previousStoredDrafts = await appStateStorage.getItem(CHAT_DRAFTS_APP_STATE_KEY);
+      const restoreTabs = useChatSessionsStore.getState().restoreProvisionalChatTabs;
+      vi.stubGlobal("window", {
+        location: { hash: "#settings" },
+        api: { appState: { set: save } },
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      });
+      const previousDrafts = useChatDraftsStore.getState().drafts;
+      const previousTabs = useChatSessionsStore.getState().openTabs;
+      // Drain older tests' writes before measuring this window's ownership.
+      await flushAllPendingAppState();
+      save.mockClear();
+      useChatDraftsStore.setState({ drafts: {} });
+      useChatSessionsStore.setState({ openTabs: {} });
+      const rehydrate = vi.spyOn(useChatDraftsStore.persist, "rehydrate");
+      const restore = vi.spyOn(useChatSessionsStore.getState(), "restoreProvisionalChatTabs");
+      const layout = vi.spyOn(useProjectUiStore.persist, "rehydrate");
+      const gateway = fakeGateway({
+        bootstrap: vi.fn(async () => ({
+          ok: true as const,
+          data: payload({
+            projects: [workspace("draft-project")],
+            appState: {
+              [CHAT_DRAFTS_APP_STATE_KEY]: JSON.stringify({
+                state: {
+                  drafts: {
+                    draftA: {
+                      text: "keep my words",
+                      attachments: [],
+                      held: [],
+                      touchedAt: 10,
+                      provisional: {
+                        projectId: "draft-project",
+                        ticketId: null,
+                        operationId: "draft-operation",
+                        title: null,
+                        phase: "draft",
+                      },
+                    },
+                  },
+                },
+                version: 1,
+              }),
+            },
+          }),
+        })),
+      });
+      try {
+        await expect(
+          boot(
+            gateway,
+            fakeStorage(),
+            async () => false,
+            async () =>
+              mode === "local"
+                ? LOCAL_LAUNCH
+                : { store: "cloud", userId: "settings-user", backendUrl: "http://127.0.0.1:1" },
+          ),
+        ).resolves.toEqual({ ok: true });
+        expect(rehydrate).not.toHaveBeenCalled();
+        expect(restore).not.toHaveBeenCalled();
+        expect(layout).not.toHaveBeenCalled();
+        expect(useChatDraftsStore.getState().drafts).toEqual({});
+        // A later project removal must not let this renderer erase a newer map.
+        useProjectsStore.getState().hydrate([], null);
+        await flushAllPendingAppState();
+        expect(save.mock.calls.filter(([key]) => key === CHAT_DRAFTS_APP_STATE_KEY)).toEqual([]);
+      } finally {
+        useChatDraftsStore.setState({ drafts: previousDrafts });
+        useChatSessionsStore.setState({
+          openTabs: previousTabs,
+          restoreProvisionalChatTabs: restoreTabs,
+        });
+        acceptAppStateValue(CHAT_DRAFTS_APP_STATE_KEY, previousStoredDrafts ?? "");
+        adoptLaunch(LOCAL_LAUNCH);
+        vi.restoreAllMocks();
+        vi.unstubAllGlobals();
+      }
+    },
+  );
+});
+
 describe("refreshPlanningData", () => {
   // The "a read failed, heal wholesale next time" bit is board state now, so a
   // wholesale hydrate is what drains it — the same door the app uses, rather
@@ -664,6 +753,7 @@ describe("refreshPlanningData", () => {
       version: beforeChange + 1,
       ticketId: null,
       projectId: "p1",
+      kind: "ticket",
     });
   });
 
@@ -944,6 +1034,7 @@ describe("refreshPlanningData", () => {
         version: before + 1,
         ticketId: "t1",
         projectId: "p1",
+        kind: "comment",
       });
     });
 
@@ -1663,6 +1754,67 @@ describe("a cloud launch's boot (VC-889)", () => {
     expect(useProjectsStore.getState().projects).toEqual([]);
     expect(useBoardStore.getState().ticketsByProject).toEqual({});
     expect(useCloudWorkspaceStore.getState().localProjects).toBe(2);
+  });
+
+  it("restores a pending cloud start after its project arrives, retaining another account's intent", async () => {
+    const touchedAt = Date.now();
+    const pending = (accountScope: string) => ({
+      text: "",
+      attachments: [],
+      held: [],
+      touchedAt,
+      provisional: {
+        projectId: "cloud-project",
+        ticketId: null,
+        title: null,
+        operationId: "request",
+        phase: "draft",
+        runnerStart: {
+          accountScope,
+          intent: {
+            clientRequestId: "request",
+            projectId: "cloud-project",
+            ticketId: null,
+            runnerId: "box",
+            body: "{}",
+            model: null,
+          },
+        },
+      },
+    });
+    useChatSessionsStore.setState({ openTabs: {} });
+    const gateway = fakeGateway({
+      bootstrap: vi.fn(async () => ({
+        ok: true as const,
+        data: payload({
+          appState: {
+            [CHAT_DRAFTS_APP_STATE_KEY]: JSON.stringify({
+              version: 1,
+              state: {
+                drafts: {
+                  mine: pending(JSON.stringify([CLOUD.backendUrl, CLOUD.userId])),
+                  other: pending("other-account"),
+                },
+              },
+            }),
+          },
+        }),
+      })),
+    });
+    await boot(
+      gateway,
+      fakeStorage(),
+      async () => true,
+      async () => CLOUD,
+    );
+    expect(useChatSessionsStore.getState().openTabs).toEqual({});
+    useProjectsStore.setState({ projects: [workspace("cloud-project")] });
+    expect(useChatSessionsStore.getState().openTabs).toEqual({ "cloud-project": ["mine"] });
+    expect(useChatDraftsStore.getState().drafts.other).toBeDefined();
+    const cleanup = vi
+      .mocked(window.addEventListener)
+      .mock.calls.find(([event]) => event === "pagehide")![1] as () => void;
+    cleanup();
   });
 
   it("opens a Workspace joined at sign-in instead of the last selection", async () => {

@@ -126,6 +126,7 @@ describe("local git separator parity with raw git", () => {
       ["cat-file", "-e", `${head}:two.txt`],
       ["cat-file", "-e", `${head}:-file.txt`],
       ["cat-file", "-e", head],
+      ["ls-tree", "-z", "--full-tree", head, "two.txt", "ünï cødé.txt"],
       ["show", `${head}:ünï cødé.txt`],
       ["show", `${head}:-file.txt`],
       ["log", "-1", "--format=%ct", "HEAD"],

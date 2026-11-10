@@ -24,7 +24,7 @@
  * against a loopback self-hosted backend; the deployment refuses it elsewhere too.
  */
 
-import { isLoopbackUrl } from "../functions/lib/deploymentChecks.ts";
+import { isLoopbackUrl } from "../functions/lib/loopback.ts";
 
 /** Runs the pinned `convex` CLI; `capture` collects stdout instead of printing it. */
 export type ConvexCli = (

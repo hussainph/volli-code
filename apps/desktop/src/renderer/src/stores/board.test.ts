@@ -2478,6 +2478,19 @@ describe("notePlanningChange", () => {
       projectId: null,
     });
   });
+
+  it("carries the change's kind only when the producer named one", () => {
+    const store = createBoardStore();
+    store.getState().notePlanningChange({ projectId: "p1", kind: "worktree" });
+    expect(store.getState().lastPlanningChange).toEqual({
+      version: 1,
+      ticketId: null,
+      projectId: "p1",
+      kind: "worktree",
+    });
+    store.getState().notePlanningChange({ projectId: "p1" });
+    expect(store.getState().lastPlanningChange).not.toHaveProperty("kind");
+  });
 });
 
 describe("planningChangeAffects", () => {

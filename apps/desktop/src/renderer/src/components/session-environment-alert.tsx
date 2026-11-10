@@ -1,7 +1,5 @@
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
-import { WrenchIcon } from "@phosphor-icons/react/dist/csr/Wrench";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import { TerminalIcon, ToolsIcon } from "@renderer/components/ui/icon";
+
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { errorMessage } from "@volli/shared";
@@ -12,6 +10,8 @@ import {
   type SessionEnvironmentMeasurement,
 } from "@renderer/components/session-environment-alert-model";
 import { Button } from "@renderer/components/ui/button";
+import { Spinner } from "@renderer/components/ui/spinner";
+import { useProjectUiStore } from "@renderer/stores/project-ui";
 import { Notice } from "@renderer/components/ui/notice";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { toastError } from "@renderer/lib/toast";
@@ -35,9 +35,8 @@ import { useUiStore } from "@renderer/stores/ui";
  *   store), and the dismissal is dropped again the moment that fault stops
  *   being measured. It used to be component state keyed on the alert's exact
  *   sentence, which is why it came back at every relaunch. A project-readiness
- *   notice has no fault kind and is still dismissed for the view only: it is
- *   the project's onboarding state, not an app fault, and VC-156 owns retiring
- *   it altogether.
+ *   notice has no fault kind; its measured identity is persisted per project
+ *   in the workspace store, so navigation and remounts cannot resurrect it.
  *
  * One notice is drawn at a time — the first the reader has not dismissed.
  * Dismissing the app fault therefore reveals whatever the project is still
@@ -45,10 +44,15 @@ import { useUiStore } from "@renderer/stores/ui";
  */
 export function SessionEnvironmentAlert() {
   const [measurement, setMeasurement] = useState<SessionEnvironmentMeasurement | null>(null);
-  const [dismissedKey, setDismissedKey] = useState<string | null>(null);
   const [fixing, setFixing] = useState(false);
   const project = useSelectedProject();
   const projectCwd = project?.path;
+  const dismissedReadiness = useProjectUiStore((state) =>
+    project === undefined || project === null
+      ? undefined
+      : state.byProject[project.id]?.dismissedReadinessNotices,
+  );
+  const dismissReadinessNotice = useProjectUiStore((state) => state.dismissReadinessNotice);
   const projectName = project?.name;
   const terminalFocused = useUiStore((state) => state.terminalFocusTarget !== null);
   const setSettingsOpen = useUiStore((state) => state.setSettingsOpen);
@@ -76,7 +80,7 @@ export function SessionEnvironmentAlert() {
       if (fetchToken.current !== token || !result.ok) return undefined;
       const measured = sessionEnvironmentMeasurement(
         result.status,
-        projectName === undefined ? null : { name: projectName },
+        projectName === undefined ? null : { name: projectName, id: project?.id },
       );
       setMeasurement(measured);
       // The "cleared when the fault clears" half of the dismissal contract:
@@ -91,7 +95,7 @@ export function SessionEnvironmentAlert() {
       // This read cannot establish a PATH failure, so it must not invent one.
       return undefined;
     }
-  }, [projectCwd, projectName, retainEnvironmentFaultDismissals]);
+  }, [projectCwd, projectName, project?.id, retainEnvironmentFaultDismissals]);
 
   useEffect(() => {
     // A project becomes selected in the same state change that adds it, so this
@@ -128,9 +132,7 @@ export function SessionEnvironmentAlert() {
       if (!result.ok) {
         toastError(`Couldn't repair the Session PATH: ${result.error}`);
       } else if (measured !== undefined && measured.faults.length > 0) {
-        toastError(
-          "Volli still couldn't read your terminal's PATH. Review details for what it found.",
-        );
+        toastError("Volli still couldn't read your terminal's PATH");
       }
     } catch (error) {
       toastError(`Couldn't repair the Session PATH: ${errorMessage(error)}`);
@@ -143,7 +145,9 @@ export function SessionEnvironmentAlert() {
   // fault reveals the project's own shortfall instead of hiding it too.
   const alert =
     measurement?.notices.find((notice) =>
-      notice.fault === null ? notice.key !== dismissedKey : !dismissedFaults.includes(notice.fault),
+      notice.fault === null
+        ? !dismissedReadiness?.includes(notice.key)
+        : !dismissedFaults.includes(notice.fault),
     ) ?? null;
   if (terminalFocused || alert === null) return null;
 
@@ -155,8 +159,8 @@ export function SessionEnvironmentAlert() {
         onFix={alert.fault === null ? undefined : () => void fix()}
         onReview={() => setSettingsOpen(true, "cli")}
         onDismiss={() => {
-          if (alert.fault === null) setDismissedKey(alert.key);
-          else dismissEnvironmentFault(alert.fault);
+          if (alert.fault === null && project) dismissReadinessNotice(project.id, alert.key);
+          else if (alert.fault !== null) dismissEnvironmentFault(alert.fault);
         }}
       />
     </div>
@@ -174,7 +178,7 @@ export function SessionEnvironmentNotice({
   alert: SessionEnvironmentAlertState;
   /** The repair is running; the button says so and cannot be pressed twice. */
   fixing?: boolean;
-  /** Present only for an app fault — a project's missing dependencies are not Volli's to repair. */
+  /** Present only for an app fault — missing repository git is not repaired by PATH adoption. */
   onFix?: (() => void) | undefined;
   onReview(): void;
   onDismiss(): void;
@@ -184,24 +188,26 @@ export function SessionEnvironmentNotice({
       announce
       layout="stack"
       tone="error"
-      icon={WarningIcon}
       title={alert.title}
       detail={alert.detail}
+      onDismiss={onDismiss}
       actions={
         <>
           {onFix === undefined ? null : (
-            <Button size="xs" variant="outline" disabled={fixing} onClick={onFix}>
-              <WrenchIcon />
-              {fixing ? "Fixing…" : "Fix now"}
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={fixing}
+              aria-busy={fixing}
+              onClick={onFix}
+            >
+              {fixing ? <Spinner aria-label="Fixing" /> : <ToolsIcon />}
+              {fixing ? "Fixing" : "Fix now"}
             </Button>
           )}
-          <Button size="xs" variant="ghost" onClick={onReview}>
-            <TerminalWindowIcon />
+          <Button size="xs" variant="outline" onClick={onReview}>
+            <TerminalIcon />
             Review details
-          </Button>
-          <Button size="xs" variant="ghost" onClick={onDismiss}>
-            <XIcon />
-            Dismiss
           </Button>
         </>
       }

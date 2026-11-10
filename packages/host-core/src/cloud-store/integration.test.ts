@@ -9,7 +9,7 @@ import {
   type NativeHarnessAdapter,
 } from "@volli/session-engine";
 import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine/testing";
-import { decodeSessionEventPayload, LOCAL_RUNNER } from "@volli/shared";
+import { cloudMessageSubmit, decodeSessionEventPayload, LOCAL_RUNNER } from "@volli/shared";
 import {
   SESSION_COMMAND_FORMAT,
   SESSION_NOTICE_FORMAT,
@@ -38,6 +38,7 @@ import { createMachinePaths } from "../machine-paths";
 import type { CloudRunnerContext } from "./context";
 import { createLocalSessionEngine } from "./owner";
 import { createCloudEnvironmentPreparation } from "./environment";
+import { createFileTranscriptArtifactStore } from "../session-runtime/transcript-artifacts";
 import { markFirstRunPending } from "../worktree/first-run";
 import type { BusyWorktreeSites } from "../worktree/activity";
 import { agentTurnOpenWithin } from "../worktree/agent-sites";
@@ -880,7 +881,7 @@ it("wires retention reclaim to fresh backend dates/PR facts and the machine TTL"
 it("runs a cloud Automation Run through connect/inbox/journal: fenced context, runner-born Session, drained creation", async () => {
   const f = fixture();
   const a = f.store();
-  expect(a.jobCapabilities).toEqual(["automation.run"]);
+  expect(a.jobCapabilities).toEqual(["automation.run", "session.start"]);
   const remote = connect(f, a);
   const SESSION = "00000000-0000-4000-8000-000000000041";
   const RUN = "00000000-0000-4000-8000-000000000042";
@@ -994,5 +995,165 @@ it("runs a cloud Automation Run through connect/inbox/journal: fenced context, r
   await a.drain.idle();
   expect(remote.accepted).toContainEqual(
     expect.objectContaining({ sessionId: SESSION, kind: "session.created" }),
+  );
+}, 20_000);
+
+it("starts a person's Session on runner B from another device: B is born the claimant, and a later command reaches B", async () => {
+  const f = fixture();
+  // Runner B: another of the same person's runners (a Linux box, a Mac mini).
+  const b = f.store("a", RUNNER_B);
+  const remote = connect(f, b, RUNNER_B);
+  const SESSION = "00000000-0000-4000-8000-000000000051";
+  const START = "00000000-0000-4000-8000-000000000052";
+  const FOLLOW = "00000000-0000-4000-8000-000000000053";
+  // What `sessionStarts.startOn` staged and `sessions.command` stages: the canonical bodies.
+  const first = cloudMessageSubmit({
+    sessionId: SESSION,
+    commandId: START,
+    message: { id: "m-1", role: "user", parts: [{ type: "text", text: "Fix the upload test" }] },
+  });
+  const follow = cloudMessageSubmit({
+    sessionId: SESSION,
+    commandId: FOLLOW,
+    message: { id: "m-2", role: "user", parts: [{ type: "text", text: "Also run the linter" }] },
+  });
+  remote.query.mockImplementation((async (name: string, input: Record<string, unknown>) => {
+    if (name === "sessionStarts:startContext")
+      return {
+        kind: "ready",
+        projectId: PROJECT,
+        ticket: { id: TICKET, live: true },
+        runnerName: "hetzner-1",
+        body: first.body,
+      };
+    if (name === "transcripts:commandArtifact")
+      return input.digest === follow.reference.digest ? { body: follow.body } : null;
+    return { ...f.facts, sessionId: input.sessionId, ownerUserId: b.ownerUserId };
+  }) as never);
+  const model = { providerId: "scripted", modelId: "test", reasoningLevel: "off" } as const;
+  const command = vi.fn(async () => ({ receipt: { status: "accepted" } }));
+  const runtime = {
+    command,
+    openNativeBindings: () => [],
+    reportMessageDeliveryFailure: async () => {},
+    projection: async () => ({ projection: { latestTurnId: null }, throughSequence: 0 }),
+    subscribe: async () => () => {},
+  };
+  const artifactRoot = mkdtempSync(join(tmpdir(), "volli-session-start-"));
+  cleanups.push(() => rmSync(artifactRoot, { recursive: true, force: true }));
+  b.bindRuntime(runtime as never, createFileTranscriptArtifactStore(artifactRoot));
+  b.bindAutomations({
+    sessions: {
+      create: async (input) => {
+        await b.sessionBirth.beforeCreate(input);
+        await b.engine.createSession({
+          commandId: `${input.operationId}:create`,
+          requestedSessionId: input.requestedSessionId!,
+          projectId: input.projectId,
+          ticketId: input.ticketId,
+          role: input.role,
+          parentSessionId: null,
+          title: input.title,
+          provenance,
+        });
+        return { sessionId: input.requestedSessionId!, model };
+      },
+      attach: async (input) => ({
+        sessionId: input.sessionId,
+        state: "ready",
+        receipt: null,
+        throughSequence: 0,
+      }),
+    },
+    runtime: runtime as never,
+    promptSupply: async () => ({ templates: [], skills: [] }),
+    notify: () => {},
+  });
+  const start = {
+    job: {
+      id: START,
+      kind: "session.start",
+      runnerId: RUNNER_B,
+      projectId: PROJECT,
+      ticketId: TICKET,
+      sessionId: SESSION,
+      workingCopyId: null,
+      commandId: START,
+      payload: {
+        format: "volli.session-start.v1",
+        projectId: PROJECT,
+        ticketId: TICKET,
+        title: "Fix the upload test",
+        firstMessage: { commandId: START, body: { ...first.reference } },
+        model: null,
+      },
+      priority: "normal",
+      createdBy: { kind: "person", userId: "a" },
+      createdAt: 0,
+      availableAt: 0,
+    },
+    lease: { bootId: "boot", attempt: 1, expiresAt: Date.now() + 60_000 },
+  } as unknown as ClaimedJob;
+  remote.queued.push(start);
+  remote.sync.start();
+  await vi.waitFor(() => expect(remote.completed.get(START)?.status).toBe("done"), {
+    timeout: 10_000,
+  });
+  expect(remote.completed.get(START)).toEqual({
+    status: "done",
+    result: { kind: "started", sessionId: SESSION, model },
+  });
+  expect(remote.query).toHaveBeenCalledWith("sessionStarts:startContext", {
+    jobId: START,
+    bootId: "boot",
+    attempt: 1,
+  });
+  expect(command).toHaveBeenCalledWith(
+    expect.objectContaining({
+      sessionId: SESSION,
+      commandId: START,
+      command: expect.objectContaining({ kind: "message.submit" }),
+    }),
+  );
+  // B holds the Session: its creation drains to Volli Cloud as B's facts.
+  expect(b.ownsSession(SESSION)).toBe(true);
+  await b.drain.idle();
+  expect(remote.accepted).toContainEqual(
+    expect.objectContaining({ sessionId: SESSION, kind: "session.created" }),
+  );
+  expect(
+    remote.calls.some((call) => call.name === "sessions:accept" && call.args.sessionId === SESSION),
+  ).toBe(true);
+
+  // A later message from any device is a `session.command` routed to the
+  // claim, which is B's: B hydrates the staged body and delivers it.
+  const later = {
+    job: {
+      ...start.job,
+      id: FOLLOW,
+      kind: "session.command",
+      commandId: FOLLOW,
+      payload: { format: SESSION_COMMAND_FORMAT, intent: follow.intent },
+    },
+    lease: { bootId: "boot", attempt: 1, expiresAt: Date.now() + 60_000 },
+  } as unknown as ClaimedJob;
+  remote.queued.push(later);
+  remote.wake();
+  await vi.waitFor(() => expect(remote.completed.get(FOLLOW)?.status).toBe("done"), {
+    timeout: 10_000,
+  });
+  expect(command).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      sessionId: SESSION,
+      commandId: FOLLOW,
+      command: expect.objectContaining({
+        kind: "message.submit",
+        message: {
+          id: "m-2",
+          role: "user",
+          parts: [{ type: "text", text: "Also run the linter" }],
+        },
+      }),
+    }),
   );
 }, 20_000);

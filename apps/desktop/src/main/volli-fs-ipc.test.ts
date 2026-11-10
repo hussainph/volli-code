@@ -1461,6 +1461,24 @@ describe("registerFileIpcHandlers", () => {
     expect(result.skills?.map((entry) => entry.description)).toEqual(["Project PDFs"]);
   });
 
+  it("carries bounded skill discovery diagnostics through the real JSON result", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    for (let i = 0; i < 203; i++)
+      mkdirSync(
+        join(setup.projectPath, ".agents", "skills", `skill-${String(i).padStart(4, "0")}`),
+        { recursive: true },
+      );
+    const result = JSON.parse(
+      JSON.stringify(
+        await invoke("volli:prompt-templates", {}, { projectId: setup.projectId, ruled: false }),
+      ),
+    ) as { ok: boolean; omittedSkillDirectories?: number; skills: unknown[] };
+    expect(result.ok).toBe(true);
+    expect(result.omittedSkillDirectories).toBe(3);
+    expect(result.skills).toHaveLength(0);
+  });
+
   it("answers prompt-templates with BOTH skill tiers beside the templates", async () => {
     const setup = setupDbAndHandlers();
     ctx = setup.ctx;

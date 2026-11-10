@@ -1,12 +1,13 @@
+import { PanelEmptyState } from "@renderer/components/ui/empty-state";
 import * as React from "react";
-import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
+import { AutomationIcon } from "@renderer/components/ui/icon";
+
 import { displayTicketId } from "@volli/shared";
 import { useBoardStore } from "@renderer/stores/board";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { parseCloudAutomationSkipReason } from "@volli/shared/cloud";
 import { Button } from "@renderer/components/ui/button";
 import { ListRow } from "@renderer/components/ui/list-row";
-import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { ResolvedModelName } from "@renderer/components/models/resolved-model-name";
 import { toastError } from "@renderer/lib/toast";
 import { relativeTime } from "@renderer/lib/relative-time";
@@ -44,15 +45,15 @@ export function cloudRunLabel(run: CloudRun): string {
           : reason.kind === "runner-unavailable"
             ? "Runner unavailable"
             : reason.kind === "superseded"
-              ? "Replaced by the next run"
+              ? "Replaced by next run"
               : reason.kind === "run-refused"
                 ? reason.error
                 : reason.kind === "app-closed"
-                  ? "Volli wasn’t running"
+                  ? "Volli was closed"
                   : reason.kind === "not-observed"
                     ? "Volli didn’t wake in time"
-                    : "Reason unreadable";
-      return `Skipped · ${cause}${(run.missedCount ?? 0) > 1 ? ` (${run.missedCount} missed)` : ""}`;
+                    : "Reason unavailable";
+      return `Skipped · ${cause}${(run.missedCount ?? 0) > 1 ? ` · ${run.missedCount} occurrences` : ""}`;
     }
     case "started":
       return run.sessionAccess === "private"
@@ -70,9 +71,11 @@ export function cloudRunLabel(run: CloudRun): string {
 export function CloudRunHistory({
   projectId,
   automationId,
+  recent = false,
 }: {
   projectId: string;
   automationId: string | null;
+  recent?: boolean;
 }) {
   const key = automationId === null ? projectId : automationHistoryKey(projectId, automationId);
   const rows = useCloudAutomationsStore((state) => state.histories[key] ?? EMPTY);
@@ -81,21 +84,19 @@ export function CloudRunHistory({
   const source = cloudAutomationSource();
   const [loading, setLoading] = React.useState(false);
   return (
-    <section className="flex flex-col gap-1" data-run-history={automationId ?? "project"}>
-      <SectionHeading className="h-6 leading-6">
-        {automationId === null ? "Project activity" : "Runs"}
-      </SectionHeading>
+    <section className="flex flex-col gap-1">
       {loaded && rows.length === 0 ? (
-        <p className="py-2 text-ui text-muted-foreground">
-          {automationId === null
-            ? "Nothing has run in this project yet."
-            : "Nothing has run this Automation yet."}
+        <PanelEmptyState illustration="automation" title="No runs yet" />
+      ) : null}
+      {!loaded ? (
+        <p role="status" aria-busy="true" className="text-ui text-muted-foreground">
+          Loading runs…
         </p>
       ) : null}
-      {rows.map((row) => (
+      {rows.slice(0, recent ? 3 : undefined).map((row) => (
         <CloudRunRow key={row.id} run={row} now={now} />
       ))}
-      {source?.hasMore(key) ? (
+      {!recent && source?.hasMore(key) ? (
         <Button
           size="sm"
           variant="ghost"
@@ -159,7 +160,7 @@ function CloudRunRow({ run, now }: { run: CloudRun; now: number }) {
               })
           : null
       }
-      leading={<LightningIcon className="size-4 text-muted-foreground" />}
+      leading={<AutomationIcon className="size-4 text-muted-foreground" />}
       primary={
         <span className="flex min-w-0 flex-wrap items-center gap-1 text-ui">
           <span>{run.automationName ?? "Unbound Run"}</span>

@@ -1,0 +1,98 @@
+/** Create a real project command file and hand its contents to the app editor. */
+import * as React from "react";
+import { CodeFileIcon } from "@renderer/components/ui/icon";
+
+import { isWritablePromptTemplateName } from "@volli/shared";
+import { Button } from "@renderer/components/ui/button";
+import { Input } from "@renderer/components/ui/input";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
+import { Notice } from "@renderer/components/ui/notice";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+  DialogFooter,
+} from "@renderer/components/ui/dialog";
+import { openProjectSettingFile } from "../open-project-setting-file";
+export function MarkdownCommandDialog({
+  projectId,
+  onCreated,
+}: {
+  projectId: string;
+  onCreated(): void;
+}) {
+  const [open, setOpen] = React.useState(false),
+    [name, setName] = React.useState(""),
+    [busy, setBusy] = React.useState(false),
+    [error, setError] = React.useState<string | null>(null);
+  const latch = React.useRef(false);
+  const slug = name.trim().replace(/^\//, "");
+  const valid = isWritablePromptTemplateName(slug);
+  async function create() {
+    if (!valid || latch.current) return;
+    latch.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await window.api.files.create({
+        projectId,
+        relPath: `.volli/commands/${slug}.md`,
+      });
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      setOpen(false);
+      onCreated();
+      openProjectSettingFile(projectId, result.relPath);
+    } catch {
+      setError("Couldn't create the command file. Try again.");
+    } finally {
+      latch.current = false;
+      setBusy(false);
+    }
+  }
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (busy) return;
+        setOpen(next);
+        if (next) {
+          setName("");
+          setError(null);
+        }
+      }}
+    >
+      <DialogTrigger asChild>
+        <Button variant="ghost" size="xs">
+          <CodeFileIcon />
+          Write a markdown file
+        </Button>
+      </DialogTrigger>
+      <DialogContent aria-describedby={undefined}>
+        <DialogHeader>
+          <DialogTitle>Write a command</DialogTitle>
+        </DialogHeader>
+        <label htmlFor="markdown-command-name" className="text-ui font-medium">
+          Command name
+        </label>
+        <Input
+          id="markdown-command-name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="review"
+          disabled={busy}
+        />
+        {error && <Notice tone="error" announce title="Couldn't create command" detail={error} />}
+        <DialogFooter>
+          <Button variant="outline" disabled={busy || !valid} onClick={() => void create()}>
+            {busy ? <LoadingLabel>Creating</LoadingLabel> : "Create and open"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}

@@ -7,7 +7,7 @@ sidebar:
 
 ## A chat cannot start or has stopped
 
-In **Settings → Models**, connect a provider and choose an available default.
+In **Settings → All projects → Models**, connect a provider and choose an available default.
 See [Models and usage](/guides/models/) for account and tier setup.
 
 If an existing Session has stopped, its conversation is kept. Follow
@@ -20,7 +20,7 @@ Check all of the conditions for the Trigger:
 
 - For a ticket-enter Trigger, **Automatic triggers** must be on for the Automation on this Mac.
 - The destination column must offer the Automation and have it armed, not
-  **No Automation**.
+  **No automation**.
 - The ticket must make a new **Deliberate move** into the column. Enabling or
   arming a column does not process tickets already there.
 - Another Automation may be the armed one in the column; only one Automation
@@ -56,11 +56,25 @@ open elsewhere may need the CLI installed and connected separately.
 
 ## `volli: command not found`
 
-Open **Settings → About**. Its CLI checks run when the pane opens; a fault
-offers **Fix**, which regenerates the parts Volli owns, and **Re-check** to run
-the checks again. To see the detected executable and shell integration, copy
-the support report from that pane. Terminal companions opened by the app
-already have `volli` on `PATH`.
+Press `⌘,` to open the separate **Settings** window, then choose **About** and
+expand **Diagnostics**. Its CLI checks run when the page opens; a fault offers
+**Fix**, which regenerates the parts Volli owns. **Retry** runs the checks
+again. Use **Copy report…** to inspect the detected executable and shell
+integration. Terminal companions opened by the app already have `volli` on
+`PATH`.
+
+## A CLI response is too large
+
+`RESPONSE_TOO_LARGE` means the app answered, but the response exceeded the
+CLI's 4 MiB limit. Narrow the request before retrying:
+
+```sh
+volli ticket list --status doing --limit 20 --json --no-body
+volli ticket show VLT-12
+```
+
+`--no-body` keeps ticket bodies out of JSON on matching app builds. Older app
+builds may ignore it, so filters and `--limit` are still needed.
 
 ## A source build cannot load the terminal module
 
@@ -92,9 +106,32 @@ settings if you want the terminal to follow the app theme. See
 
 ## MCP tools do not appear in a chat
 
-A Session keeps the tools it received when it was created. After adding or
-enabling tools, create a new Session. Follow [MCP servers](/guides/mcp-servers/)
-for discovery failures, unsupported authentication, and deletion limits.
+Check that the server and its tools are enabled. Existing Sessions can gain
+eligible additions, but new named tools wait for a cold prompt cache,
+compaction, or a model switch. Tools selected only for Code Mode can become
+usable before its next program. Start a new Session if you need the new
+selection immediately.
+
+Disabling tools does not remove them from an existing Session's recorded
+surface. A disabled server still refuses calls and asks you to enable it in
+**Settings**. Start a new Session to use a reduced tool selection. Follow
+[MCP servers](/guides/mcp-servers/) for discovery failures, unsupported
+authentication, and deletion limits.
+
+## The app stalls or responds slowly
+
+Use the read-only performance diagnostics to inspect stalls recorded on this
+Mac:
+
+```sh
+volli perf top --since 24h
+volli perf stalls --process renderer --limit 20
+```
+
+The output identifies known operations, interaction labels, and builds. Missing
+attribution means the cause is unknown. Include the relevant rows with your
+reproduction steps. See [CLI commands](/reference/cli-commands/#performance-diagnostics)
+for filters and build comparisons.
 
 ## Where Volli keeps things
 

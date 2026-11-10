@@ -12,9 +12,7 @@
  * string; a GUI runtime later only changes the spelling inside.
  */
 import * as React from "react";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
+import { ChevronDownIcon, CheckIcon, TerminalIcon } from "@renderer/components/ui/icon";
 
 import { Button } from "@renderer/components/ui/button";
 import {
@@ -50,7 +48,7 @@ function CommandPeek({ runtime }: { runtime: AutomationRuntime }) {
   return (
     <div className="flex max-w-[22rem] flex-col gap-1.5">
       <span className="flex items-center gap-1.5 text-label text-muted-foreground">
-        <TerminalWindowIcon weight="fill" className="size-3.5" />
+        <TerminalIcon className="size-3.5" />
         Launches
       </span>
       <code className="flex flex-wrap items-baseline gap-x-1.5 font-mono text-label leading-relaxed">
@@ -90,7 +88,7 @@ function HarnessPicker({
             >
               <HarnessMark harnessId={runtime.harnessId} tinted />
               {harnessLabelFor(runtime.harnessId)}
-              <CaretDownIcon weight="bold" className="size-3 text-muted-foreground" />
+              <ChevronDownIcon strokeWidth={2.25} className="size-3 text-muted-foreground" />
             </Button>
           </DropdownMenuTrigger>
         </TooltipTrigger>
@@ -108,7 +106,7 @@ function HarnessPicker({
             <HarnessMark harnessId={id} tinted={id === runtime.harnessId} className="size-3.5" />
             {harnessLabelFor(id)}
             {id === runtime.harnessId ? (
-              <CheckIcon weight="bold" aria-hidden className="ml-auto size-3 text-primary" />
+              <CheckIcon strokeWidth={2.25} aria-hidden className="ml-auto size-3 text-primary" />
             ) : null}
           </DropdownMenuItem>
         ))}
@@ -357,7 +355,7 @@ function ModelPicker({
               className="gap-1.5 font-mono active:scale-[0.97] transition-transform duration-100 ease-out"
             >
               <span className="text-foreground">{summary || "model"}</span>
-              <CaretDownIcon weight="bold" className="size-3 text-muted-foreground" />
+              <ChevronDownIcon strokeWidth={2.25} className="size-3 text-muted-foreground" />
             </Button>
           </PopoverTrigger>
         </TooltipTrigger>
@@ -427,7 +425,7 @@ function ModelPicker({
                   >
                     <span className="min-w-0 flex-1 truncate">{model}</span>
                     {selected ? (
-                      <CheckIcon weight="bold" aria-hidden className="size-3 text-primary" />
+                      <CheckIcon strokeWidth={2.25} aria-hidden className="size-3 text-primary" />
                     ) : null}
                   </button>
                 </li>
@@ -471,7 +469,7 @@ export function ApprovalsPicker({
           className="gap-1.5 font-mono text-muted-foreground active:scale-[0.97] transition-transform duration-100 ease-out"
         >
           {runtime.approvals ?? <span className="font-sans italic">approvals</span>}
-          <CaretDownIcon weight="bold" className="size-3" />
+          <ChevronDownIcon strokeWidth={2.25} className="size-3" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">

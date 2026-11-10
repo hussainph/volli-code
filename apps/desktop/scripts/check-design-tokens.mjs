@@ -32,6 +32,7 @@
  * later. That is the property that keeps the file from becoming a graveyard.
  */
 
+import { semanticShapeLiterals } from "./ui-class-context.mjs";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -83,6 +84,21 @@ const RULES = [
     // `rounded-full`, `rounded-control` and the rest are untouched.
     summary: "bare `rounded` is a 4px literal outside the ladder",
     match: (base) => base === "rounded" || base === "-rounded",
+  },
+  {
+    id: "type-literal-size",
+    // Fixed font-size literals bypass the named scale even when they restate
+    // a rung. Relative em sizing in markdown is separately inventoried, not
+    // silently swept by this rule; arbitrary text colors are not font sizes.
+    summary: "literal font size — use a named type rung",
+    match: (base) => /^text-\[(?:\d*\.)?\d+(?:px|rem)\]$/.test(base),
+  },
+  {
+    id: "type-unknown-ui-sm",
+    // No such utility is registered: this typo silently inherits its host
+    // instead of declaring the intended rung. The actual UI rung is text-ui.
+    summary: "text-ui-sm does not exist — use text-ui",
+    match: (base) => base === "text-ui-sm",
   },
   {
     id: "type-text-base",
@@ -295,7 +311,7 @@ function classLists(source) {
       }
       if (closed) {
         advance(cursor + 1);
-        found.push({ line: startLine, text });
+        found.push({ line: startLine, text, offset: startIndex });
       } else {
         advance(startIndex + 1);
       }
@@ -311,7 +327,9 @@ function classLists(source) {
 function violations(path, source) {
   const found = [];
   const lines = source.split("\n");
-  for (const { line, text } of classLists(source)) {
+  const shapeValues = semanticShapeLiterals(source, path);
+  for (const { line, text, offset } of classLists(source)) {
+    if (shapeValues.has(offset)) continue;
     const tokens = text.split(/\s+/).filter(Boolean);
     if (!isClassList(tokens)) continue;
     for (const token of tokens) {
@@ -412,8 +430,20 @@ function selfTest() {
     ['"rounded-tl-[3px] p-2"', ["radius-arbitrary"]],
     ['"shrink-0 rounded border"', ["radius-bare"]],
     ['"rounded"', ["radius-bare"]],
+    ['type ControlShape = "rounded" | "capsule";', []],
+    ['<Button shape="rounded" />', []],
+    ['<Button className="rounded" />', ["radius-bare"]],
+    ['resolveControlShape("rounded", "sm", "content")', []],
     ['"hover:rounded bg-card"', ["radius-bare"]],
     ['"text-base md:text-sm"', ["type-text-base"]],
+    ['"truncate text-ui-sm text-muted-foreground"', ["type-unknown-ui-sm"]],
+    ['"hover:text-ui-sm"', ["type-unknown-ui-sm"]],
+    ['"text-[10px] font-medium"', ["type-literal-size"]],
+    ['"md:text-[13px]"', ["type-literal-size"]],
+    ['"text-[0.875rem]"', ["type-literal-size"]],
+    ['"text-[.875rem]"', ["type-literal-size"]],
+    ['"text-[#ff7b72]"', []],
+    ['"text-[0.8em]"', []],
     ['"gap-1 text-xs"', ["type-text-xs"]],
     ['"group-hover:text-xs"', ["type-text-xs"]],
     // An arbitrary value may contain an apostrophe, and one used to hide every

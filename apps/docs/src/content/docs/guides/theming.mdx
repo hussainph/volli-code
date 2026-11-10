@@ -1,142 +1,112 @@
 ---
 title: Theming
-description: Edit Volli's canvas to change every color in the app. Place one to three colors, set vibrancy and grain, choose light or dark, and override both per project.
+description: Change Volli's canvas, accent, appearance, typography, and motion. Give a project its own theme and configure terminal appearance through Ghostty overlays.
 sidebar:
   label: Theming
 ---
 
-import { Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
+import { Aside } from "@astrojs/starlight/components";
 
-Volli paints its window from a **canvas**: one to three colors placed on the
-window, plus a vibrancy and a grain amount. Every surface, text tier, border,
-and accent in the app derives from that canvas and repaints when you change it.
+Open **Settings → All projects → Appearance** to change the app's theme and
+terminal appearance. Changes preview as you edit and save when you finish a
+control. There is no apply button.
 
-The default canvas starts with one color stop, `#e8652a`, at 60% vibrancy and
-15% grain.
+Volli derives its surfaces, text, borders, and accent from a **canvas** of one
+to three colors. The default has orange, pink, and amber stops, with orange
+(`#e8652a`) as its primary, 60% vibrancy, and 15% grain.
 
 ## What a canvas is
 
-A canvas has four parts:
+A canvas stores the colors and their positions, a primary color, vibrancy, and
+grain. Colors pool around their positions in the window. The primary color
+also supplies the app's accent and derived color tiers.
 
-- **Colors**, called stops. One to three of them, each anchored at a point in
-  the window, where its color pools and fades outward.
-- **A primary.** The dominant stop. It's drawn larger, fades last, and the rest
-  of the app's colors derive from it.
-- **Vibrancy.** How saturated the canvas is, from a near-neutral wash up to the
-  most each mode allows.
-- **Grain.** A noise layer over the gradient. Zero turns it off.
-
-Panel elevation, card tint, shadow depth, and text weight use fixed values for
-each mode. The same canvas works in light and dark.
+The same canvas can render in light or dark appearance. Terminal colors may
+come from your Ghostty configuration instead.
 
 ## Edit the canvas
 
-![Settings → Appearance with the App theme canvas editor open: one orange color stop on the placement pad, light/dark/auto controls, plus and minus stop controls, color swatches, two faders, and the `#e8652a` field.](../../../assets/screenshots/canvas-editor.png)
+![Appearance settings with the canvas editor open.](../../../assets/screenshots/canvas-editor.png)
 
-Go to **Settings → Appearance → App theme**. Every edit paints the real app as
-you make it, and saves when you release the control. There is no apply button.
+In **Theme**, select the **Canvas** preview to open **Colour placement**.
+The pad represents your window at 16:10 proportions.
 
-### The pad
-
-The pad is a minimap of your window at the same 16:10 proportions, so where a
-color sits on the pad is where it pools on screen. Each stop is a circle.
-
-- **Drag a circle** to move that stop.
-- **Click a circle** without dragging to make it the primary.
-- **Arrow keys** move a focused circle by 1%, or 5% with `Shift` held.
-
-The circles show the colors you picked. The window paints a lighter or darker
-version of each, depending on the mode.
+- Drag a circle to move a color.
+- Click a circle without dragging to make it the primary.
+- Use arrow keys to move a focused circle by 1%, or 5% with `Shift` held.
+- Use **Add a colour** to add a stop, up to three. The minus control removes a
+  non-primary stop. You must keep at least one color.
 
 ### Colors
 
-**+** and **−** at the pad's foot add a color, up to three, or remove the last
-stop that isn't primary.
+Use **Accent** to choose a primary-color preset. **Custom** opens a saturation
+and brightness pad, a hue slider, and **Primary colour hex**. The hex field
+accepts `#rgb` or `#rrggbb`, with or without `#`. Valid values preview while
+you type; `Enter` or leaving the field commits them. `Esc` in the custom
+popover cancels an unfinished preview.
 
-Only the primary's color is editable. The others follow it around the color
-wheel: two stops sit opposite each other, three sit at even thirds. Changing a
-color never moves a stop, so positions stay where you put them.
-
-The row below the pad holds nine primary-color presets at a time, with chevrons
-for the second page and a hex field. The field takes `#rgb` and `#rrggbb`, with
-or without the `#`. A value that parses previews as you type; `Enter` or leaving
-the field keeps it, and `Esc` puts the previous color back. A half-typed value
-is never applied.
+Under **Harmony**, choose **Complementary** for contrasting secondary colors
+or **Analogous** for nearby hues. Changing the primary color recolors the
+other stops without moving them.
 
 ### Vibrancy and grain
 
-Both run from 0 to 100%. They are matching vertical faders that flank the pad.
-Grain appears as texture on the pad and the window, so the canvas itself shows
-the setting as you adjust it. The faders also support keyboard arrows.
+**Vibrancy** controls the canvas's saturation. **Grain** controls its noise
+texture; 0% turns the texture off. Both sliders run from 0 to 100% and support
+keyboard arrows.
 
 ### Contrast
 
-The rest of the app derives its text, border, and surface tiers from the canvas,
-and keeps each as legible as that surface allows. A more saturated canvas leaves
-less separation. Lower the vibrancy or choose another primary color when you
-want more.
+Volli derives text, borders, and surfaces from the canvas. If you want more
+separation between them, lower **Vibrancy** or choose a different accent.
 
 ## Light, dark, and auto
 
-**Settings → Appearance → App theme → Mode** offers **Light**, **Dark**, and
-**Auto**. Auto follows macOS.
+**Theme → Appearance** offers **Light**, **Dark**, and **Auto**. **Auto** follows
+macOS. Appearance and canvas are separate settings, so a project can override
+either without overriding the other.
 
-Mode and canvas are separate settings. The same canvas renders in both modes,
-and a project can override either one on its own.
+**Style** offers **macOS** and **Modern** typography. **Motion** controls app
+animations. Motion is app-wide; Style can also be overridden per project.
 
 ## Use a different theme for one project
 
-Open **Configure → Appearance** for that project. It has three sections: **App
-theme**, **Editor**, and **Terminal**.
+In Settings, select the project row, then **Appearance**. **Configure →
+Appearance** opens the same page.
 
-**App theme** gives **Mode** and **Canvas** separate **Inherit** / **Custom**
-controls. A project can pin its mode while inheriting the app-wide canvas, or
-use its own canvas while following the app-wide mode. **Editor** and
-**Terminal** each have their own scope control.
+Edit **Style**, **Mode**, or the canvas controls to create an override. You do
+not need to switch to a custom scope first. A project's canvas and mode are
+independent, so it can keep its own colors while following the app-wide
+appearance.
 
-Every control starts on **Inherit** and says what the project is following.
-**Custom** pins the value already showing, so switching to it does not repaint
-the app until you edit. A custom Canvas opens the same editor Settings uses,
-scoped to this project.
+An overridden value has a reset control. Open it and choose **Revert to global
+default** to remove that override. The **Canvas** row also shows **Global
+default** or **Project override**. **Overview** lists the project's overrides
+in one place.
 
-Switch back to **Inherit** to drop that override. The project follows the
-app-wide setting again, including later changes.
-
-While the current project overrides the canvas, **Settings → Appearance → App
-theme** shows **Project override**. Edits there still go to the app-wide canvas,
-not to the one this window is showing.
+The **All projects** appearance page edits the global theme, even when the
+project in your main window has its own theme. Its override links take you to
+the projects that differ.
 
 ## What the terminal does
 
-The terminal is the one surface that doesn't always follow your canvas. Ghostty
-configuration takes precedence over Volli's.
+Volli reads your Ghostty configuration and layers its own overlay files on
+top. In **All projects → Appearance → Terminal**, you can change **Font
+family** and **Font size**, inspect the current **Theme**, and open **Ghostty
+config** or **Volli overlay** from **Config files**.
 
-- **If you haven't set a Ghostty theme**, the terminal takes its background,
-  foreground, cursor, and normal red from the app's derived colors, and
-  repaints as soon as you change the canvas or the mode.
-- **If a Ghostty theme is set**, in your own `~/.config/ghostty/config` or
-  through Volli's terminal settings, that theme wins. A `theme = light:X,dark:Y`
-  pair is re-read on every mode change, so you get the half that matches.
-
-The other fifteen ANSI colors use Volli's own palette. The light-mode palette
-derives from its dark-mode hues with contrast adjusted for a light background.
+- Without a Ghostty theme, the terminal uses Volli's canvas-derived background,
+  foreground, cursor, and normal red, plus Volli's fallback ANSI palette.
+- With a Ghostty theme, that theme supplies the terminal colors. A
+  `theme = light:X,dark:Y` pair follows the app's current appearance.
+- The project's **Appearance → Terminal → Config file** opens **This project's
+  overlay** for project-specific settings.
 
 <Aside type="note">
-  Volli never edits your Ghostty config. It writes overlay files layered on top
-  of it, so anything you've configured yourself keeps working.
+  Volli never edits your Ghostty config. Settings writes overlay files, which
+  you can also open and edit yourself.
 </Aside>
 
-## Next steps
-
-<CardGrid>
-  <LinkCard
-    title="Settings and configuration"
-    href="/guides/settings/"
-    description="Every other pane in Settings and Configure, and how to back up your data."
-  />
-  <LinkCard
-    title="Troubleshooting"
-    href="/reference/troubleshooting/"
-    description="What to do when the terminal ignores your app theme."
-  />
-</CardGrid>
+See [Settings and configuration](/guides/settings/) for the other preferences,
+or [Troubleshooting](/reference/troubleshooting/) if terminal colors do not
+match your configuration.

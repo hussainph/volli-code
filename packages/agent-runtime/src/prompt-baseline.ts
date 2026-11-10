@@ -38,7 +38,7 @@
  * the second Session of that Role means this module is wrong and the meter is
  * right.
  */
-import { SKILLS_INDEX_RESOURCE_NAME } from "@volli/shared";
+import { REPO_INSTRUCTIONS_RESOURCE_NAME, SKILLS_INDEX_RESOURCE_NAME } from "@volli/shared";
 import type { RuntimeBrief, RuntimeWorkspaceEnvironment } from "@volli/shared";
 
 import {
@@ -67,14 +67,15 @@ export const PROMPT_BASELINE_CHARS_PER_TOKEN = 4;
  *   varies within a Role, which is why the surface block below is
  *   `session-static` instead.
  * - `project-static`: composed from a project fact. Shared by every Session in
- *   the project — which is where the skills index, far the largest section,
- *   lands.
+ *   the project — which is where the skills index lands, and the repository
+ *   instructions (VC-1054), which are project-sized rather than Volli-sized
+ *   and are rolled up on their own for exactly that reason.
  * - `session-static`: fixed for one Session's life and shared with no other.
  *   Bought once, read on every turn after the first.
  * - `per-turn`: recomposed while the Session runs. Nothing carries this class
  *   today, and the emptiness is the finding rather than an oversight — see
  *   {@link WORKSPACE_ENVIRONMENT_REMINDER_ID}. The class stays named because a
- *   Turn Reminder is DEFINED by per-turn delivery (CONTEXT.md), and the next
+ *   Turn Reminder is DEFINED by per-turn delivery (CONTEXT.md#turn-reminder), and the next
  *   one — live ticket state — will be one.
  */
 export type PromptCacheClass = "role-static" | "project-static" | "session-static" | "per-turn";
@@ -198,6 +199,19 @@ export interface PromptBaseline {
    */
   toolSurface: PromptBaselineTotal;
   /**
+   * The repository instructions' share of {@link system} (VC-1054): their
+   * RESOURCE section plus the separator that joins it, so `total` minus this is
+   * exactly what the same Session would cost without them. Already inside
+   * `system` and `total` — this is a slice, not an addend.
+   *
+   * Its own rollup because these bytes are the project's, not Volli's: a
+   * repository's `AGENTS.md` can be many times the size of everything Volli
+   * composes, and the Volli-owned budget (`prompt-baseline.test.ts`) is judged
+   * on `total` minus this slice rather than loosened to absorb a file Volli
+   * does not write. A measured zero when the workspace has no instruction file.
+   */
+  repoInstructions: PromptBaselineTotal;
+  /**
    * `system + brief + reminder + toolSurface`: everything Volli composes into a fresh
    * Session's context. The provider's first-turn meter also carries tool
    * definitions, the user's own text, the newlines joining the message-side
@@ -229,7 +243,12 @@ function measure(text: string): PromptBaselineTotal {
   };
 }
 
-/** Layers whose inputs are fixed by Role, its bundle and product version. */
+/**
+ * Layers whose inputs are fixed by Role, its bundle and product version. The
+ * Execution layer also reads one bit of the resource set — whether repository
+ * instructions are present (VC-1054) — which splits it two ways across every
+ * project, not per project, so it stays `role-static`.
+ */
 const SYSTEM_SECTION_CACHE_CLASS: Readonly<Record<string, PromptCacheClass>> = {
   execution: "role-static",
   role: "role-static",
@@ -253,7 +272,17 @@ const RESOURCE_SECTION_PREFIX = "resource:";
  */
 function hasProjectStaticResourceSet(input: SystemPromptInput): boolean {
   const resources = input.promptResources ?? [];
-  return resources.length === 1 && resources[0]?.name === SKILLS_INDEX_RESOURCE_NAME;
+  // The repository instructions are a project fact too (VC-1054): read from
+  // the workspace root at birth, never selected per Session, so a set made of
+  // them and the index alone still proves nothing Session-specific.
+  const names = resources.map((resource) => resource.name);
+  return (
+    names.length > 0 &&
+    new Set(names).size === names.length &&
+    names.every(
+      (name) => name === SKILLS_INDEX_RESOURCE_NAME || name === REPO_INSTRUCTIONS_RESOURCE_NAME,
+    )
+  );
 }
 
 /**
@@ -270,8 +299,19 @@ function systemSectionCacheClass(id: string, input: SystemPromptInput): PromptCa
     return projectStaticResources ? "project-static" : "session-static";
   }
   if (id.startsWith(RESOURCE_SECTION_PREFIX)) {
-    // A project-static resource set contains exactly the skills index, so every
-    // resource section in that shape is the index by construction.
+    // Production records the repository instructions FIRST (VC-1054), so in
+    // that position nothing a Session selected precedes them: their bytes and
+    // everything ahead of them are the same for every Session in the project,
+    // whatever skills follow.
+    if (
+      id === `${RESOURCE_SECTION_PREFIX}${REPO_INSTRUCTIONS_RESOURCE_NAME}` &&
+      input.promptResources?.[0]?.name === REPO_INSTRUCTIONS_RESOURCE_NAME
+    ) {
+      return "project-static";
+    }
+    // A project-static resource set holds only project facts — the skills
+    // index and the repository instructions — so every resource section in
+    // that shape is one of them by construction.
     return projectStaticResources ? "project-static" : "session-static";
   }
   /* v8 ignore next -- fixed section ids are pinned in prompt.test; resource ids returned above. */
@@ -307,6 +347,12 @@ export function promptBaseline(input: PromptBaselineInput): PromptBaseline {
   const brief = measure(briefBlock);
   const reminder = measure(reminderBlock ?? "");
   const toolSurface = measure(toolSurfaceBlock);
+  const repoSection = sections.find(
+    (section) => section.id === `${RESOURCE_SECTION_PREFIX}${REPO_INSTRUCTIONS_RESOURCE_NAME}`,
+  );
+  // The section and the "\n\n" that joins it: what removing it would save.
+  const repoInstructions =
+    repoSection === undefined ? measure("") : measure(`\n\n${repoSection.text}`);
   return {
     charsPerToken: PROMPT_BASELINE_CHARS_PER_TOKEN,
     sections: [
@@ -326,6 +372,7 @@ export function promptBaseline(input: PromptBaselineInput): PromptBaseline {
     brief,
     reminder,
     toolSurface,
+    repoInstructions,
     total: {
       chars: system.chars + brief.chars + reminder.chars + toolSurface.chars,
       tokens: system.tokens + brief.tokens + reminder.tokens + toolSurface.tokens,

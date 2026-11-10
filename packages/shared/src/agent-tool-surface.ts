@@ -2,12 +2,9 @@
  * Who holds which tools, and the one place the whole vocabulary is known
  * (VC-162).
  *
- * `CONTEXT.md` has always said Role determines the tool bundle. Until this
- * module there was no mapping to determine it with: every Session was handed
- * the same four coding tools plus whatever ports the profile could wire, and
- * `RuntimeToolBundle` could not spell a product verb at all. VC-92's second
- * earned property — *no injection can call a tool that is not in the room* — is
- * worthless while every room holds the same things.
+ * Session Role determines the default tool bundle (CONTEXT.md#session-role).
+ * This mapping makes availability enforcement rather than a prompt promise:
+ * no injection can call a tool that is not in the room.
  *
  * ## The formula
  *

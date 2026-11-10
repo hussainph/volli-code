@@ -115,10 +115,10 @@ describe("ProjectFolderBanner", () => {
     stubApi(["missing"], { canceled: true });
     await renderBanner();
 
-    expect(container?.textContent).toContain("This project's folder isn't where Volli left it.");
+    expect(container?.textContent).toContain("Project folder not found");
     // The path is the clue to where the person moved it, so it is on screen.
     expect(container?.textContent).toContain("/Users/me/volli");
-    expect(buttonLabelled("Relink…")).toBeDefined();
+    expect(buttonLabelled("Relink folder")).toBeDefined();
   });
 
   // A path that now resolves to a FILE is the same recovery and a different
@@ -128,8 +128,8 @@ describe("ProjectFolderBanner", () => {
     stubApi(["not-a-directory"], { canceled: true });
     await renderBanner();
 
-    expect(container?.textContent).toContain("This project's path is a file, not a folder.");
-    expect(buttonLabelled("Relink…")).toBeDefined();
+    expect(container?.textContent).toContain("Project path isn't a folder");
+    expect(buttonLabelled("Relink folder")).toBeDefined();
   });
 
   // "We could not look" is not "it is not there". A failed check must not put a
@@ -147,8 +147,8 @@ describe("ProjectFolderBanner", () => {
     const api = stubApi(["missing"], { canceled: false, path: "/Users/me/code/volli" });
     await renderBanner();
 
-    await act(async () => buttonLabelled("Relink…")?.click());
-    await act(async () => buttonLabelled("Choose folder…")?.click());
+    await act(async () => buttonLabelled("Relink folder")?.click());
+    await act(async () => buttonLabelled("Choose folder")?.click());
 
     expect(api.relink).toHaveBeenCalledWith({ id: "p1", path: "/Users/me/code/volli" });
     expect(useProjectsStore.getState().projects).toEqual([
@@ -162,10 +162,10 @@ describe("ProjectFolderBanner", () => {
   it("clears itself once the relink has landed", async () => {
     const api = stubApi(["missing", "present"], { canceled: false, path: "/Users/me/code/volli" });
     await renderBanner();
-    expect(container?.textContent).toContain("This project's folder isn't where Volli left it.");
+    expect(container?.textContent).toContain("Project folder not found");
 
-    await act(async () => buttonLabelled("Relink…")?.click());
-    await act(async () => buttonLabelled("Choose folder…")?.click());
+    await act(async () => buttonLabelled("Relink folder")?.click());
+    await act(async () => buttonLabelled("Choose folder")?.click());
 
     expect(api.checkFolder).toHaveBeenCalledTimes(2);
     expect(container?.textContent).toBe("");
@@ -184,6 +184,6 @@ describe("ProjectFolderBanner", () => {
     });
 
     expect(api.checkFolder).toHaveBeenCalledTimes(2);
-    expect(container?.textContent).toContain("This project's folder isn't where Volli left it.");
+    expect(container?.textContent).toContain("Project folder not found");
   });
 });

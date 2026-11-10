@@ -8,6 +8,7 @@ import type { DecisionModelResult, DecisionModelSettingsView } from "../../../..
 import type { Project } from "@volli/shared";
 
 import { cloudSetting } from "./decision-model-model";
+import { TooltipProvider } from "@renderer/components/ui/tooltip";
 
 import {
   CloudOptInDialog,
@@ -26,6 +27,8 @@ vi.mock("@renderer/lib/app-state-storage", () => ({
     setItem: vi.fn((key: string, value: string) => receipts.set(key, value)),
   },
   flushPendingAppStateKey: vi.fn(async () => true),
+  // stores/ui and stores/style register preference defaults at module scope.
+  registerSharedPreferenceDefaults: () => {},
 }));
 
 const ZEN: DecisionModelCatalogEntry = {
@@ -106,7 +109,7 @@ async function render(node: React.ReactNode): Promise<void> {
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
-  await act(async () => root?.render(node));
+  await act(async () => root?.render(<TooltipProvider>{node}</TooltipProvider>));
 }
 
 function button(text: string): HTMLButtonElement {

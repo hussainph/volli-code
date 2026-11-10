@@ -112,13 +112,23 @@ describe("cloud Automation controls", () => {
       ]).map((row) => row.id),
     ).toEqual([R]);
   });
-  it("defaults column arming to this Mac, shows its armer, and has no per-machine switch", async () => {
-    await mount(<CloudColumnArming projectId={P} status="doing" />);
+  it("defaults column arming to this Mac and names the action distinctly from the automation navigation", async () => {
+    const navigate = vi.fn();
+    await mount(
+      <>
+        <button onClick={navigate}>Review</button>
+        <CloudColumnArming projectId={P} status="doing" />
+      </>,
+    );
     await click("Doing runs Review on Ada’s Mac · Armed by Ada");
     expect(document.body.textContent).toContain("Armed by Ada");
-    expect(document.body.textContent).toContain("on Ada’s Mac (this Mac)");
+    expect(document.body.textContent).toContain("Ada’s Mac (this Mac)");
     expect(document.querySelector('[role="switch"]')).toBeNull();
-    await click("Review");
+    expect(document.querySelector('[aria-label="Arm Doing with Review"]')?.textContent).toBe(
+      "Review",
+    );
+    await click("Arm Doing with Review");
+    expect(navigate).not.toHaveBeenCalled();
     expect(useAutomationsStore.getState().arm).toHaveBeenCalledWith({
       projectId: P,
       status: "doing",
@@ -144,7 +154,10 @@ describe("cloud Automation controls", () => {
     await mount(<CloudColumnArming projectId={P} status="doing" />);
     expect(container.textContent).toContain("Paused · Re-arm");
     await click("Doing · Paused · Re-arm");
-    await click("Re-arm Review");
+    expect(document.querySelector('[aria-label="Re-arm Doing with Review"]')?.textContent).toBe(
+      "Re-arm Review",
+    );
+    await click("Re-arm Doing with Review");
     expect(useAutomationsStore.getState().arm).toHaveBeenCalledWith({
       projectId: P,
       status: "doing",
@@ -161,7 +174,7 @@ describe("cloud Automation controls", () => {
       },
     };
     await mount(<CloudAutomationControls projectId={P} automation={scheduled} />);
-    expect(container.textContent).toContain("Armed by Ada");
+    expect(container.querySelector('[aria-label="Armed by Ada on Ada’s Mac"]')).not.toBeNull();
     await click("Armed: Review");
     expect(useAutomationsStore.getState().setEnabled).toHaveBeenCalledWith(A, false, R);
   });
@@ -190,6 +203,7 @@ describe("cloud Automation controls", () => {
         schedules: { [P]: [{ ...schedule, nextFireAt: Date.parse("2026-03-07T12:34:00Z") }] },
       }),
     );
+    expect(container.textContent).toContain("Next ·");
     expect(container.textContent).toContain("12:34");
   });
   it("names the update recovery when this Mac has an old build", async () => {
@@ -208,7 +222,7 @@ describe("cloud Automation controls", () => {
     await mount(<CloudColumnArming projectId={P} status="doing" />);
     await click("Doing runs Review on Ada’s Mac · Armed by Ada");
     expect(document.body.textContent).toContain("Update Volli on Ada’s Mac");
-    const picker = document.querySelector('[aria-label="Automation runner"]')!;
+    const picker = document.querySelector('[aria-label="Runner"]')!;
     await act(async () =>
       picker.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })),
     );
@@ -246,11 +260,11 @@ describe("cloud Run evidence", () => {
         skipReason: { kind: "runner-asleep", runnerId: R },
         missedCount: 3,
       }),
-      "Skipped · Ada’s Mac was asleep (3 missed)",
+      "Skipped · Ada’s Mac was asleep · 3 occurrences",
     ],
     [
       run({ status: "skipped", skipReason: { kind: "superseded" } }),
-      "Skipped · Replaced by the next run",
+      "Skipped · Replaced by next run",
     ],
     [
       run({ status: "skipped", skipReason: { kind: "runner-unavailable", code: "armer_left" } }),
@@ -280,7 +294,7 @@ describe("cloud Run evidence", () => {
     });
     await mount(<CloudRunHistory projectId={P} automationId={null} />);
     expect(container.textContent).toContain("Waiting for Ada’s Mac");
-    expect(container.textContent).toContain("3 missed");
+    expect(container.textContent).toContain("3 occurrences");
     expect(container.textContent).toContain("Private Session");
     expect(container.textContent).toContain("Starting…");
     expect(container.querySelectorAll('[data-run-history-run="skip"]')).toHaveLength(1);
@@ -332,7 +346,12 @@ describe("cloud Run evidence", () => {
         },
       })),
     );
-    expect(container.textContent).toContain("Starting…");
-    expect(container.querySelector("button")?.disabled).toBe(true);
+    expect(container.textContent).toContain("Starting");
+    const cancel = container.querySelector<HTMLButtonElement>("button");
+    expect(cancel?.textContent).toBe("Cancel");
+    expect(cancel?.disabled).toBe(true);
+    const errors = vi.mocked(toastError).mock.calls.length;
+    await act(async () => cancel?.click());
+    expect(toastError).toHaveBeenCalledTimes(errors);
   });
 });

@@ -41,6 +41,10 @@ const LONG_SKILL: SkillReference = {
   root: ".agents/skills/review-every-boundary",
 };
 
+function providerHelp(): Element | null {
+  return document.body.querySelector('[data-slot="tooltip-content"]');
+}
+
 function automation(overrides: Partial<Automation> = {}): Automation {
   return {
     id: "automation-1",
@@ -152,14 +156,16 @@ async function mountEditor(
 }
 
 function buttonContaining(label: string): HTMLButtonElement {
-  const found = [...document.querySelectorAll("button")].find((candidate) =>
-    candidate.textContent?.includes(label),
+  const found = [...document.querySelectorAll("button")].find(
+    (candidate) =>
+      candidate.textContent?.includes(label) || candidate.getAttribute("aria-label") === label,
   );
   if (found === undefined) throw new Error(`no button containing ${label}`);
   return found;
 }
 
 async function typeInstructions(value: string): Promise<void> {
+  if (!document.querySelector('[aria-label="Instructions"]')) await edit("instructions");
   const box = document.querySelector('[aria-label="Instructions"]') as HTMLTextAreaElement;
   const setter = Object.getOwnPropertyDescriptor(
     window.HTMLTextAreaElement.prototype,
@@ -210,10 +216,19 @@ afterEach(async () => {
 });
 
 describe("the page editor hierarchy", () => {
+  it("stacks the editor at narrow container widths without shrinking rows over history", async () => {
+    await mountEditor();
+    const editor = document.querySelector('[data-slot="automation-editor"]')!;
+    expect(editor.classList.contains("overflow-y-auto")).toBe(true);
+    expect(editor.querySelector("aside")).toBeNull();
+    expect(editor.querySelector(".max-w-content")).not.toBeNull();
+    expect(editor.querySelectorAll('[data-slot="pref-section-title"]').length).toBe(3);
+  });
+
   it("cloud authoring offers only this project, never All projects", async () => {
     adoptLaunch({ store: "cloud", userId: "u", backendUrl: "http://127.0.0.1:1" });
     await mountEditor();
-    const ownership = document.querySelector('[aria-label="Ownership"]') as HTMLButtonElement;
+    const ownership = document.querySelector('[aria-label="Scope"]') as HTMLButtonElement;
     await act(async () =>
       ownership.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })),
     );
@@ -223,10 +238,10 @@ describe("the page editor hierarchy", () => {
   it("keeps one clear save action and moves record settings into the inspector", async () => {
     await mountEditor();
 
-    expect(buttonContaining("Create automation").dataset.size).toBe("sm");
+    expect(buttonContaining("Create").dataset.size).toBe("sm");
     expect(document.querySelector('[data-slot="automation-editor"]')).not.toBeNull();
-    expect(document.querySelector('[aria-label="Ownership"]')).not.toBeNull();
-    expect(document.querySelector('[role="radiogroup"][aria-label="Trigger"]')).not.toBeNull();
+    expect(document.querySelector('[aria-label="Scope"]')).not.toBeNull();
+    expect(document.querySelector('[role="tablist"][aria-label="Trigger"]')).not.toBeNull();
     expect(document.querySelector('[aria-label="Runtime model"]')).not.toBeNull();
     expect(document.querySelector('[aria-label="Name"]')?.classList.contains("text-heading")).toBe(
       true,
@@ -243,13 +258,129 @@ describe("a tier Runtime", () => {
     useAutomationsStore.setState({ update });
     await mountEditor(automation({ runtime: { kind: "tier", tier: "fast" } }));
 
+    await typeName("Renamed sweep");
     await act(async () => {
-      buttonContaining("Save changes").click();
+      buttonContaining("Save name").click();
     });
 
     expect(update).toHaveBeenCalledWith(
       expect.objectContaining({ runtime: { kind: "tier", tier: "fast" } }),
     );
+  });
+});
+
+describe("the Runtime model selector's provider help", () => {
+  it("keeps pointer-focused rows quiet and reveals a typeahead-selected provider immediately", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = catalogueClient();
+      const inspect = client.inspect;
+      client.inspect = async (options) => {
+        const snapshot = await inspect(options);
+        return {
+          ...snapshot,
+          providers: [
+            ...snapshot.providers,
+            { ...snapshot.providers[0]!, id: "openai", label: "OpenAI" },
+          ],
+          models: [
+            ...snapshot.models,
+            {
+              ...snapshot.models[0]!,
+              providerId: "openai",
+              modelId: "gpt-4.1-mini",
+              label: "GPT-4.1 mini",
+            },
+          ],
+        };
+      };
+      const pin: ModelSelection = {
+        providerId: "anthropic",
+        modelId: "claude-opus",
+        reasoningLevel: "high",
+      };
+      await mountEditor(automation({ runtime: pin }), client);
+      await edit("runtime");
+      const draftBefore = loadEditorDraft("p1", undefined, "automation-1");
+      const trigger = document.querySelector<HTMLButtonElement>('[aria-label="Runtime model"]')!;
+      await act(async () => trigger.focus());
+      await act(async () =>
+        trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })),
+      );
+      await act(async () => {
+        vi.advanceTimersByTime(0);
+      });
+      const options = [...document.querySelectorAll<HTMLElement>('[role="option"]')];
+      const claude = options.find(
+        (option) =>
+          option.querySelector('[data-slot="model-name"]')?.textContent === "Claude Opus 4.5",
+      )!;
+      const gpt = options.find(
+        (option) =>
+          option.querySelector('[data-slot="model-name"]')?.textContent === "GPT-4.1 mini",
+      )!;
+      const pointerFocus = () =>
+        claude.dispatchEvent(
+          new PointerEvent("pointermove", { bubbles: true, pointerType: "mouse" }),
+        );
+      await act(async () => {
+        pointerFocus();
+      });
+      expect(document.activeElement).toBe(claude);
+      expect(providerHelp()).toBeNull();
+      expect(claude.textContent).not.toContain("Anthropic");
+      expect(gpt.textContent).not.toContain("OpenAI");
+      const mark = claude.querySelector<HTMLElement>('[data-slot="help-tag"]')!;
+      expect(mark.hasAttribute("tabindex")).toBe(false);
+      await act(async () =>
+        mark.dispatchEvent(
+          new PointerEvent("pointermove", { bubbles: true, pointerType: "mouse" }),
+        ),
+      );
+      await act(async () => {
+        vi.advanceTimersByTime(1499);
+      });
+      expect(providerHelp()).toBeNull();
+      await act(async () => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(providerHelp()?.textContent).toBe("Claude Opus 4.5 · Anthropic");
+      await act(async () =>
+        mark.dispatchEvent(
+          new PointerEvent("pointerout", { bubbles: true, relatedTarget: document.body }),
+        ),
+      );
+      expect(providerHelp()).toBeNull();
+      await act(async () => {
+        pointerFocus();
+      });
+      expect(document.activeElement).toBe(claude);
+      // Modifier shortcuts are not Radix's character typeahead.
+      await act(async () =>
+        claude.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "g", ctrlKey: true, bubbles: true }),
+        ),
+      );
+      await act(async () => {
+        vi.advanceTimersByTime(0);
+      });
+      expect(document.activeElement).toBe(claude);
+      expect(providerHelp()).toBeNull();
+      await act(async () =>
+        claude.dispatchEvent(new KeyboardEvent("keydown", { key: "g", bubbles: true })),
+      );
+      await act(async () => {
+        vi.advanceTimersByTime(0);
+      });
+      expect(document.activeElement).toBe(gpt);
+      expect(providerHelp()?.textContent).toBe("GPT-4.1 mini · OpenAI");
+      expect(gpt.querySelector('[data-slot="help-tag"]')?.hasAttribute("tabindex")).toBe(false);
+      // Typeahead reads an option; it does not change the saved Runtime.
+      expect(loadEditorDraft("p1", undefined, "automation-1")).toEqual(draftBefore);
+      expect(useAutomationsStore.getState().editor?.automation?.runtime).toEqual(pin);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -271,10 +402,15 @@ describe("the unavailable Runtime selection's display name", () => {
       const inspect = vi.spyOn(client, "inspect");
       await mountEditor(automation({ runtime: pin }), client);
 
+      await edit("runtime");
       const trigger = document.querySelector('[aria-label="Runtime model"]') as HTMLButtonElement;
       const caption = trigger.querySelector('[data-slot="model-name"]');
-      expect(caption?.textContent).toBe("Claude Opus 4.5 · Anthropic");
+      expect(caption?.textContent).toBe("Claude Opus 4.5");
       expect(caption!.parentElement?.querySelector("svg[aria-hidden] path")).not.toBeNull();
+      expect(
+        caption!.parentElement?.querySelector('[role="img"]')?.getAttribute("aria-label"),
+      ).toBe("Anthropic");
+      expect(trigger.textContent).not.toContain("Anthropic");
       expect(trigger.textContent).not.toContain("claude-opus");
       // The picker has no offerable selection, but display identity can still
       // read it. Both consumers use the actual provider's one held inspection.
@@ -287,9 +423,12 @@ describe("the unavailable Runtime selection's display name", () => {
       });
       const selectedOption = document.querySelector('[role="option"][data-state="checked"]');
       expect(selectedOption?.querySelector('[data-slot="model-name"]')?.textContent).toBe(
-        "Claude Opus 4.5 · Anthropic",
+        "Claude Opus 4.5",
       );
       expect(selectedOption!.querySelector("svg[aria-hidden] path")).not.toBeNull();
+      expect(selectedOption!.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
+        "Anthropic",
+      );
       await act(async () => {
         selectedOption!.dispatchEvent(
           new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
@@ -300,7 +439,7 @@ describe("the unavailable Runtime selection's display name", () => {
       // clear the unavailable selection, or clamp its previously saved effort.
       await typeName("Renamed sweep");
       expect(loadEditorDraft("p1", undefined, "automation-1")?.runtime).toEqual(pin);
-      await act(async () => buttonContaining("Save changes").click());
+      await act(async () => buttonContaining("Save name").click());
       expect(update).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           automationId: "automation-1",
@@ -321,14 +460,17 @@ describe("the unavailable Runtime selection's display name", () => {
     useAutomationsStore.setState({ update });
     await mountEditor(automation({ runtime: pin }), catalogueClient());
 
+    await edit("runtime");
     const trigger = document.querySelector('[aria-label="Runtime model"]');
-    expect(trigger?.querySelector('[data-slot="model-name"]')?.textContent).toBe(
-      "claude-opus · other-account",
-    );
+    expect(trigger?.querySelector('[data-slot="model-name"]')?.textContent).toBe("claude-opus");
     expect(trigger?.textContent).not.toContain("Claude Opus 4.5");
+    expect(trigger?.textContent).not.toContain("other-account");
+    expect(trigger?.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
+      "other-account",
+    );
     await typeName("Keep the unknown pin");
     expect(loadEditorDraft("p1", undefined, "automation-1")?.runtime).toEqual(pin);
-    await act(async () => buttonContaining("Save changes").click());
+    await act(async () => buttonContaining("Save name").click());
     expect(update).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ automationId: "automation-1", runtime: pin }),
     );
@@ -339,7 +481,7 @@ describe("the schedule time field", () => {
   it("uses a content-sized themed trigger and editable numeric parts", async () => {
     await mountEditor();
     await act(async () => {
-      buttonContaining("On a schedule").click();
+      buttonContaining("Schedule").click();
     });
 
     const trigger = document.querySelector('[aria-label="Time"]') as HTMLButtonElement;
@@ -352,6 +494,7 @@ describe("the schedule time field", () => {
       trigger.click();
     });
     const hour = document.querySelector('[aria-label="Hour"]') as HTMLInputElement;
+    await edit("trigger");
     const minute = document.querySelector('[aria-label="Minute"]') as HTMLInputElement;
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
     await act(async () => {
@@ -369,7 +512,7 @@ describe("the schedule time field", () => {
   it("keeps a two-digit draft intact while the second key is typed", async () => {
     await mountEditor();
     await act(async () => {
-      buttonContaining("On a schedule").click();
+      buttonContaining("Schedule").click();
     });
     await act(async () => {
       (document.querySelector('[aria-label="Time"]') as HTMLButtonElement).click();
@@ -402,15 +545,29 @@ describe("the schedule time field", () => {
       }),
     );
 
-    const minute = document.querySelector(
-      '[aria-label="Minutes past the hour"]',
-    ) as HTMLInputElement;
+    await edit("trigger");
+    const minute = document.querySelector('[aria-label="Minute"]') as HTMLInputElement;
     expect(minute.inputMode).toBe("numeric");
     expect(minute.classList.contains("tabular-nums")).toBe(true);
   });
 });
 
 describe("schedule wording", () => {
+  it("does not describe the local scheduler's asleep policy in a cloud schedule", async () => {
+    adoptLaunch({ store: "cloud", userId: "u", backendUrl: "http://127.0.0.1:1" });
+    await mountEditor(
+      automation({
+        trigger: {
+          kind: "schedule",
+          schedule: { preset: "hourly", minute: 0, timeZone: "Europe/London" },
+        },
+      }),
+    );
+    await edit("trigger");
+    expect(document.querySelector('[aria-label="Frequency"]')).not.toBeNull();
+    expect(document.querySelector('[aria-label="Schedule policy"]')).toBeNull();
+    expect(document.body.textContent).not.toContain("Mac is asleep");
+  });
   it("gives Weekly one visible day choice beside its time", async () => {
     await mountEditor(
       automation({
@@ -427,13 +584,14 @@ describe("schedule wording", () => {
       }),
     );
 
-    const schedule = document.querySelector('[aria-label="Schedule"]');
-    const weekday = document.querySelector('[aria-label="Day of the week"]');
+    await edit("trigger");
+    const schedule = document.querySelector('[aria-label="Frequency"]');
+    const weekday = document.querySelector('[aria-label="Day"]');
     expect(schedule?.textContent).toContain("Weekly");
     expect(weekday?.textContent).toContain("Monday");
     expect(document.querySelector('[aria-label="Time"]')?.textContent).toContain("09:00");
     // The weekday is one compact dropdown, not another seven-segment strip.
-    expect(document.querySelector('[aria-label="Day of the week"] [aria-pressed]')).toBeNull();
+    expect(document.querySelector('[aria-label="Day"] [aria-pressed]')).toBeNull();
   });
 
   it("spells the hourly offset as minutes past the hour", async () => {
@@ -446,11 +604,10 @@ describe("schedule wording", () => {
       }),
     );
 
-    const minute = document.querySelector(
-      '[aria-label="Minutes past the hour"]',
-    ) as HTMLInputElement;
+    await edit("trigger");
+    const minute = document.querySelector('[aria-label="Minute"]') as HTMLInputElement;
     expect(minute.value).toBe("00");
-    expect(minute.parentElement?.textContent).toContain("Minutes past the hour");
+    expect(minute.closest('[data-slot="pref-row"]')?.textContent).toContain("Minute");
   });
 });
 
@@ -461,8 +618,13 @@ const KUWAIT_NINE_THIRTY = automation({
   },
 });
 
+function preview() {
+  return [...document.querySelectorAll('[data-slot="pref-row"]')].find((row) =>
+    row.textContent?.startsWith("Next runs"),
+  )?.textContent;
+}
 function nextLine(): HTMLElement | undefined {
-  return [...document.querySelectorAll("p")].find((p) => p.textContent?.startsWith("Next: "));
+  return [...document.querySelectorAll("p")].find((p) => p.textContent?.startsWith("Next · "));
 }
 
 describe("the next-run line (VC-298)", () => {
@@ -471,16 +633,33 @@ describe("the next-run line (VC-298)", () => {
     await mountEditor(KUWAIT_NINE_THIRTY);
 
     expect(nextLine()).toBeDefined();
-    expect(document.body.textContent).toContain(
-      "Runs up to 2 min late; skipped if Volli is closed or the Mac is asleep",
+    // Policy is disclosed, not a standing paragraph under the controls.
+    expect(document.body.textContent).not.toContain("min late");
+    const policy = document.querySelector<HTMLButtonElement>(
+      '[aria-label="Trigger more actions"]',
+    )!;
+    expect(policy.dataset.variant).toBe("ghost");
+    await act(async () =>
+      policy.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })),
     );
+    await act(async () =>
+      [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+        .find((b) => b.textContent?.includes("Schedule policy"))
+        ?.click(),
+    );
+    expect(document.body.textContent).toContain("Up to 2 min late");
+    expect(document.body.textContent).toContain(
+      "Skipped when Volli is closed or this Mac is asleep",
+    );
+    await act(async () =>
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })),
+    );
+    expect(document.body.textContent).not.toContain("min late");
 
     await act(async () => {
       useAutomationsStore.setState({ enabledIds: [] });
     });
     expect(nextLine()).toBeUndefined();
-    // The policy is the schedule's, whether or not it fires here right now.
-    expect(document.body.textContent).toContain("Runs up to 2 min late");
   });
 
   it("follows the time being edited before it is saved", async () => {
@@ -488,6 +667,8 @@ describe("the next-run line (VC-298)", () => {
     await mountEditor(KUWAIT_NINE_THIRTY);
     const before = nextLine()?.textContent;
 
+    await edit("trigger");
+    const beforePreview = preview();
     await act(async () => {
       buttonContaining("09:30").click();
     });
@@ -499,7 +680,8 @@ describe("the next-run line (VC-298)", () => {
     });
 
     // 17:30 is a different time of day from 09:30 whatever the clock says now.
-    expect(nextLine()?.textContent).not.toBe(before);
+    expect(nextLine()?.textContent).toBe(before);
+    expect(preview()).not.toBe(beforePreview);
   });
 
   it("says nothing about a next run for a record never switched on here", async () => {
@@ -524,11 +706,23 @@ describe("the Instructions picker", () => {
     expect(stack?.classList.contains("min-w-0")).toBe(true);
     expect(overlay?.classList.contains("absolute")).toBe(true);
     // Floating suggestions do not take a flow slot before the Run history.
-    expect(document.querySelector('[data-slot="run-history"]')?.textContent).toBe("Recent runs");
+    expect(document.querySelector('[data-slot="composer-picker-stack"]')).not.toBeNull();
   });
 });
 
-function typeName(value: string): Promise<void> {
+async function edit(group: string) {
+  const button = document.querySelector<HTMLButtonElement>(`[aria-label="Edit ${group}"]`);
+  if (button) await act(async () => button.click());
+}
+
+async function typeName(value: string): Promise<void> {
+  if (!document.querySelector('[aria-label="Name"]')) {
+    const cancel = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (b) => b.textContent === "Cancel",
+    );
+    if (cancel) await act(async () => cancel.click());
+    await act(async () => document.querySelector<HTMLButtonElement>("h2 button")?.click());
+  }
   const box = document.querySelector('[aria-label="Name"]') as HTMLInputElement;
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
   return act(async () => {
@@ -581,7 +775,7 @@ describe("automation editor drafts (VC-329)", () => {
 
   it("keeps an ownership-only choice as a draft", async () => {
     await mountEditor();
-    const ownership = document.querySelector('[aria-label="Ownership"]') as HTMLButtonElement;
+    const ownership = document.querySelector('[aria-label="Scope"]') as HTMLButtonElement;
     ownership.focus();
     await act(async () => {
       ownership.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
@@ -610,7 +804,7 @@ describe("automation editor drafts (VC-329)", () => {
     ) as HTMLTextAreaElement;
     expect(name.value).toBe("Nightly sweep");
     expect(instructions.value).toBe("/review the board");
-    expect(buttonContaining("On a schedule").getAttribute("aria-checked")).toBe("true");
+    expect(buttonContaining("Schedule").getAttribute("aria-selected")).toBe("true");
     expect((document.querySelector('[aria-label="Time"]') as HTMLButtonElement).textContent).toBe(
       "21:00",
     );
@@ -640,18 +834,25 @@ describe("automation editor drafts (VC-329)", () => {
     // passes — so every assertion below would report on a header that is not there.
     const header = indicator!.closest("header");
     expect(header).not.toBeNull();
-    expect(header!.querySelector('[aria-label="Name"]')).not.toBeNull();
+    const name = header!.querySelector('[aria-label="Name"]');
+    expect(name).not.toBeNull();
+    // Actions wrap instead of shrinking the name field to zero on narrow windows.
+    expect(header!.classList.contains("flex-wrap")).toBe(true);
+    expect(name!.classList.contains("min-w-0")).toBe(true);
     expect(header!.contains(buttonContaining("Discard draft"))).toBe(true);
-    expect(header!.contains(buttonContaining("Create automation"))).toBe(true);
+    expect(
+      document
+        .querySelector('[data-slot="automation-editor"]')!
+        .contains(buttonContaining("Create")),
+    ).toBe(true);
 
-    // The scrolling form holds only the form: nothing above Instructions moves
-    // when the draft state comes and goes. Asserted by KIND rather than by
-    // walking firstElementChild twice — the walk passed on any first node whose
-    // subtree mentioned Instructions, and broke on any wrapper added above it.
-    const form = document.querySelector("main");
+    // Draft state stays above the scrolling form. The instructions field keeps
+    // its accessible name without a redundant heading above it.
+    const form = document.querySelector("fieldset");
     expect(form).not.toBeNull();
     expect(form!.querySelector('[data-slot^="draft-"]')).toBeNull();
-    expect(form!.querySelector("h2")?.textContent).toBe("Instructions");
+    expect(form!.querySelectorAll("h2")).toHaveLength(3);
+    expect(form!.querySelector('[aria-label="Instructions"]')).not.toBeNull();
   });
 
   // VC-405's actual complaint is the JUMP, not the placement. The title row is
@@ -733,7 +934,7 @@ describe("automation editor drafts (VC-329)", () => {
     expect(loadEditorDraft("p1")).not.toBeNull();
 
     await act(async () => {
-      buttonContaining("Create automation").click();
+      buttonContaining("Create").click();
     });
 
     expect(loadEditorDraft("p1")).toBeNull();
@@ -750,11 +951,9 @@ describe("automation editor drafts (VC-329)", () => {
     expect((document.querySelector('[aria-label="Name"]') as HTMLInputElement).value).toBe(
       "Unsaved",
     );
-    expect(document.querySelector('[aria-label="Runtime model"]')?.textContent).toContain(
-      "Project default",
-    );
+    expect(loadEditorDraft("p1", undefined, "automation-1")?.runtime).toBeNull();
     await act(async () => buttonContaining("Discard draft").click());
-    expect((document.querySelector('[aria-label="Name"]') as HTMLInputElement).value).toBe("Saved");
+    expect(document.querySelector("h2 button")?.textContent).toBe("Saved");
     expect(loadEditorDraft("p1", undefined, "automation-1")).toBeNull();
   });
 
@@ -772,10 +971,143 @@ describe("automation editor drafts (VC-329)", () => {
     saveEditorDraft("p1", seededDraft());
     await mountEditor(automation({ name: "Existing" }));
 
-    const name = document.querySelector('[aria-label="Name"]') as HTMLInputElement;
-    expect(name.value).toBe("Existing");
+    expect(document.querySelector("h2 button")?.textContent).toBe("Existing");
     expect(document.querySelector('[data-slot="draft-resumed"]')).toBeNull();
     // A saved record uses its own slot; the new-automation draft is untouched.
     expect(loadEditorDraft("p1")).toEqual(seededDraft());
   });
+});
+
+describe("reading groups and explicit transactions", () => {
+  it("keeps saved fields read-only until Edit and never saves on blur", async () => {
+    const update = vi.fn(async () => null);
+    useAutomationsStore.setState({ update });
+    await mountEditor(automation());
+    expect(document.querySelector('[aria-label="Name"]')).toBeNull();
+    expect(document.querySelector('[aria-label="Instructions"]')).toBeNull();
+    expect(document.querySelector('[aria-label="Scope"]')).toBeNull();
+    await typeName("Unsaved");
+    await act(async () =>
+      (document.querySelector('[aria-label="Name"]') as HTMLInputElement).blur(),
+    );
+    expect(update).not.toHaveBeenCalled();
+    expect(loadEditorDraft("p1", undefined, "automation-1")?.name).toBe("Unsaved");
+  });
+
+  it("merges only the active group into the latest saved projection", async () => {
+    const update = vi.fn(async () => null);
+    useAutomationsStore.setState({ update });
+    await mountEditor(automation());
+    await edit("instructions");
+    await typeInstructions("New instructions");
+    useAutomationsStore.setState({
+      byProject: {
+        p1: [automation({ name: "Renamed elsewhere", runtime: { kind: "tier", tier: "deep" } })],
+      },
+    });
+    await act(async () => buttonContaining("Save instructions").click());
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "Renamed elsewhere",
+        instructions: "New instructions",
+        runtime: { kind: "tier", tier: "deep" },
+      }),
+    );
+    useAutomationsStore.setState({ byProject: {} });
+  });
+
+  it("rejects zero columns without converting the draft to None", async () => {
+    const update = vi.fn(async () => null);
+    useAutomationsStore.setState({ update });
+    await mountEditor(automation({ trigger: { kind: "columns", columns: ["doing"] } }));
+    await edit("trigger");
+    await act(async () =>
+      (
+        document.querySelector('[role="checkbox"][aria-label="Doing"]') as HTMLButtonElement
+      ).click(),
+    );
+    await act(async () => buttonContaining("Save trigger").click());
+    expect(document.querySelector('[role="alert"]')?.textContent).toBe("Select a column");
+    expect(loadEditorDraft("p1", undefined, "automation-1")?.triggerChoice).toBe("columns");
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it("validates the creation fields on attempted submit", async () => {
+    await mountEditor();
+    await act(async () => buttonContaining("Create").click());
+    expect(document.querySelector('[role="alert"]')?.textContent).toBe("Name required");
+    await typeName("New");
+    await act(async () => buttonContaining("Create").click());
+    expect(document.querySelector('[role="alert"]')?.textContent).toBe("Instructions required");
+  });
+
+  it("holds one command id across a refused transport retry", async () => {
+    const update = vi.fn(async () => "Transport unavailable");
+    useAutomationsStore.setState({ update });
+    await mountEditor(automation());
+    await typeName("Renamed");
+    await act(async () => buttonContaining("Save name").click());
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+      "Couldn’t save Renamed",
+    );
+    await act(async () => buttonContaining("Save name").click());
+    expect(update).toHaveBeenCalledTimes(2);
+    expect(update.mock.calls[0]).toEqual(update.mock.calls[1]);
+  });
+
+  it("does not erase typing newer than an in-flight accepted save", async () => {
+    let resolve!: (refusal: string | null) => void;
+    const update = vi.fn(
+      () =>
+        new Promise<string | null>((done) => {
+          resolve = done;
+        }),
+    );
+    useAutomationsStore.setState({ update });
+    await mountEditor(automation());
+    await typeName("Submitted");
+    await act(async () => buttonContaining("Save name").click());
+    // Synthetic late input models an already queued event while the control is locked.
+    await typeName("Newer draft");
+    await act(async () => resolve(null));
+    expect(loadEditorDraft("p1", undefined, "automation-1")?.name).toBe("Newer draft");
+    expect((document.querySelector('[aria-label="Name"]') as HTMLInputElement).value).toBe(
+      "Newer draft",
+    );
+  });
+});
+
+it("Cancel reverts only its group, not an unrelated restored draft", async () => {
+  saveEditorDraft(
+    "p1",
+    {
+      ...seededDraft(),
+      name: "Unsaved name",
+      instructions: "Other unsaved words",
+      triggerChoice: "none",
+    },
+    undefined,
+    "automation-1",
+  );
+  await mountEditor(automation());
+  await act(async () => buttonContaining("Cancel").click());
+  expect(loadEditorDraft("p1", undefined, "automation-1")?.name).toBe("Review sweep");
+  expect(loadEditorDraft("p1", undefined, "automation-1")?.instructions).toBe(
+    "Other unsaved words",
+  );
+  await edit("instructions");
+  expect((document.querySelector('[aria-label="Instructions"]') as HTMLTextAreaElement).value).toBe(
+    "Other unsaved words",
+  );
+});
+
+it("associates the selected Trigger segment with its real conditional panel", async () => {
+  await mountEditor();
+  const selected = document.querySelector('[role="tab"][aria-selected="true"]')!;
+  expect(document.getElementById(selected.getAttribute("aria-controls")!)).not.toBeNull();
+  await act(async () => buttonContaining("Schedule").click());
+  const scheduled = document.querySelector('[role="tab"][aria-selected="true"]')!;
+  const panel = document.getElementById(scheduled.getAttribute("aria-controls")!)!;
+  expect(panel.querySelector('[aria-label="Frequency"]')).not.toBeNull();
+  expect(panel.getAttribute("aria-labelledby")).toBe(scheduled.id);
 });

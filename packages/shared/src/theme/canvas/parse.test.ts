@@ -12,6 +12,12 @@ describe("parseCanvas", () => {
     expect(parseCanvas(JSON.parse(JSON.stringify(DEFAULT_CANVAS)))).toEqual(DEFAULT_CANVAS);
   });
 
+  it("ships a mesh without rewriting a saved one-stop canvas", () => {
+    expect(DEFAULT_CANVAS.stops.map((stop) => stop.hex)).toEqual(["#e8652a", "#e0457b", "#f3a33c"]);
+    const saved = { ...DEFAULT_CANVAS, stops: [{ hex: "#e8652a", x: 0.68, y: 0.3 }] };
+    expect(parseCanvas(JSON.parse(JSON.stringify(saved)))).toEqual(saved);
+  });
+
   it("rejects anything whose shape leaves a question open", () => {
     const valid = DEFAULT_CANVAS;
     const junk: unknown[] = [
@@ -28,7 +34,7 @@ describe("parseCanvas", () => {
       { ...valid, stops: [{ hex: "not-a-color", x: 0.5, y: 0.5 }] },
       { ...valid, stops: [{ hex: "#e8652a", x: "0.5", y: 0.5 }] },
       { ...valid, stops: [{ hex: "#e8652a", x: 0.5, y: Number.NaN }] },
-      { ...valid, primaryIndex: 1 },
+      { ...valid, primaryIndex: valid.stops.length },
       { ...valid, primaryIndex: -1 },
       { ...valid, primaryIndex: 0.5 },
       { ...valid, primaryIndex: "0" },

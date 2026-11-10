@@ -1,4 +1,11 @@
-import type { Canvas, Project, ProjectRelinkAftermath, Ticket } from "@volli/shared";
+import type {
+  Canvas,
+  GhosttyAppearancePayload,
+  Project,
+  ProjectRelinkAftermath,
+  Ticket,
+} from "@volli/shared";
+import type { ThemeStatePayload } from "../../../ipc/contract";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { toast } from "sonner";
 import { flushPendingAppState } from "@renderer/lib/app-state-storage";
@@ -905,11 +912,12 @@ describe("selectByIndex", () => {
       project({ id: "b", path: "/b" }),
       project({ id: "c", path: "/c" }),
     ];
-    const { store } = freshStore();
+    const { store, onSelectedProjectChange } = freshStore();
     store.getState().hydrate([a, project({ id: "b", path: "/b" }), c], null);
 
     store.getState().selectByIndex(0);
     expect(store.getState().selectedProjectId).toBe(a.id);
+    expect(onSelectedProjectChange).toHaveBeenLastCalledWith(a.id, "keyboard");
 
     store.getState().selectByIndex(2);
     expect(store.getState().selectedProjectId).toBe(c.id);
@@ -959,6 +967,151 @@ describe("hydrate", () => {
     store.getState().hydrate([project({ id: "a", path: "/a" })], null);
 
     expect(onSelectedProjectChange).not.toHaveBeenCalled();
+  });
+});
+
+/** The terminal half of a `volli:theme-state` payload, under test for nothing but its shape. */
+const TERMINAL_APPEARANCE: GhosttyAppearancePayload = {
+  prefs: {
+    themeName: null,
+    fontFamilies: [],
+    fontSize: null,
+    ligatures: null,
+    mouseReporting: null,
+    macosOptionAsAlt: null,
+    scrollbackLimitBytes: null,
+  },
+  configText: null,
+  themeSource: null,
+  provenance: {},
+  overlayPaths: { global: "/data/volli/ghostty/config", project: null },
+  ghosttyConfigPath: "/home/u/.config/ghostty/config",
+};
+
+/**
+ * The default selection listener's native Settings guard (VC-1121).
+ *
+ * Driven through the REAL `defaultSelectedProjectListener` and the real theme
+ * singleton, whose gateway reads `window.api.theme` (stubbed per test below;
+ * the paint itself is a no-op headlessly, and the first-paint hint write is
+ * answered). The ordinary-window tests run the real `useProjectsStore`
+ * singleton the way boot does (lib/boot.ts hydrates it), because the listener
+ * reads that same singleton's rows to hand the columns over — the skip test
+ * needs no rows at all, so a private store with a fake gateway serves. The
+ * Settings window's renderer shares these singletons, so a selection made by
+ * its cloud follower must not repaint App preferences in a project's palette.
+ */
+describe("the default selection listener and the native Settings window", () => {
+  let themeSnapshot: ReturnType<typeof useThemeStore.getState>;
+  let projectsSnapshot: ReturnType<typeof useProjectsStore.getState>;
+  beforeEach(() => {
+    themeSnapshot = useThemeStore.getState();
+    projectsSnapshot = useProjectsStore.getState();
+  });
+  afterEach(() => {
+    useThemeStore.setState(themeSnapshot);
+    useProjectsStore.setState(projectsSnapshot);
+  });
+
+  /**
+   * A window stub whose `window.api.theme.state` records the scope reads the
+   * real theme gateway makes. `hash` decides which window the listener believes
+   * it is announcing in: the Settings window carries `#settings`.
+   */
+  function stubThemeWindow(hash: string) {
+    const state = vi.fn<
+      (input: {
+        projectId?: string;
+      }) => Promise<{ ok: true; value: ThemeStatePayload } | { ok: false; error: string }>
+    >(async (input) => ({
+      ok: true,
+      value: {
+        projectOverride: null,
+        projectId: input.projectId ?? null,
+        terminal: TERMINAL_APPEARANCE,
+      },
+    }));
+    const remove = vi.fn(async () => ({ ok: true as const }));
+    vi.stubGlobal("window", {
+      location: { hash },
+      api: {
+        theme: {
+          state,
+          setFirstPaint: vi.fn(async () => ({ ok: true as const })),
+          systemPrefersDark: () => true,
+        },
+        projects: { remove },
+        terminal: { kill: vi.fn().mockResolvedValue({ ok: true }) },
+        appState: { set: vi.fn().mockResolvedValue({ ok: true }) },
+      },
+    });
+    return state;
+  }
+
+  it("skips theme hydration for every selection announced inside the Settings window", async () => {
+    const state = stubThemeWindow("#settings");
+    const [a, b] = [project({ id: "a", path: "/a" }), project({ id: "b", path: "/b" })];
+    const gateway = fakeGateway();
+    const store = createProjectsStore(gateway); // the default listener — the seam under test
+
+    // Boot restore, a rail switch, and the removal fallback — every entry
+    // point the listener covers — must each stay quiet.
+    store.getState().hydrate([a, b], a.id);
+    store.getState().select(b.id, "keyboard");
+    await flush();
+
+    expect(state).not.toHaveBeenCalled();
+    expect(useThemeStore.getState().hydrated).toBe(false);
+
+    await store.getState().removeProject(b.id); // last project gone → global scope
+    await flush();
+
+    expect(state).not.toHaveBeenCalled();
+    expect(useThemeStore.getState().hydrated).toBe(false);
+  });
+
+  it("still hydrates a workspace's scope in an ordinary main window, from the row's own columns", async () => {
+    const state = stubThemeWindow("");
+    const a = project({
+      id: "a",
+      path: "/a",
+      themeCanvas: WORKSPACE_CANVAS,
+      themeAppearance: "dark",
+    });
+
+    // Boot hydrates THIS singleton (lib/boot.ts), and the default listener
+    // reads the same singleton's rows to hand the columns over — the exact
+    // production wiring, not a private store beside it.
+    useProjectsStore.getState().hydrate([a], a.id); // boot restore announces the workspace
+    await flush();
+
+    expect(state).toHaveBeenCalledExactlyOnceWith({ projectId: a.id });
+    const theme = useThemeStore.getState();
+    expect(theme.hydrated).toBe(true);
+    expect(theme.projectId).toBe(a.id);
+    // The columns ride the scope handed OVER to the theme store — never a
+    // re-fetch, and never the global canvas.
+    expect(theme.projectOverride).toEqual({
+      canvas: WORKSPACE_CANVAS,
+      appearance: "dark",
+      terminalThemeName: null,
+    });
+  });
+
+  it("still hydrates the global scope when the last project goes in an ordinary window", async () => {
+    const state = stubThemeWindow("");
+    const only = project({ id: "only", path: "/a" });
+
+    useProjectsStore.getState().hydrate([only], only.id);
+    await flush();
+    expect(state).toHaveBeenCalledTimes(1);
+
+    await useProjectsStore.getState().removeProject(only.id); // the selection falls to null
+    await flush();
+
+    expect(state).toHaveBeenLastCalledWith({});
+    expect(useThemeStore.getState().projectId).toBeNull();
+    expect(useThemeStore.getState().hydrated).toBe(true);
   });
 });
 

@@ -20,9 +20,8 @@
  * folder's Sessions is gone with the `newest` folder mode it belonged to.
  */
 import * as React from "react";
-import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
-import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
-import { TicketIcon } from "@phosphor-icons/react/dist/csr/Ticket";
+import { ExternalIcon, TicketIcon } from "@renderer/components/ui/icon";
+
 import { displayTicketId, TICKET_STATUS_LABELS, type Ticket } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
@@ -119,7 +118,7 @@ export function TicketPeekCard({
           </div>
         </div>
         <Button size="icon-sm" variant="ghost" aria-label={`Open ${id}`} onClick={onOpenTicket}>
-          <ArrowSquareOutIcon />
+          <ExternalIcon />
         </Button>
       </header>
       {/*
@@ -157,11 +156,6 @@ export function TicketPeekCard({
                     {session.summary ?? "No summary yet"}
                   </span>
                 </span>
-                <CaretRightIcon
-                  aria-hidden
-                  weight="bold"
-                  className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover/drill:opacity-100 group-focus-visible/drill:opacity-100 motion-reduce:transition-none"
-                />
               </button>
             </li>
           ))}

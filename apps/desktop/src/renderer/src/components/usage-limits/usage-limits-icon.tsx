@@ -22,7 +22,7 @@
  * popover; this prints both — the short span on top, the long one below, in
  * family order — and demotes each ring to a half-circle beside its own figure.
  * Two numbers in a glyph is more than an icon usually carries, and it is the
- * whole reason the glyph is 26px rather than the 14 the Gauge sat at: the
+ * whole reason the glyph is 20px rather than the 14 the Gauge sat at: the
  * ring's clear middle is a fixed FRACTION of its box, so at 14px two digits of
  * the system's smallest type are wider than the space that exists. The rest of
  * the picker's reasoning, and the shapes this beat, are in the lab scratch.
@@ -41,6 +41,7 @@ import type { ReactNode } from "react";
 import type { UsageTone } from "@volli/shared";
 
 import { providerMark } from "@renderer/components/models/model-identity";
+import type { ProviderArtwork } from "./provider-glyph";
 import {
   usageIconWindows,
   type UsageAccountReading,
@@ -57,18 +58,10 @@ const MID = BOX / 2;
 /** The outermost ink the drawing may touch, leaving the 1px Phosphor leaves. */
 const EDGE = 11;
 
-/**
- * What the glyph renders at, and the size everything else here is solved for.
- *
- * Not a taste and not a Phosphor default: two digits at the system's smallest
- * type (`--text-label`, 11px) need a clear middle no 14px ring has, and the
- * stacked pair needs more still. 26 is the rung where both figures come within
- * a twentieth of the floor while the button stays inside a 36px band.
- */
-export const USAGE_ICON_PX = 26;
-
-/** `icon-sm`'s own proportion: 3px of padding around the glyph, either side. */
-export const USAGE_ICON_BUTTON_PX = USAGE_ICON_PX + 6;
+/** Optical bounds inside the shared 28px canvas-chrome target. All arc and
+ * zero-cap geometry below stays in the same 24-unit coordinate space. */
+export const USAGE_ICON_PX = 20;
+export const USAGE_ICON_BUTTON_PX = 28;
 
 /**
  * How the figures are set, in the 24-unit box.
@@ -90,16 +83,9 @@ const TONE_STROKE: Record<UsageTone, string> = {
   critical: "text-destructive",
 };
 
-/**
- * Small, gentle, and off under reduced motion.
- *
- * Only the length of an arc and the mark's opacity move. A glyph in window
- * chrome that animated its position or its size would be a thing moving in the
- * corner of the eye all day; a bar that grows into its new value is the one
- * change worth seeing, because it says WHICH WAY the number went.
- */
+/** Readings land immediately; only account-mark opacity may transition. */
 const MOTION =
-  "transition-[stroke-dasharray,opacity] duration-300 ease-out motion-reduce:transition-none";
+  "transition-opacity duration-(--duration-menu-in) ease-out motion-reduce:transition-none";
 
 function circumference(r: number): number {
   return 2 * Math.PI * r;
@@ -138,10 +124,8 @@ const R = EDGE - SW / 2;
  * One arc: a circle wearing a dash pattern, rotated so `from` degrees means
  * degrees clockwise from twelve o'clock.
  *
- * Drawn as a dashed circle rather than a path so that its length is a CSS
- * property the browser can interpolate. A `d` attribute cannot be transitioned,
- * and the changes this glyph makes — a window refilling on reset, an account
- * signing out — are exactly the ones worth seeing move rather than blink.
+ * Dash length carries amount without moving its starting point. Readings are
+ * intentionally static: this is frequently updated data, not a gesture.
  */
 function Arc({
   from,
@@ -170,7 +154,7 @@ function Arc({
       // — it draws a bead at the arc's start. In this glyph that would put a
       // speck at the foot of a spent window's bar, which reads as dirt on the
       // screen. Squaring the cap at zero is what actually erases it; the
-      // element stays mounted either way so the length can still animate.
+      // element stays mounted either way without an interpolated paint sequence.
       strokeLinecap={drawn <= 0 ? "butt" : "round"}
       // `${drawn} ${circle}` and never a dashoffset: an offset would slide the
       // arc's start as its length changed, so a shrinking bar would appear to
@@ -220,7 +204,7 @@ function QuietRing({ dashed }: { dashed: boolean }) {
       strokeWidth={1.1}
       strokeLinecap="round"
       strokeDasharray={dashed ? "1.8 2.6" : undefined}
-      className="stroke-current text-muted-foreground/45"
+      className="stroke-current text-muted-foreground"
     />
   );
 }
@@ -302,16 +286,15 @@ function markBox(viewBox: string): { x: number; y: number; w: number; h: number 
  * means anything here, and a mark that turned red with the bars would be more
  * red ink in exactly the state Apple's own icon is recorded as failing.
  *
- * One metered account has no mark to draw — xAI, which simple-icons will not
- * carry — so the lettermark stays, and it stays drawn BARE rather than in
- * `ModelMark`'s muted rounded square: a filled square between two bars reads
- * as a third bar. A capital X is the one fallback that costs nothing here;
- * `O` for OpenCode was the one that could not stay, because a round letter
- * between two arcs reads as a second ring.
+ * An account whose provider has no mark to draw keeps the lettermark, and it
+ * stays drawn BARE rather than in `ModelMark`'s muted rounded square: a filled
+ * square between two bars reads as a third bar. `O` for OpenCode was the one
+ * letter that could not stay, because a round letter between two arcs reads
+ * as a second ring.
  */
 function AccountMark({ account }: { account: UsageAccountReading | null }) {
   if (account === null) return null;
-  const mark = providerMark(account.providerId);
+  const mark: ProviderArtwork | null = providerMark(account.providerId);
   const quiet = cn("text-muted-foreground", MOTION);
   if (mark === null) {
     return (
@@ -339,9 +322,15 @@ function AccountMark({ account }: { account: UsageAccountReading | null }) {
       // right to left, as SVG applies them.
       transform={`translate(${MID} ${MID}) scale(${scale}) translate(${-(x + w / 2)} ${-(y + h / 2)})`}
       className={quiet}
+      fillRule={mark.fillRule}
     >
-      {mark.paths.map((path) => (
-        <path key={path.slice(0, 24)} d={path} fill="currentColor" />
+      {mark.paths.map((path, index) => (
+        <path
+          key={path.slice(0, 24)}
+          d={path}
+          fill="currentColor"
+          clipRule={mark.clipRules?.[index]}
+        />
       ))}
     </g>
   );
@@ -487,6 +476,12 @@ export function UsageLimitsIcon({ reading }: { reading: UsageIconReading }) {
     return (
       <Glyph>
         <QuietRing dashed={reading.kind === "unread"} />
+        {reading.kind === "failed" ? (
+          <g data-usage-fault="" className="text-destructive">
+            <path d="M12 6v8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            <circle cx="12" cy="18" r="1" fill="currentColor" />
+          </g>
+        ) : null}
       </Glyph>
     );
   }

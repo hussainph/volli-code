@@ -21,6 +21,23 @@ const REQUIRED_VARIABLES = [
   "VOLLI_S3_SECRET_ACCESS_KEY",
 ];
 
+/** The GitHub App's six variables (`README.md`, "GitHub App"): all set or none. */
+const GITHUB_APP_VARIABLES = [
+  "GITHUB_APP_ID",
+  "GITHUB_APP_SLUG",
+  "GITHUB_APP_CLIENT_ID",
+  "GITHUB_APP_CLIENT_SECRET",
+  "GITHUB_APP_PRIVATE_KEY",
+  "GITHUB_WEBHOOK_SECRETS",
+];
+
+/** Every GitHub App variable set, as overrides for `cloudEnv`. */
+function githubEnv(overrides: Record<string, string | undefined> = {}) {
+  const env: Record<string, string | undefined> = {};
+  for (const name of GITHUB_APP_VARIABLES) env[name] = `value-of-${name}`;
+  return { ...env, ...overrides };
+}
+
 const CLOUD_URL = "https://happy-otter-123.convex.cloud";
 const LOCAL_URL = "http://127.0.0.1:3210";
 
@@ -111,6 +128,76 @@ describe("checkDeployment, cloud", () => {
   });
 });
 
+describe("checkDeployment, the GitHub App", () => {
+  test("passes with none of its variables (GitHub stays off) or all six", () => {
+    expect(checkDeployment("cloud", reader(cloudEnv())).ok).toBe(true);
+    expect(checkDeployment("cloud", reader(cloudEnv(githubEnv()))).ok).toBe(true);
+  });
+
+  test("names each variable a partial set is missing, unset, empty or blank", () => {
+    const report = checkDeployment(
+      "cloud",
+      reader(
+        cloudEnv(
+          githubEnv({
+            GITHUB_APP_SLUG: undefined,
+            GITHUB_APP_CLIENT_SECRET: "",
+            GITHUB_APP_PRIVATE_KEY: " \n ",
+          }),
+        ),
+      ),
+    );
+    expect(report.ok).toBe(false);
+    expect(report.problems).toEqual([
+      { variable: "GITHUB_APP_SLUG", code: "incomplete" },
+      { variable: "GITHUB_APP_CLIENT_SECRET", code: "incomplete" },
+      { variable: "GITHUB_APP_PRIVATE_KEY", code: "incomplete" },
+    ]);
+  });
+
+  test("one variable alone names the other five", () => {
+    for (const name of GITHUB_APP_VARIABLES) {
+      const report = checkDeployment("cloud", reader(cloudEnv({ [name]: `value-of-${name}` })));
+      expect(report.problems, name).toEqual(
+        GITHUB_APP_VARIABLES.filter((other) => other !== name).map((variable) => ({
+          variable,
+          code: "incomplete",
+        })),
+      );
+    }
+  });
+
+  test("webhook secrets with no secret in them count as unset, as readGithubConfig reads them", () => {
+    expect(
+      checkDeployment("cloud", reader(cloudEnv(githubEnv({ GITHUB_WEBHOOK_SECRETS: " , ," }))))
+        .problems,
+    ).toEqual([{ variable: "GITHUB_WEBHOOK_SECRETS", code: "incomplete" }]);
+    expect(checkDeployment("cloud", reader(cloudEnv({ GITHUB_WEBHOOK_SECRETS: "," }))).ok).toBe(
+      true,
+    );
+    expect(
+      checkDeployment("cloud", reader(cloudEnv(githubEnv({ GITHUB_WEBHOOK_SECRETS: "new,old" }))))
+        .ok,
+    ).toBe(true);
+  });
+
+  test("the optional URLs alone are not a partial set", () => {
+    expect(
+      checkDeployment(
+        "cloud",
+        reader(cloudEnv({ GITHUB_API_URL: "http://fake", GITHUB_WEB_URL: "http://fake" })),
+      ).ok,
+    ).toBe(true);
+  });
+
+  test("a test check on the local backend skips it", () => {
+    expect(
+      checkDeployment("test", reader({ [DEPLOYMENT_URL_VARIABLE]: LOCAL_URL, GITHUB_APP_ID: "1" }))
+        .ok,
+    ).toBe(true);
+  });
+});
+
 describe("checkDeployment, test mode", () => {
   test("allows the test issuer and unset variables on a loopback deployment", () => {
     expect(
@@ -156,11 +243,13 @@ describe("describeProblems", () => {
         { variable: TEST_JWKS_VARIABLE, code: "forbidden" },
         { variable: "WORKOS_CLIENT_ID", code: "missing" },
         { variable: DEPLOYMENT_URL_VARIABLE, code: "test_mode_refused" },
+        { variable: "GITHUB_APP_SLUG", code: "incomplete" },
       ]).split("\n"),
     ).toEqual([
       expect.stringMatching(/^VOLLI_TEST_JWKS set; .*test issuer/),
       expect.stringMatching(/^WORKOS_CLIENT_ID unset; .*requires it/),
       expect.stringMatching(/^CONVEX_CLOUD_URL not loopback; /),
+      expect.stringMatching(/^GITHUB_APP_SLUG unset while other GitHub App variables are set; /),
     ]);
   });
 });
@@ -171,7 +260,12 @@ describe("health.deploymentChecks", () => {
   });
 
   function stub(env: Record<string, string | undefined>) {
-    for (const name of [DEPLOYMENT_URL_VARIABLE, TEST_JWKS_VARIABLE, ...REQUIRED_VARIABLES]) {
+    for (const name of [
+      DEPLOYMENT_URL_VARIABLE,
+      TEST_JWKS_VARIABLE,
+      ...REQUIRED_VARIABLES,
+      ...GITHUB_APP_VARIABLES,
+    ]) {
       vi.stubEnv(name, env[name] ?? "");
     }
   }
@@ -211,6 +305,34 @@ describe("health.deploymentChecks", () => {
     });
     expect(JSON.stringify((error as { data: unknown }).data)).not.toContain(secret);
     expect(JSON.stringify((error as { data: unknown }).data)).not.toContain("value-of-");
+  });
+
+  test("refuses a partial GitHub App set by name, and never a value", async () => {
+    const privateKey = "-----BEGIN PRIVATE KEY-----secret";
+    stub(cloudEnv({ GITHUB_APP_ID: "123", GITHUB_APP_PRIVATE_KEY: privateKey }));
+    const t = convexTest(schema, modules);
+    const error = await t.query(internal.health.deploymentChecks, {}).then(
+      () => null,
+      (caught: unknown) => caught,
+    );
+    expect(error).toMatchObject({
+      data: {
+        code: "deployment_unsafe",
+        message: expect.stringContaining("GITHUB_APP_SLUG unset while other GitHub App"),
+        report: {
+          ok: false,
+          problems: [
+            "GITHUB_APP_SLUG",
+            "GITHUB_APP_CLIENT_ID",
+            "GITHUB_APP_CLIENT_SECRET",
+            "GITHUB_WEBHOOK_SECRETS",
+          ].map((variable) => ({ variable, code: "incomplete" })),
+        },
+      },
+    });
+    const data = JSON.stringify((error as { data: unknown }).data);
+    expect(data).not.toContain(privateKey);
+    expect(data).not.toContain("123");
   });
 
   test("an explicit test check passes on the local backend and is refused elsewhere", async () => {

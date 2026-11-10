@@ -13,10 +13,15 @@
  * inline on the root). A `MutationObserver` over exactly those two attributes
  * sees both, and nothing else on the page can wake it.
  *
- * Deriving on every render rather than memoising: four colours of OKLCH
- * arithmetic is cheaper than a `useMemo` whose dependency — "the document
- * changed" — no linter can check, and which would silently go stale the first
- * time someone forgot to list the epoch.
+ * MEMOISED ON THE EPOCH. These colours used to be derived on every render,
+ * on the argument that four colours of arithmetic cost less than a memo. The
+ * arithmetic was never the question: `getComputedStyle(...).getPropertyValue`
+ * is a style read, and a style read inside a render makes the browser bring
+ * any dirty styles up to date synchronously, mid-task. These charts fill the
+ * empty chat, and an empty chat is a Draft somebody is typing into, so an
+ * unmemoised read rode along with every keystroke (VC-1079). The epoch is the
+ * memo's dependency and {@link readToken} takes it as an argument, so the
+ * value a read depends on is visible at the read.
  */
 import * as React from "react";
 import { hueFan, isHexColor, rampFromBackground } from "@volli/shared";
@@ -53,8 +58,14 @@ export function usableToken(value: string | null | undefined, fallback: string):
   return value !== null && value !== undefined && isHexColor(value) ? value.trim() : fallback;
 }
 
-/** A token's current value on the document root, resolved through {@link usableToken}. */
-function readToken(name: string, fallback: string): string {
+/**
+ * A token's current value on the document root, resolved through {@link usableToken}.
+ *
+ * `_epoch` is the {@link useThemeEpoch} reading the caller memoises on. It is
+ * unused here and present so the memo's one dependency is a value its body
+ * visibly reads — the read is only as fresh as the epoch it was taken under.
+ */
+function readToken(name: string, fallback: string, _epoch: number): string {
   if (typeof document === "undefined") return fallback;
   return usableToken(
     getComputedStyle(document.documentElement).getPropertyValue(name).trim(),
@@ -69,7 +80,12 @@ function readToken(name: string, fallback: string): string {
  */
 export function useThemeEpoch(): number {
   const [epoch, setEpoch] = React.useState(0);
-  React.useEffect(() => {
+  // A layout effect, not a passive one: the colours are memoised on this epoch,
+  // so a theme change landing between the first render's read and the observer
+  // attaching would otherwise stay unseen until the next one. A layout effect
+  // attaches in the same commit, before the browser can paint (or a canvas
+  // write can land) in between.
+  React.useLayoutEffect(() => {
     const observer = new MutationObserver(() => setEpoch((value) => value + 1));
     observer.observe(document.documentElement, {
       attributes: true,
@@ -89,16 +105,23 @@ export function useThemeEpoch(): number {
  * colour for one frame beats a chart that throws.
  */
 export function useStreakRamp(): string[] {
-  useThemeEpoch();
-  return rampFromBackground(
-    readToken("--background", "#1a1210"),
-    readToken("--primary", "#d37550"),
-    STREAK_STOPS,
+  const epoch = useThemeEpoch();
+  return React.useMemo(
+    () =>
+      rampFromBackground(
+        readToken("--background", "#1a1210", epoch),
+        readToken("--primary", "#d37550", epoch),
+        STREAK_STOPS,
+      ),
+    [epoch],
   );
 }
 
 /** `count` peer colours fanned off the live primary — for a series, not a scale. */
 export function useSeriesColors(count: number): string[] {
-  useThemeEpoch();
-  return hueFan(readToken("--primary", "#d37550"), count, SERIES_SPREAD);
+  const epoch = useThemeEpoch();
+  return React.useMemo(
+    () => hueFan(readToken("--primary", "#d37550", epoch), count, SERIES_SPREAD),
+    [epoch, count],
+  );
 }

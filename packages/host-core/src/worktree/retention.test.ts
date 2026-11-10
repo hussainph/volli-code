@@ -302,6 +302,36 @@ describe("reclaimIfStale", () => {
     ]);
   });
 
+  // VC-1016: the look for work in flight awaits, and a move can freeze the project meanwhile.
+  it("does NOT reclaim when a move freezes the project while work in flight is looked for", async () => {
+    const wt = tempDir("wt");
+    const gitDir = tempDir("gitdir");
+    seedDone(wt, 20);
+    const { git, gitAsync, calls } = statusGit(wt, gitDir, false);
+
+    const outcome = await reclaimIfStale(
+      {
+        ...deps({ git, gitAsync }),
+        busyWorktreeSites: async () => {
+          ctx.db.exec(`
+            INSERT INTO cloud_move_queues VALUES ('q', 'u', 'w', 'r', 1, 0, 'pending', NULL, 'running', 1, 1);
+            INSERT INTO cloud_moves (move_id, queue_id, project_id, position, user_id, workspace_id,
+              runner_id, state, app_version, mapper_version, created_at, updated_at)
+            VALUES ('m', 'q', 'p1', 0, 'u', 'w', 'r', 'frozen', 'test', 3, 1, 1);
+          `);
+          return [];
+        },
+      },
+      "t1",
+      null,
+    );
+
+    expect(outcome).toEqual({ kind: "skipped", reason: "moving to Volli Cloud" });
+    expect(calls.some((c) => c.args[1] === "remove")).toBe(false);
+    expect(getTicketRow(ctx.db, "t1")!.worktree_path).toBe(wt);
+    expect(reclaimEvents()).toEqual([]);
+  });
+
   // The heart of VC-113: merging is an EVENT, not a dwell. An agent that merges
   // its own PR must not take the checkout with it — that is the "insta delete"
   // that made the Open-PR button feel dangerous.

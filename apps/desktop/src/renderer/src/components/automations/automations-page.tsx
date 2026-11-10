@@ -1,73 +1,47 @@
-/**
- * The Automations page (VC-127): a nav destination beside Home and Configure,
- * and **the only surface in the app that authors an Automation**. Every other
- * surface — the board card menu, the ticket rail, the command palette — merely
- * runs one. The persistent rail and embedded editor live HERE for exactly that
- * reason: an authoring form summoned from anywhere is a second authoring
- * surface however it was opened.
- *
- * It is a nav page rather than a room inside Home on purpose: `nav-list.tsx`
- * carries the guardrail that Home must not become a junk drawer, and VC-112
- * names this page as the fourth `NavKey` for that reason.
- *
- * TWO drawings of one set, and the split is the point (VC-132). The persistent
- * rail selects a record for its focused editor; Lanes switches the main plane
- * to one lane per board column, holding each Offered list in digit order. The
- * editor owns the whole record lifecycle and Run history. Lanes only arranges
- * column order and arming — it never rewrites a record, because a second
- * authoring surface is a second authoring surface however it is drawn.
- *
- * Three rows of vocabulary worth stating once, because all three are
- * load-bearing:
- *
- *  - **Every listing surface can Run.** VC-112: running by hand is universal
- *    and is never one of the Trigger's answers. The selected editor can Run
- *    whether or not the switch is on — the switch governs what starts an
- *    Automation BESIDES a person.
- *  - **The switch is machine-local, and off is the resting state.** It never
- *    travels with the project (VC-112 puts an Automation's shareable half in
- *    git as a Skill and keeps the record local; the switch is more local
- *    still), and a machine that has never been asked has not said yes: an
- *    Automation fires on its own only where somebody turned it on.
- *  - **Delete is a record delete.** There is no archive, and that is a ruling
- *    rather than an omission: for a Skill, git is already the archive.
- */
+/** The one authoring page. Listing, column rank and history share the existing store doors. */
 import * as React from "react";
-import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
-import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
-import { DotsThreeIcon } from "@phosphor-icons/react/dist/csr/DotsThree";
-import { KanbanIcon } from "@phosphor-icons/react/dist/csr/Kanban";
-import { ListBulletsIcon } from "@phosphor-icons/react/dist/csr/ListBullets";
-import { PlayIcon } from "@phosphor-icons/react/dist/csr/Play";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
-import { ClockCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ClockCounterClockwise";
-import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
-
+import {
+  AutomationIcon,
+  CopyIcon,
+  MoreIcon,
+  BoardIcon,
+  PlayIcon,
+  AddIcon,
+  HistoryIcon,
+  DeleteIcon,
+  ClockIcon,
+  GlobeIcon,
+  ChevronDownIcon,
+  ArrowLeftIcon,
+  EditIcon,
+} from "@renderer/components/ui/icon";
 import { effortLabel } from "@volli/session-presentation";
 import {
   TICKET_STATUS_LABELS,
   displayTicketId,
-  isAutomationRuntimePin,
   type Automation,
   type AutomationRun,
   type AutomationSkippedOccurrence,
   type Ticket,
 } from "@volli/shared";
-
 import {
   automationHistory,
-  groupByOwnership,
-  historyEmptyCopy,
+  groupByTrigger,
   listingRunTarget,
   runAutomationLabel,
   runStartLabel,
-  runtimeLabel,
   skipCountLabel,
   skipReasonLabel,
   triggerLabel,
+  nextScheduledRun,
 } from "./automations-page-model";
 import { AutomationEditorPanel } from "./automation-editor";
-import { clearEditorDraft, loadEditorDraft } from "./editor-draft";
+import {
+  clearEditorDraft,
+  loadEditorDraft,
+  saveEditorDraft,
+  type AutomationEditorDraft,
+} from "./editor-draft";
 import { AutomationLanes } from "./automation-lanes";
 import { openRunSession, runAutomationForProject, runAutomationOnTicket } from "./run-automation";
 import {
@@ -82,23 +56,26 @@ import {
 } from "@renderer/components/ui/alert-dialog";
 import { ResolvedModelName } from "@renderer/components/models/resolved-model-name";
 import { Button } from "@renderer/components/ui/button";
+import { ButtonGroup } from "@renderer/components/ui/button-group";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@renderer/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
-import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
+import { PageHeader } from "@renderer/components/layout/page-header";
+import { ContentColumn } from "@renderer/components/layout/content-column";
+import { PaperSurface } from "@renderer/components/ui/surface";
 import { Input } from "@renderer/components/ui/input";
 import { ListRow } from "@renderer/components/ui/list-row";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
-import { Switch } from "@renderer/components/ui/switch";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
+import { useCanWrite, guardWrite } from "@renderer/components/hosts/use-hosts";
 import { relativeTime } from "@renderer/lib/relative-time";
 import { useAgeNow } from "@renderer/lib/use-age-now";
-import { cn } from "@renderer/lib/utils";
 import {
   automationHistoryKey,
   selectAutomationRuns,
@@ -107,426 +84,465 @@ import {
 } from "@renderer/stores/automations";
 import { useBoardStore } from "@renderer/stores/board";
 import { automationSourceIsCloud } from "@renderer/stores/automation-source";
-import { CloudAutomationControls } from "./cloud-automation-controls";
+import { useCloudAutomationsStore } from "@renderer/stores/cloud-automations/state";
 import { CloudRunHistory } from "./cloud-run-history";
-
+import { AutomationRuntimeValue } from "./automation-runtime-value";
+import { Command, CommandInput, CommandList, CommandItem } from "@renderer/components/ui/command";
+import { EmptyState } from "@renderer/components/ui/empty-state";
+import "./automations.css";
 const NO_AUTOMATIONS: readonly Automation[] = [];
 const NO_RUNS: readonly AutomationRun[] = [];
 const NO_SKIPS: readonly AutomationSkippedOccurrence[] = [];
 const NO_TICKETS: readonly Ticket[] = [];
 
+const EXAMPLES: readonly Pick<
+  AutomationEditorDraft,
+  "name" | "instructions" | "triggerChoice" | "columns"
+>[] = [
+  {
+    name: "Morning review",
+    instructions: "/code-review\nFind regressions merged since yesterday.",
+    triggerChoice: "schedule",
+    columns: [],
+  },
+  {
+    name: "Implement ticket",
+    instructions: "/implement\nImplement the ticket and verify it with focused checks.",
+    triggerChoice: "columns",
+    columns: ["doing"],
+  },
+  {
+    name: "Triage ticket",
+    instructions: "/triage\nFind the smallest next step.",
+    triggerChoice: "none",
+    columns: [],
+  },
+];
+
 export function AutomationsPage() {
   const project = useSelectedProject();
-
-  if (project === null) {
+  if (project === null)
     return (
-      <div className={cn("flex-1", EMPTY_PAGE)}>
-        <div className="flex max-w-sm flex-col items-center">
-          <div className="mb-4 flex items-center justify-center rounded-xl border border-border bg-card/70 p-2">
-            <LightningIcon className="size-5 text-muted-foreground" />
-          </div>
-          <h1 className="text-heading font-semibold">No automations</h1>
-          <p className="mt-2 text-sm leading-6 text-muted-foreground">Select a project first.</p>
-        </div>
+      <div className="grid flex-1 place-items-center text-ui text-muted-foreground">
+        No project selected
       </div>
     );
-  }
-
   return (
     <AutomationsSurface
       key={project.id}
       projectId={project.id}
+      projectName={project.name}
       ticketPrefix={project.ticketPrefix}
     />
   );
 }
-
-type AutomationPageView = "details" | "lanes";
-
-function ViewChoice({
-  view,
-  value,
-  label,
-  icon: Icon,
-  onChange,
-}: {
-  view: AutomationPageView;
-  value: AutomationPageView;
-  label: string;
-  icon: typeof ListBulletsIcon;
-  onChange(value: AutomationPageView): void;
-}) {
-  const active = view === value;
-  return (
-    <button
-      type="button"
-      aria-pressed={active}
-      onClick={() => onChange(value)}
-      className={cn(
-        "flex h-7 items-center gap-2 rounded-md px-2 text-ui outline-none",
-        "focus-visible:ring-2 focus-visible:ring-ring",
-        active
-          ? "bg-accent text-foreground shadow-raised"
-          : "text-muted-foreground hover:text-foreground",
-      )}
-    >
-      <Icon aria-hidden className="size-4" />
-      {label}
-    </button>
-  );
-}
-
+type PageView = "details" | "columns" | "history" | "runs";
 function AutomationsSurface({
   projectId,
+  projectName,
   ticketPrefix,
 }: {
   projectId: string;
+  projectName: string;
   ticketPrefix: string;
 }) {
-  const automations = useAutomationsStore((state) => state.byProject[projectId] ?? NO_AUTOMATIONS);
-  // Whether the LIST has landed, not whether it is empty: before the first
-  // read both look the same, and the difference decides which history to ask
-  // main for.
-  const automationsLoaded = useAutomationsStore(
-    (state) => state.byProject[projectId] !== undefined,
-  );
-  const runs = useAutomationsStore((state) => state.runsByProject[projectId] ?? NO_RUNS);
-  const skips = useAutomationsStore((state) => state.skipsByProject[projectId] ?? NO_SKIPS);
-  const editor = useAutomationsStore((state) => state.editor);
-  const enabledIds = useAutomationsStore((state) => state.enabledIds);
-  const openEditor = useAutomationsStore((state) => state.openEditor);
-  const editAutomation = useAutomationsStore((state) => state.editAutomation);
-  const closeEditor = useAutomationsStore((state) => state.closeEditor);
-  const duplicate = useAutomationsStore((state) => state.duplicate);
-  const remove = useAutomationsStore((state) => state.remove);
-  const setEnabled = useAutomationsStore((state) => state.setEnabled);
-  const refresh = useAutomationsStore((state) => state.refresh);
-  const refreshRuns = useAutomationsStore((state) => state.refreshRuns);
-  const refreshArming = useAutomationsStore((state) => state.refreshArming);
-  const refreshOrder = useAutomationsStore((state) => state.refreshOrder);
-  const refreshSkips = useAutomationsStore((state) => state.refreshSkips);
-  const refreshAutomationHistory = useAutomationsStore((state) => state.refreshAutomationHistory);
-  const refreshEnablement = useAutomationsStore((state) => state.refreshEnablement);
-  const [view, setView] = React.useState<AutomationPageView>("details");
-  const [initialDraft] = React.useState(() => loadEditorDraft(projectId) !== null);
-  const resumeOnArrival = React.useRef(initialDraft);
-  // The project's own activity, asked for by name. Local rather than in the
-  // store's editor, because it is a VIEW of this page and not a record being
-  // edited: leaving it puts the reader back on the record they had.
-  const [showingActivity, setShowingActivity] = React.useState(false);
+  const automations = useAutomationsStore((s) => s.byProject[projectId] ?? NO_AUTOMATIONS);
+  const loaded = useAutomationsStore((s) => s.byProject[projectId] !== undefined);
+  const editor = useAutomationsStore((s) => s.editor);
+  const refreshRail = useAutomationsStore((s) => s.refreshRail);
+  const editAutomation = useAutomationsStore((s) => s.editAutomation);
+  const openEditor = useAutomationsStore((s) => s.openEditor);
+  const closeEditor = useAutomationsStore((s) => s.closeEditor);
+  const duplicate = useAutomationsStore((s) => s.duplicate);
+  const remove = useAutomationsStore((s) => s.remove);
+  const version = useBoardStore((s) => s.lastPlanningChange.version);
+  const canWrite = useCanWrite(projectId);
+  const [view, setView] = React.useState<PageView>("details");
+  const [detail, setDetail] = React.useState(false);
+  const [query, setQuery] = React.useState("");
+  const [read, setRead] = React.useState<"loading" | "ready" | "failed">("loading");
+  const [retry, setRetry] = React.useState(0);
+  const [pending, setPending] = React.useState(false);
+  const [starting, setStarting] = React.useState(false);
+  const startLock = React.useRef(false);
+  const pendingRef = React.useRef(false);
+  const [newDraftVersion, setNewDraftVersion] = React.useState(0);
+  const [renameRequest, setRenameRequest] = React.useState(0);
   const [choosingTicket, setChoosingTicket] = React.useState<Automation | null>(null);
   const [confirmingDelete, setConfirmingDelete] = React.useState<Automation | null>(null);
-
-  const planningVersion = useBoardStore((state) => state.lastPlanningChange.version);
+  const resume = React.useRef(loadEditorDraft(projectId) !== null);
   React.useEffect(() => {
-    void refresh(projectId);
-    void refreshArming(projectId);
-    void refreshOrder(projectId);
-    void refreshEnablement();
-  }, [projectId, planningVersion, refresh, refreshArming, refreshOrder, refreshEnablement]);
-
+    let current = true;
+    setRead("loading");
+    void refreshRail(projectId, version).then((ok) => {
+      if (current) setRead(ok ? "ready" : "failed");
+    });
+    return () => {
+      current = false;
+    };
+  }, [projectId, version, refreshRail, retry]);
   React.useEffect(() => closeEditor, [closeEditor]);
-
-  // The rail always has one selected record once the list lands. A create is a
-  // deliberate null record and is never replaced by this defaulting effect.
   React.useEffect(() => {
-    if (resumeOnArrival.current) {
-      resumeOnArrival.current = false;
+    if (resume.current) {
+      resume.current = false;
       openEditor(projectId);
+      setDetail(true);
       return;
     }
-    if (automations.length === 0) return;
-    if (editor?.projectId === projectId && editor.automation === null) return;
-    const selectedId = editor?.projectId === projectId ? editor.automation?.id : undefined;
     if (
-      selectedId !== undefined &&
-      automations.some((automation) => automation.id === selectedId)
-    ) {
+      editor?.projectId === projectId &&
+      (editor.automation === null || automations.some((a) => a.id === editor.automation?.id))
+    )
       return;
-    }
-    editAutomation(projectId, automations[0]!);
-  }, [automations, editAutomation, editor, openEditor, projectId]);
-
+    if (automations[0]) editAutomation(projectId, automations[0]);
+  }, [automations, editor, editAutomation, openEditor, projectId]);
   const target = editor?.projectId === projectId ? editor : null;
-  const selectedAutomation =
-    target?.automation === null || target === null
+  const selected =
+    target?.automation == null
       ? null
-      : (automations.find((automation) => automation.id === target.automation?.id) ??
-        target.automation);
-  const selectedId = selectedAutomation?.id ?? null;
-
-  // The editor's OWN history, read for the record on screen rather than sieved
-  // out of the project's (VC-297).
-  const selectedRuns = useAutomationsStore((state) =>
-    selectedId === null ? NO_RUNS : selectAutomationRuns(state, projectId, selectedId),
-  );
-  const selectedSkips = useAutomationsStore((state) =>
-    selectedId === null ? NO_SKIPS : selectAutomationSkips(state, projectId, selectedId),
-  );
-  // READ, not non-empty. One write lands both halves, so one key answers.
-  const selectedHistoryLoaded = useAutomationsStore((state) =>
-    selectedId === null
-      ? false
-      : state.runsByAutomation[automationHistoryKey(projectId, selectedId)] !== undefined,
-  );
-  React.useEffect(() => {
-    if (selectedId === null) return;
-    void refreshAutomationHistory(projectId, selectedId);
-  }, [projectId, selectedId, planningVersion, refreshAutomationHistory]);
-
-  // The project's whole history is fetched only where it is actually drawn:
-  // the activity view, or the empty state of a project that has no records.
-  // An editor no longer pays for a read it does not use.
-  const showsProjectHistory = showingActivity || (automationsLoaded && automations.length === 0);
-  // Two separate reads here, unlike the scoped pair, so both must have landed
-  // before the list may say it found nothing.
-  const projectHistoryLoaded = useAutomationsStore(
-    (state) =>
-      state.runsByProject[projectId] !== undefined && state.skipsByProject[projectId] !== undefined,
-  );
-  React.useEffect(() => {
-    if (!showsProjectHistory) return;
-    void refreshRuns(projectId);
-    void refreshSkips(projectId);
-  }, [showsProjectHistory, projectId, planningVersion, refreshRuns, refreshSkips]);
-  const { project: projectAutomations, global: globalAutomations } = React.useMemo(
-    () => groupByOwnership(automations),
-    [automations],
-  );
-
-  function selectAutomation(automation: Automation): void {
-    setView("details");
-    setShowingActivity(false);
+      : (automations.find((a) => a.id === target.automation?.id) ?? target.automation);
+  const writable = canWrite && read === "ready" && !pending && !starting;
+  function select(automation: Automation) {
     editAutomation(projectId, automation);
-  }
-
-  function createAutomation(): void {
     setView("details");
-    setShowingActivity(false);
+    setDetail(true);
+  }
+  function create() {
+    if (!writable || !guardWrite(projectId)) return;
     openEditor(projectId);
-  }
-
-  function showProjectActivity(): void {
     setView("details");
-    setShowingActivity(true);
+    setDetail(true);
   }
-
-  function runAutomation(automation: Automation): void {
+  function back() {
+    setView("details");
+    setDetail(false);
+    requestAnimationFrame(() =>
+      document.querySelector<HTMLElement>(`[data-automation-rail-row="${selected?.id}"]`)?.focus(),
+    );
+  }
+  function run(automation: Automation) {
+    if (!writable || !guardWrite(projectId)) return;
     if (listingRunTarget(automation) === "project") {
+      if (startLock.current) return;
+      startLock.current = true;
+      setStarting(true);
       void runAutomationForProject({
         automationId: automation.id,
         automationName: automation.name,
         projectId,
+      }).finally(() => {
+        startLock.current = false;
+        setStarting(false);
       });
+    } else setChoosingTicket(automation);
+  }
+  async function mutate(action: () => Promise<unknown>) {
+    if (pendingRef.current || !writable || !guardWrite(projectId)) return;
+    pendingRef.current = true;
+    setPending(true);
+    try {
+      await action();
+    } finally {
+      pendingRef.current = false;
+      setPending(false);
+    }
+  }
+  function example(starter: (typeof EXAMPLES)[number]) {
+    if (!writable) return;
+    // Examples are create drafts, never accepted records. Do not overwrite a saved draft.
+    if (loadEditorDraft(projectId) !== null) {
+      create();
       return;
     }
-    setChoosingTicket(automation);
+    saveEditorDraft(projectId, {
+      ...starter,
+      ownership: "project",
+      schedule:
+        starter.triggerChoice === "schedule"
+          ? { preset: "weekdays", hour: 9, minute: 0, timeZone: "Asia/Kuwait" }
+          : {
+              preset: "daily",
+              hour: 9,
+              minute: 0,
+              timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+            },
+      runtime: null,
+    });
+    setNewDraftVersion((revision) => revision + 1);
+    create();
   }
-
-  const editorActions =
-    selectedAutomation === null ? (
-      automations.length === 0 ? null : (
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => editAutomation(projectId, automations[0]!)}
-        >
-          Cancel
-        </Button>
-      )
-    ) : (
+  const actions =
+    selected === null ? null : (
       <>
-        {automationSourceIsCloud() ? (
-          <CloudAutomationControls
-            key={selectedAutomation.id}
-            projectId={projectId}
-            automation={selectedAutomation}
-          />
-        ) : (
-          <label className="flex items-center gap-2 text-ui text-muted-foreground">
-            Automatic triggers
-            <Switch
-              checked={enabledIds.includes(selectedAutomation.id)}
-              aria-label={`Automatic triggers on this machine: ${selectedAutomation.name}`}
-              onCheckedChange={(enabled) => void setEnabled(selectedAutomation.id, enabled)}
-            />
-          </label>
-        )}
         <Button
           variant="outline"
           size="sm"
-          aria-label={`Run ${selectedAutomation.name}`}
-          onClick={() => runAutomation(selectedAutomation)}
+          disabled={!writable}
+          aria-label={`Run ${selected.name}`}
+          onClick={() => run(selected)}
         >
           <PlayIcon />
-          Run
+          {starting ? "Starting…" : "Run"}
         </Button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label={`More for ${selectedAutomation.name}`}
-            >
-              <DotsThreeIcon />
+            <Button variant="ghost" size="icon-sm" disabled={!writable} aria-label="More actions">
+              <MoreIcon />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuItem onSelect={() => void duplicate(projectId, selectedAutomation)}>
+            <DropdownMenuItem onSelect={() => setRenameRequest((n) => n + 1)}>
+              <EditIcon />
+              Rename
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => void mutate(() => duplicate(projectId, selected))}>
               <CopyIcon />
               Duplicate
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem
-              variant="destructive"
-              onSelect={() => setConfirmingDelete(selectedAutomation)}
-            >
-              <TrashIcon />
-              Delete
+            <DropdownMenuLabel>
+              Target · {selected.trigger.kind === "schedule" ? projectName : "Ticket"}
+            </DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem variant="destructive" onSelect={() => setConfirmingDelete(selected)}>
+              <DeleteIcon />
+              Delete…
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </>
     );
-
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <header className="flex shrink-0 items-center gap-4 border-b border-border px-6 py-4">
-        <div className="flex items-center gap-2">
-          <LightningIcon weight="fill" className="size-4 text-muted-foreground" />
-          <h1 className="text-sm font-semibold">Automations</h1>
+    <PaperSurface
+      className="automations-surface flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+      data-detail={detail}
+    >
+      <PageHeader
+        title="Automations"
+        className="min-h-16 border-b border-border"
+        actions={
+          <>
+            <Button
+              size="sm"
+              variant="ghost"
+              aria-label="Columns"
+              onClick={() => setView("columns")}
+            >
+              <BoardIcon />
+              <span className="automation-header-word">Columns</span>
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              aria-label="History"
+              onClick={() => setView("history")}
+            >
+              <HistoryIcon />
+              <span className="automation-header-word">History</span>
+            </Button>
+            <ButtonGroup>
+              <Button size="sm" disabled={!writable} onClick={create}>
+                <AddIcon />
+                {target?.automation !== null && loadEditorDraft(projectId) !== null
+                  ? "Resume draft"
+                  : "New automation"}
+              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button size="icon-sm" disabled={!writable} aria-label="New automation menu">
+                    <ChevronDownIcon />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuLabel>Examples</DropdownMenuLabel>
+                  {EXAMPLES.map((starter) => (
+                    <DropdownMenuItem key={starter.name} onSelect={() => example(starter)}>
+                      <AutomationIcon />
+                      {starter.name}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </ButtonGroup>
+          </>
+        }
+      />
+      {read === "failed" && loaded ? (
+        <div className="flex items-center gap-2 border-b border-border px-gutter py-2">
+          <span role="alert" className="text-ui">
+            Couldn’t refresh automations
+          </span>
+          <Button size="sm" variant="outline" onClick={() => setRetry((n) => n + 1)}>
+            Retry
+          </Button>
         </div>
-        <div className="flex items-center gap-1 rounded-lg border border-border bg-rail/30 p-1">
-          <ViewChoice
-            view={view}
-            value="details"
-            label="Automations"
-            icon={ListBulletsIcon}
-            onChange={setView}
-          />
-          <ViewChoice
-            view={view}
-            value="lanes"
-            label="Lanes"
-            icon={KanbanIcon}
-            onChange={setView}
+      ) : null}
+      {!loaded ? (
+        <div className="grid min-h-0 flex-1 place-items-center">
+          {read === "failed" ? (
+            <EmptyState
+              tier="page"
+              illustration="failed"
+              title="Couldn’t load automations"
+              status="failed"
+              action={{ label: "Retry", onAction: () => setRetry((n) => n + 1) }}
+            />
+          ) : (
+            <p role="status" aria-busy="true" className="text-ui text-muted-foreground">
+              Loading automations…
+            </p>
+          )}
+        </div>
+      ) : view === "columns" ? (
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <ContentColumn className="py-6">
+            <Button size="sm" variant="ghost" onClick={back}>
+              <ArrowLeftIcon />
+              Automations
+            </Button>
+            <AutomationLanes projectId={projectId} onSelect={select} disabled={!writable} />
+          </ContentColumn>
+        </div>
+      ) : view === "history" || view === "runs" ? (
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <ContentColumn className="py-6">
+            <Button size="sm" variant="ghost" onClick={back}>
+              <ArrowLeftIcon />
+              Automations
+            </Button>
+            <HistorySurface
+              key={view === "history" ? "project" : selected?.id}
+              projectId={projectId}
+              ticketPrefix={ticketPrefix}
+              automationId={view === "runs" ? (selected?.id ?? null) : null}
+              disabled={!writable}
+              name={view === "runs" ? selected?.name : undefined}
+              onScope={(id) => {
+                if (id === "all") setView("history");
+                else {
+                  const row = automations.find((a) => a.id === id);
+                  if (row) {
+                    editAutomation(projectId, row);
+                    setView("runs");
+                  }
+                }
+              }}
+            />
+          </ContentColumn>
+        </div>
+      ) : automations.length === 0 && target === null ? (
+        <div className="grid min-h-0 flex-1 place-items-center">
+          <EmptyState
+            tier="page"
+            illustration="automation"
+            title="No automations yet"
+            action={{
+              label: "New automation",
+              onAction: create,
+              disabled: !writable,
+              icon: <AddIcon />,
+            }}
           />
         </div>
-        <Button size="sm" onClick={createAutomation}>
-          <PlusIcon />
-          {target?.automation !== null && loadEditorDraft(projectId) !== null
-            ? "Resume draft"
-            : "New Automation"}
-        </Button>
-      </header>
-
-      <div className="flex min-h-0 flex-1">
-        <AutomationRail
-          project={projectAutomations}
-          global={globalAutomations}
-          enabledIds={enabledIds}
-          selectedId={showingActivity ? null : selectedId}
-          creating={!showingActivity && target?.automation === null}
-          activitySelected={showingActivity && view === "details"}
-          onSelect={selectAutomation}
-          onCreate={createAutomation}
-          onShowActivity={showProjectActivity}
-        />
-        {view === "lanes" ? (
-          <div className="min-h-0 min-w-0 flex-1 overflow-y-auto p-6">
-            {automations.length === 0 ? (
-              <EmptyAutomations onCreate={createAutomation} />
+      ) : (
+        <div className="flex min-h-0 flex-1">
+          <AutomationList
+            automations={automations}
+            selectedId={selected?.id ?? null}
+            query={query}
+            onQuery={setQuery}
+            onSelect={select}
+            onRun={run}
+            disabled={!writable}
+            coherent={read === "ready"}
+            projectId={projectId}
+          />
+          <div className="automation-detail flex min-h-0 min-w-0 flex-1 flex-col">
+            {target === null ? (
+              <p className="p-gutter text-ui">Loading automation…</p>
             ) : (
-              <AutomationLanes projectId={projectId} />
+              <AutomationEditorPanel
+                key={selected?.id ?? `new:${newDraftVersion}`}
+                projectId={projectId}
+                automation={selected}
+                actions={actions}
+                disabled={!writable}
+                renameRequest={renameRequest}
+                readState={read}
+                back={
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="automation-back mb-4"
+                    aria-label="All automations"
+                    onClick={back}
+                  >
+                    <ArrowLeftIcon />
+                    Automations
+                  </Button>
+                }
+                onDiscardedNewDraft={() => {
+                  if (automations[0]) editAutomation(projectId, automations[0]);
+                  else closeEditor();
+                  setDetail(false);
+                }}
+                history={
+                  selected === null ? undefined : (
+                    <HistorySurface
+                      key={selected.id}
+                      projectId={projectId}
+                      ticketPrefix={ticketPrefix}
+                      automationId={selected.id}
+                      disabled={!writable}
+                      recent
+                      onAll={() => setView("runs")}
+                    />
+                  )
+                }
+              />
             )}
           </div>
-        ) : showingActivity ? (
-          <ProjectActivity
-            projectId={projectId}
-            ticketPrefix={ticketPrefix}
-            runs={runs}
-            skips={skips}
-            loaded={projectHistoryLoaded}
-          />
-        ) : target !== null ? (
-          <AutomationEditorPanel
-            key={`${selectedAutomation?.id ?? "new"}:${selectedAutomation?.updatedAt ?? 0}`}
-            projectId={projectId}
-            automation={selectedAutomation}
-            actions={editorActions}
-            onDiscardedNewDraft={() => {
-              const first = automations[0];
-              if (first === undefined) closeEditor();
-              else editAutomation(projectId, first);
-            }}
-            history={
-              selectedAutomation === null ? undefined : (
-                <RunHistory
-                  projectId={projectId}
-                  ticketPrefix={ticketPrefix}
-                  runs={selectedRuns}
-                  skips={selectedSkips}
-                  automationId={selectedAutomation.id}
-                  loaded={selectedHistoryLoaded}
-                />
-              )
-            }
-          />
-        ) : (
-          <EmptyAutomations
-            onCreate={createAutomation}
-            history={
-              <RunHistory
-                projectId={projectId}
-                ticketPrefix={ticketPrefix}
-                runs={runs}
-                skips={skips}
-                automationId={null}
-                loaded={projectHistoryLoaded}
-              />
-            }
-          />
-        )}
-      </div>
-
-      {choosingTicket === null ? null : (
+        </div>
+      )}
+      {choosingTicket && (
         <RunOnTicketDialog
           open
-          onOpenChange={(open) => (open ? undefined : setChoosingTicket(null))}
+          onOpenChange={(open) => {
+            if (!open) setChoosingTicket(null);
+          }}
           projectId={projectId}
           ticketPrefix={ticketPrefix}
           automation={choosingTicket}
         />
       )}
-
       <AlertDialog
         open={confirmingDelete !== null}
-        onOpenChange={(open) => (open ? undefined : setConfirmingDelete(null))}
+        onOpenChange={(open) => {
+          if (!open) setConfirmingDelete(null);
+        }}
       >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete “{confirmingDelete?.name}”?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Its past Runs stay in history, but this Automation cannot be run again.
-            </AlertDialogDescription>
+            <AlertDialogDescription>Past runs and Sessions stay in history.</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
+              disabled={!writable}
               onClick={() => {
-                if (confirmingDelete !== null) {
-                  const deletedId = confirmingDelete.id;
-                  void remove(projectId, confirmingDelete).then(() => {
-                    const records = useAutomationsStore.getState().byProject[projectId];
+                const row = confirmingDelete;
+                if (row)
+                  void mutate(async () => {
+                    await remove(projectId, row);
                     if (
-                      records !== undefined &&
-                      !records.some((record) => record.id === deletedId)
-                    ) {
-                      clearEditorDraft(projectId, undefined, deletedId);
-                    }
+                      !useAutomationsStore
+                        .getState()
+                        .byProject[projectId]?.some((a) => a.id === row.id)
+                    )
+                      clearEditorDraft(projectId, undefined, row.id);
                   });
-                }
                 setConfirmingDelete(null);
               }}
             >
@@ -535,211 +551,327 @@ function AutomationsSurface({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </PaperSurface>
   );
 }
-
-function AutomationRail({
-  project,
-  global,
-  enabledIds,
+function AutomationList({
+  automations,
   selectedId,
-  creating,
-  activitySelected,
+  query,
+  onQuery,
   onSelect,
-  onCreate,
-  onShowActivity,
+  onRun,
+  disabled,
+  coherent,
+  projectId,
 }: {
-  project: readonly Automation[];
-  global: readonly Automation[];
-  enabledIds: readonly string[];
+  automations: readonly Automation[];
   selectedId: string | null;
-  creating: boolean;
-  /** The project's own activity is on screen, so no record is the subject. */
-  activitySelected: boolean;
-  onSelect(automation: Automation): void;
-  onCreate(): void;
-  onShowActivity(): void;
+  query: string;
+  onQuery(value: string): void;
+  onSelect(row: Automation): void;
+  onRun(row: Automation): void;
+  disabled: boolean;
+  coherent: boolean;
+  projectId: string;
 }) {
-  const groups = [
-    { label: "This project", automations: project },
-    { label: "All projects", automations: global },
-  ] as const;
+  const groups = React.useMemo(() => groupByTrigger(automations, query), [automations, query]);
   return (
-    <aside className="flex w-64 shrink-0 flex-col overflow-y-auto border-r border-border bg-rail/30 p-2">
-      {creating ? (
-        <div className="mb-2 rounded-lg bg-accent px-2 py-2 text-ui font-medium text-foreground">
-          New Automation
+    <aside
+      className="automation-master flex min-h-0 shrink-0 flex-col border-r border-border bg-muted/30"
+      aria-label="Automations"
+    >
+      {automations.length > 8 || query !== "" ? (
+        <div className="p-3">
+          <Input
+            aria-label="Filter automations"
+            placeholder="Filter automations"
+            value={query}
+            onChange={(e) => onQuery(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape" && query) {
+                e.stopPropagation();
+                onQuery("");
+              }
+            }}
+          />
         </div>
       ) : null}
-      {groups
-        .filter((group) => !automationSourceIsCloud() || group.label !== "All projects")
-        .map((group) => (
-          <section key={group.label} className="flex flex-col gap-1 pb-4">
-            <div className="flex h-6 items-center px-2">
-              <h2 className="text-label text-muted-foreground uppercase">{group.label}</h2>
-              <button
-                type="button"
-                aria-label={`New automation in ${group.label}`}
-                onClick={onCreate}
-                className="ml-auto grid size-5 place-items-center rounded-md text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <PlusIcon weight="bold" className="size-3" />
-              </button>
-            </div>
-            {group.automations.length === 0 ? (
-              <p className="px-2 py-1 text-label text-muted-foreground">Nothing here</p>
-            ) : (
-              group.automations.map((automation) => (
-                <button
-                  key={automation.id}
-                  type="button"
-                  data-automation-rail-row={automation.id}
-                  aria-current={automation.id === selectedId ? "page" : undefined}
-                  onClick={() => onSelect(automation)}
-                  className={cn(
-                    "flex w-full flex-col gap-1 rounded-lg px-2 py-2 text-left outline-none",
-                    "focus-visible:ring-2 focus-visible:ring-ring",
-                    automation.id === selectedId
-                      ? "bg-accent text-foreground"
-                      : "text-muted-foreground hover:bg-accent/50",
-                  )}
-                >
-                  <span className="flex w-full min-w-0 items-center gap-2">
-                    <span className="min-w-0 flex-1 truncate text-ui font-medium">
-                      {automation.name}
-                    </span>
-                    <span
-                      aria-label={
-                        enabledIds.includes(automation.id) ? "Automatic triggers" : "Manual only"
-                      }
-                      className={cn(
-                        "size-2 shrink-0 rounded-full",
-                        enabledIds.includes(automation.id) ? "bg-primary" : "border border-border",
-                      )}
-                    />
+      <div className="min-h-0 flex-1 overflow-y-auto p-3">
+        {groups.every((g) => g.automations.length === 0) ? (
+          <p className="sr-only">No matching automations</p>
+        ) : (
+          groups
+            .filter((g) => g.automations.length > 0)
+            .map((group) => (
+              <section key={group.kind} className="mb-4">
+                <SectionHeading as="h3" className="flex items-center justify-between px-2 py-2">
+                  {group.label}
+                  <span className="text-label text-muted-foreground tabular-nums">
+                    {group.automations.length}
                   </span>
-                  <span className="flex w-full min-w-0 flex-wrap items-center gap-x-1 text-label text-muted-foreground">
-                    {triggerLabel(automation.trigger)} ·{" "}
-                    {/* Only pins name a model. Inherited, tier and invalid
-                      runtimes keep their own labels. Effort carries its noun
-                      so `High` cannot read as an adjective on the model. */}
-                    {isAutomationRuntimePin(automation.runtime) ? (
-                      <ResolvedModelName
-                        selection={automation.runtime}
-                        className="max-w-full"
-                        trailing={`${effortLabel(automation.runtime.reasoningLevel)} effort`}
+                </SectionHeading>
+                <ul>
+                  {group.automations.map((row) => (
+                    <li key={row.id}>
+                      <ListRow
+                        data-automation-rail-row={row.id}
+                        aria-current={row.id === selectedId ? "page" : undefined}
+                        aria-label={row.name}
+                        aria-describedby={
+                          row.trigger.kind === "none" || !coherent
+                            ? undefined
+                            : `automation-fact-${row.id}`
+                        }
+                        selected={row.id === selectedId}
+                        onActivate={() => onSelect(row)}
+                        leading={
+                          row.trigger.kind === "schedule" ? (
+                            <ClockIcon className="size-4 shrink-0 text-muted-foreground" />
+                          ) : (
+                            <AutomationIcon className="size-4 shrink-0 text-muted-foreground" />
+                          )
+                        }
+                        primary={
+                          <span className="line-clamp-2 min-w-0 text-ui font-medium wrap-anywhere">
+                            {row.name}
+                          </span>
+                        }
+                        primaryTrailing={
+                          row.projectId === null ? (
+                            <span role="img" aria-label="All projects">
+                              <GlobeIcon className="size-3 shrink-0 text-muted-foreground" />
+                            </span>
+                          ) : undefined
+                        }
+                        secondary={triggerLabel(row.trigger)}
+                        trailing={
+                          coherent ? (
+                            <AutomationListFact automation={row} projectId={projectId} />
+                          ) : undefined
+                        }
+                        actions={
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            disabled={disabled}
+                            className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+                            aria-label={`Run ${row.name}`}
+                            onClick={() => onRun(row)}
+                          >
+                            <PlayIcon />
+                          </Button>
+                        }
                       />
-                    ) : (
-                      runtimeLabel(automation.runtime)
-                    )}
-                  </span>
-                </button>
-              ))
-            )}
-          </section>
-        ))}
-      {/* The way back to the whole project's work (VC-297).
-
-          The rail always leaves one record selected once the list lands, so
-          without this row the interleaved list would only ever be reachable by
-          a project that has no Automations at all — and the Runs of a DELETED
-          Automation, which main keeps on purpose, would be kept where nobody
-          could read them. */}
-      <button
-        type="button"
-        data-automation-rail-activity=""
-        aria-current={activitySelected ? "page" : undefined}
-        onClick={onShowActivity}
-        className={cn(
-          "mt-auto flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left outline-none",
-          "focus-visible:ring-2 focus-visible:ring-ring",
-          activitySelected
-            ? "bg-accent text-foreground"
-            : "text-muted-foreground hover:bg-accent/50",
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ))
         )}
-      >
-        <ClockCounterClockwiseIcon className="size-4 shrink-0" />
-        <span className="min-w-0 flex-1 truncate text-ui font-medium">Project activity</span>
-      </button>
+      </div>
     </aside>
   );
 }
 
-/**
- * Every Automation's work in this project, interleaved (VC-297).
- *
- * The wide scope, on its own surface and reachable while records exist. It is
- * the only place a Run whose Automation was deleted — or one that never had
- * an Automation (VC-129) — can still be read, because no editor can claim it.
- */
-function ProjectActivity({
+/** One factual value at the row edge; no synthetic Run outcome or trigger provenance. */
+function AutomationListFact({
+  automation,
+  projectId,
+}: {
+  automation: Automation;
+  projectId: string;
+}) {
+  const enabled = useAutomationsStore((s) => s.enabledIds.includes(automation.id));
+  const armings = useAutomationsStore((s) => s.armingByProject[projectId]);
+  const cloudSchedule = useCloudAutomationsStore((s) =>
+    s.schedules[projectId]?.find((row) => row.automationId === automation.id),
+  );
+  const [now] = React.useState(() => Date.now());
+  if (automation.trigger.kind === "none") return null;
+  let fact: string | null = null;
+  if (automationSourceIsCloud()) {
+    if (cloudSchedule?.pausedAt != null) fact = "Paused";
+  } else if (!enabled) fact = "Manual only";
+  else if (
+    automation.trigger.kind === "columns" &&
+    armings?.some(
+      (a) =>
+        a.automationId === automation.id &&
+        automation.trigger.kind === "columns" &&
+        automation.trigger.columns.includes(a.status),
+    )
+  )
+    fact = "Armed";
+  const schedule = automation.trigger.kind === "schedule" ? automation.trigger.schedule : null;
+  const next =
+    schedule !== null &&
+    (automationSourceIsCloud()
+      ? cloudSchedule !== undefined && cloudSchedule.pausedAt === null
+      : enabled)
+      ? automationSourceIsCloud()
+        ? cloudSchedule!.nextFireAt
+        : nextScheduledRun({
+            schedule,
+            automationId: automation.id,
+            now,
+            timeZone: schedule.timeZone,
+          }).at
+      : null;
+  if (next !== null && schedule !== null)
+    return (
+      <span
+        id={`automation-fact-${automation.id}`}
+        className="shrink-0 text-label text-muted-foreground tabular-nums"
+      >
+        <span aria-hidden>
+          {new Date(next).toLocaleTimeString(undefined, {
+            hour: "2-digit",
+            minute: "2-digit",
+            hour12: false,
+            timeZone: schedule.timeZone,
+          })}
+        </span>
+        <span className="sr-only">
+          Next run {new Date(next).toLocaleString(undefined, { timeZone: schedule.timeZone })} ·{" "}
+          {schedule.timeZone}
+        </span>
+      </span>
+    );
+  return (
+    <span
+      id={`automation-fact-${automation.id}`}
+      className="max-w-16 shrink-0 text-right text-label text-muted-foreground"
+    >
+      {fact}
+    </span>
+  );
+}
+
+/** Scoped reads stay scoped, including when a global record is selected. */
+function HistorySurface({
   projectId,
   ticketPrefix,
-  runs,
-  skips,
-  loaded,
+  automationId,
+  recent = false,
+  onAll,
+  name,
+  onScope,
+  disabled = false,
 }: {
   projectId: string;
   ticketPrefix: string;
-  runs: readonly AutomationRun[];
-  skips: readonly AutomationSkippedOccurrence[];
-  loaded: boolean;
+  automationId: string | null;
+  recent?: boolean;
+  onAll?(): void;
+  name?: string;
+  onScope?(id: string): void;
+  disabled?: boolean;
 }) {
+  const runs = useAutomationsStore((s) =>
+    automationId === null
+      ? (s.runsByProject[projectId] ?? NO_RUNS)
+      : selectAutomationRuns(s, projectId, automationId),
+  );
+  const skips = useAutomationsStore((s) =>
+    automationId === null
+      ? (s.skipsByProject[projectId] ?? NO_SKIPS)
+      : selectAutomationSkips(s, projectId, automationId),
+  );
+  const loaded = useAutomationsStore((s) =>
+    automationId === null
+      ? s.runsByProject[projectId] !== undefined && s.skipsByProject[projectId] !== undefined
+      : s.runsByAutomation[automationHistoryKey(projectId, automationId)] !== undefined,
+  );
+  const rows = useAutomationsStore((s) => s.byProject[projectId] ?? NO_AUTOMATIONS);
+  const version = useBoardStore((s) => s.lastPlanningChange.version);
+  const [retry, setRetry] = React.useState(0);
+  const [failed, setFailed] = React.useState(false);
+  React.useEffect(() => {
+    let current = true;
+    setFailed(false);
+    const store = useAutomationsStore.getState();
+    const request =
+      automationId === null
+        ? Promise.all([store.refreshRuns(projectId), store.refreshSkips(projectId)]).then((r) =>
+            r.every(Boolean),
+          )
+        : store.refreshAutomationHistory(projectId, automationId);
+    void request.then((ok) => {
+      if (current) setFailed(!ok);
+    });
+    return () => {
+      current = false;
+    };
+  }, [automationId, projectId, version, retry]);
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-      <div className="mx-auto w-full max-w-content px-6 py-6">
-        <RunHistory
+    <section className="mt-5 min-w-0" data-run-history={automationId ?? "project"}>
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <SectionHeading as={recent ? "h3" : "h2"}>
+          {recent
+            ? "Recent runs"
+            : automationId === null
+              ? "History"
+              : `Runs${name ? ` · ${name}` : ""}`}
+        </SectionHeading>
+        {recent ? (
+          <Button size="sm" variant="ghost" onClick={onAll}>
+            All runs
+          </Button>
+        ) : onScope ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="sm" variant="outline">
+                {name ?? "All automations"}
+                <ChevronDownIcon />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent>
+              <DropdownMenuItem onSelect={() => onScope("all")}>
+                <HistoryIcon />
+                All automations
+              </DropdownMenuItem>
+              {rows.map((row) => (
+                <DropdownMenuItem key={row.id} onSelect={() => onScope(row.id)}>
+                  <AutomationIcon />
+                  {row.name}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : null}
+      </div>
+      {failed ? (
+        <div className="flex items-center gap-2">
+          <span role="alert" className="text-ui">
+            Couldn’t load runs
+          </span>
+          <Button size="sm" variant="outline" onClick={() => setRetry((n) => n + 1)}>
+            Retry
+          </Button>
+        </div>
+      ) : null}
+      {failed && !loaded ? null : automationSourceIsCloud() ? (
+        <CloudRunHistory projectId={projectId} automationId={automationId} recent={recent} />
+      ) : !loaded && !failed ? (
+        <p role="status" aria-busy="true" className="text-ui text-muted-foreground">
+          Loading runs…
+        </p>
+      ) : (
+        <LocalRunHistory
           projectId={projectId}
           ticketPrefix={ticketPrefix}
           runs={runs}
           skips={skips}
-          automationId={null}
           loaded={loaded}
+          limit={recent ? 3 : undefined}
+          disabled={disabled || failed}
         />
-      </div>
-    </div>
-  );
-}
-
-function EmptyAutomations({ onCreate, history }: { onCreate(): void; history?: React.ReactNode }) {
-  return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-      <div className="grid min-h-64 flex-1 place-items-center p-6">
-        <div className="flex max-w-sm flex-col items-center gap-4 text-center">
-          <LightningIcon className="size-5 text-muted-foreground" />
-          <div>
-            <h2 className="text-heading font-semibold">Nothing saved yet</h2>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Save a way of starting work, then run it by hand or give it a Trigger.
-            </p>
-          </div>
-          <Button size="sm" onClick={onCreate}>
-            <PlusIcon />
-            New Automation
-          </Button>
-        </div>
-      </div>
-      {history === undefined ? null : (
-        <div className="mx-auto w-full max-w-content px-6 pb-6">{history}</div>
       )}
-    </div>
+    </section>
   );
 }
 
-/**
- * Which Ticket to run on.
- *
- * A Run opens one fresh Session at one scope (VC-112), and the manual Trigger
- * names no Ticket of its own — so the surface that runs has to ask. Elsewhere
- * the Ticket is already the context (the board card, the rail, the palette's
- * open Ticket); here the person is looking at a list of records, so this is
- * the one place the question is worth a dialog.
- *
- * Starting the Run does NOT navigate. VC-234 makes that universal rather than
- * a listing-versus-context distinction: `runAutomationOnTicket` toasts with an
- * "Open session" action and the person decides whether to leave this page.
- */
 function RunOnTicketDialog({
   open,
   onOpenChange,
@@ -766,65 +898,98 @@ function RunOnTicketDialog({
     );
   }, [query, tickets, ticketPrefix]);
 
+  const [selected, setSelected] = React.useState("");
+  const [starting, setStarting] = React.useState(false);
+  const lock = React.useRef(false);
+  const canWrite = useCanWrite(projectId);
+  const selectedTicket = matches.find((ticket) => ticket.id === selected);
+  async function start() {
+    if (lock.current || selectedTicket === undefined || !guardWrite(projectId)) return;
+    lock.current = true;
+    setStarting(true);
+    try {
+      const outcome = await runAutomationOnTicket({
+        target: { kind: "automation", automationId: automation.id },
+        automationName: automation.name,
+        ticketId: selectedTicket.id,
+        ticketDisplayId: displayTicketId(ticketPrefix, selectedTicket.ticketNumber),
+        modelOverride: null,
+      });
+      if (outcome !== "failed" && outcome !== "refused") onOpenChange(false);
+    } finally {
+      lock.current = false;
+      setStarting(false);
+    }
+  }
   return (
     <Dialog
       open={open}
-      onOpenChange={(next) => {
-        if (!next) setQuery("");
-        onOpenChange(next);
+      onOpenChange={(value) => {
+        if (!starting) onOpenChange(value);
       }}
     >
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Run “{automation.name}” on</DialogTitle>
         </DialogHeader>
-        <div className="flex flex-col gap-2">
-          <Input
+        <AutomationRuntimeValue
+          runtime={automation.runtime}
+          projectId={projectId}
+          projectTarget={false}
+        />
+        <Command
+          shouldFilter={false}
+          value={selected}
+          onValueChange={setSelected}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && selectedTicket) {
+              e.preventDefault();
+              void start();
+            }
+          }}
+        >
+          <CommandInput
             autoFocus
-            value={query}
             aria-label="Find a ticket"
             placeholder="Find a ticket"
-            onChange={(event) => setQuery(event.currentTarget.value)}
+            value={query}
+            onValueChange={setQuery}
           />
-          <div className="flex max-h-80 flex-col overflow-y-auto">
+          <CommandList>
             {matches.length === 0 ? (
-              <p className="py-2 text-ui text-muted-foreground">No tickets here.</p>
+              <p className="sr-only">No matching tickets</p>
             ) : (
-              matches.map((ticket) => {
-                const ticketDisplayId = displayTicketId(ticketPrefix, ticket.ticketNumber);
-                return (
-                  <ListRow
-                    key={ticket.id}
-                    primary={ticket.title}
-                    leading={
-                      <span className="shrink-0 font-mono text-label text-muted-foreground">
-                        {ticketDisplayId}
-                      </span>
-                    }
-                    trailing={
-                      <span className="shrink-0 text-label text-muted-foreground">
-                        {TICKET_STATUS_LABELS[ticket.status]}
-                      </span>
-                    }
-                    onActivate={() => {
-                      onOpenChange(false);
-                      setQuery("");
-                      void runAutomationOnTicket({
-                        target: { kind: "automation", automationId: automation.id },
-                        automationName: automation.name,
-                        ticketId: ticket.id,
-                        ticketDisplayId,
-                        // The page runs the record as saved. Its per-invocation
-                        // override lives where a person picks one Ticket and
-                        // stops — the rail and the ticket context menu.
-                        modelOverride: null,
-                      });
-                    }}
-                  />
-                );
-              })
+              matches.map((ticket) => (
+                <CommandItem
+                  key={ticket.id}
+                  value={ticket.id}
+                  disabled={starting}
+                  onSelect={() => setSelected(ticket.id)}
+                >
+                  <span className="shrink-0 font-mono text-label text-muted-foreground">
+                    {displayTicketId(ticketPrefix, ticket.ticketNumber)}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">{ticket.title}</span>
+                  <span className="text-label text-muted-foreground">
+                    {TICKET_STATUS_LABELS[ticket.status]}
+                  </span>
+                </CommandItem>
+              ))
             )}
-          </div>
+          </CommandList>
+        </Command>
+        <div className="flex justify-end">
+          <Button
+            size="sm"
+            disabled={!canWrite || starting || !selectedTicket}
+            onClick={() => void start()}
+          >
+            {starting
+              ? "Starting…"
+              : selectedTicket
+                ? `Run on ${displayTicketId(ticketPrefix, selectedTicket.ticketNumber)}`
+                : "Select a ticket"}
+          </Button>
         </div>
       </DialogContent>
     </Dialog>
@@ -856,59 +1021,54 @@ function RunOnTicketDialog({
  * project's history to draw one record's — the read a phone or a browser
  * should never be made to do.
  */
-function RunHistory(props: Parameters<typeof LocalRunHistory>[0]) {
-  return automationSourceIsCloud() ? (
-    <CloudRunHistory projectId={props.projectId} automationId={props.automationId} />
-  ) : (
-    <LocalRunHistory {...props} />
-  );
-}
 function LocalRunHistory({
   projectId,
   ticketPrefix,
   runs,
   skips,
-  automationId,
   loaded,
+  limit,
+  disabled,
 }: {
   projectId: string;
   ticketPrefix: string;
   /** Already scoped by main to whatever {@link automationId} names. */
   runs: readonly AutomationRun[];
   skips: readonly AutomationSkippedOccurrence[];
-  /** The record these rows were read for, or `null` for the whole project. */
-  automationId: string | null;
   /** Whether this scope's read has LANDED — not whether it found anything. */
   loaded: boolean;
+  limit?: number;
+  disabled?: boolean;
 }) {
   const entries = React.useMemo(() => automationHistory(runs, skips), [runs, skips]);
   const now = useAgeNow(
-    entries.map((entry) => (entry.kind === "run" ? entry.run.createdAt : entry.skip.dueAt)),
+    entries
+      .slice(0, limit)
+      .map((entry) => (entry.kind === "run" ? entry.run.createdAt : entry.skip.dueAt)),
   );
-  const emptyCopy = historyEmptyCopy(automationId, loaded);
+  const emptyCopy = loaded ? "No runs yet" : null;
   return (
-    <section className="flex flex-col gap-1" data-run-history={automationId ?? "project"}>
-      <SectionHeading className="h-6 leading-6">
-        {automationId === null ? "Project activity" : "Runs"}
-      </SectionHeading>
+    <section className="flex flex-col gap-1">
       {entries.length === 0 ? (
         emptyCopy === null ? null : (
           <p className="py-2 text-ui text-muted-foreground">{emptyCopy}</p>
         )
       ) : (
-        entries.map((entry) =>
-          entry.kind === "run" ? (
-            <RunRow
-              key={entry.run.id}
-              projectId={projectId}
-              ticketPrefix={ticketPrefix}
-              run={entry.run}
-              now={now}
-            />
-          ) : (
-            <SkippedRow key={entry.skip.id} skip={entry.skip} now={now} />
-          ),
-        )
+        entries
+          .slice(0, limit)
+          .map((entry) =>
+            entry.kind === "run" ? (
+              <RunRow
+                key={entry.run.id}
+                projectId={projectId}
+                ticketPrefix={ticketPrefix}
+                run={entry.run}
+                now={now}
+              />
+            ) : (
+              <SkippedRow key={entry.skip.id} skip={entry.skip} now={now} disabled={disabled} />
+            ),
+          )
       )}
     </section>
   );
@@ -933,7 +1093,18 @@ function LocalRunHistory({
  * replayed (VC-112), and this is the by-hand recovery that ruling promises
  * instead.
  */
-function SkippedRow({ skip, now }: { skip: AutomationSkippedOccurrence; now: number }) {
+function SkippedRow({
+  skip,
+  now,
+  disabled,
+}: {
+  skip: AutomationSkippedOccurrence;
+  now: number;
+  disabled?: boolean;
+}) {
+  const canWrite = useCanWrite(skip.projectId);
+  const [pending, setPending] = React.useState(false);
+  const lock = React.useRef(false);
   const count = skipCountLabel(skip);
   return (
     <ListRow
@@ -942,22 +1113,14 @@ function SkippedRow({ skip, now }: { skip: AutomationSkippedOccurrence; now: num
       // row itself to go. Its one act is the control, which is why the control
       // is on it rather than a click nothing would answer.
       onActivate={null}
-      leading={<ClockCounterClockwiseIcon className="size-4 text-muted-foreground" />}
-      primary={
-        <span className="flex min-w-0 items-center gap-1 text-ui">
-          <span className="shrink-0 text-foreground">{skip.automationName}</span>
-          <span aria-hidden className="text-muted-foreground">
-            ·
-          </span>
-          <span className="truncate text-muted-foreground">{skipReasonLabel(skip)}</span>
-          {count === "" ? null : (
-            <>
-              <span aria-hidden className="text-muted-foreground">
-                ·
-              </span>
-              <span className="shrink-0 text-muted-foreground">{count}</span>
-            </>
-          )}
+      leading={<HistoryIcon className="size-4 text-muted-foreground" />}
+      primary={skip.automationName}
+      secondary={
+        // The reason is the record, not optional metadata. Let it wrap below
+        // the name rather than truncate to nothing beside the recovery action.
+        <span className="block text-ui text-muted-foreground">
+          {skipReasonLabel(skip)}
+          {count === "" ? null : ` · ${count}`}
         </span>
       }
       actions={
@@ -965,12 +1128,19 @@ function SkippedRow({ skip, now }: { skip: AutomationSkippedOccurrence; now: num
           size="sm"
           variant="secondary"
           aria-label={`Run ${skip.automationName} now`}
+          disabled={disabled || !canWrite || pending}
           onClick={(event) => {
             event.stopPropagation();
+            if (lock.current || disabled || !guardWrite(skip.projectId)) return;
+            lock.current = true;
+            setPending(true);
             void runAutomationForProject({
               automationId: skip.automationId,
               automationName: skip.automationName,
               projectId: skip.projectId,
+            }).finally(() => {
+              lock.current = false;
+              setPending(false);
             });
           }}
         >
@@ -1006,6 +1176,7 @@ function RunRow({
   return (
     <ListRow
       data-run-history-run={run.id}
+      aria-label={`${runAutomationLabel(run)}, ${runStartLabel(run)}. Open Session`}
       // The door back to the Session the Run opened, always. A Run whose
       // Ticket is gone kept its Session and its place in this history, so it
       // opens in Home — the project's own home for a Session no Ticket owns —
@@ -1013,10 +1184,10 @@ function RunRow({
       onActivate={() =>
         openRunSession({ sessionId: run.sessionId, projectId, ticketId: run.ticketId })
       }
-      leading={<LightningIcon className="size-4 text-muted-foreground" />}
+      leading={<AutomationIcon className="size-4 text-muted-foreground" />}
       primary={
-        <span className="flex min-w-0 items-center gap-1 text-ui">
-          <span className="shrink-0 text-foreground">{runAutomationLabel(run)}</span>
+        <span className="flex min-w-0 flex-wrap items-center gap-1 text-ui">
+          <span className="min-w-0 wrap-anywhere text-foreground">{runAutomationLabel(run)}</span>
           {ticketNumber === undefined ? null : (
             <>
               <span aria-hidden className="text-muted-foreground">
@@ -1038,7 +1209,11 @@ function RunRow({
             <ResolvedModelName
               selection={run.model}
               className="max-w-full"
-              trailing={`${effortLabel(run.model.reasoningLevel)} effort`}
+              trailing={
+                run.model.reasoningLevel === "off"
+                  ? undefined
+                  : `${effortLabel(run.model.reasoningLevel)} effort`
+              }
             />
           </span>
           <span aria-hidden className="text-muted-foreground">

@@ -70,9 +70,9 @@ function git(args) {
 }
 
 function install(tree, pkg) {
-  // `vp` is the toolchain CI provides (pnpm is not a command on its runners);
-  // a dev machine has either. Scripts stay off: N-1 needs only better-sqlite3,
-  // whose N-API prebuild ships inside the package.
+  // CI provides both the workspace Vite+ CLI and pinned pnpm; a dev machine
+  // may have either. Scripts stay off: N-1 needs only better-sqlite3, whose
+  // N-API prebuild ships inside the package.
   const args = ["install", "--frozen-lockfile", "--ignore-scripts", "--filter", `${pkg}...`];
   for (const bin of ["vp", "pnpm"]) {
     const run = spawnSync(bin, args, { cwd: tree, stdio: "inherit" });

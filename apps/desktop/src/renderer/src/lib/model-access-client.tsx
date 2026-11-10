@@ -29,6 +29,8 @@ export interface ModelAccessSignInSession {
 }
 
 export interface ModelAccessClient {
+  /** Accepted changes made by another client of the same authority. */
+  subscribeChanges?(listener: () => void): () => void;
   inspect(input: { refresh?: boolean }): Promise<ModelAccessSnapshot>;
   /** The per-purpose defaults — see {@link ModelAccessDefaults}. */
   defaults(): Promise<ModelAccessDefaults>;
@@ -146,16 +148,18 @@ export function ModelAccessProvider({
     };
   }, []);
 
+  /** Drop everything held and wake every surface that reads it. */
+  const invalidate = React.useCallback((): void => {
+    if (!mounted.current) return;
+    generation.current += 1;
+    inspectRead.current = null;
+    defaultsRead.current = null;
+    hiddenRead.current = null;
+    setRevision((current) => current + 1);
+  }, []);
+  React.useEffect(() => client.subscribeChanges?.(invalidate), [client, invalidate]);
+
   const value = React.useMemo<ModelAccessContextValue>(() => {
-    /** Drop everything held and wake every surface that reads it. */
-    const invalidate = (): void => {
-      if (!mounted.current) return;
-      generation.current += 1;
-      inspectRead.current = null;
-      defaultsRead.current = null;
-      hiddenRead.current = null;
-      setRevision((current) => current + 1);
-    };
     return {
       inspect: (input) => {
         if (input.refresh !== true) {
@@ -222,7 +226,7 @@ export function ModelAccessProvider({
       setPickerView: (view) => client.setPickerView(view),
       revision,
     };
-  }, [client, revision]);
+  }, [client, invalidate, revision]);
   return <ModelAccessContext.Provider value={value}>{children}</ModelAccessContext.Provider>;
 }
 

@@ -19,3 +19,16 @@
  * field still wears on its border.
  */
 export const FIELD_INVALID = "aria-invalid:border-destructive";
+
+/** Geometry shared by actions, text fields and closed choice controls. */
+export const CONTROL_SIZE = {
+  xs: "h-control-xs px-control-pad-xs",
+  sm: "h-control-sm px-control-pad-sm",
+  default: "h-control-default px-control-pad-default",
+  lg: "h-control-lg px-control-pad-lg",
+} as const;
+export type ControlSize = keyof typeof CONTROL_SIZE;
+
+/** A text field keeps its lift even while its caret is active. */
+export const FIELD_SURFACE =
+  "border border-border-strong bg-card shadow-raised disabled:opacity-50";

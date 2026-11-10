@@ -3,8 +3,8 @@
 Pi 1.0 removed the experimental harness from `@earendil-works/pi-agent-core`.
 Volli retains only the pieces used by its existing executor and compatibility
 tests. **Session Engine remains the durability authority**; these modules are
-private executor sidecar machinery, not a second Session engine. There is no
-`pi-durable` dependency, durable harness reducer, or new resume policy.
+private executor sidecar machinery, not a second Session engine. There is no production `pi-durable` dependency, durable harness reducer, or
+new resume policy; the development-only 1.0.0 benchmark is separate.
 
 ## Provenance and license
 
@@ -27,7 +27,7 @@ private executor sidecar machinery, not a second Session engine. There is no
 
 Consumers use `src/pi/harness-session.ts`, `harness-compaction.ts`, and
 `harness-env.ts`; provider/loop types and `Agent` still come from core's root.
-`pi-context.ts` uses `Context` and cancellation directly from `chord@1.0.0`.
+`pi-context.ts` uses `Context` and cancellation directly from `chord@1.5.0`.
 Sidecar storage is independent of the Session Engine and does not include Pi's
 deleted harness orchestration (VC-497).
 
@@ -37,7 +37,7 @@ Paths below are relative to this directory. Renames are explicit.
 
 | Modules                                                                    | Reason retained                                                                                                                                                                                           |
 | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `context.ts`                                                               | Chord cancellation exports and the original no-op telemetry parent used by summary requests. Unused context helpers are omitted.                                                                          |
+| `context.ts`                                                               | Chord cancellation exports; summary requests use Chord's no-op `context.telemetry` span. Unused context helpers are omitted.                                                                              |
 | `types.ts`                                                                 | File/shell capabilities, typed failures/results, four-tool execution contract and stream-option shape referenced by legacy stored lane configuration. Skill/resource and unused helper types are omitted. |
 | `messages.ts`                                                              | Existing custom/bash/branch/compaction message augmentation, summary framing, and `convertToLlm` conversion. These affect transcript/provider replay.                                                     |
 | `env/nodejs.ts`                                                            | Existing Node filesystem/process implementation behind Volli's scoped execution and authority checks.                                                                                                     |
@@ -82,7 +82,7 @@ branch-summary execution. `Agent`/agent loop are **not** vendored.
 ## Local divergences
 
 1. Internal imports are relocated. Core message/loop/tool types use the supported
-   1.0 root; context uses chord directly. Tool/output helpers moved from upstream
+   1.5 root; context uses chord directly. Tool/output helpers moved from upstream
    `utils/` into `execution/`; usage helpers are shared under `session/`.
 2. **Former estimator patch:** `findCutPoint` and `prepareCompaction` accept the
    optional estimator. Both the retained-tail cut and `tokensBefore` use it.
@@ -111,8 +111,9 @@ branch-summary execution. `Agent`/agent loop are **not** vendored.
    failed commits and competing publications remain covered. Coverage thresholds
    and production source inclusion are unchanged.
 5. The copied core patch is deleted; ownership now lives here. Codemode is not
-   vendored: its output/call-size patch is retained on 1.0.0 because upstream
-   still lacks those limits.
+   vendored: its configurable output/call-size patch is retained on 1.5.0 because
+   upstream's fixed output caps do not bound calls, errors or returned values
+   to Volli's lower per-run budgets.
 6. **Edit byte preservation:** `edit` reads bytes and decodes strict UTF-8,
    refusing a file that does not decode instead of writing U+FFFD back. Matching
    (exact, then fuzzy) still runs on the LF-normalized view, but the result is
@@ -151,6 +152,21 @@ branch-summary execution. `Agent`/agent loop are **not** vendored.
    Volli's owned `ShellSpillRedactor`, and releases what it held when the command
    ends. Any failure fails the spill with one fixed message; a spill stopped
    that way still closes its stream. Without the option, bytes spill unchanged.
+10. **Bounded edit diff (VC-1074):** `edit` takes its display diff and patch from
+    `generateEditDiff`, one jsdiff line comparison bounded by
+    `EDIT_DIFF_BOUNDS` (100 ms shared wall time, 20,000 changed lines). When the
+    file has no BOM and no CR, the patch is derived from that same comparison
+    and is byte-identical to `generateUnifiedPatch`'s; otherwise the bytes get a
+    second comparison inside the remaining budget. A comparison past the bounds
+    still writes the edit but reports
+    `(diff omitted: the change is too large to compare)` as `diff`, the first
+    changed line, and no `patch`. Upstream ran two unbounded comparisons
+    synchronously, seconds for scattered changes across a large file.
+
+11. **Pi 1.5 telemetry:** summary request options use `telemetry: context.telemetry`
+    instead of the removed `telemetryContext` option. The embedding still uses
+    Chord's no-op parent, with no exporter or network telemetry. The former
+    context-key helper is removed; cancellation and request routing are unchanged.
 
 ## Compatibility evidence
 

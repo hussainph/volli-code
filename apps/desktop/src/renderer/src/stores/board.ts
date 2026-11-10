@@ -19,6 +19,7 @@ import {
   moveTickets as moveTicketsOp,
   setTicketPriority as setTicketPriorityOp,
   type ArchivedTicket,
+  type DataChangeKind,
   type DeliberateMoveChoice,
   type HarnessId,
   type Label,
@@ -110,6 +111,12 @@ export interface PlanningChange {
   ticketId: string | null;
   /** The project the change belonged to, when known. */
   projectId: string | null;
+  /**
+   * What changed, when the producer said (`DataChangedEvent.kind`). Absent
+   * means unknown — a reader must treat it as possibly anything. Present only
+   * when known, so a scope with no hint reads exactly as it always has.
+   */
+  kind?: DataChangeKind;
 }
 
 /**
@@ -214,7 +221,11 @@ export interface BoardState {
    * refresh re-hydrates the planning stores (see lib/boot.ts). Always bumps
    * `version`; `change.ticketId`/`projectId` default to `null` (untargeted).
    */
-  notePlanningChange(change?: { ticketId?: string; projectId?: string }): void;
+  notePlanningChange(change?: {
+    ticketId?: string;
+    projectId?: string;
+    kind?: DataChangeKind;
+  }): void;
   /**
    * Records that a planning refresh read failed, arming the wholesale recovery
    * described on {@link BoardState.planningRecoveryNeeded}.
@@ -763,6 +774,7 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
             version: get().lastPlanningChange.version + 1,
             ticketId: change?.ticketId ?? null,
             projectId: change?.projectId ?? null,
+            ...(change?.kind === undefined ? {} : { kind: change.kind }),
           },
         });
       },

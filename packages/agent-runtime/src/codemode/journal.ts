@@ -56,6 +56,8 @@ export interface JournaledCall {
   argumentsDigest: string;
   /** What it came to; `null` when it was past the run's bound and not kept. */
   outcome: ShapedOutcome | null;
+  /** An inspectable MCP/bash answer may still represent a failed tool call. */
+  isError?: true;
   /** Its answer came from outside the Session, so a replay of it is marked too. */
   untrusted?: true;
   /** Host-side payloads count toward the existing journal byte cap. */
@@ -129,6 +131,7 @@ export function remember(
     name: string;
     argumentsDigest: string;
     outcome: ShapedOutcome;
+    isError?: true;
     untrusted?: true;
     images?: readonly HeldImage[];
     omittedImages?: number;

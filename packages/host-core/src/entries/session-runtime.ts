@@ -26,6 +26,7 @@ export { removeTicketToolOutput } from "../pi-tool-output";
 export { buildSessionEnvReport } from "../session-env";
 export type { AutoTitleRequest } from "../session-runtime/auto-title";
 export { closeStaleAttachments } from "../session-runtime/boot-recovery";
+export { createBootRecoveryEngine } from "../session-runtime/boot-recovery-reader";
 export { createConnectivityPort } from "../session-runtime/connectivity";
 export { createHostNoticeDelivery } from "../session-runtime/durable-host-notice-delivery";
 export {
