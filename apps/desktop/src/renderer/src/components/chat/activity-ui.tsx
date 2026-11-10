@@ -1382,6 +1382,7 @@ const ReasoningRow = React.memo(function ReasoningRow({ rows }: { rows: readonly
           {rows.map((row) => (
             <ReasoningBody
               key={row.key}
+              isAnimating={row.streaming}
               className="my-1 rounded-md border border-border/50 bg-muted/30 p-2 text-ui leading-5"
             >
               {row.part.text}

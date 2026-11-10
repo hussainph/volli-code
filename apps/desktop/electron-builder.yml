@@ -58,7 +58,7 @@ directories:
 # the quickjs.wasm the host compiles for it (see asarUnpack below and
 # packages/host-core/src/codemode/sandbox-assets.ts). Only pi-codemode is kept from its
 # scope; the rest of @earendil-works is bundled. The extglob negation below
-# drops the other ~500 collected packages (~400 MB: monaco, mermaid, icon
+# drops the other ~500 collected packages (~400 MB: monaco, icon
 # packs, AI SDK providers — all renderer-only or already bundled). KEEP IN
 # SYNC with the bare `require(`/`import(` specifiers in dist-electron/*.cjs: a
 # new external main-process dep must be added here or the packaged app fails

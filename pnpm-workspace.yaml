@@ -106,10 +106,6 @@ overrides:
   # the linear selector parser fix, but the lock retains 6.1.4. This path is
   # docs build tooling only. Remove once its parent requires >=6.1.5.
   "postcss-selector-parser@<6.1.5": "6.1.5"
-  # VC-963: Mermaid's ^0.16.47 range cannot reach the trust-bypass fix
-  # GHSA-238p-pmpm-9mq7. Keep its public render API, and remove when Mermaid
-  # declares KaTeX >=0.18.2 itself.
-  "mermaid@11.17.2>katex": "0.18.2"
   # VC-793 / GHSA-68fv-2mgg-jv7q: every parent declares ^1.2.1, so this is
   # the same 1.x line; the override keeps a stale lockfile entry from
   # re-selecting a vulnerable copy. Scoped to the vulnerable range only.

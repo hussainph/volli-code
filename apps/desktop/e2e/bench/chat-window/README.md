@@ -111,6 +111,45 @@ measurement transport now includes supervisor IPC and a guarded host. Do not mix
 historical direct-launch latency numbers with guarded runs as a causal A/B;
 re-run both source revisions through this same harness.
 
+## Invented diagram cadence probe
+
+The `stream`/`transcript` arms accept `--stream-content diagram`. The fixture is
+an invented 18-group topology, not a private transcript or prototype. Each sample
+must stream through a working, active Turn, open and close its fence, scroll,
+and show a changing, viewport-intersecting SVG with all 18 output labels both
+live and settled. Icons, empty/hidden/static SVGs and missing samples fail closed.
+The default code-fence contract and all draft/reveal arms remain intact.
+
+In a coordinated slot, run the same guarded production pipeline for each cadence:
+
+```sh
+vp env exec --node 24.22.1 -- node apps/desktop/e2e/chat-window-bench.mjs \
+  --arm stream --sessions 1 --turns 1600 --stream-content diagram \
+  --stream-samples 3 --stream-steps 240 --diagram-sample-ms 100 \
+  --label sampled --output .scratch/chat-diagram-100
+```
+
+Repeat with `--diagram-sample-ms 0 --label every-update` and a fresh output
+`.scratch/chat-diagram-0`. Run serially, one guarded instance at a time. Use enough
+steps to finish the graph at the display's refresh rate; an incomplete graph is a
+failed probe, not a usable faster result. Repeat in alternating cadence order
+before drawing causal conclusions; 2–3 samples are exploratory/noisy evidence.
+
+`--diagram-sample-ms` accepts only `0` or `100`, with diagram content. A bench-only
+Vite transform replaces the adapter's exact local `const SAMPLE_MS = 100;` in
+memory, never product source. The normal app build retains its 100ms cadence.
+The transform must reach the real adapter or the build fails. The emitted cadence
+artifact is checked against the settings by the controller and guarded driver,
+recorded in the report/source metadata, and included alongside asset and host
+hashes in the skip-build proof. `--skip-build` can reuse only that exact cadence's
+unchanged proof; switching cadence requires a fresh build. Omitting the override
+measures unmodified production source and records a null instrumentation value.
+A historical revision without this adapter cannot support a cadence override.
+
+Earlier direct-renderer/direct-launch diagram measurements are **historical and
+noncomparable** to this guarded path or changed main layout/theme. They are not
+current release evidence; rerun both cadences through this entry.
+
 ## Source-only checks
 
 No install or app required:
@@ -118,7 +157,8 @@ No install or app required:
 ```sh
 vp env exec --node 24.22.1 -- node --test \
   --test-concurrency="$VOLLI_CONCURRENCY_HINT" \
-  apps/desktop/e2e/bench/chat-window/integration.test.mjs
+  apps/desktop/e2e/bench/chat-window/integration.test.mjs \
+  apps/desktop/e2e/chat-window-bench.test.mjs
 ```
 
 The tests exercise the real NDJSON codec, lifecycle order/cleanup, source archive

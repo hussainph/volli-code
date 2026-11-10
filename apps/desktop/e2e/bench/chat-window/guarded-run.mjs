@@ -71,6 +71,7 @@ export async function runGuardedSide({ drive, settings, source, signals = proces
     throw new Error("reveal arm did not receive all trusted clicks/paint samples");
   if (
     ["stream", "transcript"].includes(settings.arm) &&
+    settings.streamContent !== "diagram" &&
     (result.streamingSamples?.length !== settings.streamSamples ||
       result.streamingSamples.some(
         (sample) =>
@@ -81,6 +82,13 @@ export async function runGuardedSide({ drive, settings, source, signals = proces
       ))
   )
     throw new Error("stream arm did not measure live streaming code");
+  if (
+    settings.diagramSampleMs !== null &&
+    settings.diagramSampleMs !== undefined &&
+    result.benchCadence?.diagramSampleMs !== settings.diagramSampleMs
+  )
+    throw new Error("bench cadence artifact missing or mismatched in report");
+  if (settings.streamContent === "diagram") validateDiagramProbe(result, settings.streamSamples);
   return result;
 }
 
@@ -94,4 +102,46 @@ export async function serialComparison(sides, runSide) {
     }
   }
   return reports;
+}
+
+/** Refuse plausible-looking numbers from an empty, hidden or static probe. */
+export function validateDiagramProbe(report, expectedSamples) {
+  if (
+    report.failure !== undefined ||
+    !Array.isArray(report.streamingSamples) ||
+    report.streamingSamples.length !== expectedSamples ||
+    !Array.isArray(report.errors) ||
+    report.errors.length > 0 ||
+    !Array.isArray(report.errorDetails) ||
+    report.errorDetails.length > 0
+  ) {
+    throw new Error("diagram probe has missing samples or renderer errors");
+  }
+  for (const sample of report.streamingSamples) {
+    if (
+      sample?.ok !== true ||
+      sample.streamContent !== "diagram" ||
+      sample.codeFenceOpened !== true ||
+      sample.codeFenceClosed !== true ||
+      sample.streamedWhileWorking !== true ||
+      sample.streamedWhileTurnActive !== true ||
+      !(sample.liveDiagramSvgs > 0) ||
+      !(sample.visibleDiagramFrames > 1) ||
+      !(sample.distinctVisibleDiagramSources > 1) ||
+      sample.maxDiagramLabels !== 18 ||
+      sample.settledDiagramSvgs !== 1 ||
+      sample.settledDiagramLabels !== 18 ||
+      !(sample.scrollDistancePx > 0) ||
+      !(sample.refreshIntervalMs > 0) ||
+      ![
+        sample.liveDiagramSvgs,
+        sample.visibleDiagramFrames,
+        sample.distinctVisibleDiagramSources,
+        sample.scrollDistancePx,
+        sample.refreshIntervalMs,
+      ].every(Number.isFinite)
+    ) {
+      throw new Error("diagram probe missed its visible/changing/complete SVG contract");
+    }
+  }
 }

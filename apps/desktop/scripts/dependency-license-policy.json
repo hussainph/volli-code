@@ -326,6 +326,27 @@
       "blocked": null
     },
 
+    "pele": {
+      "license": "MIT",
+      "versions": ["1.13.0"],
+      "reviewedAt": "2026-11-09",
+      "disposition": "shipped",
+      "summary": [
+        "Recorded deliberately although MIT is permissive: this is the diagram renderer the chat",
+        "bundles in place of Mermaid (VC-1157), and the entry is the record of reading its license.",
+        "The manifest declares MIT; the shipped LICENSE is the plain MIT text, copyright 2026 kepano,",
+        "plus one embedded note inside the same file: the zoom controls' reset icon is Lucide's",
+        "rotate-ccw, granted under the ISC license with Lucide's own copyright line. Both terms are",
+        "permissive, and the centralized notice carries the file verbatim, so both attributions ship.",
+        "Single-licensed, so there is no election to record."
+      ],
+      "obligations": [
+        "MIT attribution for pele and ISC attribution for the embedded Lucide icon, both carried by",
+        "the package's own LICENSE file in the centralized notice."
+      ],
+      "blocked": null
+    },
+
     "node-forge": {
       "license": "(BSD-3-Clause OR GPL-2.0)",
       "versions": ["1.4.0"],
@@ -346,20 +367,6 @@
       "summary": ["Dual-licensed; Volli elects BSD-3-Clause."],
       "obligations": ["Notices must state BSD-3-Clause as the elected license."],
       "electedLicense": "BSD-3-Clause",
-      "blocked": null
-    },
-
-    "khroma": {
-      "license": "MIT",
-      "versions": ["2.1.0"],
-      "disposition": "shipped",
-      "licenseSource": "license-file",
-      "summary": [
-        "No `license` field in its manifest, so automated scans report it as unknown. Its `license` file",
-        "is the plain MIT text, copyright 2019-present Fabio Spampinato and Andrew Maney. Arrives under",
-        "mermaid, which the desktop renderer bundles."
-      ],
-      "obligations": ["MIT attribution, from the license file rather than the manifest."],
       "blocked": null
     },
 
