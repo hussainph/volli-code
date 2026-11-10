@@ -292,7 +292,7 @@
 
     "lightningcss*": {
       "license": "MPL-2.0",
-      "versions": ["1.32.0", "1.33.0"],
+      "versions": ["1.33.0"],
       "disposition": "build-only",
       "summary": [
         "Tailwind's CSS transformer, and astro's, plus its per-platform native binary. Weak copyleft at",
