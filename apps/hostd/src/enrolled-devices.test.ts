@@ -160,12 +160,13 @@ describe("the enrolled-devices store", () => {
   });
 });
 
+function enrolled() {
+  const { privateKey, spki } = keyPair();
+  const { device } = enrollDevice(own(), { publicKey: spki, name: "Mac", via: "ssh" }, mint());
+  return { privateKey, deviceId: device.deviceId };
+}
+
 describe("the enrolled-device verifier", () => {
-  function enrolled() {
-    const { privateKey, spki } = keyPair();
-    const { device } = enrollDevice(own(), { publicKey: spki, name: "Mac", via: "ssh" }, mint());
-    return { privateKey, deviceId: device.deviceId };
-  }
   let clock = NOW_S * 1000;
   const verifier = (max?: number) =>
     createEnrolledDeviceVerifier({

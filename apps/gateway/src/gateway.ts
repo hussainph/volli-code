@@ -78,6 +78,23 @@ class Refusal {
   }
 }
 
+async function assertNotRevoked(
+  env: GatewayEnv,
+  claims: GatewayGrantClaims,
+  route: GatewayGrantRoute,
+) {
+  if (!env.REVOCATIONS) return;
+  const [grant, connection, keyVersion] = await Promise.all(
+    [`grant:${claims.jti}`, `conn:${route.conn}`, `conn:${route.conn}:kv:${route.kv}`].map((key) =>
+      env.REVOCATIONS!.get(key),
+    ),
+  );
+  if (grant !== null || connection !== null) throw new Refusal("volli_grant_revoked");
+  // A retired key version is a rotation, not a revocation: a fresh grant
+  // carries the current version.
+  if (keyVersion !== null) throw new Refusal("volli_grant_stale");
+}
+
 /** Builds the Worker's handlers. The deployed Worker passes the global fetch and clock. */
 export function createGateway(deps: GatewayDeps): Gateway {
   // Isolate-lifetime caches, keyed by the configuration they were built from.
@@ -121,23 +138,6 @@ export function createGateway(deps: GatewayDeps): Gateway {
     });
     if (!verification.ok) throw new Refusal(verification.code);
     return verification.claims;
-  }
-
-  async function assertNotRevoked(
-    env: GatewayEnv,
-    claims: GatewayGrantClaims,
-    route: GatewayGrantRoute,
-  ) {
-    if (!env.REVOCATIONS) return;
-    const [grant, connection, keyVersion] = await Promise.all(
-      [`grant:${claims.jti}`, `conn:${route.conn}`, `conn:${route.conn}:kv:${route.kv}`].map(
-        (key) => env.REVOCATIONS!.get(key),
-      ),
-    );
-    if (grant !== null || connection !== null) throw new Refusal("volli_grant_revoked");
-    // A retired key version is a rotation, not a revocation: a fresh grant
-    // carries the current version.
-    if (keyVersion !== null) throw new Refusal("volli_grant_stale");
   }
 
   async function relay(request: Request, env: GatewayEnv, ctx: WaitUntil): Promise<Response> {

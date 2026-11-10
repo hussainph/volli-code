@@ -118,9 +118,10 @@ function encodeFeedCursor(cursor: FeedCursor): string {
   return JSON.stringify({ v: CURSOR_VERSION, at: cursor.at, b: cursor.bounds, d: cursor.done });
 }
 
+const invalid = () => feedError("invalid_cursor", "That page cursor is not valid here.");
+
 /** A cursor this feed minted, or `invalid_cursor`. */
 function decodeFeedCursor(text: string): FeedCursor {
-  const invalid = () => feedError("invalid_cursor", "That page cursor is not valid here.");
   let raw: unknown;
   try {
     raw = JSON.parse(text);

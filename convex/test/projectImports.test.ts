@@ -235,28 +235,28 @@ describe("accumulators", () => {
   });
 });
 
+async function partlyImported(mutate: (records: Records) => void) {
+  const world = await importWorld();
+  await begin(world);
+  const sent = moveRecords();
+  mutate(sent);
+  await importAll(world.alice.as, world.moveId, sent);
+  return world;
+}
+
+async function expectRefused(world: ImportWorld, streams: unknown) {
+  await expect(commit(world)).rejects.toThrow(
+    expect.objectContaining({
+      data: expect.objectContaining({ code: "verification_failed", streams }),
+    }),
+  );
+  // Still hidden, still importing.
+  await expect(getProject(world)).rejects.toThrow(code("not_found"));
+  const status = await world.alice.as.query(api.projectImports.status, { moveId: world.moveId });
+  expect(status.status).toBe("importing");
+}
+
 describe("commit refuses on any mismatch", () => {
-  async function partlyImported(mutate: (records: Records) => void) {
-    const world = await importWorld();
-    await begin(world);
-    const sent = moveRecords();
-    mutate(sent);
-    await importAll(world.alice.as, world.moveId, sent);
-    return world;
-  }
-
-  async function expectRefused(world: ImportWorld, streams: unknown) {
-    await expect(commit(world)).rejects.toThrow(
-      expect.objectContaining({
-        data: expect.objectContaining({ code: "verification_failed", streams }),
-      }),
-    );
-    // Still hidden, still importing.
-    await expect(getProject(world)).rejects.toThrow(code("not_found"));
-    const status = await world.alice.as.query(api.projectImports.status, { moveId: world.moveId });
-    expect(status.status).toBe("importing");
-  }
-
   test("a row that never arrived", async () => {
     const world = await partlyImported((records) => {
       records.ticketComments = [];

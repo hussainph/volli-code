@@ -43,6 +43,18 @@ function text(value) {
   return typeof value === "string" ? value.slice(0, 1024) : undefined;
 }
 
+function cgroup() {
+  const result = {};
+  for (const name of ["memory.current", "memory.peak", "memory.max", "memory.events"]) {
+    try {
+      result[name] = readFileSync(`/sys/fs/cgroup/${name}`, "utf8").trim();
+    } catch (error) {
+      result[name] = { unavailable: error.code };
+    }
+  }
+  return result;
+}
+
 function install(root) {
   mkdirSync(root, { recursive: true });
   const output = join(root, `events-${process.pid}-${threadId}.jsonl`);
@@ -92,18 +104,6 @@ function install(root) {
       append = undefined;
       unavailable();
     }
-  }
-
-  function cgroup() {
-    const result = {};
-    for (const name of ["memory.current", "memory.peak", "memory.max", "memory.events"]) {
-      try {
-        result[name] = readFileSync(`/sys/fs/cgroup/${name}`, "utf8").trim();
-      } catch (error) {
-        result[name] = { unavailable: error.code };
-      }
-    }
-    return result;
   }
 
   record("process-start", {

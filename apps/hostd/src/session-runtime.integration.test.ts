@@ -705,6 +705,8 @@ const OPERATOR_SHELL = `const run = require("node:child_process").spawnSync(proc
 if (run.status !== 0) process.exit(run.status ?? 1);
 setInterval(() => {}, 1 << 30);`;
 
+const cliArgs = (...argv: string[]) => [cliBundle, ...argv, "--json"];
+
 /**
  * The M1 demo's journey (VC-563), with only the provider wire scripted: an
  * operator registers a git repository whose `origin` is a local bare remote,
@@ -803,7 +805,6 @@ describe("M1 headless smoke (VC-563)", () => {
       VOLLI_SOCKET: socketPath,
       VOLLI_OPERATOR_TOKEN: operator,
     };
-    const cliArgs = (...argv: string[]) => [cliBundle, ...argv, "--json"];
     const cli = async (...argv: string[]) =>
       JSON.parse(
         (await exec(process.execPath, cliArgs(...argv), { cwd: root, env: cliEnv })).stdout,

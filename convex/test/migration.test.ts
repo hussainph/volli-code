@@ -199,6 +199,17 @@ describe("record ↔ schema parity", () => {
   });
 });
 
+const audit = (workspaceId: string) => ({
+  id: newId("job"),
+  workspaceId,
+  actor: person,
+  kind: "mcp_install",
+  targetKind: "mcp_server",
+  targetId: "x",
+  at: 1,
+  detail: {},
+});
+
 describe("migration.importRows", () => {
   test("inserts, then a re-run leaves identical rows alone and reports changed ones", async () => {
     const { t, target } = await setup();
@@ -368,16 +379,6 @@ describe("migration.importRows", () => {
 
   test("audit rows belong to the target Workspace", async () => {
     const { t, target } = await setup();
-    const audit = (workspaceId: string) => ({
-      id: newId("job"),
-      workspaceId,
-      actor: person,
-      kind: "mcp_install",
-      targetKind: "mcp_server",
-      targetId: "x",
-      at: 1,
-      detail: {},
-    });
     const result = await t.mutation(internal.migration.importRows, {
       target,
       stream: "auditLog",
@@ -387,23 +388,24 @@ describe("migration.importRows", () => {
   });
 });
 
+const entry = (userId: string) => ({
+  id: newId("job"),
+  level: "personal",
+  userId,
+  workspaceId: null,
+  projectId: null,
+  kind: "decision_model",
+  name: "default",
+  state: "on",
+  definition: { modelId: "m" },
+  revision: 1,
+  updatedBy: person,
+  updatedAt: 1,
+});
+
 describe("personal settings", () => {
   test("belong to the migrating person, not to a project", async () => {
     const { t, target } = await setup();
-    const entry = (userId: string) => ({
-      id: newId("job"),
-      level: "personal",
-      userId,
-      workspaceId: null,
-      projectId: null,
-      kind: "decision_model",
-      name: "default",
-      state: "on",
-      definition: { modelId: "m" },
-      revision: 1,
-      updatedBy: person,
-      updatedAt: 1,
-    });
     const result = await t.mutation(internal.migration.importRows, {
       target,
       stream: "configEntries",

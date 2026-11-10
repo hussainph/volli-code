@@ -180,19 +180,20 @@ describe("measuring the disk", () => {
   });
 });
 
-describe("listing the runner's sealed model credentials", () => {
-  const options = () => ({
-    dataDir: join(root, "data"),
-    configDir: join(root, "config"),
-    env: {} as Record<string, string>,
-  });
-  const prepare = () => {
-    const value = options();
-    mkdirSync(value.dataDir, { recursive: true, mode: 0o700 });
-    mkdirSync(value.configDir, { recursive: true, mode: 0o700 });
-    return value;
-  };
+const options = () => ({
+  dataDir: join(root, "data"),
+  configDir: join(root, "config"),
+  env: {} as Record<string, string>,
+});
 
+const prepare = () => {
+  const value = options();
+  mkdirSync(value.dataDir, { recursive: true, mode: 0o700 });
+  mkdirSync(value.configDir, { recursive: true, mode: 0o700 });
+  return value;
+};
+
+describe("listing the runner's sealed model credentials", () => {
   it("reports an absent or empty store without creating a key or reading ambient Pi files", async () => {
     const value = options();
     expect(await readStoredCredentials(value)).toEqual({ state: "listed", providers: [] });

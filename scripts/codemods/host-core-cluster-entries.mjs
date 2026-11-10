@@ -199,20 +199,23 @@ const NODE_DIRECT = new Set([
 const DESKTOP_TEST_ENGINE = /(["'])(?:\.\.?\/)+test-session-engine\1/g;
 const TEST_ENGINE_SPECIFIER = `${NAME}/testing/session-engine`;
 
+const relativeSourcePath = (path) => relative(SRC, resolve(PKG, path)).split("\\").join("/");
+
 function oldTarget(specifier) {
   if (specifier === TEST_ENGINE_SPECIFIER) return "testing/session-engine.ts";
   const key = specifier === NAME ? "." : `.${specifier.slice(NAME.length)}`;
   // On a re-run a cluster entry (`./db` is both an old and a new name) is already migrated.
   if (RERUN && (key === "./testing" || Object.hasOwn(CLUSTERS, key.slice(2)))) return null;
-  const rel = (path) => relative(SRC, resolve(PKG, path)).split("\\").join("/");
-  if (OLD_EXPORTS[key]) return rel(OLD_EXPORTS[key]);
+  if (OLD_EXPORTS[key]) return relativeSourcePath(OLD_EXPORTS[key]);
   for (const [pattern, target] of Object.entries(OLD_EXPORTS)) {
     const star = pattern.indexOf("*");
     if (star < 0) continue;
     const prefix = pattern.slice(0, star);
     const suffix = pattern.slice(star + 1);
     if (key.startsWith(prefix) && key.endsWith(suffix)) {
-      return rel(target.replaceAll("*", key.slice(prefix.length, key.length - suffix.length)));
+      return relativeSourcePath(
+        target.replaceAll("*", key.slice(prefix.length, key.length - suffix.length)),
+      );
     }
   }
   return null;

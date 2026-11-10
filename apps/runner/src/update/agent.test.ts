@@ -210,15 +210,15 @@ describe("deciding", () => {
   });
 });
 
-describe("draining and activating", () => {
-  async function stagedAgent(h: Harness, t = target()) {
-    const a = agent(h);
-    await a.onTarget(t);
-    answer({ staged: t.targetVersion });
-    await a.tick();
-    return a;
-  }
+async function stagedAgent(h: Harness, t = target()) {
+  const a = agent(h);
+  await a.onTarget(t);
+  answer({ staged: t.targetVersion });
+  await a.tick();
+  return a;
+}
 
+describe("draining and activating", () => {
   it("drains once staged and activates after an idle minute", async () => {
     const h = harness();
     h.inFlight = 1;
@@ -546,37 +546,37 @@ function release(dir: string, version: string): void {
   writeFileSync(join(dir, "MANIFEST.json"), JSON.stringify({ version }));
 }
 
+function publish(documents: Map<string, string>, version: string): void {
+  const base = `${ORIGIN}v${version}/`;
+  const tarball = `tarball-${version}`;
+  documents.set(`${base}${tarballName(version, "x64")}`, tarball);
+  documents.set(
+    `${base}${MANIFEST_ASSET}`,
+    JSON.stringify({
+      schemaVersion: 1,
+      version,
+      releaseTag: `v${version}`,
+      minRunnerVersion: "0.3.0",
+      minGlibc: "2.31",
+      targets: [
+        {
+          platform: "linux",
+          arch: "x64",
+          url: `${base}${tarballName(version, "x64")}`,
+          size: tarball.length,
+          sha256: sha(tarball),
+        },
+      ],
+      provenance: { bundleUrl: `${base}bundle.json` },
+    }),
+  );
+}
+
 /**
  * The whole loop: the daemon's agent writes requests, "systemd" runs the
  * applier on each, and "a restart" is a new agent on the new `current`.
  */
 describe("updating end to end", () => {
-  function publish(documents: Map<string, string>, version: string): void {
-    const base = `${ORIGIN}v${version}/`;
-    const tarball = `tarball-${version}`;
-    documents.set(`${base}${tarballName(version, "x64")}`, tarball);
-    documents.set(
-      `${base}${MANIFEST_ASSET}`,
-      JSON.stringify({
-        schemaVersion: 1,
-        version,
-        releaseTag: `v${version}`,
-        minRunnerVersion: "0.3.0",
-        minGlibc: "2.31",
-        targets: [
-          {
-            platform: "linux",
-            arch: "x64",
-            url: `${base}${tarballName(version, "x64")}`,
-            size: tarball.length,
-            sha256: sha(tarball),
-          },
-        ],
-        provenance: { bundleUrl: `${base}bundle.json` },
-      }),
-    );
-  }
-
   it("goes v → v+1, then rolls a broken v+2 back to v+1 and reports it", async () => {
     const documents = new Map<string, string>();
     publish(documents, "0.4.0");

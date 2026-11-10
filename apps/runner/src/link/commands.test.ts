@@ -237,11 +237,11 @@ describe("volli-runner link with a device code", () => {
   });
 });
 
-describe("volli-runner unlink", () => {
-  async function linked(): Promise<void> {
-    await runLink(input({ token: "vrt_abc" }), testContext({ root, routes: { link: granted } }));
-  }
+async function linked(): Promise<void> {
+  await runLink(input({ token: "vrt_abc" }), testContext({ root, routes: { link: granted } }));
+}
 
+describe("volli-runner unlink", () => {
   it("forgets the link, keeping its key", async () => {
     await linked();
     const context = testContext({ root });

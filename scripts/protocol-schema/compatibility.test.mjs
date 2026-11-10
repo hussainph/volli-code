@@ -70,8 +70,9 @@ test("output enum/const growth requires scalar reader tolerance in both versions
   }
 });
 
+const mark = (schema) => ({ ...schema, [enumMarker]: true });
+
 test("scalar tolerance never permits member removal or type growth, and annotations alone are additive", () => {
-  const mark = (schema) => ({ ...schema, [enumMarker]: true });
   for (const [before, after] of [
     [{ enum: ["a", "b"] }, { enum: ["a"] }],
     [{ enum: ["a", "b"] }, { const: "a" }],

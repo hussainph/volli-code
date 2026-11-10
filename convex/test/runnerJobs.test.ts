@@ -1178,20 +1178,20 @@ function message(id: string): string {
   });
 }
 
-describe("inbox helpers for in-place edits and settled commands", () => {
-  function followUp(w: World, sessionId: string, commandId: string): JobDraft {
-    return {
-      runnerId: w.runnerId,
-      kind: "session.followUp",
-      projectId: w.projectId,
-      sessionId,
-      commandId,
-      payload: { format: SESSION_FOLLOW_UP_FORMAT, intent: message("m-1") },
-      createdBy: person(w.ownerUserId),
-      onBehalfOf: w.ownerUserId,
-    } as JobDraft;
-  }
+function followUp(w: World, sessionId: string, commandId: string): JobDraft {
+  return {
+    runnerId: w.runnerId,
+    kind: "session.followUp",
+    projectId: w.projectId,
+    sessionId,
+    commandId,
+    payload: { format: SESSION_FOLLOW_UP_FORMAT, intent: message("m-1") },
+    createdBy: person(w.ownerUserId),
+    onBehalfOf: w.ownerUserId,
+  } as JobDraft;
+}
 
+describe("inbox helpers for in-place edits and settled commands", () => {
   test("patchQueuedJob rewrites a payload no runner has seen, and nothing after", async () => {
     const w = await world();
     const sessionId = newId("session");

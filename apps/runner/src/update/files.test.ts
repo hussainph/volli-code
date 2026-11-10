@@ -65,30 +65,30 @@ describe("reading a small file", () => {
   });
 });
 
-describe("the update request", () => {
-  const path = () => join(root, "data", "update", "request.json");
+const requestPath = () => join(root, "data", "update", "request.json");
 
+describe("the update request", () => {
   it("round-trips both phases with a fresh id each time", () => {
-    const stage = writeUpdateRequest(path(), {
+    const stage = writeUpdateRequest(requestPath(), {
       phase: "stage",
       version: "0.4.0",
       manifestUrl: "https://example.com/m.json",
       urgent: false,
     });
-    expect(statSync(path()).mode & 0o777).toBe(0o600);
+    expect(statSync(requestPath()).mode & 0o777).toBe(0o600);
     expect(statSync(join(root, "data", "update")).mode & 0o777).toBe(0o700);
-    expect(readUpdateRequest(path())).toEqual(stage);
-    const activate = writeUpdateRequest(path(), {
+    expect(readUpdateRequest(requestPath())).toEqual(stage);
+    const activate = writeUpdateRequest(requestPath(), {
       phase: "activate",
       version: "0.4.0",
       urgent: true,
     });
     expect(activate.id).not.toBe(stage.id);
-    expect(readUpdateRequest(path())).toEqual(activate);
+    expect(readUpdateRequest(requestPath())).toEqual(activate);
   });
 
   it("is null when absent", () => {
-    expect(readUpdateRequest(path())).toBeNull();
+    expect(readUpdateRequest(requestPath())).toBeNull();
   });
 
   it("refuses anything that is not exactly a request", () => {
@@ -116,8 +116,8 @@ describe("the update request", () => {
     ];
     mkdirSync(join(root, "data", "update"), { recursive: true });
     for (const value of cases) {
-      writeFileSync(path(), JSON.stringify(value));
-      expect(() => readUpdateRequest(path())).toThrow();
+      writeFileSync(requestPath(), JSON.stringify(value));
+      expect(() => readUpdateRequest(requestPath())).toThrow();
     }
   });
 });
@@ -131,11 +131,11 @@ const outcome = (id: string): UpdateOutcome => ({
   at: "2026-11-01T00:00:00.000Z",
 });
 
-describe("the updater state", () => {
-  const path = () => join(root, "update-state.json");
+const updaterStatePath = () => join(root, "update-state.json");
 
+describe("the updater state", () => {
   it("is empty until written, then durable and world-readable", () => {
-    expect(readUpdaterState(path())).toEqual(EMPTY_STATE);
+    expect(readUpdaterState(updaterStatePath())).toEqual(EMPTY_STATE);
     const state = {
       ...EMPTY_STATE,
       staged: { version: "0.4.0", name: "0.4.0-abc" },
@@ -148,15 +148,19 @@ describe("the updater state", () => {
       },
       outcomes: [outcome("a")],
     };
-    writeUpdaterState(path(), state);
-    expect(statSync(path()).mode & 0o777).toBe(0o644);
-    expect(readUpdaterState(path())).toEqual(state);
+    writeUpdaterState(updaterStatePath(), state);
+    expect(statSync(updaterStatePath()).mode & 0o777).toBe(0o644);
+    expect(readUpdaterState(updaterStatePath())).toEqual(state);
   });
 
   it("keeps bounded histories", () => {
     const ids = Array.from({ length: STATE_HISTORY + 5 }, (_, index) => `id-${index}`);
-    writeUpdaterState(path(), { ...EMPTY_STATE, handled: ids, outcomes: ids.map(outcome) });
-    const read = readUpdaterState(path());
+    writeUpdaterState(updaterStatePath(), {
+      ...EMPTY_STATE,
+      handled: ids,
+      outcomes: ids.map(outcome),
+    });
+    const read = readUpdaterState(updaterStatePath());
     expect(read.handled).toEqual(ids.slice(-STATE_HISTORY));
     expect(read.outcomes.map((entry) => entry.id)).toEqual(ids.slice(-STATE_HISTORY));
   });
@@ -180,36 +184,39 @@ describe("the updater state", () => {
       { ...EMPTY_STATE, outcomes: [{ ...outcome("a"), at: 1 }] },
     ];
     for (const value of cases) {
-      writeFileSync(path(), JSON.stringify(value));
-      expect(() => readUpdaterState(path())).toThrow();
+      writeFileSync(updaterStatePath(), JSON.stringify(value));
+      expect(() => readUpdaterState(updaterStatePath())).toThrow();
     }
-    writeFileSync(path(), JSON.stringify({ ...EMPTY_STATE, previous: "0.3.0", staged: null }));
-    expect(readUpdaterState(path()).previous).toBe("0.3.0");
     writeFileSync(
-      path(),
+      updaterStatePath(),
+      JSON.stringify({ ...EMPTY_STATE, previous: "0.3.0", staged: null }),
+    );
+    expect(readUpdaterState(updaterStatePath()).previous).toBe("0.3.0");
+    writeFileSync(
+      updaterStatePath(),
       JSON.stringify({
         ...EMPTY_STATE,
         outcomes: [{ ...outcome("a"), fromVersion: null, reason: "x" }],
       }),
     );
-    expect(readUpdaterState(path()).outcomes[0]?.reason).toBe("x");
+    expect(readUpdaterState(updaterStatePath()).outcomes[0]?.reason).toBe("x");
   });
 });
 
-describe("update --now", () => {
-  const path = () => join(root, "update-now.json");
+const nowRequestPath = () => join(root, "update-now.json");
 
+describe("update --now", () => {
   it("round-trips, world-readable", () => {
-    expect(readNowRequest(path())).toBeNull();
-    writeNowRequest(path(), "0.4.0", new Date(0));
-    expect(statSync(path()).mode & 0o777).toBe(0o644);
-    expect(readNowRequest(path())).toEqual({
+    expect(readNowRequest(nowRequestPath())).toBeNull();
+    writeNowRequest(nowRequestPath(), "0.4.0", new Date(0));
+    expect(statSync(nowRequestPath()).mode & 0o777).toBe(0o644);
+    expect(readNowRequest(nowRequestPath())).toEqual({
       v: 1,
       version: "0.4.0",
       at: "1970-01-01T00:00:00.000Z",
     });
-    writeNowRequest(path(), null, new Date(0));
-    expect(readNowRequest(path())?.version).toBeNull();
+    writeNowRequest(nowRequestPath(), null, new Date(0));
+    expect(readNowRequest(nowRequestPath())?.version).toBeNull();
   });
 
   it("refuses a damaged one", () => {
@@ -219,34 +226,37 @@ describe("update --now", () => {
       { v: 1, version: "x", at: "x" },
       { v: 1, version: null, at: 1 },
     ]) {
-      writeFileSync(path(), JSON.stringify(value));
-      expect(() => readNowRequest(path())).toThrow();
+      writeFileSync(nowRequestPath(), JSON.stringify(value));
+      expect(() => readNowRequest(nowRequestPath())).toThrow();
     }
   });
 });
 
-describe("the reported set", () => {
-  const path = () => join(root, "data", "update", "reported.json");
+const reportedPath = () => join(root, "data", "update", "reported.json");
 
+describe("the reported set", () => {
   it("round-trips, bounded, and reads anything unreadable as empty", () => {
-    expect(readReported(path())).toEqual(new Set());
+    expect(readReported(reportedPath())).toEqual(new Set());
     const ids = Array.from({ length: STATE_HISTORY * 2 + 3 }, (_, index) => `id-${index}`);
-    writeReported(path(), ids);
-    expect([...readReported(path())]).toEqual(ids.slice(-STATE_HISTORY * 2));
-    writeFileSync(path(), "{");
-    expect(readReported(path())).toEqual(new Set());
-    writeFileSync(path(), JSON.stringify({ not: "a list" }));
-    expect(readReported(path())).toEqual(new Set());
-    expect(readFileSync(path(), "utf8")).toContain("not");
+    writeReported(reportedPath(), ids);
+    expect([...readReported(reportedPath())]).toEqual(ids.slice(-STATE_HISTORY * 2));
+    writeFileSync(reportedPath(), "{");
+    expect(readReported(reportedPath())).toEqual(new Set());
+    writeFileSync(reportedPath(), JSON.stringify({ not: "a list" }));
+    expect(readReported(reportedPath())).toEqual(new Set());
+    expect(readFileSync(reportedPath(), "utf8")).toContain("not");
   });
 });
 
-describe("the daemon's status, read by the applier", () => {
-  const path = () => join(root, "runner-status.json");
+const daemonStatusPath = () => join(root, "runner-status.json");
 
+describe("the daemon's status, read by the applier", () => {
   it("reads a status and nothing else", () => {
     expect(readDaemonStatus(root)).toBeNull();
-    writeFileSync(path(), JSON.stringify({ state: "online", pid: 7, version: "0.4.0" }));
+    writeFileSync(
+      daemonStatusPath(),
+      JSON.stringify({ state: "online", pid: 7, version: "0.4.0" }),
+    );
     expect(readDaemonStatus(root)).toMatchObject({ state: "online", pid: 7 });
     for (const value of [
       "{",
@@ -255,7 +265,7 @@ describe("the daemon's status, read by the applier", () => {
       '{"state":1}',
       '{"state":"online","pid":1}',
     ]) {
-      writeFileSync(path(), value);
+      writeFileSync(daemonStatusPath(), value);
       expect(readDaemonStatus(root)).toBeNull();
     }
   });
@@ -265,7 +275,7 @@ describe("the daemon's status, read by the applier", () => {
       join(root, "elsewhere"),
       JSON.stringify({ state: "online", pid: 7, version: "0.4.0" }),
     );
-    symlinkSync(join(root, "elsewhere"), path());
+    symlinkSync(join(root, "elsewhere"), daemonStatusPath());
     expect(readDaemonStatus(root)).toBeNull();
   });
 });

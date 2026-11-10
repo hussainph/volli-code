@@ -758,25 +758,26 @@ describe("Run commands", () => {
   });
 });
 
-describe("arrivals and the completion hook", () => {
-  async function armDoing(w: World) {
-    await w.as.mutation(api.automations.arm, {
-      commandId: command(),
-      projectId: w.projectId,
-      status: "doing",
-      automationId: w.reviewId,
-      runnerId: w.runnerId,
-    });
-  }
-  async function arrive(w: World, status: "doing" | "todo" = "doing") {
-    await w.as.mutation(api.board.moveTickets, {
-      commandId: command(),
-      projectId: w.projectId,
-      ticketIds: [w.ticketId],
-      toStatus: status,
-    });
-  }
+async function armDoing(w: World) {
+  await w.as.mutation(api.automations.arm, {
+    commandId: command(),
+    projectId: w.projectId,
+    status: "doing",
+    automationId: w.reviewId,
+    runnerId: w.runnerId,
+  });
+}
 
+async function arrive(w: World, status: "doing" | "todo" = "doing") {
+  await w.as.mutation(api.board.moveTickets, {
+    commandId: command(),
+    projectId: w.projectId,
+    ticketIds: [w.ticketId],
+    toStatus: status,
+  });
+}
+
+describe("arrivals and the completion hook", () => {
   test("an armed arrival carries a Run identity; abandoned it leaves no row, started it writes one", async () => {
     const w = await world();
     await armDoing(w);
