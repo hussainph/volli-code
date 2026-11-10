@@ -70,7 +70,7 @@ function PendingRow({
   const seconds = Math.max(0, Math.ceil((row.availableAt - now) / 1000));
   const [saving, setSaving] = React.useState(false);
   const label = row.leased
-    ? "Starting…"
+    ? "Starting"
     : seconds > 0
       ? `Starts in ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`
       : waitingForRunner(row.runner.name, row.runner.status, row.runner.statusChangedAt);

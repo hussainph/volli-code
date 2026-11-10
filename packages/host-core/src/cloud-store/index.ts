@@ -37,6 +37,7 @@ import {
   type AutomationRunSessions,
 } from "./automation-jobs";
 import { createCloudRunAttention } from "./automation-attention";
+import { registerSessionStartJob, SESSION_START_JOB_CAPABILITY } from "./session-start-jobs";
 import { runGitCapturingAsync } from "../worktree/git";
 import { getTrimSettings } from "../worktree/trim-settings";
 import type { BusyWorktreeSites } from "../worktree/activity";
@@ -48,7 +49,12 @@ import {
   DEFAULT_AUTHORITY_POLICY,
   type NotificationRequest,
 } from "@volli/shared";
-import type { AutomationRunContext, JobKind, RunnerId } from "@volli/shared/cloud";
+import type {
+  AutomationRunContext,
+  JobKind,
+  RunnerId,
+  SessionStartContext,
+} from "@volli/shared/cloud";
 import { retentionTtlMs } from "../worktree/retention";
 import { createCloudReportPublisher } from "./reports";
 import { createAgentBackend, runnerTokenBefore } from "../cloud-agent/agent-backend";
@@ -90,10 +96,24 @@ export function createCloudProductStore(options: {
   prepareEnvironment?: CloudSessionLocationOptions["prepareEnvironment"];
   environmentRecipes?: () => boolean;
   /**
+   * Runner-managed clones (`managed-clone.ts`), for a runner with no folder of
+   * the person's (`volli-runner run`). Absent (the Mac) keeps "Choose the
+   * folder for <project> on this Mac".
+   */
+  managedClones?: CloudSessionLocationOptions["managedClones"];
+  /**
    * Specialized follow-up executor override; the default and notice executor
    * are composed here behind the same owner gate.
    */
   sessionJobs?: Partial<Record<"session.followUp", JobExecutor>>;
+  /**
+   * How a person signs a model provider in on this runner, as one instruction
+   * a refused start carries ("run `volli-runner login anthropic`"). Absent: a
+   * refusal names the provider and the runner only (a Mac, whose sign-in is
+   * in Settings). Receiving-task wiring: the headless runner's composition
+   * (VC-1042) passes its `volli-runner login <provider>` instruction.
+   */
+  signInHint?(providerId: string): string | null;
 }) {
   const { host, ownerUserId } = options;
   const db = host.database.db;
@@ -344,6 +364,7 @@ export function createCloudProductStore(options: {
       ...(options.environmentRecipes === undefined
         ? {}
         : { environmentRecipes: options.environmentRecipes }),
+      ...(options.managedClones === undefined ? {} : { managedClones: options.managedClones }),
       prepareEnvironment: async (input) => {
         if (prepareEnvironment === undefined) {
           if (input.outcome.setupPending)
@@ -475,11 +496,23 @@ export function createCloudProductStore(options: {
       active?.packing.refresh();
     },
     /**
+     * A move took these Sessions' drain cursors back (Go back to local, a roll
+     * back after the commit): the drain forgets their streams, so nothing
+     * still in flight writes a cursor back and hides them from the local copy.
+     */
+    forgetDrainCursors(sessionIds: readonly string[]): void {
+      drain.forget(sessionIds);
+    },
+    /**
      * The job kinds beyond Sessions and Working copies this store executes,
      * for the runner's capability report (`runners.capabilities.tools`): the
-     * backend queues `automation.run` only for a runner that names it.
+     * backend queues `automation.run` only for a runner that names it, and
+     * refuses a `session.start` for a runner whose report leaves it out.
      */
-    jobCapabilities: [AUTOMATION_RUN_CAPABILITY] as readonly JobKind[],
+    jobCapabilities: [
+      AUTOMATION_RUN_CAPABILITY,
+      SESSION_START_JOB_CAPABILITY,
+    ] as readonly JobKind[],
     /**
      * The recovered Session services a cloud Automation Run starts through,
      * and this Mac's notification delivery for an unattended Run's alert.
@@ -625,6 +658,24 @@ export function createCloudProductStore(options: {
           })) as AutomationRunContext;
         },
         onSessionBorn: (born) => runAttention.track(born),
+      });
+      // A person's Session started here from any of their devices. Not behind
+      // the owner gate: its Session is born here, so this runner holds no
+      // claim on it yet. It starts through the same recovered Session
+      // services as an Automation Run.
+      registerSessionStartJob(inbox, {
+        runnerId: parts.runnerId as RunnerId,
+        engine: owner.engine,
+        sessions: boundAutomationSessions,
+        artifacts: () => artifacts,
+        startContext: async (request) => {
+          if (parts.link.query === undefined)
+            throw new Error("Runner context reads are unavailable.");
+          return (await parts.link.query("sessionStarts:startContext", {
+            ...request,
+          })) as SessionStartContext;
+        },
+        ...(options.signInHint === undefined ? {} : { signInHint: options.signInHint }),
       });
       // Optional specialized executors still cross the same owner gate.
       for (const [kind, executor] of Object.entries(options.sessionJobs ?? {}))

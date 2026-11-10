@@ -3,7 +3,7 @@
  * or a helper another Session started.
  *
  * A presentation label, and here rather than in `@volli/shared` for that
- * reason: CONTEXT.md's Session Semantic Facts are identity, lifecycle, control
+ * reason: Session Semantic Facts (CONTEXT.md#session-semantic-fact) are identity, lifecycle, control
  * and historical meaning, and explicitly not "presentation labels, icons,
  * grouping, and layout". Every Volli client naming the same Session must reach
  * the same words, so the rule is written once in the Session Presentation

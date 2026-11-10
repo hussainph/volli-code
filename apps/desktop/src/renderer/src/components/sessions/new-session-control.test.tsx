@@ -43,28 +43,21 @@ function labelOf(item: React.ReactElement<ItemProps>): string {
 }
 
 describe("NewSessionControl", () => {
-  it("puts chat on the press and the other kinds behind a separate caret half", () => {
+  it("puts every kind behind one anchored plus, not a split button", () => {
     const html = renderToStaticMarkup(
       <NewSessionControl projectId="p1" disabled={false} onNewChat={noop} onNewTerminal={noop} />,
     );
-
-    // Two buttons, not one: the label half commits, the caret half opens.
-    expect(html.match(/<button/g)).toHaveLength(2);
-    expect(buttonTag(html, "New chat")).not.toContain('aria-haspopup="menu"');
-    expect(buttonTag(html, "Other things to open")).toContain('aria-haspopup="menu"');
-    // The word is the target as much as the label — a terminal is two presses
-    // and never has a peer control beside the default.
-    expect(html).toContain("Chat");
-    expect(html).not.toContain('aria-label="New terminal"');
+    expect(html.match(/<button/g)).toHaveLength(1);
+    expect(buttonTag(html, "Open a tab")).toContain('aria-haspopup="menu"');
+    expect(html).not.toContain('aria-label="New chat"');
+    expect(html).not.toContain('data-slot="button-group"');
   });
 
-  it("takes both halves out of reach while a Session of either kind is booting", () => {
+  it("takes the chooser out of reach while a Session is booting", () => {
     const html = renderToStaticMarkup(
       <NewSessionControl projectId="p1" disabled onNewChat={noop} onNewTerminal={noop} />,
     );
-
-    expect(buttonTag(html, "New chat")).toContain('disabled=""');
-    expect(buttonTag(html, "Other things to open")).toContain('disabled=""');
+    expect(buttonTag(html, "Open a tab")).toContain('disabled=""');
   });
 
   it("gathers chat, terminal and browser into the one menu, and drops skills", () => {
@@ -104,10 +97,8 @@ describe("NewSessionControl", () => {
       />,
     );
 
-    // Still exactly the two halves of one pill. Offering a Browser Tab must not
-    // grow a third target in the strip — that standalone button is the shape
-    // this menu replaced.
-    expect(html.match(/<button/g)).toHaveLength(2);
+    // Offering Browser never adds a second target beside the chooser.
+    expect(html.match(/<button/g)).toHaveLength(1);
     expect(html).not.toContain('aria-label="New Browser Tab"');
   });
 
@@ -150,17 +141,9 @@ describe("NewSessionControl", () => {
       />,
     );
 
-    // ⌘T is CONTEXT-SENSITIVE (lib/new-session-shortcut.ts): it resolves against
-    // the surface in front, so inside a ticket it mints a ticket Session and on
-    // Home's strip a ticketless one. A control mounted ON one of those
-    // surfaces starts exactly what the chord starts, and says so — which is why
-    // both the ticket strip and Home's strip pass `shortcuts`. (The menus
-    // carry the glyphs too, but they are portalled and closed at rest, so the
-    // press half's `aria-keyshortcuts` is what static markup can be asked about.)
-    expect(onTheSurface).toContain('aria-keyshortcuts="Meta+T"');
-    // The flag still has an off position, and that is the whole rule: a menu may
-    // only advertise a key that does what the item does. A mount that ever
-    // appears where the chord resolves to some OTHER owner must stay quiet.
+    // The plus opens a menu; it must not claim the direct chat shortcut.
+    // The menu rows retain that announcement in their existing scoped calls.
+    expect(onTheSurface).not.toContain("aria-keyshortcuts");
     expect(quiet).not.toContain("aria-keyshortcuts");
   });
 
@@ -184,9 +167,10 @@ describe("NewSessionControl", () => {
       />,
     );
 
-    expect(strip).toContain(">Chat<");
+    expect(strip).toContain('aria-label="Open a tab"');
     expect(strip).toContain('data-variant="ghost"');
-    expect(empty).toContain(">New chat<");
+    expect(strip).not.toContain("active:scale-");
+    expect(empty).toContain('aria-label="Open a tab"');
     expect(empty).toContain('data-variant="default"');
   });
 });

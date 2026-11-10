@@ -5,12 +5,15 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { busyLoadName } from "./background-load.mjs";
+import { stormSessionIds } from "./interaction-arms.mjs";
 import {
   addNullableMeasurements,
   aggregateInteraction,
+  attachStallSignals,
   backgroundLoadGap,
   INTERACTION_IDS,
   markdown,
+  measurementFor,
   parseArgs,
   runBandMarginMs,
   summarize,
@@ -425,6 +428,32 @@ describe("whole-report validation and Markdown", () => {
     expect(validateBenchmarkReport(report)).toBe(report);
   });
 
+  /**
+   * VC-1080 — the keep-alive arms report the switch as Event Timing saw it,
+   * beside the harness latency that also holds Playwright's own wait.
+   */
+  it("reports input-to-paint for the chat tab switch and board return arms", () => {
+    const report = benchmarkReport();
+    report.config.streamOnly = false;
+    report.config.interactions = ["chat_tab_switch", "board_return"];
+    report.arms[0].interactions = [
+      aggregateInteraction("chat_tab_switch", "Switch between two open chat tabs", [
+        streamSample({ latencyMs: 90, inputToPaintMs: 40 }),
+        streamSample({ latencyMs: 110, inputToPaintMs: 56 }),
+      ]),
+      aggregateInteraction("board_return", "Return to board from a Ticket view", [
+        streamSample({ latencyMs: 80, inputToPaintMs: 16 }),
+        streamSample({ latencyMs: 95, inputToPaintMs: 24 }),
+      ]),
+    ];
+    report.arms[0].chatWindow = null;
+
+    expect(validateBenchmarkReport(report)).toBe(report);
+    const output = markdown(report);
+    expect(output).toContain("| idle | ↳ input to next paint | 40 ms | 56 ms |");
+    expect(output).toContain("| idle | ↳ input to next paint | 16 ms | 24 ms |");
+  });
+
   it("accepts zero latency samples and renders the report contract", () => {
     const report = benchmarkReport();
     report.arms[0].interactions[0] = aggregateInteraction(
@@ -690,5 +719,172 @@ describe("interaction selection", () => {
 
   it("refuses an interaction it cannot measure rather than reporting an empty arm", () => {
     expect(() => parseArgs(["--interactions", "new_chat,typo"])).toThrow(/typo/);
+  });
+});
+
+describe("stall signals and the VC-1093 arms", () => {
+  it("measures the audit's missing interactions by default and by name", () => {
+    expect(INTERACTION_IDS).toEqual(
+      expect.arrayContaining(["workspace_switch", "fleet_storm", "draft_typing"]),
+    );
+    expect(parseArgs(["--interactions", "fleet_storm,draft_typing"]).interactions).toEqual([
+      "fleet_storm",
+      "draft_typing",
+    ]);
+  });
+
+  it("parses the signal and storm settings, defaulting to production's threshold and VC-1078's storm", () => {
+    expect(parseArgs([])).toMatchObject({
+      mainStallMs: 200,
+      stormSessions: 16,
+      stormIntervalMs: 60,
+      stormDurationMs: 4_000,
+    });
+    expect(
+      parseArgs([
+        "--main-stall-ms",
+        "50",
+        "--storm-sessions",
+        "256",
+        "--storm-interval-ms",
+        "30",
+        "--storm-duration-ms",
+        "2000",
+      ]),
+    ).toMatchObject({
+      mainStallMs: 50,
+      stormSessions: 256,
+      stormIntervalMs: 30,
+      stormDurationMs: 2_000,
+    });
+    for (const flag of [
+      "--main-stall-ms",
+      "--storm-sessions",
+      "--storm-interval-ms",
+      "--storm-duration-ms",
+    ]) {
+      expect(() => parseArgs([flag, "0"])).toThrow(flag);
+    }
+  });
+
+  it("drives a storm over Sessions spread across the fixture, never more than it has", () => {
+    const manifest = { counts: { sessions: 5_034 } };
+    const { storm } = measurementFor(parseArgs(["--storm-sessions", "4"]), manifest);
+    expect(storm.sessionIds).toEqual([
+      "perf-session-0001",
+      "perf-session-1259",
+      "perf-session-2518",
+      "perf-session-3776",
+    ]);
+    expect(stormSessionIds(3, 16)).toEqual([
+      "perf-session-0001",
+      "perf-session-0002",
+      "perf-session-0003",
+    ]);
+    expect(() => stormSessionIds(10, 0)).toThrow();
+  });
+
+  it("puts each window's main stalls on its sample and keeps the repetition's signals", () => {
+    const at = Date.parse("2026-11-02T10:00:00.000Z");
+    const outcome = {
+      samples: {
+        cold_launch: { latencyMs: 900 },
+        fleet_storm: { latencyMs: 4_100 },
+        board_render: null,
+      },
+    };
+    const windows = [
+      { id: "cold_launch", startMs: at, endMs: at + 900 },
+      { id: "fleet_storm", startMs: at + 2_000, endMs: at + 6_100 },
+    ];
+    const parsed = {
+      main: [
+        {
+          at: at + 500,
+          durationMs: 300,
+          attribution: "unattributed",
+          door: "unattributed",
+          operation: "unattributed",
+        },
+        {
+          at: at + 3_000,
+          durationMs: 250,
+          attribution: "door",
+          door: "ipc",
+          operation: "volli:session-read-set",
+        },
+        {
+          at: at + 3_500,
+          durationMs: 210,
+          attribution: "door",
+          door: "ipc",
+          operation: "volli:session-read-set",
+        },
+      ],
+      renderer: [],
+      rendererDropped: 0,
+      unreadableLines: 0,
+      logFiles: 1,
+    };
+    attachStallSignals(outcome, parsed, windows, "closed");
+    expect(outcome.samples.cold_launch).toMatchObject({
+      mainStallCount: 1,
+      mainStallMs: 300,
+      mainStallMaxMs: 300,
+    });
+    expect(outcome.samples.fleet_storm).toMatchObject({
+      mainStallCount: 2,
+      mainStallMs: 460,
+      mainStallMaxMs: 250,
+    });
+    expect(outcome.samples.board_render).toBeNull();
+    expect(outcome.signals).toMatchObject({ closeKind: "closed", windows });
+    const aggregated = aggregateInteraction("fleet_storm", "Fleet activity storm", [
+      outcome.samples.fleet_storm,
+      {
+        latencyMs: 4_000,
+        mainStallCount: 0,
+        mainStallMs: 0,
+        mainStallMaxMs: 0,
+        keyToPaintMs: [8, 30],
+      },
+    ]);
+    expect(aggregated.summary).toMatchObject({
+      mainStallMs: { n: 2, p50: 0, p95: 460 },
+      keyToPaintMs: { n: 2, p95: 30 },
+    });
+  });
+
+  it("carries arm signals and the signal settings into the compact summary and the Markdown", () => {
+    const report = benchmarkReport();
+    report.config.mainStallThresholdMs = 200;
+    report.config.storm = { sessions: 16, intervalMs: 60, durationMs: 4_000 };
+    report.config.interactions = ["stream_scroll"];
+    report.arms[0].signals = {
+      repetitions: 2,
+      mainStallThresholdMs: 200,
+      rendererStallThresholdMs: 100,
+      main: {
+        count: 1,
+        totalMs: 300,
+        maxMs: 300,
+        countPerRepetition: summarize([1, 0]),
+        msPerRepetition: summarize([300, 0]),
+        unattributedShare: 1,
+        topOperations: [
+          { door: "unattributed", operation: "unattributed", count: 1, totalMs: 300, maxMs: 300 },
+        ],
+        byInteraction: { cold_launch: { count: 1, totalMs: 300, maxMs: 300 } },
+      },
+      renderer: { count: 0, totalMs: 0, maxMs: 0, dropped: 0, byLabel: [], byOperation: [] },
+    };
+    const summary = summaryReport(report);
+    expect(summary.signalConfig).toEqual({ mainStallThresholdMs: 200, storm: report.config.storm });
+    expect(summary.arms[0].signals.main.count).toBe(1);
+    expect(JSON.stringify(summary)).not.toMatch(/samples|frameTimesMs|longTasksMs/);
+    const text = markdown(report);
+    expect(text).toContain("## Stall signals");
+    expect(text).toContain("| idle | Cold launch to interactive | 1 | 300 ms | 300 ms |");
+    expect(text).toContain("threshold 200 ms");
   });
 });

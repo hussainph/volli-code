@@ -8,6 +8,11 @@ import {
 } from "@volli/shared";
 
 import {
+  deleteGlobalMcpServer,
+  getGlobalMcpServer,
+  listGlobalMcpServers,
+  putGlobalMcpServer,
+  globalMcpServerIds,
   deleteMcpServer,
   getMcpServer,
   listMcpServers,
@@ -16,7 +21,7 @@ import {
   selectedMcpToolDefinitions,
 } from "./mcp-servers-repo";
 import { insertProject } from "./projects-repo";
-import { openTestDb, testProject, type TestDb } from "./test-helpers";
+import { openRawDb, openTestDb, testProject, type TestDb } from "./test-helpers";
 
 let ctx: TestDb;
 
@@ -213,5 +218,257 @@ describe("MCP server provenance (VC-380)", () => {
       version: "1.0.0",
       digest: null,
     });
+  });
+});
+
+describe("machine-wide MCP fold-in", () => {
+  function otherProject() {
+    insertProject(ctx.db, testProject({ id: "p2", name: "Other project", path: "/repo/other" }));
+  }
+
+  it("unions project rows, deduplicates identical definitions and retains conflicting names", () => {
+    otherProject();
+    putMcpServer(ctx.db, record());
+    putMcpServer(
+      ctx.db,
+      record({
+        id: "same",
+        projectId: "p2",
+        catalog: record({ id: "same" }).catalog,
+        createdAt: 20,
+      }),
+    );
+    putMcpServer(
+      ctx.db,
+      record({
+        id: "different",
+        projectId: "p2",
+        transport: { type: "stdio", command: "uvx", args: ["other"] },
+        catalog: [],
+        createdAt: 30,
+      }),
+    );
+    expect(listGlobalMcpServers(ctx.db).map(({ id, name }) => ({ id, name }))).toEqual([
+      { id: "server-1", name: "Fixture" },
+      { id: "different", name: "Fixture (Other project)" },
+    ]);
+    expect(globalMcpServerIds(ctx.db, "server-1")).toEqual(["server-1", "same"]);
+    // The old real row codec still reads every original configuration and id.
+    expect(listMcpServers(ctx.db, "p2").map(({ name }) => name)).toEqual(["Fixture", "Fixture"]);
+    expect(getGlobalMcpServer(ctx.db, "same")).toEqual(
+      record({
+        id: "same",
+        projectId: "p2",
+        catalog: record({ id: "same" }).catalog,
+        createdAt: 20,
+      }),
+    );
+    // A second process/handle reads the durable fold, not an in-memory cache.
+    const reopened = openRawDb(ctx.dbPath);
+    try {
+      expect(listGlobalMcpServers(reopened)).toEqual(listGlobalMcpServers(ctx.db));
+    } finally {
+      reopened.close();
+    }
+  });
+
+  it("deduplicates a conflicting definition even after giving it a distinguishing name", () => {
+    otherProject();
+    putMcpServer(ctx.db, record({ catalog: [] }));
+    const transport = { type: "streamable-http" as const, url: "https://tools.example/mcp" };
+    putMcpServer(
+      ctx.db,
+      record({ id: "remote", projectId: "p2", transport, catalog: [], createdAt: 20 }),
+    );
+    listGlobalMcpServers(ctx.db);
+    putMcpServer(
+      ctx.db,
+      record({ id: "remote-copy", projectId: "p1", transport, catalog: [], createdAt: 30 }),
+    );
+    expect(listGlobalMcpServers(ctx.db)).toHaveLength(2);
+    expect(globalMcpServerIds(ctx.db, "remote")).toEqual(["remote", "remote-copy"]);
+  });
+
+  it("unions enabled tool selections without changing either legacy catalog", () => {
+    otherProject();
+    putMcpServer(
+      ctx.db,
+      record({
+        enabled: false,
+        catalog: record().catalog.map((tool) => Object.assign({}, tool, { enabled: false })),
+      }),
+    );
+    putMcpServer(
+      ctx.db,
+      record({
+        id: "same",
+        projectId: "p2",
+        catalog: record({ id: "same" }).catalog,
+        createdAt: 20,
+      }),
+    );
+    const [server] = listGlobalMcpServers(ctx.db);
+    expect(server?.enabled).toBe(true);
+    expect(server?.catalog[0]?.enabled).toBe(true);
+    expect(getMcpServer(ctx.db, "server-1")?.enabled).toBe(false);
+    expect(getGlobalMcpServer(ctx.db, "same")?.catalog[0]?.definition?.serverId).toBe("same");
+  });
+
+  it("does not merge different arguments or credential references at the same command or URL", () => {
+    otherProject();
+    putMcpServer(ctx.db, record());
+    putMcpServer(
+      ctx.db,
+      record({
+        id: "args",
+        projectId: "p2",
+        transport: { type: "stdio", command: "node", args: ["other.mjs"] },
+        catalog: [],
+      }),
+    );
+    expect(listGlobalMcpServers(ctx.db)).toHaveLength(2);
+  });
+
+  it.each(["missing", "hashed"])(
+    "upgrades a %s legacy baseline without losing the imported union",
+    (baseline) => {
+      otherProject();
+      putMcpServer(ctx.db, record({ enabled: false }));
+      putMcpServer(
+        ctx.db,
+        record({ id: "same", projectId: "p2", catalog: record({ id: "same" }).catalog }),
+      );
+      const before = listGlobalMcpServers(ctx.db);
+      const raw = ctx.db
+        .prepare("SELECT value FROM app_state WHERE key = 'volli:mcp-global'")
+        .get() as { value: string };
+      const state = JSON.parse(raw.value);
+      if (baseline === "missing") delete state.legacy;
+      else state.legacy = { "server-1": "0".repeat(64), same: "1".repeat(64) };
+      ctx.db
+        .prepare("UPDATE app_state SET value = ? WHERE key = 'volli:mcp-global'")
+        .run(JSON.stringify(state));
+
+      expect(listGlobalMcpServers(ctx.db)).toEqual(before);
+      expect(getMcpServer(ctx.db, "server-1")?.enabled).toBe(false);
+      expect(getGlobalMcpServer(ctx.db, "same")?.id).toBe("same");
+    },
+  );
+
+  it("observes legacy endpoint and credential-reference edits even when their timestamps are unchanged", () => {
+    putMcpServer(ctx.db, record());
+    const [original] = listGlobalMcpServers(ctx.db);
+    const transport = {
+      type: "streamable-http" as const,
+      url: "https://changed.example/mcp",
+      headers: [{ name: "Authorization", source: { kind: "secret" as const } }],
+    };
+    putMcpServer(ctx.db, { ...original!, transport });
+
+    expect(getGlobalMcpServer(ctx.db, "server-1")?.transport).toEqual(transport);
+    expect(listGlobalMcpServers(ctx.db)[0]?.transport).toEqual(transport);
+  });
+
+  it("observes OAuth client and secret-reference changes without requiring a timestamp change", () => {
+    const transport = {
+      type: "streamable-http" as const,
+      url: "https://tools.example/mcp",
+      oauth: { clientId: "client", clientSecret: { kind: "secret" as const } },
+    };
+    putGlobalMcpServer(ctx.db, record({ transport }));
+    for (const oauth of [
+      { clientId: "other-client", clientSecret: { kind: "secret" as const } },
+      {
+        clientId: "other-client",
+        clientSecret: { kind: "reference" as const, template: "${MCP_SECRET}" },
+      },
+      {
+        clientId: "other-client",
+        clientSecret: { kind: "reference" as const, template: "${NEW_MCP_SECRET}" },
+      },
+      { clientId: "other-client" },
+    ]) {
+      const edited = record({ transport: { ...transport, oauth } });
+      putMcpServer(ctx.db, edited);
+      expect(getGlobalMcpServer(ctx.db, edited.id)).toEqual(edited);
+      // A stable second read must not mistake the mirror for another edit.
+      expect(listGlobalMcpServers(ctx.db)).toEqual([edited]);
+    }
+  });
+
+  it("keeps deduped selections across reads and mirrors, but observes an edited alias without borrowing its credentials", () => {
+    otherProject();
+    putMcpServer(ctx.db, record({ enabled: false }));
+    putMcpServer(
+      ctx.db,
+      record({ id: "same", projectId: "p2", catalog: record({ id: "same" }).catalog }),
+    );
+    const [global] = listGlobalMcpServers(ctx.db);
+    expect(global?.enabled).toBe(true);
+    expect(listGlobalMcpServers(ctx.db)[0]?.enabled).toBe(true);
+    putGlobalMcpServer(ctx.db, { ...global!, updatedAt: 200 });
+    expect(listGlobalMcpServers(ctx.db)[0]?.enabled).toBe(true);
+
+    const transport = { type: "streamable-http" as const, url: "https://alias.example/mcp" };
+    putMcpServer(ctx.db, { ...getMcpServer(ctx.db, "same")!, transport });
+    expect(getGlobalMcpServer(ctx.db, "same")?.transport).toEqual(transport);
+    expect(getGlobalMcpServer(ctx.db, "server-1")?.transport).toEqual(global?.transport);
+  });
+
+  it("mirrors edits for N-1, keeps frozen duplicate ids, and survives deleting the source project", () => {
+    otherProject();
+    putMcpServer(ctx.db, record());
+    putMcpServer(
+      ctx.db,
+      record({
+        id: "same",
+        projectId: "p2",
+        catalog: record({ id: "same" }).catalog,
+        createdAt: 20,
+      }),
+    );
+    const [global] = listGlobalMcpServers(ctx.db);
+    putGlobalMcpServer(ctx.db, { ...global!, enabled: false, updatedAt: 200 });
+    expect(getMcpServer(ctx.db, "server-1")?.enabled).toBe(false);
+    expect(getMcpServer(ctx.db, "same")?.enabled).toBe(false);
+    ctx.db.prepare("DELETE FROM projects").run();
+    expect(listGlobalMcpServers(ctx.db)).toHaveLength(1);
+    expect(getGlobalMcpServer(ctx.db, "same")?.catalog[0]?.definition?.serverId).toBe("same");
+    expect(getGlobalMcpServer(ctx.db, "same")?.enabled).toBe(false);
+  });
+
+  it("removes every alias and never resurrects an imported row", () => {
+    otherProject();
+    putMcpServer(ctx.db, record());
+    putMcpServer(
+      ctx.db,
+      record({
+        id: "same",
+        projectId: "p2",
+        catalog: record({ id: "same" }).catalog,
+        createdAt: 20,
+      }),
+    );
+    listGlobalMcpServers(ctx.db);
+    expect(deleteGlobalMcpServer(ctx.db, "server-1")).toEqual(["server-1", "same"]);
+    expect(getGlobalMcpServer(ctx.db, "same")).toBeUndefined();
+    // Even a retained row restored by an N-1 build is not re-imported.
+    putMcpServer(ctx.db, record());
+    expect(listGlobalMcpServers(ctx.db)).toEqual([]);
+    expect(deleteGlobalMcpServer(ctx.db, "missing")).toEqual([]);
+  });
+
+  it("fails loudly on corrupt global configuration through the production codec", () => {
+    putMcpServer(ctx.db, record());
+    listGlobalMcpServers(ctx.db);
+    const raw = ctx.db
+      .prepare("SELECT value FROM app_state WHERE key = 'volli:mcp-global'")
+      .get() as { value: string };
+    const state = JSON.parse(raw.value);
+    state.rows[0].transport = JSON.stringify({ type: "stdio", command: "" });
+    ctx.db
+      .prepare("UPDATE app_state SET value = ? WHERE key = 'volli:mcp-global'")
+      .run(JSON.stringify(state));
+    expect(() => listGlobalMcpServers(ctx.db)).toThrow(/Stored MCP server is invalid/);
   });
 });

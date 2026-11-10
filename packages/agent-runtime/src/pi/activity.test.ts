@@ -26,7 +26,150 @@ function activityContext(context: Omit<PiActivityContext, "turnId">): PiActivity
   return { turnId: "turn-1", ...context };
 }
 
+function project(value: unknown) {
+  return mapPiActivity(
+    {
+      type: "tool_execution_end",
+      toolName: "codemode",
+      toolCallId: "program",
+      isError: true,
+      result: { content: [], details: value },
+    },
+    { turnId: "turn" },
+  );
+}
+
 describe("mapPiActivity", () => {
+  it("bounds and validates partial-completion metadata without trusting malformed nested records", () => {
+    const details = {
+      error: "script",
+      errorCause: "parse failed",
+      callCounts: { succeeded: 1, failed: 0, unfinished: 0, replayed: 0 },
+    };
+    for (const succeeded of [-1, NaN, 20_001, "1"]) {
+      const result = project({ ...details, callCounts: { ...details.callCounts, succeeded } });
+      expect(result.state).toBe("failed");
+      expect(JSON.stringify(result.input)).not.toContain("volli.codemode.failure");
+    }
+    for (const invalid of [
+      { ...details, error: 7 },
+      { ...details, error: "future" },
+      { ...details, callCounts: null },
+    ]) {
+      expect(JSON.stringify(project(invalid).input)).not.toContain("volli.codemode.failure");
+    }
+    expect(project(details).input).toMatchObject({
+      "volli.codemode.failure": { nestedCalls: { complete: false, calls: [] } },
+    });
+    expect(
+      project({ ...details, nestedCalls: { complete: true, calls: [null, { status: "future" }] } })
+        .input,
+    ).toMatchObject({
+      "volli.codemode.failure": {
+        nestedCalls: {
+          complete: true,
+          calls: [
+            { name: "unknown", status: "unfinished" },
+            { name: "unknown", status: "unfinished" },
+          ],
+        },
+      },
+    });
+  });
+
+  it("projects the independently redacted typed exception and partial completion before trust boilerplate", () => {
+    const secret = "secret crossing the diagnostic bound";
+    const result = mapPiActivity(
+      {
+        type: "tool_execution_end",
+        toolCallId: "program",
+        toolName: "codemode",
+        isError: true,
+        result: {
+          content: [{ type: "text", text: "trust notice ".repeat(10_000) }],
+          details: {
+            status: "failed",
+            error: "script",
+            errorCause: `Unexpected token '{' in JSON: ${secret} ${"x ".repeat(1_000)}`,
+            callCounts: { succeeded: 20, failed: 0, unfinished: 0, replayed: 0 },
+            nestedCalls: { complete: false, calls: [{ name: "mcp__paper__write", status: "ok" }] },
+          },
+        },
+      },
+      { turnId: "turn", input: { code: "await tools.write({}); JSON.parse('no');" } },
+      { redact: (text) => text.replaceAll(secret, "[redacted]") },
+    );
+    expect(result.state).toBe("failed");
+    expect(result.state === "failed" && result.error).toMatch(
+      /^Program failed after 20 successful calls\. Unexpected token '\{' in JSON: \[redacted\]/,
+    );
+    expect(result.state === "failed" && result.error?.length).toBeLessThan(460);
+    expect(result.input).toMatchObject({
+      code: "await tools.write({}); JSON.parse('no');",
+      "volli.codemode.failure": {
+        version: 1,
+        stage: "script",
+        errorCause: expect.stringContaining("Unexpected token"),
+        callCounts: { succeeded: 20, failed: 0, unfinished: 0, replayed: 0 },
+        nestedCalls: { complete: false, calls: [{ name: "mcp__paper__write", status: "ok" }] },
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain(secret);
+  });
+
+  it("keeps typed failure causes with returned images, fails redaction closed, and leaves legacy markers unchanged", () => {
+    const event = {
+      type: "tool_execution_end",
+      toolCallId: "program",
+      toolName: "codemode",
+      isError: true,
+      result: {
+        content: [
+          { type: "text", text: "legacy failure" },
+          { type: "image", data: "AAAA", mimeType: "image/png" },
+        ],
+        details: {
+          error: "timeout",
+          errorCause: "private cause",
+          callCounts: { succeeded: 1, failed: 0, unfinished: 1, replayed: 0 },
+          nestedCalls: {
+            complete: false,
+            calls: Array.from({ length: 50 }, () => ({
+              name: "write",
+              status: "ok",
+              arguments: { token: "do not retain" },
+            })),
+          },
+        },
+      },
+    };
+    const result = mapPiActivity(
+      event,
+      { turnId: "turn", persistImage: () => "picture" },
+      {
+        redact: () => {
+          throw new Error("redactor failed");
+        },
+      },
+    );
+    expect(result.state === "failed" && result.error).toContain(
+      "Program failed after 1 successful call. [Text withheld",
+    );
+    expect(result.state === "failed" && result.error).toContain("older builds omit them");
+    expect(result.input).toMatchObject({ "volli.activity.output": result.output });
+    expect(JSON.stringify(result.input)).not.toContain("do not retain");
+    expect(JSON.stringify(result.input).length).toBeLessThan(16_384);
+    const legacy = mapPiActivity(
+      { ...event, result: { content: [{ type: "text", text: "legacy failure" }] } },
+      { turnId: "turn" },
+    );
+    expect(legacy.input).toBeNull();
+    expect(legacy.state === "failed" && legacy.error).toBe("Tool execution failed.");
+    const completed = mapPiActivity({ ...event, isError: false }, { turnId: "turn" });
+    expect(completed.state).toBe("completed");
+    expect(JSON.stringify(completed.input)).not.toContain("volli.codemode.failure");
+  });
+
   it("stores large Code Mode pictures without running binary bytes through the text sanitizer", () => {
     const data = Buffer.alloc(50_000, 200).toString("base64");
     const calls: unknown[] = [];

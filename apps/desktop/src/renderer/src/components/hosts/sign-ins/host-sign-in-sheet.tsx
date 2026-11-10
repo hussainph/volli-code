@@ -84,9 +84,7 @@ function HostSignInSheetBody({
     <>
       <DialogHeader>
         <DialogTitle>Sign-ins on {target.hostName}</DialogTitle>
-        <DialogDescription>
-          Agents on {target.hostName} use these. Keys and tokens are stored on that host.
-        </DialogDescription>
+        <DialogDescription>Keys and tokens are stored on {target.hostName}.</DialogDescription>
       </DialogHeader>
       <HostSignInRows hostName={target.hostName} snapshot={snapshot} controller={controller} />
     </>

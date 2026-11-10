@@ -14,6 +14,8 @@
  */
 import * as React from "react";
 
+import { ChevronUpIcon, ChevronDownIcon } from "@renderer/components/ui/icon";
+
 import { Input } from "@renderer/components/ui/input";
 import { cn } from "@renderer/lib/utils";
 
@@ -33,6 +35,9 @@ export function CommitField({
   disabled,
   ariaLabel,
   suffix,
+  step = 1,
+  min,
+  max,
   validate,
   confirm,
   onCommit,
@@ -55,6 +60,10 @@ export function CommitField({
    * announced with the value rather than being visual-only.
    */
   suffix?: string;
+  /** Numeric quantities accept typed values, arrow keys and explicit up/down presses. */
+  step?: number;
+  min?: number;
+  max?: number;
   /** Cheap local check. Return a message to refuse. */
   validate?: (next: string) => string | null;
   /** Last gate before a destructive write. Return false to abandon. */
@@ -75,6 +84,12 @@ export function CommitField({
   const [saved, setSaved] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const dirty = React.useRef(false);
+  const committing = React.useRef(false);
+  const inputRef = React.useRef<HTMLInputElement>(null);
+  // Existing unit-bearing fields predate the number prop. Keep their API while
+  // giving actual quantities a stepper; branch/path/password fields remain text.
+  const quantity =
+    type === "number" || (type === "text" && !!suffix && /^-?\d+(\.\d+)?$/.test(value));
 
   // Adopt an external change ONLY when the user is not mid-edit. A bare
   // dependency on `value` means a background refresh wipes whatever is
@@ -89,9 +104,8 @@ export function CommitField({
     return () => clearTimeout(timer);
   }, [saved]);
 
-  const commit = async (): Promise<void> => {
-    if (!dirty.current || busy) return;
-    const next = draft;
+  const commit = async (next = draft): Promise<void> => {
+    if (!dirty.current || committing.current) return;
 
     const local = validate?.(next) ?? null;
     if (local) {
@@ -105,9 +119,20 @@ export function CommitField({
       return;
     }
 
+    committing.current = true;
     setBusy(true);
-    const result = await onCommit(next);
-    setBusy(false);
+    let result: CommitResult;
+    try {
+      result = await onCommit(next);
+    } catch (cause) {
+      result = {
+        ok: false,
+        error: cause instanceof Error ? cause.message : "Couldn't save this preference.",
+      };
+    } finally {
+      committing.current = false;
+      setBusy(false);
+    }
 
     if (!result.ok) {
       setError(result.error);
@@ -129,38 +154,90 @@ export function CommitField({
             Saved
           </span>
         ) : null}
-        <Input
-          id={fieldId}
-          type={type}
-          value={draft}
-          disabled={disabled || busy}
-          placeholder={placeholder}
-          aria-label={ariaLabel}
-          aria-invalid={error !== null}
-          aria-describedby={
-            [error ? errorId : null, suffix ? unitId : null].filter(Boolean).join(" ") || undefined
-          }
-          className={CONTROL_W[width]}
-          onChange={(event) => {
-            dirty.current = true;
-            setDraft(event.target.value);
-            if (error) setError(null);
+        <div
+          className="relative"
+          onBlur={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget)) void commit();
           }}
-          onBlur={() => void commit()}
-          onKeyDown={(event) => {
-            // Never mid-word: an IME's Enter and Escape are its own.
-            if (event.nativeEvent.isComposing) return;
-            if (event.key === "Enter") {
-              event.preventDefault();
-              event.currentTarget.blur();
+        >
+          <Input
+            ref={inputRef}
+            id={fieldId}
+            type={quantity ? "number" : type}
+            step={quantity ? step : undefined}
+            min={min}
+            max={max}
+            value={draft}
+            disabled={disabled || busy}
+            placeholder={placeholder}
+            aria-label={ariaLabel}
+            aria-invalid={error !== null}
+            aria-describedby={
+              [error ? errorId : null, suffix ? unitId : null].filter(Boolean).join(" ") ||
+              undefined
             }
-            if (event.key === "Escape") {
-              setDraft(value);
-              dirty.current = false;
-              setError(null);
-            }
-          }}
-        />
+            className={cn(
+              CONTROL_W[width],
+              quantity &&
+                "pr-6 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none",
+            )}
+            onChange={(event) => {
+              dirty.current = true;
+              setDraft(event.target.value);
+              if (error) setError(null);
+            }}
+            onKeyDown={(event) => {
+              // Never mid-word: an IME's Enter and Escape are its own.
+              if (event.nativeEvent.isComposing) return;
+              if (event.key === "Enter") {
+                event.preventDefault();
+                event.currentTarget.blur();
+              }
+              if (event.key === "Escape") {
+                setDraft(value);
+                dirty.current = false;
+                setError(null);
+              }
+            }}
+          />
+          {quantity ? (
+            <div className="absolute inset-y-0 right-0 flex w-6 flex-col border-l border-border-strong">
+              {([1, -1] as const).map((direction) => {
+                const Icon = direction === 1 ? ChevronUpIcon : ChevronDownIcon;
+                const atLimit =
+                  draft.trim() !== "" &&
+                  (direction === 1
+                    ? max !== undefined && Number(draft) >= max
+                    : min !== undefined && Number(draft) <= min);
+                return (
+                  <button
+                    key={direction}
+                    type="button"
+                    aria-label={`${direction === 1 ? "Increase" : "Decrease"} ${ariaLabel ?? suffix ?? "value"}`}
+                    disabled={disabled || busy || atLimit}
+                    className="flex min-h-0 flex-1 items-center justify-center rounded-sm text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+                    onClick={() => {
+                      const field = inputRef.current;
+                      if (!field || committing.current) return;
+                      // Use the browser's step/bounds arithmetic without mutating
+                      // React's controlled node (a declined confirmation must restore it).
+                      const stepped = field.cloneNode() as HTMLInputElement;
+                      stepped.value = draft;
+                      if (direction === 1) stepped.stepUp();
+                      else stepped.stepDown();
+                      const next = stepped.value;
+                      dirty.current = true;
+                      setDraft(next);
+                      void commit(next);
+                    }}
+                  >
+                    <Icon aria-hidden strokeWidth={2.25} className="size-3" />
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+        </div>
         {/* Dims with the field it belongs to: a live unit beside a dead number
             would read as the control being half on. */}
         {suffix ? (

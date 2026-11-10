@@ -1,5 +1,6 @@
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 /**
- * Configure → MCP Servers: a fixed-column server table and bounded audit log.
+ * Settings → MCP Servers: a fixed-column server table and bounded audit log.
  *
  * Identity, tool counts, health and enablement each own a column. Recovery is
  * one action beside a menu, never a wrapping strip. Narrow panes scroll the
@@ -9,18 +10,21 @@
  * neither it nor the history can bury the other (VC-397).
  */
 import * as React from "react";
-import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { ClockCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ClockCounterClockwise";
-import { DotsThreeIcon } from "@phosphor-icons/react/dist/csr/DotsThree";
-import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
-import { ListChecksIcon } from "@phosphor-icons/react/dist/csr/ListChecks";
-import { PlugsConnectedIcon } from "@phosphor-icons/react/dist/csr/PlugsConnected";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
-import { SignInIcon } from "@phosphor-icons/react/dist/csr/SignIn";
-import { SignOutIcon } from "@phosphor-icons/react/dist/csr/SignOut";
-import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import {
+  RefreshIcon,
+  ChevronDownIcon,
+  HistoryIcon,
+  MoreIcon,
+  SettingsIcon,
+  ChecklistIcon,
+  ConnectedIcon,
+  AddIcon,
+  SignInIcon,
+  SignOutIcon,
+  DeleteIcon,
+  CloseIcon,
+} from "@renderer/components/ui/icon";
+
 import type { McpOperationRecord, McpServerAccess, McpServerRecord, Project } from "@volli/shared";
 
 import {
@@ -47,13 +51,9 @@ import {
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
 import { Switch } from "@renderer/components/ui/switch";
-import {
-  DataTable,
-  Empty,
-  Health,
-  PrefSection,
-  SectionAction,
-} from "@renderer/components/settings/kit";
+import { Notice } from "@renderer/components/ui/notice";
+import { errorMessage } from "@volli/shared";
+import { DataTable, Empty, Health, PrefSection } from "@renderer/components/settings/kit";
 import { relativeTime } from "@renderer/lib/relative-time";
 import { useAgeNow } from "@renderer/lib/use-age-now";
 import { cn } from "@renderer/lib/utils";
@@ -94,10 +94,11 @@ function replaceServer(
     : servers.map((candidate) => (candidate.id === server.id ? server : candidate));
 }
 
-export function McpPane({ project }: { project: Project }) {
+export function McpPane({ project }: { project: Pick<Project, "id"> }) {
   const [servers, setServers] = React.useState<readonly McpServerRecord[]>([]);
   const [operations, setOperations] = React.useState<readonly McpOperationRecord[]>([]);
-  const [loading, setLoading] = React.useState(false);
+  const [loading, setLoading] = React.useState(true);
+  const [readError, setReadError] = React.useState<string | null>(null);
   /**
    * The servers with an action running. Per server, so one row finishing
    * never frees another row that is still waiting on its own.
@@ -126,16 +127,22 @@ export function McpPane({ project }: { project: Project }) {
 
   const load = React.useCallback(async () => {
     setLoading(true);
-    const result = await window.api.mcp.list({ projectId: project.id });
-    setLoading(false);
-    if (!result.ok) {
-      setError(result.error);
-      return;
+    setReadError(null);
+    try {
+      const result = await window.api.mcp.list({ projectId: project.id });
+      if (!result.ok) {
+        setReadError(result.error);
+        return;
+      }
+      setError(null);
+      setServers(result.servers);
+      setOperations(result.operations);
+      setAccess(result.access ?? {});
+    } catch (cause) {
+      setReadError(errorMessage(cause));
+    } finally {
+      setLoading(false);
     }
-    setError(null);
-    setServers(result.servers);
-    setOperations(result.operations);
-    setAccess(result.access ?? {});
   }, [project.id]);
 
   React.useEffect(() => {
@@ -248,40 +255,72 @@ export function McpPane({ project }: { project: Project }) {
     <div className="flex flex-col gap-6">
       <PrefSection
         title="Servers"
-        icon={PlugsConnectedIcon}
+        icon={ConnectedIcon}
+        // The one-line trust boundary: a person cannot see it from the controls.
         hint={
           <>
-            Server metadata and results are untrusted data, never instructions. Tool choices affect
-            new Sessions only; running Sessions keep the tools they started with.
+            A local MCP command runs as you; a remote server receives the arguments sent to its
+            tools.
           </>
         }
         action={
-          <SectionAction
-            label="Add server"
-            icon={PlusIcon}
-            onAct={() => {
-              setError(null);
-              setDialog({ kind: "add" });
-            }}
-          />
+          servers.length === 0 && !loading && readError === null ? undefined : (
+            <Button
+              size="sm"
+              onClick={() => {
+                setError(null);
+                setDialog({ kind: "add" });
+              }}
+            >
+              <AddIcon />
+              Add server
+            </Button>
+          )
         }
       >
-        {/* The one always-on line, and the reason it is an exception to "let
-            controls talk": it is a trust boundary a person cannot see from the
-            controls. Everything else about MCP lives in the summoned hint. */}
-        <p className="mb-2 text-ui text-muted-foreground">
-          A local MCP command runs as you; a remote server receives the arguments sent to its tools.
-        </p>
         {error === null ? null : (
-          <p
-            role="alert"
-            className="mb-2 rounded-md bg-destructive/10 px-4 py-2 text-ui text-destructive"
-          >
-            {error}
-          </p>
+          <Notice
+            tone="error"
+            announce
+            data-testid="mcp-error"
+            className="mb-2"
+            title="Couldn't update MCP servers"
+            detail={error}
+          />
         )}
-        {servers.length === 0 ? (
-          <Empty>{loading ? "Loading MCP servers…" : "No MCP servers yet."}</Empty>
+        {readError !== null ? (
+          <Notice
+            tone="error"
+            announce
+            title="Couldn't read MCP servers"
+            detail={readError}
+            actions={
+              <Button size="xs" variant="outline" onClick={() => void load()}>
+                <RefreshIcon />
+                Retry
+              </Button>
+            }
+          />
+        ) : servers.length === 0 ? (
+          loading ? (
+            <div className="p-4">
+              <LoadingLabel>Loading MCP servers</LoadingLabel>
+            </div>
+          ) : (
+            <Empty
+              illustration="mcp"
+              action={{
+                label: "Add server",
+                icon: <AddIcon />,
+                onAction: () => {
+                  setError(null);
+                  setDialog({ kind: "add" });
+                },
+              }}
+            >
+              No MCP servers
+            </Empty>
+          )
         ) : (
           <div
             role="region"
@@ -294,9 +333,26 @@ export function McpPane({ project }: { project: Project }) {
                 label="MCP servers"
                 items={servers}
                 keyOf={(server) => server.id}
+                search={(server) => server.name}
+                placeholder="Search MCP servers"
                 rows={12}
-                empty="No MCP servers yet."
+                empty="No MCP servers"
+                emptyIllustration="mcp"
                 columns={[
+                  {
+                    key: "enabled",
+                    header: "Enabled",
+                    width: "5rem",
+                    cell: (server) => (
+                      <Switch
+                        aria-label={`${server.name} enabled`}
+                        checked={server.enabled}
+                        disabled={busy.has(server.id)}
+                        onCheckedChange={(enabled) => void toggleServer(server, enabled)}
+                      />
+                    ),
+                  },
+
                   {
                     key: "server",
                     header: "Server",
@@ -371,19 +427,6 @@ export function McpPane({ project }: { project: Project }) {
                     },
                   },
                   {
-                    key: "enabled",
-                    header: "Enabled",
-                    width: "5rem",
-                    cell: (server) => (
-                      <Switch
-                        aria-label={`${server.name} enabled`}
-                        checked={server.enabled}
-                        disabled={busy.has(server.id)}
-                        onCheckedChange={(enabled) => void toggleServer(server, enabled)}
-                      />
-                    ),
-                  },
-                  {
                     key: "actions",
                     header: "Actions",
                     headerHidden: true,
@@ -418,7 +461,7 @@ export function McpPane({ project }: { project: Project }) {
       </PrefSection>
 
       {operations.length === 0 ? null : (
-        <PrefSection title="Recent activity" icon={ClockCounterClockwiseIcon}>
+        <PrefSection title="Recent activity" icon={HistoryIcon}>
           {/*
             Where an install an AGENT performed becomes findable by a person.
             The audit row is the only trace of a removal once the server is gone,
@@ -456,8 +499,7 @@ export function McpPane({ project }: { project: Project }) {
           <AlertDialogHeader>
             <AlertDialogTitle>Remove {removing?.name}?</AlertDialogTitle>
             <AlertDialogDescription>
-              New Sessions stop getting its tools, and any credentials or sign-in stored for it are
-              deleted. Sessions already running keep the tools they started with.
+              Its stored credentials and sign-in are deleted.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -516,7 +558,7 @@ function ServerActions({
   const health = serverHealth(server, access, signingIn === server.id);
   const otherSignIn = signingIn !== null && signingIn !== server.id;
   return (
-    <div className="flex w-full items-center justify-end gap-2 whitespace-nowrap">
+    <div className="flex w-full items-center justify-end gap-2">
       {health.fix === "sign-in" ? (
         <Button size="xs" variant="outline" disabled={busy || otherSignIn} onClick={onSignIn}>
           <SignInIcon />
@@ -524,7 +566,7 @@ function ServerActions({
         </Button>
       ) : health.fix === "cancel-sign-in" ? (
         <Button size="xs" variant="outline" onClick={onCancelSignIn}>
-          <XIcon />
+          <CloseIcon />
           Cancel
         </Button>
       ) : health.fix === "credentials" ? (
@@ -533,27 +575,27 @@ function ServerActions({
         </Button>
       ) : health.fix === "retry" ? (
         <Button size="xs" variant="outline" disabled={busy} onClick={onRefresh}>
-          <ArrowClockwiseIcon />
+          <RefreshIcon />
           Retry
         </Button>
       ) : null}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button size="icon-xs" variant="ghost" aria-label={`More for ${server.name}`}>
-            <DotsThreeIcon weight="bold" />
+          <Button size="icon-sm" variant="ghost" aria-label={`More for ${server.name}`}>
+            <MoreIcon strokeWidth={2.25} />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           <DropdownMenuItem onSelect={() => onOpen("tools")}>
-            <ListChecksIcon />
+            <ChecklistIcon />
             Choose tools
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={() => onOpen("connection")}>
-            <GearSixIcon />
+            <SettingsIcon />
             Edit connection
           </DropdownMenuItem>
           <DropdownMenuItem disabled={busy} onSelect={onRefresh}>
-            <ArrowClockwiseIcon />
+            <RefreshIcon />
             Refresh tools
           </DropdownMenuItem>
           {signsIn(server) && access?.signIn === "signed-in" ? (
@@ -564,7 +606,7 @@ function ServerActions({
           ) : null}
           <DropdownMenuSeparator />
           <DropdownMenuItem variant="destructive" disabled={busy} onSelect={onRemove}>
-            <TrashIcon />
+            <DeleteIcon />
             Remove
           </DropdownMenuItem>
         </DropdownMenuContent>
@@ -575,7 +617,7 @@ function ServerActions({
 
 /** The caret every disclosure on this pane turns. */
 function DisclosureCaret({ open }: { open: boolean }) {
-  return <CaretDownIcon aria-hidden className={cn(open && "rotate-180")} />;
+  return <ChevronDownIcon aria-hidden className={cn(open && "rotate-180")} />;
 }
 
 /**

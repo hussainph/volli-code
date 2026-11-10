@@ -21,7 +21,7 @@
  * caller.
  */
 import { useShallow } from "zustand/react/shallow";
-import type { FileWorkspaceTab } from "@volli/shared";
+import type { ChatSessionRecord, FileWorkspaceTab } from "@volli/shared";
 import type { BrowserTabState } from "../../../../ipc/contract";
 
 import { fileTabLabels } from "@renderer/components/files/file-tab-labels";
@@ -29,10 +29,13 @@ import { HOME_BOARD_TAB, type HomeTabDescriptor } from "@renderer/components/hom
 import { browserTabId } from "@renderer/components/home/home-tabs";
 import { chatTabId, CHAT_TAB_FALLBACK_LABEL } from "@renderer/components/ticket/ticket-chat-tab";
 import { chatTabStatus } from "@renderer/components/ticket/ticket-chat-tab";
+import type { TicketTabStatus } from "@renderer/components/ticket/ticket-tabs";
 import { fileTabId } from "@renderer/components/ticket/ticket-file-tab";
 import { browserTabDisplayTitle } from "@renderer/stores/browser-tabs";
 import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
+import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
+import { listedChatRecord } from "@renderer/lib/listed-chat-record";
 import type { SessionTab } from "@renderer/stores/sessions";
 
 export interface HomeTabDescriptorsInput {
@@ -41,6 +44,13 @@ export interface HomeTabDescriptorsInput {
   fileTabs: readonly FileWorkspaceTab[];
   browserTabs: readonly BrowserTabState[];
   dirtyFilePaths: ReadonlySet<string>;
+}
+
+/** A listed row's state in the tab's vocabulary: only the two a tab dot draws. */
+function listedChatStatus(record: ChatSessionRecord | null): TicketTabStatus {
+  if (record?.activity === "working") return "working";
+  if (record?.activity === "waiting") return "waiting";
+  return "idle";
 }
 
 /** Home's whole strip as descriptors, in composed order (Board first). */
@@ -62,7 +72,19 @@ export function useHomeTabDescriptors({
     ),
   );
   const chatStatuses = useChatSessionsStore(
-    useShallow((state) => chatIds.map((sessionId) => chatTabStatus(state.sessions[sessionId]))),
+    useShallow((state) =>
+      chatIds.map((sessionId) => {
+        const slice = state.sessions[sessionId];
+        return slice === undefined ? null : chatTabStatus(slice);
+      }),
+    ),
+  );
+  // A tab with no resident Session yet — opened at relaunch, adopted only when
+  // shown (VC-515) — reads its title and state off the durable listing row.
+  // Records keep their identity across unrelated listing writes, so this stays
+  // shallow-stable.
+  const listedChats = useProjectSessionsStore(
+    useShallow((state) => chatIds.map((sessionId) => listedChatRecord(state.byProject, sessionId))),
   );
   // Disambiguating hints are computed across EVERY open file, not per pane: two
   // tabs called `index.ts` need their parent directories whichever panes they
@@ -76,8 +98,12 @@ export function useHomeTabDescriptors({
       kind: "chat",
       id: chatTabId(sessionId),
       sessionId,
-      title: draftChatTitles[index] ?? chatTitles[index] ?? CHAT_TAB_FALLBACK_LABEL,
-      status: chatStatuses[index] ?? "idle",
+      title:
+        draftChatTitles[index] ??
+        chatTitles[index] ??
+        listedChats[index]?.title ??
+        CHAT_TAB_FALLBACK_LABEL,
+      status: chatStatuses[index] ?? listedChatStatus(listedChats[index] ?? null),
     })),
     ...fileTabs.map((tab, index): HomeTabDescriptor => {
       const label = fileLabels[index] ?? { name: tab.relPath, hint: null };

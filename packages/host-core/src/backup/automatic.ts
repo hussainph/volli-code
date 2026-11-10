@@ -8,6 +8,7 @@ import { join } from "node:path";
 import type { ProfileBackupStatus } from "@volli/shared";
 import { ProfileBackupError } from "./errors";
 import { hostLogger } from "../log/root";
+import { withMainSpan } from "../log/context";
 
 const log = hostLogger("profile-backups");
 
@@ -189,7 +190,7 @@ export class AutomaticProfileBackups {
   start(): void {
     if (this.#timer || this.#stopped) return;
     this.#timer = setInterval(() => {
-      void this.tick();
+      void withMainSpan({ door: "timer", operation: "backup-schedule" }, () => this.tick());
     }, 60_000);
     this.#timer.unref();
     void this.tick();

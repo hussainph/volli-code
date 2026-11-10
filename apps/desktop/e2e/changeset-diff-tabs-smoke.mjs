@@ -330,14 +330,17 @@ async function main() {
       page.evaluate(() => document.querySelector("[data-volli-surface]") !== null),
     );
 
-    const card = page.locator("article").filter({
-      has: page.locator("span.font-mono", { hasText: new RegExp(`^${displayId}$`) }),
-    });
+    const card = page
+      .locator("article")
+      .filter({ visible: true })
+      .filter({
+        has: page.locator("span.font-mono", { hasText: new RegExp(`^${displayId}$`) }),
+      });
     await waitUntil("card", async () => (await card.count()) === 1);
     await card.dblclick();
     await waitUntil("detail", async () => (await page.getByRole("tablist").count()) >= 1);
 
-    const aside = page.locator("aside");
+    const aside = page.locator('[data-inspector-panel][data-shown="true"]');
     await waitUntil("rail visible", async () => (await aside.count()) === 1);
 
     // ---- 1. Changes list ----------------------------------------------------
@@ -463,15 +466,15 @@ async function main() {
     await attempt(5, "Files open of same path shares model content and dirty", async () => {
       await aside.getByTestId("ticket-rail-tab-files").click();
       await waitUntil(
-        "files list",
-        async () => (await aside.getByTestId("ticket-files-list").count()) === 1,
+        "files tree",
+        async () => (await aside.getByRole("tree", { name: "Files" }).count()) === 1,
         { timeout: 10000 },
       );
 
-      // Enter src/ then open edit-me.ts
+      // Expand src/ (a click on an open folder would fold it) then open edit-me.ts
       const srcDir = aside.locator('[data-testid="ticket-files-row"][data-path="src"]');
       await waitUntil("src dir row", async () => (await srcDir.count()) === 1, { timeout: 10000 });
-      await srcDir.click();
+      if ((await srcDir.getAttribute("aria-expanded")) !== "true") await srcDir.click();
       const fileRow = aside.locator(`[data-testid="ticket-files-row"][data-path="${TARGET}"]`);
       await waitUntil("edit-me file row", async () => (await fileRow.count()) === 1, {
         timeout: 10000,
@@ -519,6 +522,9 @@ async function main() {
       const tabsNow = await readTicketTabs(page, ticketId);
       if (tabsNow?.active !== `file:${TARGET}`) {
         await aside.getByTestId("ticket-rail-tab-files").click();
+        const srcDir = aside.locator('[data-testid="ticket-files-row"][data-path="src"]');
+        await waitUntil("src dir row", async () => (await srcDir.count()) === 1);
+        if ((await srcDir.getAttribute("aria-expanded")) !== "true") await srcDir.click();
         const fileRow = aside.locator(`[data-testid="ticket-files-row"][data-path="${TARGET}"]`);
         await waitUntil("reopen file row", async () => (await fileRow.count()) === 1);
         await fileRow.click();

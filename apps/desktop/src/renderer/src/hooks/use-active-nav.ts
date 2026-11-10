@@ -9,8 +9,9 @@ import { DEFAULT_PROJECT_UI, useProjectUiStore, type NavKey } from "@renderer/st
  * Falls back to the default for never-visited projects; the setter is a no-op
  * with no project selected (the sidebar shows no nav then anyway).
  */
-export function useActiveNav(): [NavKey, (nav: NavKey) => void] {
-  const selectedProjectId = useProjectsStore((state) => state.selectedProjectId);
+export function useActiveNav(projectId?: string | null): [NavKey, (nav: NavKey) => void] {
+  const currentProjectId = useProjectsStore((state) => state.selectedProjectId);
+  const selectedProjectId = projectId ?? currentProjectId;
   const activeNav = useProjectUiStore(
     (state) =>
       (selectedProjectId ? state.byProject[selectedProjectId]?.nav : undefined) ??

@@ -2,11 +2,9 @@
  * The markdown file tab's view control (plan §4.6, VC-192; the Preview slot,
  * VC-307).
  *
- * Icons in the segmented control's own pressed/unpressed language, in the same
- * slim band idiom the diff pane's controls live in — `Code` for the file's own
- * bytes, `Article` for the rendered document, `Eye` for the read-only preview.
- * `iconOnly` keeps each word as the accessible name, which is what makes the
- * switch cost one control's width instead of a strip of prose.
+ * Labeled buttons share one group in the file's control band: Source for the
+ * file's bytes, Document for the rendered editor, and Preview for the read-only
+ * fallback. Each button exposes its pressed state and keeps its word visible.
  *
  * The band draws ONLY on markdown file tabs (`offersMarkdownViewToggle`), which
  * is the whole reason it is allowed to exist at all: the house rule from VC-187
@@ -33,16 +31,14 @@
  * person is missing once they are looking at a page they cannot edit. The
  * refusal is a keystroke away in Source, and stays in the control's tooltip.
  */
-import { ArticleIcon } from "@phosphor-icons/react/dist/csr/Article";
-import { CodeIcon } from "@phosphor-icons/react/dist/csr/Code";
-import { EyeIcon } from "@phosphor-icons/react/dist/csr/Eye";
+import { ArticleIcon, CodeIcon, PreviewIcon } from "@renderer/components/ui/icon";
 
 import { Segmented } from "@renderer/components/ui/segmented";
 import type { DocumentViewRefusal, MarkdownFileView } from "@renderer/editor/document-view-policy";
 
 const SOURCE = { key: "source", label: "Source", icon: CodeIcon } as const;
 const DOCUMENT = { key: "document", label: "Document", icon: ArticleIcon } as const;
-const PREVIEW = { key: "preview", label: "Preview", icon: EyeIcon } as const;
+const PREVIEW = { key: "preview", label: "Preview", icon: PreviewIcon } as const;
 
 /** The editable pair, for a file the projection can honestly show. */
 const EDITABLE_VIEWS = [SOURCE, DOCUMENT] as const;
@@ -66,14 +62,13 @@ export function MarkdownViewToggle({
   return (
     <div
       data-testid="file-view-control-band"
-      className="flex shrink-0 items-center gap-2 border-b border-border px-gutter py-1"
+      className="flex min-h-control-default shrink-0 items-center gap-2 border-b border-border bg-background px-1 py-0.5"
     >
       <Segmented
         ariaLabel="Markdown view"
         testId="file-markdown-view"
         value={view}
         options={refusal === null ? EDITABLE_VIEWS : REFUSED_VIEWS}
-        iconOnly
         className="shrink-0"
         onChange={onChange}
       />
@@ -93,12 +88,10 @@ export function MarkdownViewToggle({
 }
 
 /**
- * What Preview says about itself: that it cannot be edited, that unsupported
- * markup may be missing from it, and — only while it is true — that the draft
- * open in Source is not what is on screen.
+ * What Preview says about itself, as a status: that it cannot be edited and —
+ * only while it is true — that the draft open in Source is not what is on
+ * screen. Omitted HTML marks itself in place, so the line does not say it too.
  */
 function previewNote(sourceDirty: boolean): string {
-  return sourceDirty
-    ? "Read-only preview. Unsaved Source edits and unsupported HTML may be left out."
-    : "Read-only preview. Unsupported HTML may be left out.";
+  return sourceDirty ? "Read-only · unsaved edits not shown" : "Read-only";
 }

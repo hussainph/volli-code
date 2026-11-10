@@ -3,6 +3,7 @@ import { LOCAL_RUNNER, shortSessionId } from "@volli/shared";
 import type {
   CommandReceipt,
   SessionEventProvenance,
+  SessionListingProjection,
   SessionProjection,
   SessionStopActor,
   SessionAttachmentProjection,
@@ -110,8 +111,8 @@ export async function stopResolvedSession(
   ports: Pick<StopSessionByIdPorts, "runtime"> & {
     sessionEngine: Pick<SessionEngine, "submit">;
   },
-  target: SessionProjection,
-  reread: () => Promise<SessionProjection>,
+  target: SessionListingProjection,
+  reread: () => Promise<SessionListingProjection>,
   acts: StopActs,
 ): Promise<StopSessionOutcome> {
   const previouslyStopped = target.stopped !== null;

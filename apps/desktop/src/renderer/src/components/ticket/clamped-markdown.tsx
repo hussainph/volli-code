@@ -1,5 +1,5 @@
 import * as React from "react";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
+import { ChevronDownIcon } from "@renderer/components/ui/icon";
 
 import { Markdown } from "@renderer/components/ticket/markdown";
 import { COMMENT_CLAMP_PX, planClamp } from "@renderer/components/ticket/clamp-policy";
@@ -70,7 +70,7 @@ export function ClampedMarkdown({ source, className }: { source: string; classNa
           className="mt-1 flex items-center gap-1 rounded-sm text-ui text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
         >
           {clamped ? "Show more" : "Show less"}
-          <CaretDownIcon
+          <ChevronDownIcon
             className={cn("size-3 shrink-0 transition-transform", !clamped && "rotate-180")}
           />
         </button>

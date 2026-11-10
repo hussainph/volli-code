@@ -1,3 +1,4 @@
+import { HelpTag } from "@renderer/components/ui/help-tag";
 /**
  * The sign-in rows for one host (VC-702), ported from the lab's
  * `#host-sign-ins` "Per sign-in" direction (PR #745): each row chooses where
@@ -11,10 +12,7 @@
 import * as React from "react";
 import { signInWebUrl } from "@volli/shared";
 import { AnimatePresence, motion } from "motion/react";
-import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
-import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
-import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
-import { LockSimpleIcon } from "@phosphor-icons/react/dist/csr/LockSimple";
+import { ExternalIcon, CheckIcon, CopyIcon, LockIcon } from "@renderer/components/ui/icon";
 
 import {
   AlertDialog,
@@ -109,7 +107,7 @@ export function HostSignInRows({
       </div>
       <AddGitHost controller={controller} />
       <p className="flex items-center gap-1 px-2 text-ui text-muted-foreground">
-        <LockSimpleIcon aria-hidden className="size-3.5 shrink-0" />
+        <LockIcon aria-hidden className="size-3.5 shrink-0" />
         {trustLine(hostName, sendsFromMac)}
       </p>
       <SendConfirm
@@ -248,7 +246,7 @@ export function SignInRow({
   return (
     <div
       className={cn(
-        "rounded-control transition-colors duration-150",
+        "rounded-control transition-colors duration-(--duration-menu-in)",
         open && "bg-background shadow-raised",
       )}
       data-row={row.key}
@@ -256,7 +254,6 @@ export function SignInRow({
       <div className="flex items-center gap-2 px-2 py-2">
         <ProviderMark id={row.id} name={row.label} />
         <div className="min-w-0 flex-1">
-          <div className="truncate text-ui font-medium">{row.label}</div>
           <div
             className={cn(
               "flex items-center gap-1 truncate text-ui",
@@ -266,7 +263,7 @@ export function SignInRow({
             )}
           >
             {row.state === "signed-in" && flow.kind === "idle" ? (
-              <CheckIcon weight="bold" className="size-3 text-positive" />
+              <CheckIcon strokeWidth={2.25} className="size-3 text-positive" />
             ) : null}
             <span className="truncate">{statusLine(row, flow, hostName)}</span>
           </div>
@@ -324,7 +321,7 @@ export function SignInRow({
                   onClick={() => controller.openPage(flow.authUrl!)}
                 >
                   <span className="min-w-0 break-all">Open {siteOf(flow.authUrl)}</span>
-                  <ArrowSquareOutIcon />
+                  <ExternalIcon />
                 </Button>
               ) : null}
               {flow.kind === "signing-in" && flow.deviceCode !== null ? (
@@ -409,7 +406,7 @@ function DeviceCode({ code, page, onOpen }: { code: string; page: string; onOpen
         {code}
         <span className="text-muted-foreground">
           {copied ? (
-            <CheckIcon weight="bold" className="size-3.5 text-positive" />
+            <CheckIcon strokeWidth={2.25} className="size-3.5 text-positive" />
           ) : (
             <CopyIcon className="size-3.5" />
           )}
@@ -421,7 +418,7 @@ function DeviceCode({ code, page, onOpen }: { code: string; page: string; onOpen
         onClick={onOpen}
       >
         <span className="min-w-0 break-all">Open {site}</span>
-        <ArrowSquareOutIcon />
+        <ExternalIcon />
       </Button>
     </div>
   );
@@ -532,14 +529,16 @@ const PROVIDER_TINT: Record<string, string> = {
 /** A monogram, not a logo: Volli redistributes no third-party marks. */
 export function ProviderMark({ id, name }: { id: string; name: string }) {
   return (
-    <span
-      aria-hidden
-      className={cn(
-        "grid size-6 shrink-0 place-items-center rounded-sm font-mono text-ui font-semibold",
-        PROVIDER_TINT[id] ?? "bg-muted text-foreground",
-      )}
-    >
-      {name.slice(0, 1).toUpperCase()}
-    </span>
+    <HelpTag label={name === id ? name : `${name} · ${id}`}>
+      <span
+        aria-hidden
+        className={cn(
+          "grid size-6 shrink-0 place-items-center rounded-sm font-mono text-ui font-semibold",
+          PROVIDER_TINT[id] ?? "bg-muted text-foreground",
+        )}
+      >
+        {name.slice(0, 1).toUpperCase()}
+      </span>
+    </HelpTag>
   );
 }

@@ -1,7 +1,7 @@
 /**
  * Acceptance smoke for headless agent Browser Tabs (VC-238, driven from the
  * Activity Island since VC-268), against the BUILT app:
- * headless → open beside chat → close/Undo → show and group → close.
+ * headless → open beside chat → close/Undo → show and group → hide → close.
  *
  * A Session-owned tab is born headless — in no strip, attached to no window —
  * and the only place a person sees it is the chat that owns it: the island
@@ -20,7 +20,9 @@
  *   4. Show tab SELECTS it — full width while it is ordinary, never pulled into
  *      a group. A tab-edge drop onto the person's tab groups the two browsers,
  *      attaching both native views together, and Show tab then shows that
- *      group. The compatibility hide bridge still preserves agent state;
+ *      group. Hide to Island, in the browser's own chrome (VC-1118), takes it
+ *      back out of the strip and its group, headless with its page and owner,
+ *      and the Island offers Open beside chat again, which brings it back;
  *   5. Close removes the row immediately, destroys the tab after five seconds,
  *      and leaves the other Session's tab and the person's tab alone.
  *
@@ -75,10 +77,11 @@ async function startFixtureServer() {
 }
 
 // The TOP strip holds ordinary tabs and one chip per group (VC-1052). A chip
-// draws ONE tab, the group's front — its focused member while shown, else its
-// first pane's front — and carries that tab's `data-pair-target-id`; its other
-// members are only rows of its popover (`data-tab-id`). A shown group's panes
-// also draw strips of their own, so every probe here is scoped to the top strip.
+// draws ONE tab — main's direct group tab, labeled from the group — and
+// carries its front's `data-strip-tab-id` (plus the front's
+// `data-pair-target-id` where edge drops aim at it); the member tabs are only
+// rows of its popover (`data-tab-id`). A shown group's panes also draw strips
+// of their own, so every probe here is scoped to the top strip.
 const browserStripTabs = (page) => tabStrip(page, HOME_TAB_STRIP).getByTestId("home-browser-tab");
 /**
  * A chat's top-strip tab: an ordinary tab, or a chip whose front it is.
@@ -86,7 +89,7 @@ const browserStripTabs = (page) => tabStrip(page, HOME_TAB_STRIP).getByTestId("h
  */
 const chatStripTab = (page, sessionId) =>
   tabStrip(page, HOME_TAB_STRIP)
-    .locator(`[data-pair-target-id="chat:${sessionId}"]`)
+    .locator(`[data-strip-tab-id="chat:${sessionId}"]`)
     .getByRole("tab");
 const groupChips = (page) =>
   tabStrip(page, HOME_TAB_STRIP).locator('[data-slot="grouped-tab-chip"]');
@@ -143,7 +146,10 @@ const selectChat = (page, sessionId) =>
   );
 /** How many shown panes draw a strip of their own. */
 const paneStrips = (page) =>
-  page.locator('[data-slot="split-view-pane"] > [data-slot="tab-strip"]').count();
+  page
+    .locator('[data-slot="split-view-pane"] [data-slot="tab-strip"]')
+    .filter({ visible: true })
+    .count();
 const island = (page) => page.locator("[data-activity-island]");
 const tabsCluster = (page) => page.locator('[data-island-cluster="tabs"]');
 const tabsCount = (page) => tabsCluster(page).locator("[data-island-count]");
@@ -178,10 +184,17 @@ async function attachedViews(app) {
 
 /** Pins the island's tabs card open and hands back the one row it lists. */
 async function pinTabsCard(page, tabId) {
-  await tabsCluster(page).click();
-  const row = tabsCard(page).locator(`[data-island-row="${tabId}"]`);
-  await waitUntil("the tab's row in the pinned card", async () =>
-    (await row.count()) === 1 ? true : null,
+  // A row can remain mounted during the popover's exit. Open the glance,
+  // then use its explicit pin control and observe the pin receipt before
+  // moving off the cluster toward the row's hover-only actions.
+  await tabsCluster(page).hover();
+  const card = page.locator('[data-island-card="tabs"][data-state="open"]');
+  await card.waitFor({ state: "visible" });
+  const pin = card.locator("[data-island-pin]");
+  if ((await pin.getAttribute("aria-pressed")) !== "true") await pin.click();
+  const row = card.locator(`[data-island-row="${tabId}"]`);
+  await waitUntil("the tab's row in the pinned, open card", async () =>
+    (await pin.getAttribute("aria-pressed")) === "true" && (await row.isVisible()) ? true : null,
   );
   return row;
 }
@@ -205,6 +218,57 @@ async function showBeside(page, tabId, label) {
   if (label === "Show tab") await row.click();
   else await reveal.click();
   await page.keyboard.press("Escape");
+  await page.mouse.move(0, 0);
+  await waitUntil(
+    "the reveal card to leave the screen",
+    async () => (await tabsCard(page).filter({ visible: true }).count()) === 0,
+  );
+}
+
+/** Keep the failing transition's evidence, before another action changes it. */
+async function waitForReveal(label, page, app, predicate) {
+  try {
+    return await waitUntil(label, predicate);
+  } catch (error) {
+    const renderer = await page.evaluate(() => ({
+      activeGroups: Array.from(
+        document.querySelectorAll('[data-slot="grouped-tab-chip"][data-active="true"]'),
+        (node) => node.getAttribute("data-group-id"),
+      ),
+      selectedTabs: Array.from(
+        document.querySelectorAll('[data-strip-tab-id]:has([role="tab"][aria-selected="true"])'),
+        (node) => node.getAttribute("data-strip-tab-id"),
+      ),
+      panes: Array.from(document.querySelectorAll('[data-slot="split-view-pane"]'), (node) => ({
+        id: node.getAttribute("data-pane-id"),
+        focused: node.getAttribute("data-focused"),
+      })),
+      focus: document.activeElement?.outerHTML.slice(0, 500),
+      overlays: Array.from(
+        document.querySelectorAll(
+          '[data-slot="hover-card-content"], [data-slot="popover-content"], [role="dialog"], [role="menu"], [role="tooltip"]',
+        ),
+      )
+        .filter((node) => node.checkVisibility())
+        .map((node) => ({
+          slot: node.getAttribute("data-slot"),
+          state: node.getAttribute("data-state"),
+          bounds: node.getBoundingClientRect().toJSON(),
+        })),
+    }));
+    throw new Error(
+      `${error.message}; renderer=${JSON.stringify(renderer)}; attached=${JSON.stringify(await attachedViews(app))}`,
+      { cause: error },
+    );
+  }
+}
+
+/** The reveal the tab's Island row offers right now, read from a pinned card. */
+async function islandRevealLabel(page, tabId) {
+  const row = await pinTabsCard(page, tabId);
+  const label = await row.getAttribute("aria-label");
+  await page.keyboard.press("Escape");
+  return label;
 }
 
 /** Close hides immediately, offers Undo, and destroys only after that window. */
@@ -320,6 +384,9 @@ async function groupBrowsers(page, agentTab, personTab) {
   } finally {
     await page.mouse.up();
   }
+  // A group now has a hover inventory. Leave the trigger after dropping:
+  // an open inventory correctly fences native Browser planes underneath it.
+  await page.mouse.move(0, 0);
   await dragSettled(page);
 }
 
@@ -552,19 +619,21 @@ async function main() {
 
   await must(
     4,
-    "Show tab selects without grouping; a tab-edge drop groups both browsers; Show tab then shows that group; hiding keeps ownership",
+    "Show tab selects without grouping; a tab-edge drop groups both browsers; Show tab then shows that group; Hide to Island takes it out of the strip and group, and Open beside chat brings it back",
     async () => {
       await selectChat(page, sessionId);
       const groupId = await activeGroup(page).getAttribute("data-group-id");
       // Close and Undo kept the tab in its pane beside the chat: Show tab shows
       // that group, with the browser's pane in focus.
       await showBeside(page, agentTabId, "Show tab");
-      const grouped = await waitUntil(
+      const grouped = await waitForReveal(
         "Show tab to show the browser's group",
+        page,
+        app,
         async () =>
           (await activeGroup(page).getAttribute("data-group-id")) === groupId &&
           (await attachedViews(app)).includes(agentUrl),
-      ).catch(() => false);
+      );
       // Dragged from its pane's strip up to the top strip, it leaves the group;
       // Show tab now SELECTS it full width and never pulls it back in. The
       // Island lives above its chat's composer, so the chat — chosen from its
@@ -572,27 +641,45 @@ async function main() {
       await ungroupByDrag(page, agentPaneTab(page));
       await showOwningChat(page, sessionId);
       await showBeside(page, agentTabId, "Show tab");
-      const selected = await waitUntil(
-        "Show tab to bring the ordinary browser forward full width",
-        async () =>
-          (await activeGroup(page).count()) === 0 &&
-          (await page.locator('[data-slot="split-view-pane"][data-pane-id]').count()) === 1 &&
-          (await attachedViews(app)).includes(agentUrl),
-      ).catch(() => false);
-      // Both browsers on the top strip: the agent's ordinary tab, and the
-      // person's as the front of its (unshown) group's chip — its first pane's
-      // front — which is also the tab-edge target the drag below aims at.
-      const marks = await browserStripTabs(page).evaluateAll((tabs) =>
-        tabs.map((tab) =>
-          tab.querySelector("[data-browser-tab-mark]")?.getAttribute("data-browser-tab-mark"),
-        ),
+      // Selection and native attachment are different receipts. A correctly
+      // selected Browser may still be yielding its native plane to an overlay;
+      // do not collapse both into selected=false and then destroy the evidence
+      // by carrying on with the next drag.
+      const ordinarySelected = async () =>
+        (await activeGroup(page).count()) === 0 &&
+        (await page.locator('[data-slot="split-view-pane"][data-pane-id]').count()) === 1 &&
+        (await browserStripTabs(page)
+          .filter({ has: page.locator('[data-browser-tab-mark="session"]') })
+          .getAttribute("aria-selected")) === "true";
+      const selected = await waitForReveal(
+        "Show tab to select the ordinary browser full width",
+        page,
+        app,
+        ordinarySelected,
       );
+      await waitForReveal(
+        "the selected ordinary browser's native plane to attach",
+        page,
+        app,
+        async () => (await ordinarySelected()) && (await attachedViews(app)).includes(agentUrl),
+      );
+      // The person's browser is folded into its group's chip while the agent
+      // tab is full width. Its popover rows — real rows, not hidden tab DOM —
+      // prove it still belongs to that group before the edge drop.
+      const targetGroup = page.locator(
+        `[data-slot="grouped-tab-chip"][data-group-id="${groupId}"]`,
+      );
+      const memberIds = (await readChipRows(page, targetGroup)).map((row) => row.id);
+      const person = (await hostTabs(app)).find((tab) => tab.createdBy === "user");
+      if (!person || !memberIds.includes(`browser:${person.tabId}`))
+        throw new Error(`person's browser missing from group: ${JSON.stringify(memberIds)}`);
+      const marks = (await hostTabs(app))
+        .filter((tab) => tab.presentation === "tab")
+        .map((tab) => (tab.createdBy === "session" ? "session" : "user"));
       const agentTab = browserStripTabs(page).filter({
         has: page.locator('[data-browser-tab-mark="session"]'),
       });
-      const personTab = browserStripTabs(page).filter({
-        has: page.locator('[data-browser-tab-mark="user"]'),
-      });
+      const personTab = targetGroup;
       await groupBrowsers(page, agentTab, personTab);
       const both = await waitUntil("both native browser planes in one group", async () => {
         const attached = await attachedViews(app);
@@ -602,6 +689,10 @@ async function main() {
           (await activeGroupRows(page)).filter((row) => row.id?.startsWith("browser:")).length === 2
           ? attached
           : null;
+      }).catch(async (error) => {
+        throw new Error(
+          `${error.message}; attached=${JSON.stringify(await attachedViews(app))}; host=${JSON.stringify(await hostTabs(app))}; groups=${JSON.stringify(await page.locator('[data-slot="grouped-tab-chip"]').evaluateAll((chips) => chips.map((chip) => ({ id: chip.getAttribute("data-group-id"), active: chip.getAttribute("data-active"), target: chip.getAttribute("data-pair-target-id") }))))}; strips=${await browserStripTabs(page).count()}`,
+        );
       });
       // Focus back on the chat, then Show tab: a grouped tab shows its group,
       // with the browser's pane in focus.
@@ -615,21 +706,48 @@ async function main() {
           : null,
       );
       const before = (await hostTabs(app)).find((tab) => tab.tabId === agentTabId);
-      // Hide is no longer a miniature-preview control. Retain its compatibility
-      // bridge assertion separately from the person's reversible Close journey.
-      const hidden = await page.evaluate(
-        (tabId) => window.api.browser.setPresentation({ tabId, presentation: "headless" }),
-        agentTabId,
-      );
-      if (!hidden.ok) throw new Error(hidden.error);
-      const mine = await waitUntil("the tab to leave the strip and return headless", async () => {
-        const found = (await hostTabs(app)).find((tab) => tab.tabId === agentTabId);
-        return found?.presentation === "headless" &&
-          !(await attachedViews(app)).includes(agentUrl) &&
-          (await stripBrowserCount(page)) === 1
-          ? found
-          : null;
+      const panesBefore = await page.locator('[data-slot="split-view-pane"][data-pane-id]').count();
+      // The way back (VC-1118): the agent's own chrome, and only the agent's —
+      // the person's browser beside it offers no such control.
+      const hide = page.getByRole("button", { name: "Hide to Island", exact: true });
+      const hideControls = await hide.count();
+      await hide.click();
+      const mine = await waitUntil(
+        "the tab to leave the strip and its group and return headless",
+        async () => {
+          const found = (await hostTabs(app)).find((tab) => tab.tabId === agentTabId);
+          const attached = await attachedViews(app);
+          return found?.presentation === "headless" &&
+            (await stripBrowserCount(page)) === 1 &&
+            (await page.locator('[data-slot="split-view-pane"][data-pane-id]').count()) ===
+              panesBefore - 1 &&
+            !attached.includes(agentUrl) &&
+            attached.includes(personUrl)
+            ? found
+            : null;
+        },
+      ).catch(async (error) => {
+        throw new Error(
+          `${error.message}; attached=${JSON.stringify(await attachedViews(app))}; host=${JSON.stringify(await hostTabs(app))}; strips=${await stripBrowserCount(page)}; panes=${await page.locator('[data-slot="split-view-pane"][data-pane-id]').count()}; overlays=${await page.locator('[data-slot="hover-card-content"], [data-slot="dropdown-menu-content"]').evaluateAll((elements) => elements.map((e) => e.outerHTML.slice(0, 300)))}`,
+        );
       });
+      // The group it left is still the one on screen, chat and all, so the
+      // Island above the chat lists the tab again with its first reveal.
+      const offered = await islandRevealLabel(page, agentTabId);
+      await showBeside(page, agentTabId, "Open beside chat");
+      const back = await waitUntil(
+        "Open beside chat to bring the hidden tab back beside its chat",
+        async () => {
+          const found = (await hostTabs(app)).find((tab) => tab.tabId === agentTabId);
+          return found?.presentation === "tab" &&
+            (await attachedViews(app)).includes(agentUrl) &&
+            (await stripBrowserCount(page)) === 2 &&
+            (await activeGroupRows(page)).some((row) => row.id === `chat:${sessionId}`)
+            ? found
+            : null;
+        },
+        { timeout: 20000 },
+      );
       return {
         ok:
           grouped !== false &&
@@ -637,11 +755,15 @@ async function main() {
           groupId !== null &&
           groupId === reusedGroupId &&
           marks.toSorted().join(",") === "session,user" &&
+          hideControls === 1 &&
           mine.ownerSessionId === sessionId &&
           mine.generation === before.generation &&
           mine.url === before.url &&
+          offered === "Open beside chat: Agent Fixture" &&
+          back.ownerSessionId === sessionId &&
+          back.generation === before.generation &&
           (await preview(page).count()) === 0,
-        detail: `grouped=${grouped} selected=${selected} marks=${JSON.stringify(marks)} reusedGroup=${groupId === reusedGroupId} both=${JSON.stringify(both)} presentation=${mine.presentation}`,
+        detail: `grouped=${grouped} selected=${selected} marks=${JSON.stringify(marks)} reusedGroup=${groupId === reusedGroupId} both=${JSON.stringify(both)} hideControls=${hideControls} presentation=${mine.presentation} offered=${JSON.stringify(offered)} back=${back.presentation}`,
       };
     },
   );

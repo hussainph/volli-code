@@ -1,14 +1,17 @@
 /**
  * Reaching a top-strip tab the way a person can (VC-614, VC-1052).
  *
- * A tab group draws ONE chip on the top strip: a single `role="tab"`, its
- * FRONT — the focused member while the group is shown, else its first pane's
- * front. The group's other members are not in the top strip's DOM at all. A
- * person reaches them through the chip's popover (hover, right-click, a press
- * on its stacked glyph), whose rows list every tab of every pane in pane
- * order; choosing one brings it to the front of ITS pane and shows the group.
- * These helpers do the same: a tab on the strip is clicked, any other is
- * chosen from a chip's popover row.
+ * A tab group draws ONE chip on a strip: main's direct tab — labeled from the
+ * group (its title, else its front's label) and carrying the group's actions
+ * — with no segments and no +N: the member tabs are not in the strip's DOM at
+ * all. A person reaches them through the chip's popover (hover, right-click,
+ * a press on its stacked glyph), whose rows list every tab of every pane in
+ * pane order; choosing one brings it to the front of ITS pane and shows the
+ * group. These helpers do the same. A tab drawn on a strip is activated
+ * without landing on the hover-revealed "Actions for" control a tab can
+ * carry: Enter on an ordinary tab, a click on a chip's front (a chip's Enter
+ * is the keyboard path into its popover, not a selection). Any other member
+ * is chosen from a chip's popover row.
  */
 
 const CHIP = '[data-slot="grouped-tab-chip"]';
@@ -16,11 +19,12 @@ const POPOVER = '[data-slot="grouped-tab-popover"]';
 const ROW = '[data-slot="grouped-tab-row"]';
 
 /**
- * The popover row a tab belongs to, by the row titles (`grouped-tab-row-title`,
- * the tab's bare label). A tab's accessible name can carry a hint after its
- * label (`"Chat\nWaiting for you"`, `"page · 127.0.0.1:5173/x"`), so a name
- * matches a title it starts with — the LONGEST such title, so "Session 10" is
- * never taken for "Session 1".
+ * The popover row a tab belongs to, by the row titles — each row's primary
+ * label (the first `.truncate.text-ui` inside it), the tab's bare label. A
+ * tab's accessible name can carry a hint after its label (`"Chat\nWaiting for
+ * you"`, `"page · 127.0.0.1:5173/x"`), so a name matches a title it starts
+ * with — the LONGEST such title, so "Session 10" is never taken for
+ * "Session 1".
  */
 export function menuRowIndexFor(name, rowTitles) {
   let best = -1;
@@ -42,7 +46,7 @@ function readRows(popover) {
       id: row.getAttribute("data-tab-id"),
       pane: Number(row.getAttribute("data-pane")),
       front: row.getAttribute("data-front") === "true",
-      title: (row.querySelector('[data-slot="grouped-tab-row-title"]')?.textContent ?? "").trim(),
+      title: (row.querySelector(".truncate.text-ui")?.textContent ?? "").trim(),
       name: row.getAttribute("aria-label") ?? "",
     })),
   );
@@ -112,32 +116,80 @@ export async function ungroupChip(page, chip, { timeout = 8000 } = {}) {
 }
 
 /**
- * Select a top-strip tab.
+ * Select a top-strip tab. The target is either form the smokes have used:
  *
- * - `tab`: a locator for the tab on the top strip, when it may be drawn there
- *   (an ordinary tab, or a chip's front). Visible: it is clicked.
- * - `id` / `label`: how to find it among a chip's popover rows otherwise —
- *   by `data-tab-id` when the id is known, else by {@link menuRowIndexFor}
- *   over the row titles.
+ * - a raw locator for the tab on a strip (main's shape), when it may be drawn
+ *   there — an ordinary tab, or a chip's front;
+ * - a descriptor: `{ tab, id, label }` (VC-1052's shape — `tab` as above) or
+ *   bare `{ id }` / `{ label }` (main's shape), naming the tab wherever the
+ *   strip draws it.
  *
- * `strip` scopes the chips searched (default: the whole page). Every visible
- * chip is right-clicked in turn until one lists the tab; its row is chosen,
- * and the helper returns once the popover is gone and that chip is active.
- * Polls until `timeout`, since the tab may still be arriving.
+ * A visible target is activated the way the strip wants: Enter for an
+ * ordinary tab (never a click, which can land on the hover-revealed
+ * "Actions for" control a compact icon-only tab carries where a person would
+ * click), a click on a chip front's LABEL for a chip's front (a chip's Enter
+ * is the keyboard path into its popover, not a selection). A bare descriptor
+ * finds a tab drawn on a strip first — by its `data-strip-tab-id` (`id`) or
+ * its accessible name (`label`, among tabs that carry one) — then falls back
+ * to the chip search: every visible chip is right-clicked in turn until one
+ * lists the tab — by `data-tab-id` when the id is known, else by
+ * {@link menuRowIndexFor} over its popover rows' titles — whose row is
+ * chosen; the helper returns once the popover is gone and that chip is
+ * active. Polls until `timeout`, since the tab may still be arriving.
  */
 export async function selectStripTab(
   page,
-  { tab, id, label },
+  target,
   { strip = page.locator("body"), timeout = 8000 } = {},
 ) {
+  const { tab, id, label } = typeof target?.first === "function" ? { tab: target } : (target ?? {});
   const popover = page.locator(POPOVER);
   const deadline = Date.now() + timeout;
   const what = id ?? label ?? "a top-strip tab";
   for (;;) {
-    if (tab !== undefined && (await tab.first().isVisible())) {
-      await tab.first().click({ timeout });
-      // A click on an ALREADY shown chip opens its popover, and the pointer
-      // resting on any chip opens it on hover: close it before handing back.
+    const focus =
+      tab !== undefined
+        ? tab.first()
+        : id !== undefined
+          ? page
+              .locator(`[data-strip-tab-id=${JSON.stringify(id)}]`)
+              .getByRole("tab")
+              .filter({ visible: true })
+              .first()
+          : label !== undefined
+            ? page
+                .locator('[data-slot="tab-strip"] [data-strip-tab-id]')
+                .getByRole("tab", { name: label, exact: true })
+                .filter({ visible: true })
+                .first()
+            : undefined;
+    if (focus !== undefined && (await focus.isVisible().catch(() => false))) {
+      const chip = focus.locator('xpath=ancestor::*[@data-slot="grouped-tab-chip"][1]');
+      if ((await chip.count()) > 0) {
+        // A chip's front: a person clicks its label — not the tab's centre
+        // box, under which the hover-revealed "Actions for" control can sit,
+        // and not Enter, which opens the popover (the keyboard path to the
+        // rows) rather than selecting. A click on an ALREADY shown chip also
+        // opens the popover; the pointer parked below closes it again.
+        const labelSpan = focus.locator('[data-slot="tab-label"]');
+        if (
+          await labelSpan
+            .first()
+            .isVisible()
+            .catch(() => false)
+        ) {
+          await labelSpan.first().click({ timeout });
+        } else {
+          await focus.click({ timeout });
+        }
+      } else {
+        // Activate the tab itself, never the hover-revealed "Actions for"
+        // control that can occupy the centre of a compact icon-only tab.
+        await focus.focus({ timeout });
+        await focus.press("Enter", { timeout });
+      }
+      // The pointer resting on any chip opens its popover on hover: close it
+      // before handing back.
       await parkPointer(page);
       await popover.waitFor({ state: "detached", timeout });
       return;
@@ -175,7 +227,7 @@ export async function selectStripTab(
       }
     }
     if (Date.now() > deadline) {
-      throw new Error(`"${what}" is neither on the top strip nor in any group chip's popover`);
+      throw new Error(`"${what}" is neither on the strip nor in any group chip's popover`);
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
   }

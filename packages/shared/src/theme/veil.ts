@@ -80,10 +80,9 @@ export type ThemeVeilTokens = Record<ThemeVeilTokenName, string>;
  * hold there regardless of what this function does. Clamping only decides what
  * happens with an already-broken solve: the closest reachable color, versus an
  * `rgb()` string a compositor clamps itself (silently, to the *wrong* color,
- * which is the bug this guards). `ladder.ts`'s light rung ordering narrows how
- * often this triggers — it does not eliminate it, and saturated seeds (e.g. a
- * fully-vivid cyan) still reach it, which is why this function must not assume
- * its input is in range.
+ * which is the bug this guards). Accent-tinted highlights can exceed what a 10% veil can reproduce, so
+ * this compatibility path must not assume its input is in range. Glass surfaces
+ * use their neutral veil and canvas sampling directly instead.
  */
 export function generateVeilTokens(tokens: ThemeTokens): ThemeVeilTokens {
   const solved = VEILS.map(({ name, target, base }) => {

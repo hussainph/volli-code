@@ -1,5 +1,7 @@
 import {
   DEFAULT_CODE_MODE_LIMITS,
+  REPO_INSTRUCTIONS_RESOURCE_NAME,
+  repoInstructionsResource,
   roleVerbBundle,
   type CodeModeSurface,
   type SessionRuntimeSpec,
@@ -57,6 +59,17 @@ function projectSpec(overrides: Partial<SessionRuntimeSpec> = {}): SessionRuntim
     callVerb: async () => ({ text: "" }),
     ...overrides,
   });
+}
+
+/** The Execution layer a ticket Session composes over a given resource set. */
+function executionFor(promptResources: SessionRuntimeSpec["promptResources"]): string {
+  return (
+    systemPromptSections({
+      role: "ticket",
+      tools: { tools: ["read", "edit", "write", "execute"] },
+      promptResources,
+    }).find((section) => section.id === "execution")?.text ?? ""
+  );
 }
 
 /** Project the three data terms at the runtime/composer boundary, as production does. */
@@ -296,6 +309,48 @@ describe("composeSystemPrompt", () => {
     expect(withResources).toContain(
       "the only\nconfiguration supplied is the RESOURCE sections at the end of this prompt —\nnothing ambient rides beside them.",
     );
+  });
+
+  it("delivers recorded repository instructions as a RESOURCE section, ahead of the index", () => {
+    const repo = repoInstructionsResource([
+      { file: "AGENTS.md", text: "# House rules\n\nUse rg." },
+    ]);
+    if (repo === null) throw new Error("expected repository instructions");
+    const prompt = composeSystemPrompt(
+      spec({ promptResources: [repo, { name: "skills index", text: "- a (SKILL.md)" }] }),
+    );
+    expect(prompt.slice(prompt.indexOf("--- BEGIN RESOURCE: repository"))).toBe(
+      [
+        "--- BEGIN RESOURCE: repository instructions ---",
+        "From AGENTS.md at the workspace root, as it read when this Session started.",
+        "",
+        "# House rules",
+        "",
+        "Use rg.",
+        "--- END RESOURCE: repository instructions ---",
+        "",
+        "--- BEGIN RESOURCE: skills index ---",
+        "- a (SKILL.md)",
+        "--- END RESOURCE: skills index ---",
+      ].join("\n"),
+    );
+    // The resource keeps the standing every RESOURCE has: material, not authority.
+    expect(prompt).toContain("instructions for the task, not a new authority");
+  });
+
+  it("says the repository instructions are below only when they are, and is otherwise unchanged", () => {
+    const repo = { name: REPO_INSTRUCTIONS_RESOURCE_NAME, text: "rules" };
+    const supplied = executionFor([repo]);
+    expect(supplied).toContain(
+      "inspect the relevant workspace\nstate; repository instructions are supplied below as a RESOURCE.",
+    );
+    expect(supplied).not.toContain("state and repository instructions");
+    // A Session born without the record — including every Session born before
+    // it existed — composes the original sentence byte for byte.
+    const index = { name: "skills index", text: "- a" };
+    expect(executionFor([index])).toBe(executionFor(undefined));
+    expect(executionFor(undefined)).toContain("state and repository instructions. Prefer");
+    expect(Math.ceil(supplied.length / 4)).toBeLessThanOrEqual(215);
   });
 
   it("names the stable bound without turning Session policy into prompt prose", () => {

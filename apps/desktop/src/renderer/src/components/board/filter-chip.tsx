@@ -1,4 +1,4 @@
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
+import { FilterIcon, ChevronDownIcon } from "@renderer/components/ui/icon";
 
 import { Button } from "@renderer/components/ui/button";
 import {
@@ -18,13 +18,14 @@ interface FilterChipOption {
 
 interface FilterChipProps {
   label: string;
+  icon?: React.ReactNode;
   options: readonly FilterChipOption[];
   selected: readonly string[];
   onToggle(value: string): void;
 }
 
 /** Generic multi-select facet chip: a dropdown of checkbox options that stays open per-toggle. */
-export function FilterChip({ label, options, selected, onToggle }: FilterChipProps) {
+export function FilterChip({ label, icon, options, selected, onToggle }: FilterChipProps) {
   const active = selected.length > 0;
   // Reserve the icon slot for every option once any option in this menu has
   // one, so labels stay left-aligned across icon and non-icon rows.
@@ -34,14 +35,15 @@ export function FilterChip({ label, options, selected, onToggle }: FilterChipPro
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
-          variant="ghost"
+          variant="toolbar"
           className={cn(
-            "border border-border px-2 text-ui text-muted-foreground",
-            active && "border-border-strong text-foreground",
+            "px-2 text-ui text-muted-foreground",
+            active && "bg-(--accent-selected) text-primary-text",
           )}
         >
+          {icon ?? <FilterIcon aria-hidden />}
           {active ? `${label} · ${selected.length}` : label}
-          <CaretDownIcon className="size-3" />
+          <ChevronDownIcon className="size-3" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">

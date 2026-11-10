@@ -20,21 +20,21 @@ function marked(path: string): string {
 }
 
 /**
- * This host's real login `PATH` as VC-94 measured it, unexpanded tilde and all:
+ * Representative macOS login `PATH`, with an unexpanded tilde:
  * `path_helper` appends the literal text of `/etc/paths.d/dotnet-cli-tools`,
  * written there by Microsoft's .NET CLI installer, to every login shell on the
  * machine.
  */
-const MEASURED_HOST_PATH =
-  "/Users/phalasiya/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:" +
+const EXAMPLE_LOGIN_PATH =
+  "/Users/example/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:" +
   "/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:" +
   "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:" +
   "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:" +
   "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:" +
-  "/pkg/env/global/bin:/Library/Apple/usr/bin:" +
-  "/Applications/Wireshark.app/Contents/MacOS:/usr/local/share/dotnet:~/.dotnet/tools:" +
-  "/Applications/quarto/bin:/Users/phalasiya/.vite-plus/bin:/Users/phalasiya/.cargo/bin:" +
-  "/Users/phalasiya/Library/Application Support/Volli Code/bin";
+  "/opt/tools/bin:/Library/Apple/usr/bin:" +
+  "/Applications/ExampleTool.app/Contents/MacOS:/usr/local/share/dotnet:~/.dotnet/tools:" +
+  "/Applications/ExampleDocs/bin:/Users/example/.vite-plus/bin:/Users/example/.cargo/bin:" +
+  "/Users/example/Library/Application Support/Volli Code/bin";
 
 /** A shell that printed this and exited on its own terms. */
 function successful(stdout: string): LoginShellRun {
@@ -153,12 +153,12 @@ describe("parseLoginShellPathOutput", () => {
     }
   });
 
-  // VC-94's live bug, reproduced from this host: the all-or-nothing rule this
+  // Regression fixture: the all-or-nothing rule this
   // test guards against turned all 20 good entries into nothing because of the
   // one tilde entry, leaving structured sessions on launchd's bare four.
-  it("keeps the rest of this host's measured login PATH when the dotnet tilde entry is present", () => {
-    expect(parseLoginShellPathOutput(`__VOLLI_PATH__${MEASURED_HOST_PATH}`)).toBe(
-      MEASURED_HOST_PATH.replace("~/.dotnet/tools:", ""),
+  it("keeps the rest of a login PATH when the dotnet tilde entry is present", () => {
+    expect(parseLoginShellPathOutput(`__VOLLI_PATH__${EXAMPLE_LOGIN_PATH}`)).toBe(
+      EXAMPLE_LOGIN_PATH.replace("~/.dotnet/tools:", ""),
     );
   });
 });
@@ -294,14 +294,14 @@ describe("probeLoginShellPath", () => {
     }
   });
 
-  // A2's one behaviour change: detection used to report this host's PATH with
+  // A2's one behaviour change: detection used to report a PATH with
   // the unexpanded `~/.dotnet/tools` still in it, so the Settings pane named a
   // directory no shell would ever search — and the two probes reported
   // different environments for the same host. One parser, one answer.
   it("drops a tilde entry from what detection reports, as adoption already did", async () => {
-    const dotnet = shell(async () => successful(marked(MEASURED_HOST_PATH)));
+    const dotnet = shell(async () => successful(marked(EXAMPLE_LOGIN_PATH)));
     const deps = { env: { SHELL: "/bin/zsh" }, runShell: dotnet.runShell };
-    const expected = MEASURED_HOST_PATH.replace("~/.dotnet/tools:", "");
+    const expected = EXAMPLE_LOGIN_PATH.replace("~/.dotnet/tools:", "");
 
     expect(await probeLoginShellPath(DETECTION_PROBE, deps)).toBe(expected);
     expect(await probeLoginShellPath(ADOPTION_PROBE, deps)).toBe(expected);

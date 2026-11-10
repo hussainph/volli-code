@@ -10,10 +10,10 @@ import type {
 import {
   INSTRUCTIONS_PLACEHOLDER,
   MANUAL_TRIGGER_LABEL,
-  SCHEDULE_SKIPPED_OCCURRENCE_POLICY,
   automationHistory,
   duplicateName,
   groupByOwnership,
+  groupByTrigger,
   laneDropRank,
   laneRowId,
   listingRunTarget,
@@ -61,7 +61,7 @@ function run(overrides: Partial<AutomationRun> = {}): AutomationRun {
 
 describe("vocabulary", () => {
   it("names the default Trigger as a complete answer, not an absent one", () => {
-    expect(MANUAL_TRIGGER_LABEL).toBe("Only when I run it");
+    expect(MANUAL_TRIGGER_LABEL).toBe("Manual only");
   });
 
   it("pushes the Instructions placeholder toward /skill rather than prose", () => {
@@ -99,7 +99,7 @@ describe("triggerLabel", () => {
 
 describe("runtimeLabel", () => {
   it("says inherit as a sentence rather than leaving a blank", () => {
-    expect(runtimeLabel(null)).toBe("Default model");
+    expect(runtimeLabel(null)).toBe("Project default");
   });
 
   it("prints a pin as one model-and-reasoning pair, never half of it", () => {
@@ -147,16 +147,14 @@ describe("a Run prints its own evidence", () => {
   });
 
   it("says nothing about an empty history until the read has landed (VC-297)", () => {
-    // "Nothing has run" is a claim about the past, and an unread cache cannot
+    // "No runs yet" is a claim about the past, and an unread cache cannot
     // make it. A cold cache is the ordinary state on every record the reader
-    // picks, so this is the difference between silence and a false sentence.
-    expect(historyEmptyCopy("automation-1", false)).toBeNull();
-    expect(historyEmptyCopy(null, false)).toBeNull();
+    // picks, so this is the difference between silence and a false label.
+    expect(historyEmptyCopy(false)).toBeNull();
   });
 
-  it("names the scope once it knows the answer is empty", () => {
-    expect(historyEmptyCopy("automation-1", true)).toBe("Nothing has run this Automation yet.");
-    expect(historyEmptyCopy(null, true)).toBe("Nothing has run in this project yet.");
+  it("says so in a short label once it knows the answer is empty", () => {
+    expect(historyEmptyCopy(true)).toBe("No runs yet");
   });
 
   it("never names a schedule for an unattended Run", () => {
@@ -347,19 +345,19 @@ describe("triggerLabel for a schedule", () => {
         kind: "schedule",
         schedule: { preset: "daily", hour: 21, minute: 0, timeZone: "Europe/London" },
       }),
-    ).toBe("Every day at 21:00 Europe/London");
+    ).toBe("Daily · 21:00 · Europe/London");
     expect(
       triggerLabel({
         kind: "schedule",
         schedule: { preset: "hourly", minute: 5, timeZone: "America/New_York" },
       }),
-    ).toBe("Hourly at :05 past the hour America/New_York");
+    ).toBe("Hourly · :05 · America/New_York");
     expect(
       triggerLabel({
         kind: "schedule",
         schedule: { preset: "weekly", weekday: "monday", hour: 8, minute: 30, timeZone: "UTC" },
       }),
-    ).toBe("Weekly on Monday at 08:30 UTC");
+    ).toBe("Mondays · 08:30 · UTC");
   });
 });
 
@@ -414,20 +412,20 @@ describe("automationHistory", () => {
 
 describe("skipReasonLabel", () => {
   it("says Skipped in every arm, so a skip is never a silence", () => {
-    expect(skipReasonLabel(skip())).toBe("Skipped — Volli wasn’t running");
+    expect(skipReasonLabel(skip())).toBe("Skipped · Volli was closed");
     // A machine asleep at 21:00 with the app open is not a closed app, and the
     // row says what was observed rather than a cause it cannot know.
     expect(skipReasonLabel(skip({ reason: { kind: "not-observed" } }))).toBe(
-      "Skipped — Volli didn’t wake in time",
+      "Skipped · Volli didn’t wake in time",
     );
     expect(
       skipReasonLabel(
         skip({ reason: { kind: "run-refused", code: "MODEL_REQUIRED", error: "Choose a model." } }),
       ),
-    ).toBe("Skipped — Choose a model.");
+    ).toBe("Skipped · Choose a model.");
     // The cause may be unreadable; that something did not run must not be.
     expect(skipReasonLabel(skip({ reason: { kind: "unknown" } }))).toBe(
-      "Skipped — reason unreadable",
+      "Skipped · Reason unavailable",
     );
   });
 });
@@ -476,12 +474,13 @@ describe("nextScheduledRun (VC-298)", () => {
     const now = Date.UTC(2026, 2, 7, 12);
     const result = next(daily(9, KUWAIT), now);
     expect(result.at).toBe(Date.UTC(2026, 2, 8, 6, 30));
-    expect(result.label).toMatch(/^Next: /);
-    expect(result.label).toContain("1:30");
+    expect(result.label).toMatch(/^Next · /);
+    expect(result.label).toContain("09:30");
+    expect(result.label).toContain("Asia/Kuwait");
     // The same instant, read on a Mac in Kuwait instead: a different clock face.
     const inKuwait = next(daily(9, KUWAIT), now, KUWAIT).label;
-    expect(inKuwait).toContain("9:30");
-    expect(inKuwait).not.toBe(result.label);
+    expect(inKuwait).toContain("09:30");
+    expect(inKuwait).toBe(result.label);
   });
 
   it("staggers an on-the-hour schedule inside the stagger window", () => {
@@ -490,10 +489,29 @@ describe("nextScheduledRun (VC-298)", () => {
     expect(at).toBeGreaterThanOrEqual(Date.UTC(2026, 2, 8, 6));
     expect(at).toBeLessThan(Date.UTC(2026, 2, 8, 6, 5));
   });
+});
 
-  it("states the scheduler's grace and what happens outside it", () => {
-    expect(SCHEDULE_SKIPPED_OCCURRENCE_POLICY).toBe(
-      "Runs up to 2 min late; skipped if Volli is closed or the Mac is asleep",
-    );
+describe("display grouping", () => {
+  it("groups by trigger and sorts names with id ties without touching rank", () => {
+    const rows = [
+      automation({ id: "b", name: "Same", trigger: { kind: "none" } }),
+      automation({ id: "z", name: "Zed", trigger: { kind: "columns", columns: ["doing"] } }),
+      automation({ id: "a", name: "Same", trigger: { kind: "none" } }),
+      automation({
+        id: "s",
+        name: "Schedule",
+        trigger: {
+          kind: "schedule",
+          schedule: { preset: "weekdays", hour: 9, minute: 17, timeZone: "UTC" },
+        },
+      }),
+    ];
+    expect(groupByTrigger(rows, "").map((g) => g.automations.map((a) => a.id))).toEqual([
+      ["s"],
+      ["z"],
+      ["a", "b"],
+    ]);
+    expect(groupByTrigger(rows, "  WEEKDAYS ")[0]?.automations.map((a) => a.id)).toEqual(["s"]);
+    expect(groupByTrigger(rows, "no match").every((g) => g.automations.length === 0)).toBe(true);
   });
 });

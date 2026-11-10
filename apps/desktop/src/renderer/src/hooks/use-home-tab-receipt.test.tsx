@@ -46,5 +46,5 @@ it("only records a settled, changed, nonempty fallback without a focused overlay
     act(() => root.render(<Harness receipt={{ ...base, ...receipt }} />));
   expect(recordResolvedTab).not.toHaveBeenCalled();
   act(() => root.render(<Harness receipt={base} />));
-  expect(recordResolvedTab).toHaveBeenCalledExactlyOnceWith("project", "chat:real");
+  expect(recordResolvedTab).toHaveBeenCalledExactlyOnceWith("project", "chat:real", "chat:closed");
 });

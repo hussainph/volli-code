@@ -1,3 +1,4 @@
+import { isSharedPreferenceKey, mergePreferenceSnapshot } from "../preference-patch";
 import { pageClientEventSink } from "./client-event-sink";
 import { assertRendererAppStateKey } from "./app-state-key-guard";
 import { randomUUID } from "node:crypto";
@@ -9,6 +10,8 @@ import {
   listMaterializableLinks,
   listMcpOperations,
   getAllAppState,
+  getAppState,
+  deleteAppState,
   setAppState,
   MIN_READER_VERSION_KEY,
   listAllLabels,
@@ -180,7 +183,12 @@ import {
   type SessionListingSources,
   type SessionPeekContentPorts,
 } from "@volli/host-core/sessions";
-import { broadcastDataChanged, broadcastSessionActivity, windowEventBus } from "./broadcast";
+import {
+  broadcastAppStateChanged,
+  broadcastDataChanged,
+  broadcastSessionActivity,
+  windowEventBus,
+} from "./broadcast";
 import { deliverNotification } from "./notifications/runtime";
 import { exportDatabase } from "./menu";
 import {
@@ -273,6 +281,19 @@ function databaseStorageBytes(dbPath: string): number {
 function ticketScope(db: Database.Database, ticketId: string): { projectId?: string } {
   const projectId = getTicketRow(db, ticketId)?.project_id;
   return projectId === undefined ? {} : { projectId };
+}
+
+/**
+ * Puts back the value a main-side effect refused (VC-1037): the renderer's
+ * failed write and the row agree, including the "never written" case.
+ */
+function restoreAppState(
+  db: Database.Database,
+  key: Parameters<typeof getAppState>[1],
+  previous: string | undefined,
+): void {
+  if (previous === undefined) deleteAppState(db, key);
+  else setAppState(db, key, previous, Date.now());
 }
 
 function buildBootstrapPayload(db: Database.Database): BootstrapPayload {
@@ -409,6 +430,13 @@ export function registerDataIpcHandlers(
     blobsRoot?: string;
     /** Main-owned MCP settings/discovery service; injected in focused IPC tests. */
     mcpSettings?: McpSettingsService;
+    /**
+     * A main-side effect a write has to apply before the renderer is told the
+     * value is durable (VC-1037): the Keep-working switch also owns this Mac's
+     * login item, which macOS can refuse. A refusal restores the previous
+     * value, so the switch and the stored preference never disagree.
+     */
+    onAppStateSet?: (key: string, value: string) => AppStateSetResult;
     /**
      * Where Pi keeps its sidecars and the tool output saved beside them
      * (VC-469). Archiving or deleting a ticket removes its Sessions' saved
@@ -692,13 +720,14 @@ export function registerDataIpcHandlers(
       }
       const project = updateProjectAuthorityPolicy(db, input.id, override, Date.now());
       if (!project) return { ok: false, error: "Unknown project" };
+      broadcastDataChanged();
       return { ok: true, project };
     },
 
     "volli:mcp-list": (input: McpProjectInput) => ({
       ok: true as const,
       servers: mcpSettings.list(input.projectId),
-      operations: listMcpOperations(db, input.projectId),
+      operations: listMcpOperations(db, mcpSettings.global ? null : input.projectId),
       access: mcpSettings.accessFor(input.projectId),
     }),
     "volli:mcp-test": (input: McpServerInput) => mcpSettings.test(input),
@@ -989,9 +1018,14 @@ export function registerDataIpcHandlers(
      *
      * The caller already moved its own row optimistically; the answer is what it
      * reverts to if this failed.
+     *
+     * No fold for the existence check, and the row comes from the listing's
+     * one-row read (VC-1101): a receipt moves no ledger fact, so a click — or a
+     * fleet of them — costs a base-row read and a cached listing row, never a
+     * checkpoint decode and whole-projection copy.
      */
     "volli:session-read-set": async (input: SessionReadSetInput): Promise<SessionReadSetResult> => {
-      const existing = await sessionEngine.getSession({ sessionId: input.sessionId });
+      const existing = await sessionEngine.getBaseSession({ sessionId: input.sessionId });
       if (existing === null) return { ok: false, error: "Unknown session" };
       // Main's clock, never the renderer's: the receipt is main's record, and a
       // stamp from a window with a skewed clock would date the dot wrongly for
@@ -1000,7 +1034,7 @@ export function registerDataIpcHandlers(
       await publishSessionListingRow(
         {
           db,
-          getSession: (query) => sessionEngine.getSession(query),
+          getSessionListing: (query) => sessionEngine.getSessionListing(query),
           liveAttachmentIds,
           publish: broadcastSessionActivity,
         },
@@ -1107,15 +1141,38 @@ export function registerDataIpcHandlers(
       label: board("board.setLabelColor", input).label,
     }),
 
-    "volli:app-state-set": (key: string, value: string): AppStateSetResult => {
+    "volli:app-state-set": (key: string, value: string, ...rest): AppStateSetResult => {
+      const sender = rest.at(-1);
+      if (typeof sender !== "object" || sender === null) throw new Error("Missing app window.");
+      const baseValue = typeof rest[0] === "string" ? rest[0] : undefined;
       // The schema floor is the migration runner's alone (VC-602): a renderer
       // write could lock older builds out of this database, or let them in.
       if (key === MIN_READER_VERSION_KEY) {
         return { ok: false, error: "This app state key is owned by the database." };
       }
       assertRendererAppStateKey(key);
-      setAppState(db, key, value, Date.now());
-      return { ok: true };
+      const previous = getAppState(db, key);
+      const accepted = isSharedPreferenceKey(key)
+        ? mergePreferenceSnapshot(previous ?? undefined, baseValue, value)
+        : value;
+      setAppState(db, key, accepted, Date.now());
+      try {
+        const acknowledged = options.onAppStateSet?.(key, accepted);
+        if (acknowledged !== undefined && !acknowledged.ok) {
+          restoreAppState(db, key, previous);
+          return acknowledged;
+        }
+      } catch (error) {
+        restoreAppState(db, key, previous);
+        return { ok: false, error: errorMessage(error) };
+      }
+      // Only shared presentation snapshots use this generic write path.
+      // Theme/appearance and retention publish from their semantic handlers;
+      // drafts and workspace snapshots must not be serialized to peer windows.
+      if (isSharedPreferenceKey(key)) broadcastAppStateChanged(key, accepted, sender.id);
+      return isSharedPreferenceKey(key) && baseValue !== undefined
+        ? { ok: true, value: accepted }
+        : { ok: true };
     },
 
     "volli:worktree-remove": async (input: WorktreeRemoveInput): Promise<WorktreeRemoveResult> => {
@@ -1665,7 +1722,7 @@ export function registerDataIpcHandlers(
       return { ok: true, days: getRetentionTtlDays(db) };
     },
 
-    "volli:retention-ttl-set": (input: RetentionTtlSetInput): RetentionTtlResult => {
+    "volli:retention-ttl-set": (input: RetentionTtlSetInput, sender): RetentionTtlResult => {
       const stored = setRetentionTtlDays(db, input.days, Date.now());
       // Every eligibility date the cached scan proposed was measured against the
       // OLD window, so that proposal no longer describes this app's policy
@@ -1677,6 +1734,8 @@ export function registerDataIpcHandlers(
       // The TTL clock is GLOBAL — it moves every Done ticket's archive-readiness
       // at once, so this is untargeted: every retention surface must re-evaluate.
       broadcastDataChanged({ kind: "retention" });
+      // The board invalidation does not refresh a renderer's cached TTL.
+      broadcastAppStateChanged("volli:retention", JSON.stringify({ ttlDays: stored }), sender.id);
       return { ok: true, days: stored };
     },
 

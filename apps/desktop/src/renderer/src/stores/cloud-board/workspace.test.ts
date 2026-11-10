@@ -361,6 +361,70 @@ describe("joining and leaving a Workspace", () => {
     expect(useCloudWorkspaceStore.getState().workspace?.id).toBe("w1");
     h.stop();
   });
+  it("does not query for a selection already cancelled by its caller", async () => {
+    const h = harness();
+    h.connect();
+    const query = vi.spyOn(h.cloud.session.client, "query");
+    const request = new AbortController();
+    const cancelled = new Error("Navigation superseded");
+    request.abort(cancelled);
+
+    await expect(selectCloudWorkspace("w2", h.cloud.session, request.signal)).rejects.toBe(
+      cancelled,
+    );
+    expect(query).not.toHaveBeenCalled();
+    expect(h.cloud.watchers("projects:list", { workspaceId: "w2" })).toBe(0);
+    h.stop();
+  });
+  it("does not apply a membership answer after the navigation times out", async () => {
+    const h = harness();
+    h.connect();
+    h.cloud.answer("workspaces:listMine", {}, [W1, W2]);
+    let answer!: (row: typeof W2) => void;
+    h.cloud.queries.set(
+      "workspaces:get",
+      () =>
+        new Promise<typeof W2>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const request = new AbortController();
+    const selecting = selectCloudWorkspace("w2", h.cloud.session, request.signal);
+    const timedOut = new Error("Navigation timed out");
+    request.abort(timedOut);
+    answer(W2);
+
+    await expect(selecting).rejects.toBe(timedOut);
+    expect(useCloudWorkspaceStore.getState().workspace?.id).toBe("w1");
+    expect(h.cloud.watchers("projects:list", { workspaceId: "w2" })).toBe(0);
+    h.stop();
+  });
+  it("allows a new selection while a cancelled membership query is still unanswered", async () => {
+    const h = harness();
+    h.connect();
+    h.cloud.answer("workspaces:listMine", {}, [W1, W2]);
+    let answer!: (row: typeof W2) => void;
+    h.cloud.queries.set(
+      "workspaces:get",
+      () =>
+        new Promise<typeof W2>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const request = new AbortController();
+    const first = selectCloudWorkspace("w2", h.cloud.session, request.signal);
+    const cancelled = new Error("Navigation superseded");
+    request.abort(cancelled);
+    h.cloud.queries.set("workspaces:get", () => W1);
+
+    await selectCloudWorkspace("w1", h.cloud.session);
+    expect(useCloudWorkspaceStore.getState().workspace?.id).toBe("w1");
+    answer(W2);
+    await expect(first).rejects.toBe(cancelled);
+    expect(useCloudWorkspaceStore.getState().workspace?.id).toBe("w1");
+    expect(h.cloud.watchers("projects:list", { workspaceId: "w2" })).toBe(0);
+    h.stop();
+  });
   it("refuses a selection when the socket drops during its membership read", async () => {
     const h = harness();
     h.connect();

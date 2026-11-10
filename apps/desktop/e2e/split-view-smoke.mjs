@@ -90,8 +90,8 @@ const DRAGGED_FILE = "README.md";
 const FILE_ROW = `[data-testid="ticket-files-row"][data-path="${DRAGGED_FILE}"]`;
 /**
  * A second committed file, for the reorder check's second movable tab. At the
- * repository ROOT on purpose: the navigator lists one folder at a time, so a
- * file under `docs/` is not a row until somebody opens `docs/`.
+ * repository ROOT on purpose: the navigator's folders start folded, so a file
+ * under `docs/` is not a row until somebody opens `docs/`.
  */
 const SECOND_FILE = "second.md";
 const SECOND_ROW = `[data-testid="ticket-files-row"][data-path="${SECOND_FILE}"]`;
@@ -102,6 +102,11 @@ const SECOND_ROW = `[data-testid="ticket-files-row"][data-path="${SECOND_FILE}"]
  * Visible cells only, in reading order. A shown group's cell draws its OWN
  * strip (its stack, front selected); the one full-width cell draws none, and
  * then holds the top strip's selected tab.
+ *
+ * "Visible" is meant literally: while a Ticket view has taken Home over, Home's
+ * own plane stays mounted behind `<Activity mode="hidden">` (VC-1080) — its
+ * grid, its `root` cell and all — so a document-wide read would see that
+ * hidden plane's cells beside the ticket's (VC-1102).
  */
 function readPanes(page) {
   return page.evaluate(() => {
@@ -109,6 +114,7 @@ function readPanes(page) {
       '[data-slot="split-view-tab-bar"] [role="tab"][aria-selected="true"]',
     );
     return Array.from(document.querySelectorAll('[data-slot="split-view-pane"][data-pane-id]'))
+      .filter((cell) => cell.checkVisibility())
       .toSorted((first, second) => {
         const a = first.getBoundingClientRect();
         const b = second.getBoundingClientRect();
@@ -116,7 +122,7 @@ function readPanes(page) {
       })
       .map((cell) => {
         const empty = cell.querySelector('[data-slot="pane-empty-state"]') !== null;
-        const strip = cell.querySelector(':scope > [data-slot="tab-strip"]');
+        const strip = cell.querySelector('[data-slot="tab-strip"]');
         const tabs =
           strip === null
             ? empty || selected === null
@@ -153,11 +159,14 @@ function readPanes(page) {
 async function hasOneTopStrip(page, label = "Ticket tabs") {
   return page.evaluate((name) => {
     const bars = document.querySelectorAll('[data-slot="split-view-tab-bar"]');
-    const cells = document.querySelectorAll('[data-slot="split-view-pane"][data-pane-id]');
-    const stripped = Array.from(cells).filter(
-      (cell) => cell.querySelector(':scope > [data-slot="tab-strip"]') !== null,
+    // The plane in front only — Home's hidden one stays mounted (see readPanes).
+    const cells = Array.from(
+      document.querySelectorAll('[data-slot="split-view-pane"][data-pane-id]'),
+    ).filter((cell) => cell.checkVisibility());
+    const stripped = cells.filter(
+      (cell) => cell.querySelector('[data-slot="tab-strip"]') !== null,
     ).length;
-    const empties = Array.from(cells).filter(
+    const empties = cells.filter(
       (cell) => cell.querySelector('[data-slot="pane-empty-state"]') !== null,
     ).length;
     return (
@@ -231,7 +240,7 @@ function selectTopTab(page, label) {
  */
 async function draggableTab(page, label) {
   const inPane = page
-    .locator('[data-slot="split-view-pane"] > [data-slot="tab-strip"]')
+    .locator('[data-slot="split-view-pane"] > [data-slot="tab-strip"]:visible')
     .getByRole("tab", { name: label, exact: true })
     .first();
   return (await inPane.count()) > 0 ? inPane : topTab(page, label);
@@ -311,9 +320,13 @@ function readFocus(page) {
 
 /** A menu row inside the focused (empty) pane. */
 function paneMenuRow(page, label) {
-  return page.locator(
-    `[data-slot="split-view-pane"][data-focused="true"] [data-slot="pane-empty-row"][aria-label="${label}"]`,
-  );
+  return {
+    async click(options = {}) {
+      const pane = page.locator('[data-slot="split-view-pane"][data-focused="true"]');
+      await pane.getByRole("button", { name: "Pane actions", exact: true }).click(options);
+      await page.getByRole("menuitem", { name: label, exact: true }).click(options);
+    },
+  };
 }
 
 /** The zone the pointer is currently in, per pane — the drag's own feedback. */
@@ -333,7 +346,7 @@ function cardById(page, displayId) {
   const exact = new RegExp(`^${displayId}$`);
   return page
     .locator("article")
-    .filter({ has: page.locator("span.font-mono", { hasText: exact }) });
+    .filter({ visible: true, has: page.locator("span.font-mono", { hasText: exact }) });
 }
 
 async function openTicketViaCard(page, displayId) {
@@ -417,7 +430,7 @@ async function readSurfaceTabs(page) {
 /** The box of one pane cell, as the pointer sees it. */
 async function paneBox(page, paneId) {
   const box = await page
-    .locator(`[data-slot="split-view-pane"][data-pane-id="${paneId}"]`)
+    .locator(`[data-slot="split-view-pane"][data-pane-id="${paneId}"]:visible`)
     .first()
     .boundingBox();
   if (box === null) throw new Error(`no bounding box for pane ${paneId}`);
@@ -558,7 +571,7 @@ async function main() {
 
         // A file OPENED from the rail while the group is shown joins the
         // focused pane — pane 2 — in front of the terminal.
-        const aside = page.locator("aside");
+        const aside = page.locator('[data-inspector-panel][data-shown="true"]');
         await aside.getByTestId("ticket-rail-tab-files").click();
         await waitUntil(
           "the second file row",
@@ -818,11 +831,11 @@ async function main() {
       8,
       "a file row dragged from the rail onto a pane's right edge opens it in a new pane",
       async () => {
-        const aside = page.locator("aside");
+        const aside = page.locator('[data-inspector-panel][data-shown="true"]');
         await aside.getByTestId("ticket-rail-tab-files").click();
         await waitUntil(
-          "the files list",
-          async () => (await aside.getByTestId("ticket-files-list").count()) === 1,
+          "the files tree",
+          async () => (await aside.getByRole("tree", { name: "Files" }).count()) === 1,
           { timeout: 10_000 },
         );
         await waitUntil("the file row", async () => (await aside.locator(FILE_ROW).count()) === 1, {
@@ -854,7 +867,7 @@ async function main() {
         // The zones are a render away from the announcement, not a tick.
         await waitUntil(
           "the panes to offer their zones",
-          async () => (await page.locator('[data-slot="split-drop-zones"]').count()) > 0,
+          async () => (await page.locator('[data-slot="split-drop-zones"]:visible').count()) > 0,
           { timeout: 4000 },
         );
 
@@ -951,6 +964,7 @@ async function main() {
         const paneTabs = panes.flatMap((pane) => pane.tabs);
         const listed =
           menu.length === paneTabs.length &&
+          new Set(menu.map((row) => row.id)).size === menu.length &&
           menu.every(
             (row, i) =>
               row.title.length > 0 &&
@@ -1029,7 +1043,7 @@ async function main() {
 
     // ---- 10. A within-strip reorder still means what it meant ---------------
     await attempt(10, "a drag inside the top strip reorders it, exactly as before", async () => {
-      const aside = page.locator("aside");
+      const aside = page.locator('[data-inspector-panel][data-shown="true"]');
       // Pin both files so neither can replace the other as a preview.
       await aside.locator(FILE_ROW).dblclick();
       await aside.locator(SECOND_ROW).dblclick();
@@ -1051,9 +1065,13 @@ async function main() {
       const target = await topTab(page, leading).boundingBox();
       if (target === null) return { ok: false, detail: "no box for the leading tab" };
       // Drag the trailing tab onto the leading one: the two swap.
-      await dragTabTo(page, trailing, {
-        x: Math.round(target.x + target.width / 2),
-        y: Math.round(target.y + target.height / 2),
+      await dragTabTo(page, trailing, async () => {
+        const current = await topTab(page, leading).boundingBox();
+        if (!current) throw new Error("leading tab disappeared during reorder");
+        return {
+          x: Math.round(current.x + current.width / 2),
+          y: Math.round(current.y + current.height / 2),
+        };
       });
       const after = await waitUntil(
         "the strip to reorder",
@@ -1233,7 +1251,7 @@ async function main() {
           groups.length === 1 &&
           groups[0].id === groupId &&
           groups[0].active &&
-          JSON.stringify(groups[0].tabs) === JSON.stringify(["Board", "Chat"]) &&
+          JSON.stringify(groups[0].tabs) === JSON.stringify(["Board", terminal, "Chat"]) &&
           (await hasOneTopStrip(page, "Home tabs")),
         detail: `panes=${JSON.stringify(after)} groups=${JSON.stringify(groups)}`,
       };

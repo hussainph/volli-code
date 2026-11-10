@@ -1,1260 +1,165 @@
 # Volli
 
-Planner and execution app for coding agents: one board and one Session history, with agents running on Runners. This glossary is the canonical project language. Definitions describe domain contracts; code and tests remain authoritative for implemented behavior. Volli Cloud terms below name the target architecture; where the code still runs the older local or host model, the entry says so.
+Domain glossary; linked code and tests establish current behavior. **Planned** marks a concept or extension without a complete implementation. Each term has a stable anchor.
 
 ## Language
 
-**Workspace**:
-The team container: projects (boards, tickets, history), Members and roles,
-billing, and shared connections (GitHub App, secrets, MCP, skills, plugins,
-agents, instructions, model keys). Every account gets one at signup, named
-after the person; inviting someone just adds a Member. One Workspace is open at
-a time, with a switcher. Projects can move between Workspaces. Not a database
-file, a worktree, or the ticket surface (**Ticket view**). Persisted names
-such as the `volli:workspace` app-state key, the stored `workspaceRailHidden`
-field and the `workspace_id` columns of `board_command_receipts` and
-`workspace_epochs` predate this meaning and hold project state; they are wire
-format, kept for older builds, and code reading them says project.
-_Avoid_: org, personal workspace (the signup Workspace is an ordinary one;
-there are no Workspace types), Ticket workspace
-
-**Member**:
-A person's membership in one Workspace, with a role; it can be suspended
-without deleting anything they did. The account, its Runners, personal model
-connections and personal secrets belong to the person, not the Workspace.
-_Avoid_: user (for the membership), seat
-
-**Runner**:
-Where a Session's tools and its agent loop (Pi) run: the person's Mac, a Linux
-box they installed with one command, or a **Volli Cloud runner**. A runner
-connects outbound to the backend, holds Working copies and its own Retry
-buffer, and never holds board authority. A Mac runner runs only its owner's
-work. Planned as `apps/runner` (`volli-runner`); today's nearest code is
-`hostd` and the desktop's own host.
-_Avoid_: host, worker, box (in copy), device (that is the viewing machine)
-
-**Volli Cloud runner**:
-A disposable cloud environment run by Volli that acts as a Runner. It sleeps
-when idle and pauses while its agent waits on a person.
-_Avoid_: Orb, sandbox (in copy), VM, managed host
-
-**Place**:
-Where a ticket's or Session's tools run: one Runner, shown as a small label. A
-Session's default Place is its ticket's Place; the composer's environment
-picker and `--env` choose another. When the ticket's Place is someone else's
-Mac, a teammate's Session falls back to their own default Runner.
-_Avoid_: venue, execution venue, location
-
-**Working copy**:
-A ticket's git checkout on one Runner: one per ticket per machine, shared by
-that machine's Sessions. Today it is the **Ticket worktree** (or the **Main
-checkout** for a worktree-opt-out ticket; a Board Session stands in the Main
-checkout). Another Runner starts from what is pushed; uncommitted work is shown as "uncommitted on <machine>", never moved
-behind the person's back.
-_Avoid_: checkout lease, workspace, sandbox
-
-**Retry buffer**:
-A Runner's ordered, crash-safe local queue of durable facts the backend has not
-yet accepted. Each fact is its own mutation, idempotent by `commandId`; the
-agent never waits on it, and the backend assigns final order. Only Runners have
-one; a Client holds no unaccepted facts.
-_Avoid_: offline queue, outbox (in copy), sync
-
-**Client**:
-Anything a person reads projections and sends commands through: the desktop
-window, a web or phone client, the CLI. Holds no durable facts of its own and
-never talks to databases.
-_Avoid_: renderer (only one client), Runner
-
-**Model gateway**:
-The backend service that holds personal API keys and Workspace model keys and hands
-Runners short-lived Runner tokens for inference. Usage is attributed to the
-Session owner's connection. Subscriptions never pass through it: they stay on
-the person's machine.
-_Avoid_: proxy, key store (it does not hand out raw keys)
-
-**Runner token**:
-A short-lived, scoped credential a Runner presents to the backend or the Model
-gateway, never a long-lived key: the Runner's own sign-in (minutes long, for its
-runner-wide calls), or one scoped to a single Session or job.
-_Avoid_: API key, device credential
-
-**Refresh credential**:
-The one long-lived secret a linked Runner holds, exchanged for a Runner token
-and replaced by a new one at every exchange. A copy used after its replacement
-disconnects the Runner.
-_Avoid_: runner key, API key
-
-**Environment recipe**:
-A project's description of how to set up a Runner for it: size, setup and
-resume scripts (`.agents/setup` and `.agents/resume` in the repository, which
-run behind the `cloud` flag today) and the secrets they need.
-An agent usually writes it; a form is the fallback.
-_Avoid_: Dockerfile, image, template
-
-**Config level**:
-One of the four places configuration is defined: personal, Workspace, project,
-and repo files (`AGENTS.md`, `.agents/*`, `.mcp.json`), which always apply.
-Define at the widest level that is true, switch on at the narrowest level that
-is needed. Precedence is personal > project > Workspace; admin policy overrides
-all. Other levels may add entries beside a repo file's but never replace one of
-the same name; only admin policy can deny a repo entry.
-_Avoid_: scope (overloaded), profile
-
-**Needs-you inbox**:
-One cross-Workspace list of the Attention waiting on this person: questions,
-approvals, failures and reviews, from every Workspace they belong to.
-_Avoid_: notifications (delivery, not the list), activity feed
-
-**Retired terms** (the superseded host model; still in code until deleted):
-**Host** and **Worker** are replaced by the backend (authority) and **Runner**
-(execution). **Host link** and **Host protocol** are superseded by backend
-functions and the Runner connection. **Execution venue** is replaced by
-**Place**; the Runner a Session's facts ran on is a `RunnerIdentity` in code
-(still stored as `venue`). **Checkout lease / epoch** and **Workspace epoch** are dropped:
-authority never moves, and one Working copy per ticket per machine needs no
-fence. **Checkpoint ref** is retired: Volli never pushes uncommitted work.
-Their contracts live in the superseded `docs/host-*.md` until those are
-deleted.
-**Workspace** no longer means one host's database file. Host-protocol code that
-says `workspace` (`workspaceId`, Workspace grants and links, `workspace_epochs`)
-still means the host protocol's Workspace, where a project is its own Workspace
-(`workspace_epochs.workspace_id` references `projects(id)`).
-
-**Ticket**:
-A board card whose Ticket Body can scope a Ticket Session. Opening it shows the Ticket view; moving it to Doing records work state but does not start a Session.
-
-**Ticket Body**:
-The ticket's canonical Markdown scope and starting instruction, authored by a human or agent. It is part of the ticket record, not a file or Artifact.
-_Avoid_: Ticket Doc, ticket document, ticket artifact
-
-**Runtime Brief**:
-The agent-ready projection of a Ticket at session launch: its Ticket Body plus resolved context and operating instructions. It is generated from ticket state rather than being canonical ticket content.
-_Avoid_: Ticket Body, ticket document
-
-**Dangling Reference**:
-A Ticket Body file reference that no longer resolves in that ticket's context.
-_Avoid_: missing Attachment, broken Artifact
-
-**Ticket view**:
-The expanded working surface for one ticket. Its main tabs hold the Ticket Body, Sessions, files, and diffs; its Now, Diffs, and Files rail keeps repository state, properties, Session history, and file navigation beside them.
-Formerly "Ticket workspace"; renamed because **Workspace** now names the team
-container. Older docs and code identifiers still say ticket workspace; new copy
-says Ticket view.
-_Avoid_: Ticket workspace, ticket worktree, artifact view
-
-**Home**:
-The project-level tabbed workspace, and the app's landing page. Its permanent
-first tab is the Board; the project's own Board Sessions and Project Files
-open as tabs beside it. Opening a ticket takes Home over: the Ticket view
-fills the surface and Home's tab bar steps aside, so the two surfaces' tabs
-never stack above one another.
-_Avoid_: Board (for the page), Sessions page, dashboard, Files (as a nav item)
-
-**Tab group**:
-Two or more Panes of one surface (Home, or one Ticket view) shown together as a
-split, each Pane a stack of tabs (VC-614). The top tab strip draws a group as
-ONE chip whose segments are its Panes' front tabs; right-clicking it lists
-every tab of the group by Pane and offers Ungroup. Selecting any tab of a group
-shows the whole group with that tab in front of its Pane; selecting an ordinary
-tab shows it full width and never pulls it in, and returning restores the
-group exactly. A tab OPENED while a group is shown — a new chat, terminal or
-Browser Tab, a file from ⌘P or a file tree — joins the focused Pane's stack. A
-surface keeps any number of groups; a tab belongs to at most one, and groups
-never cross surfaces. A group left with one Pane (or no tab) dissolves; nothing
-that changes a group closes a tab. A saved older split reads back as one group.
-_Avoid_: pair (the two-tab predecessor), split screen, editor group, pane tree
-
-**Split view**:
-The side-by-side or stacked arrangement a shown **Tab group** draws, and the
-docs' name for the feature. A full-width tab is not "a split view of one".
-_Avoid_: multi-pane mode, split screen
-
-**Pane**:
-One cell of a shown Tab group: a stack of tab ids, the one it has in front, and
-a tab strip of its own. The FOCUSED Pane is the surface's context — the right
-rail reads it, and new tabs open into it. A Pane holding nothing draws the
-surface menu (New chat, New terminal, New browser, Open file…, Close pane);
-closing a Pane hands its tabs to its sibling. Not to be confused with a
-terminal pane, which is one shell inside a terminal Split Tab.
-_Avoid_: split, editor group, window, terminal pane
-
-**Drop zone**:
-Where a dragged tab, Session row or file row may land on a Pane: its centre
-(join that Pane's stack) or its left/right/top/bottom edge (split there — on a
-full-width tab, a new group of two). A top-strip tab's left or right edge
-groups beside it, and a Pane's tab dropped on the top strip leaves its group.
-Zones appear only while a compatible drag is live, and what lights up is the
-RESULT — the half the split would open, or the whole Pane a move would fill —
-never the region being hit-tested. A payload from another surface shows no
-zones at all.
-_Avoid_: drop target (for the highlight), drag overlay, hot zone
-
-**Project Files**:
-Main-checkout files opened as tabs in Home, browsed from a Files page in Home's
-own rail. Not a first-class nav item or a standalone page (retired VC-122; the
-rail page and tabs are VC-121).
-_Avoid_: global files, project file tab, Files page, Files nav
-
-**Ticket Files**:
-The Ticket view's list of files in that ticket's Working copy.
-_Avoid_: Project Files, artifact files
-
-**Session**:
-The durable identity and ordered history of an agentic conversation. A
-Session is created before any executor attaches and outlives terminal panes,
-processes, the Agent Runtime, UI surfaces, and the Runner it ran on. It remains
-openable after an attachment, turn, or Run completes; only explicit archival
-changes its availability. A Session may belong to one Ticket or be
-project-scoped.
-Each Session has a Role, model policy, frozen tools, credential safeguards, and
-host-API actor boundaries. It starts in its recorded workspace, but ordinary
-desktop execution is host-native, not a filesystem sandbox. Deterministic
-workspace scoping remains available through an injected execution environment.
-Reconnect, restart, and recovery may replace its live executor attachment
-without changing that identity. A model change is an explicit recorded action,
-never a silent fallback. A Session begins at its first message, not at the gesture that opened
-the composer — see **Chat Draft**.
-_Avoid_: pane session, split session, harness process, terminal pane, UI tab,
-chat draft, provisional session, empty session
-
-**Chat Draft**:
-A chat someone has opened but not yet sent a first message in. It is NOT a
-Session: it has no durable row, no Session Attachment, no worktree, no Agent
-Runtime and no history, and abandoning one leaves nothing behind. It holds the
-words, the staged files, the model choice and the scope it will be created
-under, and it carries the UUID its Session will take, so the tab, the split
-pane, the keyboard chord and the sidebar row all name the same thing before and
-after. It lives in renderer state, persisted so that unsent words survive a
-relaunch.
-A Chat Draft is invisible until it has content: pressing `+ Chat` shows only a
-composer, and the first typed character or staged file is what earns the tab a
-place in the workspace layout and a row in the sidebar. That row says `Draft`,
-because nothing is running.
-_Avoid_: empty session, unsaved session, pending session, draft session, ghost
-session
-
-**Promotion**:
-The first message turning a Chat Draft into a Session. It mints the durable row
-under the id the Draft already carried — there is no id swap, because there is
-no second id — transfers the Draft's staged Blobs to it, and only then ensures
-the worktree and attaches the Agent Runtime. It is idempotent: a retry replays
-one create command, so two rapid sends produce one Session.
-Promotion has two phases. `draft` means nothing durable exists yet and
-abandoning costs nothing. `session-created` means the row has landed but its
-Blobs have not all transferred, so a retry resumes there rather than creating a
-second Session. A Session that exists cannot be un-created: there is no delete
-channel, by design.
-Every non-interactive creator — a kickoff chat from the new-Ticket composer,
-`session_start`, `session_delegate`, an Automation Run, Automation authoring —
-skips the Chat Draft entirely and creates a Session immediately, because each
-of them already holds the opening message.
-_Avoid_: saving a session, committing a draft, upgrading a draft, materialising
-
-**Session Role**:
-The product scope a Session acts within: `project`, `ticket`, or `subagent`.
-Board Sessions orchestrate project work; Ticket Sessions execute with explicit
-Ticket and worktree context; Subagent Sessions perform a bounded delegation and
-remain durable children of the Session that created them. Role determines the
-default context, tool bundle, and authority policy, not a separate Session type,
-and it is stored on the Session rather than read off its Ticket (VC-9). A Board
-Session runs on the Main checkout with no worktree and no Ticket of its own — it
-sees the whole board, and its lifecycle moves no card — and is recorded in
-Session history exactly as a Ticket Session is. A Subagent Session is started by
-a parent's `session_delegate` call, shares the parent's working directory and
-inherits its Ticket, holds every coding tool and no agent-control verb or
-`ask_user`, and carries its parent on the Session itself (`parentSessionId`, a
-ledger fact). When its first turn completes a notice from Volli is steered into
-the parent — the child's handle, state and title, then its final message quoted
-inside an untrusted-prose envelope as the child's own words (cut when very long,
-with `volli session answer <handle>` naming the rest), so the child's prose
-never reads as the parent's user (VC-457). The parent is never parked on it,
-nothing bounds the child's time, and stopping the parent stops its children. A
-child a person resumes after that notice reports to its parent again when the
-resumed turn ends; a turn a host notice opens in it (its own shell exiting, a
-Browser Tab event) does not, unless a person or another Session steers a
-message into that turn (VC-809). The Session
-Presentation Contract projects that notice into the parent's transcript as a
-quiet host-authored receipt row, not as a Turn in the person's voice. This row
-records the delegation outcome; it is not a listing of the child. While work is
-live, the parent's chat shows its children in the Activity Island's agents
-cluster (VC-269): one chip per child, working / done / failed / stopped, where a
-row peeks the child's transcript read-only in an overlay, opens it as a full
-tab, or stops it as the person (`sessions.stop`, recorded with the `user`
-actor). That cluster is the only place a child itself is an interactive activity
-ROW: a Subagent Session never appears in a Session
-listing (VC-279) — not the project sidebar's bands, the ticket rail's roster,
-Home's Sessions page or ⌘K — because how many helpers a turn opened is a fact
-about how the agents worked, not about what the person started. Only the
-listings drop them; the durable records keep every child, which is what the
-cluster reads, what usage counts, and what `volli session list` still returns
-carrying its Role for an orchestrator reading its own fleet. A working child
-still lights its Ticket's board ring — that is work happening there — but a
-child's wait never draws the `waiting` ring, which would send a person to a
-Ticket holding no row they could answer. The row that stands for that work is
-the parent's: a Session that delegated reads `working` and stays in the
-sidebar's Active band for as long as any child of it is running, dated by the
-freshest fact in the delegation, so the band and the board never disagree about
-one Ticket. A wait is an errand, so dropping the
-row moves the addressee rather than the errand (`sessionWaitAudience`): a child
-stopped on a permission or an expired credential marks its chip in the parent's
-cluster and is announced there, which is the only surface that can hand that
-wait to anyone. What a child SPENT is folded the same way — the Ticket's usage
-breakdown adds a child's cost to the Session that delegated it rather than
-naming it in a row of its own, while the per-model breakdown counts every call
-as made. Concurrent children sharing a tree require explicit file ownership.
-_Avoid_: harness mode, agent mode, plan mode, scratch session, hidden thread,
-Project Session, project chat
-
-**Authority Policy**:
-The app-owned per-project policy for host-API access and delegation budgets.
-It defines which coordination verbs each actor may use, transcript disclosure,
-and awaitable Ticket and Session facts. Built-in defaults have per-project
-departures; a project list naming `$defaults` extends rather than replaces.
-It is not a per-call file/command gate or a model judgment mode. Legacy gate
-fields in stored overrides are ignored.
-_Avoid_: tool permissions, model judgment, repo instruction file
-
-**Session Event**:
-An immutable fact in a Session's ordered ledger: an attachment outcome,
-native observation, command outcome, message/turn boundary, or recovery signal.
-The Session Engine assigns the per-Session sequence; timestamps are metadata, not
-ledger order. Session Events are not Ticket Events, although a planner event may
-cite a Session as provenance.
-_Avoid_: session state, hook state, terminal state
-
-**Agent Thread**:
-A durable conversation lane inside a Session. Every Session begins with one root
-Agent Thread. Disposable runtime reasoning may use internal branches, but
-delegated work whose output matters becomes a durable child Session rather than
-an invisible provider-owned Thread.
-_Avoid_: provider session, subagent pane, terminal split
-
-**Conversation Branch**:
-An immutable lineage of messages within an Agent Thread. Editing an earlier
-message creates a new Branch instead of rewriting committed history.
-_Avoid_: edited transcript, current messages array
-
-**Generation Attempt**:
-One model response attempt on a Conversation Branch. Regeneration creates a
-sibling Attempt and retains the earlier result.
-_Avoid_: retry count, overwritten response
-
-**Context Compaction**:
-Replacing the older part of an Agent Thread's context with a summary of it, so
-the Session can continue past the model's window. It is linear and additive: the
-summary is appended, the history before it stays in durable local history, and
-only what the model is sent changes. It happens for one of three reasons — a
-reserve threshold, an overflow the provider refused, or an explicit request —
-and each one is a Session Event. A fourth reason exists on the FAILED arm only:
-a provider-native checkpoint the Session can no longer use, whose history is
-restored in its place. It is a reason a person sees rather than a silent
-recovery, because their context just grew back and the next turn may compact
-again for a threshold they did not watch fill. Only the threshold is policy: one app-wide
-switch decides whether a Session compacts before it is asked to. Nobody
-configures a reserve: per-model reserve budgets were retired with the policy
-that carried them (VC-155) and there is no setting to bring them back. The
-threshold itself is the larger of the executor's own reserve and a fixed share
-of the model's window — not a preference, an arithmetic fact about windows: one
-flat allowance is sensible at 200k and a rounding error at 1M, where it leaves
-less than one dense tool result of room and a single unmeasured round can carry
-a Session past the window before the next check (VC-331). The occupancy it is
-measured against is the provider's last reported usage plus a model-aware
-estimate of everything unmeasured since — incoming messages and tool results
-included — and it is checked before each provider request, not only ahead of an
-idle prompt. The summary's own output allowance stays on the executor's smaller
-reserve: a 1M-window model has no reason to write an 80,000-token summary.
-Switching the threshold off never withholds the recovery an overflow triggers.
-_Avoid_: truncation, trimming history, pruning the transcript, per-model reserve
-(a retired setting, not this window-proportional threshold)
-
-**Agent Runtime**:
-The product-aware execution package that hosts Volli's agent loop. It receives a
-Session Role, work location, model policy, prompt resources, and frozen tools;
-it enforces credential safeguards and its supplied execution environment's
-checks, and emits runtime observations and tool requests without owning durable
-Session or Ticket state. Ordinary desktop Sessions use host-native execution;
-`ScopedExecutionEnv` is retained for hosts that explicitly inject workspace
-scoping. Pi is its initial acknowledged substrate, but Pi types and events never
-become renderer or Session contracts. The package may
-depend on Node but never Electron or DOM APIs, so Electron main can host it
-locally and a future worker can host the same package elsewhere.
-_Avoid_: harness adapter, provider runtime, Electron service, renderer client
-
-**Executor Slot**:
-The structured runtimes a Session runtime can attach, keyed by each runtime's
-durable adapter id, with one default. A Session runs on the runtime its newest
-attachment by a registered runtime recorded, else on the default; no person or
-caller chooses one. Pi is the only registered runtime; the slot exists so a later
-runtime (a Claude Agent SDK mode) can register beside it.
-_Avoid_: adapter registry, harness profile, runtime picker
-
-**Model Access**:
-One sanitized view of the provider accounts, subscriptions, API credentials,
-gateways, local inference, and models the Agent Runtime can truthfully use. The
-credential owner never exposes secrets to the renderer, prompt, transcript, or
-Session ledger. Availability and billing source are explicit; Volli never
-silently falls back to another model or account.
-_Avoid_: harness profile, provider picker (when meaning the complete access model)
-
-**Decision Model**:
-The second model kind beside the chat model: a classifier that reads a JSON
-state and answers named, typed questions — one of N (`choice`), a level
-(`score`), or yes/no (`bool`) — with probabilities and a confidence, and writes
-no text. Configured per profile with a per-project override, and `none` by
-default: nothing calls a model nobody configured. Local means a llama.cpp
-server on this Mac (loopback only, nothing leaves it); cloud means a Pi
-catalog classifier such as TypeSafe's Jev, reached with the provider's own
-Model Access credential and only for the purposes the person opted into.
-Every caller goes through the host **Decision Service** under a named
-**Decision Purpose** (`agent.classify` and `model.select`) and must state a deterministic
-fallback, which is its answer whenever the model is unset, unreachable, slow,
-wrong-shaped or refused. Agents reach it through the `classify` tool, present
-only in Sessions created while one was configured.
-**Automatic model choice** (`model.select`) lets a cloud Decision Model, behind
-its own switch, pick a new Session's model and reasoning level from the
-person's approved pairs — once, at birth, falling back to the configured default
-on any miss — and the Session records and shows the pick (`Auto-picked`).
-_Avoid_: classifier model (when meaning the setting), router, permission judge
-
-**Web Access**:
-The app-wide decision about whether Volli may reach the Internet on a
-Session's behalf, and through whose search provider. Off is the default and the
-resting state: an app with no configured provider gives its Sessions no
-web tool at all, rather than a tool that refuses when called. A provider
-endpoint is a person's own configuration and is judged by its own admission
-policy when saved and again on every request; a URL the model supplies is not,
-and faces the stricter public-web policy every time. The credential owner keeps a
-bring-your-own key in the profile's own user-only store — the trade Pi's
-`auth.json` already makes, rather than the OS keychain, whose per-binary prompts
-cost more than they bought — and never exposes it to the renderer, prompt,
-transcript, or Session ledger. The renderer may learn only whether a key
-exists. What a search returns is third-party text, references rather than
-contents, and reading one of them is a new decision judged from scratch.
-_Avoid_: web search setting, browsing, internet permission
-
-**Browser Tab**:
-A sandboxed web page hosted inside the workspace as a native Electron
-`WebContentsView`, owned and placed by the desktop's main-process
-BrowserTabHost — never loaded into the app's own renderer. A tab has a
-product-owned opaque id, a mode-scoped session partition isolated from the app
-renderer and from every other mode, and a per-tab generation that advances on
-navigation. People browse in them; Sessions reach them only through the Browser
-port's `browser_*` tools, which speak the accessibility-snapshot/ref dialect
-over `webContents.debugger` — Electron's app-private CDP wire, so no remote
-debugging port ever opens. A ref names one element for as long as the tab
-stays at its generation (VC-364), but only the latest snapshot or
-`browser_find` decides which refs may act. Everything a page contributes — title,
-snapshot, console, pixels — is untrusted third-party content in the same
-envelope discipline Web Access established. A tab is not Web Access: reading
-the public web through `web_fetch` and rendering a page a person can also see
-are different capabilities with different policies.
-_Avoid_: webview, BrowserView, preview pane (for the tab itself), browser
-session (when meaning a tab)
-
-**Headless tab**:
-A Browser Tab a Session opened and nobody has asked to see (VC-238). It has
-its real viewport, wake hold, console and screenshots, but is in no strip, in
-no tab order, and on no surface a person can look at. Every Session-created tab
-is born this way; a person's own tabs never are. Headless is a fact about
-presentation, never about rendering: the host still parks the page in an
-internal compositor host it never shows and never hands to the person (today an
-off-screen window in Electron main, VC-278), because a page with no compositor
-surface cannot be captured or clicked at all — its screenshots never answer and
-its clicks reach nothing while its accessibility tree reads perfectly. "Drawn
-nowhere a person can look" is the rule; "attached to nothing" is not, and would
-stay wrong however the Browser host is later split between a **Client Surface**
-and the host that serves it. A headless tab is visible only in the chat that
-owns it — as the **tab card** under the browser row that touched it,
-and in the Activity Island's tabs cluster above the composer (VC-268), whose
-card lists every tab the Session and its children hold — and it closes with
-its owner Session's attachment or when its Ticket is archived. The model can never
-reveal one; the person can.
-_Avoid_: hidden tab, background tab, agent tab (says who opened it, not where it
-is), off-screen tab (where the host parks it, not what headless means)
-
-**Tab owner**:
-The Session that opened a Browser Tab (`ownerSessionId`), or nobody for a
-person's tab. Ownership is who may drive a tab through the Browser port: a
-Session sees the person's tabs and its own, so two Sessions on one Ticket
-never see each other's. It is separate from the storage partition, which stays
-per Ticket. Six live tabs per owner; the person's own cap is counted
-apart, so a fleet of agents can never stop a person opening one. Distinct from
-a **tab hold**: ownership says whose tab it is and outlives every turn, while
-a hold says whose turn it is to write to it right now. A Session owns its
-headless tabs and holds one only while it drives it.
-_Avoid_: creator, session tab (ambiguous with the Session's own tabs)
-
-**Presentation**:
-Where a Browser Tab is drawn, decided by the person and held by main:
-`headless` (on no surface a person can look at), `tab` (an item in the Home or
-Ticket strip), or the compatible legacy `preview` (pinned live above the owning
-chat's composer). A person's tabs are always `tab`. **Open beside chat** promotes
-a Session's tab into the strip and groups it beside its owning chat, splitting
-the chat's Pane when the chat is already in a Tab group; the Island's **Show
-tab** selects it, showing its group if it has one. Neither changes ownership,
-generation, cookies or what the agent sees. A revealed tab survives its Session.
-The preview representation remains readable but is no longer the default reveal
-path.
-_Avoid_: visibility (that is whether the native plane is attached right now),
-shown/hidden as states (they are the actions)
-**Tab hold**:
-One party's turn to drive a Browser Tab (VC-239): one Session, or the person,
-never both. Reads never need it; a write (`browser_act`, `browser_navigate`)
-takes a free tab's hold, keeps its own, and is refused on anybody else's with
-the holder named. A tab a Session opens is its own from birth;
-`browser_acquire` and `browser_release` take and give one back explicitly. A
-hold ends when the Session releases it, its turn ends, its attachment ends,
-the tab closes, or the person takes over — and by nothing else, so there is
-no stale hold to time out. The person is never locked out: their own input
-into the page is always delivered, and the address bar, back, forward and
-reload are not a takeover. **Take over**, **Ask to leave** and **Hand back**
-are the person's explicit controls on the chrome pill and the cursor label;
-the affected Session is told in one in-band line. A client projects that line
-as a host-authored receipt named by the tab's bounded title or hostname, while
-the full opaque tab id remains its identity. `heldBy` rides the tab's state so
-every surface — the pill, the tab strip's holder dot, the cursor — agrees on
-who has it.
-_Avoid_: lock, lease (that is the wake hold against throttling), tab owner
-(a separate fact — see **Tab owner**; a headless tab can be held, and a held
-tab is not thereby owned)
-
-**Session cursor**:
-The arrow drawn over a Browser Tab while a Session holds it (VC-239), in that
-Session's identity colour with its name on a small label. Drawn by one
-app-owned transparent `WebContentsView` main places above the page — never
-inside the page, which could read, hide or fake it, and never in the app's
-React tree, which the page composites over. It glides to each target before
-the input goes there and the click is dispatched only once it has landed, so
-it never claims a spot a click did not go to. Only the on-screen tab draws
-one; a hidden tab keeps its cursor's last position and pays no delay. It
-yields with the plane and never appears in a screenshot or a frozen frame.
-_Avoid_: pointer overlay, ghost cursor, agent mouse
-
-**Browser Trace**:
-The replayable record of what one Session did in one Browser Tab it owns
-(VC-453): every browser call it made against that tab — navigate, act,
-snapshot, find, screenshot, console — in the order they settled (answered,
-refused or failed), with its target, page, time and, for a call that changed
-the page or took a screenshot, the frame the host kept. Only the host writes it, and only for a tab a
-Session created: a person's tab is never recorded, even while a Session
-holds it. Page text in it (a title, an element's name) is cleaned on the way
-in, and nothing typed into a page is kept. It is the person's evidence and
-never the model's input — its own bounded directory under userData, never a
-Blob, read by no tool. The **Browser replay** steps through a Session's
-traces from a browse row's card or the Activity Island, before or after a
-relaunch. The type is `@volli/shared`'s, so any client can replay it.
-_Avoid_: recording, video, screencast (there is none), session log
-
-**Session colour**:
-An identity colour, never a state colour (VC-239): which Session, not how it
-is doing. Eight hues fanned around the accent at one lightness in
-`@volli/shared`'s `session-color.ts`, keyed by a stable hash of the Session
-id and resolved by main across the Sessions holding tabs so concurrent ones
-differ. Worn by the cursor, the chrome pill and the strip's holder dot, and
-by nothing that means a state — `ui/status-dot.tsx` owns those.
-_Avoid_: status colour, agent colour (for a state), theme accent
-
-**Background shell**:
-A command a Session runs BESIDE the turn instead of holding it (VC-270): a
-dev server, a watch build, a long test run, a log tail. `execute` blocks until
-its command exits; `shell_start` spawns one in its own process group with
-pipes and no PTY, waits about a second, and comes back with whatever it printed
-so far. `shell_output` returns only what is new since the last read of that
-shell, so a poll loop costs the same context every time; `tail` is the explicit
-override and both are bytes, bounded by policy. `shell_kill` is SIGTERM then
-SIGKILL. The three names ride one port, appended last to the vocabulary. A
-shell belongs to the Session that started it — a subagent never sees its
-parent's — is capped per Session, runs inside the workspace, is spawned
-through the same environment record and the same attachment identity the
-`execute` tool gets, and is killed when the attachment ends — a subagent's
-already when a turn of it completes, silently, so a shell it left running
-cannot reopen it after its parent has the answer (VC-809); its exited shells'
-output is forgotten at that point too. Every shell
-result restates the Session's live shells, because the tool calls are the
-durable record; shells are live resources, not ledger facts, and do not
-survive a relaunch. The Activity Island's shells cluster reads them through
-one push and one store, and opens a shell's tail in a plain read-only pane.
-A shell also speaks for itself (VC-495), so nothing polls or sleeps for it:
-when one exits on its own, a notice from Volli is steered into the Session that
-started it — the delivery a **Watch** and a subagent's completion already use,
-read mid-turn, opening a turn on an idle Session, or parked until the next
-attachment — naming the shell, how it ended, how long it ran, and the end of
-its output. That output is another author's prose: redacted by the credential
-store and the shared redactor BEFORE it is cut, and quoted inside an untrusted
-envelope. Each pipe is decoded and redacted independently, including multiline
-credentials, overlapping shared/exact values, and incomplete PEM/URL/token
-structures. Raw redaction context is bounded (256 KB per pipe): if it
-cannot be retained safely, the notice withholds that pipe's output instead of
-quoting a credential fragment. Notices never consume the incremental output
-cursor, so failed delivery leaves the next `shell_output` useful.
-`shell_start`'s optional `notifyOn` (a literal, or a bounded-state regex)
-adds ONE notice the first time output matches, even before a newline, so a
-chatty process cannot flood the chat. Matching examines the first 1,000 UTF-16
-units of each line; unsupported regex syntax or expansion is refused rather
-than run in a backtracking engine. Pending shell notices are stored by the
-host before delivery and replayed after restart with the same payload and id.
-A notice is never sent for the Session's own `shell_kill` (its tool
-result is the news), for an exit the model already read, for output `shell_start`
-already returned, or once the Session's attachment has ended; a person's kill
-from the Island is sent, because nothing else would tell the Session.
-A live shell keeps its worktree busy, so a shell never outlives its process
-group (VC-666): it exits when its output pipe closes, or — once the command
-itself has exited — when nothing is left in its group, whichever comes first.
-A grandchild that escaped the group (`setsid`, a daemonizing server) while
-holding the pipe is not signalled, but Volli stops reading that pipe, so its
-next write to it fails with SIGPIPE, which usually ends it.
-_Avoid_: background job, `&` (which loses the handle), terminal (a shell a
-person types into), daemon
-
-**Agent CLI**:
-The bash-composable `volli` verb surface a Session's shell (or a person's
-terminal) reaches through the local agent socket. It is the discovery surface
-and the low-risk coordination surface: reads, plus writes that are visible,
-attributable, and reversible. Any process running as the user can reach it, so
-a Session proves itself with a per-attachment token rather than by naming
-itself; a caller without one is the unauthenticated Actor and reads only. The
-token defeats an injected string and cross-session confusion, not a hostile
-same-uid process — so a verb whose misuse cannot be tolerated from an arbitrary
-such process still does not belong here.
-_Avoid_: agent surface (alone), planning CLI
-
-**Agent Tool Surface**:
-The named, schema'd tools a Session receives inside the Agent Runtime:
-`bundle(Role) ∪ grants(session)`. A grant is durable app-owned data, scoped with
-its verb, and frozen at Session birth; it is never a hot bundle edit. A tool call
-is bound to the Session that made it and never crosses the agent socket, so
-availability itself is enforcement: what a Role or birth grant did not hand it
-cannot be called.
-_Avoid_: Pi tools (as product vocabulary)
-
-**Client Surface**:
-A host API a Volli client — the desktop renderer, a future mobile or cloud
-client — speaks for the humans driving the product. Clients talk to hosts,
-never to databases, and no client is an agent.
-_Avoid_: renderer API, app surface
-
-**External Agent Surface**:
-A future boundary (for example an MCP server) exposing Volli operations to
-agents Volli does not host. A foreign agent has no Session Role and no
-Volli-attached identity, so this surface carries its own admission policy and
-never re-exposes a Role bundle as-is.
-_Avoid_: MCP surface (as a synonym for the Agent Tool Surface)
-
-**Verb Registry**:
-The single enumerable declaration of every agent-facing verb: its name, what it
-does, which surfaces project it, and the one handler binding that answers it —
-where that handler lives, and which handler it is. Each surface exposes a
-projection of the registry; no surface owns verbs of its own, and the socket's
-dispatch is a table keyed by the binding rather than a chain checked against it.
-_Avoid_: command list, tool list (when meaning the declaration rather than one
-surface's projection)
-
-**Verb Tier**:
-The governance class a verb's access modes imply, never a stored field. Read
-tier: Agent CLI, any caller. Coordination tier: Agent CLI, authenticated
-session actor, judged by per-actor policy. Control tier: named tool only, held
-through a Role bundle or a scoped birth grant, absent from the agent socket. A
-verb on no agent surface at all holds no tier. No verb needs a higher tier than the ambient authority its
-effect already lies within.
-_Avoid_: dangerous tier, middle tier
-
-**Cache Prefix**:
-The byte-identical leading portion of a model request that a provider reuses
-between requests. One changed byte invalidates everything after it; where the
-provider orders the tool array before the system prompt, a tool change
-invalidates the prompt too. Within a warm-cache epoch, the Agent Tool Surface declarations and system
-prompt stay byte-identical. Additions can enter the provider surface only at a
-cold turn, compaction or model switch. Code-Mode-only additions can arrive while
-warm, announced in an appended message without changing the prefix. Birth and
-additive refresh facts are durable; reattachment restores both the effective
-callable surface and its last-cold declarations. Existing names are never removed
-or renamed. Credentials are never part of the durable shape.
-_Avoid_: cache hit (one outcome of a stable prefix), prompt cache (the provider feature)
-
-**Context Assembly**:
-The composition of one model request: system prompt, tool array, and message
-history, ordered stable-first. Assembly is cache-stable when every byte that
-varies per session or per turn — workspace path, date, ticket state — is
-delivered as late as possible, in message content rather than prompt bytes.
-Volli's assembly is deterministic: the system prompt is a pure function of
-Role, bundle, product version, and resource set; same inputs, same string.
-_Avoid_: prompt building, context window (the model's capacity, not the request)
-
-**Turn Reminder**:
-Volatile fact delivered as content in a message at the turn that needs it,
-instead of bytes in the system prompt: the date, the working directory, live
-ticket state. The Runtime Brief is the first and largest one.
-_Avoid_: system reminder (a provider's wrapper, not Volli's), dynamic prompt section
-
-**Cache class**:
-How often one section of an assembled request is bought again at write price
-rather than read from the provider's cache: `role-static`, `project-static`,
-`session-static`, or `per-turn`. It is a claim derived from what the section is
-composed from, never a measurement — reported per section by `prompt baseline`
-beside what the section costs, and falsifiable by the cache read and write token
-counts a turn actually reports. A message-side section is marked as one, because
-the same class prices differently there: it is appended once and can invalidate
-no Cache Prefix ahead of it.
-_Avoid_: cache tier, TTL (the provider's retention window, not a section's
-stability), static/dynamic (says nothing about how often)
-
-**Metered operation**:
-One model call Volli made on a Session's behalf, and what the provider said it
-consumed: uncached input, output, cache-read and cache-write tokens, each
-counted apart because each is priced apart. Its `cause` says which kind of work
-bought it — an `assistant` reply, a Context Compaction, `utility` work such
-as auto-titling, or a `decision` a Decision Model made for the Session (its
-purpose rides the event's provenance). A reply that only called tools, a reply that failed after its
-prompt was billed, and every attempt in a retry storm are each one of these; a
-turn is usually several. Recorded as a `usage.recorded` Session Event, never as
-metadata on the message it happened to produce — most metered operations produce
-no message at all. An unreported number is absent, never zero: a provider that
-charged nothing and a provider that said nothing are different facts.
-_Avoid_: request (says nothing about billing), token count (only one of four),
-message usage (most spend has no message)
-
-**Cost basis**:
-What a cost number IS: `provider-reported` when a backend supplied its own
-accounting, `catalog-estimate` when the executor multiplied token counts by a
-local price table, `unavailable` when Volli cannot vouch for either. Almost all
-of Volli's costs are estimates — right about consumption, only approximate about
-the invoice, and sharply so for subscription-backed models where a list-price
-value can be calculated for traffic nobody is marginally billed for. A report
-summarising several bases says `mixed` rather than choosing one, and no local
-total may be presented as provider account spend.
-_Avoid_: bill, actual cost, spend (all claim an invoice Volli has not seen)
-
-**Usage projection**:
-The rebuildable index of metered operations, one row per operation, keyed by the
-Session Event that proves it. It is a fact index and never a stored total:
-nothing writes a running sum a later fact could contradict, and dropping the
-whole table loses nothing that the ledger cannot derive again. Ticket, Session,
-model and time rollups are query-time aggregation over it. Attribution is
-copied when the operation is recorded rather than joined at read time, so
-deleting a Ticket cannot move its old spend into unticketed Project spend.
-_Avoid_: usage table (understates that it is derived), cost cache, running total
-
-**Usage Window**:
-One metered allowance a provider's SUBSCRIPTION grants an account, and how much
-of it is gone: a share used, when the window resets, and how long the window
-runs. Claude Pro/Max meters a five-hour session window and a seven-day one;
-Codex a session and a weekly one; OpenCode Go a rolling, weekly and monthly one;
-Kimi Code a five-hour one and a plan-wide one; xAI one shared period; GitHub
-Copilot a monthly one per class of interaction. A window is named by WHAT ITS
-SOURCE STATES — the key the source gives it, or its length — and never by the
-slot a provider happened to put it in: Codex has been seen putting a weekly
-window in `primary`, so length names that one, while Anthropic and Copilot state
-keys (`five_hour`, `premium_interactions`) that are the only spelling a reader
-can look up. Both sources for one provider use the same window id so a reading
-taken mid-turn lands on the row an on-demand read drew. Windows are read two
-ways: the rate-limit headers a Metered operation's response carries, and one
-on-demand GET of the provider's own usage endpoint. A reader also decides which
-of an account's credentials its endpoint takes — usually the one the turns use,
-but Copilot's account endpoint is on a different host and knows only the GitHub
-token the request token was minted from. Neither source is durable. A window is a
-live measurement of someone else's meter, so it is held in memory by the Agent
-Runtime, read through Model Access, surfaced in the chrome band's usage-limits
-popover, and never written to the Session ledger.
-_Avoid_: quota (says nothing about the window), rate limit (that is the refusal,
-not the allowance), usage (that word is already spent — see **Usage projection**,
-which is Volli's own cost accounting and an unrelated fact)
-
-**Cached input share**:
-Cache reads as a fraction of all prompt tokens — `cacheRead / (input + cacheRead
-
-- cacheWrite)`. It is the measurement that a **Cache class** predicts, and a
-  falling share is an operational incident rather than a curiosity: cache reads
-  bill at roughly a tenth of an uncached input token and writes at more than one.
-  _Avoid_: cache hit rate (providers report token classes, not one hit-or-miss bit
-  per request)
-
-**Session Semantic Fact**:
-A product-owned fact produced at the Agent Runtime boundary and committed to the
-Session: message content, an interaction, activity, Thread lineage, attachment
-selection, or another identity, lifecycle, control, or historical meaning.
-Presentation labels, icons, grouping, and layout are not semantic facts. Pi or
-model-provider detail that Volli has not adopted remains bounded diagnostic
-metadata until the product deliberately promotes it into this vocabulary.
-_Avoid_: UI state, provider payload, component props
-
-**Session Presentation Contract**:
-The portable consumer boundary that projects Session Semantic Facts and Role
-into a surface model for a Volli client. It determines which
-shared affordances are meaningful and progressively discloses active product
-state, but does not parse Pi or provider protocols or require Electron or React.
-Presentation dispatch follows Volli semantic kind and state, never runtime tool
-identity.
-_Avoid_: harness-specific screen, provider renderer, component registry
-
-**Session Surface Model**:
-The framework-neutral output of the Session Presentation Contract. It describes
-the meaningful transcript, attention, active ephemeral affordances, available
-controls, and historical summaries that a client may render; each Volli client
-maps it to its own components without reinterpreting runtime-native data.
-_Avoid_: React tree, Electron view model, provider payload
-
-**Thread Binding**:
-The live or historical binding from an Agent Thread to a Session Attachment and
-its native conversation locator. Each Agent Thread has at most one live Binding;
-the first Agent Runtime slice has one root Thread and retains the existing
-single-live-executor behavior.
-_Avoid_: Session, provider session, terminal pane
-
-**Session Attachment**:
-One historical association between an existing Session and an executor or
-transport: its runtime identity, native recovery reference where available,
-the Runner it ran on (`venue`, a `RunnerIdentity`; the desktop's is the frozen
-`LOCAL_RUNNER`, `{ id: "local", kind: "local" }`), and attach/detach outcome. A Session keeps many historical attachments
-but has at most one live executor attachment. A terminal companion is a workspace
-view, not an alternate structured attachment.
-_Avoid_: Session, terminal, harness state
-
-**Command**:
-Durable, explicit user intent directed at a Session, recorded before the Agent
-Runtime is asked to act. A Command does not imply that a transport accepted or
-completed the work; ambiguous delivery is reconciled before it is retried.
-_Avoid_: action, keystroke, request (when referring to accepted work)
-
-**Receipt**:
-The durable runtime-boundary record of a Command's observed outcome: accepted,
-rejected, completed, or unreconciled. A Receipt makes delivery observable
-without claiming an unsupported native guarantee.
-_Avoid_: event, acknowledgement (when no durable outcome exists)
-
-**Door**:
-One entrance through which a caller reaches host behavior: an IPC handler
-(the renderer's door), a socket verb (the CLI's), an agent tool (the tool
-door), the Run door an Automation fires through. A door resolves its caller
-and maps inputs and replies; the behavior it reaches lives once, behind it, so
-two doors to one action must not diverge. "The one door" names the single
-entrance a rule is enforced at, such as notification delivery.
-_Avoid_: endpoint, route (both name a transport), adapter (a Port's
-implementation), service (what a door calls)
-
-**Session Engine**:
-The UI- and runtime-implementation-agnostic interface that owns Session
-commands, facts, projections, and their durable storage contract. Electron main
-is its only SQLite writer in the initial local deployment; the interface is
-deliberately portable to a future daemon, cloud sandbox, or mobile client.
-_Avoid_: Electron main, Agent Runtime, renderer store
-
-**Attention**:
-A reconstructible projection of committed Session facts that tells the user
-whether recovery or input is needed. It is not a source of truth and never
-turns silence alone into an agent lifecycle fact.
-Under Volli Cloud, Needs-you **attention items** belong to one person: the
-Session's items (derived from these facts), plus review requests from the
-board, runner alerts and `volli notify`. An item answered or cleared on one
-device is gone on every device.
-_Avoid_: waiting flag, notification state
-
-**Unread**:
-Whether a Session has said something nobody has seen. Its own axis, not an
-activity state: a working Session can be read and an idle one unread. Set when a
-turn ends out of sight — not in front of a focused window — and cleared by
-opening the Session, replying to it, viewing its conversation, or marking it by
-hand. A peek never reads: glancing at a row is not having seen the work.
-_Avoid_: Attention, new, active, notification
-
-**Read receipt**:
-The durable per-Session stamp behind Unread — when it went unread, or nothing
-for a Session that is read. It lives beside the ledger, never in it: what one
-person has looked at is not a Session fact, so it is never an event, never
-replayed, and never part of history. Main owns its clock.
-_Avoid_: Session Event, Receipt (that is a Command's), seen flag
-
-**Held order**:
-The order of the sidebar's Active band. A new question floats to the very top; a
-new turn or a Session's first appearance lifts it to the top but under the
-lowest open question; nothing else moves, so an answered question stays where it
-floated. The order is frozen while the pointer is in a sidebar or a peek is open,
-and pending moves land on leave. The ticket rail follows the same order.
-_Avoid_: sort, ranking, recency order
-
-**Session peek**:
-The card shown on hover over a sidebar row: that Session's recent conversation,
-the question it is asking, and transient action without navigating. A read, not
-an adoption — it opens no stream and leaves nothing to tear down. A Previous-band
-ticket folder peeks its ticket instead, read-only, with one line per Session.
-_Avoid_: preview, tooltip, Split view, Presentation
-
-**Scheduled Resume**:
-A person's choice, made on a run a spent provider allowance stopped, to retry
-that run when the allowance's stated reset arrives. It is three Session
-Commands — schedule, cancel, and the host's settle — whose receipts are the
-whole of its state. A minute after the stated reset (a fast local clock must
-not retry into the spent window) the host resumes through the ordinary retry,
-or skips it with a reason when the Session was continued, ended, or overtaken by
-a person's work in another Session on its Ticket — another Session's own
-scheduled resume does not count. Never scheduled without being chosen, and never
-re-scheduled on its own.
-_Avoid_: auto-retry, auto-resume, Automation
-
-**Restart Resume**:
-The host continuing, on its own, a turn a lost process cut short, through the
-ordinary retry and never by sending the person's message again. Only when the
-turn stopped at a settled point (a user message, or tool results that answered
-every call) and is still wanted: nobody picked the Session or its Ticket up
-since the loss, the loss is recent, and the turn was not already a restart
-resume. A turn cut short inside a tool waits for the person's **Resume**. One
-attempt per loss; a skip raises nothing new.
-_Avoid_: auto-retry, crash replay, Scheduled Resume
-
-**SessionInteraction**:
-A decision a Session is waiting on — a permission or a question — held in Volli
-terms: a title, optional detail, declared options, and an opaque runtime
-reference used to correlate its reply. It is durable ledger content, so it
-survives a reload and outlives the turn that raised it; only an answer or a
-cancellation ends the wait.
-_Avoid_: approval, prompt (that is one question inside it), Attention
-
-**SessionInteractionPrompt**:
-One question inside a SessionInteraction, with its own options, whether several
-may be chosen, and whether the runtime accepts free text beside them. A
-permission is one prompt; a grouped decision declares one prompt per question.
-Records written before interactions carried questions project as a single
-prompt.
-_Avoid_: prompt (the model's input), field, form
-
-**SessionInteractionOption**:
-One declared choice on a prompt: an id, a label, and an optional description.
-Ids are runtime-correlated values, except for the permission vocabulary Volli
-mints (`once`, `always`, `reject`); an unrecognized id is an ordinary answer and
-never inferred to mean consent or refusal.
-_Avoid_: button, action, permission mode
-
-**SessionInteractionAnswer**:
-One prompt's answer: the option ids chosen, plus free text where that prompt allows it. Answers are per prompt, so a set of ids is always read against the question that declared them.
-_Avoid_: response, decision (that is the whole resolution)
-
-**SessionInteractionResolution**:
-The user's whole decision on one SessionInteraction, carried as the answers it gave. A resolution that chose nothing and said nothing is a refusal, not a missing answer. It is the durable record of what was authorized; a cancelled interaction never carries one.
-_Avoid_: Receipt, outcome, answer (that is one prompt's)
-
-**SessionInteractionCancelReason**:
-Why an interaction stopped waiting without a decision: `abandoned` (the user
-left it unanswered), `superseded` (a newer interaction replaced it), or
-`withdrawn` (the runtime stopped asking). None of them is an answer, and none may
-be read downstream as a refusal.
-_Avoid_: rejection, denial, timeout
-
-**SessionInteractionProjection**:
-The reconstructed view of a Session's interactions: those still waiting, and those resolved, each with its resolution and when it was given. Derived from committed Session Events, never a source of truth.
-_Avoid_: pending list, approval queue
-
-**Split Tab**:
-One returnable tab-strip item that presents multiple independently owned
-surfaces together — a terminal tab holding several shells. Inside one tab; the
-surface-level division of the plane is a Split view (VC-202), and the two use
-the same grammar (right/down splits, the same ring, the same divider) precisely
-because they are the same act at two scopes.
-_Avoid_: split session, pane tree, split view
-
-**Ticket ID**:
-The opaque, permanent record identity of a ticket (a UUID). Never shown to users, never derived from mutable fields.
-_Avoid_: using `"VC-12"`-style strings as identity
-
-**Display ID**:
-The project-unique human handle `<PREFIX>-<n>` (for example `VC-12`), used by the UI, branches, and `volli` CLI. It is derived presentation, never record identity.
-_Avoid_: id, ticket id (when meaning the handle)
-
-**Label**:
-A first-class, project-scoped entity attached to tickets: a name plus an optional stored color. Without a stored color, the chip color is hash-derived from the name; a stored color wins.
-_Avoid_: tag (the pre-persistence term for ad-hoc strings)
-
-**Ticket event**:
-One append-only planner-history record of something that happened to a Ticket
-(created, status changed, comment added, …). It records Ticket facts and
-planner-level consequences only; executor conversation facts live in the
-Session Event ledger. A Ticket Event may cite a Session as provenance.
-
-**Ticket Signal**:
-A typed verdict on a Ticket — a fixed kind (validate, implement, review,
-merge, human-gate, budget), a verdict (pass, fail, blocked), and optional
-prose detail — recorded as a `signaled` Ticket Event by an authenticated
-Session actor (VC-85). Signals carry state; comments carry prose. A signal
-never moves the board: Deliberate moves and Run Outcomes own movement.
-_Avoid_: verdict comment, `VERDICT:` first line, status (that is a column)
-
-**Ticket Wake**:
-One committed Ticket Event, fanned out in-process after its transaction
-commits (`packages/host-core/src/ticket-wake.ts`). The wake bus is the host's
-canonical post-commit stream: every mutation door feeds it, and the Watch registry listens on it. A
-wake is never a source of truth — the durable event it reports already is.
-_Avoid_: notification, broadcast (that is the window fan-out)
-
-**Watch**:
-A non-blocking subscription one Session holds on another Session or a Ticket
-(VC-457): arming it returns at once, and each later change arrives in the
-watcher as a notice from Volli — steered into a turn in progress, opening a turn
-on an idle Session, or parked until a detached one attaches again. A watched
-Session reports the end of its NEXT turn (once, with what it said last), its
-done/blocked signal, and its stop; a watched Ticket reports moves, comments and
-signals made by anyone but the watcher. `session_start`, `automation_run` and
-`session_send` arm one on the Session they open or steer; the `watch` tool
-covers the rest and ends a watch. Changes for one watcher that land together
-arrive as one notice. What may wake a watcher is per-actor policy data
-(`awaitable`, `awaitableSessions` — durable names kept from the await tools).
-Watches are process memory: a relaunch forgets them, and the durable facts they
-reported remain in their own ledgers.
-_Avoid_: await, wait, polling loop, `volli ticket wait` (nothing waits)
-
-**Await** (retired):
-The control-tier waits `ticket_await` (VC-85) and `session_await` (VC-324)
-parked the caller's turn until a watched fact arrived, which left the person
-driving a chat they could not use; VC-457 replaced both with **Watch**. They are
-in no Role bundle and cannot be granted. Sessions whose frozen surface still
-names one keep it so they reattach unchanged, and calling one now arms the
-equivalent watch and returns at once.
-_Avoid_: using either as a current mechanism
-
-**Session Wake**:
-One committed Session Event, fanned out in-process after its transaction
-commits (`session-wake.ts`), the Session-ledger twin of a Ticket Wake. Watches
-and the resumed-subagent re-arm listen on it; it carries the durable event
-itself, un-coalesced, because a listener must decide whether THIS is the fact it
-cares about.
-_Avoid_: notification, treating `turn.completed` and `turn.interrupted` as one
-
-**`awaitableSessions`**:
-The Session half of an actor's policy list, beside `awaitable` (VC-324): which
-of `turn`, `verdict`, `stopped` (and `$defaults`) may wake the actor about
-another Session — read by a **Watch** since VC-457, under the name the await
-tool gave it. A separate list under a separate name, never a widened
-`awaitable`: Ticket await kinds name planner facts and this list names Session
-Events — two ledgers, two sequences, and two cursors. A document naming a
-Ticket kind in this list is refused, not filtered.
-_Avoid_: merged await list, shared vocabulary with `awaitable`
-
-**`interrupted`**:
-The red listing state a Session reads when its latest turn ended by
-interruption, an active failure Attention explains that interruption, and
-nothing has started since: `session list` and `session peek` say `interrupted`,
-with why. It sits below working and above idle — stopped still outranks it —
-and a Session that resumed reads working again. A deliberate user cancellation
-has no failure Attention and stays out of this state. A fleet that read idle
-while four of its members had been cut off is the failure this state exists to
-end.
-_Avoid_: idle (for a failed interruption), error, crashed
-
-**Project**:
-A tracked codebase folder: name, path, ticket prefix, rail position. Removing one from Volli never touches the folder on disk. **The one user-facing word for a rail entry** (VC-57 ruling): every surface says "project" — "project switcher", "Project override", "Set by this project" — and it anchors the session language too (project-level vs ticket-level sessions). Persisted names (`volli:workspace`, `workspaceRailHidden`) are wire format, not copy.
-_Avoid_: Workspace (the team container that owns projects), Ticket view (the ticket surface), space
-
-**Ticket worktree**:
-The isolated git checkout a ticket works in: branch `volli/<DISPLAY-ID>-<slug>`, directory `~/.volli/worktrees/<project-dirname>-<short-id>/<DISPLAY-ID>-<slug>/`. App-owned (outside both the repo and Electron's `userData`), named once at creation — neither branch nor directory is renamed when the ticket title changes. The recorded branch follows the checkout only when the ticket's own directory is found on another branch of the same ticket — `volli/<DISPLAY-ID>` or `volli/<DISPLAY-ID>-…` (an agent cut a narrower one, or a stacked-PR slice `volli/VC-627-b-…`), or the same with a one-lowercase-letter slice suffix (`volli/VC-627c` or `volli/VC-627c-…`): the next Session start adopts it as an automation `worktree_changed`. Anything else after the number (`volli/VC-6270`, `volli/VC-627.bak`), another ticket's branch, a non-`volli/` branch or a detached HEAD there is refused, never switched away from, and the refusal names the branch checked out, whether it has uncommitted changes and the branch the ticket expects.
-_Avoid_: Workspace (the team container), Ticket view (the ticket surface), checkout (ambiguous with the main checkout)
-
-**Artifact**:
-A durable, project-scoped output or reference, stored as a file or bundle and reusable across tickets. Its format determines how Volli presents it.
-_Avoid_: ticket artifact, Attachment, Change Set
-
-**Attachment**:
-A ticket-scoped starting-context item, either an imported file or a URL reference, retained with the ticket and presented to its sessions.
-_Avoid_: Artifact, Project Doc
-
-**Change Set**:
-The ticket-scoped body of source changes relative to its base branch, including committed and uncommitted work. It is live ticket state, not an artifact.
-_Avoid_: artifact, diff (when referring to the whole body of work)
-
-**Main checkout**:
-The project folder the user added to Volli — the repo's own working tree, never touched by ticket automation. Board Sessions and worktree-opt-out tickets run here.
-
-**Actor**:
-Who a ticket event is attributed to: `user`, `session`, `automation`, or `unauthenticated`. The app derives this from how the mutation arrived; callers never self-declare it. `unauthenticated` is the honest name for a socket caller Volli could not identify — it is neither the person nor the Session it may have named, and by default it writes nothing at all.
-_Avoid_: agent (as an actor value — the app cannot know an agent typed it, only which session it came from)
-
-**Deliberate move**:
-A human drag or explicit `volli` move, as opposed to a lifecycle-driven auto-move. It carries the same semantics regardless of actor and wins over trailing lifecycle events.
-_Avoid_: manual move (too narrow — implies human-only)
-
-**Automation**:
-A saved, named way of starting work, made of three parts: its Trigger, its
-Instructions, and its Runtime. An Automation removes the repetitive setup of
-composing a prompt and choosing model, reasoning, and authority defaults — it
-does not remove the person. Every Automation is runnable by hand from any
-surface that lists one, so the Trigger says only what _else_ starts it. Whether
-a Run is attended follows from that Trigger; it is never a property an
-Automation declares about itself.
-_Avoid_: recipe, preset, workflow, template, pipeline
-
-**Trigger**:
-What starts an Automation besides a person: a ticket entering one or more named
-columns, or a schedule. "Nothing else" is the third answer and the default for a
-new Automation — run by hand is always available, so an Automation with no
-Trigger is complete rather than inert. One Automation holds exactly one Trigger.
-The same work on two Triggers is two Automations naming one Skill, which is
-cheap precisely because the workflow lives in the Skill rather than in either
-record.
-_Avoid_: event, hook, condition
-
-**Armed automation**:
-The single Automation a column fires on its own when a ticket arrives there by
-Deliberate move. A column has at most one, or none — in which case an arriving
-ticket is a pure status change. Arming is a property of the column, not of the
-Automation, so one Automation may be armed in one column and merely offered in
-another. It is local to the machine that set it and never travels with the
-project. Arming a column is not retroactive: it governs tickets that arrive
-afterward, never those already sitting there. A countdown whose window elapsed
-while the app was closed starts nothing at the next launch; it waits for a
-person's Retry, because nobody was shown its Cancel. The column-header bolt is always
-visible: outline when unarmed, filled when armed. A filled, muted bolt with
-“automatic triggers off” keeps the arming distinct from permission to fire.
-_Avoid_: default automation (collides with project defaults and the default base branch)
-
-**Offered list**:
-The Automations a column presents during a Deliberate move, in the order their
-digit accelerators read, with a `Move only` target beside them. Membership is
-each Automation's Trigger; the order is the column's own **rank**, arranged by
-dragging the lanes on the Automations page and stored per column, like the
-arming and on the same machine. A column's Armed automation is pinned to digit
-`1` while it is switched on here, so `1` reproduces a plain drop. Digits run
-`1`–`9` and `0` is `Move only`; a row ranked past the ninth keeps its place in
-the lanes, drawn without a digit and still draggable, and is not a landing
-target mid-drag. Offering is not arming: a column offers many and fires at most
-one on its own.
-_Avoid_: column automations, automation menu
-
-**Option-drag picker**:
-What holding ⌥ during a drag does: the hovered column grows its Offered list
-into large landing targets — every row with a digit plus `Move only` — and the
-picker, not the pointer, is what a release obeys, so every release under ⌥ lands
-on a named target. Landing on a named Automation opens the same delay window a
-plain drop into an armed column opens, with the same single Cancel; `Move only`
-moves the ticket and starts nothing. Over the column every lifted card already
-stands in, the Offered list is drawn inert at both sizes — the compact list
-and the ⌥ picker — with `Move only` lit: a release there is not an arrival, so
-it starts nothing whichever row is named. ⌥ is a state rather than an edge: the column is
-expanded whenever ⌥ is held over it, however the two became true. Escape ends
-the drag; ⌥-up only closes the picker.
-_Avoid_: palette, radial menu, drag menu
-
-**Instructions**:
-The prompt an Automation sends when it opens its Session: authored prose plus
-the composer's own grammar — `/` for prompt templates and Skills, `@` for file
-references — resolved exactly as they resolve for a person typing into the chat
-composer. Nothing is appended to them. The Runtime Brief already carries the
-ticket's context, and per-Automation prompt text would break the cache prefix a
-stable system prompt exists to hold. An Automation starts from an empty box.
-_Avoid_: prompt template, Ticket Body, Runtime Brief
-
-**Runtime**:
-An Automation's execution setting: its model policy, reasoning policy, Session
-Role, and frozen tool defaults. Model and reasoning travel together as
-one selection, and are inherited or pinned together rather than separately — the
-reasoning levels a model offers are its own, so a pinned level against an
-inherited model can name a pair that does not exist. An Automation that pins
-nothing resolves through the project's runtime preferences and then the global
-record, so changing the model in Settings changes every Automation that inherits
-it. The Agent Runtime is a product constant rather than an Automation choice.
-_Avoid_: agent, harness, model (alone)
-
-**Run**:
-One invocation of an Automation, and the record of which Automation and which
-_resolved_ model and reasoning produced a given Session. A Run owns exactly one
-Session and always starts a fresh one: it never wakes an existing Session whose
-context is stale by the time a schedule fires. A ticket has at most one Run in flight at a
-time. A Board Session can start one too, through the `automation.run` tool its
-Role bundle holds; the Run it starts carries the automation Actor and is
-indistinguishable in its record from one a person started by hand. Runs outlive the app — one whose Session died is interrupted, never lost,
-and only a human restarts it. A Session a user opens from the composer belongs
-to no Run and never moves the board.
-_Avoid_: job, task, session (a Run has a Session — it is not one)
-
-**Unbound Run**:
-A Run that carries its own Instructions and names no Automation — the one-time
-case, authored where it is launched. It writes no file and saves no record
-beyond the Run, so there is nothing left afterwards to name, disable, or delete.
-_Avoid_: ad-hoc automation, draft automation, one-shot automation
-
-**Enabled automation**:
-An Automation somebody switched on for this machine, and therefore the only
-kind whose Trigger has an effect here. Off is the resting state: a machine that
-was never asked has not said yes, so a record fires on its own only where it
-was turned on — the same rule that lets the Skills travel through git while the
-record and its switch do not. Run by hand is universal, so an Automation that
-is off is still runnable from every surface that lists one; the switch narrows
-what _else_ starts it, exactly as the Trigger does. Like arming, it is local to
-the machine that set it and never travels with the project, which is why it is
-not a field on the record. Distinct from deleting, which removes the record;
-there is no third state between them, because for a Skill git is already the
-archive. The UI labels this switch **Automatic triggers** and its off state
-**Manual only**, so a deliberate Run does not look like a disabled control
-being ignored.
-_Avoid_: paused, archived, active, on (alone)
-
-**Skipped occurrence**:
-A scheduled Trigger's due time that passed without a Run — usually because the
-app was not open, otherwise because this machine never woke to it (asleep, or
-too busy), or because the Run door refused when the moment came. It is recorded
-with the reason that is actually true of it and never replayed — the next
-occurrence stands — and a person may start it by hand from the Run history
-afterwards, as one Run rather than as the backlog it stood for. A skip and a
-silence must not look the same, and neither must two different skips.
-_Avoid_: missed run, failed run
-
-**Skill**:
-A directory holding a `SKILL.md` — frontmatter naming and describing it, body
-of instructions — under the `.agents/skills/` convention, in either the
-project's own tier or the personal `~/.agents/skills/`. Its identity is the
-directory slug, not the frontmatter `name`: the slug is what a person types
-after `/`, what the picker offers, and what the delivered RESOURCE block
-carries, so the reference and the injection can never disagree about what the
-thing is called. A Skill's body reaches a model three ways, each visible in the
-prompt or the transcript — an explicit `/slug` in the composer, an attach-time
-selection, or the model's own read of a SKILL.md it found in the Skills index.
-_Avoid_: plugin, tool, extension, macro
-
-**Invocation policy**:
-What one Skill is currently allowed to do, on two independent axes: **Model
-discoverable** (its metadata rides the Skills index and the model may activate
-it unprompted) and **User invokable** (it appears in `/` completion and an
-explicit reference resolves). A Skill that is neither is **Unavailable**. The
-two are separate questions — the index is a prompt-budget question, the picker
-a discoverability question for a person — and every consumer resolves the same
-policy, so the index, the picker, explicit submit, attach-time selection and
-Settings can never disagree.
-_Avoid_: enabled, visibility, permission, scope
-
-**Skill mode**:
-A Project's complete per-Skill override: `Auto` opens model discovery and user
-invocation, `Manual` closes model discovery and keeps user invocation, and
-`Off` closes both. The author-only fourth combination — model discoverable but
-not user invokable — applies only where the Project has no override; Settings
-names it `Model only (author)` rather than mislabelling it Auto. A stored mode
-outranks both author axes and is removed when it exactly restores the file's
-declaration.
-_Avoid_: skill setting, toggle, enablement
-
-**Author invocation default**:
-What a `SKILL.md` asks for before any Project has its say. The top-level
-`disable-model-invocation` spelling is the portable manual default honoured by
-Claude Code, Cursor, Copilot and Pi. `user-invocable` is the independent
-Claude/Copilot spelling Volli also accepts; neither extension belongs to the
-Agent Skills core format. Volli's legacy
-`metadata.volli-user-invoke-only` remains an alias, the portable top-level key
-wins a conflict, and any declaration that cannot be read earns a surfaced
-diagnostic. Unparseable YAML fails closed until the file or a Project override
-fixes it.
-_Avoid_: frontmatter flag (alone), skill config
-
-**Skill activation lifecycle**:
-An explicit `/slug` is attached to one user message: the transcript keeps the
-person's reference and one typed delivery receipt containing the exact resource
-bytes and Skill root. Repeating the same resolved name in that message delivers
-it once; invoking it again in a later message creates a new receipt and delivers
-it again. Context compaction restores one exact active resource per Skill name,
-using the latest delivered bytes, so summarization cannot silently replace its
-instructions. This preservation is user-message context, not a persistent mode;
-starting a Session with a Skill is the separate attach-time route and places its
-resource in the attachment's stable system prompt. Attach-time names are also
-deduplicated.
-
-Project policy writes automatically invalidate every mounted supply. Consumers
-expose no previous-policy rows while the replacement disk read is in flight,
-and main resolves policy again after that read before index or delivery. Skill
-file adds, edits and removals are intentionally not watched: `/reload` is the
-explicit disk rescan and recovery action. A past transcript receipt never
-changes when either policy or disk content changes.
-_Avoid_: active plugin, sticky slash command
+- <a id="volli-local"></a> **Volli Local** — Permanent free signed-out operation without a network requirement; SQLite today, embedded Convex planned ([launch deployment](packages/shared/src/account.ts#L124)).
+- <a id="workspace"></a> **Workspace** — Team container for projects, Members and policy; not a checkout or Ticket view ([Workspace API](convex/functions/workspaces.ts)).
+- <a id="member"></a> **Member** — A person's membership and role in one Workspace, independently suspendable ([membership rules](packages/shared/src/cloud/members.ts)).
+- <a id="runner"></a> **Runner** — Owner-linked machine running Session tools and Pi, connected outbound to the backend ([runner vocabulary](packages/shared/src/cloud/runners.ts), [headless entry](apps/runner/src/commands/run.ts)).
+- <a id="volli-cloud-runner"></a> **Volli Cloud runner** — Planned disposable Volli-managed Runner; `cloud` is already a reserved Runner kind ([Runner kinds](packages/shared/src/cloud/runners.ts#L29)).
+- <a id="place"></a> **Place** — The Runner a Session runs on, presented with its availability ([RunnerPlace](packages/shared/src/cloud/place.ts)).
+- <a id="working-copy"></a> **Working copy** — Checkout a Session works in: ticket worktree or main checkout, distinct from its Runner ([working-copy vocabulary](packages/shared/src/working-copy.ts)).
+- <a id="retry-buffer"></a> **Retry buffer** — Runner-local Session ledger facts above the backend-accepted cursor, drained in order without blocking the agent ([fact drain](packages/host-core/src/cloud-runner/drain.ts)).
+- <a id="client"></a> **Client** — A projection reader and command sender, not the authority over durable Session facts ([Session client](packages/session-presentation/src/client.ts)).
+- <a id="model-gateway"></a> **Model gateway** — Backend-key inference relay using short-lived per-Session grants; machine-local subscriptions bypass it ([gateway contract](packages/shared/src/cloud/gateway.ts)).
+- <a id="runner-token"></a> **Runner token** — Short-lived scoped Runner credential, distinct from its long-lived refresh credential ([token contract](packages/shared/src/cloud/runners.ts)).
+- <a id="refresh-credential"></a> **Refresh credential** — Linked Runner's long-lived secret, rotated whenever exchanged for a Runner token ([link](packages/host-core/src/cloud-runner/link.ts), [exchange](packages/host-core/src/cloud-runner/token-source.ts)).
+- <a id="environment-recipe"></a> **Environment recipe** — Repository `.agents/setup` and `.agents/resume` scripts preparing a Runner's Working copy ([recipe vocabulary](packages/shared/src/environment-recipe.ts)).
+- <a id="config-level"></a> **Config level** — Personal, Workspace, project or repo configuration, with policy above them; each surface declares supported levels and precedence ([resolution](packages/shared/src/config-resolution.ts)).
+- <a id="needs-you-inbox"></a> **Needs-you inbox** — Planned cross-Workspace list of one person's unresolved Attention items; item storage and rules exist ([attention vocabulary](packages/shared/src/cloud/attention.ts)).
+- <a id="retired-terms"></a> **Retired terms** — Host/Worker, Host link/protocol, Execution venue, checkout lease/epoch, Workspace epoch and checkpoint ref name the superseded host model, not Runner architecture ([legacy links](packages/shared/src/remote-hosts.ts), [legacy fences](packages/host-core/src/db/cloud-identity-migration.ts)).
+
+## Board and files
+
+- <a id="project"></a> **Project** — A tracked codebase with a name, path and ticket prefix; the user-facing name for a project rail entry ([Project](packages/shared/src/project-identity.ts#L24)).
+- <a id="ticket"></a> **Ticket** — Board card carrying scope, status and Working-copy identity; moving it is distinct from starting a Session ([Ticket](packages/shared/src/ticket.ts#L147)).
+- <a id="ticket-body"></a> **Ticket Body** — Ticket's canonical Markdown scope, stored on the Ticket rather than as an Artifact ([Ticket.body](packages/shared/src/ticket.ts#L160)).
+- <a id="runtime-brief"></a> **Runtime Brief** — Agent-ready Ticket/context projection delivered at Session launch, not canonical Ticket content ([RuntimeBrief](packages/shared/src/agent-runtime.ts#L310)).
+- <a id="dangling-reference"></a> **Dangling Reference** — File reference that no longer resolves; preserved as plain text rather than silently rewritten ([renderFileRefChips](apps/desktop/src/renderer/src/editor/file-refs.ts)).
+- <a id="ticket-id"></a> **Ticket ID** — Opaque permanent UUID, never the human-facing handle ([Ticket.id](packages/shared/src/ticket.ts#L147)).
+- <a id="display-id"></a> **Display ID** — Project-unique `<PREFIX>-<number>` handle used in copy, branches and CLI, not record identity ([displayTicketId](packages/shared/src/ticket.ts#L228)).
+- <a id="label"></a> **Label** — Project-scoped named Ticket label, optionally carrying a stored color ([Label](packages/shared/src/label.ts)).
+- <a id="ticket-event"></a> **Ticket event** — Append-only planner fact, distinct from a Session's conversation ledger ([TicketEvent](packages/shared/src/ticket-events.ts)).
+- <a id="ticket-signal"></a> **Ticket Signal** — Typed verdict recorded as a `signaled` Ticket event; signals do not move cards ([signal vocabulary](packages/shared/src/ticket-events.ts)).
+- <a id="actor"></a> **Actor** — Attribution derived at the mutation door: `user`, `session`, `automation` or `unauthenticated` ([TicketEventActor](packages/shared/src/ticket-events.ts)).
+- <a id="deliberate-move"></a> **Deliberate move** — Explicit board move, whether human drag or CLI command, distinct from lifecycle automation ([move commands](packages/host-core/src/board/commands.ts#L307)).
+- <a id="ticket-worktree"></a> **Ticket worktree** — Isolated ticket checkout whose recorded branch and path survive title changes ([branch identity](packages/shared/src/ticket-branch.ts), [location resolution](packages/host-core/src/session-runtime/location.ts)).
+- <a id="main-checkout"></a> **Main checkout** — Project's original working tree; Board Sessions and worktree-opt-out tickets run here ([WorkingCopyKind](packages/shared/src/working-copy.ts#L34)).
+- <a id="artifact"></a> **Artifact** — Reusable project file under `.volli/artifacts/`, resolved from the main checkout ([artifact paths](packages/shared/src/file-ref.ts#L35)).
+- <a id="attachment"></a> **Attachment** — User-supplied file linked to a Ticket or Session; URL-reference attachments are planned, not implemented ([BlobLink](packages/shared/src/blob.ts#L52)).
+- <a id="change-set"></a> **Change Set** — Ticket's committed and uncommitted source changes against its base branch ([ChangeSetSnapshot](packages/shared/src/change-set.ts)).
+
+## Surfaces
+
+- <a id="ticket-view"></a> **Ticket view** — Expanded Ticket surface containing Body, Sessions, files, diffs and rail; formerly “Ticket workspace” ([TicketDetail](apps/desktop/src/renderer/src/components/ticket/ticket-detail.tsx)).
+- <a id="home"></a> **Home** — Project surface with a permanent Board tab beside project Sessions, files and Browser Tabs ([Home tabs](apps/desktop/src/renderer/src/components/home/home-tabs.ts)).
+- <a id="project-files"></a> **Project Files** — Main-checkout files browsed in Home's rail and opened as tabs ([file workspace](packages/shared/src/file-workspace.ts), [Home navigator](apps/desktop/src/renderer/src/components/home/home-files-panel.tsx)).
+- <a id="ticket-files"></a> **Ticket Files** — Files browsed within one Ticket's checkout, alongside references and attachments ([Ticket navigator](apps/desktop/src/renderer/src/components/ticket/ticket-files-panel.tsx)).
+- <a id="tab-group"></a> **Tab group** — Surface-local split tree of at least two Panes, represented by one top-strip chip ([SplitViewGroup](packages/shared/src/split-view.ts#L84)).
+- <a id="split-view"></a> **Split view** — Side-by-side or stacked arrangement displayed by a Tab group ([SplitViewState](packages/shared/src/split-view.ts#L86)).
+- <a id="pane"></a> **Pane** — Tab-stack cell of a Split view, with one front tab; not a terminal shell pane ([SplitViewPane](packages/shared/src/split-view.ts#L62)).
+- <a id="drop-zone"></a> **Drop zone** — Pane center for joining its stack, or edge for splitting; cross-surface payloads are rejected ([SplitDropZone](apps/desktop/src/renderer/src/components/split/split-drop.ts)).
+- <a id="split-tab"></a> **Split Tab** — One terminal tab containing several independently owned shell panes; distinct from surface-level Split view ([SessionSplit](apps/desktop/src/renderer/src/stores/sessions.ts)).
+- <a id="chat-draft"></a> **Chat Draft** — Unsent chat with a reserved Session identity but no durable Session yet ([ProvisionalChatDraft](apps/desktop/src/renderer/src/stores/chat-drafts.ts#L114)).
+- <a id="promotion"></a> **Promotion** — Idempotent first-send handoff from Chat Draft to durable Session, retaining its identity and staged attachments ([promoteChatSession](apps/desktop/src/renderer/src/stores/chat-sessions.ts#L676)).
+- <a id="unread"></a> **Unread** — Whether a Session has unseen work, independent of activity or Attention ([read-state rules](packages/shared/src/session-read.ts)).
+- <a id="read-receipt"></a> **Read receipt** — Durable per-Session unread stamp stored beside, never inside, Session history ([SessionReadState](packages/shared/src/session-read.ts#L20)).
+- <a id="held-order"></a> **Held order** — Stable listing order that floats new questions and turns, not every activity update ([order rules](packages/shared/src/session-order.ts)).
+- <a id="session-peek"></a> **Session peek** — On-demand read of recent conversation and its open question, without adopting a live stream ([peek content](packages/shared/src/session-peek.ts)).
+
+## Sessions
+
+- <a id="session"></a> **Session** — Durable conversation identity and ordered history, independent of executors, processes and views ([Session](packages/shared/src/session-ledger.ts#L46)).
+- <a id="session-role"></a> **Session Role** — Stored `project`, `ticket` or `subagent` scope determining identity, context and tool bundle ([roles](packages/shared/src/agent-runtime.ts#L56), [bundles](packages/shared/src/agent-tool-surface.ts)).
+- <a id="board-session"></a> **Board Session** — Role `project`: ticketless Session working from the main checkout ([ProjectRuntimeIdentity](packages/shared/src/agent-runtime.ts#L207)).
+- <a id="ticket-session"></a> **Ticket Session** — Role `ticket`: Session with explicit Ticket and Working-copy context ([TicketRuntimeIdentity](packages/shared/src/agent-runtime.ts#L201)).
+- <a id="subagent-session"></a> **Subagent Session** — Role `subagent`: durable bounded helper carrying its parent and inherited Ticket, not a hidden Thread ([SubagentRuntimeIdentity](packages/shared/src/agent-runtime.ts#L222)).
+- <a id="authority-policy"></a> **Authority Policy** — App-owned per-project actor access, transcript disclosure, watch kinds and delegation budget policy ([AuthorityPolicy](packages/shared/src/authority-config.ts)).
+- <a id="session-event"></a> **Session Event** — Immutable ledger fact ordered by per-Session sequence, not timestamps ([SessionEvent](packages/shared/src/session-ledger.ts#L972)).
+- <a id="session-semantic-fact"></a> **Session Semantic Fact** — Product-owned identity, lifecycle, content or control meaning; not presentation labels or raw provider data ([observation translation](packages/session-engine/src/observation-translation.ts)).
+- <a id="agent-thread"></a> **Agent Thread** — Conversation lane inside a Session; currently one derived root Thread ([sessionRootThreadId](packages/session-engine/src/observation-translation.ts#L61)).
+- <a id="conversation-branch"></a> **Conversation Branch** — Transcript lineage inside a Thread; currently one main Branch, with edit-created branches planned ([sessionMainBranchId](packages/session-engine/src/observation-translation.ts#L65)).
+- <a id="generation-attempt"></a> **Generation Attempt** — Transcript attempt identity; sibling attempts for regeneration are planned ([attemptId](packages/session-engine/src/transcript-artifacts.ts#L6)).
+- <a id="thread-binding"></a> **Thread Binding** — Planned durable Thread-to-attachment association; current live bindings are Session-scoped ([OpenNativeBinding](packages/session-engine/src/session-runtime.ts#L687)).
+- <a id="session-attachment"></a> **Session Attachment** — Historical Session/executor association carrying runtime identity, recovery reference and Runner provenance ([SessionAttachment](packages/shared/src/session-ledger.ts#L335)).
+- <a id="command"></a> **Command** — Durable explicit intent recorded before delivery; not proof that an executor accepted work ([SessionCommand](packages/shared/src/session-ledger.ts#L1344)).
+- <a id="receipt"></a> **Receipt** — Durable Command outcome: accepted, rejected, completed or unreconciled ([CommandReceipt](packages/shared/src/session-ledger.ts#L1406)).
+- <a id="unreconciled"></a> **unreconciled** — Receipt status meaning delivery is unconfirmed, neither accepted nor rejected; never latch it as delivered ([receipt status](packages/shared/src/session-ledger.ts#L1388), [delivery interpretation](packages/session-presentation/src/client.ts)).
+- <a id="session-engine"></a> **Session Engine** — Runtime/UI-independent owner of Session commands, events, projections and storage contract ([SessionEngine](packages/session-engine/src/session-engine.ts#L121)).
+- <a id="attention"></a> **Attention** — Reconstructible committed-fact projection identifying needed input or recovery, never inferred from silence ([SessionAttentionProjection](packages/shared/src/session-ledger.ts#L1550)).
+- <a id="session-presentation-contract"></a> **Session Presentation Contract** — Framework-neutral projection of Session facts into client-facing meaning, without parsing native provider protocols ([presentation boundary](packages/session-presentation/src/index.ts)).
+- <a id="session-surface-model"></a> **Session Surface Model** — Portable transcript, attention, controls and live state a client renders ([ChatSessionSlice](packages/session-presentation/src/client.ts#L83), [presentation projection](packages/shared/src/session-event-codec.ts#L869)).
+- <a id="scheduled-resume"></a> **Scheduled Resume** — Person-chosen retry after a provider allowance resets, recorded through schedule/cancel/settle commands ([resume rules](packages/shared/src/scheduled-resume.ts)).
+- <a id="restart-resume"></a> **Restart Resume** — One guarded continuation of a process-lost turn through ordinary retry, without resending the person's message ([recovery verdict](packages/session-engine/src/restart-resume.ts)).
+- <a id="interrupted"></a> **`interrupted`** — Listing state for an interrupted latest turn explained by active failure Attention, until work resumes ([listing activity](packages/shared/src/session-listing-activity.ts)).
+
+## Interactions and wakes
+
+- <a id="sessioninteraction"></a> **SessionInteraction** — Durable question or permission awaiting an answer or cancellation ([SessionInteraction](packages/shared/src/session-ledger.ts#L201)).
+- <a id="sessioninteractionprompt"></a> **SessionInteractionPrompt** — One question with options, selection rules and optional free-text input ([SessionInteractionPrompt](packages/shared/src/session-ledger.ts#L182)).
+- <a id="sessioninteractionoption"></a> **SessionInteractionOption** — One declared choice with runtime-correlated id and label ([SessionInteractionOption](packages/shared/src/session-ledger.ts#L110)).
+- <a id="sessioninteractionanswer"></a> **SessionInteractionAnswer** — One prompt's chosen option ids and permitted free text ([SessionInteractionAnswer](packages/shared/src/session-ledger.ts#L193)).
+- <a id="sessioninteractionresolution"></a> **SessionInteractionResolution** — Whole decision on an interaction, carrying its per-prompt answers ([SessionInteractionResolution](packages/shared/src/session-ledger.ts#L220)).
+- <a id="sessioninteractioncancelreason"></a> **SessionInteractionCancelReason** — `abandoned`, `superseded` or `withdrawn`; cancellation is not a refusal or answer ([cancel reasons](packages/shared/src/session-ledger.ts#L227)).
+- <a id="sessioninteractionprojection"></a> **SessionInteractionProjection** — Rebuilt waiting/resolved interaction state and its recorded resolutions ([projection](packages/shared/src/session-ledger.ts#L1555)).
+- <a id="ticket-wake"></a> **Ticket Wake** — Post-commit in-process delivery of a durable Ticket event and cursor ([TicketWake](packages/host-core/src/ticket-wake.ts)).
+- <a id="session-wake"></a> **Session Wake** — Post-commit in-process delivery of a durable Session event, without coalescing ([wake bus](packages/host-core/src/session-control/session-wake.ts)).
+- <a id="watch"></a> **Watch** — Non-blocking subscription whose later Ticket/Session facts arrive as Volli notices ([watch doors](packages/host-core/src/agent-watch.ts)).
+- <a id="await"></a> **Await** — Retired `ticket_await`/`session_await`; frozen Sessions retain their names, but calls now arm Watches and return immediately; cursors follow ledger order ([compatibility doors](packages/host-core/src/agent-watch.ts), [ordered cursor](packages/host-core/src/db/session-events-cursor-repo.ts)).
+- <a id="awaitablesessions"></a> **`awaitableSessions`** — Actor-policy list of Session facts allowed to wake a Watch, separate from Ticket `awaitable` kinds ([AuthorityActorPolicy](packages/shared/src/authority-config.ts)).
+
+## Runtime and access
+
+- <a id="agent-runtime"></a> **Agent Runtime** — Pi-backed executor boundary emitting observations without owning durable Session or Ticket state ([runtime contract](packages/shared/src/agent-runtime.ts), [implementation](packages/agent-runtime/src/pi/runtime.ts)).
+- <a id="executor-slot"></a> **Executor Slot** — Runtime-id registry and attachment-based selection seam; Pi is the only shipped runtime, never a caller choice ([slot](packages/session-engine/src/executor-slot.ts)).
+- <a id="model-access"></a> **Model Access** — Sanitized provider/model availability and billing view, with credentials kept behind the runtime boundary ([ModelAccessSnapshot](packages/shared/src/agent-runtime.ts#L172)).
+- <a id="decision-model"></a> **Decision Model** — Configured classifier returning typed choice/score/bool answers with probabilities, not prose ([decision vocabulary](packages/shared/src/decision-model.ts)).
+- <a id="decision-service"></a> **Decision Service** — Bounded classifier orchestration returning a caller's deterministic fallback on any miss ([service](packages/agent-runtime/src/decision/service.ts)).
+- <a id="decision-purpose"></a> **Decision Purpose** — Named opt-in and policy boundary for classifier use: `agent.classify` or `model.select` ([purposes](packages/shared/src/decision-model.ts#L43)).
+- <a id="automatic-model-choice"></a> **Automatic model choice** — Opt-in birth-time selection from approved model/reasoning pairs, falling back to the configured default ([selection rules](packages/shared/src/model-auto-select.ts)).
+- <a id="web-access"></a> **Web Access** — App-wide web/search configuration; off provides no web tools, and model-supplied URLs face public-web admission ([settings](packages/shared/src/host-settings.ts), [target policy](packages/shared/src/web-target-policy.ts)).
+- <a id="context-compaction"></a> **Context Compaction** — Summary replacing older model context without deleting durable history; automatic threshold policy does not disable overflow/manual recovery ([policy](packages/shared/src/compaction-policy.ts), [mechanism](packages/agent-runtime/src/pi/compaction.ts)).
+- <a id="background-shell"></a> **Background shell** — Session-owned process running beside a turn, with bounded output and exit notices; not a durable Session or terminal ([shell host](packages/host-core/src/shell/background-shell-host.ts)).
+- <a id="agent-cli"></a> **Agent CLI** — Bash-composable `volli` socket surface; Session authentication is per attachment, not a claimed id ([wire](packages/shared/src/agent-surface.ts), [admission](packages/host-core/src/agent-dispatch/admission.ts)).
+- <a id="agent-tool-surface"></a> **Agent Tool Surface** — Session's Role bundle plus scoped grants and available capabilities, frozen at birth and refreshed only additively ([surface resolution](packages/shared/src/agent-tool-surface.ts), [refresh](packages/shared/src/tool-refresh-delta.ts)).
+- <a id="client-surface"></a> **Client Surface** — Person-facing command/projection API; the local desktop bridge exposes it without database access ([preload API](apps/desktop/src/preload/index.ts)).
+- <a id="external-agent-surface"></a> **External Agent Surface** — Planned admission boundary for agents Volli does not host; current code only provides a policy-store seam ([admission seam](packages/host-core/src/agent-dispatch/admission.ts#L105)).
+- <a id="verb-registry"></a> **Verb Registry** — Single declaration of agent-facing verbs, projected onto each surface with one handler binding ([registry](packages/shared/src/verb-registry.ts)).
+- <a id="verb-tier"></a> **Verb Tier** — Derived read/coordination/control governance class, never a stored field ([tier rules](packages/shared/src/verb-registry.ts)).
+- <a id="door"></a> **Door** — Caller-resolving transport entrance to shared behavior: IPC, socket, tool or Automation Run ([admission](packages/host-core/src/agent-dispatch/admission.ts), [Run door](packages/host-core/src/automations/run.ts)).
+- <a id="cache-prefix"></a> **Cache Prefix** — Byte-stable leading request content reusable by the provider within a warm epoch ([prompt assembly](packages/agent-runtime/src/prompt.ts), [cache placement](packages/agent-runtime/src/prompt-baseline.ts#L83)).
+- <a id="context-assembly"></a> **Context Assembly** — Deterministic stable-first composition of system prompt, tools and message content ([prompt composition](packages/agent-runtime/src/prompt.ts)).
+- <a id="turn-reminder"></a> **Turn Reminder** — Volatile turn facts delivered as message content rather than changing system-prompt bytes ([composeTurnReminderBlock](packages/agent-runtime/src/prompt.ts#L694)).
+- <a id="cache-class"></a> **Cache class** — Declared section stability: `role-static`, `project-static`, `session-static` or `per-turn`, not measured cache performance ([PromptCacheClass](packages/agent-runtime/src/prompt-baseline.ts#L59)).
+
+## Browser
+
+- <a id="browser-tab"></a> **Browser Tab** — Product-identified page with navigation generation, separate from the app renderer and accessible through Browser tools ([tab state](packages/shared/src/browser-tab.ts)).
+- <a id="headless-tab"></a> **Headless tab** — Session-created Browser Tab on no person-visible surface, still rendered and capturable ([presentation states](packages/shared/src/browser-tab.ts#L18)).
+- <a id="tab-owner"></a> **Tab owner** — Session that opened a Browser Tab, or nobody for a person's tab; distinct from its current hold ([ownerSessionId](packages/shared/src/browser-tab.ts#L43)).
+- <a id="presentation"></a> **Presentation** — Person-controlled Browser Tab placement: `headless`, `tab` or compatible legacy `preview` ([BrowserTabPresentation](packages/shared/src/browser-tab.ts#L18)).
+- <a id="tab-hold"></a> **Tab hold** — One party's turn to drive a Browser Tab: a Session or the person, never both ([BrowserTabHolder](packages/shared/src/browser-tab-hold.ts)).
+- <a id="session-cursor"></a> **Session cursor** — Identity-colored arrow showing where a Session holding a Browser Tab acts ([cursor](apps/desktop/src/renderer/src/components/browser/session-cursor.tsx), [motion](packages/shared/src/session-cursor-motion.ts)).
+- <a id="browser-trace"></a> **Browser Trace** — Host-written replay evidence of settled browser calls on a Session-owned tab, never model input or typed page text ([trace contract](packages/shared/src/browser-trace.ts)).
+- <a id="browser-replay"></a> **Browser replay** — Person-facing playback of Browser Trace steps and retained frames ([replay dialog](apps/desktop/src/renderer/src/components/browser/browser-trace-dialog.tsx)).
+- <a id="tab-card"></a> **Tab card** — Transcript affordance for a Browser Tab's live state and replay ([BrowserTabCard](apps/desktop/src/renderer/src/components/browser/browser-tab-card.tsx)).
+- <a id="session-colour"></a> **Session colour** — Stable identity hue, collision-resolved among concurrent holders; never a state color ([identity colors](packages/shared/src/session-color.ts)).
+
+## Usage
+
+- <a id="metered-operation"></a> **Metered operation** — One provider call's reported consumption, recorded as `usage.recorded` with its cause; missing measurements are not zero ([SessionUsage](packages/shared/src/session-usage.ts)).
+- <a id="cost-basis"></a> **Cost basis** — `provider-reported`, `catalog-estimate` or `unavailable`; a mixed rollup says `mixed`, never implies an invoice ([cost vocabulary](packages/shared/src/session-usage.ts#L25)).
+- <a id="usage-projection"></a> **Usage projection** — Rebuildable per-operation ledger index with query-time rollups, not stored running totals ([session_usage](packages/host-core/src/db/migrations.ts#L923)).
+- <a id="usage-window"></a> **Usage Window** — Live provider-subscription allowance measurement: used share, reset time and optional duration; not Session cost accounting ([UsageWindow](packages/shared/src/usage-limits.ts)).
+- <a id="cached-input-share"></a> **Cached input share** — Cache-read tokens divided by uncached input plus cache-read plus cache-write tokens; not a request hit rate ([usage summary](packages/shared/src/session-usage.ts#L192)).
+
+## Automations and skills
+
+- <a id="automation"></a> **Automation** — Saved named way to start work, composed of Trigger, Instructions and Runtime ([Automation](packages/shared/src/automation.ts#L137)).
+- <a id="trigger"></a> **Trigger** — What starts an Automation besides a person: none, column arrival or schedule ([AutomationTrigger](packages/shared/src/automation.ts#L126)).
+- <a id="armed-automation"></a> **Armed automation** — Column's single selected Automation for deliberate arrivals; distinct from offered membership and enablement ([ColumnArming](packages/shared/src/automation.ts#L638)).
+- <a id="offered-list"></a> **Offered list** — Column's ranked Trigger-matching Automations, with enabled armed choice first and bounded digit targets ([offered ordering](packages/shared/src/automation.ts#L694)).
+- <a id="option-drag-picker"></a> **Option-drag picker** — Expanded Offered list under ⌥ during a card drag, including an explicit Move only target ([column panel](apps/desktop/src/renderer/src/components/board/column-offered-panel.tsx)).
+- <a id="instructions"></a> **Instructions** — Automation's opening prompt, resolving the composer's `/` and `@` grammar without appending Ticket context ([Automation.instructions](packages/shared/src/automation.ts#L142)).
+- <a id="runtime"></a> **Runtime** — Automation's model/reasoning selection: inherited, pinned or tier-resolved; not an Agent Runtime choice ([AutomationRuntime](packages/shared/src/automation.ts#L94)).
+- <a id="run"></a> **Run** — Durable invocation of an Automation, owning one fresh Session and its resolved execution choices ([AutomationRun](packages/shared/src/automation.ts#L207)).
+- <a id="unbound-run"></a> **Unbound Run** — One-time Run carrying Instructions without naming or saving an Automation ([AutomationRunTarget](packages/shared/src/automation.ts#L326)).
+- <a id="enabled-automation"></a> **Enabled automation** — Locally, one permitted to fire automatically on this machine; manual Runs remain available ([enablement](packages/host-core/src/automations/enablement.ts)).
+- <a id="skipped-occurrence"></a> **Skipped occurrence** — Scheduled due time recorded without a Run and with its actual reason, never replayed as backlog ([AutomationSkippedOccurrence](packages/shared/src/automation.ts#L589)).
+- <a id="skill"></a> **Skill** — Instruction directory containing `SKILL.md`, identified by its slug and supplied from repo or personal `.agents/skills` ([skill vocabulary](packages/shared/src/skill.ts)).
+- <a id="invocation-policy"></a> **Invocation policy** — Independent model-discoverable and user-invokable axes resolved consistently for every Skill consumer ([SkillInvocationPolicy](packages/shared/src/skill.ts#L81)).
+- <a id="skill-mode"></a> **Skill mode** — Project override: Auto opens both invocation axes, Manual only user invocation, Off neither ([SkillMode](packages/shared/src/skill.ts#L274)).
+- <a id="author-invocation-default"></a> **Author invocation default** — Skill file's invocation declaration before Project overrides, with portable keys and a legacy alias ([author policy reader](packages/shared/src/skill.ts#L529)).
+- <a id="skill-activation-lifecycle"></a> **Skill activation lifecycle** — Explicit per-message Skill delivery retains exact resource bytes; attach-time selection is separate ([delivery receipts](packages/shared/src/skill.ts#L756), [resource format](packages/shared/src/prompt-resource.ts)).

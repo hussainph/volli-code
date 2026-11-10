@@ -34,11 +34,18 @@ import { randomUUID } from "node:crypto";
 import { mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import type { Credential, CredentialInfo, CredentialStore, Models } from "@earendil-works/pi-ai";
+import {
+  createModels,
+  type Credential,
+  type CredentialInfo,
+  type CredentialStore,
+  type Models,
+} from "@earendil-works/pi-ai";
 import { registerBunOAuthFlows } from "@earendil-works/pi-ai/bun-oauth";
-import { builtinModels } from "@earendil-works/pi-ai/providers/all";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import lockfile from "proper-lockfile";
 
+import { withDurableAzureCatalog, withDurableAzureProvider } from "./azure-provider-compat";
 import {
   attachRefreshableCatalog,
   piDevCatalogSource,
@@ -69,6 +76,8 @@ export interface PiCredentialOptions {
    * packaged smoke run against an isolated profile instead of a developer's.
    */
   agentDir?: string;
+  /** Host-owned storage; absent keeps Pi's existing auth.json behavior. */
+  credentials?: CredentialStore;
 }
 
 /**
@@ -138,15 +147,18 @@ export function piOwnedModels(options: PiCredentialOptions = {}): Models {
  */
 export function piOwnedModelAccess(options: PiCredentialOptions = {}): PiModelAccess {
   registerBunOAuthFlows();
-  const credentials = new PiFileCredentialStore(piAuthFilePath(options));
+  const credentials = options.credentials ?? new PiFileCredentialStore(piAuthFilePath(options));
   // The store is what lets a refreshed catalog outlive this process: without
   // it pi falls back to `InMemoryModelsStore` and every fetched model dies at
   // restart. The wrapping is what makes "Refresh models" mean something — pi's
   // built-in catalogs are frozen at publish time, and an unwrapped provider
   // has no `refreshModels` for the button to reach (see `model-catalog.ts`).
   const modelsStore = new PiFileModelsStore(piModelsFilePath(options));
-  const models = builtinModels({ credentials, modelsStore });
-  const catalogs = attachRefreshableCatalog(models, piDevCatalogSource(), {
+  const models = createModels({ credentials, modelsStore });
+  for (const provider of builtinProviders()) {
+    models.setProvider(withDurableAzureProvider(provider));
+  }
+  const catalogs = attachRefreshableCatalog(models, withDurableAzureCatalog(piDevCatalogSource()), {
     store: modelsStore,
   });
   // Start restoration eagerly, but make its completion part of the returned

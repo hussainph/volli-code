@@ -1,22 +1,27 @@
-"use client";
+import { useOverlayLayer } from "./overlay-layer";
+import { GlassSurface } from "./surface";
 
 /**
  * The context-menu primitives, and one policy that binds every item in them:
  * `icon` is REQUIRED — on {@link ContextMenuItem} and {@link ContextMenuSubTrigger}
- * alike — and is drawn at Phosphor's default outline weight. `iconWeight="fill"`
- * is the deliberate exception for a surface whose visual requirement names it;
- * a normal menu never gets fill as generic emphasis.
+ * alike — and is drawn with the shared set's outline stroke. Selected and
+ * destructive rows communicate their exception through ink or background,
+ * never through a second, filled icon family.
  *
  * Geometry comes from `menu-classes.ts` — this file states no menu size of its
  * own, so it cannot drift from the dropdown it is the right-click twin of.
  */
 import * as React from "react";
-import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
-import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
-import type { Icon } from "@phosphor-icons/react";
+import {
+  ChevronRightIcon,
+  CheckIcon,
+  type IconComponent as Icon,
+} from "@renderer/components/ui/icon";
+
 import { ContextMenu as ContextMenuPrimitive } from "radix-ui";
 
 import { cn } from "@renderer/lib/utils";
+import { MotionOriginRoot, useMotionOriginProps } from "./motion-origin";
 import {
   MENU_INDICATOR,
   MENU_INDICATOR_MARK,
@@ -34,13 +39,18 @@ import {
 } from "@renderer/components/ui/menu-classes";
 
 function ContextMenu({ ...props }: React.ComponentProps<typeof ContextMenuPrimitive.Root>) {
-  return <ContextMenuPrimitive.Root data-slot="context-menu" {...props} />;
+  return (
+    <MotionOriginRoot scope="context-menu" {...props}>
+      {(motion) => <ContextMenuPrimitive.Root data-slot="context-menu" {...props} {...motion} />}
+    </MotionOriginRoot>
+  );
 }
 
 function ContextMenuTrigger({
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Trigger>) {
-  return <ContextMenuPrimitive.Trigger data-slot="context-menu-trigger" {...props} />;
+  const motion = useMotionOriginProps("context-menu", props);
+  return <ContextMenuPrimitive.Trigger data-slot="context-menu-trigger" {...props} {...motion} />;
 }
 
 function ContextMenuGroup({ ...props }: React.ComponentProps<typeof ContextMenuPrimitive.Group>) {
@@ -48,11 +58,21 @@ function ContextMenuGroup({ ...props }: React.ComponentProps<typeof ContextMenuP
 }
 
 function ContextMenuPortal({ ...props }: React.ComponentProps<typeof ContextMenuPrimitive.Portal>) {
-  return <ContextMenuPrimitive.Portal data-slot="context-menu-portal" {...props} />;
+  return (
+    <ContextMenuPrimitive.Portal
+      data-slot="context-menu-portal"
+      {...props}
+      container={useOverlayLayer()}
+    />
+  );
 }
 
 function ContextMenuSub({ ...props }: React.ComponentProps<typeof ContextMenuPrimitive.Sub>) {
-  return <ContextMenuPrimitive.Sub data-slot="context-menu-sub" {...props} />;
+  return (
+    <MotionOriginRoot scope="context-menu" {...props} hover>
+      {(motion) => <ContextMenuPrimitive.Sub data-slot="context-menu-sub" {...props} {...motion} />}
+    </MotionOriginRoot>
+  );
 }
 
 function ContextMenuRadioGroup({
@@ -61,46 +81,58 @@ function ContextMenuRadioGroup({
   return <ContextMenuPrimitive.RadioGroup data-slot="context-menu-radio-group" {...props} />;
 }
 
-/** Required `icon`, outline by default; `fill` is an explicit visual exception. */
+/** Every action has a neighbouring shared symbol. */
 function ContextMenuSubTrigger({
   className,
   icon: ItemIcon,
-  iconWeight,
   children,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.SubTrigger> & {
   icon: Icon;
-  iconWeight?: "fill";
 }) {
+  const motion = useMotionOriginProps("context-menu", props, true);
   return (
     <ContextMenuPrimitive.SubTrigger
       data-slot="context-menu-sub-trigger"
       className={cn(MENU_ROW, MENU_ROW_STATE, MENU_ROW_OPEN, className)}
       {...props}
+      {...motion}
     >
-      <ItemIcon aria-hidden weight={iconWeight} />
+      <ItemIcon aria-hidden />
       {children}
-      <CaretRightIcon weight="bold" className="ml-auto" />
+      <ChevronRightIcon strokeWidth={2.25} className="ml-auto" />
     </ContextMenuPrimitive.SubTrigger>
   );
 }
 
+/**
+ * Portaled, never drawn inside its parent: `material-floating` contains paint
+ * (and its blur is a containing block), so a submenu left in the parent's DOM
+ * is clipped to the parent's box — open, focusable and invisible.
+ */
 function ContextMenuSubContent({
   className,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.SubContent>) {
+  const motion = useMotionOriginProps("context-menu", props, false, true);
   return (
-    <ContextMenuPrimitive.SubContent
-      data-slot="context-menu-sub-content"
-      className={cn(
-        MENU_SURFACE,
-        MENU_SURFACE_PAD,
-        MENU_SURFACE_MOTION,
-        "max-h-(--radix-context-menu-content-available-height) origin-(--radix-context-menu-content-transform-origin) overflow-x-hidden overflow-y-auto",
-        className,
-      )}
-      {...props}
-    />
+    <ContextMenuPrimitive.Portal container={useOverlayLayer()}>
+      <GlassSurface asChild tier="full">
+        <ContextMenuPrimitive.SubContent
+          data-slot="context-menu-sub-content"
+          className={cn(
+            MENU_SURFACE,
+            "material-floating",
+            MENU_SURFACE_PAD,
+            MENU_SURFACE_MOTION,
+            "max-h-[min(var(--radix-context-menu-content-available-height),20rem)] origin-(--radix-context-menu-content-transform-origin) overflow-x-hidden overflow-y-auto overscroll-contain",
+            className,
+          )}
+          {...props}
+          {...motion}
+        />
+      </GlassSurface>
+    </ContextMenuPrimitive.Portal>
   );
 }
 
@@ -108,35 +140,38 @@ function ContextMenuContent({
   className,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Content>) {
+  const motion = useMotionOriginProps("context-menu", props, false, true);
   return (
-    <ContextMenuPrimitive.Portal>
-      <ContextMenuPrimitive.Content
-        data-slot="context-menu-content"
-        className={cn(
-          MENU_SURFACE,
-          MENU_SURFACE_PAD,
-          MENU_SURFACE_MOTION,
-          "max-h-(--radix-context-menu-content-available-height) origin-(--radix-context-menu-content-transform-origin) overflow-x-hidden overflow-y-auto",
-          className,
-        )}
-        {...props}
-      />
+    <ContextMenuPrimitive.Portal container={useOverlayLayer()}>
+      <GlassSurface asChild tier="full">
+        <ContextMenuPrimitive.Content
+          data-slot="context-menu-content"
+          className={cn(
+            MENU_SURFACE,
+            "material-floating",
+            MENU_SURFACE_PAD,
+            MENU_SURFACE_MOTION,
+            "max-h-[min(var(--radix-context-menu-content-available-height),20rem)] origin-(--radix-context-menu-content-transform-origin) overflow-x-hidden overflow-y-auto overscroll-contain",
+            className,
+          )}
+          {...props}
+          {...motion}
+        />
+      </GlassSurface>
     </ContextMenuPrimitive.Portal>
   );
 }
 
-/** Required `icon`, outline by default; `fill` is an explicit visual exception. */
+/** Every action has a neighbouring shared symbol. */
 function ContextMenuItem({
   className,
   variant = "default",
   icon: ItemIcon,
-  iconWeight,
   children,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Item> & {
   variant?: "default" | "destructive";
   icon: Icon;
-  iconWeight?: "fill";
 }) {
   return (
     <ContextMenuPrimitive.Item
@@ -145,7 +180,7 @@ function ContextMenuItem({
       className={cn(MENU_ROW, MENU_ROW_STATE, MENU_ROW_DESTRUCTIVE, className)}
       {...props}
     >
-      <ItemIcon aria-hidden weight={iconWeight} />
+      <ItemIcon aria-hidden />
       {children}
     </ContextMenuPrimitive.Item>
   );
@@ -167,7 +202,7 @@ function ContextMenuCheckboxItem({
       {children}
       <span className={MENU_INDICATOR}>
         <ContextMenuPrimitive.ItemIndicator>
-          <CheckIcon weight="bold" className={MENU_INDICATOR_MARK} />
+          <CheckIcon strokeWidth={2.25} className={MENU_INDICATOR_MARK} />
         </ContextMenuPrimitive.ItemIndicator>
       </span>
     </ContextMenuPrimitive.CheckboxItem>
@@ -191,7 +226,7 @@ function ContextMenuRadioItem({
       {children}
       <span className={MENU_INDICATOR}>
         <ContextMenuPrimitive.ItemIndicator>
-          <CheckIcon weight="bold" className={MENU_INDICATOR_MARK} />
+          <CheckIcon strokeWidth={2.25} className={MENU_INDICATOR_MARK} />
         </ContextMenuPrimitive.ItemIndicator>
       </span>
     </ContextMenuPrimitive.RadioItem>

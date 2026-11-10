@@ -175,7 +175,11 @@ function expectModelCaption(row: HTMLElement, label: string, modelId: string): v
   expect(row.textContent).not.toContain(modelId);
   expect(row.textContent).not.toContain("anthropic");
   // The caption's adjacent vendor mark, not the row's CPU icon or submenu caret.
-  const logo = caption?.previousElementSibling;
+  const mark = caption?.previousElementSibling;
+  expect(mark?.getAttribute("role")).toBe("img");
+  expect(mark?.getAttribute("aria-label")).toBe("Anthropic");
+  expect(row.textContent).not.toContain("Anthropic");
+  const logo = mark?.querySelector("svg");
   expect(logo?.tagName).toBe("svg");
   expect(logo?.getAttribute("aria-hidden")).toBe("true");
   expect(logo?.querySelector("path")?.getAttribute("d")).toBe(providerMark("anthropic")?.paths[0]);
@@ -291,7 +295,11 @@ describe("the board card's Automations submenu", () => {
 
     // The ticket sits in Doing; the Todo automation is still listed, under its
     // own column heading, alongside this ticket's own column's heading.
-    expect(text()).toContain("Doing · this ticket");
+    expect(text()).toContain("DoingThis ticket");
+    const currentGroup = document.querySelector('[data-slot="context-menu-group"]');
+    expect(currentGroup?.textContent).toContain("Doing");
+    expect(currentGroup?.textContent).toContain("This ticket");
+    expect(menuItem("Review sweep").querySelector("span")?.className).not.toContain("truncate");
     expect(text()).toContain("Todo");
 
     await act(async () => {
@@ -328,7 +336,7 @@ describe("the board card's Automations submenu", () => {
 
     await open();
 
-    expect(text()).toContain("Reading automations…");
+    expect(text()).toContain("Reading automations");
     expect(document.querySelectorAll('[data-slot="context-menu-item"]')).toHaveLength(0);
 
     await act(async () => {
@@ -350,7 +358,7 @@ describe("the board card's Automations submenu", () => {
 
     await open();
 
-    expect(text()).toContain("Reading automations…");
+    expect(text()).toContain("Reading automations");
     expect(document.querySelectorAll('[data-slot="context-menu-item"]')).toHaveLength(0);
     expect(runAutomationOnTicket).not.toHaveBeenCalled();
   });

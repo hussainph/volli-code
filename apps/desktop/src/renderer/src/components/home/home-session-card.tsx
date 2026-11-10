@@ -61,14 +61,8 @@
  * `claude-opus-4-1`. This page printed the bare id, and it was the last place
  * in the app that did.
  *
- * THE ACCOUNT IS NOT SAID ON THE ROW. The roomier model surfaces append a
- * "· Anthropic" where two signed-in providers ship the same model name
- * (`needsProvider`), and in a column this narrow that term is what pushes the
- * NAME into an ellipsis — it took more of the fact than it added. The mark
- * carries it instead: marks are chosen by provider first, so an Opus from
- * Anthropic and an Opus from Copilot already wear different glyphs. Same
- * answer, drawn rather than spelled, and the words are still one hover or one
- * focus away in the reveal.
+ * The account lives in the mark's long-hover/focus tag, as on every model
+ * surface. The model text's own reveal only repeats the model name.
  *
  * The id survives as the fallback for a selection the catalogue does not list
  * — a provider signed out from under a pinned Session — which is the composer
@@ -88,11 +82,13 @@
  * store reads and the working copy's `ensure` stay in `home-rail.tsx`.
  */
 import * as React from "react";
-import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
-import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
-import { GitBranchIcon } from "@phosphor-icons/react/dist/csr/GitBranch";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
+import {
+  ChatIcon,
+  FolderOpenIcon,
+  BranchIcon,
+  TerminalIcon,
+  WarningIcon,
+} from "@renderer/components/ui/icon";
 
 import { effortLabel } from "@volli/session-presentation";
 import { workingCopyLooseCount, type ModelAccessModel } from "@volli/shared";
@@ -108,7 +104,6 @@ import {
 } from "@renderer/components/ticket/rail-panel-parts";
 import { Button } from "@renderer/components/ui/button";
 import { SESSION_ACTIVITY_LABEL } from "@renderer/components/ui/session-activity-status";
-import { Skeleton } from "@renderer/components/ui/skeleton";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { ValueReveal } from "@renderer/components/ui/value-reveal";
@@ -262,7 +257,7 @@ function IdentityRow({ facts }: { facts: HomeSessionFacts }) {
 
 /**
  * The model's name: one truncating line, with the whole identity — the name
- * AND the account — on a reveal (VC-288).
+ * — on a reveal (VC-288); the mark separately reveals the account.
  *
  * `ModelName`, which every roomier model surface uses, wraps instead, and its
  * run would put the mark beside the middle of a three-line block and push the
@@ -273,7 +268,7 @@ function ModelNameLine({ model }: { model: HomeSessionModel }) {
   return (
     <ValueReveal
       term="Model"
-      full={`${model.model.label} · ${model.providerLabel}`}
+      full={model.model.label}
       side="left"
       className="min-w-0 truncate rounded-sm text-left text-ui text-sidebar-foreground"
     >
@@ -288,10 +283,10 @@ function ModelNameLine({ model }: { model: HomeSessionModel }) {
  * yet.
  */
 function Glyph({ facts }: { facts: NonNullable<HomeSessionFacts> }) {
-  const Icon = facts.kind === "chat" ? ChatCircleIcon : TerminalWindowIcon;
+  const Icon = facts.kind === "chat" ? ChatIcon : TerminalIcon;
   return (
     <Icon
-      weight="bold"
+      strokeWidth={2.25}
       aria-label={facts.kind === "chat" ? "Chat" : "Terminal"}
       className="size-4 shrink-0 text-muted-foreground"
     />
@@ -337,9 +332,7 @@ function WorkingCopyRows({
     return (
       <div aria-hidden data-testid="home-working-copy-loading">
         {["w-3/5", "w-2/5"].map((width) => (
-          <div key={width} className={cn(CARD_ROW, RAIL_CARD_SEAM)}>
-            <Skeleton className={cn("h-3", width)} />
-          </div>
+          <div key={width} className={cn(CARD_ROW, RAIL_CARD_SEAM)}></div>
         ))}
       </div>
     );
@@ -356,7 +349,7 @@ function WorkingCopyRows({
         title={workingCopy.error}
         data-testid="home-working-copy-error"
       >
-        <WarningIcon weight="bold" className="size-4 shrink-0 text-destructive" />
+        <WarningIcon strokeWidth={2.25} className="size-4 shrink-0 text-destructive" />
         <span className="min-w-0 flex-1 truncate text-ui text-muted-foreground">
           Couldn&apos;t read the venue
         </span>
@@ -382,7 +375,7 @@ function WorkingCopyRows({
           that opens a bubble repeating the word under it. */}
       {workingCopy.workingCopy.branch === null ? (
         <div className={cn(CARD_ROW, RAIL_CARD_SEAM)} data-testid="home-working-copy-branch">
-          <GitBranchIcon weight="bold" className="size-4 shrink-0 text-muted-foreground" />
+          <BranchIcon strokeWidth={2.25} className="size-4 shrink-0 text-muted-foreground" />
           <span className="min-w-0 flex-1 truncate font-mono text-ui text-muted-foreground">
             detached
           </span>
@@ -390,7 +383,7 @@ function WorkingCopyRows({
         </div>
       ) : (
         <WorkingCopyRow
-          icon={GitBranchIcon}
+          icon={BranchIcon}
           term="Branch"
           full={workingCopy.workingCopy.branch}
           value={workingCopy.workingCopy.branch}
@@ -422,7 +415,7 @@ function WorkingCopyRow({
   trailing,
   testId,
 }: {
-  icon: React.ComponentType<{ className?: string; weight?: "bold" }>;
+  icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
   term: string;
   full: string;
   value: string;
@@ -437,7 +430,7 @@ function WorkingCopyRow({
         side="left"
         className="flex min-w-0 flex-1 items-center gap-2 rounded-sm text-left font-mono text-ui text-muted-foreground"
       >
-        <Icon weight="bold" className="size-4 shrink-0" />
+        <Icon strokeWidth={2.25} className="size-4 shrink-0" />
         <span className="min-w-0 truncate">{value}</span>
       </ValueReveal>
       {trailing}

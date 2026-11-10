@@ -1,14 +1,8 @@
 /**
- * Code Mode's product setting (VC-471, phase 2): one switch, a mode per model,
- * and the rule that keeps large MCP servers out of the declared tool array.
- *
- * What a person sees is one switch, "Code Mode", on by default. Behind it,
- * each model gets the mode the benchmark found best for it
- * ({@link CODE_MODE_MODEL_DEFAULTS}), and an Advanced list lets a person
- * pin a different mode for one model. Everything here is read once, when a
- * Session is born, and frozen into its `tool-surface` record: changing the
- * setting changes what new Sessions get and nothing about Sessions that
- * already exist, because their tool array is part of their Cache Prefix.
+ * Code Mode policy for new Sessions: an optional global mode and per-model
+ * exceptions. Policies written before the global choice keep their shipped
+ * family defaults. The legacy enabled guard is retained for older readers.
+ * A Session's birth surface stays frozen when this preference changes.
  *
  * ## Large MCP servers
  *
@@ -38,11 +32,13 @@ import type { SessionToolId } from "./authority";
 
 /** The setting, whole: what the Models pane edits and main stores. */
 export interface CodeModePolicy {
-  /** The one switch. Off: no new Session gets Code Mode at all. */
+  /** Legacy master guard. False disables Code Mode, including server deferral. */
   enabled: boolean;
+  /** Explicit default for new Sessions. Absent preserves shipped family defaults. */
+  defaultMode?: CodeModeMode;
   /**
-   * Advanced: a mode a person pinned for one model, by {@link codeModeModelKey}.
-   * A model it does not name takes its built-in default.
+   * A mode a person pinned for one model, by {@link codeModeModelKey}.
+   * A model it does not name takes defaultMode, else its built-in default.
    */
   models: Readonly<Record<string, CodeModeMode>>;
 }
@@ -130,7 +126,7 @@ export function codeModeModeFor(
   const key = codeModeModelKey(model);
   return Object.hasOwn(policy.models, key)
     ? policy.models[key]!
-    : defaultCodeModeMode(model.modelId);
+    : (policy.defaultMode ?? defaultCodeModeMode(model.modelId));
 }
 
 /**
@@ -152,7 +148,11 @@ export function readCodeModePolicy(value: unknown): CodeModePolicy {
       if (isCodeModeMode(mode) && isModelKey(key)) models[key] = mode;
     }
   }
-  return { enabled, models };
+  return {
+    enabled,
+    models,
+    ...(isCodeModeMode(row["defaultMode"]) ? { defaultMode: row["defaultMode"] } : {}),
+  };
 }
 
 function isModelKey(key: string): boolean {

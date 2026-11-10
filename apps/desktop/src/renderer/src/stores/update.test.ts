@@ -86,3 +86,12 @@ describe("update store", () => {
     expect(store.getState().dialogOpen).toBe(false);
   });
 });
+
+it("Settings hydrates update state without duplicating the workbench's automatic prompt", () => {
+  const store = createUpdateStore();
+  store.getState().receive(downloaded("0.3.0"), false);
+  expect(store.getState().state?.phase).toBe("downloaded");
+  expect(store.getState().dialogOpen).toBe(false);
+  store.getState().openDialog();
+  expect(store.getState().dialogOpen).toBe(true);
+});

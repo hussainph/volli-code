@@ -98,8 +98,8 @@ Receiving wiring:
 
 - **Moved Session history**: `createMoveSessionHistory` composes
   `sessionEventImportRecord`, `createMoveHistoryUploader` (the runner's spool
-  over `projectImportHistory.*`) and `seedMovedSessionCursors` /
-  `releaseMovedSessionCursors` into `MoveSessionHistory`, over the live
+  over `projectImportHistory.*`) and `seedMovedSessionCursors` into
+  `MoveSessionHistory`, over the live
   profile, its transcript store, the secret store's redactor and Pi's
   directory.
 - **The object store**: `presignedMoveObjects` over the account's Convex client:

@@ -7,8 +7,8 @@ sidebar:
 
 import { Aside } from "@astrojs/starlight/components";
 
-Install Volli on an Apple silicon Mac. Volli needs no account of its own, but
-its built-in chats use a model provider you connect.
+Install Volli on an Apple silicon Mac. Built-in chats use a model provider you
+connect.
 
 <Aside type="caution" title="Alpha">
   Features and behavior change between builds. Keep backups and Git branches
@@ -29,7 +29,7 @@ its built-in chats use a model provider you connect.
 1. Download the `.dmg` from [volli.app/download](https://volli.app/download/).
 2. Open the disk image and drag the Volli app to **Applications**.
 3. Open Volli from **Applications**.
-4. In **Settings → Models**, connect a provider and choose a default model.
+4. In **Settings → All projects → Models**, connect a provider and choose a default model.
    See [Models and usage](/guides/models/) for more on providers and models.
 
 Continue with [Run your first coding task](/start/quickstart/) to add a
@@ -52,15 +52,17 @@ the app in **Applications**.
 ## The volli CLI
 
 Terminal companions you open from Volli have `volli` on `PATH`. In one of
-them, run `volli identify` to check its context. **Settings → About** checks and
-repairs the parts of the installation that Volli owns. See
+them, run `volli identify` to check its context. In **Settings → All projects →
+About**, expand **Diagnostics** to check and repair the parts of the
+installation that Volli owns. See
 [CLI setup and context](/reference/cli/).
 
 ## Where your data lives
 
-Volli stores app data under `~/Library/Application Support/Volli Code/` and
-ticket worktrees under `~/.volli/worktrees/`. Removing a project from the app
-does not delete its repository folder.
+Volli stores app data under
+`~/Library/Application Support/Volli Code/` and ticket worktrees under
+`~/.volli/worktrees/`. Removing a project from the app does not delete its
+repository folder.
 
 See [Local data and network access](/reference/data-and-privacy/) for what
 Volli stores and what it sends out, and [Storage and backups](/guides/storage/)

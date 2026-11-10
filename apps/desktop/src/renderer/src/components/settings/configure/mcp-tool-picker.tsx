@@ -28,13 +28,14 @@
  * Left comes back. Escape in the filter clears it before it closes anything.
  */
 import * as React from "react";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
+import { ChevronDownIcon } from "@renderer/components/ui/icon";
+
 import type { McpCatalogTool } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
 import { Checkbox } from "@renderer/components/ui/checkbox";
 import { Segmented } from "@renderer/components/ui/segmented";
-import { InfoHint, TableSearch } from "@renderer/components/settings/kit";
+import { TableSearch } from "@renderer/components/settings/kit";
 import { cn } from "@renderer/lib/utils";
 
 import {
@@ -213,7 +214,7 @@ export function McpToolPicker({
           className="ml-auto shrink-0 text-ui text-muted-foreground tabular-nums"
           aria-live="polite"
         >
-          {on} of {total} on
+          {on} of {total} selected
         </span>
       </div>
 
@@ -244,8 +245,10 @@ export function McpToolPicker({
         )}
         <div className="min-h-0 flex-1 overflow-y-auto px-1 pb-1">
           {listed.length === 0 ? (
-            <div className="flex flex-col items-center gap-2 py-6 text-ui text-muted-foreground">
-              <span>{tools.length === 0 ? "This server offers no tools." : "No tools match."}</span>
+            <div className="flex flex-col items-start gap-2 px-2 py-4 text-ui text-muted-foreground">
+              <span className="sr-only">
+                {tools.length === 0 ? "This server offers no tools." : "No tools match."}
+              </span>
               {narrowed ? (
                 <Button
                   size="xs"
@@ -306,7 +309,7 @@ function ToolGroup({
       {group.label === null ? null : (
         // Sticky inside the list's own scroll box, so a long group still says
         // which group a row belongs to and keeps its checkbox in reach.
-        <div className="sticky top-0 z-10 flex h-8 items-center gap-2 bg-background px-1 pt-1">
+        <div className="sticky top-0 z-10 flex min-h-8 flex-wrap items-center gap-2 bg-card px-2 py-2">
           {selectable ? (
             <label className="flex items-center gap-2">
               <Checkbox
@@ -320,22 +323,22 @@ function ToolGroup({
                 disabled={disabled}
                 onCheckedChange={() => onChange(toggleTools(group.tools, selected))}
               />
-              <span className="text-label text-muted-foreground uppercase">{group.label}</span>
+              <span className="text-ui font-medium text-muted-foreground">{group.label}</span>
             </label>
           ) : (
-            <span className="pl-6 text-label text-muted-foreground uppercase">{group.label}</span>
+            <span className="pl-6 text-ui font-medium text-muted-foreground">{group.label}</span>
           )}
           {selectable ? (
-            <span className="text-ui text-muted-foreground tabular-nums">
+            <span className="ml-auto font-mono text-ui text-muted-foreground tabular-nums">
               {on} of {group.tools.length}
             </span>
           ) : null}
           {group.key === "read-only" ? (
             // The one trust line this list carries: the grouping is the
             // server's claim, and a person deciding on it should know whose.
-            <InfoHint label="read-only tools">
-              The server labels these tools read-only. Volli does not check the label.
-            </InfoHint>
+            <span className="block w-full text-ui text-muted-foreground">
+              Read-only is the server’s claim, not a Volli guarantee.
+            </span>
           ) : null}
         </div>
       )}
@@ -416,7 +419,7 @@ function ToolRow({
               </code>
             )}
             {destructive ? (
-              <span className="shrink-0 text-label text-destructive uppercase">Destructive</span>
+              <span className="shrink-0 text-label text-destructive">Destructive</span>
             ) : null}
           </label>
           <span id={describedBy} className="block">
@@ -461,7 +464,7 @@ function ToolRow({
           aria-label={`${open ? "Hide" : "Show"} details for ${title}`}
           onClick={onToggleOpen}
         >
-          <CaretDownIcon className={cn(open && "rotate-180")} />
+          <ChevronDownIcon className={cn(open && "rotate-180")} />
         </Button>
       ) : null}
     </div>

@@ -26,8 +26,8 @@
  * yet): `createMoveHistoryUploader` packs and commits a moved Session's
  * transcript bodies and Pi logs through the import's own doors before the
  * commit (`piLogFilesOf` finds its Pi files, as the runner's packing does),
- * and `seedMovedSessionCursors` / `releaseMovedSessionCursors` hand the moved
- * Sessions to this runner after the commit, and take them back on a roll back.
+ * and `seedMovedSessionCursors` hands the moved Sessions to this runner after
+ * the commit (a roll back takes back every cursor on the project).
  *
  * Agent verbs in a cloud launch: `createCloudProductStore` composes the
  * HTTP functions client and per-Session Agent-token cache over this same
@@ -42,6 +42,37 @@ export {
   type CloudProductStore,
   type CloudRunnerSyncConnection,
 } from "../cloud-store";
+// Git on a runner with no folder of the person's (BYO-8). Receiving wiring:
+// `volli-runner run` (apps/runner, the headless composition) passes
+// `createManagedClones({ root: <data>/repos, credentials:
+// managedCloneCredentials(tokens) })` to
+// `createCloudProductStore({ managedClones })`, serves
+// `createGitCredentialBroker` with `serveGitCredentials` beside the agent
+// socket, and gives every Session command
+// `runnerSessionGitEnv(base, { helperCommand, github: tokens.github() })`,
+// rebuilt for each command; the
+// `volli-runner git-credential` command is `askGitCredentialDaemon`.
+export {
+  createManagedClones,
+  createRunnerGit,
+  type ManagedCloneCredentials,
+  type ManagedClones,
+} from "../cloud-store/managed-clone";
+export {
+  createRunnerGithubTokens,
+  managedCloneCredentials,
+  type RunnerGithub,
+  type RunnerGithubTokenAnswer,
+  type RunnerGithubTokens,
+} from "../cloud-store/github-tokens";
+export {
+  askGitCredentialDaemon,
+  createGitCredentialBroker,
+  GIT_CREDENTIAL_EXPLAIN_ONLY_FLAG,
+  runnerSessionGitEnv,
+  serveGitCredentials,
+  type GitCredentialBroker,
+} from "../cloud-store/git-credential-broker";
 export {
   type BackendConnection,
   type BackendLink,
@@ -56,6 +87,15 @@ export {
   type ConvexClientLike,
   type ConvexClientModule,
 } from "../cloud-runner/convex-connection";
+export {
+  createHeadlessRunner,
+  type HeadlessRunner,
+  type HeadlessRunnerConnection,
+  type HeadlessRunnerOptions,
+  type HeadlessRunnerPlatform,
+  type HeadlessRunnerSnapshot,
+  type HeadlessRunnerTarget,
+} from "../cloud-runner/headless-runner";
 export {
   type AcceptCall,
   type AcceptReply,
@@ -87,7 +127,6 @@ export {
 } from "../cloud-runner/inbox";
 export {
   MovedSessionCursorConflictError,
-  releaseMovedSessionCursors,
   seedMovedSessionCursors,
   sqliteDrainCursorStore,
   sqliteJobJournalStore,

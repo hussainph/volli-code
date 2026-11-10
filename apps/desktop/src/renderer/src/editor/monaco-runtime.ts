@@ -22,6 +22,7 @@ import {
   type ShikiMonacoBootstrap,
 } from "./shiki-monaco";
 import { bindMonacoEditorThemeHost, ensureMonacoEditorTheme } from "./monaco-theme";
+import { readableCommentTheme } from "./comment-theme";
 import { findTextEdits, type TextEdit } from "./text-reconciliation";
 import { startUnsavedDocumentReporting } from "./unsaved-report";
 
@@ -457,7 +458,7 @@ export async function prepareMonacoEditorThemes(
   ensureMonacoLanguagesRegistered(monaco, allShikiLanguageIds());
 
   const shiki = await bootstrapShikiMonaco(monaco, {
-    themes: [vitesseLight, vitesseDark],
+    themes: [readableCommentTheme(vitesseLight), readableCommentTheme(vitesseDark)],
     langs: [],
   });
 

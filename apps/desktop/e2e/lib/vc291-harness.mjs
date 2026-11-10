@@ -256,7 +256,12 @@ export async function seedTicketAndOpen(page, title) {
     "board open again",
     async () => (await page.getByRole("button", { name: "New ticket", exact: true }).count()) > 0,
   );
-  await page.locator("article").filter({ hasText: "VC-1" }).first().dblclick();
+  await page
+    .locator("article")
+    .filter({ visible: true })
+    .filter({ hasText: "VC-1" })
+    .first()
+    .dblclick();
   await sleep(900);
 }
 

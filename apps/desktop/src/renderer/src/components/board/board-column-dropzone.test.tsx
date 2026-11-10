@@ -97,7 +97,6 @@ async function mount(tickets: Ticket[], aimed = false) {
                 onOpen={() => {}}
                 composerInitiallyOpen={false}
                 onComposerClose={() => {}}
-                animateEnter={false}
                 aimed={aimed}
               />
             </DndContext>
@@ -153,7 +152,7 @@ describe("a column's dropzone", () => {
     expect(bolt?.getAttribute("aria-label")).toBe("Arm Doing");
     expect(bolt?.className).not.toContain("opacity-0");
     expect(bolt?.className).not.toContain("group-hover");
-    expect(bolt?.querySelector('[data-arming-mark="unfilled"]')).not.toBeNull();
+    expect(bolt?.querySelector('[data-arming-mark="unarmed"]')).not.toBeNull();
   });
 
   it("shows a paint-only landing target without changing the measured dropzone", async () => {

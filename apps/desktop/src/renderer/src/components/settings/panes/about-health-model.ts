@@ -26,7 +26,12 @@
  * decision is invisible in a screenshot of the happy case, which is exactly
  * how the original defect survived.
  */
-import { doctorCheckHeadline, LEGACY_DOCTOR_REMEDY, type DoctorCheck } from "@volli/shared";
+import {
+  doctorCheckHeadline,
+  LEGACY_DOCTOR_REMEDY,
+  SESSION_ENV_TOOLS,
+  type DoctorCheck,
+} from "@volli/shared";
 
 import {
   cliStatusDisclosure,
@@ -74,6 +79,12 @@ export interface AboutHealthInput {
   checks: readonly DoctorCheck[];
 }
 
+// Filter the UI projection only: About's support report still receives every
+// original check, including runtime and package-manager failures and remedies.
+const AGENT_ONLY_TOOL_CHECK_IDS = new Set(
+  SESSION_ENV_TOOLS.filter((tool) => tool !== "git").map((tool) => `tool-${tool}`),
+);
+
 /**
  * A Doctor finding, headed by what went WRONG rather than by the check's
  * positive claim, and detailed by the remedy the check computed. An older
@@ -82,7 +93,7 @@ export interface AboutHealthInput {
  */
 function doctorFaults(checks: readonly DoctorCheck[]): AboutFault[] {
   return checks
-    .filter((check) => check.status !== "ok")
+    .filter((check) => check.status !== "ok" && !AGENT_ONLY_TOOL_CHECK_IDS.has(check.id))
     .map((check) => ({
       id: check.id,
       headline: doctorCheckHeadline(check),
@@ -105,7 +116,9 @@ function statusFaults(rows: readonly CliStatusRow[]): AboutFault[] {
   return cliStatusDisclosure(rows).attentionRows.map((row) => ({
     id: `cli-status:${row.key}`,
     headline: cliStatusFaultTitle(row),
-    detail: row.remedy ?? "Select Re-check for current repair guidance.",
+    detail: row.remedy?.includes("Settings → CLI")
+      ? "Run `volli doctor` in a terminal for repair steps."
+      : (row.remedy?.replaceAll("re-check", "retry") ?? "Retry for current repair steps."),
   }));
 }
 
@@ -121,18 +134,19 @@ export function aboutHealth({ status, doctor, rows, checks }: AboutHealthInput):
   ];
 
   // A known failure outranks a concurrent read: this set of checks can no
-  // longer complete, so continuing to say "Checking…" would hide the recovery
+  // longer complete, so continuing to say "Checking" would hide the recovery
   // action behind work whose answer cannot make the set whole.
   if (status === "unavailable" || doctor === "unavailable") {
     return {
       state: "unavailable",
       headline: "Couldn't complete these checks",
-      faults,
+      // A partial check cannot offer Fix or prescribe repairs it has not confirmed.
+      faults: faults.map((fault) => Object.assign({}, fault, { detail: "" })),
       canFix: false,
     };
   }
   if (status === "loading" || doctor === "loading") {
-    return { state: "checking", headline: "Checking…", faults: [], canFix: false };
+    return { state: "checking", headline: "Checking", faults: [], canFix: false };
   }
   if (faults.length === 0) {
     return { state: "healthy", headline: "Everything's working", faults, canFix: false };

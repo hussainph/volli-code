@@ -158,6 +158,10 @@ describe("MCP operations repository (VC-380)", () => {
     expect(listMcpOperations(ctx.db, "p1").map((row) => row.summary)).toEqual(["second", "first"]);
     expect(listMcpOperations(ctx.db, "p1", 1).map((row) => row.summary)).toEqual(["second"]);
     expect(listMcpOperations(ctx.db, "p2").map((row) => row.summary)).toEqual(["elsewhere"]);
+    expect(listMcpOperations(ctx.db, null, 2).map((row) => row.summary)).toEqual([
+      "elsewhere",
+      "second",
+    ]);
     expect(MCP_OPERATION_HISTORY_LIMIT).toBeGreaterThan(0);
   });
 

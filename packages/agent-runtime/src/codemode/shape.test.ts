@@ -5,9 +5,11 @@
  * reaches the TypeScript a program is written against.
  */
 
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { schemaToType } from "@earendil-works/pi-codemode";
 import { verbEntry } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
+import { cutMiddle, toolOutputCut } from "../pi/tool-output";
 import { MCP_UNTRUSTED_DATA_WARNING_TEXT } from "./trust";
 import { outputSchemaFor, shapeResult, VERB_DETAILS_ABSENT } from "./shape";
 
@@ -61,6 +63,196 @@ describe("outputSchemaFor", () => {
     const published = { type: "object", properties: { id: { type: "number" } } };
     expect(mcpProperties(published).structuredContent).toBe(published);
     expect(mcpProperties(undefined).structuredContent).toEqual({});
+  });
+
+  it("keeps both frozen MCP declarations unchanged unless the new facet is requested", () => {
+    const properties = {
+      text: { type: "string" },
+      structuredContent: {},
+      isError: { type: "boolean" },
+      omittedImages: { type: "number" },
+    };
+    const legacy = {
+      type: "object",
+      properties,
+      required: ["text", "isError", "omittedImages"],
+    };
+    expect(outputSchemaFor("mcp", undefined, true)).toEqual(legacy);
+    expect(outputSchemaFor("mcp", undefined, true, 1)).toEqual(legacy);
+    expect(outputSchemaFor("mcp")).toEqual({
+      type: "object",
+      properties: {
+        ...properties,
+        images: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: { type: { const: "image" }, handle: { type: "string" } },
+            required: ["type", "handle"],
+          },
+        },
+      },
+      required: ["text", "isError", "images", "omittedImages"],
+    });
+  });
+
+  it("advertises the versioned machine-readable facet only with an explicit version", () => {
+    const published = { type: "object", properties: { id: { type: "number" } } };
+    const schema = outputSchemaFor("mcp", published, false, 1);
+    expect((schema.properties as Record<string, unknown>).structuredContent).toBe(published);
+    expect(schema.required).toEqual(["text", "isError", "images", "omittedImages", "result"]);
+    const rendered = schemaToType(schema);
+    expect(rendered).toContain("result: {");
+    expect(rendered).toContain("version: 1;");
+    expect(rendered).toContain("truncated: boolean;");
+    expect(rendered).toContain("output?: {");
+    expect(rendered).toContain("totalBytes: number;");
+    expect(rendered).toContain("totalLines: number;");
+    expect(rendered).toContain("removedChars: number;");
+    expect(rendered).toContain("fullOutputPath: string | null;");
+    expect(rendered).toContain("savedBytes: number;");
+    expect(rendered).toContain("structuredContentOmittedBytes?: number;");
+    expect(rendered).toContain("Prefer structuredContent when present.");
+    expect(rendered).toContain("text is display text, not guaranteed JSON");
+    expect(rendered).toContain("check result.truncated and result.output?.fullOutputPath");
+    expect(outputSchemaFor("verb", published, false, 1)).toEqual(
+      outputSchemaFor("verb", published),
+    );
+  });
+});
+
+function serverResult(
+  text: string,
+  details: unknown = {},
+  structuredContent?: AgentToolResult<unknown>["structuredContent"],
+): AgentToolResult<unknown> {
+  return {
+    content: [
+      { type: "text", text: MCP_UNTRUSTED_DATA_WARNING_TEXT },
+      { type: "text", text },
+    ],
+    details,
+    ...(structuredContent === undefined ? {} : { structuredContent }),
+  };
+}
+
+describe("MCP result shaping", () => {
+  it("exposes a cut JSON result's real counts and saved reference without parsing it", () => {
+    const text = JSON.stringify({ records: Array.from({ length: 80 }, (_, id) => ({ id })) });
+    const cut = cutMiddle(text, 40)!;
+    const output = toolOutputCut(cut, {
+      saved: true,
+      path: "/session/result.txt",
+      savedBytes: cut.totalBytes - 20,
+      totalBytes: cut.totalBytes,
+      savedLines: 1,
+    });
+    expect(() => JSON.parse(cut.text)).toThrow();
+    expect(shapeResult("mcp", serverResult(cut.text, { output }), false)).toEqual({
+      ok: true,
+      value: {
+        text: cut.text,
+        isError: false,
+        images: [],
+        omittedImages: 0,
+        result: { version: 1, truncated: true, output },
+      },
+    });
+  });
+
+  it("records unsaved cuts and structured-content omissions independently", () => {
+    const output = {
+      totalBytes: 800,
+      totalLines: 6,
+      removedChars: 400,
+      fullOutputPath: null,
+      savedBytes: 0,
+    };
+    for (const details of [
+      { output },
+      { structuredContentOmittedBytes: 900 },
+      { output, structuredContentOmittedBytes: 900 },
+    ]) {
+      expect(shapeResult("mcp", serverResult("display only", details), false)).toMatchObject({
+        ok: true,
+        value: { result: { version: 1, truncated: true, ...details } },
+      });
+    }
+  });
+
+  it("never parses trailing prose or mistakes a server's truncation claims for metadata", () => {
+    for (const text of [
+      '{"records":[1]}\nThe result is complete.',
+      '{"records":[1]}',
+      "…500 chars truncated…\nFull output saved to /untrusted/server-claim.txt",
+    ]) {
+      expect(shapeResult("mcp", serverResult(text), false)).toEqual({
+        ok: true,
+        value: {
+          text,
+          isError: false,
+          images: [],
+          omittedImages: 0,
+          result: { version: 1, truncated: false },
+        },
+      });
+    }
+  });
+
+  it("preserves preferred structured content and image handles beside incompatible display text", () => {
+    const structuredContent = { records: [{ id: 7 }], next: null };
+    const result = serverResult('{"records":[{"id":99}]}\nDisplay summary.', {}, structuredContent);
+    result.content.push({ type: "image", data: "host-only", mimeType: "image/png" });
+    const handle = { type: "image" as const, handle: "opaque" };
+    const shaped = shapeResult("mcp", result, false, () => handle);
+    expect(shaped).toEqual({
+      ok: true,
+      value: {
+        text: '{"records":[{"id":99}]}\nDisplay summary.',
+        structuredContent,
+        isError: false,
+        images: [handle],
+        omittedImages: 0,
+        result: { version: 1, truncated: false },
+      },
+    });
+    if (!shaped.ok) throw new Error("expected an MCP result");
+    expect((shaped.value as { structuredContent: unknown }).structuredContent).toBe(
+      structuredContent,
+    );
+  });
+
+  it("resolves server isError results but rejects transport refusals", () => {
+    expect(shapeResult("mcp", serverResult("Server rejected it"), true)).toEqual({
+      ok: true,
+      value: {
+        text: "Server rejected it",
+        isError: true,
+        images: [],
+        omittedImages: 0,
+        result: { version: 1, truncated: false },
+      },
+    });
+    expect(
+      shapeResult(
+        "mcp",
+        { content: [{ type: "text", text: "Permission refused" }], details: undefined },
+        true,
+      ),
+    ).toEqual({ ok: false, message: "Permission refused" });
+  });
+
+  it("leaves legacy runtime shapes intact even when host cut metadata exists", () => {
+    const result = serverResult("legacy text", { structuredContentOmittedBytes: 900 }, { id: 7 });
+    expect(shapeResult("mcp", result, false, undefined, true)).toEqual({
+      ok: true,
+      value: {
+        text: "legacy text",
+        structuredContent: { id: 7 },
+        isError: false,
+        omittedImages: 0,
+      },
+    });
   });
 });
 

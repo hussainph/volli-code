@@ -72,13 +72,12 @@
   --vscode-editor-background: transparent;
   --vscode-editor-foreground: var(--foreground);
   --vscode-editor-placeholder-foreground: var(--muted-foreground);
-  /* Ink at low alpha rather than an authored pair per mode: it lands the same
-     perceptual step off the page in both appearances, and follows the canvas.
-     Monaco paints selection UNDER the text, so the wash never dims a glyph. */
-  --vscode-editor-selectionBackground: color-mix(in oklab, var(--foreground) 22%, transparent);
+  /* Material ink at the original alpha; body text and the writing plane stay
+     neutral. Monaco paints selection UNDER text, never over the glyphs. */
+  --vscode-editor-selectionBackground: color-mix(in oklab, var(--wash-ink) 22%, transparent);
   --vscode-editor-inactiveSelectionBackground: color-mix(
     in oklab,
-    var(--foreground) 10%,
+    var(--wash-ink) 10%,
     transparent
   );
   /* Monaco draws its own scrollbar out of divs, so the app's global

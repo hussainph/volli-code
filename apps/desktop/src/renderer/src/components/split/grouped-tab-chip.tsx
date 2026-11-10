@@ -1,10 +1,16 @@
 import * as React from "react";
 import "./grouped-tab-chip.css";
-import type { Icon } from "@phosphor-icons/react";
-import { LinkBreakIcon } from "@phosphor-icons/react/dist/csr/LinkBreak";
+import { type IconComponent as Icon, UnlinkIcon, CloseIcon } from "@renderer/components/ui/icon";
+import { ListRow } from "@renderer/components/ui/list-row";
+import { Button } from "@renderer/components/ui/button";
+import {
+  TabActionScope,
+  TabDropdownDismissContext,
+  type TabAction,
+} from "@renderer/components/ui/tab-actions";
 
 import { Popover, PopoverAnchor, PopoverContent } from "@renderer/components/ui/popover";
-import { tabStopIndex, TabFaceProvider, type TabFace } from "@renderer/components/ui/tab-strip";
+import { Tab, tabStopIndex } from "@renderer/components/ui/tab-strip";
 
 /** One pane of a group, as the strip draws it: its live stack and its front. */
 export interface TabGroupPane {
@@ -16,6 +22,7 @@ export interface TabGroupPane {
 /** One tab group, as the top strip draws it — see `split-tab-groups.ts`. */
 export interface TabGroup {
   id: string;
+  title?: string;
   /** Reading order. A pane with no live tab draws nothing. */
   panes: readonly TabGroupPane[];
 }
@@ -24,6 +31,8 @@ export interface TabGroup {
 export interface TabMenuLabel {
   label: string;
   icon: Icon;
+  artwork?: React.ReactNode;
+  memberGlyph?: React.ReactNode;
   /**
    * The second line that tells two like tabs apart — a Browser Tab's
    * host:port/path, a File tab's folder. `null` when the title is enough.
@@ -137,17 +146,11 @@ const CLOSE_GRACE_MS = 160;
  */
 function GlyphStack({
   front,
-  frontIcon: FrontIcon,
   behind,
-  state,
   onOpen,
 }: {
-  /** The tab's own leading glyph, or `null` to draw its kind's icon. */
-  front: React.ReactNode;
-  frontIcon: Icon;
-  /** Nearest first; drawn farthest first so the nearer card lands on top. */
-  behind: readonly { id: string; icon: Icon }[];
-  state: React.ReactNode | null;
+  front: TabMenuLabel;
+  behind: readonly { id: string; description: TabMenuLabel }[];
   onOpen(): void;
 }) {
   return (
@@ -156,27 +159,25 @@ function GlyphStack({
       data-slot="tab-glyph-stack"
       data-depth={behind.length + 1}
       onClick={(event) => {
-        // The tab's own click would select it; the stack is the list's door.
         event.stopPropagation();
         onOpen();
       }}
       onDoubleClick={(event) => event.stopPropagation()}
     >
       {behind
-        .map(({ id, icon: BehindIcon }, index) => (
+        .map(({ id, description }, index) => (
           <span
             key={id}
             data-slot="tab-glyph-card"
             data-layer={index + 1}
             className="bg-muted text-muted-foreground"
           >
-            <BehindIcon className="size-3" />
+            <MemberIcon description={description} className="size-3" />
           </span>
         ))
         .toReversed()}
       <span data-slot="tab-glyph-card" data-layer={0} className="bg-popover">
-        {front ?? <FrontIcon className="size-3 text-muted-foreground" />}
-        {state}
+        <MemberIcon description={front} className="size-3.5 text-muted-foreground" />
       </span>
     </span>
   );
@@ -188,7 +189,7 @@ function GlyphStack({
  * from the chip into the list. `how` remembers whether the keyboard opened it,
  * which is the one case where focus moves into the list (and back out after).
  */
-function useHoverOpen() {
+function useHoverOpen(onLeave: () => void) {
   const [open, setOpen] = React.useState(false);
   const [how, setHow] = React.useState<"pointer" | "keyboard">("pointer");
   const timer = React.useRef<number | null>(null);
@@ -197,6 +198,10 @@ function useHoverOpen() {
     timer.current = null;
   }, []);
   React.useEffect(() => clear, [clear]);
+  const hide = React.useCallback(() => {
+    clear();
+    setOpen(false);
+  }, [clear]);
   return {
     open,
     how,
@@ -205,10 +210,7 @@ function useHoverOpen() {
       setHow(via);
       setOpen(true);
     },
-    hide() {
-      clear();
-      setOpen(false);
-    },
+    hide,
     enter() {
       clear();
       if (open) return;
@@ -222,6 +224,7 @@ function useHoverOpen() {
       clear();
       timer.current = window.setTimeout(() => {
         timer.current = null;
+        onLeave();
         setOpen(false);
       }, CLOSE_GRACE_MS);
     },
@@ -232,6 +235,107 @@ function useHoverOpen() {
 /** A mouse pointer with no button down: a hover, not a drag passing over. */
 function hovering(event: React.PointerEvent): boolean {
   return event.pointerType === "mouse" && event.buttons === 0;
+}
+
+const EMPTY_ACTIONS: readonly TabAction[] = [];
+const noActions = () => EMPTY_ACTIONS;
+
+function MemberIcon({ description, className }: { description: TabMenuLabel; className: string }) {
+  const { icon: Mark, artwork } = description;
+  return artwork === undefined ? (
+    <Mark className={className} />
+  ) : (
+    <span aria-hidden className={`inline-flex shrink-0 ${className}`}>
+      {artwork}
+    </span>
+  );
+}
+
+/** The same member rows serve hover inspection and the tab dropdown. */
+function GroupMemberRows<T extends { id: string }>({
+  tabs,
+  describe,
+  onSelect,
+  actionsFor,
+  item,
+  activeTabId,
+}: {
+  item: Extract<StripItem<T>, { group: TabGroup }>;
+  activeTabId: string | null;
+  tabs: readonly T[];
+  describe(tab: T): TabMenuLabel;
+  onSelect(tab: T): void;
+  actionsFor(tab: T): readonly TabAction[];
+}) {
+  const dismiss = React.useContext(TabDropdownDismissContext);
+  return tabs.map((tab) => {
+    const description = describe(tab);
+    const { label, detail, status, memberGlyph } = description;
+    return (
+      <ListRow
+        key={tab.id}
+        data-slot="grouped-tab-row"
+        data-tab-id={tab.id}
+        data-pane={
+          item.stacks.findIndex((stack) => stack.tabs.some((member) => member.id === tab.id)) + 1
+        }
+        data-front={item.segments.some((member) => member.id === tab.id)}
+        role="menuitem"
+        tabIndex={-1}
+        aria-current={tab.id === activeTabId ? "true" : undefined}
+        aria-label={[label, detail, status].filter(Boolean).join(", ")}
+        density={memberGlyph !== undefined && detail == null ? "row" : "two-line"}
+        leading={
+          memberGlyph ?? <MemberIcon description={description} className="size-4 shrink-0" />
+        }
+        primary={label}
+        secondary={detail ?? undefined}
+        trailing={
+          memberGlyph === undefined && status ? (
+            <span className="text-label text-muted-foreground capitalize">{status}</span>
+          ) : undefined
+        }
+        onActivate={() => {
+          onSelect(tab);
+          dismiss();
+        }}
+        actions={actionsFor(tab).map((action) => (
+          <Button
+            key={action.label}
+            size="icon-sm"
+            variant="ghost"
+            aria-label={`${action.label}: ${label}`}
+            title={action.label}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              action.run();
+              dismiss();
+            }}
+          >
+            <action.icon className="size-3.5" />
+          </Button>
+        ))}
+      />
+    );
+  });
+}
+
+function UngroupRow({ onUngroup }: { onUngroup(): void }) {
+  const dismiss = React.useContext(TabDropdownDismissContext);
+  return (
+    <ListRow
+      role="menuitem"
+      tabIndex={-1}
+      data-slot="grouped-tab-ungroup"
+      leading={<UnlinkIcon aria-hidden className="size-3.5" />}
+      primary="Ungroup"
+      onActivate={() => {
+        dismiss();
+        onUngroup();
+      }}
+    />
+  );
 }
 
 /**
@@ -258,7 +362,9 @@ function GroupedTabChip<T extends { id: string }>({
   describe,
   onSelect,
   onUngroup,
-  children,
+  tabStop,
+  onClose,
+  actionsFor,
 }: {
   item: Extract<StripItem<T>, { group: TabGroup }>;
   front: T;
@@ -269,39 +375,65 @@ function GroupedTabChip<T extends { id: string }>({
   describe(tab: T): TabMenuLabel;
   onSelect(tab: T): void;
   onUngroup?(groupId: string): void;
-  children: React.ReactNode;
+  tabStop: boolean;
+  onClose?(tab: T): void;
+  actionsFor(tab: T): readonly TabAction[];
 }) {
-  const hover = useHoverOpen();
   const chipRef = React.useRef<HTMLDivElement>(null);
   const listRef = React.useRef<HTMLDivElement>(null);
-  const listId = React.useId();
-  const head = describe(front);
-  const behind = behindFront(item, front).map((tab) => ({ id: tab.id, icon: describe(tab).icon }));
-  const face: TabFace = {
-    leading: (own, state) => (
-      <GlyphStack
-        front={own}
-        frontIcon={head.icon}
-        behind={behind}
-        state={state}
-        onOpen={() => hover.show("pointer")}
-      />
-    ),
-    hint: head.detail,
-    attributes: {
-      "aria-haspopup": "menu",
-      "aria-expanded": hover.open,
-      "aria-controls": hover.open ? listId : undefined,
-    },
-  };
-  // Closing hands focus back to the chip's tab when focus was in the list —
-  // synchronously, before the list unmounts and leaves it on the document.
-  const close = () => {
+  const returnFocus = React.useCallback(() => {
     if (listRef.current?.contains(document.activeElement)) {
       chipRef.current?.querySelector<HTMLElement>('[role="tab"]')?.focus();
     }
-    hover.hide();
-  };
+  }, []);
+  const hover = useHoverOpen(returnFocus);
+  const listId = React.useId();
+  const head = describe(front);
+  const tabs = item.stacks.flatMap((stack) => stack.tabs);
+  const title = item.group.title ?? head.label;
+  const behind = behindFront(item, front).map((tab) => ({
+    id: tab.id,
+    description: describe(tab),
+  }));
+  const [menuOpen, setMenuOpen] = React.useState(false);
+  const memberActions = (tab: T) => [
+    ...actionsFor(tab),
+    ...(onClose
+      ? [{ label: "Close", icon: CloseIcon, run: () => onClose(tab), destructive: true }]
+      : []),
+  ];
+  // Closing hands focus back to the chip's tab when focus was in the list —
+  // synchronously, before the list unmounts and leaves it on the document.
+  const { hide } = hover;
+  const close = React.useCallback(() => {
+    returnFocus();
+    hide();
+  }, [returnFocus, hide]);
+  const rows = (
+    <>
+      <div
+        aria-hidden
+        data-slot="grouped-tab-popover-header"
+        className="truncate px-2 pt-1 pb-1.5 text-ui font-semibold text-muted-foreground"
+      >
+        {head.detail ? `${title} ${head.detail}` : title}
+      </div>
+      <GroupMemberRows
+        tabs={tabs}
+        item={item}
+        activeTabId={active ? activeTabId : null}
+        describe={describe}
+        onSelect={onSelect}
+        actionsFor={memberActions}
+      />
+      {onUngroup ? (
+        <>
+          <div role="separator" className="my-1 h-px bg-border" />
+          <UngroupRow onUngroup={() => onUngroup(item.group.id)} />
+        </>
+      ) : null}
+    </>
+  );
   return (
     <Popover open={hover.open} onOpenChange={(next) => (next ? hover.show("pointer") : close())}>
       <PopoverAnchor asChild>
@@ -309,11 +441,12 @@ function GroupedTabChip<T extends { id: string }>({
           ref={chipRef}
           data-slot="grouped-tab-chip"
           data-group-id={item.group.id}
+          data-strip-tab-id={front.id}
           data-active={active}
           {...(edgeTarget ? { "data-pair-target-id": front.id } : {})}
           className="relative flex shrink-0"
           onPointerEnter={(event) => {
-            if (hovering(event)) hover.enter();
+            if (!menuOpen && hovering(event)) hover.enter();
           }}
           onPointerLeave={(event) => {
             if (event.pointerType === "mouse") hover.leave();
@@ -324,25 +457,42 @@ function GroupedTabChip<T extends { id: string }>({
           // After the tab's own click has selected it: a press on a chip that
           // was ALREADY showing its group has nothing left to show, so it opens
           // the list instead — the touch path to it.
-          onClick={() => {
+          onClick={(event) => {
+            if (event.target instanceof Element && event.target.closest("button")) return;
             if (active) hover.show("pointer");
           }}
           onContextMenu={(event) => {
             event.preventDefault();
             hover.show("pointer");
           }}
-          onKeyDown={(event) => {
+          onKeyDownCapture={(event) => {
             if (event.target !== event.currentTarget.querySelector('[role="tab"]')) return;
-            if (
-              event.key === "ArrowDown" ||
-              ((event.key === "Enter" || event.key === " ") && active)
-            ) {
+            if (event.key === "ArrowDown" || event.key === "Enter" || event.key === " ") {
               event.preventDefault();
+              event.stopPropagation();
               hover.show("keyboard");
             }
           }}
         >
-          <TabFaceProvider face={face}>{children}</TabFaceProvider>
+          <Tab
+            label={title}
+            hint={head.detail || undefined}
+            active={active}
+            tabStop={tabStop}
+            aria-haspopup="menu"
+            aria-expanded={hover.open}
+            aria-controls={hover.open ? listId : undefined}
+            onActivate={() => onSelect(front)}
+            onClose={onClose ? () => tabs.forEach(onClose) : undefined}
+            leading={
+              <GlyphStack front={head} behind={behind} onOpen={() => hover.show("pointer")} />
+            }
+            actionsContent={rows}
+            onActionsOpenChange={(open) => {
+              setMenuOpen(open);
+              if (open) close();
+            }}
+          />
         </div>
       </PopoverAnchor>
       <PopoverContent
@@ -375,75 +525,12 @@ function GroupedTabChip<T extends { id: string }>({
           if (event.pointerType === "mouse") hover.leave();
         }}
         onKeyDown={(event) => moveRowFocus(event)}
-        className="w-60 rounded-xl bg-popover/85 p-1 backdrop-blur-lg"
+        showArrow={false}
+        className="w-60 p-1"
       >
-        <div
-          aria-hidden
-          data-slot="grouped-tab-popover-header"
-          className="truncate px-2 pt-1 pb-1.5 text-ui font-semibold text-muted-foreground"
-        >
-          {head.detail ? `${head.label} ${head.detail}` : head.label}
-        </div>
-        {item.stacks.map(({ pane, tabs }, paneIndex) =>
-          tabs.map((tab) => {
-            const { label, icon: RowIcon, detail, status } = describe(tab);
-            const showing = active && tab.id === activeTabId;
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                role="menuitem"
-                tabIndex={-1}
-                data-slot="grouped-tab-row"
-                data-tab-id={tab.id}
-                // Not drawn (no pane badges, no checks): which pane a row is in,
-                // and whether it is that pane's front, for probes reading the list.
-                data-pane={paneIndex + 1}
-                data-front={tab.id === (pane.activeTabId ?? tabs[0]?.id)}
-                aria-current={showing ? "true" : undefined}
-                aria-label={[label, detail, status].filter(Boolean).join(", ")}
-                onClick={() => {
-                  close();
-                  onSelect(tab);
-                }}
-                className="grid w-full cursor-default grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-2 rounded-lg px-2 py-1.5 text-left outline-none select-none hover:bg-accent/60 focus-visible:bg-accent/60"
-              >
-                <RowIcon aria-hidden className="size-3.5 text-muted-foreground" />
-                <span
-                  data-slot="grouped-tab-row-title"
-                  className="truncate text-ui font-medium text-foreground"
-                >
-                  {label}
-                </span>
-                <span className="text-label text-muted-foreground">{status ?? null}</span>
-                {detail ? (
-                  <span className="col-start-2 col-end-4 truncate text-label text-muted-foreground">
-                    {detail}
-                  </span>
-                ) : null}
-              </button>
-            );
-          }),
-        )}
-        {onUngroup === undefined ? null : (
-          <>
-            <div role="separator" className="-mx-1 my-1 h-px bg-border" />
-            <button
-              type="button"
-              role="menuitem"
-              tabIndex={-1}
-              data-slot="grouped-tab-ungroup"
-              onClick={() => {
-                close();
-                onUngroup(item.group.id);
-              }}
-              className="flex w-full cursor-default items-center gap-2 rounded-lg px-2 py-1 text-left text-ui text-muted-foreground outline-none select-none hover:bg-accent/60 hover:text-foreground focus-visible:bg-accent/60 focus-visible:text-foreground"
-            >
-              <LinkBreakIcon aria-hidden className="size-3.5" />
-              Ungroup
-            </button>
-          </>
-        )}
+        <TabDropdownDismissContext.Provider value={close}>
+          {rows}
+        </TabDropdownDismissContext.Provider>
       </PopoverContent>
     </Popover>
   );
@@ -496,6 +583,8 @@ export function GroupedTabList<T extends { id: string }>({
   describe,
   onSelect,
   onUngroup,
+  onClose,
+  actionsFor = noActions,
   children,
 }: {
   tabs: readonly T[];
@@ -507,6 +596,8 @@ export function GroupedTabList<T extends { id: string }>({
   describe(tab: T): TabMenuLabel;
   onSelect(tab: T): void;
   onUngroup?: (groupId: string) => void;
+  onClose?: (tab: T) => void;
+  actionsFor?: (tab: T) => readonly TabAction[];
   children: (tab: T, state: GroupedTabState) => React.ReactNode;
 }) {
   const items = groupTabItems(tabs, groups).map((item) =>
@@ -526,14 +617,17 @@ export function GroupedTabList<T extends { id: string }>({
       return (
         <div
           key={tab.id}
+          data-strip-tab-id={tab.id}
           {...(edgeTargets ? { "data-pair-target-id": tab.id } : {})}
           className="relative flex shrink-0"
         >
-          {children(tab, {
-            active: tab.id === activeTabId,
-            tabStop: tab.id === stopId,
-            grouped: false,
-          })}
+          <TabActionScope actions={actionsFor(tab)}>
+            {children(tab, {
+              active: tab.id === activeTabId,
+              tabStop: tab.id === stopId,
+              grouped: false,
+            })}
+          </TabActionScope>
         </div>
       );
     }
@@ -550,9 +644,10 @@ export function GroupedTabList<T extends { id: string }>({
         describe={describe}
         onSelect={onSelect}
         onUngroup={onUngroup}
-      >
-        {children(front, { active, tabStop: front.id === stopId, grouped: true })}
-      </GroupedTabChip>
+        tabStop={front.id === stopId}
+        onClose={onClose}
+        actionsFor={actionsFor}
+      />
     );
   });
 }

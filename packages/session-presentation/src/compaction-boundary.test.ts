@@ -7,7 +7,7 @@
  * surface was built around lives entirely in a string: the measured count is
  * drawn and the estimated one is not, and nothing but a test can hold that.
  */
-import { sessionHostNoticeMetadata } from "@volli/shared";
+import { sessionHostNoticeMetadata, type SessionOrigin } from "@volli/shared";
 import type { UIMessage } from "ai";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -56,8 +56,9 @@ function drop(sequence: number, afterMessageId: string | null): TranscriptReason
 function shape(
   turns: readonly (readonly UIMessage[])[],
   compactions: readonly TranscriptCompaction[],
+  origins?: ReadonlyMap<string, SessionOrigin | null>,
 ) {
-  return projectTranscriptRows(turns, compactions, []).map((row) => {
+  return projectTranscriptRows(turns, compactions, [], [], origins).map((row) => {
     if (row.kind === "turn") return row.messages.map((held) => held.id).join("+");
     if (row.kind === "host-notice") return `host:${row.notice.kind}`;
     if (row.kind === "tool-refresh") return `tools:${row.refresh.sequence}`;
@@ -93,7 +94,15 @@ describe("projectTranscriptRows", () => {
       parts: [{ type: "text", text: "Volli told the Session about the hold." }],
     };
 
-    expect(projectTranscriptRows([[notice]], [], [])).toEqual([
+    expect(
+      projectTranscriptRows(
+        [[notice]],
+        [],
+        [],
+        [],
+        new Map([[notice.id, { kind: "volli", reason: "browser-notice" }]]),
+      ),
+    ).toEqual([
       {
         kind: "host-notice",
         messageId: "notice-1",
@@ -121,11 +130,13 @@ describe("projectTranscriptRows", () => {
       parts: [{ type: "text", text: "Volli told the Session about the hold." }],
     };
 
-    expect(shape([[notice], [message("m1")]], [compacted(9, "notice-1")])).toEqual([
-      "host:browser-hold",
-      "—9—",
-      "m1",
-    ]);
+    expect(
+      shape(
+        [[notice], [message("m1")]],
+        [compacted(9, "notice-1")],
+        new Map([[notice.id, { kind: "volli", reason: "browser-notice" }]]),
+      ),
+    ).toEqual(["host:browser-hold", "—9—", "m1"]);
   });
 
   it("keeps a multi-message turn intact instead of classifying one message inside it", () => {
@@ -147,16 +158,16 @@ describe("projectTranscriptRows", () => {
         [[message("u1", "user")], [message("m1"), message("m2")], [message("u2", "user")]],
         [compacted(9, "m1")],
       ),
-    ).toEqual(["u1", "m1+m2", "—9—", "u2"]);
+    ).toEqual(["u1", "m1", "—9—", "m2", "u2"]);
   });
 
-  it("never splits a turn, even when the compaction happened inside one", () => {
-    // The threshold path runs at the head of a message and the overflow path
-    // after a refused reply, so an anchor mid-turn is ordinary. The rule goes
-    // after the whole utterance rather than through it.
+  it("splits the grouped turn at the real message anchor before later work", () => {
+    // A grouped assistant turn can contain later tools/commentary. Context
+    // facts land after their actual message, not after those later messages.
     expect(shape([[message("m1"), message("m2"), message("m3")]], [compacted(9, "m1")])).toEqual([
-      "m1+m2+m3",
+      "m1",
       "—9—",
+      "m2+m3",
     ]);
   });
 
@@ -223,13 +234,11 @@ describe("compactionBoundaryCopy", () => {
       reason: "checkpoint",
     });
     expect(copy.headline).toBe("Compaction reverted");
-    expect(copy.note).toBe("The messages it had replaced are being sent to the model again.");
     expect(copy.before).toBeNull();
     expect(copy.description).toBe(
-      "Compaction reverted — the saved checkpoint could not be read. The messages it had replaced are being sent to the model again. The provider-native checkpoint could not be read.",
+      "Compaction reverted — the saved checkpoint could not be read. The provider-native checkpoint could not be read.",
     );
     // The ordinary failure still says the opposite thing.
-    expect(compactionBoundaryCopy(failed(1, "m1")).note).toBe("The context was left as it was.");
     expect(compactionBoundaryCopy(failed(1, "m1")).headline).toBe("Compaction failed");
   });
 
@@ -243,15 +252,19 @@ describe("compactionBoundaryCopy", () => {
     // The honesty rule, pinned: nothing on this row is an estimate, and the ~
     // that would mark one has nothing to mark.
     expect(copy.description).not.toContain("~");
-    expect(copy.description).toBe(
-      "Context compacted — the window filled. Older messages above are no longer sent to the model; a summary of them is. The context held 182k tokens before.",
-    );
+    expect(copy.description).toBe("Context compacted — the window filled. 182k tokens before.");
   });
 
-  it("says what a reader scrolling past the line is actually looking at", () => {
-    expect(compactionBoundaryCopy(compacted(1, "m1")).note).toBe(
-      "Older messages above are no longer sent to the model; a summary of them is.",
-    );
+  it("carries no explanatory note, on the row or in its hover", () => {
+    for (const copy of [
+      compactionBoundaryCopy(compacted(1, "m1")),
+      compactionBoundaryCopy(failed(1, "m1")),
+      compactionBoundaryCopy({ ...failed(1, "m1"), reason: "checkpoint" }),
+    ]) {
+      expect(copy).not.toHaveProperty("note");
+      expect(copy.description).not.toContain("sent to the model");
+      expect(copy.description).not.toContain("left as it was");
+    }
   });
 
   it("borrows no count for a compaction that never happened", () => {
@@ -259,10 +272,9 @@ describe("compactionBoundaryCopy", () => {
 
     expect(copy.headline).toBe("Compaction failed");
     expect(copy.before).toBeNull();
-    expect(copy.note).toBe("The context was left as it was.");
     expect(copy.detail).toBe("The summarizer refused the request.");
     expect(copy.description).toBe(
-      "Compaction failed — the provider refused this turn. The context was left as it was. The summarizer refused the request.",
+      "Compaction failed — the provider refused this turn. The summarizer refused the request.",
     );
   });
 
@@ -270,9 +282,7 @@ describe("compactionBoundaryCopy", () => {
     const copy = compactionBoundaryCopy(failed(1, "m1", "   "));
 
     expect(copy.detail).toBeNull();
-    expect(copy.description).toBe(
-      "Compaction failed — the provider refused this turn. The context was left as it was.",
-    );
+    expect(copy.description).toBe("Compaction failed — the provider refused this turn.");
   });
 });
 

@@ -421,7 +421,10 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
    * (whose working copy every reader re-measures).
    */
   const announce = (call: HandlerCall, change: DataChangeScope, always = false): void => {
-    if (call.origin === "desktop-window" && !always) return;
+    if (call.origin === "desktop-window" && !always) {
+      feed.untapped(() => options.events.publishToPeers?.("data-changed", change));
+      return;
+    }
     feed.untapped(() => options.events.publish("data-changed", change));
   };
 
@@ -571,7 +574,9 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
             ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
           },
         ]);
-        announce(call, { projectId: updated.id });
+        // A project roster contains tickets/labels, not the project's settings.
+        // Peers must refresh project rows as well as the board slices.
+        announce(call, {});
       },
     );
     return { receipt, throughCursor, project };

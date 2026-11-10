@@ -1,14 +1,17 @@
 import { EventEmitter } from "node:events";
+import { deserialize, serialize } from "node:v8";
 import { createServer, type Server } from "node:net";
 import type { PiSignIn } from "@volli/agent-runtime";
 import { ModelAccessSignInService } from "@volli/host-core/session-runtime";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-const { handlers } = vi.hoisted(() => ({
+const { handlers, windows } = vi.hoisted(() => ({
   handlers: new Map<string, (...args: never[]) => unknown>(),
+  windows: [] as { webContents: ReturnType<typeof windowContents> }[],
 }));
 
 vi.mock("electron", () => ({
+  BrowserWindow: { getAllWindows: () => windows },
   ipcMain: {
     handle(channel: string, handler: (...args: never[]) => unknown) {
       handlers.set(channel, handler);
@@ -27,6 +30,7 @@ function invoke(channel: string, sender: unknown = {}, ...args: unknown[]): unkn
 
 beforeEach(() => {
   handlers.clear();
+  windows.length = 0;
 });
 
 // The degraded half of the surface (VC-76): a runtime that never came up must
@@ -63,9 +67,9 @@ describe("registerModelAccessIpcHandlers (degraded)", () => {
 // and closes the server however the attempt ends.
 
 /** The app window's WebContents, able to fire any page-lifetime event. */
-function windowContents() {
+function windowContents(id = 1) {
   return Object.assign(new EventEmitter(), {
-    id: 1,
+    id,
     isDestroyed: vi.fn(() => false),
     send: vi.fn(),
   });
@@ -173,5 +177,132 @@ describe("registerModelAccessIpcHandlers (a page that goes away mid sign-in)", (
 
     contents.emit("destroyed");
     await vi.waitFor(() => expect(flow.servers[0]?.listening).toBe(false));
+  });
+});
+
+/** Exercise Electron's structured-clone shape, never shared object references. */
+function wire<T>(value: T): T {
+  return deserialize(serialize(value)) as T;
+}
+
+describe("accepted credential changes across windows", () => {
+  it("keeps prompts addressed and broadcasts only a payload-free accepted sign-in", async () => {
+    const opener = windowContents(1);
+    const peer = windowContents(2);
+    const gone = windowContents(3);
+    gone.isDestroyed.mockReturnValue(true);
+    windows.push(...[opener, peer, gone].map((webContents) => ({ webContents })));
+    registerModelAccessIpcHandlers(
+      new ModelAccessSignInService({
+        pi: {
+          offers: () => true,
+          login: async (_providerId, _type, _signal, steps) => {
+            await steps.ask(
+              {
+                promptId: "key",
+                kind: "secret",
+                message: "API key",
+                placeholder: null,
+                options: [],
+              },
+              undefined,
+            );
+          },
+          logout: async () => {},
+        },
+      }),
+    );
+    const started = wire(
+      invoke("volli:model-access-sign-in-begin", opener, ...wire(["anthropic", "api-key"])),
+    ) as { ok: true; attemptId: string };
+    expect(started.ok).toBe(true);
+    expect(wire(opener.send.mock.calls)).toEqual([
+      ["volli:model-access-sign-in", expect.objectContaining({ kind: "prompt" })],
+    ]);
+    expect(peer.send).not.toHaveBeenCalled();
+    expect(gone.send).not.toHaveBeenCalled();
+
+    expect(
+      wire(
+        invoke(
+          "volli:model-access-sign-in-respond",
+          opener,
+          ...wire([started.attemptId, "key", "test-only-secret"]),
+        ),
+      ),
+    ).toEqual({ ok: true });
+    await vi.waitFor(() =>
+      expect(peer.send).toHaveBeenCalledExactlyOnceWith("volli:model-access-changed"),
+    );
+    expect(opener.send.mock.calls.map(([, update]) => (update as { kind: string }).kind)).toEqual([
+      "prompt",
+      "settled",
+    ]);
+    expect(gone.send).not.toHaveBeenCalled();
+    expect(JSON.stringify(wire(peer.send.mock.calls))).not.toContain("test-only-secret");
+  });
+
+  it("notifies the replacement page when a saved credential outlives its opener", async () => {
+    const opener = windowContents(1);
+    const peer = windowContents(2);
+    windows.push({ webContents: opener }, { webContents: peer });
+    const saved = Promise.withResolvers<void>();
+    registerModelAccessIpcHandlers(
+      new ModelAccessSignInService({
+        pi: {
+          offers: () => true,
+          // A credential write already underway may complete despite abandonment.
+          login: () => saved.promise,
+          logout: async () => {},
+        },
+      }),
+    );
+    invoke("volli:model-access-sign-in-begin", opener, "anthropic", "oauth");
+    opener.emit("did-navigate");
+    saved.resolve();
+    await vi.waitFor(() =>
+      expect(peer.send).toHaveBeenCalledExactlyOnceWith("volli:model-access-changed"),
+    );
+    expect(opener.send).toHaveBeenCalledExactlyOnceWith("volli:model-access-changed");
+  });
+
+  it("notifies peers only after sign-out succeeds", async () => {
+    const opener = windowContents(1);
+    const peer = windowContents(2);
+    windows.push({ webContents: opener }, { webContents: peer });
+    const logout = Promise.withResolvers<void>();
+    let fail = false;
+    registerModelAccessIpcHandlers(
+      new ModelAccessSignInService({
+        pi: {
+          offers: () => true,
+          login: async () => {
+            throw new Error("Sign-in failed");
+          },
+          logout: async () => {
+            await logout.promise;
+            if (fail) throw new Error("Could not remove credential");
+          },
+        },
+      }),
+    );
+    invoke("volli:model-access-sign-in-begin", opener, "anthropic", "oauth");
+    await vi.waitFor(() => expect(opener.send).toHaveBeenCalled());
+    expect(peer.send).not.toHaveBeenCalled();
+    opener.send.mockClear();
+    const pending = invoke("volli:model-access-sign-out", opener, "anthropic");
+    expect(peer.send).not.toHaveBeenCalled();
+    logout.resolve();
+    expect(wire(await pending)).toEqual({ ok: true });
+    expect(wire(peer.send.mock.calls)).toEqual([["volli:model-access-changed"]]);
+    expect(opener.send).not.toHaveBeenCalled();
+
+    peer.send.mockClear();
+    fail = true;
+    expect(wire(await invoke("volli:model-access-sign-out", opener, "anthropic"))).toEqual({
+      ok: false,
+      error: "Could not remove credential",
+    });
+    expect(peer.send).not.toHaveBeenCalled();
   });
 });

@@ -1,7 +1,7 @@
 import { PERSON_STARTED, SESSION_READ } from "@volli/shared";
 import type {
   SessionListingRow,
-  SessionProjection,
+  SessionListingProjection,
   SessionProvenance,
   SessionReadState,
 } from "@volli/shared";
@@ -56,7 +56,7 @@ const NO_LIVE_ATTACHMENTS: ReadonlySet<string> = new Set();
  * them differing.
  */
 export function sessionListingRow(
-  session: SessionProjection,
+  session: SessionListingProjection,
   provenance: SessionProvenance = PERSON_STARTED,
   /** Attachment ids with an executor binding in this process right now. */
   liveAttachmentIds: ReadonlySet<string> = NO_LIVE_ATTACHMENTS,
@@ -95,10 +95,10 @@ export function sessionListingRow(
  * in, which is what keeps the fetch and the push identical.
  */
 export function sessionListingRows(
-  sessions: readonly SessionProjection[],
-  provenanceOf: (session: SessionProjection) => SessionProvenance = () => PERSON_STARTED,
+  sessions: readonly SessionListingProjection[],
+  provenanceOf: (session: SessionListingProjection) => SessionProvenance = () => PERSON_STARTED,
   liveAttachmentIds: ReadonlySet<string> = NO_LIVE_ATTACHMENTS,
-  readOf: (session: SessionProjection) => SessionReadState = () => SESSION_READ,
+  readOf: (session: SessionListingProjection) => SessionReadState = () => SESSION_READ,
 ): SessionListingRow[] {
   return sessions.map((session) =>
     sessionListingRow(session, provenanceOf(session), liveAttachmentIds, readOf(session)),

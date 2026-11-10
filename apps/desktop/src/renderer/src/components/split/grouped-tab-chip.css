@@ -22,9 +22,7 @@
  * drawn there peek past the card in front), nudged up and to the right, and dimmer. The slot widens by one
  * sliver per card so the label never sits under the deck.
  *
- * The one motion: hovering the chip fans the deck a pixel wider, the glance
- * that says "there is more here" while the popover's intent delay runs. It is a
- * transform on a 20px glyph, and it goes entirely under reduced motion.
+ * The deck is static: frequent strip interactions do not need motion.
  */
 [data-slot="tab-glyph-stack"] {
   position: relative;
@@ -51,12 +49,11 @@
   justify-content: center;
   width: 1.25rem;
   height: 1.25rem;
-  border-radius: 0.375rem;
+  border-radius: var(--radius-control-small);
   box-shadow: 0 0 0 1px var(--border);
   transform-origin: right center;
   transform: translate(calc(var(--layer) * var(--fan)), calc(var(--layer) * -1.5px))
     scale(calc(1 - var(--layer) * 0.14));
-  transition: transform 160ms var(--ease-out);
 }
 [data-slot="tab-glyph-card"][data-layer="0"] {
   z-index: 3;
@@ -79,15 +76,4 @@
   --layer: 2;
   z-index: 1;
   opacity: 0.6;
-}
-[data-slot="grouped-tab-chip"]:hover [data-slot="tab-glyph-card"] {
-  --fan: 7px;
-}
-@media (prefers-reduced-motion: reduce) {
-  [data-slot="tab-glyph-card"] {
-    transition: none;
-  }
-  [data-slot="grouped-tab-chip"]:hover [data-slot="tab-glyph-card"] {
-    --fan: 6px;
-  }
 }

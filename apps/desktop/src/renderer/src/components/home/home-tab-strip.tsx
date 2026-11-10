@@ -1,20 +1,24 @@
 import * as React from "react";
+import { useAutomaticTitleChange } from "@renderer/chat/title-change";
 import { launchStore } from "@renderer/stores/launch";
 import { SessionShare, SessionTeamMark } from "@renderer/components/sessions/session-team";
 import { BrowserTabMark } from "@renderer/components/browser/browser-tab-mark";
-import { BrowserIcon } from "@phosphor-icons/react/dist/csr/Browser";
-import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
-import { FileIcon } from "@phosphor-icons/react/dist/csr/File";
-import { KanbanIcon } from "@phosphor-icons/react/dist/csr/Kanban";
-import { MoonIcon } from "@phosphor-icons/react/dist/csr/Moon";
-import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
-import { PushPinIcon } from "@phosphor-icons/react/dist/csr/PushPin";
-import { PushPinSlashIcon } from "@phosphor-icons/react/dist/csr/PushPinSlash";
-import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
-import { SunIcon } from "@phosphor-icons/react/dist/csr/Sun";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
-import { XSquareIcon } from "@phosphor-icons/react/dist/csr/XSquare";
+import {
+  BrowserIcon,
+  ChatIcon,
+  FileIcon,
+  BoardIcon,
+  MoonIcon,
+  EditIcon,
+  PinIcon,
+  UnpinIcon,
+  SunIcon,
+  TerminalIcon,
+  CloseIcon,
+  ExternalIcon,
+  MinusIcon,
+  CloseSquareIcon,
+} from "@renderer/components/ui/icon";
 
 import { sessionProvenanceHoverLine, type BrowserTabHolder } from "@volli/shared";
 
@@ -24,7 +28,11 @@ import { CopyPathContextMenuItems } from "@renderer/components/files/copy-path-m
 import { HOME_BOARD_TAB_ID } from "@renderer/components/home/home-tabs";
 import { CloudCheckoutControl } from "@renderer/components/cloud-checkout/cloud-checkout-control";
 import { SessionGlyph } from "@renderer/components/sessions/session-glyph";
-import { PaneTakeOutButton } from "@renderer/components/split/pane-take-out-button";
+import { ChatProviderIcon } from "@renderer/components/sessions/chat-provider-icon";
+import { projectChatProviders } from "@renderer/lib/session-provider-index";
+import { providerIdentityOf, providerLabelOf } from "@renderer/components/models/model-identity";
+import { useModelCatalogue } from "@renderer/lib/use-model-catalogue";
+import { TabContextActions, type TabAction } from "@renderer/components/ui/tab-actions";
 import {
   GroupedTabList,
   groupTabItems,
@@ -52,11 +60,9 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
-import { Button } from "@renderer/components/ui/button";
 import { Tab, TabStrip, type TabProps } from "@renderer/components/ui/tab-strip";
 import { useSessionsStore, type SessionTab } from "@renderer/stores/sessions";
-import { STATUS_DOT_LABEL } from "@renderer/components/ui/session-activity-status";
-import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
+import { hidesToIsland, useBrowserTabsStore } from "@renderer/stores/browser-tabs";
 import { browserTabAddress } from "@renderer/chat/use-island-tabs";
 
 /**
@@ -127,6 +133,8 @@ export interface HomeTabListProps {
   shownGroupId?: string | null;
   /** Dissolve a group from its chip's menu; every tab stays open. */
   onUngroup?(groupId: string): void;
+  onTakeOutTab?(tabId: string): void;
+  onHideBrowser?(tabId: string): void;
   /**
    * The project whose Main checkout Home's File tabs come from — what Copy Path
    * resolves against. Home has no ticket, so those paths never resolve into a
@@ -148,7 +156,7 @@ export interface HomeTabListProps {
   onReorder?(movedId: string, ids: readonly string[]): void;
   /** Double-click / Keep Open on a preview File tab. */
   onPinFile(relPath: string): void;
-  /** "Close Others" on a File tab — closes every OTHER File tab, guards included. */
+  /** "Close others" on a File tab — closes every OTHER File tab, guards included. */
   onCloseOtherFiles(relPath: string): void;
 }
 
@@ -170,15 +178,8 @@ interface HomeTabStripProps extends HomeTabListProps {
 }
 
 /**
- * Home's tab strip: the FOLDER variant of `ui/tab-strip.tsx`, the same drawing
- * the Ticket view uses and in the same place — the top edge of the content
- * card, with the active tab bleeding one pixel past the strip's border so it
- * fuses with the plane below. That is not a coincidence to be tidied away
- * later: Home and a Ticket view are the same object at two scopes, and
- * drawing them alike is how the app says so without prose.
- *
- * (It was the PILL variant while this strip belonged to the Sessions page,
- * where it floated above a surface it did not own. It owns this one.)
+ * Home's tab strip uses the shared Rex capsule anatomy. It owns no surface
+ * perimeter or inspector placement; those belong to the window shell.
  *
  * The permanent Board tab leads, then both kinds of Session a project can run
  * without a ticket, Main-checkout File tabs, and live Browser Tabs. That
@@ -204,9 +205,9 @@ export function HomeTabStrip({
   onNewChat,
   onNewBrowser,
   creating,
-  railCollapsed,
-  railTogglable,
-  onToggleRail,
+  railCollapsed: _railCollapsed,
+  railTogglable: _railTogglable,
+  onToggleRail: _onToggleRail,
   ...list
 }: HomeTabStripProps) {
   return (
@@ -236,26 +237,6 @@ export function HomeTabStrip({
               onNewTerminal={onNewSession}
             />
           </div>
-          {/* The rail's collapse control, in the same corner the ticket strip
-              puts it — same glyph, same chord, same full-height rectangular
-              hover, because it is the same control one scope up. It is ABSENT
-              on the Board tab rather than disabled: the strip's right corner
-              sits over the box the rail would occupy, and on the board there is
-              no such box. */}
-          {railTogglable ? (
-            <Button
-              size="icon-xs"
-              variant="ghost"
-              className="ml-1 h-full rounded-none"
-              onClick={onToggleRail}
-              aria-label={railCollapsed ? "Show details rail" : "Hide details rail"}
-              title={`${railCollapsed ? "Show" : "Hide"} details (⌥⌘B)`}
-            >
-              {/* scale-x-[-1] mirrors the left-sidebar glyph so it reads as the
-                  RIGHT panel; each caret points toward the rail it toggles. */}
-              <SidebarSimpleIcon className="size-3.5 scale-x-[-1]" />
-            </Button>
-          ) : null}
         </>
       }
     >
@@ -275,13 +256,11 @@ export function HomePaneTabStrip({
   ...list
 }: HomeTabListProps & { label: string; onTakeOut?: () => void }) {
   return (
-    <TabStrip
-      variant="folder"
-      label={label}
-      reorder={reorderFor(list)}
-      actions={onTakeOut === undefined ? undefined : <PaneTakeOutButton onTakeOut={onTakeOut} />}
-    >
-      <HomeTabList {...list} />
+    <TabStrip variant="folder" label={label} reorder={reorderFor(list)}>
+      <HomeTabList
+        {...list}
+        onTakeOutTab={list.onTakeOutTab ?? (onTakeOut ? () => onTakeOut() : undefined)}
+      />
     </TabStrip>
   );
 }
@@ -305,20 +284,36 @@ function reorderFor({ tabs, groups, onReorder }: HomeTabListProps) {
 }
 
 /** What a group chip's menu says about a Home tab. */
-function homeTabMenuLabel(tab: HomeTabDescriptor): TabMenuLabel {
-  if (tab.kind === "board") return { label: "Board", icon: KanbanIcon };
+function homeTabMenuLabel(
+  tab: HomeTabDescriptor,
+  providers: ReadonlyMap<string, string | null>,
+): TabMenuLabel {
+  if (tab.kind === "board") return { label: "Board", icon: BoardIcon };
   if (tab.kind === "terminal") {
     // The same reading the terminal tab's own dot makes; a parked tab's moon
     // has no dot, so its word is said here instead.
     const state = terminalTabState(tab.tab, useSessionsStore.getState().parkState);
-    return {
-      label: tab.tab.title,
-      icon: TerminalWindowIcon,
-      status: STATUS_DOT_LABEL[terminalTabDot(state) ?? "parked"],
-    };
+    return { label: tab.tab.title, icon: TerminalIcon, status: terminalTabDot(state) ?? "parked" };
   }
   if (tab.kind === "chat") {
-    return { label: tab.title, icon: ChatCircleIcon, status: STATUS_DOT_LABEL[tab.status] };
+    return {
+      label: tab.title,
+      icon: ChatIcon,
+      artwork: (
+        <ChatProviderIcon
+          sessionId={tab.sessionId}
+          savedProviderId={providers.get(tab.sessionId) ?? null}
+        />
+      ),
+      memberGlyph: (
+        <ChatProviderIcon
+          sessionId={tab.sessionId}
+          savedProviderId={providers.get(tab.sessionId) ?? null}
+          state={tab.status}
+        />
+      ),
+      status: tab.status,
+    };
   }
   if (tab.kind === "browser") {
     // Read when the menu opens: the address is the line that tells fifteen
@@ -347,6 +342,8 @@ function HomeTabList({
   groups,
   shownGroupId,
   onUngroup,
+  onTakeOutTab,
+  onHideBrowser,
   onSelect,
   onClose,
   onRename,
@@ -354,6 +351,9 @@ function HomeTabList({
   onCloseOtherFiles,
 }: HomeTabListProps) {
   const [editingId, setEditingId] = React.useState<string | null>(null);
+  const providers = useProjectSessionsStore((state) =>
+    projectChatProviders(state.byProject[projectId]?.chat),
+  );
   return (
     <GroupedTabList
       tabs={tabs}
@@ -361,9 +361,32 @@ function HomeTabList({
       activeTabId={activeTabId}
       shownGroupId={shownGroupId}
       edgeTargets={groups !== undefined}
-      describe={homeTabMenuLabel}
+      describe={(tab) => homeTabMenuLabel(tab, providers)}
       onSelect={onSelect}
       onUngroup={onUngroup}
+      onClose={onClose}
+      actionsFor={(tab) => {
+        const actions: TabAction[] = [];
+        if (
+          onTakeOutTab &&
+          (groups === undefined ||
+            groups.some((group) => group.panes.some((pane) => pane.tabIds.includes(tab.id))))
+        )
+          actions.push({
+            label: "Take out of group",
+            icon: ExternalIcon,
+            run: () => onTakeOutTab(tab.id),
+          });
+        const browser =
+          tab.kind === "browser" ? useBrowserTabsStore.getState().byId[tab.tabId] : undefined;
+        if (browser && hidesToIsland(browser) && onHideBrowser)
+          actions.push({
+            label: "Hide to Island",
+            icon: MinusIcon,
+            run: () => onHideBrowser(browser.tabId),
+          });
+        return actions;
+      }}
     >
       {(descriptor, { active, tabStop, grouped }) => {
         // A chip segment is the chip's: no drag of its own, no menu of its own.
@@ -385,22 +408,32 @@ function HomeTabList({
         }
         if (descriptor.kind === "browser") {
           return (
-            <Tab
-              key={descriptor.id}
-              data-testid="home-browser-tab"
-              label={descriptor.title}
-              title={descriptor.title}
-              active={active}
-              tabStop={tabStop}
-              dragId={dragId}
-              status={descriptor.loading ? "working" : undefined}
-              // Two marks, two facts: the glyph says whose tab this IS
-              // (VC-238), the dot says who may write to it right now (VC-239).
-              leading={<BrowserTabMark driven={descriptor.driven} />}
-              badge={<BrowserHolderDot holder={descriptor.heldBy} />}
-              onActivate={() => onSelect(descriptor)}
-              onClose={() => onClose(descriptor)}
-            />
+            <ContextMenu>
+              <ContextMenuTrigger asChild>
+                <Tab
+                  key={descriptor.id}
+                  data-testid="home-browser-tab"
+                  label={descriptor.title}
+                  title={descriptor.title}
+                  active={active}
+                  tabStop={tabStop}
+                  dragId={dragId}
+                  status={descriptor.loading ? "working" : undefined}
+                  // Two marks, two facts: the glyph says whose tab this IS
+                  // (VC-238), the dot says who may write to it right now (VC-239).
+                  leading={<BrowserTabMark driven={descriptor.driven} />}
+                  badge={<BrowserHolderDot holder={descriptor.heldBy} />}
+                  onActivate={() => onSelect(descriptor)}
+                  onClose={() => onClose(descriptor)}
+                />
+              </ContextMenuTrigger>
+              <ContextMenuContent>
+                <TabContextActions />
+                <ContextMenuItem icon={CloseIcon} onSelect={() => onClose(descriptor)}>
+                  Close
+                </ContextMenuItem>
+              </ContextMenuContent>
+            </ContextMenu>
           );
         }
         if (descriptor.kind === "file") {
@@ -489,15 +522,20 @@ function BoardTab({
   return (
     <Tab
       label="Board"
+      iconOnly
       dragId={dragId}
       active={active}
       tabStop={tabStop}
       closable={false}
       onActivate={onSelect}
-      // size-3 and `bold`, the leading-glyph tier the chat bubble and the moon
+      // size-3 and the heavier stroke, the leading-glyph tier the chat bubble and the moon
       // beside it already take: at 12px regular draws lighter than the label.
       leading={
-        <KanbanIcon aria-hidden weight="bold" className="size-3 shrink-0 text-muted-foreground" />
+        <BoardIcon
+          aria-hidden
+          strokeWidth={2.25}
+          className="size-3 shrink-0 text-muted-foreground"
+        />
       }
     />
   );
@@ -509,7 +547,7 @@ function BoardTab({
  * These are main-checkout files, opened out of the same `FileWorkspaceState`
  * reducer ticket File tabs share, and this tab carries its own menu: the two
  * Copy Path items, Word Wrap, then Keep Open (disabled once pinned, so the menu
- * keeps one shape), Close, Close Others. The ticket strip differs because a
+ * keeps one shape), Close, Close others. The ticket strip differs because a
  * pinned ticket File tab has no menu at all, which would leave Home's keyboard
  * users with no route to Close.
  */
@@ -563,18 +601,19 @@ function HomeFileTab({
     <ContextMenu>
       <ContextMenuTrigger asChild>{inner}</ContextMenuTrigger>
       <ContextMenuContent>
+        <TabContextActions />
         <CopyPathContextMenuItems target={{ projectId, relPath: tab.relPath }} />
         <ContextMenuSeparator />
         <WordWrapContextMenuItem />
         <ContextMenuSeparator />
-        <ContextMenuItem icon={PushPinIcon} disabled={!tab.preview} onSelect={onPin}>
+        <ContextMenuItem icon={PinIcon} disabled={!tab.preview} onSelect={onPin}>
           Keep Open
         </ContextMenuItem>
-        <ContextMenuItem icon={XIcon} onSelect={onClose}>
+        <ContextMenuItem icon={CloseIcon} onSelect={onClose}>
           Close
         </ContextMenuItem>
-        <ContextMenuItem icon={XSquareIcon} onSelect={onCloseOthers}>
-          Close Others
+        <ContextMenuItem icon={CloseSquareIcon} onSelect={onCloseOthers}>
+          Close others
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
@@ -661,14 +700,9 @@ function TerminalTab({
     <Tab
       {...sharedTabProps(tab.title, shell)}
       label={tab.title}
-      // Exited tabs read as muted; a parked (and live) tab explains itself
-      // on hover.
+      // Exited tabs read as muted; a parked (and live) tab says so on hover.
       title={tabTitleWithProvenance(
-        exited
-          ? `Exited (${exitCode})`
-          : parked
-            ? "Terminal is parked to save memory. Select to wake it."
-            : tab.title,
+        exited ? `Exited (${exitCode})` : parked ? `${tab.title}\nParked` : tab.title,
         sessionProvenanceHoverLine(provenance),
       )}
       labelClassName={exited ? "line-through" : undefined}
@@ -681,7 +715,11 @@ function TerminalTab({
         // same as the ticket strip's moon — one leading glyph size now that
         // the two strips are one tab.
         dot === null ? (
-          <MoonIcon aria-hidden weight="bold" className="size-3 shrink-0 text-muted-foreground" />
+          <MoonIcon
+            aria-hidden
+            strokeWidth={2.25}
+            className="size-3 shrink-0 text-muted-foreground"
+          />
         ) : null
       }
       onActivate={activate}
@@ -693,7 +731,8 @@ function TerminalTab({
     <ContextMenu>
       <ContextMenuTrigger asChild>{inner}</ContextMenuTrigger>
       <ContextMenuContent>
-        <ContextMenuItem icon={PencilSimpleIcon} onSelect={shell.onStartRename}>
+        <TabContextActions />
+        <ContextMenuItem icon={EditIcon} onSelect={shell.onStartRename}>
           Rename
         </ContextMenuItem>
         {showParkControls && (
@@ -720,7 +759,7 @@ function TerminalTab({
               </ContextMenuItem>
             )}
             <ContextMenuItem
-              icon={keptAwake ? PushPinSlashIcon : PushPinIcon}
+              icon={keptAwake ? UnpinIcon : PinIcon}
               onSelect={() =>
                 runOnLivePanes(
                   livePaneIds,
@@ -734,7 +773,7 @@ function TerminalTab({
           </>
         )}
         <ContextMenuSeparator />
-        <ContextMenuItem icon={XIcon} variant="destructive" onSelect={shell.onClose}>
+        <ContextMenuItem icon={CloseIcon} variant="destructive" onSelect={shell.onClose}>
           Close
         </ContextMenuItem>
       </ContextMenuContent>
@@ -760,21 +799,26 @@ function ChatTab({
   ...shell
 }: KindTabProps & { sessionId: string; title: string; status: TicketTabStatus }) {
   const canRename = launchStore() !== "cloud";
+  const automaticLabelChange = useAutomaticTitleChange(sessionId, title);
   const provenance = useSessionProvenance(projectId, sessionId);
   const liveProvider = useChatSessionsStore(
     (state) => state.sessions[sessionId]?.projection?.modelSelection?.providerId ?? null,
   );
   const savedProvider = useProjectSessionsStore(
-    (state) =>
-      state.byProject[projectId]?.chat.find((record) => record.sessionId === sessionId)?.model
-        ?.providerId ?? null,
+    (state) => projectChatProviders(state.byProject[projectId]?.chat).get(sessionId) ?? null,
   );
   const providerId = liveProvider ?? savedProvider;
+  const catalogue = useModelCatalogue();
+  const providers = catalogue?.providers ?? [];
+  const providerLabel = providerId === null ? "Chat" : providerLabelOf(providers, providerId);
+  const providerIdentity =
+    providerId === null ? undefined : providerIdentityOf(providers, providerId);
   const inner = (
     <Tab
       {...sharedTabProps(title, shell)}
       onDoubleClick={canRename ? shell.onStartRename : undefined}
       label={title}
+      identity={providerIdentity}
       // The waiting dot's one line of hover, in the sidebar's own words: a
       // tab is the only place that dot stands with nothing beside it to say
       // what it means.
@@ -792,13 +836,14 @@ function ChatTab({
       // A landing auto-title reveals here word by word (VC-81); terminal
       // and board tabs stay static.
       revealLabel
+      automaticLabelChange={automaticLabelChange}
       leading={
         <SessionGlyph
           providerId={providerId}
-          providerLabel={providerId ?? "Chat"}
+          providerLabel={providerLabel}
           state={status}
           kind="chat"
-          name={`${providerId ?? "Chat"}, ${status}`}
+          name={`${providerIdentity ?? providerLabel}, ${status}`}
           size="tab"
         />
       }
@@ -809,16 +854,17 @@ function ChatTab({
     <ContextMenu>
       <ContextMenuTrigger asChild>{inner}</ContextMenuTrigger>
       <ContextMenuContent>
+        <TabContextActions />
         <SessionShare sessionId={sessionId} projectId={projectId} />
         {canRename ? (
           <>
-            <ContextMenuItem icon={PencilSimpleIcon} onSelect={shell.onStartRename}>
+            <ContextMenuItem icon={EditIcon} onSelect={shell.onStartRename}>
               Rename
             </ContextMenuItem>
             <ContextMenuSeparator />
           </>
         ) : null}
-        <ContextMenuItem icon={XIcon} variant="destructive" onSelect={shell.onClose}>
+        <ContextMenuItem icon={CloseIcon} variant="destructive" onSelect={shell.onClose}>
           Close
         </ContextMenuItem>
       </ContextMenuContent>

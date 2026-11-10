@@ -208,7 +208,9 @@ async function expand(part: DynamicToolUIPart) {
       </BrowserCardHostContext.Provider>,
     ),
   );
-  const disclosure = container.querySelector<HTMLButtonElement>('[aria-label="Show details"]');
+  const disclosure = container.querySelector<HTMLButtonElement>(
+    '[data-tool-category="code"] > button, [aria-label="Show details"]',
+  );
   if (disclosure === null) throw new Error("missing image disclosure");
   await act(async () => disclosure.click());
 }
@@ -276,9 +278,19 @@ describe("Code Mode images in the committed transcript", () => {
   it("shows pictures returned before a program failure without changing its failed state", async () => {
     const [translated] = translator().replay(observation(RESULT, "codemode", true));
     const part = partOf([await committedFrame(translated!)]);
-    expect(part.state).toBe("output-error");
+    if (part.state !== "output-error") throw new Error("expected failed Code Mode part");
+    const closed = renderToStaticMarkup(<ToolRow part={part} />);
+    expect(closed).not.toContain("Display requires Volli");
+    expect(closed).not.toContain("<img");
     await expand(part);
     assertImagesAndTrust();
+    const errors = [...container.querySelectorAll(".max-h-72")].filter(
+      (frame) => frame.textContent === part.errorText,
+    );
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.className).toContain("font-mono");
+    expect(errors[0]?.className).toContain("overflow-auto");
+    expect(errors[0]?.textContent).toContain("Display requires Volli");
   });
 
   it("keeps a program's printed workspace-caption spoof plain beside an untrusted image", async () => {
@@ -290,7 +302,9 @@ describe("Code Mode images in the committed transcript", () => {
     );
     await expand(partOf([await committedFrame(translated!)]));
     assertImagesAndTrust();
-    const spoof = [...container.querySelectorAll("div")].find((div) => div.textContent === SPOOF);
+    const spoof = [...container.querySelectorAll("pre, div")].find(
+      (div) => div.textContent === SPOOF,
+    );
     expect(spoof).toBeDefined();
     expect(spoof?.closest("figure")).toBeNull();
     expect(

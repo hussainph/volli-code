@@ -4,7 +4,8 @@
  * architecture it runs on, what schema version its database is at, whether
  * the migrations that file ran are the ones this build ships (VC-633), and
  * what the updater's last check said (VC-294), what this launch's boot
- * recovery did (VC-926), and where this Mac stands as a runner (VC-895).
+ * recovery did (VC-926), where this Mac stands as a runner (VC-895), and
+ * the last day's stalls from the perf store (VC-1092).
  *
  * Every one of them lives somewhere the renderer cannot reach — the app
  * version is Electron's, the channel is a row in `app_state`, the schema
@@ -14,8 +15,9 @@
  *
  * AN ALLOWLIST, NOT A DUMP. The report is text a person pastes into a public
  * issue, so this module is written so that widening it takes an edit here and
- * a new test: it names nine fields, reads one pragma, one `app_state` key and
- * the version/fingerprint columns of `migration_history`, and imports nothing
+ * a new test: it names its fields, reads one pragma, one `app_state` key,
+ * the version/fingerprint columns of `migration_history` and the perf store's
+ * stall rows (counts, durations, operation names), and imports nothing
  * that could reach the secrets table, the credential store, or the
  * environment. The last update check is handed in from the running updater
  * and only ever leaves here as a redacted one-line summary — never the raw
@@ -33,6 +35,7 @@
 import type Database from "better-sqlite3";
 import { checkMigrationHistory, describeMigrationHistory, SCHEMA_HEAD } from "@volli/host-core/db";
 
+import { perfSummary, type PerfStore, type PerfSummary } from "@volli/host-core/perf";
 import type { BootRecoveryReport } from "@volli/host-core/session-runtime";
 import {
   summarizeUpdateFailure,
@@ -65,6 +68,35 @@ export interface SupportInfoDeps {
   bootRecovery(): BootRecoveryReport | null;
   /** This Mac's runner (VC-895); `null` outside a Volli Cloud launch. */
   cloudRunner?(): ThisMacRunnerSnapshot | null;
+  /** This machine's perf store (VC-1092); `null` when it did not open. */
+  perfStalls?(): Pick<PerfStore, "scanStalls" | "runs"> | null;
+  /** The wall clock the stall window ends at; `Date.now` unless a test pins it. */
+  now?(): number;
+}
+
+/** The support report's stall window: the last day. */
+export const SUPPORT_PERF_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+function milliseconds(ms: number): string {
+  return `${ms.toLocaleString("en-US")} ms`;
+}
+
+/**
+ * The report's stall line (VC-1092): over the last day, how long the app ran,
+ * then per process the stall count, total and p95, and its three worst
+ * operations as `door/operation ×count total`. Counts, durations and
+ * code-owned operation names only — never a Session, a path or a message.
+ */
+export function describePerfStalls(summary: PerfSummary): string {
+  const hours = Math.round(summary.observedMs / 360_000) / 10;
+  const parts = summary.processes.map((process) => {
+    if (process.stalls === 0) return `${process.process} none`;
+    const top = process.top
+      .map((entry) => `${entry.key} ×${entry.count} ${milliseconds(entry.totalMs)}`)
+      .join(", ");
+    return `${process.process} ${process.stalls} ${process.stalls === 1 ? "stall" : "stalls"}, ${milliseconds(process.stallMs)}, p95 ${milliseconds(process.p95Ms)} (${top})`;
+  });
+  return `last 24h, ${hours}h observed: ${parts.join("; ")}`;
 }
 
 /**
@@ -158,12 +190,29 @@ export function collectSupportInfo(deps: SupportInfoDeps): SupportInfo {
 }
 
 /**
+ * The whole report: the allowlist, and the last day's stall line when the
+ * perf store is open. Asynchronous because the store reads its rows a chunk
+ * per turn of the event loop, so asking for a report never stalls main.
+ */
+export async function collectSupportReport(deps: SupportInfoDeps): Promise<SupportInfo> {
+  const info = collectSupportInfo(deps);
+  const perf = deps.perfStalls?.() ?? null;
+  if (perf === null) return info;
+  const now = deps.now?.() ?? Date.now();
+  const summary = await perfSummary(perf, now - SUPPORT_PERF_WINDOW_MS, now);
+  return { ...info, perfStalls: describePerfStalls(summary) };
+}
+
+/**
  * Registered outside `dbHandle.ok` on purpose, like the update surface: a
  * profile that will not open is exactly when About must say the report is
  * unavailable rather than losing the channel or presenting a partial report.
  */
 export function registerSupportIpcHandlers(deps: SupportInfoDeps): void {
   registerGuardedIpcHandlers(SUPPORT_IPC, {
-    "volli:support-info": () => ({ ok: true as const, info: collectSupportInfo(deps) }),
+    "volli:support-info": async () => ({
+      ok: true as const,
+      info: await collectSupportReport(deps),
+    }),
   });
 }

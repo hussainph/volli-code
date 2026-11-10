@@ -24,6 +24,8 @@ vi.mock("sonner", () => ({ toast, Toaster: () => null }));
 // These sheet tests have no persistence bridge; unrelated UI debounce must not toast.
 vi.mock("@renderer/lib/app-state-storage", () => ({
   appStateStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+  // stores/ui and stores/style register preference defaults at module scope.
+  registerSharedPreferenceDefaults: () => {},
 }));
 
 let world: HostWorld | null = null;
@@ -166,7 +168,7 @@ describe("Add a host", () => {
     expect(rows()).toEqual([
       "connect:done:Connect",
       "check:done:Check the system",
-      "install:active:Installing Volli host…",
+      "install:active:Installing Volli host",
       "start:pending:Start",
       "pair:pending:Pair",
     ]);
@@ -205,7 +207,7 @@ describe("Add a host", () => {
       log: [line("tunnel retrying"), line("tunnel up")],
       omitted: 412,
     });
-    expect(rows().at(-1)).toBe("pair:active:Pairing…");
+    expect(rows().at(-1)).toBe("pair:active:Pairing");
     await click(sheet(), "Details");
     expect(sheet().querySelector('[role="log"]')?.textContent).toBe(
       "412 earlier lines omittedtunnel retryingtunnel up",
@@ -585,7 +587,7 @@ describe("Add a host: detach and re-attach", () => {
       expect(useRemoteHostsStore.getState().addHostActivity).toMatchObject({ status: "running" });
       await emit({ kind: "view", view: flowView({ done: 4, at: "start" }) });
       await act(async () => useRemoteHostsStore.getState().openAddHost());
-      expect(rows()[3]).toContain("Starting…");
+      expect(rows()[3]).toContain("Starting");
       expect(api.calls.filter(([method]) => method === "startAdd")).toHaveLength(1);
     },
   );
@@ -647,7 +649,7 @@ describe("Add a host: detach and re-attach", () => {
     await act(async () => useRemoteHostsStore.getState().openAddHost());
     expect(api.following("flow-1")).toBe(true);
     await emit({ kind: "replay", view: flowView({ done: 3, at: "install" }), log: [], omitted: 0 });
-    expect(rows()[2]).toContain("Installing Volli host…");
+    expect(rows()[2]).toContain("Installing Volli host");
     expect(api.calls).toEqual([["startAdd", "deploy@box"]]);
   });
 
@@ -858,7 +860,7 @@ describe("Add a host: pending calls and owner replacement", () => {
       });
       button("Try again")!.click();
     });
-    expect(rows()[2]).toContain("Installing Volli host…");
+    expect(rows()[2]).toContain("Installing Volli host");
     await click(sheet(), "Details");
     expect(sheet().querySelector('[role="log"]')?.textContent).toContain("Newest event");
     await act(async () => finish());
@@ -934,7 +936,7 @@ describe("Add a host: pending calls and owner replacement", () => {
       status: "running",
     });
     await act(async () => useRemoteHostsStore.getState().openAddHost());
-    expect(rows()[2]).toContain("Installing Volli host…");
+    expect(rows()[2]).toContain("Installing Volli host");
     expect(api.calls.filter(([method]) => method === "startAdd")).toHaveLength(1);
   });
 
@@ -1002,7 +1004,7 @@ describe("Add a host: pending calls and owner replacement", () => {
           status,
         });
         await act(async () => useRemoteHostsStore.getState().openAddHost());
-        if (status === "running") expect(rows()[1]).toContain("Checking the system…");
+        if (status === "running") expect(rows()[1]).toContain("Checking the system");
         else expect(sheet().textContent).toContain("account only");
         expect(starts).toBe(0);
       } finally {
@@ -1089,7 +1091,7 @@ describe("Add a host: pending calls and owner replacement", () => {
       expect(useRemoteHostsStore.getState().addHost.open).toBe(true);
       expect(api.following("flow-2")).toBe(true);
       expect(useRemoteHostsStore.getState().addHostActivity?.name).toBe("new-box");
-      expect(rows()[2]).toContain("Installing Volli host…");
+      expect(rows()[2]).toContain("Installing Volli host");
       expect(toast.error).not.toHaveBeenCalled();
     },
   );
@@ -1195,7 +1197,7 @@ describe("Add a host: password handling, a closed sheet, and read-only hosts", (
     expect(api.following("flow-1")).toBe(true);
     await emit({ kind: "view", view: flowView({ done: 3, at: "install" }) });
     await act(async () => useRemoteHostsStore.getState().openAddHost());
-    expect(rows()[2]).toContain("Installing Volli host…");
+    expect(rows()[2]).toContain("Installing Volli host");
   });
 
   it("says nothing of a start refused after Close", async () => {
@@ -1255,7 +1257,7 @@ describe("Add a host: what each step shows", () => {
       "connect:done:Connected as deploy",
       "check:done:Ubuntu 24.04.1 LTS · x86-64 · 8 GB",
       "install:done:Volli host 1.1.0",
-      "start:active:Starting…",
+      "start:active:Starting",
       "pair:pending:Pair",
     ]);
     // The OS shows as soon as the check found it.

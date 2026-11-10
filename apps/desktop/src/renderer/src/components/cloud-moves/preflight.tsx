@@ -1,3 +1,4 @@
+import { PanelEmptyState } from "@renderer/components/ui/empty-state";
 import * as React from "react";
 import { errorMessage } from "@volli/shared";
 import type { CloudMovesClient } from "@renderer/lib/cloud-moves";
@@ -8,7 +9,15 @@ import type {
   CloudMoveExclusion,
 } from "@volli/shared";
 import { AccountPane } from "@renderer/components/settings/panes/account-pane";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import { Button } from "@renderer/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@renderer/components/ui/select";
 import { Checkbox } from "@renderer/components/ui/checkbox";
 import { DialogFooter } from "@renderer/components/ui/dialog";
 import { formatFileSize } from "@renderer/components/attachments/attachment-model";
@@ -17,7 +26,7 @@ import { useProjectsStore } from "@renderer/stores/projects";
 import { useProjectUiStore } from "@renderer/stores/project-ui";
 import { useUiStore } from "@renderer/stores/ui";
 import { toastError } from "@renderer/lib/toast";
-import { moveTime } from "./presentation";
+import { moveTime, preflightProgressLabel } from "./presentation";
 
 export function MovePreflight({
   api,
@@ -28,6 +37,7 @@ export function MovePreflight({
   snapshot: CloudMoveSnapshot;
   projectIds?: string[];
 }) {
+  const workspaceSelectId = React.useId();
   const [workspaceId, setWorkspaceId] = React.useState(
     () => snapshot.workspaces.find((item) => item.canMove)?.id ?? "",
   );
@@ -40,12 +50,16 @@ export function MovePreflight({
   const [starting, setStarting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [run, setRun] = React.useState(0);
-  // Sign-in can finish with this sheet open. A target change invalidates the dry run immediately.
   const target =
     snapshot.workspaces.find((item) => item.id === workspaceId && item.canMove)?.id ??
     snapshot.workspaces.find((item) => item.canMove)?.id ??
     null;
-  const scope = JSON.stringify([target, includeRemoved, snapshot.account?.userId ?? null, run]);
+  // A dry run reads only this Mac's projects, so only the selection and an
+  // explicit re-run start another. The Workspace and the sign-in are `start`'s
+  // to check: a sign-in finishing, a token refresh or the Workspace list
+  // reloading while a long dry run runs must never send it back to the start.
+  const selection = projectIds === undefined ? null : JSON.stringify(projectIds);
+  const scope = JSON.stringify([selection, includeRemoved, run]);
   React.useEffect(() => {
     let active = true;
     setReading(true);
@@ -53,8 +67,8 @@ export function MovePreflight({
     setError(null);
     void api
       .preflight({
-        ...(projectIds === undefined ? {} : { projectIds }),
-        workspaceId: target,
+        ...(selection === null ? {} : { projectIds: JSON.parse(selection) as string[] }),
+        workspaceId: null,
         includeRemoved,
       })
       .then((next) => {
@@ -77,7 +91,7 @@ export function MovePreflight({
     return () => {
       active = false;
     };
-  }, [api, projectIds, target, includeRemoved, scope]);
+  }, [api, selection, includeRemoved, scope]);
 
   const projects = preflight?.projects.filter((item) => selected.has(item.id)) ?? [];
   const totalEstimate = projects.some((item) => item.estimateSeconds === null)
@@ -120,23 +134,23 @@ export function MovePreflight({
         ) : (
           <div className="flex items-center justify-between gap-2">
             <span>{snapshot.account.displayName}</span>
-            <label className="flex items-center gap-2">
-              Workspace
-              <select
-                className="rounded-control border border-input bg-background px-2 py-1"
-                value={target ?? ""}
-                disabled={starting}
-                onChange={(event) => setWorkspaceId(event.target.value)}
-              >
-                {snapshot.workspaces
-                  .filter((item) => item.canMove)
-                  .map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.name}
-                    </option>
-                  ))}
-              </select>
-            </label>
+            <div className="flex items-center gap-2">
+              <label htmlFor={workspaceSelectId}>Workspace</label>
+              <Select value={target ?? ""} disabled={starting} onValueChange={setWorkspaceId}>
+                <SelectTrigger id={workspaceSelectId}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {snapshot.workspaces
+                    .filter((item) => item.canMove)
+                    .map((item) => (
+                      <SelectItem key={item.id} value={item.id}>
+                        {item.name}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
         )}
         {snapshot.unavailable !== null ? <p role="status">{snapshot.unavailable}</p> : null}
@@ -151,15 +165,20 @@ export function MovePreflight({
           </label>
         ) : null}
         {reading ? (
-          <p role="status">
-            Checking projects… The snapshot finishes even if you close this sheet.
-          </p>
+          <div role="status" className="flex flex-col gap-1">
+            <p>
+              <LoadingLabel>Checking projects</LoadingLabel>
+            </p>
+            {snapshot.preflight !== null ? (
+              <p className="text-muted-foreground">{preflightProgressLabel(snapshot.preflight)}</p>
+            ) : null}
+          </div>
         ) : null}
         {error !== null ? <p role="alert">{error}</p> : null}
         {preflight !== null && !reading ? (
           <>
             {preflight.projects.length === 0 ? (
-              <p>No local projects to move.</p>
+              <PanelEmptyState illustration="folder" title="No local projects" />
             ) : (
               <div className="flex flex-col gap-4">
                 {preflight.projects.map((project) => (
@@ -229,7 +248,7 @@ export function MovePreflight({
           Run a dry run only
         </Button>
         <Button disabled={!canStart} onClick={() => void start()}>
-          {starting ? "Starting…" : "Move"}
+          {starting ? <LoadingLabel>Starting</LoadingLabel> : "Move"}
         </Button>
       </DialogFooter>
     </>

@@ -346,6 +346,13 @@ describe("accounts.cancelDeletion", () => {
     vi.setSystemTime(1_000_000 + ACCOUNT_DELETION_GRACE_MS + 60_000);
     await expect(
       t.withIdentity(identity("lee")).mutation(api.accounts.cancelDeletion, {}),
-    ).rejects.toThrow(code("purge_started"));
+    ).rejects.toThrow(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          code: "purge_started",
+          message: expect.stringContaining("privacy@volli.app"),
+        }),
+      }),
+    );
   });
 });

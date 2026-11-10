@@ -3,3 +3,13 @@
 /guides/ticket-workspace /guides/ticket-view/ 301
 /guides/ticket-workspace/ /guides/ticket-view/ 301
 /guides/ticket-workspace.md /guides/ticket-view.md 301
+# Runner guides are unpublished while their required product features are experimental.
+/runners /guides/sessions/ 301
+/runners/ /guides/sessions/ 301
+/runners.md /guides/sessions.md 301
+/runners/linux /guides/sessions/ 301
+/runners/linux/ /guides/sessions/ 301
+/runners/linux.md /guides/sessions.md 301
+/runners/vps /guides/sessions/ 301
+/runners/vps/ /guides/sessions/ 301
+/runners/vps.md /guides/sessions.md 301

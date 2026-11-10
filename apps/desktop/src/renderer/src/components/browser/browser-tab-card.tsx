@@ -20,11 +20,9 @@
  */
 import * as React from "react";
 import { errorMessage, isBrowserTraceAction, type ActivityBrowse } from "@volli/shared";
-import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
-import { ClockCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ClockCounterClockwise";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import { ExternalIcon, HistoryIcon, CloseIcon, WarningIcon } from "@renderer/components/ui/icon";
+
 import { Spinner } from "@renderer/components/ui/spinner";
-import { WarningCircleIcon } from "@phosphor-icons/react/dist/csr/WarningCircle";
 
 import type { BrowserTabPresentation, BrowserTabState } from "../../../../ipc/contract";
 import type { BrowserApi } from "@renderer/components/browser/browser-api";
@@ -220,7 +218,7 @@ export function BrowserTabCard({
       ) : null}
       {facet.refusal !== null ? (
         <div className="flex items-start gap-1 text-destructive">
-          <WarningCircleIcon aria-hidden weight="fill" className="mt-0.5 size-3.5 shrink-0" />
+          <WarningIcon aria-hidden className="mt-0.5 size-3.5 shrink-0" />
           <span>
             Refused by <span className="font-mono">{facet.refusal}</span>
             {note !== null ? <span className="text-muted-foreground"> · {note}</span> : null}
@@ -243,13 +241,13 @@ export function BrowserTabCard({
                 } else present("tab", "open Browser Tab");
               }}
             >
-              <ArrowSquareOutIcon />
+              <ExternalIcon />
               {live.ownerSessionId === null ? "Open as tab" : "Open beside chat"}
             </Button>
           )}
           {replay === null ? null : (
             <Button size="xs" variant="ghost" onClick={replay}>
-              <ClockCounterClockwiseIcon />
+              <HistoryIcon />
               Replay
             </Button>
           )}
@@ -262,7 +260,7 @@ export function BrowserTabCard({
                 void request(host.api.close({ tabId: live.tabId }), "close Browser Tab")
               }
             >
-              <XIcon />
+              <CloseIcon />
               Close
             </Button>
           )}
@@ -304,7 +302,7 @@ function TabStatus({ live, facet }: { live: BrowserTabState | undefined; facet: 
 function PageError({ error }: { error: string }) {
   return (
     <span className="flex min-w-0 shrink-0 items-center gap-1 text-destructive" title={error}>
-      <WarningCircleIcon aria-hidden weight="fill" className="size-3.5 shrink-0" />
+      <WarningIcon aria-hidden className="size-3.5 shrink-0" />
       <span className="max-w-48 truncate">{error}</span>
     </span>
   );

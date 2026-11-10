@@ -12,8 +12,9 @@
  *   Every upload URL the spool asks for is reported (`onSigned`) as it is
  *   issued, so the engine can check, once the last one has expired, that
  *   the store holds what was last signed for each key.
- * - Drain cursors are seeded and taken back by `seedMovedSessionCursors` /
- *   `releaseMovedSessionCursors`, the runner's own store.
+ * - Drain cursors are seeded by `seedMovedSessionCursors`, the runner's own
+ *   store. The engine takes them back with every other cursor on the project
+ *   (`releaseProjectCursors`).
  *
  * Local events are read the way the exporter read them (the stored rows, as
  * JSON, not through the codec: a fact this build cannot decode moved too and
@@ -23,7 +24,7 @@
 import type Database from "better-sqlite3";
 import type { SessionAttachment, TranscriptReference } from "@volli/shared";
 
-import { releaseMovedSessionCursors, seedMovedSessionCursors } from "../cloud-runner/sqlite-stores";
+import { seedMovedSessionCursors } from "../cloud-runner/sqlite-stores";
 import { createMoveHistoryUploader } from "../cloud-store/move-history";
 import { piLogFilesOf } from "../cloud-store/pi-log-files";
 import { prepared } from "../db/prepared";
@@ -195,10 +196,6 @@ export function createMoveSessionHistory(options: MoveSessionHistoryOptions): Mo
 
     seedCursors(ownerUserId, sessions) {
       seedMovedSessionCursors(options.db, ownerUserId, sessions);
-    },
-
-    releaseCursors(ownerUserId, sessions) {
-      return releaseMovedSessionCursors(options.db, ownerUserId, sessions).kept;
     },
   };
 }

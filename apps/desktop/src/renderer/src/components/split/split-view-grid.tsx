@@ -33,11 +33,9 @@ import { cn } from "@renderer/lib/utils";
  * `.focus()` itself either — pointer-down inside an element already lands DOM
  * focus there, and moving it again would fight the surface that was clicked.
  *
- * The ring is the terminal split's exact vocabulary (`session-split-layout.tsx`)
- * because it means the same thing one scope up: `ring-primary/50` on the pane
- * whose front tab the rail is reading, `ring-border/50` on the others. It is
- * drawn only while there is more than one pane — a ring around the only pane
- * would be chrome about a choice nobody has made.
+ * Focus uses the terminal split's same quiet 2px accent edge. It is drawn
+ * only while there is more than one pane: the tab chooses the layout, and
+ * the edge names the pane receiving input without adding another tab state.
  */
 export interface SplitViewGridProps {
   view: ResolvedSplitView;
@@ -90,9 +88,9 @@ interface SplitViewNodeProps extends Omit<SplitViewGridProps, "view"> {
   paneCount: number;
 }
 
-/** Shared by the main tab bar and the plane: split the 6px grip cost evenly. */
+/** Shared by the main tab bar and the plane: split the 5px grip cost evenly. */
 export function splitFirstChildStyle(ratio: number): React.CSSProperties {
-  return { flex: `0 0 calc(${ratio * 100}% - 3px)` };
+  return { flex: `0 0 calc(${ratio * 100}% - 2.5px)` };
 }
 
 function SplitViewNodeView(props: SplitViewNodeProps) {
@@ -141,12 +139,13 @@ function SplitViewCell({
       // not "pane 1 of 1", it is the plane.
       aria-label={split ? paneCellLabel(pane, paneCount) : undefined}
       onPointerDownCapture={() => onFocusPane(pane.id)}
+      onFocusCapture={() => onFocusPane(pane.id)}
       className={cn(
         "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
         split &&
           (pane.id === focusedPaneId
-            ? "ring-1 ring-primary/50 ring-inset"
-            : "ring-1 ring-border/50 ring-inset"),
+            ? "ring-2 ring-(--accent-selected) ring-inset"
+            : "ring-1 ring-border ring-inset"),
       )}
     >
       {split ? renderStrip(pane) : null}

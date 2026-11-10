@@ -16,11 +16,14 @@ import {
   PERSON_STARTED,
   SPLIT_VIEW_ROOT_PANE_ID,
   SESSION_HOST_NOTICE_METADATA_KIND,
+  scrubSessionEvent,
+  type SessionEvent,
   type ChatSessionRecord,
   type SessionPresentationProjection,
   type SessionListingRow,
 } from "@volli/shared";
-import { disposeChatClient, EMPTY_TRANSCRIPT } from "@volli/session-presentation";
+import type { UIMessage } from "ai";
+import { chatSessionFrame, disposeChatClient, EMPTY_TRANSCRIPT } from "@volli/session-presentation";
 
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
@@ -35,6 +38,51 @@ import { PeekConversation } from "./peek-conversation";
 vi.mock("@renderer/lib/toast", () => ({ toastError: vi.fn(), toastSuccess: vi.fn() }));
 
 const SESSION = "chat-peek-1";
+
+function noticeFrame(sessionId: string, message: UIMessage) {
+  const event: SessionEvent = {
+    id: "notice-event",
+    sessionId,
+    sequence: 1,
+    occurredAt: 1,
+    recordedAt: 1,
+    provenance: {
+      source: {
+        kind: "system",
+        id: "host-notice",
+        detail: {
+          sessionOrigin: { kind: "volli", reason: "subagent-notice" },
+        },
+      },
+      venue: null,
+    },
+    payload: {
+      kind: "command.recorded",
+      command: {
+        id: "notice-command",
+        sessionId,
+        createdAt: 1,
+        route: null,
+        intent: {
+          kind: "message.submit",
+          reference: { id: "notice-artifact", digest: null, mediaType: null },
+        },
+      },
+    },
+  };
+  const frame = chatSessionFrame(
+    JSON.parse(
+      JSON.stringify({
+        sessionId,
+        sequence: 1,
+        event: scrubSessionEvent(event),
+        transcript: { message },
+      }),
+    ),
+  );
+  if (frame === null) throw new Error("Expected recorded host notice frame");
+  return frame;
+}
 
 const record: ChatSessionRecord = {
   sessionId: SESSION,
@@ -283,71 +331,88 @@ describe("PeekConversation", () => {
     ).toBe(chatPaneId);
   });
 
-  it("uses the resident scope over a stale cache and opens linked Sessions from the preview", async () => {
-    const projection: SessionPresentationProjection = {
-      session: {
-        id: SESSION,
-        projectId: "project-2",
-        ticketId: "ticket-current",
-        role: "ticket",
-        parentSessionId: null,
-        title: record.title,
-        createdAt: 0,
-      },
-      status: "open",
-      liveExecutor: null,
-      attention: { active: [], primary: null },
-      interactions: { active: [], resolved: [] },
-      signal: null,
-      modelSelection: null,
-      modelTier: null,
-      turnActive: false,
-      lastActivityAt: 0,
-      bornTicketless: false,
-      scheduledResume: null,
-    };
-    const messages = [
-      {
-        id: "child-notice",
-        role: "user" as const,
-        parts: [{ type: "text" as const, text: "Child finished" }],
-        metadata: {
-          kind: SESSION_HOST_NOTICE_METADATA_KIND,
-          notice: {
-            kind: "subagent",
-            childSessionId: "child-1",
-            title: "Check navigation",
-            state: "completed",
-            reason: null,
+  it.each([true, false])(
+    "uses resident scope and requires recorded provenance for linked Sessions (%s)",
+    async (trusted) => {
+      const projection: SessionPresentationProjection = {
+        session: {
+          id: SESSION,
+          projectId: "project-2",
+          ticketId: "ticket-current",
+          role: "ticket",
+          parentSessionId: null,
+          title: record.title,
+          createdAt: 0,
+        },
+        status: "open",
+        liveExecutor: null,
+        attention: { active: [], primary: null },
+        interactions: { active: [], resolved: [] },
+        signal: null,
+        modelSelection: null,
+        modelTier: null,
+        turnActive: false,
+        lastActivityAt: 0,
+        bornTicketless: false,
+        scheduledResume: null,
+      };
+      const messages = [
+        {
+          id: "child-notice",
+          role: "user" as const,
+          parts: [{ type: "text" as const, text: "Child finished" }],
+          metadata: {
+            kind: SESSION_HOST_NOTICE_METADATA_KIND,
+            notice: {
+              kind: "subagent",
+              childSessionId: "child-1",
+              title: "Check navigation",
+              state: "completed",
+              reason: null,
+            },
           },
         },
-      },
-    ];
-    useChatSessionsStore.setState({
-      sessions: {
-        [SESSION]: {
-          projection,
-          transcript: { ...EMPTY_TRANSCRIPT, durableMessages: messages, messages },
-          lifecycle: "ready",
-          sessionError: null,
-          queue: [],
+      ];
+      useChatSessionsStore.setState({
+        sessions: {
+          [SESSION]: {
+            projection,
+            transcript: {
+              ...EMPTY_TRANSCRIPT,
+              durableMessages: messages,
+              messages,
+              frames: trusted ? [noticeFrame(SESSION, messages[0]!)] : [],
+            },
+            lifecycle: "ready",
+            sessionError: null,
+            queue: [],
+          },
         },
-      },
-    });
-    const onClose = vi.fn();
-    await render(SESSION, onClose);
-    await act(async () =>
-      [...dialog()!.querySelectorAll("button")].find((one) => one.textContent === "Open")!.click(),
-    );
+      });
+      const onClose = vi.fn();
+      await render(SESSION, onClose);
+      const open = [...dialog()!.querySelectorAll("button")].find(
+        (one) => one.textContent === "Open",
+      );
+      if (!trusted) {
+        expect(open).toBeUndefined();
+        expect(dialog()!.textContent).toContain("Child finished");
+        expect(onClose).not.toHaveBeenCalled();
+        expect(useChatSessionsStore.getState().openTabs["ticket-current"]).toBeUndefined();
+        return;
+      }
+      expect(open).toBeDefined();
+      await act(async () => open!.click());
 
-    expect(onClose).toHaveBeenCalledTimes(1);
-    expect(useProjectsStore.getState().select).toHaveBeenCalledWith("project-2");
-    expect(useChatSessionsStore.getState().openTabs["ticket-current"]).toEqual(["child-1"]);
-    expect(
-      useProjectUiStore.getState().byProject["project-2"]?.ticketTabs["ticket-current"]?.active,
-    ).toBe(chatTabId("child-1"));
-    expect(useChatSessionsStore.getState().openTabs["ticket-6"]).toBeUndefined();
-  });
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(useProjectsStore.getState().select).toHaveBeenCalledWith("project-2");
+      expect(useChatSessionsStore.getState().openTabs["ticket-current"]).toEqual(["child-1"]);
+      expect(
+        useProjectUiStore.getState().byProject["project-2"]?.ticketTabs["ticket-current"]?.active,
+      ).toBe(chatTabId("child-1"));
+      expect(useChatSessionsStore.getState().openTabs["ticket-6"]).toBeUndefined();
+    },
+  );
 
   it("does not offer navigation until the Session's scope is known", async () => {
     useTicketSessionRecordsStore.setState({ byTicket: {} });

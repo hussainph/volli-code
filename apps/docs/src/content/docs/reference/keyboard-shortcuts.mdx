@@ -15,10 +15,13 @@ first, but Session and terminal-layout shortcuts still work inside them.
 | Shortcut | Action |
 | --- | --- |
 | `⌘K` | Open the command palette |
-| `C` | New ticket |
+| `⌘P` | Open quick open to find a file |
+| `⌘,` | Open or raise the **Settings** window |
+| `⇧⌘S` | Show or hide the project rail |
+| `C` | Open **New ticket** |
 | `⌘1` to `⌘9` | Switch to the first through ninth project in the rail |
 | `⌘B` | Toggle the sidebar |
-| `⌥⌘B` | Toggle the visible ticket or Home rail |
+| `⌥⌘B` | Toggle the visible ticket or **Home** rail |
 | `⌘T` | Start a chat Session on the visible ticket or project |
 | `⌥⌘T` | Start a terminal companion on the visible ticket or project |
 | `⌥⌘Enter` | Enter or leave terminal focus mode for the visible terminal |
@@ -35,24 +38,43 @@ in text fields, the editor, a terminal, or an open dialog. Volli also suppresses
 `⌘[` while you type, because it means outdent inside an editor.
 
 <Aside type="note">
-  `⌘K` does nothing while a terminal has focus. Terminals get first claim on
-  keystrokes so that shell and agent bindings keep working.
+  `⌘K` and `⌘P` do nothing while a terminal has focus. Terminals get first
+  claim on keystrokes so that shell and agent bindings keep working.
 </Aside>
 
-## Panes
+**Settings** opens in a separate, nonmodal window. `⌘,` raises that window
+without resetting its current page, search, or drafts. You can keep working in
+the workspace while it stays open.
 
-These shortcuts act on the tabbed view in front of you: Home or a ticket
-workspace.
+## Quick open
+
+`⌘P` searches files in the visible ticket's working copy, or the project's main
+checkout when you are outside a ticket. The index reloads each time you open it.
 
 | Shortcut | Action |
 | --- | --- |
-| `⌘\` | Split the view to the right |
-| `⇧⌘\` | Split the view down |
+| `↑` / `↓` | Select a result |
+| `Enter` | Open a preview in the focused pane |
+| `⌘Enter` | Open and pin the file |
+| `Esc` | Close quick open |
+
+You can also `⌘`-click a result to pin it.
+
+## Panes
+
+These shortcuts act on the tabbed view in front of you: **Home** or a ticket
+workspace. Splitting a full-width tab creates a group of panes; splitting an
+existing group acts on its focused pane.
+
+| Shortcut | Action |
+| --- | --- |
+| `⌘\` | Split the focused pane to the right |
+| `⇧⌘\` | Split the focused pane down |
 | `⌃⌘` + `←` / `→` / `↑` / `↓` | Move focus between panes |
 
-These shortcuts do nothing while **Settings** or the New ticket dialog is open,
-on the **Automations** or **Configure** page, or while a terminal has the whole
-canvas.
+These shortcuts do nothing inside an open dialog or menu, on the
+**Automations** page, or while a terminal has the whole canvas. The separate
+**Settings** window has no workspace panes to split.
 
 ## Board
 
@@ -62,11 +84,11 @@ canvas.
 | `Enter` | Open a focused card | A card has keyboard focus |
 | `Enter` | Add the card and keep the composer open | The inline composer is open |
 | `Esc` | Close the inline composer | The inline composer is open |
-| `⌥` (Option) | Expand the hovered column's Offered list | A card is being dragged |
+| `⌥` (Option) | Expand the hovered column's **Offered** list | A card is being dragged |
 | `1`–`9` | Choose the matching offered Automation | A card is being dragged |
 | `0` | Choose **Move only** | A card is being dragged |
 
-During a drag, you can use the board's compact Offered list without holding
+During a drag, you can use the board's compact **Offered** list without holding
 Option. Holding it makes the rows larger, so they are easier to hit. The
 enabled, armed Automation is pinned to `1`; see [Automations](/guides/automations/)
 for the full move behavior.
@@ -87,11 +109,11 @@ for the full move behavior.
 | `Esc` | Cancel an in-progress comment edit | You're editing a comment |
 
 `Esc` won't close the ticket while a terminal has focus. It goes to the
-terminal instead, where it usually means "interrupt".
+terminal instead.
 
 ## Session lists
 
-These work in the sidebar's Session lists and a ticket's **Now → Sessions**.
+Peek shortcuts work in the sidebar's Session lists and a ticket's **Now → Sessions**.
 
 | Shortcut | Action | When |
 | --- | --- | --- |
@@ -100,6 +122,17 @@ These work in the sidebar's Session lists and a ticket's **Now → Sessions**.
 | `U` | Mark the focused Session read or unread | A Session row has focus |
 | `⌘.` | Reply from the card on screen | A peek card is open |
 | `Esc` | Leave the reply field, then close the card | A peek card is open |
+
+The sidebar also supports row selection and ticket folders:
+
+| Shortcut | Action |
+| --- | --- |
+| `⌘`-click | Toggle a row in the selection without opening it |
+| `⇧`-click | Select a range of rows |
+| `⌘A` | Select all currently listed rows while focus is in the Session list |
+| `Esc` | Clear the row selection before closing a peek card |
+| `→` / `←` | Expand or collapse the focused ticket folder |
+| `←` | Move from a Session inside a ticket folder to that folder |
 
 See [Peek at a Session](/guides/sessions/#peek-at-a-session-without-opening-it).
 
@@ -169,7 +202,7 @@ on the page.
 | `⌘1` to `⌘9` | Switch to the first through ninth project in the rail |
 | `⌃⌘` + `←` / `→` / `↑` / `↓` | Move focus between panes |
 | `⌘W` | Close this Browser Tab |
-| `⌘L` | Leave the page and select this tab's Address field |
+| `⌘L` | Leave the page and select this tab's **Address** field |
 
 Every other key goes to the page, including `Esc`, `Tab`, `⌘[` and `⌘]`, so
 the page's own dialogs, forms and editors keep working.

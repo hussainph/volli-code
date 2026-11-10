@@ -39,7 +39,7 @@ export function ShellOutputDialog({ shellId, api, onClose }: ShellOutputDialogPr
     >
       <DialogContent
         data-shell-output-dialog=""
-        className="flex h-[70vh] max-w-3xl flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl"
+        className="flex h-[70vh] max-h-none max-w-3xl flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl"
       >
         {/* A title row of the dialog's own, tall enough that the content's
             close button (top-4 right-4) lands inside it rather than over the
