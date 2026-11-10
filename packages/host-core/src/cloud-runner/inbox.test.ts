@@ -404,6 +404,30 @@ describe("the inbox worker", () => {
     await expect(worker.renewInFlight()).resolves.toBeUndefined();
   });
 
+  it("does not execute a job twice when a later claim repeats an in-flight job", async () => {
+    const inbox = fakeInbox([[job("j1")], [job("j1")]]);
+    const pending = Promise.withResolvers<JobOutcome>();
+    const execute = vi.fn(() => pending.promise);
+    const worker = createInboxWorker({
+      backend: inbox.backend,
+      journal: memoryJournal().store,
+      bootId: BOOT,
+      ...manualTimers(),
+    });
+    worker.register("workingCopy.refresh", execute);
+    await worker.start();
+    expect(worker.running).toBe(1);
+    await worker.claimNow();
+    expect(inbox.backend.claim).toHaveBeenCalledTimes(2);
+    expect(execute).toHaveBeenCalledOnce();
+    expect(worker.running).toBe(1);
+    pending.resolve(DONE);
+    await flush();
+    expect(inbox.completes).toEqual([{ jobId: "j1", outcome: DONE, attempt: 1 }]);
+    expect(worker.running).toBe(0);
+    worker.stop();
+  });
+
   it("claims only what it has room for, one claim at a time, and not while stopped or full", async () => {
     const inbox = fakeInbox();
     let holds: ((o: JobOutcome) => void)[] = [];
