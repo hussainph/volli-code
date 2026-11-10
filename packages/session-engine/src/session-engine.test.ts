@@ -1,4 +1,4 @@
-import { describe, expect, expectTypeOf, it } from "vite-plus/test";
+import { describe, expect, expectTypeOf, it, vi } from "vite-plus/test";
 import {
   SessionEngineCommandConflictError,
   SessionEngineConflictError,
@@ -7,6 +7,7 @@ import {
 } from "./index";
 import {
   CHECKPOINT_REFRESH_EVENTS,
+  HOT_CHECKPOINT_LIMIT,
   SESSION_LISTING_CACHE_LIMIT,
   SESSION_LISTING_FOLD_CHUNK,
 } from "./session-engine";
@@ -28,6 +29,7 @@ import type {
   SessionLedgerTransaction,
   SessionObservation,
   SessionProjectionCheckpoint,
+  SessionProjection,
   SessionProjectionEvent,
   SessionUsage,
   UnstampedCommandReceipt,
@@ -66,6 +68,13 @@ function createRequest(commandId = "command-create") {
     title: "Durable Session",
     provenance: userProvenance,
   };
+}
+
+/** A full projection as a listing row carries it: without its command history (VC-848). */
+function withoutHistory(projection: SessionProjection | null) {
+  if (projection === null) return null;
+  const { commands: _commands, receipts: _receipts, ...row } = projection;
+  return row;
 }
 
 function attachment(sessionId: string, id = "attachment-1"): SessionAttachment {
@@ -2029,6 +2038,265 @@ describe("SessionEngine creation and explicit commands", () => {
     });
   });
 
+  describe("hot checkpoints for Sessions recording facts (VC-1076)", () => {
+    function hotComposition() {
+      const stored = createInMemorySessionLedger();
+      const rowReads: string[] = [];
+      let rollBackNext = false;
+      let ticketDeleted = false;
+      let enclosed = false;
+      const ledger: SessionLedger = {
+        transaction: (work) =>
+          stored.transaction((transaction) => {
+            const value = work(
+              new Proxy(transaction, {
+                get(target, property, receiver) {
+                  if (property === "enclosed") return enclosed;
+                  if (property === "getProjectionCheckpoint") {
+                    return (sessionId: string) => {
+                      rowReads.push(sessionId);
+                      return transaction.getProjectionCheckpoint(sessionId);
+                    };
+                  }
+                  if (property === "getSession") {
+                    return (sessionId: string) => {
+                      const session = transaction.getSession(sessionId);
+                      return session && ticketDeleted ? { ...session, ticketId: null } : session;
+                    };
+                  }
+                  return Reflect.get(target, property, receiver);
+                },
+              }),
+            );
+            if (rollBackNext) {
+              rollBackNext = false;
+              throw new Error("rolled back");
+            }
+            return value;
+          }),
+      };
+      const plane = createSessionEngine({ ledger, clock: { now: () => 100 }, ids: ids() });
+      return {
+        plane,
+        ledger,
+        rowReads,
+        rollBack: () => {
+          rollBackNext = true;
+        },
+        deleteTicket: () => {
+          ticketDeleted = true;
+        },
+        enclose: (value: boolean) => {
+          enclosed = value;
+        },
+      };
+    }
+
+    async function liveSession(plane: ReturnType<typeof createSessionEngine>, commandId: string) {
+      const { session } = await plane.createSession(createRequest(commandId));
+      const opened = attachment(session.id, `attachment-${commandId}`);
+      await plane.observe({
+        id: `observation-${commandId}-opened`,
+        sessionId: session.id,
+        occurredAt: 200,
+        provenance: adapterProvenance,
+        kind: "attachment.opened",
+        attachment: opened,
+      });
+      let index = 0;
+      const fact = () =>
+        plane.observe({
+          id: `observation-${commandId}-${index}`,
+          sessionId: session.id,
+          occurredAt: 300 + index,
+          provenance: adapterProvenance,
+          attachmentId: opened.id,
+          kind: "attachment.native_referenced",
+          native: { id: `native-${index++}`, detail: null },
+        });
+      return { session, fact };
+    }
+
+    it("records facts without re-reading the checkpoint row, and folds to the same answer", async () => {
+      const { plane, ledger, rowReads } = hotComposition();
+      const { session, fact } = await liveSession(plane, "hot-facts");
+      rowReads.length = 0;
+      // Past a refresh window, so the durable row is rewritten under the cache.
+      for (let index = 0; index < CHECKPOINT_REFRESH_EVENTS + 10; index += 1) await fact();
+      expect(rowReads).toEqual([]);
+
+      const hot = await plane.getSession({ sessionId: session.id });
+      expect(rowReads).toEqual([]);
+      // A fresh engine reads the durable row and log; the answers agree.
+      const cold = createSessionEngine({ ledger, clock: { now: () => 100 }, ids: ids() });
+      expect(await cold.getSession({ sessionId: session.id })).toEqual(hot);
+      expect(
+        (await cold.getProjectionCheckpoint({ sessionId: session.id }))?.throughSequence,
+      ).toBeGreaterThanOrEqual(CHECKPOINT_REFRESH_EVENTS);
+    });
+
+    it("hands getSession a copy the cache does not share", async () => {
+      const { plane } = hotComposition();
+      const { session, fact } = await liveSession(plane, "hot-copy");
+      await fact();
+      const first = await plane.getSession({ sessionId: session.id });
+      (first as unknown as { attachments: unknown[] }).attachments.length = 0;
+      (first!.session as unknown as { title: string | null }).title = "mutated";
+      const second = await plane.getSession({ sessionId: session.id });
+      expect(second?.attachments).toHaveLength(1);
+      expect(second?.session.title).toBe("Durable Session");
+    });
+
+    it("keeps nothing hot from a fact whose transaction rolled back", async () => {
+      const { plane, rowReads, rollBack } = hotComposition();
+      const { session, fact } = await liveSession(plane, "hot-rollback");
+      await fact();
+      rollBack();
+      await expect(fact()).rejects.toThrow("rolled back");
+      rowReads.length = 0;
+      await fact();
+      // The cache held the head before the rolled-back fact, which is still
+      // the head, so it answered; the rolled-back fact is nowhere.
+      expect(rowReads).toEqual([]);
+      const events = await plane.listEvents({ sessionId: session.id });
+      expect(events.map((event) => event.sequence)).toEqual(events.map((_e, index) => index + 1));
+      expect((await plane.getSession({ sessionId: session.id }))?.liveExecutor?.native).toEqual({
+        id: "native-2",
+        detail: null,
+      });
+    });
+
+    // An enclosed transaction settles before its caller's outer transaction
+    // decides, so nothing it read or wrote may be remembered as committed
+    // (VC-1098). host-core's SQLite suite rolls a real outer transaction back.
+    it("remembers nothing from an enclosed transaction", async () => {
+      const { plane, rowReads, enclose } = hotComposition();
+      const { session, fact } = await liveSession(plane, "hot-enclosed");
+      await fact();
+      enclose(true);
+      await fact();
+      enclose(false);
+      rowReads.length = 0;
+      await fact();
+      // The enclosed fact moved the head past the hot entry and left none of
+      // its own, so this fact had to read the durable row.
+      expect(rowReads).toEqual([session.id]);
+
+      // Writing the row drops the hot entry without moving the head, so a
+      // listing fold must read the row, and a kept listing fold would answer.
+      const events = await plane.listEvents({ sessionId: session.id });
+      await plane.saveProjectionCheckpoint(createSessionProjectionCheckpoint(session, events));
+      enclose(true);
+      await plane.listSessions({ projectId: "project-1", scope: "all" });
+      enclose(false);
+      rowReads.length = 0;
+      // The enclosed listing kept no fold, so this one folds again.
+      const [row] = await plane.listSessions({ projectId: "project-1", scope: "all" });
+      expect(rowReads).toEqual([session.id]);
+      expect(row).toEqual(withoutHistory(await plane.getSession({ sessionId: session.id })));
+    });
+
+    it("misses when another verb appended, the base row moved, or the row was replaced", async () => {
+      const { plane, rowReads, deleteTicket } = hotComposition();
+      const { session, fact } = await liveSession(plane, "hot-miss");
+      await fact();
+
+      await plane.submit({
+        commandId: "command-hot-retitle",
+        sessionId: session.id,
+        intent: { kind: "session.retitle", title: "Retitled" },
+        provenance: userProvenance,
+      });
+      rowReads.length = 0;
+      await fact();
+      expect(rowReads).toEqual([session.id]);
+      await expect(plane.getSession({ sessionId: session.id })).resolves.toMatchObject({
+        session: { title: "Retitled" },
+      });
+
+      deleteTicket();
+      rowReads.length = 0;
+      await expect(plane.getSession({ sessionId: session.id })).resolves.toMatchObject({
+        session: { ticketId: null },
+      });
+      expect(rowReads).toEqual([session.id]);
+
+      await fact();
+      rowReads.length = 0;
+      const events = await plane.listEvents({ sessionId: session.id });
+      await plane.saveProjectionCheckpoint(createSessionProjectionCheckpoint(session, events));
+      await fact();
+      expect(rowReads).toEqual([session.id]);
+    });
+
+    it("never lets a commit that resolves late replace a newer hot checkpoint", async () => {
+      const stored = createInMemorySessionLedger();
+      const rowReads: string[] = [];
+      let delayNext = false;
+      const ledger: SessionLedger = {
+        transaction: (work) => {
+          const delayed = delayNext;
+          delayNext = false;
+          const settled = stored.transaction((transaction) =>
+            work(
+              new Proxy(transaction, {
+                get(target, property, receiver) {
+                  if (property !== "getProjectionCheckpoint") {
+                    return Reflect.get(target, property, receiver);
+                  }
+                  return (sessionId: string) => {
+                    rowReads.push(sessionId);
+                    return transaction.getProjectionCheckpoint(sessionId);
+                  };
+                },
+              }),
+            ),
+          );
+          return delayed
+            ? settled.then((value) => new Promise((resolve) => setTimeout(() => resolve(value), 5)))
+            : settled;
+        },
+      };
+      const plane = createSessionEngine({ ledger, clock: { now: () => 100 }, ids: ids() });
+      const { session, fact } = await liveSession(plane, "hot-late");
+      delayNext = true;
+      const late = fact();
+      await fact();
+      await late;
+      rowReads.length = 0;
+      await fact();
+      expect(rowReads).toEqual([]);
+      const events = await plane.listEvents({ sessionId: session.id });
+      expect(await plane.getSession({ sessionId: session.id })).toEqual(
+        createSessionProjectionCheckpoint(session, events).projection,
+      );
+    });
+
+    it("keeps at most HOT_CHECKPOINT_LIMIT Sessions hot, evicting the least recently written", async () => {
+      const { plane, rowReads } = hotComposition();
+      const live: Awaited<ReturnType<typeof liveSession>>[] = [];
+      for (let index = 0; index <= HOT_CHECKPOINT_LIMIT; index += 1) {
+        live.push(await liveSession(plane, `hot-bound-${index}`));
+      }
+      rowReads.length = 0;
+      await live.at(-1)!.fact();
+      expect(rowReads).toEqual([]);
+      await live[0]!.fact();
+      expect(rowReads).toEqual([live[0]!.session.id]);
+    });
+
+    it("lets a listing fold a hot Session without reading its row", async () => {
+      const { plane, rowReads } = hotComposition();
+      const { session, fact } = await liveSession(plane, "hot-listing");
+      await fact();
+      rowReads.length = 0;
+      const [row] = await plane.listSessions({ projectId: "project-1", scope: "all" });
+      expect(rowReads).toEqual([]);
+      expect(row).toEqual(withoutHistory(await plane.getSession({ sessionId: session.id })));
+      expect(Object.isFrozen(row)).toBe(true);
+    });
+  });
+
   it("lists deep Session projections through explicit project scopes in stable descending order", async () => {
     const ledger = createInMemorySessionLedger();
     const plane = createSessionEngine({ ledger, clock: { now: () => 100 }, ids: ids() });
@@ -2066,15 +2334,22 @@ describe("SessionEngine creation and explicit commands", () => {
     ]);
     const listedLater = all.find(({ session: listed }) => listed.id === ticketLater.session.id);
     expect(listedLater?.session.title).toBe("Projected title");
+    // A listing row leaves the command history out (VC-848); the Session's own
+    // read still carries it.
+    expect(listedLater).not.toHaveProperty("commands");
+    expect(listedLater).not.toHaveProperty("receipts");
+    const later = await plane.getSession({ sessionId: ticketLater.session.id });
+    // Everything else on the row is the Session's own projection, field for field.
+    expect(listedLater).toEqual(withoutHistory(later));
     expect(
-      listedLater?.commands.some(
+      later?.commands.some(
         (sessionCommand) =>
           sessionCommand.intent.kind === "session.retitle" &&
           sessionCommand.intent.title === "Projected title",
       ),
     ).toBe(true);
     expect(
-      listedLater?.receipts.some(
+      later?.receipts.some(
         (receipt) => receipt.status === "completed" && receipt.result.kind === "session.retitled",
       ),
     ).toBe(true);
@@ -4000,6 +4275,24 @@ function metered(overrides: Partial<SessionUsage> = {}): SessionUsage {
 }
 
 describe("reportUsage", () => {
+  it("uses a storage-owned report read without opening a transaction on the caller", async () => {
+    const { ledger, plane } = composition();
+    const query = { scope: { kind: "all" } as const, groupBy: "model" as const };
+    const report = await plane.reportUsage(query);
+    const reportUsage = vi.fn(async () => report);
+    const transaction = vi.spyOn(ledger, "transaction");
+    const engine = createSessionEngine({
+      ledger: { transaction: ledger.transaction.bind(ledger), reportUsage },
+      clock: { now: () => 0 },
+      ids: ids(),
+    });
+    expect(await engine.reportUsage(query)).toBe(report);
+    expect(reportUsage).toHaveBeenCalledExactlyOnceWith(query);
+    expect(transaction).not.toHaveBeenCalled();
+    reportUsage.mockRejectedValueOnce(new Error("reader failed"));
+    await expect(engine.reportUsage(query)).rejects.toThrow("reader failed");
+  });
+
   /** A Session in a named project/ticket, with one metered operation on it. */
   async function spend(
     plane: ReturnType<typeof createSessionEngine>,
@@ -4422,6 +4715,30 @@ describe("listSessions over a project roster (VC-388)", () => {
     },
   );
 
+  it(
+    "sizes point-listing retention from a metadata-only whole-project count",
+    { timeout: 120_000 },
+    async () => {
+      const { plane, folded } = foldWatchingComposition();
+      const sessions: Session[] = [];
+      for (let index = 0; index <= SESSION_LISTING_CACHE_LIMIT; index += 1) {
+        sessions.push(
+          (await plane.createSession(createRequest(`counted-roster-${index}`))).session,
+        );
+      }
+      folded.length = 0;
+      expect(await plane.countSessions({ projectId: "project-1", scope: "all" })).toBe(
+        sessions.length,
+      );
+      expect(folded).toEqual([]);
+      for (const session of sessions) await plane.getSessionListing({ sessionId: session.id });
+      expect(folded).toHaveLength(sessions.length);
+      folded.length = 0;
+      for (const session of sessions) await plane.getSessionListing({ sessionId: session.id });
+      expect(folded).toEqual([]);
+    },
+  );
+
   /**
    * The `volli session list` shape: every project listed at once, each roster
    * under the floor and their sum over it. The bound is the SUM of the
@@ -4687,7 +5004,8 @@ function interningComposition() {
   };
   let now = 100;
   const plane = createSessionEngine({ ledger, clock: { now: () => now++ }, ids: ids() });
-  return { plane, interned };
+  const relaunch = () => createSessionEngine({ ledger, clock: { now: () => now++ }, ids: ids() });
+  return { plane, interned, relaunch };
 }
 
 /**
@@ -4702,6 +5020,21 @@ function interningComposition() {
  * still has to hold for code which gets past the type (`any`, a structured
  * clone across an RPC seam, plain JavaScript).
  */
+/** One structured attachment, so a listed row holds an object inside an array. */
+async function openAttachment(
+  plane: ReturnType<typeof createSessionEngine>,
+  sessionId: string,
+): Promise<void> {
+  await plane.observe({
+    id: `observation-${sessionId}-opened`,
+    sessionId,
+    occurredAt: 200,
+    provenance: adapterProvenance,
+    kind: "attachment.opened",
+    attachment: attachment(sessionId),
+  });
+}
+
 describe("listSessions cached projections are frozen (VC-393)", () => {
   it("throws when a caller mutates a top-level field of a returned row", async () => {
     const { plane } = composition();
@@ -4717,13 +5050,14 @@ describe("listSessions cached projections are frozen (VC-393)", () => {
 
   it("throws when a caller mutates a nested object or array of a returned row", async () => {
     const { plane } = composition();
-    await plane.createSession(createRequest("command-freeze-nested"));
+    const created = await plane.createSession(createRequest("command-freeze-nested"));
+    await openAttachment(plane, created.session.id);
 
     const [row] = await plane.listSessions({ projectId: "project-1", scope: "all" });
 
     expect(() => {
       // @ts-expect-error -- a nested array.
-      row.commands.push(row.commands[0]);
+      row.attachments.push(row.attachments[0]);
     }).toThrow(TypeError);
     // The nested OBJECT is frozen too, not merely the array it holds: a
     // container that recursed into its children but skipped itself would pass
@@ -4747,26 +5081,29 @@ describe("listSessions cached projections are frozen (VC-393)", () => {
    */
   it("throws when a caller mutates an object inside an array of a returned row", async () => {
     const { plane } = composition();
-    await plane.createSession(createRequest("command-freeze-element"));
+    const created = await plane.createSession(createRequest("command-freeze-element"));
+    await openAttachment(plane, created.session.id);
 
     const [row] = await plane.listSessions({ projectId: "project-1", scope: "all" });
 
-    // The create wrote a real command, so this element is populated data
+    // The attach wrote a real attachment, so this element is populated data
     // rather than an empty-array technicality.
-    expect(row.commands).toHaveLength(1);
+    expect(row.attachments).toHaveLength(1);
+    const [opened] = row.attachments;
     expect(() => {
-      // @ts-expect-error -- an element of a nested array.
-      row.commands[0].id = "rewritten";
+      // An element of a nested array.
+      (opened as { id: string }).id = "rewritten";
     }).toThrow(TypeError);
-    // Deeper than the `readonly` modifiers reach: a command's INTENT has
-    // mutable fields, so from here down the runtime freeze is the only guard
-    // left, and it has to hold all the way to the leaves.
-    expect(Object.isFrozen(row.commands[0].intent)).toBe(true);
+    // Deeper than the `readonly` modifiers reach: an attachment's native
+    // DETAIL is an open record, so from here down the runtime freeze is the
+    // only guard left, and it has to hold all the way to the leaves.
+    const detail = opened.native?.detail as Record<string, unknown>;
+    expect(Object.isFrozen(detail)).toBe(true);
     expect(() => {
-      row.commands[0].intent.kind = "session.archive";
+      detail.native = false;
     }).toThrow(TypeError);
-    expect(row.commands[0].id).toBe("command-freeze-element");
-    expect(row.commands[0].intent.kind).toBe("session.create");
+    expect(opened.id).toBe("attachment-1");
+    expect(detail.native).toBe(true);
   });
 
   it("keeps serving the original values after a rejected mutation attempt", async () => {
@@ -4827,24 +5164,29 @@ describe("listSessions cached projections are frozen (VC-393)", () => {
    * a copy so that it cannot.
    */
   it("freezes nothing the ledger owns, so a ledger that caches its reads is safe", async () => {
-    const { plane, interned } = interningComposition();
-    await plane.createSession(createRequest("command-freeze-contagion"));
+    const { plane, interned, relaunch } = interningComposition();
+    const created = await plane.createSession(createRequest("command-freeze-contagion"));
+    await openAttachment(plane, created.session.id);
 
-    const [row] = await plane.listSessions({ projectId: "project-1", scope: "all" });
+    // A fresh engine, so the row is folded from the ledger's events rather
+    // than from the checkpoint the attach left hot (VC-1076).
+    const [row] = await relaunch().listSessions({ projectId: "project-1", scope: "all" });
     expect(Object.isFrozen(row)).toBe(true);
 
     const recorded = [...interned.values()].find(
-      (event) => event.payload.kind === "command.recorded",
+      (event) => event.payload.kind === "attachment.opened",
     );
-    expect(recorded?.payload.kind).toBe("command.recorded");
-    const ledgerCommand =
-      recorded?.payload.kind === "command.recorded" ? recorded.payload.command : undefined;
+    expect(recorded?.payload.kind).toBe("attachment.opened");
+    const ledgerNative =
+      recorded?.payload.kind === "attachment.opened"
+        ? recorded.payload.attachment.native
+        : undefined;
 
-    // The row reports the same command, by value...
-    expect(row.commands[0]).toEqual(ledgerCommand);
+    // The row reports the same native reference, by value...
+    expect(row.attachments[0]?.native).toEqual(ledgerNative);
     // ...but does not hold the ledger's object, and left it untouched.
-    expect(row.commands[0]).not.toBe(ledgerCommand);
-    expect(Object.isFrozen(ledgerCommand)).toBe(false);
+    expect(row.attachments[0]?.native).not.toBe(ledgerNative);
+    expect(Object.isFrozen(ledgerNative)).toBe(false);
     for (const event of interned.values()) {
       expect(Object.isFrozen(event)).toBe(false);
       expect(Object.isFrozen(event.payload)).toBe(false);
@@ -4921,6 +5263,54 @@ describe("listSessions cached projections are frozen (VC-393)", () => {
     // ...and then goes quiet again while the new entry stands.
     await expect(plane.listSessions(query)).resolves.toHaveLength(1);
     expect(reported.length).toBe(beforeRefold + 1);
+  });
+});
+
+describe("getSessionListing: one Session's listing row (VC-1101)", () => {
+  it("can build the shared listing cache without cold-path checkpoint writes", async () => {
+    const { plane, ledger } = composition();
+    const { session } = await plane.createSession(createRequest("read-only-listing"));
+    const query = { sessionId: session.id, persistCheckpoint: false };
+    expect(await ledger.transaction((tx) => tx.getProjectionCheckpoint(session.id))).toBeNull();
+    const first = await plane.getSessionListing(query);
+    expect(first?.session.id).toBe(session.id);
+    expect(await plane.getSessionListing(query)).toBe(first);
+    expect(Object.isFrozen(first)).toBe(true);
+    expect(await ledger.transaction((tx) => tx.getProjectionCheckpoint(session.id))).toBeNull();
+  });
+
+  it("answers the row a listing folds, from the same cache, until the log moves", async () => {
+    const { plane } = composition();
+    const created = await plane.createSession(createRequest("command-one-row"));
+    const query = { sessionId: created.session.id };
+
+    const one = await plane.getSessionListing(query);
+    const [listed] = await plane.listSessions({ projectId: "project-1", scope: "all" });
+    // The SAME shared, frozen object a listing hands out: one fold, one cache.
+    expect(listed).toBe(one);
+    expect(Object.isFrozen(one)).toBe(true);
+    // No command or receipt history: the listing shape, not getSession's.
+    expect(one).not.toHaveProperty("commands");
+    expect(one).not.toHaveProperty("receipts");
+    // And the row folds the same state getSession does.
+    const { commands: _commands, receipts: _receipts, ...full } = (await plane.getSession(query))!;
+    expect(one).toEqual(full);
+    await expect(plane.getSessionListing(query)).resolves.toBe(one);
+
+    await plane.submit({
+      commandId: "command-one-row-retitle",
+      sessionId: created.session.id,
+      intent: { kind: "session.retitle", title: "Moved on" },
+      provenance: userProvenance,
+    });
+    const moved = await plane.getSessionListing(query);
+    expect(moved).not.toBe(one);
+    expect(moved?.session.title).toBe("Moved on");
+  });
+
+  it("answers null for a Session the ledger does not have", async () => {
+    const { plane } = composition();
+    await expect(plane.getSessionListing({ sessionId: "never-minted" })).resolves.toBeNull();
   });
 });
 

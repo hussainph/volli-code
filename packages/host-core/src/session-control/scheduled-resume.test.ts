@@ -19,7 +19,11 @@ import { pendingScheduledResume, scheduledResumeFireAt, type SessionCommand } fr
 import { describe, expect, it } from "vite-plus/test";
 
 import type { NotificationRequest } from "@volli/shared";
-import { createScheduledResumeHost, SCHEDULED_RESUME_TICK_MS } from "./scheduled-resume";
+import {
+  createScheduledResumeHost,
+  SCHEDULED_RESUME_TICK_MS,
+  ticketSessionProjections,
+} from "./scheduled-resume";
 import {
   createInMemorySessionLedger,
   createInMemoryTranscriptArtifactStore,
@@ -170,8 +174,7 @@ function host(
   const resumeHost = createScheduledResumeHost({
     candidates,
     projection: async (sessionId) => (await w.runtime.projection({ sessionId })).projection,
-    ticketSessions: ({ projectId, ticketId }) =>
-      w.engine.listSessions({ projectId, scope: "ticket", ticketId }),
+    ticketSessions: (query) => ticketSessionProjections(w.engine, query),
     command,
     notify: (request) => notifications.push(request),
     now: () => w.clock.now,

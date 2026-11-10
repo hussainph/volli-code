@@ -47,6 +47,7 @@ import {
   type TranscriptArtifactStore,
 } from "@volli/session-engine";
 import type { TranscriptReference } from "@volli/shared";
+import { withMainSpan } from "../log/context";
 
 const compress = promisify(zstdCompress);
 const decompress = promisify(zstdDecompress);
@@ -81,7 +82,14 @@ export class SpoolTranscriptArtifactStore implements TranscriptArtifactStore {
     this.#directory = directory;
   }
 
-  async write(artifact: SessionTranscriptArtifact): Promise<TranscriptReference> {
+  /** Its encoding and digest run on main before the first await: timed (VC-1090). */
+  write(artifact: SessionTranscriptArtifact): Promise<TranscriptReference> {
+    return withMainSpan({ door: "runtime", operation: "transcript-artifact" }, () =>
+      this.#write(artifact),
+    );
+  }
+
+  async #write(artifact: SessionTranscriptArtifact): Promise<TranscriptReference> {
     assertArtifact(artifact);
     const bytes = Buffer.from(canonicalJson(artifact), "utf8");
     const id = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;

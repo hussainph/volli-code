@@ -1006,7 +1006,7 @@ describe("compactSession", () => {
     expect(seen[0]?.["x-opencode-session"]).toBeUndefined();
   });
 
-  it("sends no session header when the caller supplies no session id", async () => {
+  it("uses Pi's fresh summary routing id when the caller supplies no stable session id", async () => {
     const GO_PROVIDER = "opencode-go";
     const GO_MODEL = "go-model";
     const seen: Array<Record<string, string> | undefined> = [];
@@ -1043,6 +1043,10 @@ describe("compactSession", () => {
 
     expect(outcome.kind).toBe("compacted");
     expect(seen).toHaveLength(1);
-    expect(seen[0]?.["x-opencode-session"]).toBeUndefined();
+    // Pi 1.4 applies routing headers to Models requests too. The retained
+    // summarizer creates a fresh request id; no durable Session id is invented.
+    expect(seen[0]?.["x-opencode-session"]).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+    );
   });
 });

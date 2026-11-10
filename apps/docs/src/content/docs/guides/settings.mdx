@@ -1,65 +1,79 @@
 ---
 title: Settings and configuration
-description: Find app-wide preferences in Settings and project-specific agent and worktree controls in Configure.
+description: Find app-wide preferences, shared agent tools, and project overrides in Volli's separate Settings window.
 sidebar:
   label: Settings
 ---
 
-**Settings** applies across the app. **Configure** belongs to the selected
-project. Saved Automation records and their **Automatic triggers** switches live
-on the [Automations](/guides/automations/) page.
+Open **Settings** from the sidebar or press `⌘,`. Settings opens in a separate,
+nonmodal window, so you can keep working in your project while it stays open.
+Pressing `⌘,` again brings that window forward.
+
+Choose **All projects** for app-wide preferences. Choose the project row below
+it for that project's overrides. **Switch project** changes which project you
+configure without switching the project in your main window. Use **Search
+settings** to find a page or control across both scopes.
 
 ## Settings
 
-Open **Settings** from the sidebar's gear control.
+Under **All projects**, the pages cover these controls:
 
 | Page | Controls |
 | --- | --- |
-| **General** | Project switcher and sidebar visibility |
-| **Appearance** | App, editor, and terminal appearance; display zoom and diff layout |
-| **Notifications** | Native notifications for input, pull requests, cleanup, and updates |
-| **Models** | Provider access, model visibility, defaults, reasoning, and automatic compaction |
-| **Web Search** | Search provider and its connection settings |
-| **Integrations** | External editor and terminal choices, including **Ask every time** |
-| **Storage** | Retention, leftover processes, build artifacts, logs, worktrees, and data export |
-| **Telemetry** | Optional agent telemetry to a collector you specify |
+| **General** | **Zoom**, **Diff layout**, and **Show cost and token usage** |
+| **Appearance** | Canvas, light/dark appearance, **Style**, **Motion**, and terminal fonts and configuration |
+| **Notifications** | Native notifications for input, merged pull requests, reclaimed worktrees, and updates |
+| **Skills** | Project and personal Skill inventory; choose an **Activation project** to set its Skill modes |
+| **MCP Servers** | Server connections and selected tools shared across projects on this Mac |
+| **Models** | Provider sign-in, default models and reasoning, and model visibility in pickers |
+| **Agents** | Decision model, automatic model choice, automatic compaction, and Code Mode |
+| **Web Search** | Search providers and their credentials or instance address |
+| **Integrations** | External editor and terminal choices |
+| **Storage** | Worktree retention, cleanup, leftover processes, and local backup and restore |
+| **Privacy & data** | Optional agent telemetry, database location, and JSON data export |
 | **Updates** | Installed version, update channel, and update checks |
-| **About** | Installation, CLI, and terminal-companion health checks; support report |
+| **About** | Version, licence, **Diagnostics**, and **Copy report…** |
 
-Follow [Models and usage](/guides/models/), [Theming](/guides/theming/), or
-[Manage local storage](/guides/storage/) for those tasks. Subscription usage
-windows appear in the usage-limits popover beside the `⌘K` search, not on the
-**Models** page.
+Follow [Models and usage](/guides/models/), [Code Mode](/guides/code-mode/),
+[Theming](/guides/theming/), or [Manage local storage](/guides/storage/) for
+those tasks. Subscription usage windows appear in **Usage limits** beside
+`⌘K`, outside Settings.
 
 ## Configure
 
-Select your project, then open **Configure**.
+**Configure** for a project opens that project's scope in the same Settings
+window. You can also select the project directly in Settings.
 
 | Page | Controls |
 | --- | --- |
-| **Skills** | Available Skills and their prompt budget |
-| **Commands** | Project slash-command templates |
-| **MCP Servers** | Server connections and tools offered to new Sessions |
+| **Overview** | Review and reset the project's global overrides |
+| **Commands** | Project and personal slash-command templates |
 | **Secrets** | Supply, replace, and revoke project credentials |
-| **Sessions** | Project Session defaults, and which instruction files the repository has |
-| **Appearance** | Project overrides for the app, editor, and terminal |
-| **Worktrees** | Base branch and setup command for new ticket worktrees |
+| **Sessions** | Chat model and decision-model overrides; inspect repository instruction files |
+| **Appearance** | Project appearance, canvas, style, and terminal overrides |
+| **Worktrees** | Base branch, setup command, and copied files for new ticket worktrees |
+
+Skills and MCP servers live under **All projects**. Skill activation modes
+still belong to the project selected in **Activation project**. MCP server
+connections and selected tools apply across projects.
+
+Project overrides show their effective value. Where an override has a reset
+control, open it and choose **Revert to global default** to follow later
+app-wide changes again.
 
 See [Skills and commands](/guides/skills-and-commands/), [MCP
-servers](/guides/mcp-servers/), and [Agent authority](/guides/authority/) for
-agent configuration. [Chats and worktrees](/guides/agents-and-worktrees/)
-explains base branches, setup, and `.worktreeinclude`.
-
-A project appearance override can inherit or replace an app-wide value. A
-Session's tools are recorded when it starts, so changing a tool setting does
-not add tools to an existing Session. Check the relevant guide before relying
-on a configuration change.
+servers](/guides/mcp-servers/), and [Agent authority](/guides/authority/).
+[Chats and worktrees](/guides/agents-and-worktrees/) covers worktree setup.
+Saved Automations and their **Automatic triggers** switches live on the
+[Automations](/guides/automations/) page.
 
 ## Web Search
 
-In **Settings → Web Search → Provider**, choose **Off**, **Brave**, **Exa**, or
-**SearXNG**. Brave and Exa need an API key. SearXNG needs an instance URL.
-Saved keys are not displayed again.
+In **All projects → Web Search**, add a credential for **Brave** or **Exa**
+with **Add key**, or set a **SearXNG** address with **Edit instance**. Select
+the provider's **Default** radio control to use it. Saved keys are not shown
+again; use **Replace key** or **Remove key** to change them.
 
-Turning search off does not turn off model requests, Browser Tabs, or web
-reads. See [Local and cloud data and network access](/reference/data-and-privacy/).
+**Turn off** disables the built-in web search and read tools for new Sessions.
+It does not disable model requests, Browser Tabs, MCP connections, or commands
+with network access. See [Local data and network access](/reference/data-and-privacy/).

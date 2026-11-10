@@ -93,7 +93,7 @@ describe("aboutHealth — before the reads land", () => {
     ]) {
       const result = health(loading);
       expect(result.state).toBe("checking");
-      expect(result.headline).toBe("Checking…");
+      expect(result.headline).toBe("Checking");
       expect(result.canFix).toBe(false);
     }
   });
@@ -150,7 +150,7 @@ describe("aboutHealth — a read that could not be completed", () => {
       {
         id: "cli-status:socket",
         headline: "App socket: Not running",
-        detail: "Relaunch Volli, then re-check.",
+        detail: "",
       },
     ]);
   });
@@ -172,6 +172,61 @@ describe("aboutHealth — once both reads are ready", () => {
     expect(result.state).toBe("attention");
     expect(result.headline).toBe("2 things need attention");
     expect(result.canFix).toBe(true);
+  });
+
+  it.each(["node", "npm", "pnpm", "yarn", "bun", "gh"])(
+    "keeps %s tool failures out of the person-facing fault list without changing evidence",
+    (tool) => {
+      const checks: DoctorCheck[] = [
+        {
+          id: `tool-${tool}`,
+          title: `${tool} is available`,
+          failureTitle: `${tool} is missing from the session PATH`,
+          status: "fail",
+          detail: `${tool} resolves to nothing`,
+          remedy: `Install ${tool}.`,
+        },
+      ];
+      const before = structuredClone(checks);
+      expect(health({ checks })).toMatchObject({ state: "healthy", faults: [], canFix: false });
+      expect(checks).toEqual(before);
+    },
+  );
+
+  it("keeps git and unrelated faults, including wrapper failures, with their recovery actions", () => {
+    const git: DoctorCheck = {
+      id: "tool-git",
+      title: "`git` is available to sessions",
+      failureTitle: "`git` is missing from the session PATH",
+      status: "fail",
+      detail: "`git` resolves to nothing on this PATH",
+      remedy: "Run `xcode-select --install`.",
+    };
+    const wrapper: DoctorCheck = {
+      id: "wrapper-node",
+      title: "Harness wrapper",
+      failureTitle: "Harness wrapper is missing",
+      status: "warn",
+      detail: "wrapper was not generated",
+      remedy: "Select Fix.",
+    };
+    const ignored: DoctorCheck = {
+      id: "tool-node",
+      title: "Node is available",
+      failureTitle: "Node is missing",
+      status: "fail",
+      detail: "node resolves to nothing",
+    };
+    const result = health({ rows: SOCKET_DOWN_ROWS, checks: [...FAILING, git, wrapper, ignored] });
+    expect(result.headline).toBe("4 things need attention");
+    expect(result.canFix).toBe(true);
+    expect(result.faults.map((fault) => fault.id)).toEqual([
+      "shell-init",
+      "tool-git",
+      "wrapper-node",
+      "cli-status:socket",
+    ]);
+    expect(result.faults[1]).toMatchObject({ headline: git.failureTitle, detail: git.remedy });
   });
 
   it("uses singular wording for one fault", () => {
@@ -217,9 +272,24 @@ describe("aboutHealth — once both reads are ready", () => {
       {
         id: "cli-status:socket",
         headline: "App socket: Not running",
-        detail: "Relaunch Volli, then re-check.",
+        detail: "Relaunch Volli, then retry.",
       },
     ]);
+  });
+
+  it("never directs an unsupported shell to the retired CLI settings page", () => {
+    const rows = [
+      {
+        key: "path",
+        label: "Volli on login PATH",
+        tone: "warn" as const,
+        value: "Missing",
+        remedy: "Open Settings → CLI and add the listed bin directory.",
+      },
+    ];
+    expect(health({ rows }).faults[0]?.detail).toBe(
+      "Run `volli doctor` in a terminal for repair steps.",
+    );
   });
 
   it("gives an older status warning generic repair guidance when it carries no remedy", () => {
@@ -238,7 +308,7 @@ describe("aboutHealth — once both reads are ready", () => {
         {
           id: "cli-status:shell",
           headline: "Shell chain: Not generated",
-          detail: "Select Re-check for current repair guidance.",
+          detail: "Retry for current repair steps.",
         },
       ],
     );

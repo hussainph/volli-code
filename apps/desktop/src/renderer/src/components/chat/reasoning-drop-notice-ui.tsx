@@ -1,5 +1,6 @@
 import * as React from "react";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
+import { WarningIcon } from "@renderer/components/ui/icon";
+
 import { reasoningDropNoticeCopy, type TranscriptReasoningDrop } from "@volli/session-presentation";
 
 /** A quiet durable transcript fact. The Turn succeeded and needs no action. */

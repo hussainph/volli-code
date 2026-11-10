@@ -1,3 +1,7 @@
+import dockIcon from "../../../../../../build/dock-icon.png";
+import { LegalDialog } from "./legal-dialog";
+import { useUpdateStore } from "@renderer/stores/update";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 /**
  * Settings → About: is this install working — one line — and the report we
  * ask for when it is not.
@@ -96,17 +100,15 @@ export function AboutPane() {
       if (!result.ok) {
         setLoadedStatusScope(statusScope);
         setStatusState("unavailable");
-        toastError(`Couldn't check this install: ${result.error}`);
         return;
       }
       setRows(cliStatusRows(result.status));
       setLoadedStatusScope(statusScope);
       setStatusState("ready");
-    } catch (error) {
+    } catch {
       if (statusFetch.isCurrent(token)) {
         setLoadedStatusScope(statusScope);
         setStatusState("unavailable");
-        toastError(`Couldn't check this install: ${errorMessage(error)}`);
       }
     }
   }, [projectCwd, statusFetch, statusScope]);
@@ -135,17 +137,15 @@ export function AboutPane() {
       if (!result.ok) {
         setLoadedDoctorScope(statusScope);
         setDoctorState("unavailable");
-        toastError(`Doctor couldn't run: ${result.error}`);
         return;
       }
       setChecks(result.checks);
       setLoadedDoctorScope(statusScope);
       setDoctorState("ready");
-    } catch (error) {
+    } catch {
       if (doctorFetch.isCurrent(token)) {
         setLoadedDoctorScope(statusScope);
         setDoctorState("unavailable");
-        toastError(`Doctor couldn't run: ${errorMessage(error)}`);
       }
     }
   }, [doctorFetch, projectCwd, statusScope]);
@@ -168,15 +168,13 @@ export function AboutPane() {
       if (!supportFetch.isCurrent(token)) return;
       if (!result.ok) {
         setSupportState("unavailable");
-        toastError(`Couldn't read this build's details: ${result.error}`);
         return;
       }
       setSupport(result.info);
       setSupportState("ready");
-    } catch (error) {
+    } catch {
       if (supportFetch.isCurrent(token)) {
         setSupportState("unavailable");
-        toastError(`Couldn't read this build's details: ${errorMessage(error)}`);
       }
     }
   }, [supportFetch]);
@@ -294,16 +292,52 @@ export function AboutPane() {
   }, [doctorFetch, load, projectCwd, statusScope]);
 
   const checking = health.state === "checking";
+  const update = useUpdateStore((store) => store.state);
+  const openUpdates = useUpdateStore((store) => store.openDialog);
 
   return (
-    <HealthPanel
-      state={health.state}
-      headline={health.headline}
-      faults={health.faults}
-      actions={
-        <div className="flex flex-wrap items-center justify-end gap-2">
+    <>
+      <section className="flex flex-wrap items-center gap-6">
+        <img src={dockIcon} alt="" className="size-16" />
+        <div className="flex-1">
+          <h2 className="text-heading font-semibold">Volli</h2>
+          <p className="mt-1 text-ui text-muted-foreground">
+            {(support?.appVersion ?? update?.currentVersion) ? (
+              <span className="font-mono">{support?.appVersion ?? update?.currentVersion}</span>
+            ) : (
+              <LoadingLabel>Reading version</LoadingLabel>
+            )}
+          </p>
+          <p className="mt-1 text-ui text-muted-foreground">
+            {support
+              ? { stable: "Stable", canary: "Canary" }[support.channel]
+              : "Release channel unavailable"}
+          </p>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={update?.supported !== true}
+          onClick={openUpdates}
+        >
+          Check for updates
+        </Button>
+      </section>
+      <section className="flex flex-wrap gap-2">
+        <LegalDialog kind="licence" />
+        <LegalDialog kind="acknowledgements" />
+      </section>
+      <details className="rounded-container border border-border">
+        <summary className="cursor-default px-4 py-4 text-ui font-medium">Diagnostics</summary>
+        <div className="space-y-4 border-t border-border p-4">
           <CopyReportDialog report={report} availability={copyReportAvailability} />
-          {/*
+          <HealthPanel
+            state={health.state}
+            headline={health.headline}
+            faults={health.faults}
+            actions={
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                {/*
             Fix appears only over a completed pair of reads with something
             wrong in it: a repair offered under an unfinished or failed check
             is a button for a fault nobody has established. Re-check stays,
@@ -312,26 +346,34 @@ export function AboutPane() {
             button that vanished the moment it was clicked would take its
             progress with it.
           */}
-          {health.canFix || fixing ? (
-            <Button size="sm" variant="secondary" disabled={fixing} onClick={() => void runFix()}>
-              {fixing ? "Fixing…" : "Fix"}
-            </Button>
-          ) : null}
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={checking || fixing}
-            onClick={() => {
-              harnesses.refresh();
-              void load();
-              void runDoctor();
-              void loadSupport();
-            }}
-          >
-            {checking ? "Checking…" : "Re-check"}
-          </Button>
+                {health.canFix || fixing ? (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={fixing}
+                    onClick={() => void runFix()}
+                  >
+                    {fixing ? <LoadingLabel>Fixing</LoadingLabel> : "Fix"}
+                  </Button>
+                ) : null}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={checking || fixing}
+                  onClick={() => {
+                    harnesses.refresh();
+                    void load();
+                    void runDoctor();
+                    void loadSupport();
+                  }}
+                >
+                  {checking ? <LoadingLabel>Checking</LoadingLabel> : "Retry"}
+                </Button>
+              </div>
+            }
+          />
         </div>
-      }
-    />
+      </details>
+    </>
   );
 }

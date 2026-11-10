@@ -15,8 +15,8 @@
  * about those in a toast would be a warning nobody reads.
  */
 import * as React from "react";
-import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
+import { FolderOpenIcon, WarningIcon } from "@renderer/components/ui/icon";
+
 import {
   errorMessage,
   projectRelinkNotices,
@@ -35,8 +35,10 @@ import {
   DialogTitle,
 } from "@renderer/components/ui/dialog";
 import { Notice } from "@renderer/components/ui/notice";
+import { Spinner } from "@renderer/components/ui/spinner";
 import { toastError } from "@renderer/lib/toast";
 import { useProjectsStore } from "@renderer/stores/projects";
+import { PathText } from "@renderer/components/ui/path-text";
 
 interface RelinkProjectDialogProps {
   project: Project;
@@ -92,26 +94,25 @@ export function RelinkProjectDialog({
 
   const notices = aftermath === null ? [] : projectRelinkNotices(aftermath);
 
+  // A state, not a reassurance: the folder button is the explanation.
+  const description =
+    aftermath !== null ? "These items need attention:" : folderMissing ? "Folder not found" : null;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent {...(description === null ? { "aria-describedby": undefined } : {})}>
         <DialogHeader>
           <DialogTitle>
             {aftermath === null ? `Relink ${project.name}` : `${project.name} is relinked`}
           </DialogTitle>
-          <DialogDescription>
-            {aftermath === null
-              ? folderMissing
-                ? "Volli can't find this project's folder. Choose where it is now — its tickets, settings and history stay with it."
-                : "Choose where this project's folder is now. Its tickets, settings and history stay with it."
-              : "The move is saved. Some of it could not follow on its own:"}
-          </DialogDescription>
+          {description === null ? null : <DialogDescription>{description}</DialogDescription>}
         </DialogHeader>
 
         {aftermath === null ? (
-          <p className="truncate text-ui text-muted-foreground" title={project.path}>
-            {project.path}
-          </p>
+          <div className="flex min-w-0 items-center gap-2 rounded-control border border-border bg-muted/30 px-2 py-2">
+            <FolderOpenIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+            <PathText path={project.path} className="text-ui text-foreground" />
+          </div>
         ) : (
           <div className="flex flex-col gap-2">
             {notices.map((notice) => (
@@ -133,8 +134,8 @@ export function RelinkProjectDialog({
                 Cancel
               </Button>
               <Button disabled={busy} onClick={() => void chooseAndRelink()}>
-                <FolderOpenIcon />
-                Choose folder…
+                {busy ? <Spinner /> : <FolderOpenIcon />}
+                {busy ? "Relinking" : "Choose folder"}
               </Button>
             </>
           ) : (

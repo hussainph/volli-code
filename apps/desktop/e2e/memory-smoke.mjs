@@ -245,7 +245,7 @@ async function main() {
       // nothing here is auto-created. `.first()` because the empty first visit
       // mounts the control twice (tab strip + empty state). The item's name
       // carries its chord, hence the regex.
-      await page.getByLabel("Other things to open").first().click();
+      await page.getByLabel("Open a tab").first().click();
       await page.getByRole("menuitem", { name: /^Terminal/ }).click();
       await page.waitForFunction(
         (n) => document.querySelectorAll('[aria-label^="Close Terminal"]').length === n,
@@ -269,7 +269,10 @@ async function main() {
     await snap(`${N_SESSIONS} tabs after 15s idle`);
 
     // === Phase 3: scrollback fill in a plain shell tab ========================
-    await page.getByLabel("Other things to open").click();
+    await page
+      .locator('[data-slot="split-view-tab-bar"]')
+      .getByRole("button", { name: "Open a tab", exact: true })
+      .click();
     await page.getByRole("menuitem", { name: /^Terminal/ }).click();
     await page.waitForFunction(
       (n) => document.querySelectorAll('[aria-label^="Close Terminal"]').length === n,

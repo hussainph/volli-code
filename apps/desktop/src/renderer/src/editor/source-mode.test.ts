@@ -26,7 +26,7 @@ describe("source-mode.css surface", () => {
     expect(surface).toContain("--vscode-editor-background: var(--background);");
     expect(surface).toContain("--vscode-editorGutter-background: var(--background);");
     expect(surface).toContain("--vscode-editorLineNumber-foreground: var(--muted-foreground);");
-    expect(surface).toMatch(/--vscode-editor-selectionBackground:[^;]*var\(--foreground\)/);
+    expect(surface).toMatch(/--vscode-editor-selectionBackground:[^;]*var\(--wash-ink\)/);
     expect(surface).toContain("--vscode-editorWidget-background: var(--popover);");
     expect(surface).toMatch(/--vscode-editor-findMatchBackground:[^;]*var\(--primary\)/);
     expect(surface).toMatch(/--vscode-scrollbarSlider-background:\s*var\(--border\);/);
@@ -75,6 +75,22 @@ describe("source-mode.css surface", () => {
     );
     expect(rules).not.toContain("--vscode-editorGutter-addedBackground:");
     expect(rules).not.toContain("--vscode-editorGutter-deletedBackground:");
+  });
+
+  it("uses accent selection and semantic diff washes in the workbench", () => {
+    const workbench = css.slice(css.indexOf("/* Workbench reading surfaces"));
+    expect(workbench).toContain("--vscode-editor-selectionBackground: var(--accent-selected)");
+    expect(workbench).toContain("--vscode-editor-lineHighlightBackground: var(--accent-tint)");
+    for (const property of [
+      "insertedLineBackground",
+      "insertedTextBackground",
+      "removedLineBackground",
+      "removedTextBackground",
+    ]) {
+      expect(workbench).toContain(`--vscode-diffEditor-${property}:`);
+    }
+    expect(workbench).toContain("color: var(--diff-added)");
+    expect(workbench).toContain("color: var(--diff-removed)");
   });
 
   it("never selects a Document Mode editor", () => {

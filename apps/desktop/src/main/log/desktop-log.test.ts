@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   desktopLogDirectory,
   exitAfterLogFlush,
+  mainStallSummaryMs,
   mainStallThresholdMs,
   startDesktopLog,
   type DesktopLog,
@@ -36,6 +37,26 @@ describe("the main stall threshold", () => {
     }
   });
 
+  it("reads VOLLI_MAIN_STALL_SUMMARY_MS the same way, for the roll-up interval", () => {
+    expect(mainStallSummaryMs({ VOLLI_MAIN_STALL_SUMMARY_MS: "60000" })).toBe(60_000);
+    expect(mainStallSummaryMs({ VOLLI_MAIN_STALL_SUMMARY_MS: "0" })).toBeUndefined();
+    expect(mainStallSummaryMs({})).toBeUndefined();
+  });
+
+  it("rolls the stall window up into the profile's file when the log closes", async () => {
+    const userData = profile();
+    const log = startDesktopLog({
+      userData,
+      dev: false,
+      env: { VOLLI_MAIN_STALL_SUMMARY_MS: "60000" },
+    });
+    await log.close();
+    const written = readdirSync(log.directory).map((name) =>
+      readFileSync(join(log.directory, name), "utf8"),
+    );
+    expect(written.join("")).toContain('"msg":"main stall load"');
+  });
+
   it("logs a stall in main to the profile's file while the log is installed", async () => {
     const userData = profile();
     const log = startDesktopLog({ userData, dev: false, env: { VOLLI_MAIN_STALL_MS: "30" } });
@@ -50,6 +71,23 @@ describe("the main stall threshold", () => {
     const text = readFileSync(log.file.currentFile()!, "utf8");
     expect(text).toContain('"component":"main-stall"');
     expect(text).toContain('"operation":"volli:test-block"');
+  });
+
+  it("writes a window's stalls to the same file, beside main's", async () => {
+    const userData = profile();
+    const log = startDesktopLog({ userData, dev: false, env: {} });
+    logs.push(log);
+    log.rendererStalls.write(
+      { id: 3 },
+      {
+        stalls: [{ kind: "frame", operation: "longtask", label: "pane-switch", durationMs: 180 }],
+        dropped: 0,
+      },
+    );
+    await log.flush();
+    const text = readFileSync(log.file.currentFile()!, "utf8");
+    expect(text).toContain('"component":"renderer-stall"');
+    expect(text).toContain('"label":"pane-switch"');
   });
 });
 

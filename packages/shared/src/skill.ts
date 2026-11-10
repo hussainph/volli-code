@@ -3,7 +3,7 @@
  * data and path rules.
  *
  * A skill is a directory holding a `SKILL.md` (the `npx skills add`
- * convention this repo already vendors — see `skills-lock.json`):
+ * convention this repo's own `.agents/skills/` follows):
  * frontmatter with a name and description, body of instructions. It lives in
  * one of the convention's TWO tiers — the project's own `.agents/skills/`,
  * or the personal `~/.agents/skills/` that the same installer writes and that

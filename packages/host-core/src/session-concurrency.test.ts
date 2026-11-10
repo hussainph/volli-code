@@ -279,13 +279,13 @@ describe("sessionConcurrencyEnv", () => {
 /**
  * A ports double over a scriptable live fleet: every Session the script
  * currently returns is running here (a turn open on a held binding, or a PTY),
- * and `getSession` folds each to the projection it returned. Each read of the
+ * and `getSessionListing` folds each to the projection it returned. Each read of the
  * live executors is one `reads` call.
  */
 function fakePorts(fleet: () => readonly SessionProjection[]) {
   const reads = vi.fn(() => fleet());
   let folds = new Map<string, SessionProjection>();
-  const getSession = vi.fn(
+  const getSessionListing = vi.fn(
     async ({ sessionId }: { sessionId: string }) => folds.get(sessionId) ?? null,
   );
   const ports: SessionConcurrencyPorts = {
@@ -294,9 +294,9 @@ function fakePorts(fleet: () => readonly SessionProjection[]) {
       folds = new Map(projections.map((projection) => [projection.session.id, projection]));
       return allLive(projections);
     },
-    getSession,
+    getSessionListing,
   };
-  return { ports, reads, getSession };
+  return { ports, reads, getSessionListing };
 }
 
 /** Live executors naming these candidates as mid-turn chats, every attachment bound. */
@@ -336,7 +336,7 @@ describe("createSessionConcurrencyEnvReader", () => {
   // neither do the idle bindings this process has held since launch.
   it("folds only the Sessions running something, never idle held bindings", async () => {
     const working = workingChat("mid-turn");
-    const getSession = vi.fn(async ({ sessionId }: { sessionId: string }) =>
+    const getSessionListing = vi.fn(async ({ sessionId }: { sessionId: string }) =>
       sessionId === working.session.id ? working : null,
     );
     const idleBindings = Array.from({ length: 200 }, (_, index) => `idle-${index}`);
@@ -346,30 +346,30 @@ describe("createSessionConcurrencyEnvReader", () => {
           ...turnsOn("mid-turn"),
           boundAttachmentIds: new Set(["structured", ...idleBindings]),
         }),
-        getSession,
+        getSessionListing,
       },
       { now: () => 0 },
     );
 
     expect((await reader({ environment: {}, cores: 8 }))["VOLLI_CONCURRENCY_HINT"]).toBe("8");
-    expect(getSession.mock.calls).toEqual([[{ sessionId: "mid-turn" }]]);
+    expect(getSessionListing.mock.calls).toEqual([[{ sessionId: "mid-turn" }]]);
   });
 
   it("folds nothing for any number of idle held bindings", async () => {
-    const getSession = vi.fn(async () => null);
+    const getSessionListing = vi.fn(async () => null);
     const reader = createSessionConcurrencyEnvReader(
       {
         liveExecutors: () => ({
           ...NOTHING_LIVE,
           boundAttachmentIds: new Set(Array.from({ length: 500 }, (_, index) => `idle-${index}`)),
         }),
-        getSession,
+        getSessionListing,
       },
       { now: () => 0 },
     );
 
     expect((await reader({ environment: {}, cores: 8 }))["VOLLI_CONCURRENCY_HINT"]).toBe("8");
-    expect(getSession).not.toHaveBeenCalled();
+    expect(getSessionListing).not.toHaveBeenCalled();
   });
 
   it("asks for nothing when no executor is live", async () => {
@@ -377,7 +377,7 @@ describe("createSessionConcurrencyEnvReader", () => {
     const reader = createSessionConcurrencyEnvReader(fake.ports, { now: () => 0 });
 
     expect((await reader({ environment: {}, cores: 8 }))["VOLLI_CONCURRENCY_HINT"]).toBe("8");
-    expect(fake.getSession).not.toHaveBeenCalled();
+    expect(fake.getSessionListing).not.toHaveBeenCalled();
   });
 
   // A binding released between the live read and its fold leaves nothing to fold.
@@ -388,7 +388,7 @@ describe("createSessionConcurrencyEnvReader", () => {
           ...turnsOn("gone"),
           terminalSessionIds: new Set(["terminal"]),
         }),
-        getSession: async ({ sessionId }) =>
+        getSessionListing: async ({ sessionId }) =>
           sessionId === "terminal" ? liveTerminal("terminal") : null,
       },
       { now: () => 0 },
@@ -441,7 +441,7 @@ describe("createSessionConcurrencyEnvReader", () => {
     await reader({ environment: {}, cores: 8 });
 
     expect(fake.reads).toHaveBeenCalledTimes(1);
-    expect(fake.getSession).toHaveBeenCalledTimes(1);
+    expect(fake.getSessionListing).toHaveBeenCalledTimes(1);
   });
 
   it("runs a fresh read once the TTL has elapsed", async () => {
@@ -497,11 +497,11 @@ describe("createSessionConcurrencyEnvReader", () => {
       ...NOTHING_LIVE,
       terminalSessionIds: new Set(["a", "b"]),
     }));
-    const getSession = vi.fn(async ({ sessionId }: { sessionId: string }) =>
+    const getSessionListing = vi.fn(async ({ sessionId }: { sessionId: string }) =>
       sessionId === "a" ? pending : liveTerminal("b"),
     );
     const reader = createSessionConcurrencyEnvReader(
-      { liveExecutors, getSession },
+      { liveExecutors, getSessionListing },
       { now: () => 0 },
     );
 
@@ -517,7 +517,7 @@ describe("createSessionConcurrencyEnvReader", () => {
     const results = await Promise.all(calls);
 
     expect(liveExecutors).toHaveBeenCalledTimes(1);
-    expect(getSession).toHaveBeenCalledTimes(2);
+    expect(getSessionListing).toHaveBeenCalledTimes(2);
     for (const env of results) expect(env["VOLLI_CONCURRENCY_HINT"]).toBe("4");
   });
 
@@ -547,7 +547,7 @@ describe("createSessionConcurrencyEnvReader", () => {
     const reader = createSessionConcurrencyEnvReader(
       {
         liveExecutors: () => ({ ...NOTHING_LIVE, terminalSessionIds: new Set(["a"]) }),
-        getSession: async () => {
+        getSessionListing: async () => {
           calls += 1;
           if (calls === 1) throw new Error("ledger is closed");
           return liveTerminal("a");

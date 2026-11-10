@@ -13,9 +13,13 @@ import { clamp, isHexColor } from "../color";
 import { MAX_STOPS } from "./tuning";
 import type { Canvas, CanvasStop } from "./types";
 
-/** The canvas the app ships with: one ember pool, high on the right. */
+/** The fresh/unset canvas: Ember mesh. Stored canvases are parsed unchanged. */
 export const DEFAULT_CANVAS: Canvas = {
-  stops: [{ hex: "#e8652a", x: 0.68, y: 0.3 }],
+  stops: [
+    { hex: "#e8652a", x: 0.12, y: 0.08 },
+    { hex: "#e0457b", x: 0.88, y: 0.38 },
+    { hex: "#f3a33c", x: 0.3, y: 1 },
+  ],
   primaryIndex: 0,
   vibrancy: 0.6,
   grain: 0.15,

@@ -24,7 +24,7 @@
 import { availableParallelism } from "node:os";
 
 import { VOLLI_CONCURRENCY_HINT_ENV, concurrencyBudget, concurrencyBudgetEnv } from "@volli/shared";
-import type { SessionProjection } from "@volli/shared";
+import type { SessionListingProjection } from "@volli/shared";
 
 import {
   chatSessionRecord,
@@ -73,7 +73,7 @@ export interface WorkingSessionsInput {
    * ALL projects, because load is a fact about the machine: a build in another
    * project's Session competes for exactly the same cores.
    */
-  projections: readonly SessionProjection[];
+  projections: readonly SessionListingProjection[];
   /** The executors this process holds, which a Session must have to count (VC-1085). */
   live: Pick<LiveExecutors, "boundAttachmentIds" | "terminalSessionIds">;
   /**
@@ -161,7 +161,7 @@ export interface SessionConcurrencyPorts {
    */
   liveExecutors(): LiveExecutors;
   /** One candidate Session, folded through the ordinary projection path; `null` when it is gone. */
-  getSession(query: { sessionId: string }): Promise<SessionProjection | null>;
+  getSessionListing(query: { sessionId: string }): Promise<SessionListingProjection | null>;
 }
 
 /** A Session start's per-call input to a reader — everything but the fleet itself. */
@@ -270,7 +270,7 @@ export function createSessionConcurrencyEnvReader(
 /** One read of who is live, and the candidates' folds. */
 interface LiveFleet {
   readonly live: LiveExecutors;
-  readonly projections: readonly SessionProjection[];
+  readonly projections: readonly SessionListingProjection[];
 }
 
 /**
@@ -282,9 +282,9 @@ interface LiveFleet {
 async function readLiveFleet(ports: SessionConcurrencyPorts): Promise<LiveFleet> {
   const live = ports.liveExecutors();
   const candidates = new Set([...live.turnSessionIds, ...live.terminalSessionIds]);
-  const projections: SessionProjection[] = [];
+  const projections: SessionListingProjection[] = [];
   for (const sessionId of candidates) {
-    const projection = await ports.getSession({ sessionId });
+    const projection = await ports.getSessionListing({ sessionId });
     if (projection !== null) projections.push(projection);
   }
   return { live, projections };

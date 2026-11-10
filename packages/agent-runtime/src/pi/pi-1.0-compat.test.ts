@@ -1,4 +1,4 @@
-/** Provider replay fixes relied on by the Pi 1.0 migration. */
+/** Published provider replay behavior relied on across Pi upgrades. */
 import { normalizeContext, type AssistantMessage, type Model } from "@earendil-works/pi-ai";
 import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
 import { convertResponsesMessages } from "@earendil-works/pi-ai/api/openai-responses-shared";
@@ -13,6 +13,50 @@ const usage = {
   totalTokens: 0,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
+
+describe("Pi 1.5 thinking replay", () => {
+  it.each([
+    ["same model", "openai", model.id, true],
+    ["different model", "openai", "previous-model", false],
+    ["different provider", "radius", model.id, false],
+  ] as const)("keeps signed thinking only for the %s", (_name, provider, id, retained) => {
+    const reasoning = {
+      type: "reasoning",
+      id: "rs_saved",
+      encrypted_content: "opaque-reasoning",
+      summary: [{ type: "summary_text", text: "previous reasoning" }],
+    };
+    const assistant: AssistantMessage = {
+      role: "assistant",
+      api: model.api,
+      provider,
+      model: id,
+      content: [
+        {
+          type: "thinking",
+          thinking: "previous reasoning",
+          thinkingSignature: JSON.stringify(reasoning),
+        },
+        { type: "text", text: "visible answer" },
+      ],
+      usage,
+      stopReason: "stop",
+      timestamp: 0,
+    };
+    const original = structuredClone(assistant);
+    const converted = convertResponsesMessages(
+      model,
+      normalizeContext({ messages: [assistant] }),
+      new Set(["openai"]),
+    );
+    expect(converted.filter((item) => item.type === "reasoning")).toEqual(
+      retained ? [reasoning] : [],
+    );
+    if (!retained) expect(JSON.stringify(converted)).not.toContain("previous reasoning");
+    expect(JSON.stringify(converted)).toContain("visible answer");
+    expect(assistant).toEqual(original);
+  });
+});
 
 describe("Pi 1.0 grammar tool replay", () => {
   it.each(["radius", "openai"])(

@@ -14,7 +14,7 @@ import { DOC_SECTIONS } from "../data/navigation";
  */
 
 export const GET: APIRoute = async ({ site }) => {
-  const docs = await getCollection("docs");
+  const docs = await getCollection("docs", ({ data }) => !data.draft);
   const byId = new Map(docs.map((entry) => [entry.id, entry]));
   const origin = site?.origin ?? "https://docs.volli.app";
 

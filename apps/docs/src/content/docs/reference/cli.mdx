@@ -17,7 +17,8 @@ volli identify
 volli help
 ```
 
-Use **Settings → About** to check or repair the installation. A terminal outside
+Press `⌘,` to open **Settings** in its own window, then choose **About** to
+check or repair the installation under **Diagnostics**. A terminal outside
 Volli can read the plan, but naming a Session in it does not authenticate the
 terminal for writes. Write access comes from the environment Volli supplies.
 
@@ -32,13 +33,19 @@ including in JSON. Use `--all`, `--since <when>`, or `--state <s>[,<s>...]` to
 adjust the fleet view. JSON adds `hidden` beside `sessions`. `session show`
 reads metadata and ancestry; list and peek name pending delegated subagents.
 
+`ticket list --json --no-body` omits ticket bodies when you only need a
+summary. Without `--no-body`, JSON keeps the bodies; the text table never
+includes them. Older app builds may ignore `--no-body`, so use `--status`,
+`--project`, and `--limit` to narrow large results.
+
 `ticket show` prints comment bodies in full. Other log prose remains capped;
 `ticket show --full` and `ticket events --full` lift those caps without changing
 the untrusted-prose framing. JSON is always uncapped.
 
 ## Addressing
 
-Commands that take an `<id>` want a display ID, like `VC-12`.
+Ticket commands that take an `<id>` want a display ID, like `VLT-12`.
+Session commands use the short handles printed by `volli session list`.
 
 Where an ID is optional, `volli` resolves it in a fixed order and stops at the
 first answer:
@@ -131,6 +138,9 @@ These links retain the anchors used by earlier documentation.
 | <span id="volli-app-launch"></span>[`volli app launch`](/reference/cli-commands/#volli-app-launch) |
 | <span id="volli-prompt-baseline"></span>[`volli prompt baseline`](/reference/cli-commands/#volli-prompt-baseline) |
 | <span id="volli-doctor"></span>[`volli doctor`](/reference/cli-commands/#volli-doctor) |
+| <span id="volli-perf-top"></span>[`volli perf top`](/reference/cli-commands/#volli-perf-top) |
+| <span id="volli-perf-stalls"></span>[`volli perf stalls`](/reference/cli-commands/#volli-perf-stalls) |
+| <span id="volli-perf-compare"></span>[`volli perf compare`](/reference/cli-commands/#volli-perf-compare) |
 | <span id="volli-help"></span>[`volli help`](/reference/cli-commands/#volli-help) |
 | <span id="volli-hook"></span>[`volli hook`](/reference/cli-commands/#volli-hook) |
 

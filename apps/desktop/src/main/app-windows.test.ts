@@ -43,7 +43,7 @@ function fakeWindow(id: number, name: string, calls: string[], requests: Map<str
   };
 }
 
-function appWindows(names: readonly string[] = ["a", "b"]) {
+function appWindows(names: readonly string[] = ["a", "b"], settingsName?: string) {
   const calls: string[] = [];
   const requests = new Map<string, unknown>();
   const timers = new Map<number, { run: () => void; ms: number }>();
@@ -69,6 +69,7 @@ function appWindows(names: readonly string[] = ["a", "b"]) {
   const windows = createAppWindows({
     // As `BrowserWindow.getAllWindows`: a destroyed window is no longer listed.
     all: () => all.filter((window) => !window.isDestroyed()),
+    isWorkspace: (window) => window.name !== settingsName,
     create,
     reveal,
     flush,
@@ -296,4 +297,36 @@ describe("window returns through the menu-bar host (VC-577)", () => {
       expect(revealForLaunch).not.toHaveBeenCalled();
     }
   });
+});
+
+describe("Settings is not a workbench", () => {
+  it("opens a workbench for notification or activation with only Settings open", () => {
+    const f = appWindows(["settings"], "settings");
+    expect(f.port.count()).toBe(0);
+    f.windows.openForNotification(null);
+    expect(f.create).toHaveBeenCalledOnce();
+    const menuBar = { noteActivated: vi.fn(), reveal: vi.fn() };
+    f.windows.activated(menuBar);
+    expect(menuBar.reveal).toHaveBeenCalledOnce();
+  });
+  it("still flushes Settings when entering menu-bar mode", async () => {
+    const f = appWindows(["settings"], "settings");
+    f.port.closeAll();
+    expect(f.calls).toContain("settings.flush-asked");
+    f.ack("settings");
+    await nextImmediate();
+    expect(f.calls).toContain("settings.destroy");
+  });
+});
+
+it("reopens the signed-out workbench on a second launch when only Settings is open", () => {
+  const revealForLaunch = vi.fn();
+  answerSecondInstance(undefined, {
+    cloudEnabled: () => false,
+    hasSettingsWindow: () => true,
+    revealForLaunch,
+    show: vi.fn(),
+    quiet: true,
+  });
+  expect(revealForLaunch).toHaveBeenCalledOnce();
 });

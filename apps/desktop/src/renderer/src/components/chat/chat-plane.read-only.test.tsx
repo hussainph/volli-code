@@ -417,7 +417,7 @@ it("keeps a new cloud chat's composer before any Session exists", async () => {
   });
   const { container } = await mountPlane(true, false, true);
   expect(container.querySelector('textarea[aria-label="Message"]')).not.toBeNull();
-  expect(container.textContent).not.toContain("Loading Session owner…");
+  expect(container.textContent).not.toContain("Loading Session owner");
 });
 
 it("picks another runner in the composer and sends its durable first-message request without local promotion", async () => {
@@ -589,7 +589,9 @@ it("keeps the known owner's composer while names load or fail", async () => {
 it("fails closed while cloud ownership has not answered", async () => {
   adoptLaunch({ store: "cloud", userId: "viewer", backendUrl: "https://example.convex.cloud" });
   const { container } = await mountPlane(true, false, false, [credentialRequest("unknown-owner")]);
-  expect(container.textContent).toContain("Loading Session owner…");
+  expect(container.textContent).toContain("Loading Session owner");
+  expect(container.textContent).not.toContain("Loading Session owner…");
+  expect(container.querySelector("svg.animate-spin")).not.toBeNull();
   expect(container.querySelector('[data-slot="secret-card"]')).toBeNull();
   expect(container.querySelector('textarea[aria-label="Message"]')).toBeNull();
 });

@@ -20,7 +20,7 @@ import type {
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { findTerminalPlacement, useSessionsStore } from "@renderer/stores/sessions";
-import { useUpdateStore } from "@renderer/stores/update";
+import { useUiStore } from "@renderer/stores/ui";
 import { useProjectUiStore } from "@renderer/stores/project-ui";
 
 /** Sonner's default is tuned for glanceable news; this is an explanation. */
@@ -65,7 +65,7 @@ export const desktopNotificationSurface: NotificationSurface = {
     sessions.setActivePane(route.projectId, route.tabId, route.paneId);
   },
   revealItem: (sessionId, item) => requestSessionItemReveal(sessionId, item),
-  openUpdate: () => useUpdateStore.getState().openDialog(),
+  openUpdate: () => useUiStore.getState().setSettingsOpen(true, "updates"),
   sessionItems: (sessionId) => waitForProjection(sessionId),
   say: (message) => void toast(message, { duration: STALE_TOAST_MS }),
 };

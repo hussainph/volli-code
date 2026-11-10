@@ -988,7 +988,10 @@ describe("projectSplitView", () => {
   });
 
   it("resolves a shown group onto live tabs, numbering panes in reading order", () => {
-    const state = splitPane(openTab(showingG1(), "dead"), "p1", "down", {}, minter());
+    const state = selectTab(
+      splitPane(openTab(showingG1(), "dead"), "p1", "down", {}, minter()),
+      "c",
+    );
     const view = projectSplitView(state, ["a", "b", "c", "x"], "c", "board");
     expect(view.groupId).toBe("g1");
     expect(view.panes.map((leaf) => [leaf.id, leaf.tabIds, leaf.activeTabId, leaf.index])).toEqual([
@@ -1014,6 +1017,47 @@ describe("projectSplitView", () => {
     expect(state.root).toEqual(pane(ROOT, ["x"]));
     expect(projectSplitView(state, ["x", "y"], "y", "board").activeTabId).toBe("y");
   });
+
+  it.each(["left", "right"] as const)(
+    "keeps a missing %s pane front as the launcher destination, not the surface fallback",
+    (edge) => {
+      let state = splitPane(
+        emptySplitView("chat:neighbour"),
+        ROOT,
+        edge,
+        { tabId: "browser:departed" },
+        minter(),
+      );
+      const destination = state.focusedPaneId;
+      const neighbour = splitViewPanes(state).find((leaf) =>
+        leaf.tabIds.includes("chat:neighbour"),
+      )!;
+      const saved = state;
+      const waiting = projectSplitView(
+        state,
+        ["board", "chat:neighbour"],
+        "chat:neighbour",
+        "board",
+      );
+      expect(waiting.focusedPaneId).toBe(destination);
+      expect(waiting.activeTabId).toBeNull();
+      expect(waiting.panes.find((leaf) => leaf.id === destination)?.tabIds).toEqual([]);
+      expect(state).toBe(saved);
+      for (const id of ["chat:new", "terminal-new", "browser:new", "file:README.md"]) {
+        const opened = openTab(state, id);
+        const view = projectSplitView(opened, ["board", "chat:neighbour", id], id, "board");
+        expect(view.focusedPaneId).toBe(destination);
+        expect(view.activeTabId).toBe(id);
+        expect(view.panes.find((leaf) => leaf.id === neighbour.id)?.activeTabId).toBe(
+          "chat:neighbour",
+        );
+      }
+      state = closePane(state, destination);
+      expect(
+        projectSplitView(state, ["board", "chat:neighbour"], "chat:neighbour", "board"),
+      ).toMatchObject({ groupId: null, activeTabId: "chat:neighbour" });
+    },
+  );
 
   it("degrades a group with no live tab to the permanent tab", () => {
     const view = projectSplitView(showingG1(), ["board"], "c", "board");

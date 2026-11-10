@@ -21,7 +21,13 @@ export {
   BrowserTabLimitError,
   isAllowedBrowserUrl,
 } from "../browser/backend";
-export type { CdpTransport, TabCursorDriver, TabCursorGesture } from "../browser/cdp-controller";
+export type {
+  CdpPreviewFrameDiagnostic,
+  CdpTimeoutDiagnostic,
+  CdpTransport,
+  TabCursorDriver,
+  TabCursorGesture,
+} from "../browser/cdp-controller";
 export {
   ChromiumBrowserBackend,
   type ChromiumBrowserBackendOptions,

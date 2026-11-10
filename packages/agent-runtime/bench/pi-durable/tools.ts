@@ -3,7 +3,7 @@ import { lstat, open, realpath } from "node:fs/promises";
 import { constants } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { defineExtension, defineTool, hook, ToolTask } from "@earendil-works/pi-durable";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { containsPath, type SessionRuntimeSpec } from "@volli/shared";
 import { credentialPath } from "../../src/pi/credential-env.ts";
 

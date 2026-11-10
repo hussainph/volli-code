@@ -49,9 +49,8 @@
  * Every assertion polls (expect-style waits); no bare sleep stands in for a
  * condition (the few fixed sleeps only pace UI settling, never assert).
  *
- * This is a MANUALLY-RUN smoke (it needs a display + the built app); it is NOT
- * wired into `vp test` and does NOT run in CI (CI minutes are rationed — see
- * CLAUDE.md). It is local proof for desktop-touching PRs.
+ * This smoke needs a display + the built app. It runs in the extended desktop
+ * smoke tier, not in `vp test`, and can also run locally on macOS.
  *
  *   Run (macOS ONLY — see below):
  *     vp run --filter @volli/desktop build   # produce dist/ + dist-electron/
@@ -133,8 +132,8 @@ function homeFilesPanel(page) {
   return page.getByTestId("home-files-panel");
 }
 
-/** One row in the Home Files navigator's CURRENT folder — `relPath` is always
- * the full project-relative path (`ticket-files-panel.tsx`'s `FileRow`). */
+/** One row in the Home Files tree — `relPath` is always the full
+ * project-relative path (`files/file-tree.tsx`). */
 function fileRow(page, relPath) {
   return homeFilesPanel(page).locator(`[data-testid="ticket-files-row"][data-path="${relPath}"]`);
 }
@@ -154,32 +153,36 @@ function saveGuard(page) {
 }
 
 /**
- * Ensure the Home rail is showing its Files navigator, starting a terminal
- * Session first if nothing is in front yet. The rail only exists beside a
- * Session or File tab, never over the Board (`home-surface.tsx`'s
- * `railVisible`) — but once ANY File tab is active the rail stays visible on
- * its own, so this only spends a terminal the first time it is called.
+ * Ensure the Home inspector is showing its Files navigator, starting a terminal
+ * Session first if the Board is in front. The inspector subtree is resident
+ * even while disabled on the Board; its corner control exists only beside
+ * a Session or File tab (`home-surface.tsx`'s `railVisible`).
  */
 async function openHomeFilesRail(page) {
-  const rail = page.getByTestId("home-rail");
-  if ((await rail.count()) === 0) {
+  const detailsToggle = page.getByRole("button", { name: /^(Show|Hide) details rail$/ });
+  if ((await detailsToggle.count()) === 0) {
     await startTerminalSession(page);
-    await waitUntil("Home rail to appear", async () => (await rail.count()) === 1, {
-      timeout: 20000,
-    });
+    await detailsToggle.waitFor({ state: "visible", timeout: 20000 });
   }
+  // The inspector is resident even when collapsed. Pin it before using its
+  // controls rather than treating a mounted rail as a visible one.
+  const showDetails = page.getByRole("button", { name: "Show details rail", exact: true });
+  if (await showDetails.isVisible()) await showDetails.click();
   await page.getByTestId("home-rail-tab-files").click();
   await waitUntil("Home Files panel", async () => (await homeFilesPanel(page).count()) === 1);
 }
 
-/** Walk the navigator into root-level directory `dirRelPath` and wait for
- * `expectChild`'s row (a full relPath) to appear inside it. */
+/** Open root-level directory `dirRelPath` in the navigator's tree and wait for
+ * `expectChild`'s row (a full relPath) to appear inside it. A click on an open
+ * folder folds it, so an already-open folder is left as it is. */
 async function navigateIntoDir(page, dirRelPath, expectChild) {
   await waitUntil(
     `${dirRelPath}/ row`,
     async () => (await fileRow(page, dirRelPath).count()) === 1,
   );
-  await fileRow(page, dirRelPath).click();
+  if ((await fileRow(page, dirRelPath).getAttribute("aria-expanded")) !== "true") {
+    await fileRow(page, dirRelPath).click();
+  }
   await waitUntil(
     `navigator inside ${dirRelPath}/`,
     async () => (await fileRow(page, expectChild).count()) === 1,
@@ -188,7 +191,7 @@ async function navigateIntoDir(page, dirRelPath, expectChild) {
 
 /** Walk the navigator back out to the project root. */
 async function navigateToRoot(page) {
-  const up = homeFilesPanel(page).getByTestId("home-files-up");
+  const up = homeFilesPanel(page).getByTestId("file-tree-up");
   for (let guard = 0; guard < 10 && (await up.count()) === 1; guard += 1) {
     await up.click();
     await sleep(50);
@@ -209,7 +212,7 @@ async function readTabs(page) {
       preview: tab.getAttribute("data-preview"),
       dirty: tab.getAttribute("data-dirty"),
       active: tab.getAttribute("aria-selected") === "true",
-      hint: tab.querySelector('[data-testid="tab-hint"]')?.textContent ?? null,
+      name: tab.getAttribute("aria-label"),
     })),
   );
 }
@@ -452,22 +455,35 @@ async function main() {
         await navigateToRoot(page);
         await navigateIntoDir(page, "lib", LIB_APP_TS);
         await fileRow(page, LIB_APP_TS).click();
-        const three = await waitUntil("third tab with basename hints", async () => {
+        const three = await waitUntil("third tab with distinct basename identities", async () => {
           const strip = await readTabs(page);
           return strip.length === 3 &&
             strip[2].relPath === LIB_APP_TS &&
-            strip[1].hint === "src" &&
-            strip[2].hint === "lib"
+            strip[1].name === "app.ts · src" &&
+            strip[2].name === "app.ts · lib"
             ? strip
             : null;
         });
         await waitForMonacoReady(page, LIB_APP_TS);
-        const utilHasNoHint = three[0].hint === null;
+        // The compact captions keep the basename; sighted keyboard users can
+        // still read each path through the real tab's focus reveal.
+        for (const [relPath, detail] of [
+          [APP_TS, "app.ts · src"],
+          [LIB_APP_TS, "app.ts · lib"],
+        ]) {
+          await homeFileTab(page, relPath).focus();
+          await waitUntil(
+            `file location reveal: ${detail}`,
+            async () => (await page.getByRole("tooltip").textContent()) === detail,
+          );
+          await page.keyboard.press("Escape");
+        }
+        const utilHasNoHint = three[0].name === "util.ts";
 
         const ok = !!pinned && two.length === 2 && three.length === 3 && utilHasNoHint;
         return {
           ok,
-          detail: `tabs=${tabSignature(three)} hints=${JSON.stringify(three.map((t) => t.hint))}`,
+          detail: `tabs=${tabSignature(three)} names=${JSON.stringify(three.map((t) => t.name))}`,
         };
       },
     );

@@ -11,6 +11,9 @@
  *   cp -c volli.db /tmp/x/work.db && cp -c volli.db-wal /tmp/x/work.db-wal
  *   node --expose-gc apps/desktop/e2e/bench/projection-cache-vc1076.mjs --db /tmp/x/work.db
  *
+ * `--facts-only` skips the listing arms; `--backfill on` runs the checkpoint
+ * backfill first, and `--drop-largest N` makes it fold the N longest logs.
+ *
  * The number that matters most is each arm's worst block — the longest stretch
  * the host could not run a timer, answer IPC or paint — not its total.
  */
@@ -33,6 +36,16 @@ if (DB_PATH === null) throw new Error("--db <path to a COPY of volli.db> is requ
 const FACTS = Number(argument("facts", "200"));
 const ACTIVE = Number(argument("active", "20"));
 const BACKFILL = argument("backfill", "off") === "on";
+/**
+ * `--drop-largest N` deletes the checkpoint rows of the N Sessions with the
+ * longest logs before the backfill runs, so the backfill has to fold the
+ * biggest histories on the profile (VC-1098): its worst block is then one
+ * huge Session's, the case a profile whose large Sessions have no current row
+ * meets on the first launch of a build that bumps the checkpoint version.
+ */
+const DROP_LARGEST = Number(argument("drop-largest", "0"));
+/** `--facts-only` skips the listing arms, for profiling the per-fact path. */
+const FACTS_ONLY = process.argv.includes("--facts-only");
 
 const wait = (ms) => new Promise((done) => setTimeout(done, ms));
 
@@ -112,6 +125,17 @@ try {
     ledger.transaction((transaction) => transaction.listSessions(query).length),
   );
 
+  if (DROP_LARGEST > 0) {
+    report.dropped = db
+      .prepare(
+        `SELECT session_id AS id, COUNT(*) AS events FROM session_events
+          GROUP BY session_id ORDER BY events DESC LIMIT ?`,
+      )
+      .all(DROP_LARGEST);
+    const drop = db.prepare("DELETE FROM session_projection_checkpoints WHERE session_id = ?");
+    for (const { id } of report.dropped) drop.run(id);
+  }
+
   if (backfillModule !== null) {
     report.backfill = await measure(() =>
       backfillModule.backfillProjectionCheckpoints({
@@ -137,15 +161,18 @@ try {
       rowsMs: round(performance.now() - rowsStartedAt),
     };
   };
-  report.firstListing = await measure(() => listing(engineFor()));
-  report.afterFirstListing = checkpointCensus();
-  // A relaunch: a new connection and a fresh engine, over what the first
-  // listing persisted.
-  reopen();
-  report.relaunchListing = await measure(() => listing(engineFor()));
-  const warmEngine = engineFor();
-  await listing(warmEngine);
-  report.warmListing = await measure(() => listing(warmEngine));
+  if (!FACTS_ONLY) await listingArms();
+  async function listingArms() {
+    report.firstListing = await measure(() => listing(engineFor()));
+    report.afterFirstListing = checkpointCensus();
+    // A relaunch: a new connection and a fresh engine, over what the first
+    // listing persisted.
+    reopen();
+    report.relaunchListing = await measure(() => listing(engineFor()));
+    const warmEngine = engineFor();
+    await listing(warmEngine);
+    report.warmListing = await measure(() => listing(warmEngine));
+  }
 
   // ── One runtime fact on the Session with the largest checkpoint ────────
   const large = db
@@ -177,13 +204,31 @@ try {
     await observe(factEngine, large.id, index);
     perFact.push(performance.now() - startedAt);
   }
+  // The slowest facts with their index: the durable checkpoint refresh lands
+  // every CHECKPOINT_REFRESH_EVENTS facts, so its cost shows up here rather
+  // than in the median.
+  const slowest = perFact
+    .map((ms, index) => ({ index, ms: round(ms * 100) / 100 }))
+    .toSorted((a, b) => b.ms - a.ms)
+    .slice(0, 8);
   perFact.sort((a, b) => a - b);
+  // What a fact paid before the hot cache, on its own: one checkpoint row
+  // read, hash, parse and check for this Session.
+  const rowReads = [];
+  for (let index = 0; index < 20; index += 1) {
+    const startedAt = performance.now();
+    await ledger.transaction((transaction) => transaction.getProjectionCheckpoint(large.id));
+    rowReads.push(performance.now() - startedAt);
+  }
+  rowReads.sort((a, b) => a - b);
+  report.checkpointRowReadMedianMs = round(rowReads[10] * 100) / 100;
   report.perFact = {
     checkpointBytes: large.bytes,
     facts: FACTS,
     medianMs: round(perFact[Math.floor(perFact.length / 2)] * 100) / 100,
     p95Ms: round(perFact[Math.floor(perFact.length * 0.95)] * 100) / 100,
     maxMs: round(perFact.at(-1) * 100) / 100,
+    slowest,
   };
 
   // ── The activity watch flushing many dirty Sessions at once ────────────

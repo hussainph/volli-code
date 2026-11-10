@@ -1,78 +1,16 @@
-/**
- * The Now page's Properties block — status, priority and labels — as a SECTION
- * (VC-406): a `PROPERTIES` eyebrow over three compact rows, the same object the
- * Sessions and Automations blocks under it are.
- *
- * It was a wrapping run of 24px pills with no eyebrow, and that run was the
- * one block on the page that was neither of its two object kinds: unmarked,
- * bordered at rest where every row is borderless until hovered, and two facts
- * to a line where the page sets one thing per line. Under the sections it was
- * the odd block out.
- *
- * **THE VALUE IS THE CONTROL**. Making the whole row a target for a side
- * overlay puts the act one hop further away than the fact it is
- * editing. A row here is NOT a target. It keeps the roster's grammar — a
- * glyph, then the value — and the value itself is the app's own 28px dropdown
- * trigger (`RAIL_CONTROL`, the recipe every button a rail page presses wears,
- * over the app's `DropdownMenu`). Nothing here is a native `<select>`: the
- * fixture used one as a stand-in and said so.
- *
- * **NO FIELD CAPTIONS.** The rows used to trail `Status`, `Priority` and
- * `Labels` in the muted ink at the right edge. The glyph at the left already
- * says which field the line is and the value says the rest, so the word was a
- * third naming of the same thing, spending rail width on it — the page's own
- * rule that a row's right edge says one thing, applied to a right edge with
- * nothing left to say. The field name is not lost and was never only visual:
- * it rides each control's accessible name (`Status: Todo`, and the run's
- * `Labels: …` group), which is where a screen reader was already getting it.
- * The leading glyph is `aria-hidden` so it does not name the same field a
- * second time beside the control that names it.
- *
- * The rows are 38px (28px trigger + 4px above and below + the row's 1px
- * transparent border) rather than the 36px of the page's other one-line rows —
- * enough space for the trigger, padding, and border without compressing the control.
- *
- * **LABELS ARE ADDITIVE, LEFT TO RIGHT.** Each applied label is its own pill
- * carrying its own Remove, in the order it was added, wrapping when the run
- * outgrows the rail; one Add control at the end of the run — a bare `+`, named
- * for the two readers who cannot see it — offers what is NOT yet applied. This
- * replaces the single
- * toggle picker the whole row used to open: a toggle list makes "take this one
- * off" a round trip through a popover, and it re-sorted nothing, so the only
- * thing it gave up was the ability to see and remove a label in one place.
- * Removal keeps the hand on the run — focus lands on the pill that slid into
- * the removed one's place, else on Add.
- *
- * The vocabulary is the PROJECT's (`useLabelVocabulary`: its label rows plus
- * every name in use on its tickets) with its stored colours, and the create
- * row is the picker's own rule (`newLabelFromQuery`) so a name that differs
- * only in case is offered to apply rather than minted a second time. No
- * fixture labels, colours or vocabulary reach this file.
- *
- * Every edit writes through the board store's existing actions — `moveTicket`,
- * `setTicketPriority`, `setLabels` — so the optimistic patch, the rollback and
- * the failure toast are the ones the board card and the context menu already
- * get, and a status change still has the board's own side effects (the column
- * move, and with it whichever Automation the new column arms).
- *
- * Worktree identity (branch, base branch, path) and the done flow are NOT here:
- * they are repository facts, and they live in the rail's worktree footer
- * (`ticket-repository-summary.tsx`).
- *
- * RETIRED, deliberately: the old page closed with a `Created …` / `Updated …`
- * pair under a rule (`formatTimestamp`, since deleted). The Calm Stack has no
- * such line, and the two facts are not lost — the Activity feed carries a
- * durable "created the ticket" event with its own stamp, and its most recent
- * entry is a truer answer to "when did this last move" than a derived
- * `updatedAt` that a label edit also bumps. `formatStamp` itself survives in
- * `lib/relative-time` for the Archive.
- */
+/** Native label/value properties. Mutations, label order and focus recovery stay
+ * with the board store; the row and pop-up geometry are shared with forms. */
 import * as React from "react";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { CircleIcon } from "@phosphor-icons/react/dist/csr/Circle";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
-import { TagIcon } from "@phosphor-icons/react/dist/csr/Tag";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import {
+  InboxIcon,
+  ChecklistIcon,
+  PlayCircleIcon,
+  PreviewIcon,
+  SuccessIcon,
+  AddIcon,
+  CloseIcon,
+} from "@renderer/components/ui/icon";
+
 import {
   TICKET_PRIORITIES,
   TICKET_PRIORITY_LABELS,
@@ -83,19 +21,20 @@ import {
   type TicketStatus,
 } from "@volli/shared";
 
-import { PriorityIndicator } from "@renderer/components/board/priority-indicator";
 import {
   labelPickerOptions,
   newLabelFromQuery,
 } from "@renderer/components/ticket/label-picker-model";
 import { guardWrite, useCanWrite } from "@renderer/components/hosts/use-hosts";
-import { useLabelVocabulary } from "@renderer/components/ticket/label-picker";
 import {
-  RAIL_CONTROL,
-  RAIL_PANEL_INSET,
-  RailSectionHeadingRow,
-} from "@renderer/components/ticket/rail-panel-parts";
+  LabelPickerContent,
+  LabelPickerSurface,
+  useLabelVocabulary,
+} from "@renderer/components/ticket/label-picker";
 import { Button } from "@renderer/components/ui/button";
+import { RAIL_PANEL_INSET } from "@renderer/components/ticket/rail-panel-parts";
+import { PriorityIndicator } from "@renderer/components/board/priority-indicator";
+import { InspectorPopup, InspectorRow } from "@renderer/components/ui/inspector";
 import { Command, CommandInput, CommandItem, CommandList } from "@renderer/components/ui/command";
 import {
   DropdownMenu,
@@ -104,69 +43,27 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
-import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
-import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
+import { Popover, PopoverTrigger } from "@renderer/components/ui/popover";
 import { resolveLabelColor } from "@renderer/lib/labels";
 import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
 
-/**
- * One property row. Not a `ListRow`: a `ListRow` is either a target or inert,
- * and this row is neither — it is a line of the page that HOLDS a target. The
- * geometry is the row's (the same `px-2`, the same transparent border that
- * keeps every row's text on one left edge), without the hover fill that would
- * promise a press the row does not answer.
- */
-function PropertyRow({
-  glyph,
-  control,
-  align = "center",
-  ...rest
-}: React.HTMLAttributes<HTMLLIElement> & {
-  glyph: React.ReactNode;
-  control: React.ReactNode;
-  /** `start` for the labels row, whose run wraps to several lines. */
-  align?: "center" | "start";
-}) {
-  return (
-    <li
-      className={cn(
-        "flex w-full gap-2 rounded-lg border border-transparent px-2 py-1",
-        align === "center" ? "items-center" : "items-start",
-      )}
-      {...rest}
-    >
-      <span
-        // Decorative: the control beside it carries the field in its own
-        // accessible name, and `PriorityIndicator` is a labelled `img` that
-        // would otherwise say "Priority: Medium" twice on one line.
-        aria-hidden
-        className={cn(
-          "flex size-4 shrink-0 items-center justify-center text-muted-foreground",
-          // The trigger is 28px and the glyph is 16px: centring it on the
-          // control's own line rather than on the row keeps the mark level with
-          // the value at both alignments.
-          align === "center" ? "self-center" : "mt-1",
-        )}
-      >
-        {glyph}
-      </span>
-      <span className={cn("flex min-w-0 flex-1", align === "start" && "flex-wrap")}>{control}</span>
-    </li>
-  );
-}
+const STATUS_ICON = {
+  backlog: InboxIcon,
+  todo: ChecklistIcon,
+  doing: PlayCircleIcon,
+  needs_review: PreviewIcon,
+  done: SuccessIcon,
+} as const;
 
-/**
- * The value, as the app's compact dropdown trigger — 28px, sized to its own
- * label, never stretched across the column (docs/DESIGN.md, "Every act wears
- * one costume").
- */
+/** The current value is the only pop-up target; the row itself is inert. */
 function ValueTrigger({
   label,
   field,
   value,
   canWrite,
   children,
+  summary = false,
 }: {
   label: string;
   field: string;
@@ -174,28 +71,34 @@ function ValueTrigger({
   /** Read-only (VC-576): the value still reads; the menu does not open. */
   canWrite: boolean;
   children?: React.ReactNode;
+  summary?: boolean;
 }) {
+  const props = {
+    disabled: !canWrite,
+    "aria-label": `${field}: ${label}`,
+    "data-testid": `ticket-rail-property-${field.toLowerCase()}`,
+    "data-value": value,
+  };
+  const content = (
+    <>
+      {children}
+      <span className="min-w-0 truncate">{label}</span>
+    </>
+  );
   return (
     <DropdownMenuTrigger asChild>
-      <Button
-        variant="outline"
-        disabled={!canWrite}
-        className={cn(RAIL_CONTROL, "max-w-full justify-start gap-1.5 pr-2 pl-2.5 font-normal")}
-        // The field is in the accessible name because nothing beside the
-        // control says it any more: "Doing" alone names no field.
-        aria-label={`${field}: ${label}`}
-        data-testid={`ticket-rail-property-${field.toLowerCase()}`}
-        data-value={value}
-      >
-        {children}
-        <span className="min-w-0 truncate">{label}</span>
-        <CaretDownIcon weight="bold" className="size-3 shrink-0 text-muted-foreground" />
-      </Button>
+      {summary ? (
+        <Button {...props} variant="secondary" shape="capsule" size="sm">
+          {content}
+        </Button>
+      ) : (
+        <InspectorPopup {...props}>{content}</InspectorPopup>
+      )}
     </DropdownMenuTrigger>
   );
 }
 
-/** One applied label: its colour, its name, and its own Remove. */
+/** Neutral pill, stored label colour and its own Remove. */
 function LabelPill({
   name,
   color,
@@ -214,7 +117,7 @@ function LabelPill({
     <span
       data-testid="ticket-rail-label-pill"
       data-label={name}
-      className="flex h-6 min-w-0 shrink items-center gap-1 rounded-full border border-sidebar-border py-0 pr-0.5 pl-1.5 text-label"
+      className="flex h-6 min-w-0 shrink items-center gap-1 rounded-control-small bg-(--fill-secondary) py-0 pr-0.5 pl-1.5 text-ui"
     >
       <span
         aria-hidden
@@ -232,7 +135,7 @@ function LabelPill({
         className="flex size-4 shrink-0 items-center justify-center rounded-full text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
         onClick={onRemove}
       >
-        <XIcon weight="bold" className="size-2.5" />
+        <CloseIcon strokeWidth={2.25} className="size-2.5" />
       </button>
     </span>
   );
@@ -311,21 +214,21 @@ function AddLabelControl({
           title="Add label"
           data-testid="ticket-rail-label-add"
           disabled={!canWrite}
-          className="flex size-6 shrink-0 items-center justify-center rounded-full border border-sidebar-border text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+          className="flex size-6 shrink-0 items-center justify-center rounded-control-small text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
         >
           {/* `bold` at 12px: the size tier where regular draws lighter than the
               text it sits among (CLAUDE.md), and this glyph now has no word
               beside it to borrow weight from. */}
-          <PlusIcon weight="bold" className="size-3" />
+          <AddIcon strokeWidth={2.25} className="size-3" />
         </button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-56 p-0">
+      <LabelPickerSurface align="start" className="w-56">
         <Command shouldFilter={false} className="bg-transparent">
-          <CommandInput autoFocus value={query} onValueChange={setQuery} placeholder="Add label…" />
+          <CommandInput autoFocus value={query} onValueChange={setQuery} placeholder="Add label" />
           <CommandList className="max-h-56">
             {options.length === 0 && creatable === null ? (
               // Not "none left": the field itself is the remaining answer.
-              <div className={EMPTY_INLINE}>Type a new label name</div>
+              <div className="sr-only">Type a new label name</div>
             ) : null}
             {options.map((option) => (
               <CommandItem
@@ -356,13 +259,13 @@ function AddLabelControl({
                   setOpen(false);
                 }}
               >
-                <PlusIcon />
+                <AddIcon />
                 <span className="truncate">Create “{creatable}”</span>
               </CommandItem>
             )}
           </CommandList>
         </Command>
-      </PopoverContent>
+      </LabelPickerSurface>
     </Popover>
   );
 }
@@ -418,14 +321,16 @@ function LabelRun({
     onChange(next);
   };
 
+  const shown = labels.slice(0, 2);
+  const hiddenCount = labels.length - shown.length;
   return (
     <span
       role="group"
-      aria-label={`Labels: ${labels.length === 0 ? "none" : labels.join(", ")}`}
+      aria-label={`Labels: ${labels.length === 0 ? "none" : hiddenCount > 0 ? labels.length : labels.join(", ")}`}
       data-testid="ticket-rail-label-run"
-      className="flex min-w-0 flex-1 flex-wrap items-center gap-1"
+      className="flex h-control-sm min-w-0 flex-1 items-center gap-1"
     >
-      {labels.map((name) => (
+      {shown.map((name) => (
         <LabelPill
           key={name}
           name={name}
@@ -438,6 +343,29 @@ function LabelRun({
           onRemove={() => remove(name)}
         />
       ))}
+      {hiddenCount > 0 ? (
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              aria-label={`Manage labels, ${hiddenCount} more`}
+              className="shrink-0 px-1 tabular-nums"
+            >
+              +{hiddenCount}
+            </Button>
+          </PopoverTrigger>
+          <LabelPickerSurface align="start">
+            <LabelPickerContent
+              projectId={projectId}
+              value={labels}
+              onChange={onChange}
+              readOnly={!canWrite}
+            />
+          </LabelPickerSurface>
+        </Popover>
+      ) : null}
       <AddLabelControl
         projectId={projectId}
         applied={labels}
@@ -455,105 +383,127 @@ function LabelRun({
   );
 }
 
-export function TicketProperties({ projectId, ticket }: { projectId: string; ticket: Ticket }) {
+export function TicketProperties({
+  projectId,
+  ticket,
+  presentation = "inspector",
+}: {
+  projectId: string;
+  ticket: Ticket;
+  presentation?: "inspector" | "summary";
+}) {
+  const summary = presentation === "summary";
+  const rowClass = summary ? "contents [&>span:first-child]:sr-only" : undefined;
   const statusLabel = TICKET_STATUS_LABELS[ticket.status];
+  const StatusIcon = STATUS_ICON[ticket.status];
   const priorityLabel = TICKET_PRIORITY_LABELS[ticket.priority];
   const canWrite = useCanWrite(projectId);
   return (
     <section
       aria-label="Properties"
       data-testid="ticket-rail-properties"
-      className={cn("flex flex-col gap-1", RAIL_PANEL_INSET)}
+      className={cn("flex min-w-0 flex-col gap-1", summary ? "mt-3" : RAIL_PANEL_INSET)}
     >
-      <RailSectionHeadingRow label="Properties" />
-      <ul className="flex flex-col">
-        <PropertyRow
+      <ul className={summary ? "flex min-w-0 flex-wrap items-center gap-1.5" : "flex flex-col"}>
+        <InspectorRow
+          className={rowClass}
+          label="Status"
           data-testid="ticket-rail-property-row-status"
-          glyph={<CircleIcon className="size-4" />}
-          control={
-            <DropdownMenu>
-              <ValueTrigger
-                label={statusLabel}
-                field="Status"
-                value={ticket.status}
-                canWrite={canWrite}
-              />
-              <DropdownMenuContent align="start">
-                <DropdownMenuRadioGroup
-                  value={ticket.status}
-                  onValueChange={(value) => {
-                    if (!guardWrite(projectId)) return;
-                    // The board's own move, so the column change keeps every
-                    // side effect it has anywhere else — including whichever
-                    // Automation the new column arms.
-                    void useBoardStore
-                      .getState()
-                      .moveTicket(
-                        projectId,
-                        ticket.id,
-                        value as TicketStatus,
-                        Number.MAX_SAFE_INTEGER,
-                      );
-                  }}
-                >
-                  {TICKET_STATUSES.map((status) => (
-                    <DropdownMenuRadioItem key={status} value={status}>
-                      {TICKET_STATUS_LABELS[status]}
-                    </DropdownMenuRadioItem>
-                  ))}
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          }
-        />
-        <PropertyRow
-          data-testid="ticket-rail-property-row-priority"
-          glyph={<PriorityIndicator priority={ticket.priority} />}
-          control={
-            <DropdownMenu>
-              <ValueTrigger
-                label={priorityLabel}
-                field="Priority"
-                value={ticket.priority}
-                canWrite={canWrite}
-              />
-              <DropdownMenuContent align="start">
-                <DropdownMenuRadioGroup
-                  value={ticket.priority}
-                  onValueChange={(value) => {
-                    if (!guardWrite(projectId)) return;
-                    void useBoardStore
-                      .getState()
-                      .setTicketPriority(projectId, ticket.id, value as TicketPriority);
-                  }}
-                >
-                  {TICKET_PRIORITIES.map((priority) => (
-                    <DropdownMenuRadioItem key={priority} value={priority}>
-                      <PriorityIndicator priority={priority} />
-                      {TICKET_PRIORITY_LABELS[priority]}
-                    </DropdownMenuRadioItem>
-                  ))}
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          }
-        />
-        <PropertyRow
-          data-testid="ticket-rail-property-row-labels"
-          align="start"
-          glyph={<TagIcon className="size-4" />}
-          control={
-            <LabelRun
-              projectId={projectId}
-              labels={ticket.labels}
+        >
+          <DropdownMenu>
+            <ValueTrigger
+              label={statusLabel}
+              field="Status"
+              value={ticket.status}
               canWrite={canWrite}
-              onChange={(next) => {
-                if (!guardWrite(projectId)) return;
-                void useBoardStore.getState().setLabels(ticket.id, next);
-              }}
-            />
-          }
-        />
+              summary={summary}
+            >
+              <StatusIcon aria-hidden className="size-3.5 text-muted-foreground" />
+            </ValueTrigger>
+            <DropdownMenuContent align="start">
+              <DropdownMenuRadioGroup
+                value={ticket.status}
+                onValueChange={(value) => {
+                  if (!guardWrite(projectId)) return;
+                  // The board's own move, so the column change keeps every
+                  // side effect it has anywhere else — including whichever
+                  // Automation the new column arms.
+                  void useBoardStore
+                    .getState()
+                    .moveTicket(
+                      projectId,
+                      ticket.id,
+                      value as TicketStatus,
+                      Number.MAX_SAFE_INTEGER,
+                    );
+                }}
+              >
+                {TICKET_STATUSES.map((status) => (
+                  <DropdownMenuRadioItem key={status} value={status}>
+                    {TICKET_STATUS_LABELS[status]}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </InspectorRow>
+        <InspectorRow
+          className={rowClass}
+          label="Priority"
+          data-testid="ticket-rail-property-row-priority"
+        >
+          <DropdownMenu>
+            <ValueTrigger
+              label={priorityLabel}
+              field="Priority"
+              value={ticket.priority}
+              canWrite={canWrite}
+              summary={summary}
+            >
+              <span aria-hidden className="flex size-3.5 shrink-0 items-center justify-center">
+                <PriorityIndicator priority={ticket.priority} />
+              </span>
+            </ValueTrigger>
+            <DropdownMenuContent align="start">
+              <DropdownMenuRadioGroup
+                value={ticket.priority}
+                onValueChange={(value) => {
+                  if (!guardWrite(projectId)) return;
+                  void useBoardStore
+                    .getState()
+                    .setTicketPriority(projectId, ticket.id, value as TicketPriority);
+                }}
+              >
+                {TICKET_PRIORITIES.map((priority) => (
+                  <DropdownMenuRadioItem key={priority} value={priority}>
+                    <span
+                      aria-hidden
+                      className="flex size-3.5 shrink-0 items-center justify-center"
+                    >
+                      <PriorityIndicator priority={priority} />
+                    </span>
+                    {TICKET_PRIORITY_LABELS[priority]}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </InspectorRow>
+        <InspectorRow
+          className={rowClass}
+          label="Labels"
+          data-testid="ticket-rail-property-row-labels"
+        >
+          <LabelRun
+            projectId={projectId}
+            labels={ticket.labels}
+            canWrite={canWrite}
+            onChange={(next) => {
+              if (!guardWrite(projectId)) return;
+              void useBoardStore.getState().setLabels(ticket.id, next);
+            }}
+          />
+        </InspectorRow>
       </ul>
     </section>
   );

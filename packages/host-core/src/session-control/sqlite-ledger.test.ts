@@ -12,6 +12,7 @@ import { internSessionEventProvenance } from "../db/session-event-provenance";
 import { openTestDb, testProject, testTicket } from "../db/test-helpers";
 import type { TestDb } from "../db/test-helpers";
 import { insertTicket } from "../db/tickets-repo";
+import { withTransaction } from "../db/transaction-gate";
 import { workingSessionCount } from "../session-concurrency";
 import { createSqliteSessionLedger } from "./sqlite-ledger";
 import { localSessionRow, sessionBirthOwnerCompatible } from "../db/local-product";
@@ -50,6 +51,20 @@ const provenance = {
 
 function provenanceId(): number {
   return internSessionEventProvenance(ctx.db, JSON.stringify(provenance));
+}
+
+/**
+ * A relaunch's read: a fresh engine over the same ledger. Tests that rewrite
+ * history beneath the insert-only contract use it, because a live engine may
+ * answer from the fold it already holds (VC-1076), exactly as it is entitled
+ * to for history nothing can rewrite.
+ */
+function rereadSession(ledger: SessionLedger, sessionId: string) {
+  return createSessionEngine({
+    ledger,
+    clock: { now: () => 100 },
+    ids: { next: (kind) => `${kind}-reread` },
+  }).getSession({ sessionId });
 }
 
 // The port's guarantees — ordering, rollback, sequences, receipts, signals,
@@ -1155,7 +1170,7 @@ describe("SqliteSessionLedger", () => {
   });
 
   it("rejects an interaction whose prompts or answers are structurally wrong", async () => {
-    const { control, projectId } = setup();
+    const { control, projectId, ledger } = setup();
     const created = await control.createSession({
       commandId: "create-invalid",
       projectId,
@@ -1251,7 +1266,7 @@ describe("SqliteSessionLedger", () => {
           }
         ).payload,
       ) as { interaction?: { prompts: unknown }; resolution?: { answers: unknown } };
-    const project = () => control.getSession({ sessionId: created.session.id });
+    const project = () => rereadSession(ledger, created.session.id);
 
     const opened = read("interaction-opened-invalid");
     opened.interaction!.prompts = "prompt:0";
@@ -1303,7 +1318,7 @@ describe("SqliteSessionLedger", () => {
   });
 
   it("round-trips a cancelled interaction without a resolution and rejects an unknown reason", async () => {
-    const { control, projectId } = setup();
+    const { control, projectId, ledger } = setup();
     const created = await control.createSession({
       commandId: "create-cancelled",
       projectId,
@@ -1391,7 +1406,7 @@ describe("SqliteSessionLedger", () => {
       }),
       "interaction-cancelled",
     );
-    await expect(control.getSession({ sessionId: created.session.id })).rejects.toThrow(
+    await expect(rereadSession(ledger, created.session.id)).rejects.toThrow(
       "reason has an unsupported value",
     );
     ctx.db.pragma("ignore_check_constraints = OFF");
@@ -2309,7 +2324,188 @@ describe("birth payload memo (VC-1076)", () => {
         .prepare("SELECT schema_version FROM session_projection_checkpoints WHERE session_id = ?")
         .get(created.session.id),
     ).toEqual({ schema_version: SESSION_PROJECTION_CHECKPOINT_VERSION });
-    expect(await control.getSession({ sessionId: created.session.id })).toEqual(folded);
+    // A listing row is the Session's projection without its history (VC-848).
+    const full = await control.getSession({ sessionId: created.session.id });
+    expect(full).not.toBeNull();
+    const { commands: _commands, receipts: _receipts, ...listed } = full!;
+    expect(folded).toEqual(listed);
+  });
+});
+
+describe("hot checkpoints under a caller's outer transaction (VC-1098)", () => {
+  const adapterProvenance = {
+    source: { kind: "adapter" as const, id: "pi", detail: null },
+    venue: { id: "local", kind: "local" as const },
+  };
+  const observed = (sessionId: string, id: string, occurredAt: number): SessionObservation => ({
+    kind: "adapter.observed",
+    id,
+    sessionId,
+    occurredAt,
+    provenance: adapterProvenance,
+    attachmentId: null,
+    name: "vc1098.test",
+    native: null,
+  });
+
+  it("says a transaction is enclosed only when it runs inside one the ledger does not own", async () => {
+    const { ledger } = setup();
+    await expect(ledger.transaction((transaction) => transaction.enclosed)).resolves.toBe(false);
+    let inner: Promise<boolean | undefined> | undefined;
+    withTransaction(ctx.db, () => {
+      inner = ledger.transaction((transaction) => transaction.enclosed);
+    });
+    await expect(inner).resolves.toBe(true);
+  });
+
+  it("keeps nothing hot from a fact whose enclosing transaction rolled back", async () => {
+    const { control, ledger, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-enclosed",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Enclosed",
+      provenance,
+    });
+    const sessionId = created.session.id;
+    await control.observe(observed(sessionId, "fact-before", 1_000));
+
+    // The engine's own transaction commits as a savepoint, then the caller's
+    // outer transaction rolls the fact back.
+    let recorded: Promise<SessionEvent> | undefined;
+    expect(() =>
+      withTransaction(ctx.db, () => {
+        recorded = control.observe(observed(sessionId, "fact-rolled-back", 5_000));
+        throw new Error("outer rolled back");
+      }),
+    ).toThrow("outer rolled back");
+    const lost = await recorded!;
+
+    // The next fact takes the rolled-back fact's sequence. A hot entry kept
+    // from the rolled-back one would sit at that cursor and answer for it.
+    const next = await control.observe(observed(sessionId, "fact-after", 7_000));
+    expect(next.sequence).toBe(lost.sequence);
+    const events = await control.listEvents({ sessionId });
+    expect(events.map((event) => event.id)).not.toContain("fact-rolled-back");
+    const live = await control.getSession({ sessionId });
+    expect(live?.lastActivityAt).toBe(7_000);
+    expect(live).toEqual(await rereadSession(ledger, sessionId));
+  });
+});
+
+describe("projection checkpoint updated_at (VC-1098)", () => {
+  it("stays the Session's latest recorded_at, read from the tail after the row's cursor", async () => {
+    // A clock that runs backwards as well as forwards, so the latest
+    // recorded_at is not the newest event's.
+    const times = [500, 900, 300, 1_200, 700, 1_100, 400, 2_000, 100, 1_500];
+    let tick = 0;
+    const { control, projectId } = setup(() => times[tick++ % times.length]!);
+    const created = await control.createSession({
+      commandId: "create-updated-at",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Updated at",
+      provenance,
+    });
+    const sessionId = created.session.id;
+    const wholeLog = () =>
+      ctx.db
+        .prepare(
+          `SELECT COALESCE(
+             (SELECT MAX(recorded_at) FROM session_events WHERE session_id = ?),
+             (SELECT created_at FROM sessions WHERE id = ?)) AS updatedAt`,
+        )
+        .get(sessionId, sessionId) as { updatedAt: number };
+    const stored = () =>
+      ctx.db
+        .prepare(
+          "SELECT updated_at AS updatedAt FROM session_projection_checkpoints WHERE session_id = ?",
+        )
+        .get(sessionId) as { updatedAt: number };
+    const save = async () => {
+      const events = await control.listEvents({ sessionId });
+      await control.saveProjectionCheckpoint(
+        createSessionProjectionCheckpoint(created.session, events),
+      );
+    };
+    for (let round = 0; round < 6; round += 1) {
+      await control.submit({
+        commandId: `retitle-${round}`,
+        sessionId,
+        intent: { kind: "session.retitle", title: `Title ${round}` },
+        provenance,
+      });
+      await save();
+      expect(stored()).toEqual(wholeLog());
+    }
+    // A row written behind the head still holds the whole log's maximum, and
+    // the next save takes the tail past ITS cursor, not past the head.
+    const events = await control.listEvents({ sessionId });
+    await control.submit({
+      commandId: "retitle-ahead",
+      sessionId,
+      intent: { kind: "session.retitle", title: "Ahead" },
+      provenance,
+    });
+    ctx.db
+      .prepare("DELETE FROM session_projection_checkpoints WHERE session_id = ?")
+      .run(sessionId);
+    await control.saveProjectionCheckpoint(
+      createSessionProjectionCheckpoint(created.session, events),
+    );
+    expect(stored()).toEqual(wholeLog());
+    await save();
+    expect(stored()).toEqual(wholeLog());
+  });
+
+  it("falls back to the creation time for a Session with no events, then to its events", async () => {
+    const { ledger, control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-template",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Template",
+      provenance,
+    });
+    // A Session row with no events yet, created later than its first event
+    // will be recorded: its cursor-0 row holds the creation time, never a
+    // recorded_at, so the next save must not keep it as a maximum.
+    const empty = { ...created.session, id: "session-empty", createdAt: 50_000 };
+    await ledger.transaction((transaction) => {
+      transaction.insertSession(empty);
+      transaction.saveProjectionCheckpoint(createSessionProjectionCheckpoint(empty, []));
+    });
+    const stored = () =>
+      (
+        ctx.db
+          .prepare(
+            "SELECT updated_at AS updatedAt FROM session_projection_checkpoints WHERE session_id = ?",
+          )
+          .get(empty.id) as { updatedAt: number }
+      ).updatedAt;
+    expect(stored()).toBe(50_000);
+    const event: SessionEvent = {
+      id: "event-empty-1",
+      sessionId: empty.id,
+      sequence: 1,
+      occurredAt: 10,
+      recordedAt: 10,
+      provenance,
+      attachmentId: null,
+      commandId: null,
+      payload: { kind: "adapter.observed", attachmentId: null, name: "vc1098.test", native: null },
+    };
+    await ledger.transaction((transaction) => {
+      transaction.appendEvent(event);
+      transaction.saveProjectionCheckpoint(createSessionProjectionCheckpoint(empty, [event]));
+    });
+    expect(stored()).toBe(10);
   });
 });
 

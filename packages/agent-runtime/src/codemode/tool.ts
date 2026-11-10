@@ -34,12 +34,12 @@ import {
   type CodemodeTool,
 } from "@earendil-works/pi-codemode";
 import {
-  Type,
   type AssistantMessage,
   type JsonObject,
   type NestedToolCallRecord,
   type NestedToolCalls,
 } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import {
   CODE_MODE_TOOL_ID,
   isCodeCallable,
@@ -151,6 +151,11 @@ export interface CodeModeDetails {
   status: "completed" | "failed";
   /** Why a failed run failed. */
   error?: "check" | "script" | "timeout" | "aborted" | "sandbox" | "replay" | "limit";
+  /** The program/stop exception, separate from display text and trust framing.
+   * The activity boundary redacts this independently before bounding it. */
+  errorCause?: string;
+  /** Counts cover every call, even when the bounded nested record is incomplete. */
+  callCounts: { succeeded: number; failed: number; unfinished: number; replayed: number };
   /** Active running time, in milliseconds. */
   activeMs: number;
   /** Time the run spent paused on a person answering. */
@@ -310,6 +315,7 @@ export function createCodeModeTool(
         kinds.get(entry.tool.name)!,
         entry.mcp?.outputSchema ?? entry.detailsSchema ?? entry.tool.outputSchema,
         host.surface.descriptionVersion === undefined,
+        host.surface.mcpResultVersion,
       ),
       ...(kinds.get(entry.tool.name) === "structured" ? { nativeStructuredOutput: true } : {}),
       namespace: namespaceOf(entry),
@@ -345,6 +351,7 @@ export function createCodeModeTool(
   const search = new ToolSearch(listing);
   const description = describeCodeMode({
     legacy: host.surface.descriptionVersion === undefined,
+    mcpResultVersion: host.surface.mcpResultVersion,
     tools: listing,
     directOnly: host.tools
       .filter(
@@ -426,6 +433,8 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
       details: {
         status: "failed",
         error: "check",
+        errorCause: check.message,
+        callCounts: { succeeded: 0, failed: 0, unfinished: 0, replayed: 0 },
         activeMs: 0,
         pausedMs: 0,
         nestedCalls: { calls: [], complete: true },
@@ -486,6 +495,7 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
   const inflight = new Set<Promise<unknown>>();
   let issued = 0;
   let replayed = 0;
+  let replayedFailed = 0;
   let discoveries = 0;
   const markUntrusted = (name: string): void => {
     untrusted.set(name, (untrusted.get(name) ?? 0) + 1);
@@ -546,6 +556,17 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
         throw diverged;
       }
       if (remembered.outcome === null) {
+        // The payload was evicted, not the completed effect. Keep its known
+        // outcome in partial completion even though replay cannot answer it.
+        records.push({
+          id,
+          name: tool.name,
+          args: undefined,
+          argumentsBytes,
+          startedAt: now(),
+          durationMs: 0,
+          status: remembered.isError === true ? "error" : "ok",
+        });
         const unkept = new RunStop(
           "replay",
           `Replay cannot answer call ${position} (${tool.name}): it ran before and its result was too large to keep, so it is not run again.`,
@@ -558,6 +579,7 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
       images.restore(remembered.images ?? []);
       omittedImages += remembered.omittedImages ?? 0;
       replayed += 1;
+      if (remembered.isError === true || !remembered.outcome.ok) replayedFailed += 1;
       return deliver(remembered.outcome);
     }
     const record: CallRecord = {
@@ -649,8 +671,18 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
       // way — so it falls through and is journaled like any other.
       throw new Error("The program was cancelled before this call finished.");
     }
-    record.status = shaped.ok ? "ok" : "error";
-    if (!shaped.ok) record.error = shaped.message.slice(0, MAX_RECORDED_ERROR_CHARS);
+    // MCP server errors and bash nonzero exits resolve as inspectable answers,
+    // but are not successful calls. Their status never decides program success.
+    record.status = shaped.ok && !outcome.isError ? "ok" : "error";
+    if (record.status === "error")
+      record.error = (
+        !shaped.ok
+          ? shaped.message
+          : outcome.result.content
+              .filter((block) => block.type === "text")
+              .map((block) => block.text)
+              .join("\n")
+      ).slice(0, MAX_RECORDED_ERROR_CHARS);
     // `read` of a file Volli saved from an untrusted result opens with the
     // trust notice; a program could drop it, so the run is marked instead.
     const savedOutput =
@@ -662,6 +694,7 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
       name: tool.name,
       argumentsDigest,
       outcome: shaped,
+      ...(record.status === "error" ? { isError: true } : {}),
       images: captured.map((handle) => images.held.get(handle)!),
       ...(captureOmissions > 0 ? { omittedImages: captureOmissions } : {}),
       ...(savedOutput || input.untrustedSources.has(tool.name) ? { untrusted: true } : {}),
@@ -726,7 +759,24 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
       },
     },
   ];
+  // Pi 1.3 settles execution/close before worker exit. Hold this tool call's
+  // scheduler capacity until the actual exit, as Pi 1.0 did; admission happens
+  // after wasm loads, so a cancelled run must also reject a late worker start.
+  let workerExited: Promise<void> | undefined;
+  let workerAdmissionClosed = false;
   const sandbox = new CodemodeSandbox({
+    acquireWorker: () => {
+      if (workerAdmissionClosed) throw new Error("The program has already finished.");
+      run.signal.throwIfAborted();
+      let release!: () => void;
+      workerExited = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return release;
+    },
+    // Pi 1.5 freezes built-ins before the model program. Install the existing
+    // clock/random sequence first, then let lockdown protect those bindings too.
+    initializationCode: determinismPrelude(seedOf(outerId), journal.epoch),
     tools: sandboxTools,
     globals,
     // The run's own clock decides the deadline, because it stops while a
@@ -742,18 +792,17 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
   });
   let result: CodemodeResult;
   try {
-    result = await sandbox.execute(
-      determinismPrelude(seedOf(outerId), journal.epoch) + check.code,
-      { signal: run.signal },
-    );
+    result = await sandbox.execute(check.code, { signal: run.signal });
     // No nested call outlives the run that issued it: the sandbox has aborted
     // the unawaited ones, and their activity settles before the run answers.
     await Promise.allSettled(inflight);
   } finally {
+    workerAdmissionClosed = true;
     clock.dispose();
     clearTimeout(ceiling);
     for (const one of outerSignals) one.removeEventListener("abort", onOuterAbort);
     await sandbox.close();
+    await workerExited;
   }
   const reason: unknown = run.signal.reason;
   const stopped = reason instanceof RunStop ? reason : undefined;
@@ -776,6 +825,7 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
     records,
     untrusted,
     replayed,
+    replayedFailed,
     activeMs: clock.spentMs,
     pausedMs: clock.pausedMs,
     peak: slots.peak,
@@ -818,14 +868,21 @@ function nestedCalls(records: readonly CallRecord[]): NestedToolCalls {
   return { calls, complete };
 }
 
-function callSummary(records: readonly CallRecord[], replayed: number): string {
+function callSummary(
+  records: readonly CallRecord[],
+  replayed: number,
+  replayedFailed: number,
+): string {
   const total = records.length + replayed;
   if (total === 0) return "no calls";
   const failed = records.filter((record) => record.status === "error");
   const unfinished = records.filter((record) => record.status === "unfinished");
   const parts = [`${total} call${total === 1 ? "" : "s"}`];
   const detail: string[] = [];
-  detail.push(`${records.length - failed.length - unfinished.length + replayed} ok`);
+  detail.push(
+    `${records.length - failed.length - unfinished.length + replayed - replayedFailed} ok`,
+  );
+  if (replayedFailed > 0) detail.push(`${replayedFailed} failed (replayed)`);
   if (failed.length > 0) {
     detail.push(
       `${failed.length} failed (${failed
@@ -871,6 +928,7 @@ async function assemble(input: {
   records: readonly CallRecord[];
   untrusted: ReadonlyMap<string, number>;
   replayed: number;
+  replayedFailed: number;
   activeMs: number;
   pausedMs: number;
   peak: number;
@@ -890,11 +948,24 @@ async function assemble(input: {
     if (value !== undefined) body.push(`Returned: ${value}`);
   }
   let error: CodeModeDetails["error"];
+  let errorCause: string | undefined;
   if (stopped !== undefined) {
     error = stopped.kind;
+    errorCause = stopped.message;
     body.push(`Program stopped: ${stopped.message}`);
   } else if (!result.ok) {
     error = result.error.kind;
+    // Pi keeps the exception class in the stack, not the message. Copy only
+    // that fixed vocabulary, never a sliced stack/message (redaction must see
+    // complete credentials, including ones crossing a newline or length cap).
+    const name =
+      /^(?:Error|EvalError|RangeError|ReferenceError|SyntaxError|TypeError|URIError|InternalError|AggregateError)(?=:)/u.exec(
+        result.error.stack ?? "",
+      )?.[0];
+    errorCause =
+      name === undefined || result.error.message.startsWith(`${name}:`)
+        ? result.error.message
+        : `${name}: ${result.error.message}`;
     body.push(
       result.error.kind === "script"
         ? `Program error: ${result.error.stack ?? result.error.message}`
@@ -905,7 +976,17 @@ async function assemble(input: {
   let text = body.join("\n");
   const details: CodeModeDetails = {
     status: ok ? "completed" : "failed",
-    ...(error === undefined ? {} : { error }),
+    ...(error === undefined ? {} : { error, errorCause }),
+    callCounts: {
+      succeeded:
+        input.records.filter((record) => record.status === "ok").length +
+        input.replayed -
+        input.replayedFailed,
+      failed:
+        input.records.filter((record) => record.status === "error").length + input.replayedFailed,
+      unfinished: input.records.filter((record) => record.status === "unfinished").length,
+      replayed: input.replayed,
+    },
     activeMs: Math.round(input.activeMs),
     pausedMs: Math.round(input.pausedMs),
     nestedCalls: nestedCalls(input.records),
@@ -935,11 +1016,16 @@ async function assemble(input: {
     text = untrustedEnvelope(text, input.untrusted);
   }
   const header = [
-    `Program ${ok ? "completed" : "failed"} in ${seconds(input.activeMs)}`,
+    ok
+      ? `Program completed in ${seconds(input.activeMs)}`
+      : `Program failed after ${details.callCounts.succeeded} successful call${details.callCounts.succeeded === 1 ? "" : "s"} in ${seconds(input.activeMs)}`,
     input.pausedMs >= 1_000
       ? ` (plus ${seconds(input.pausedMs)} paused on questions and Volli verbs)`
       : "",
-    ` · ${callSummary(input.records, input.replayed)}.`,
+    ` · ${callSummary(input.records, input.replayed, input.replayedFailed)}.`,
+    !ok && details.callCounts.succeeded > 0
+      ? " Completed calls are not rolled back; do not rerun changes blindly."
+      : "",
     emitted.content.length > 0
       ? ` ${emitted.content.length / 2} image(s) attached (display requires Volli 0.2.2 or newer).`
       : "",

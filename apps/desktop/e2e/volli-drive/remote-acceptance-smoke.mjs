@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { createRegistry, findInSnapshot, instanceLayout, REPO } from "./lib/core.mjs";
 import { request } from "./lib/protocol.mjs";
+import { windowTargeting } from "./lib/window-targeting.mjs";
 import { waitUntil } from "../lib/smoke-kit.mjs";
 import {
   ANSWER_QUESTION,
@@ -42,7 +43,10 @@ let localKeepaliveStarted = false;
 let nativeQuitAttempted = false;
 let instance;
 let socket;
-const call = (cmd, args = {}) => request(socket, cmd, args, { timeoutMs: 150_000 });
+const driveWindows = windowTargeting((cmd, args = {}) =>
+  request(socket, cmd, args, { timeoutMs: 150_000 }),
+);
+const call = driveWindows.call;
 const snap = () => call("snapshot");
 const wait = async (text, timeout = 45_000) => (await call("wait", { text, timeout })).snapshot;
 
@@ -91,6 +95,17 @@ async function send(text) {
   await type("Message", text);
   await action("press", "textbox", "Message", { key: "Enter" });
 }
+async function openHomeChat() {
+  // Home's approved entry point is its tab chooser, not the removed empty-chat
+  // button. Scope the strip door to main; the sidebar has an equivalent +.
+  await click("button", "Open a tab", { scope: { role: "main", name: null } });
+  await click("menuitem", "Chat ⌘T");
+  await waitUntil(
+    "the local chat Message box is actionable",
+    async () => hasActionableControl((await snap()).text, "textbox", "Message"),
+    { timeout: 30_000, interval: 100 },
+  );
+}
 async function hostChip() {
   await click("button", "Host:", { contains: true });
   await wait("Switch host");
@@ -123,6 +138,7 @@ async function card() {
 }
 async function stopLocalKeepalive() {
   if (!localKeepaliveStarted) return;
+  driveWindows.useMainWindow();
   if (nativeQuitAttempted) {
     await call("native-reopen");
     nativeQuitAttempted = false;
@@ -191,6 +207,7 @@ async function journey() {
     // Prove the saved pairing in Settings, where the host reads its real
     // enrolled devices over SSH and marks this device as This Mac.
     await click("button", "Settings");
+    await driveWindows.useSettingsWindow();
     await wait("Settings categories");
     await click("button", "Hosts");
     await click("button", REMOTE_HOST, { contains: true, first: true });
@@ -209,6 +226,8 @@ async function journey() {
     // Never click Forget: this is only a real UI scroll for the evidence frame.
     await action("scroll", "button", "Forget…", { direction: "down" });
     await shot("step-1-paired-device");
+    // Settings stays open independently; returning to Home targets the workbench.
+    driveWindows.useMainWindow();
     await click("button", "Home");
   });
 
@@ -218,10 +237,9 @@ async function journey() {
     async () => {
       // Only benign Git box state is arranged. Project registration is UI-only.
       await call("acceptance-arrange-box");
-      await click("button", "Settings");
-      await wait("Settings categories");
-      await click("button", "Hosts");
-      await click("button", REMOTE_HOST, { contains: true, first: true });
+      // Reuse the same native Hosts detail; opening Settings again must not be
+      // used as a reset or a recovery shortcut for this retained view.
+      await driveWindows.useSettingsWindow();
       await wait("New project…");
       await click("button", "New project…");
       await wait(`New project on ${REMOTE_HOST}`);
@@ -247,9 +265,10 @@ async function journey() {
         "PASS",
         "The folder project must open through production UI registration",
       );
-      // The success toast arrives before the project's dialog has finished
-      // exiting. Wait for navigation's real accessibility name/ref to return;
-      // text behind a still-modal dialog is not an actionable Home button.
+      // The toast precedes the project's sheet exit. Prove that exit in its
+      // owning Settings window, then target the independently live workbench.
+      await call("wait", { text: `New project on ${REMOTE_HOST}`, gone: true, timeout: 10_000 });
+      driveWindows.useMainWindow();
       await waitUntil(
         "project dialog exits and Home is actionable",
         async () => hasActionableControl((await snap()).text, "button", "Home"),
@@ -267,15 +286,22 @@ async function journey() {
     await click("button", "Home");
     // Operator configuration restarts hostd. New ticket stays enabled during
     // the reconnect grace, so it cannot prove rejoin (VC-768). Observe the
-    // project's real Workspace-ready state, then the renderer's write control.
+    // project's real Workspace-ready state, then the header's write control.
+    // An empty board legitimately offers the same New ticket action in its
+    // empty state too; bind the persistent page-wide group, not an arbitrary
+    // first match or a uniqueness check over both entry points.
     await waitUntil(
       "Workspace rejoins after model deployment and New ticket is actionable",
       async () =>
         (await call("acceptance-workspace")).ready &&
-        hasActionableControl((await snap()).text, "button", "New ticket"),
+        hasActionableControl(
+          snapshotSubtree((await snap()).text, "group", "Board actions"),
+          "button",
+          "New ticket",
+        ),
       { timeout: 10_000, interval: 100 },
     );
-    await click("button", "New ticket");
+    await click("button", "New ticket", { scope: { role: "group", name: "Board actions" } });
     await type("Ticket title", TITLE);
     await click("button", "Create ticket");
     await wait(TITLE);
@@ -312,6 +338,7 @@ async function journey() {
       await type(`Azure OpenAI API key, stored on ${REMOTE_HOST}`, "volli-drive-fake-key");
       await click("button", "Save");
       await wait(`Signed in on ${REMOTE_HOST} · API key`);
+      // This is the remote sign-in modal in main, not native Settings.
       await press("Escape");
       await waitUntil(
         "sign-in sheet exits and the host chip is actionable",
@@ -333,13 +360,14 @@ async function journey() {
         ref: boardDefault.match(/\[ref=([^\]]+)\]/)[1],
         kind: "click",
       });
-      await click("option", "GPT-4.1 mini");
+      await click("option", "Azure OpenAI GPT-4.1 mini");
       await waitUntil(
         "the box saved its selected default",
         async () => boardDefaultControl((await snap()).text, REMOTE_HOST, "GPT-4.1 mini"),
         { timeout: 10_000, interval: 100 },
       );
       await shot("step-4-model-default");
+      // Escape closes only this workbench-owned model sheet.
       await press("Escape");
       await waitUntil(
         "model sheet exits and the host chip is actionable",
@@ -376,7 +404,7 @@ async function journey() {
       // scripted turn keeps the client alive while the remote question waits.
       await selectHost("This Mac");
       await click("button", "Home");
-      await click("button", "New chat", { first: true });
+      await openHomeChat();
       localKeepaliveStarted = true;
       await send(LOCAL_KEEPALIVE);
       await wait("Stop turn");
@@ -418,17 +446,18 @@ async function journey() {
     "Logs: This Mac and box source buttons, real hostd serving line labelled with box",
     async () => {
       await click("button", "Settings");
+      await driveWindows.useSettingsWindow();
       await wait("Settings categories");
       await click("button", "Logs", { contains: true, first: true });
       await wait("Sources");
       await click("button", REMOTE_HOST);
-      await type("Search", "serving");
+      await type("Search logs", "serving");
       const current = await wait('button "serving');
       assert.ok(controls(current.text, "button", "This Mac").length === 1);
       assert.ok(controls(current.text, "button", REMOTE_HOST)[0]?.includes("[pressed]"));
       assert.ok(
         visibleServingRow(current.text, REMOTE_HOST),
-        "Real serving row must name hostd and the remote machine, not just the Search input",
+        "Real serving row must name hostd and the remote machine, not just the Search logs input",
       );
     },
   );

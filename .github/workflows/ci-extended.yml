@@ -24,16 +24,15 @@ name: CI extended
 # it. A red on main is a regression to triage (AGENTS.md, CI is the gate);
 # measured repeat flakers belong in smoke-quarantine.yml, not in a re-run.
 #
-# The rest tier is ONE macOS job, not the three shards it was on PRs, and
-# cloud acceptance waits for it rather than running beside it: here latency
-# matters less than slots, so this workflow holds one macOS slot at a time
-# (main's own core e2e in ci.yml holds a second), leaving the PR lanes three
-# of the five. The runner still globs apps/desktop/e2e/*-smoke.mjs and subtracts
+# The rest tier is ONE macOS job, not the three shards it was on PRs. The four
+# macOS lanes (cloud wake, rest tier, cloud acceptance, app-path move) run in
+# parallel: release latency is bounded by the slowest lane rather than their
+# sum. With main's core e2e in ci.yml that can fill the account's five macOS
+# slots for a few minutes after a merge, so a PR's core e2e may queue briefly. The runner still globs apps/desktop/e2e/*-smoke.mjs and subtracts
 # core, credential/legacy exclusions and measured quarantine, so a new smoke
 # joins this lane with no registration step. The small two-Mac cloud journey
-# leads the chain so its failure reports before the long rest tier: that one
-# job proves the wake path and, in the same slot and build, the Automation
-# path (VC-1004). Every later lane still runs after a failure, and the summary
+# proves the wake path and, in the same slot and build, the Automation path
+# (VC-1004). Every lane runs regardless of another's failure, and the summary
 # requires all of them.
 on:
   push:
@@ -51,20 +50,19 @@ on:
 permissions:
   contents: read
 
-# On main, a RUNNING run is never cancelled — a lane this long, cancelled by
-# every merge in a burst, would never report. GitHub keeps at most ONE queued
-# run per group and replaces it with the newer commit's (the replaced one
-# shows as cancelled on its commit, which the release guard therefore
-# refuses), so a burst of merges costs one in-flight run plus one run of the
-# newest commit. A PR's newer push does supersede its older run.
+# A push to main gets its own group per commit: it starts at once instead of
+# queueing behind the previous commit's run, and is never cancelled or
+# replaced, so every main commit gets a result the release guard can read.
+# Bursts spend more runner slots in exchange for no cross-commit queue. A
+# PR's newer push still supersedes its older run; schedule and dispatch keep
+# one run per ref.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   smoke-rest:
     name: Smoke (rest tier)
-    needs: smoke-cloud-wake
     if: ${{ !cancelled() }}
     runs-on: macos-15
     timeout-minutes: 50
@@ -104,11 +102,9 @@ jobs:
   # Package hostd BEFORE the desktop install can rebuild native dependencies
   # for Electron; the delivered archive must contain the exact .nvmrc Node.
   #
-  # After the rest tier, not beside it (one macOS slot at a time), and whatever
-  # its outcome: a red rest tier must not hide the cloud result.
+  # Beside the rest tier, not after it: each macOS lane reports on its own.
   smoke-cloud:
     name: Smoke (cloud acceptance)
-    needs: smoke-rest
     if: ${{ !cancelled() }}
     runs-on: macos-15
     timeout-minutes: 45
@@ -192,9 +188,7 @@ jobs:
   # A third journey shares it too: BYO-6's runner-setup sheet (VC-1039), one
   # Mac and a SIMULATED Linux box on the real /runner/* wire.
   #
-  # First in the same single-slot chain, for quick cloud wake feedback.
-  # The rest tier and remote acceptance still run afterward, even if this
-  # fails. Its own build: the renderer CSP must reach the loopback backend
+  # One of the parallel macOS lanes. Its own build: the renderer CSP must reach the loopback backend
   # (VOLLI_CLOUD_LOOPBACK=1), which release and other lanes never build with.
   smoke-cloud-wake:
     name: Smoke (cloud wake acceptance)
@@ -327,7 +321,6 @@ jobs:
   move-app:
     name: Move to Volli Cloud (app path)
     if: ${{ !cancelled() }}
-    needs: smoke-cloud-wake
     runs-on: macos-15
     timeout-minutes: 45
     steps:

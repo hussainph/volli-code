@@ -200,4 +200,9 @@ export const AGENT_VERB_TABLE: {
   hook: servedVerb("hook", "skip"),
   doctor: servedVerb("doctor", "resolve"),
   "prompt.baseline": servedVerb("prompt.baseline", "resolve"),
+  // The perf store's reads (VC-1092): one machine-local store, no Session,
+  // no roster. `resolve` only so a caller's identity reads as every verb's.
+  "perf.top": servedVerb("perf.top", "resolve"),
+  "perf.stalls": servedVerb("perf.stalls", "resolve"),
+  "perf.compare": servedVerb("perf.compare", "resolve"),
 };

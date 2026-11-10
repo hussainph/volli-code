@@ -229,8 +229,7 @@ export interface CommandRefusal {
  * entirely different vocabulary needs no change on this side.
  *
  * **`unreconciled`.** A receipt whose status is neither accepted nor rejected
- * is the harness saying it does not know what happened (CONTEXT.md lists it
- * as one of the four outcomes). Reporting that as success would be the very
+ * is the harness saying it does not know what happened (CONTEXT.md#receipt). Reporting that as success would be the very
  * claim BOUNDARIES.md rule 4 refuses — "Leave reconciliation semantics
  * undecided rather than assumed absent" — so it comes back as a failure a
  * person can see, in the harness's words when it left any.

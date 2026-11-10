@@ -34,8 +34,14 @@ import * as handlerModule from "../handlers/host-handlers";
 import * as boot from "./boot-recovery";
 import { readRecoveredSessionServices, SessionRuntimeClosingError } from "./lifecycle";
 import * as pi from "./pi-adapter";
-import { createRunnerComposition, type RunnerHostEdge, type RunnerProductStore } from "./runner";
 import type { OpenNativeBinding } from "@volli/session-engine";
+import {
+  createRunnerComposition,
+  type RunnerHostEdge,
+  type RunnerProductStore,
+  type RunnerCompositionInput,
+} from "./runner";
+import { SourceIconDisk } from "../source-icons/storage";
 import { createCloudProductStore } from "../cloud-store";
 import { registerSessionNoticeJob } from "../cloud-store/notice-jobs";
 import { ownerGuardedInbox } from "../cloud-store/session-jobs";
@@ -137,6 +143,7 @@ function gateRecovery(calls: string[]): PromiseWithResolvers<void> {
 function compose(
   { host, ports, root }: Awaited<ReturnType<typeof composedHost>>,
   store: RunnerProductStore = { kind: "local", host },
+  capabilities: RunnerCompositionInput["capabilities"] = { askUser: false, requestSecret: false },
 ) {
   const calls: string[] = [];
   const transport = {
@@ -161,7 +168,7 @@ function compose(
     secrets: new SecretService(
       isLiveHost(host) ? host.secretStore : new SecretStore(join(root, "s.enc"), noKeys),
     ),
-    capabilities: { askUser: false, requestSecret: false },
+    capabilities,
     beforeExecution: async () => {},
     // What this host's doors answer; nothing here calls a verb.
     doors,
@@ -632,6 +639,50 @@ describe("runner composition", () => {
     await expect(f.runner.ready()).rejects.toBeInstanceOf(SessionRuntimeClosingError);
   });
 
+  it("joins source icon persistence even when desktop quit skips detached-work draining", async () => {
+    const fixture = await composedHost("desktop-quit");
+    const gate = Promise.withResolvers<void>();
+    gates.push(gate);
+    const originalSettled = SourceIconDisk.prototype.settled;
+    const persisted = vi
+      .spyOn(SourceIconDisk.prototype, "settled")
+      .mockImplementation(async function (this: SourceIconDisk) {
+        await gate.promise;
+        await originalSettled.call(this);
+      });
+    const unsubscribe = vi.fn();
+    const subscribe = vi.fn(() => unsubscribe);
+    const f = compose(fixture, undefined, {
+      askUser: false,
+      requestSecret: false,
+      sourceIconEpoch: () => "epoch",
+      sourceIconOwner: () => "a".repeat(64),
+      sourceIconRestoring: () => false,
+      watchSourceIconAuthority: subscribe,
+    });
+    await fixture.host.start(f.runner.owner());
+    expect(subscribe).toHaveBeenCalledOnce();
+    let stopped = false;
+    let settled = false;
+    const stopping = fixture.host.stop("quit").then(() => {
+      stopped = true;
+    });
+    const joining = f.runner.settleSourceIcons().then(() => {
+      settled = true;
+    });
+    await vi.waitFor(() => expect(persisted).toHaveBeenCalled());
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(stopped).toBe(false);
+    expect(settled).toBe(false);
+    expect(unsubscribe).toHaveBeenCalled();
+    gate.resolve();
+    await Promise.all([stopping, joining]);
+    expect(stopped).toBe(true);
+    expect(settled).toBe(true);
+    expect(f.shellsClose).not.toHaveBeenCalled();
+    if (isLiveHost(fixture.host)) expect(fixture.host.database.db.open).toBe(true);
+  });
+
   it("a quit during recovery never binds, joins the open sweep, and leaves desktop's database open", async () => {
     const fixture = await composedHost("desktop-quit");
     const { host } = fixture;
@@ -791,18 +842,22 @@ describe("runner composition", () => {
     vi.spyOn(Date, "now").mockImplementation(() => (clock += 10_000));
     const f = compose(fixture);
     const runtime = f.runner.runtime!;
+    const getSessionListing = vi.spyOn(host.sessionEngine, "getSessionListing");
     const getSession = vi.spyOn(host.sessionEngine, "getSession");
     const hint = async () =>
       (await f.runner.concurrency!({ environment: {}, cores: 8 }))["VOLLI_CONCURRENCY_HINT"];
 
     // Nothing held: both open attachments are history, and neither is folded.
     expect(await hint()).toBe("8");
+    expect(getSessionListing).not.toHaveBeenCalled();
     expect(getSession).not.toHaveBeenCalled();
 
     // The terminal's PTY running: one working Session, still every core.
     vi.spyOn(host, "liveTerminalSessionIds").mockReturnValue(new Set([terminal.id]));
     expect(await hint()).toBe("8");
-    expect(getSession.mock.calls).toEqual([[{ sessionId: terminal.id }]]);
+    expect(getSessionListing.mock.calls).toEqual([
+      [{ sessionId: terminal.id, persistCheckpoint: false }],
+    ]);
 
     // The chat's binding held but idle, as every chat messaged since launch
     // stays: still one working, and the chat is not even folded.
@@ -816,14 +871,25 @@ describe("runner composition", () => {
     };
     const bindings = vi.spyOn(runtime, "openNativeBindings").mockReturnValue([binding]);
     expect(await hint()).toBe("8");
-    expect(getSession.mock.calls).toEqual([
-      [{ sessionId: terminal.id }],
-      [{ sessionId: terminal.id }],
+    expect(getSessionListing.mock.calls).toEqual([
+      [{ sessionId: terminal.id, persistCheckpoint: false }],
+      [{ sessionId: terminal.id, persistCheckpoint: false }],
     ]);
 
     // Its turn open on that binding: two working, half each.
     bindings.mockReturnValue([{ ...binding, turnOpen: true }]);
     expect(await hint()).toBe("4");
+
+    // An accepted start is a candidate before its binding sees turn.started.
+    bindings.mockReturnValue([binding]);
+    vi.spyOn(runtime, "pendingTurnStarts").mockReturnValue(new Set([chat.session.id]));
+    getSessionListing.mockClear();
+    expect(await hint()).toBe("4");
+    expect(getSessionListing.mock.calls).toEqual([
+      [{ sessionId: chat.session.id, persistCheckpoint: false }],
+      [{ sessionId: terminal.id, persistCheckpoint: false }],
+    ]);
+    expect(getSession).not.toHaveBeenCalled();
   });
 
   it("composes a degraded host with no runtime, through the same start and stop", async () => {

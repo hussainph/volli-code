@@ -186,6 +186,26 @@ describe("the row→card bridge and dismissal", () => {
   });
 });
 
+describe("explicit close", () => {
+  it.each(["none", "row", "dialog", "field"] as const)(
+    "closes in one step from %s focus, pinned or not",
+    (focus) => {
+      for (const pinned of [null, ROW]) {
+        const open = { ...run(hoverOpen(ROW)), pinned, focus, overCard: true };
+        const closed = peekReducer(open, { type: "close", now: 5000 });
+        expect(closed.shown).toBeNull();
+        expect(closed.pinned).toBeNull();
+        expect(closed.focus).toBe("none");
+        expect(closed.overCard).toBe(false);
+        expect(closed.suppressedUntil).toBe(5000 + PEEK_SUPPRESSION_MS);
+        expect(
+          peekReducer(closed, { type: "dwell-elapsed", target: ROW, now: 5100 }).shown,
+        ).toBeNull();
+      }
+    },
+  );
+});
+
 describe("the pin", () => {
   it("survives the pointer walking off the row and the card", () => {
     const state = run([

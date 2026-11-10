@@ -82,6 +82,9 @@ const SOCKET_SURFACE = [
   "hook",
   "doctor",
   "prompt.baseline",
+  "perf.top",
+  "perf.stalls",
+  "perf.compare",
 ];
 
 /** The CLI reference as it stands: `COMMAND_HELP`'s entries plus `cost`, in its order. */
@@ -117,6 +120,9 @@ const REFERENCE_SURFACE = [
   "app.launch",
   "prompt.baseline",
   "doctor",
+  "perf.top",
+  "perf.stalls",
+  "perf.compare",
   "help",
 ];
 
@@ -175,6 +181,9 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   "session.answer": "read",
   doctor: "read",
   "prompt.baseline": "read",
+  "perf.top": "read",
+  "perf.stalls": "read",
+  "perf.compare": "read",
   "ticket.create": "coordination",
   "ticket.update": "coordination",
   "ticket.move": "coordination",
@@ -506,8 +515,9 @@ describe("verbTier", () => {
     // 15 in VC-92's audit, plus `cost` — which the amendment staged read tier
     // in the same breath, on the grounds that spend has to be cheap to sample —
     // plus VC-185's `conflicts`, staged read tier by the same amendment.
-    // VC-9 adds `session.answer`, a read beside the peek.
-    expect(socketTiers.filter((tier) => tier === "read")).toHaveLength(19);
+    // VC-9 adds `session.answer`, a read beside the peek. VC-1092 adds the
+    // perf store's three reads (`perf top`, `perf stalls`, `perf compare`).
+    expect(socketTiers.filter((tier) => tier === "read")).toHaveLength(22);
     // VC-163 removes archive/start from the socket; VC-85 adds ticket.signal
     // and VC-185 adds worktree.sync to the remaining coordination surface.
     // VC-310 adds label.merge, the label cleanup write. VC-623 adds

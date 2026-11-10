@@ -18,10 +18,12 @@
  * Each icon keeps its label as its accessible name (`Segmented`'s `iconOnly`),
  * so nothing is lost to a screen reader or a hover.
  */
-import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
-import { ArrowElbowDownLeftIcon } from "@phosphor-icons/react/dist/csr/ArrowElbowDownLeft";
-import { RowsIcon } from "@phosphor-icons/react/dist/csr/Rows";
-import { SquareSplitHorizontalIcon } from "@phosphor-icons/react/dist/csr/SquareSplitHorizontal";
+import {
+  type IconComponent,
+  ReturnIcon,
+  RowsIcon,
+  SplitLayoutIcon,
+} from "@renderer/components/ui/icon";
 
 import { Button } from "@renderer/components/ui/button";
 import { Segmented } from "@renderer/components/ui/segmented";
@@ -31,8 +33,8 @@ import type { DiffPresentation } from "@renderer/stores/ui";
 /** Stacked rows for one column of diff; a split square for two. */
 const PRESENTATIONS = [
   { key: "inline", label: "Inline", icon: RowsIcon },
-  { key: "side-by-side", label: "Side by side", icon: SquareSplitHorizontalIcon },
-] as const satisfies readonly { key: DiffPresentation; label: string; icon: PhosphorIcon }[];
+  { key: "side-by-side", label: "Side by side", icon: SplitLayoutIcon },
+] as const satisfies readonly { key: DiffPresentation; label: string; icon: IconComponent }[];
 
 export function DiffPresentationToggle({
   presentation,
@@ -69,13 +71,14 @@ export function WordWrapToggle({ wordWrap, onToggle }: { wordWrap: boolean; onTo
       <TooltipTrigger asChild>
         <Button
           size="icon-sm"
-          variant={wordWrap ? "secondary" : "ghost"}
+          variant="toolbar"
+          className={wordWrap ? "bg-(--accent-selected) text-primary-text" : undefined}
           aria-pressed={wordWrap}
           aria-label="Word wrap"
           data-testid="ticket-diff-word-wrap"
           onClick={onToggle}
         >
-          <ArrowElbowDownLeftIcon />
+          <ReturnIcon />
         </Button>
       </TooltipTrigger>
       <TooltipContent side="bottom">Word wrap</TooltipContent>
@@ -104,7 +107,7 @@ export function DiffControlBand({
   return (
     <div
       data-testid="ticket-diff-control-band"
-      className="flex shrink-0 items-center gap-1 border-b border-border px-gutter py-1"
+      className="flex min-h-control-default shrink-0 items-center gap-1 border-b border-border bg-background px-1 py-0.5"
     >
       {/* The segmented control keeps showing the CHOICE, never the fit. The
           preference is app-wide and durable; a pane being narrow for a minute

@@ -169,6 +169,7 @@ it("attributes current and departed people, keeps You personal, and hides edits 
     version: 1,
   });
   await mount();
+  expect(container?.querySelector("h2")?.textContent).toBe("Activity");
   expect(container?.textContent).toContain("Ben Jones created the ticket");
   expect(container?.textContent).toContain("You edited the description");
   const otherComment = [...container!.querySelectorAll("li")].find((row) =>
@@ -249,7 +250,10 @@ describe("the feed's age clock", () => {
     expect(renders).not.toHaveBeenCalled();
     expect(container?.textContent).toContain("just now");
     await act(async () =>
-      container?.querySelector<HTMLButtonElement>("button[aria-expanded]")?.click(),
+      // The bunch's own disclosure, not the activity filter's menu trigger.
+      container
+        ?.querySelector<HTMLButtonElement>("button[aria-expanded]:not([aria-haspopup])")
+        ?.click(),
     );
     // Opening exposes an overdue event boundary; the state clock catches up
     // on the next tick rather than reading the wall clock during render.
@@ -323,10 +327,68 @@ describe("the Doc tab's activity cache", () => {
   });
 });
 
+describe("activity filters", () => {
+  it("checks one dropdown item and filters real cached comments and events", async () => {
+    useTicketActivityStore.getState().apply(TICKET.id, {
+      version: 1,
+      comments: [
+        {
+          id: "human",
+          ticketId: TICKET.id,
+          sessionId: null,
+          actor: "user",
+          body: "Human comment",
+          createdAt: 2,
+          updatedAt: 2,
+        },
+        {
+          id: "agent",
+          ticketId: TICKET.id,
+          sessionId: null,
+          actor: "agent:claude-code",
+          body: "Agent report",
+          createdAt: 3,
+          updatedAt: 3,
+        },
+      ],
+      events: [
+        {
+          id: "status",
+          ticketId: TICKET.id,
+          actor: "user",
+          createdAt: 4,
+          payload: { kind: "status_changed", from: "todo", to: "doing" },
+        },
+      ],
+    });
+    await mount();
+    expect(container?.textContent).toContain("Human comment");
+    await act(async () => {
+      container
+        ?.querySelector('[aria-label="Filter activity: All"]')
+        ?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    expect(
+      document.querySelector('[role="menuitemcheckbox"][data-state="checked"]')?.textContent,
+    ).toBe("All");
+    await act(async () => {
+      (
+        [...document.querySelectorAll('[role="menuitemcheckbox"]')].find(
+          (item) => item.textContent === "Agent",
+        ) as HTMLElement
+      ).click();
+    });
+    expect(container?.textContent).toContain("Agent report");
+    expect(container?.textContent).not.toContain("Human comment");
+    expect(container?.textContent).not.toContain("moved Todo");
+    expect(doors.comments).not.toHaveBeenCalled();
+  });
+});
+
 describe("the feed while its first read is in flight (VC-383)", () => {
   const loading = () => container?.querySelector('[data-testid="ticket-activity-loading"]') ?? null;
 
-  it("holds the rows' box, then says empty only once the read has answered so", async () => {
+  it("waits silently and says empty only once the read has answered so", async () => {
     let answer: (() => void) | null = null;
     doors.events.mockImplementationOnce(
       () =>
@@ -336,15 +398,15 @@ describe("the feed while its first read is in flight (VC-383)", () => {
     );
     await mount();
 
-    expect(loading()).not.toBeNull();
-    expect(container?.textContent).not.toContain("No activity yet.");
-    expect(loading()?.querySelectorAll("li[aria-hidden]")).toHaveLength(2);
+    expect(loading()).toBeNull();
+    expect(container?.textContent).not.toContain("No activity yet");
+    expect(container?.querySelector('[data-slot="skeleton"]')).toBeNull();
 
     await act(async () => {
       answer?.();
     });
     expect(loading()).toBeNull();
-    expect(container?.textContent).toContain("No activity yet.");
+    expect(container?.textContent).toContain("No activity yet");
   });
 
   it("stands the skeleton down for a failed baseline without calling the feed empty", async () => {
@@ -353,8 +415,8 @@ describe("the feed while its first read is in flight (VC-383)", () => {
     await mount();
 
     expect(loading()).toBeNull();
-    expect(container?.textContent).not.toContain("No activity yet.");
-    expect(container?.textContent).toContain("Couldn't load activity.");
+    expect(container?.textContent).not.toContain("No activity yet");
+    expect(container?.textContent).toContain("Couldn’t load activity");
   });
 });
 

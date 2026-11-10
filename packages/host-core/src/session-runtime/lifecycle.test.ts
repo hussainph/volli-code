@@ -29,10 +29,16 @@ vi.mock("../db/projects-repo", () => ({ listProjects: () => [{ id: "project" }] 
 vi.mock("../db/scheduled-resume-repo", () => ({
   listScheduledResumeSessionIds: vi.fn(() => ["scheduled"]),
 }));
-vi.mock("../session-control", () => ({
+vi.mock("../session-control", async () => ({
   createSessionWatchdog: vi.fn(),
   createScheduledResumeHost: vi.fn(),
   createSuspendClock: vi.fn(() => ({ suspendedMsWithin: () => 0, close: vi.fn() })),
+  // The real one: the ports below are asserted to reach the engine through it.
+  ticketSessionProjections: (
+    await vi.importActual<typeof import("../session-control/scheduled-resume")>(
+      "../session-control/scheduled-resume",
+    )
+  ).ticketSessionProjections,
 }));
 vi.mock("./durable-host-notice-delivery", () => ({ createHostNoticeDelivery: vi.fn() }));
 vi.mock("./sqlite-host-notice-outbox", () => ({
@@ -46,6 +52,10 @@ vi.mock("./sqlite-host-notice-outbox", () => ({
   })),
 }));
 vi.mock("./boot-recovery", () => ({ closeStaleAttachments: vi.fn() }));
+// The sweep's reads are composed over the launch's engine, database and scope.
+vi.mock("./boot-recovery-reader", () => ({
+  createBootRecoveryEngine: vi.fn((composed: object) => ({ composed })),
+}));
 vi.mock("./restart-resume", () => ({ resumeRecoveredTurns: vi.fn(async () => {}) }));
 vi.mock("../mcp/session-host", () => ({ closeAllMcpSessionHosts: vi.fn() }));
 vi.mock("./session-resumptions", () => ({ catchUpSessionResumptions: vi.fn(async () => {}) }));
@@ -294,7 +304,13 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
     const gate = deferred();
     vi.mocked(recovery.closeStaleAttachments).mockImplementation(async (input) => {
       f.calls.push("attachments");
-      expect(input.engine).toBe(f.engine);
+      expect(input.engine).toEqual({
+        composed: {
+          db: f.options.host.database.ok ? f.options.host.database.db : undefined,
+          engine: f.engine,
+          owns: expect.any(Function),
+        },
+      });
       await gate.promise;
       return 0;
     });
@@ -658,10 +674,20 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
     vi.mocked(recovery.closeStaleAttachments).mockImplementationOnce(async (ports) => {
       await ports.reconcile({} as Parameters<typeof ports.reconcile>[0]);
       ports.onError!("attachment", new Error("reconcile failed"));
+      ports.onError!(null, new Error("unreadable fact"));
       return 0;
     });
     await owner.ready();
     expect(f.runtime.reconcile).toHaveBeenCalled();
+    expect(f.options.ports.log.error).toHaveBeenCalledWith("failed to recover attachment", {
+      attachmentId: "attachment",
+      error: new Error("reconcile failed"),
+    });
+    // Not one attachment's failure: the moment the prior process was last alive.
+    expect(f.options.ports.log.error).toHaveBeenCalledWith(
+      "failed to read when the prior process was last alive",
+      { error: new Error("unreadable fact") },
+    );
     await new Promise<void>((resolve) => setImmediate(resolve));
     const catchUp = vi.mocked(resumptions.catchUpSessionResumptions).mock.calls[0]![2];
     const change = {} as Parameters<typeof catchUp.publish>[0];
@@ -1159,7 +1185,7 @@ describe("launch-selected Session recovery scope", () => {
     });
     await owner.ready();
     expect(vi.mocked(recovery.closeStaleAttachments).mock.lastCall![0]).toMatchObject({
-      engine: scoped,
+      engine: { composed: { engine: scoped, owns: ownsSession } },
       projectIds: ["cloud-project"],
     });
     const ownedProjection = { session: { id: "owned" } } as SessionProjection;

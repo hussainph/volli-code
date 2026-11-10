@@ -82,7 +82,9 @@ describe("board create controls", () => {
         <BoardHeader projectId="remote" ticketCount={0} tickets={[]} filter={EMPTY_TICKET_FILTER} />
       </TooltipProvider>,
     );
-    expectStoodDown(button(container, "New ticket"));
+    const actions = container.querySelector('[role="group"][aria-label="Board actions"]')!;
+    expect(actions.querySelectorAll("button").length).toBeGreaterThan(0);
+    expectStoodDown(button(actions, "New ticket"));
     world.setHetzner({ link: { status: "open" } });
     expectUntouched(button(container, "New ticket"));
   });
@@ -126,6 +128,10 @@ describe("board create controls", () => {
     const container = await world.render(<BoardEmpty projectId="remote" />);
     const control = button(container, "New ticket");
     expectUntouched(control);
+    expect(container.querySelectorAll("button")).toHaveLength(1);
+    expect(container.querySelector("[data-next-action]")).toBeNull();
+    expect(control.querySelector("kbd")?.textContent).toBe("C");
+    expect(control.querySelector("kbd")?.className).not.toContain("bg-(--accent-tint)");
     act(() => control.click());
     expect(useUiStore.getState().newTicketOpen).toBe(true);
   });
@@ -229,6 +235,63 @@ describe("column arming", () => {
     const control = container.querySelector<HTMLButtonElement>("[data-column-arming]");
     expect(control?.getAttribute("aria-label")).toBe("Arm Todo");
     expect(control?.getAttribute("data-arming-state")).toBe("unarmed");
+  });
+
+  it("searches a long offered list through the windowed combobox and arms its last row", async () => {
+    world = hostWorld();
+    const arm = vi.fn(async () => null);
+    useAutomationsStore.setState({
+      byProject: {
+        remote: Array.from({ length: 1000 }, (_, i) => ({
+          id: `a${i}`,
+          projectId: "remote",
+          name: `Automation ${String(i).padStart(4, "0")}`,
+          instructions: "/implement",
+          trigger: { kind: "columns", columns: ["todo"] },
+          runtime: null,
+          createdAt: 1,
+          updatedAt: 1,
+        })),
+      },
+      armingByProject: { remote: [] },
+      orderByProject: {},
+      enabledIds: [],
+      arm,
+      refresh: vi.fn(async () => {}),
+      refreshArming: vi.fn(async () => {}),
+      refreshOrder: vi.fn(async () => {}),
+      refreshEnablement: vi.fn(async () => {}),
+    } as never);
+    const { ColumnArmingButton } = await import("./column-arming");
+    const container = await world.render(
+      <TooltipProvider>
+        <ColumnArmingButton projectId="remote" status="todo" />
+      </TooltipProvider>,
+    );
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>("[data-column-arming]")!.click(),
+    );
+    const input = document.querySelector<HTMLInputElement>('[aria-label="Search automations"]')!;
+    expect(input).not.toBeNull();
+    expect(document.querySelectorAll('[role="option"]').length).toBeLessThanOrEqual(21);
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    await act(async () => {
+      setValue.call(input, "no such automation");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(document.body.textContent).toContain("No matching automations");
+    expect(document.querySelector('[role="option"]')?.textContent).toContain("No automation");
+    await act(async () => {
+      setValue.call(input, "");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () =>
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })),
+    );
+    await act(async () =>
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+    );
+    expect(arm).toHaveBeenCalledWith({ projectId: "remote", status: "todo", automationId: "a999" });
   });
 
   it("an arming menu open before the host went away cannot arm through it", async () => {

@@ -15,6 +15,8 @@ vi.mock("@renderer/components/logs/log-viewer", () => ({
 }));
 vi.mock("@renderer/lib/app-state-storage", () => ({
   appStateStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+  // stores/ui and stores/style register preference defaults at module scope.
+  registerSharedPreferenceDefaults: () => {},
 }));
 
 describe("simulated wiring banners", () => {

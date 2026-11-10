@@ -3,7 +3,7 @@
  * F1): one feed per project, a tracked cursor, resume or resnapshot.
  *
  * The host protocol called a project a "Workspace"; that word now names the
- * team container (CONTEXT.md), so this module says project throughout.
+ * team container (CONTEXT.md#workspace), so this module says project throughout.
  *
  * - **Stamp.** Every board command stamps the rows it committed, naming the
  *   Client's `commandId` (T5), in the synchronous turn of its COMMIT; the

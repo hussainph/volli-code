@@ -27,6 +27,12 @@ const isWatchMode = process.argv.some(
 );
 const shouldLaunchElectronAfterPack = process.env.VOLLI_DESKTOP_DEV === "1" && isWatchMode;
 
+// Test-only, opt-in in CI: both projects report active tests through the same
+// preload as host-core. Nothing in the product imports this setup module.
+const diagnosticSetup = process.env["VOLLI_TEST_DIAGNOSTICS"]
+  ? [fileURLToPath(new URL("../../scripts/test-active-diagnostics.ts", import.meta.url))]
+  : [];
+
 // Bundle workspace TS source (`@volli/shared` exports raw .ts) into the CJS
 // main/preload artifacts instead of leaving a runtime require() behind.
 //
@@ -184,7 +190,10 @@ export default defineConfig(({ mode, command }) => ({
     projects: [
       // Inherits root src/renderer, plugins, @renderer alias — existing store
       // tests keep working under the default include.
-      { extends: true, test: { name: "renderer" } },
+      {
+        extends: true,
+        test: { name: "renderer", setupFiles: [...diagnosticSetup, "test-setup.ts"] },
+      },
       // NOT extends: main tests need no plugins; a fresh entry avoids
       // inheriting root src/renderer. It takes the renderer's alias alone
       // (below). @volli/shared resolves via workspace link.
@@ -210,7 +219,7 @@ export default defineConfig(({ mode, command }) => ({
           // that outlives the test that filled it is delivered into the next
           // one's window mock otherwise; see the file for why it disposes
           // rather than flushes.
-          setupFiles: ["src/main/test-setup.ts"],
+          setupFiles: [...diagnosticSetup, "src/main/test-setup.ts"],
           // Stated again here, and it is not redundant: `renderer` above
           // INHERITS this cap through `extends: true` while this project
           // inherits nothing, and vitest refuses a run whose projects disagree
@@ -478,10 +487,6 @@ export default defineConfig(({ mode, command }) => ({
         // same class of decision as cli-status-model, enrolled for the same
         // reason (VC-94).
         "src/components/session-environment-alert-model.ts",
-        // And what it OFFERS instead, for the state that turned out not to be
-        // a fault at all (VC-156): whether a workspace is offered an install,
-        // and which command that offer would run.
-        "src/components/workspace-dependencies-offer-model.ts",
         "src/components/sessions/terminal-tab-state.ts",
         // The hover peek's three decisions (VC-30), pure `.ts` beside the cards
         // for `tab-focus.ts`'s reason: none of them is visible in a screenshot
@@ -686,6 +691,7 @@ export default defineConfig(({ mode, command }) => ({
         "src/editor/autosave-plan.ts",
         "src/editor/document-decorations.ts",
         "src/editor/document-identity.ts",
+        "src/editor/document-height.ts",
         "src/editor/document-mode.ts",
         "src/editor/document-registry.ts",
         // Which repository Markdown may open as a document, and what a file
@@ -821,6 +827,10 @@ export default defineConfig(({ mode, command }) => ({
         // The db modules, including export.ts, are protected by
         // @volli/host-core's own gate; see that package's vite.config.ts.
         "**/src/main/session-rpc-ipc.ts",
+        // Renderer stall signals (VC-1091): which interaction a stall is
+        // charged to, how batches are bounded, and what main lets into the log.
+        "src/lib/renderer-stalls.ts",
+        "**/src/main/log/renderer-stall.ts",
         "**/src/main/experiments.ts",
         // Sign-ins on a remote host (VC-702): the relay that binds this Mac's
         // loopback for one request, "Send from this Mac" (a key leaving this
@@ -897,6 +907,9 @@ export default defineConfig(({ mode, command }) => ({
         // web_fetch's HTML extraction (jsdom → Readability → Turndown), so a
         // large page is parsed off the thread that serves the app.
         "web-extract-worker": "src/main/web-extract-worker.ts",
+        // Optional transcript decoration uses a separately terminated decoder.
+        "source-icon-worker": "src/main/source-icon-worker.ts",
+        "usage-report-worker": "src/main/usage-report-worker.ts",
       },
       format: "cjs",
       outDir: "dist-electron",

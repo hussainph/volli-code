@@ -219,6 +219,39 @@ export interface SessionRuntimePorts {
    * nothing; whether anything is exported is the sink's own opt-in.
    */
   observability?: ObservabilitySink;
+  /**
+   * Why an attach failed, for the host's log (VC-1099). Called once per
+   * failed attach, synchronously, on the attach's own call chain and just
+   * before its `attachment.failed` is committed, so the host can file the
+   * cause with that fact's log line. The durable fact keeps its shape: this
+   * is diagnosis, never history. A sink that throws costs the diagnosis and
+   * nothing else.
+   */
+  onAttachFailure?: (cause: SessionAttachFailureCause) => void;
+}
+
+/**
+ * Which part of an attach failed, how long it had run, and what was thrown
+ * (VC-1099). Identifiers, codes, a class name and durations only: never an
+ * error message, which may quote a path or a provider's answer.
+ */
+export interface SessionAttachFailureCause {
+  sessionId: string;
+  commandId: string;
+  /** The id the `attachment.failed` fact carries. */
+  attachmentId: string;
+  /** `workspace-preparation`: the worktree. `executor-attach`: the runtime binding itself. */
+  phase: "workspace-preparation" | "executor-attach";
+  /** The failure code the durable fact and the rejected receipt carry. */
+  code: string;
+  /** The thrown value's class (`NativeAttachmentError`, `TypeError`, …), or its type when not an Error. */
+  errorName: string;
+  /** Whether the phase outlasted a bound, rather than failing on its own. */
+  timedOut: boolean;
+  /** How long the failing phase had run. */
+  phaseMs: number;
+  /** How long the whole attach had run, preparation included. */
+  elapsedMs: number;
 }
 
 export type SessionClientCommand =
@@ -368,6 +401,14 @@ interface FailAttachInput {
   code: string;
   detail: string;
   attachmentId?: string;
+  /** What the host's log is told about this failure (VC-1099). */
+  cause: {
+    phase: SessionAttachFailureCause["phase"];
+    error: unknown;
+    timedOut: boolean;
+    attachStartedAt: number;
+    phaseStartedAt: number;
+  };
   /**
    * REQUIRED, since VC-220: an attach that failed always leaves the Session
    * saying so.
@@ -1828,6 +1869,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     const firstAttach =
       !request.commandId.startsWith("follow-up:") &&
       projection.attachments.every(({ openedAt }) => openedAt === null);
+    const attachStartedAt = this.ports.clock.now();
     let site: SessionLocation;
     try {
       const preparing = this.ports.locations.prepare(projection.session);
@@ -1846,6 +1888,13 @@ class DefaultSessionRuntime implements SessionRuntime {
         location,
         code: "location_unavailable",
         detail: errorMessage(error),
+        cause: {
+          phase: "workspace-preparation",
+          error,
+          timedOut: isAttachTimeout(error) || error instanceof PreparationCeilingError,
+          attachStartedAt,
+          phaseStartedAt: attachStartedAt,
+        },
         // Where a Session runs is part of how it is configured, and a worktree
         // that cannot be prepared is that configuration failing — the same
         // Attention an unavailable pinned model raises, and cleared by the same
@@ -1882,6 +1931,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     };
     const { translator, sink } = this.#pipeline(adapter, spec, location.venue);
     let handle: BindingHandle;
+    const executorStartedAt = this.ports.clock.now();
     try {
       const attaching = adapter.attach(spec, sink);
       handle = await this.#followUps.admissionWait(
@@ -1912,6 +1962,13 @@ class DefaultSessionRuntime implements SessionRuntime {
         code: nativeFailure?.code ?? "attach_failed",
         detail: errorMessage(error),
         attachmentId,
+        cause: {
+          phase: "executor-attach",
+          error,
+          timedOut: isAttachTimeout(error),
+          attachStartedAt,
+          phaseStartedAt: executorStartedAt,
+        },
         // An adapter that threw without naming a kind still failed to bind, and
         // nothing but a fresh attach can disprove it. `adapter_unrecoverable`
         // is what that is, and reading it as "no Attention" was how a broken
@@ -2075,6 +2132,7 @@ class DefaultSessionRuntime implements SessionRuntime {
 
   async #failAttach(input: FailAttachInput): Promise<SessionRuntimeCommandResult> {
     const attachmentId = input.attachmentId ?? this.#id("attachment");
+    this.#reportAttachFailure(input, attachmentId);
     const failed = await this.ports.engine.observe({
       id: this.#id("event"),
       sessionId: input.request.sessionId,
@@ -2207,16 +2265,35 @@ class DefaultSessionRuntime implements SessionRuntime {
    * attach records as `configuration_invalid`; the preparation itself is not
    * stopped, so a worktree it finishes later is there for the Retry.
    */
+  /** Tells the host's log why an attach failed (VC-1099); never fails the attach. */
+  #reportAttachFailure(input: FailAttachInput, attachmentId: string): void {
+    const report = this.ports.onAttachFailure;
+    if (report === undefined) return;
+    try {
+      const now = this.ports.clock.now();
+      const { error } = input.cause;
+      report({
+        sessionId: input.request.sessionId,
+        commandId: input.request.commandId,
+        attachmentId,
+        phase: input.cause.phase,
+        code: input.code,
+        errorName: error instanceof Error ? error.name : typeof error,
+        timedOut: input.cause.timedOut,
+        phaseMs: Math.max(0, now - input.cause.phaseStartedAt),
+        elapsedMs: Math.max(0, now - input.cause.attachStartedAt),
+      });
+    } catch {
+      // A lost diagnosis, never a lost failure record.
+    }
+  }
+
   async #firstAttachPreparation(preparing: Promise<SessionLocation>): Promise<SessionLocation> {
     const ceilingMs =
       this.ports.firstAttachPreparationTimeoutMs ?? FIRST_ATTACH_PREPARATION_TIMEOUT_MS;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const ceiling = new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(
-        () =>
-          reject(new Error(`Workspace preparation did not finish within ${ceilingMs / 1000} s.`)),
-        ceilingMs,
-      );
+      timer = setTimeout(() => reject(new PreparationCeilingError(ceilingMs)), ceilingMs);
     });
     try {
       return await Promise.race([preparing, ceiling]);
@@ -4781,6 +4858,19 @@ class DefaultSessionRuntime implements SessionRuntime {
 
 /** A first attach's preparation ceiling: generous, for a loaded machine making a worktree. */
 const FIRST_ATTACH_PREPARATION_TIMEOUT_MS = 10 * 60_000;
+
+/** A first attach's workspace preparation outlasting its ceiling; the message is unchanged. */
+class PreparationCeilingError extends Error {
+  constructor(ceilingMs: number) {
+    super(`Workspace preparation did not finish within ${ceilingMs / 1000} s.`);
+    this.name = "PreparationCeilingError";
+  }
+}
+
+/** An attach phase that outlasted the admission bound, rather than failing on its own. */
+function isAttachTimeout(error: unknown): boolean {
+  return error instanceof NativeAttachmentError && error.code === "queue_admission_timeout";
+}
 
 export function createSessionRuntime(ports: SessionRuntimePorts): HostedSessionRuntime {
   return new DefaultSessionRuntime(ports);

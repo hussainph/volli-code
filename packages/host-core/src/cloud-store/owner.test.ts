@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { setImmediate } from "node:timers";
 import { LOCAL_RUNNER, createSessionProjectionCheckpoint } from "@volli/shared";
 import type { SessionEngine } from "@volli/session-engine";
 import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
@@ -97,6 +98,88 @@ async function recordOutcome(
 }
 
 describe("Session owner views", () => {
+  it.each(["local", "cloud"] as const)(
+    "reuses lightweight listing folds for a 150-Session %s roster beyond the hot-write cache",
+    async (launch) => {
+      const f = setup();
+      const engine = launch === "local" ? f.local : f.a.engine;
+      for (let i = 0; i < 150; i += 1) {
+        const { session } = await f.create(engine, `many-${i}`);
+        const start = await engine.submit({
+          commandId: `start-${session.id}`,
+          sessionId: session.id,
+          intent: { kind: "executor.start", adapterId: "terminal", continuity: "fresh" },
+          provenance,
+        });
+        await engine.observe({
+          id: `open-${session.id}`,
+          kind: "attachment.opened",
+          sessionId: session.id,
+          commandId: start.command.id,
+          occurredAt: 100,
+          provenance,
+          attachment: {
+            id: `attachment-${session.id}`,
+            sessionId: session.id,
+            adapterId: "terminal",
+            venue: LOCAL_RUNNER,
+            continuity: "fresh",
+            native: { id: null, detail: null },
+            authority: null,
+          },
+        });
+      }
+      const foreign = await f.create(f.b.engine, "foreign-roster");
+      const fullRead = vi.spyOn(f.raw, "getSession");
+      const countRead = vi.spyOn(f.raw, "countSessions");
+      const pointRead = f.raw.getSessionListing;
+      let consecutiveReads = 0;
+      let maxConsecutiveReads = 0;
+      const listingRead = vi.spyOn(f.raw, "getSessionListing").mockImplementation((query) => {
+        consecutiveReads += 1;
+        maxConsecutiveReads = Math.max(maxConsecutiveReads, consecutiveReads);
+        if (consecutiveReads === 1)
+          setImmediate(() => {
+            consecutiveReads = 0;
+          });
+        return pointRead(query);
+      });
+      const changesBefore = f.db.prepare("SELECT total_changes() AS n").get();
+      const first = await engine.listSessions({ projectId: "p", scope: "ticket", ticketId: "t" });
+      expect(f.db.prepare("SELECT total_changes() AS n").get()).toEqual(changesBefore);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(maxConsecutiveReads).toBeLessThanOrEqual(8);
+      const again = await engine.listSessions({ projectId: "p", scope: "all" });
+      const attached = await engine.listAttachedSessions();
+      expect(first).toHaveLength(150);
+      expect(again).toEqual(first);
+      expect(attached).toEqual(first);
+      expect(fullRead.mock.calls.length).toBe(0);
+      expect(listingRead).toHaveBeenCalledTimes(450);
+      expect(countRead.mock.calls).toEqual(
+        Array.from({ length: 3 }, () => [{ projectId: "p", scope: "all" }]),
+      );
+      expect(listingRead).not.toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: foreign.session.id }),
+      );
+      expect(again[0]).toBe(first[0]);
+      expect(first[0]).not.toHaveProperty("commands");
+      expect(first[0]).not.toHaveProperty("receipts");
+      expect(Object.isFrozen(first[0])).toBe(true);
+      await engine.submit({
+        commandId: "change-listed-session",
+        sessionId: first[0]!.session.id,
+        intent: { kind: "session.signal", signal: "done", reason: null },
+        provenance,
+      });
+      const changed = await engine.listSessions({ projectId: "p", scope: "all" });
+      expect(changed[0]).not.toBe(first[0]);
+      expect(changed[0]?.signal?.signal).toBe("done");
+      expect(changed[1]).toBe(first[1]);
+    },
+    120_000,
+  );
+
   it("commits the birth owner and S2 cursor together, before the host's post-commit wake", async () => {
     const f = setup();
     const observed: unknown[] = [];
@@ -444,6 +527,7 @@ describe("Session owner views", () => {
     // Backups retain the ledger but deliberately omit this runner-local table.
     f.db.prepare("DELETE FROM session_drain_cursors WHERE session_id = ?").run(restored.session.id);
     const read = vi.spyOn(f.raw, "getSession");
+    const listingRead = vi.spyOn(f.raw, "getSessionListing");
     expect(f.a.owns(restored.session.id)).toBe(false);
     expect(
       f.db
@@ -469,6 +553,9 @@ describe("Session owner views", () => {
       }),
     ).rejects.toBeInstanceOf(SessionOwnerError);
     expect(read).not.toHaveBeenCalledWith({ sessionId: restored.session.id });
+    expect(listingRead).not.toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: restored.session.id }),
+    );
     expect(f.a.projectIds()).toEqual([]);
   });
 
@@ -489,6 +576,7 @@ describe("Session owner views", () => {
     await recordOutcome(f.raw, imported.session.id, 2);
     await recordOutcome(f.raw, foreign.session.id, 99);
     const read = vi.spyOn(f.raw, "getSession");
+    const listingRead = vi.spyOn(f.raw, "getSessionListing");
     expect(f.a.owns(own.session.id)).toBe(true);
     expect(f.a.owns(imported.session.id)).toBe(true);
     expect(f.a.owns(foreign.session.id)).toBe(false);
@@ -507,6 +595,9 @@ describe("Session owner views", () => {
     expect((await f.a.engine.reportUsage({ scope: { kind: "all" } })).total.knownCostUsd).toBe(3);
     expect(await f.a.engine.getBaseSession({ sessionId: foreign.session.id })).toBeNull();
     expect(read).not.toHaveBeenCalledWith({ sessionId: foreign.session.id });
+    expect(listingRead).not.toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: foreign.session.id }),
+    );
     await expect(
       f.a.engine.submit({
         commandId: "foreign-write",

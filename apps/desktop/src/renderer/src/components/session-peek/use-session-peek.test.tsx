@@ -420,6 +420,18 @@ describe("J and K", () => {
 });
 
 describe("Space into a folder's card", () => {
+  it("closes when opening the ticket", async () => {
+    const folders = new Map([[TICKET.id, [SESSION_ROW]]]);
+    await render({ rowIds: [FOLDER_ROW], folders });
+    await pressSpace(rowButton(FOLDER_ROW));
+    await act(async () => {
+      card()!.querySelector<HTMLButtonElement>('[aria-label="Open VLT-14"]')!.click();
+    });
+    expect(PORTS.openTicket).toHaveBeenCalledExactlyOnceWith(TICKET.id);
+    expect(card()).toBeNull();
+    expect(holding()).toBe(false);
+  });
+
   it("requests no content before a peek opens and uses generated folder summaries", async () => {
     const readContent = vi.mocked(PORTS.readContent);
     readContent.mockResolvedValue({
@@ -817,6 +829,68 @@ describe("the pinned card's question (§3.3)", () => {
   });
 });
 
+describe("explicitly closing a pinned question card", () => {
+  async function pinQuestion(): Promise<void> {
+    vi.mocked(PORTS.readContent).mockResolvedValue(LOCAL);
+    resident([
+      {
+        ...QUESTION,
+        prompts: [{ ...QUESTION.prompts![0]!, custom: true }],
+      },
+    ]);
+    await render({ rowIds: [SESSION_ROW] });
+    await pressSpace(rowButton(SESSION_ROW));
+    await pressSpace(rowButton(SESSION_ROW));
+    expect(card()?.getAttribute("role")).toBe("dialog");
+    expect(card()?.textContent).toContain("Recompute on scroll end");
+  }
+
+  it("closes when View conversation navigates away", async () => {
+    await pinQuestion();
+    await act(async () => {
+      card()!.querySelector<HTMLButtonElement>("[data-view-conversation]")!.click();
+    });
+    expect(PORTS.viewConversation).toHaveBeenCalledExactlyOnceWith("chat-a1");
+    expect(card()).toBeNull();
+    expect(holding()).toBe(false);
+  });
+
+  it("closes when Open session navigates away", async () => {
+    await pinQuestion();
+    await act(async () => {
+      card()!.querySelector<HTMLButtonElement>('[aria-label="Open session"]')!.click();
+    });
+    expect(PORTS.openSession).toHaveBeenCalledExactlyOnceWith(SESSION_ROW);
+    expect(card()).toBeNull();
+    expect(holding()).toBe(false);
+  });
+
+  it("closes with one X click while a question field has DOM focus", async () => {
+    await pinQuestion();
+    const field = card()!.querySelector<HTMLTextAreaElement>("textarea")!;
+    expect(field).not.toBeNull();
+    await act(async () => field.focus());
+    expect(document.activeElement).toBe(field);
+    await act(async () => {
+      card()!.querySelector<HTMLButtonElement>('[aria-label="Close reply"]')!.click();
+    });
+    expect(card()).toBeNull();
+    expect(holding()).toBe(false);
+  });
+
+  it("still ignores click-away and keeps Escape's unpin-then-close ladder", async () => {
+    await pinQuestion();
+    await act(async () => {
+      document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+    });
+    expect(card()?.getAttribute("role")).toBe("dialog");
+    await pressKey(card()!, "Escape");
+    expect(card()?.getAttribute("role")).toBe("note");
+    await pressKey(card()!, "Escape");
+    expect(card()).toBeNull();
+  });
+});
+
 describe("where the card is drawn", () => {
   it("is portalled to the body, outside every ancestor that could clip it", async () => {
     await render({ rowIds: [SESSION_ROW] });
@@ -826,6 +900,9 @@ describe("where the card is drawn", () => {
     // The framed shell clips the left sidebar with `clip-path`, which a
     // `position: fixed` descendant does not escape — so the card must not be one.
     expect(container.contains(shown)).toBe(false);
-    expect(shown?.parentElement).toBe(document.body);
+    expect(shown?.parentElement?.id).toBe("volli-overlays");
+    expect(shown?.parentElement?.parentElement).toBe(document.body);
+    expect(shown?.parentElement?.style.position).toBe("");
+    expect(shown?.parentElement?.style.overflow).toBe("");
   });
 });
