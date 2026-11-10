@@ -20,6 +20,8 @@ const required = [
   "check",
   "test-desktop",
   "coverage-desktop",
+  "test-host-core",
+  "coverage-host-core",
   "test-packages",
   "convex",
   "n1-compat",
@@ -36,6 +38,8 @@ function results(desktop = "true", host = "true", n1 = '["base"]', event = "pull
     CHECK: "success",
     TEST_DESKTOP: "success",
     COVERAGE_DESKTOP: "success",
+    TEST_HOST_CORE: "success",
+    COVERAGE_HOST_CORE: "success",
     TEST_PACKAGES: "success",
     CONVEX: "success",
     N1_COMPAT: "success",
@@ -465,7 +469,90 @@ test("existing and future host packages cannot silently omit the coverage script
   assert.ok(
     command.includes("--filter './packages/*' --filter './apps/*' --filter '!@volli/desktop'"),
   );
-  assert.ok(command.includes("test:coverage"));
+  assert.ok(command.includes("--filter '!@volli/host-core'"));
+  assert.ok(command.includes("vp run --parallel --concurrency-limit=$(nproc)"));
+  assert.ok(command.includes("test:coverage --maxWorkers=1"));
+  assert.ok(!jobs["test-packages"].steps.some((step) => /Chromium|node-pty/.test(step.name)));
+});
+
+for (const suite of ["desktop", "host-core"]) {
+  test(`${suite} shards defer thresholds to a complete, merged coverage gate`, () => {
+    const shards = jobs[`test-${suite}`];
+    const merge = jobs[`coverage-${suite}`];
+    const total = shards.strategy.matrix.shard.length;
+    assert.deepEqual(
+      shards.strategy.matrix.shard,
+      Array.from({ length: total }, (_, i) => i + 1),
+    );
+    assert.equal(shards.strategy["fail-fast"], false);
+    assert.equal(merge.needs, `test-${suite}`);
+    const command = shards.steps.find((step) => step.name.startsWith("Run shard")).run;
+    assert.ok(command.includes("--shard=${{ matrix.shard }}/${{ strategy.job-total }}"));
+    assert.ok(command.includes("--reporter=blob"));
+    assert.ok(command.includes("--coverage "));
+    for (const metric of ["statements", "branches", "functions", "lines"]) {
+      assert.ok(command.includes(`--coverage.thresholds.${metric}=0`));
+    }
+    const upload = shards.steps.find((step) => step.name === "Upload blob report");
+    assert.equal(upload.with["if-no-files-found"], "error");
+    assert.equal(upload.with.overwrite, true);
+    assert.ok(
+      upload.with.path.endsWith(
+        `${suite}-` + "${{ matrix.shard }}-of-${{ strategy.job-total }}.json",
+      ),
+    );
+    assert.ok(!merge.steps.some((step) => /Chromium|node-pty/.test(step.name)));
+    const setup = merge.steps.find((step) => step.name === "Setup Vite+");
+    assert.ok(parse(setup.with["run-install"]).args.includes("--ignore-scripts"));
+    assert.ok(parse(setup.with["run-install"]).args.includes(`@volli/${suite}...`));
+    const mergeCommand = merge.steps.at(-1).run;
+    assert.ok(mergeCommand.includes("--merge-reports="));
+    assert.ok(mergeCommand.endsWith("--coverage"));
+    assert.ok(!mergeCommand.includes("--coverage.thresholds"));
+
+    mkdirSync(join(root, ".tmp"), { recursive: true });
+    const temporary = mkdtempSync(join(root, `.tmp/${suite}-blobs-`));
+    const requireBlobs = merge.steps.find(
+      (step) => step.name === "Require a blob from every shard",
+    );
+    const directory = join(temporary, `${suite}-blobs`);
+    mkdirSync(directory);
+    const check = () =>
+      spawnSync("bash", ["-c", requireBlobs.run], {
+        cwd: root,
+        env: { ...process.env, RUNNER_TEMP: temporary },
+        encoding: "utf8",
+      });
+    const filename = (i, count = total) => join(directory, `${suite}-${i}-of-${count}.json`);
+    try {
+      assert.notEqual(check().status, 0, "no reports must fail");
+      for (let i = 1; i <= total; i++) writeFileSync(filename(i), "{}");
+      assert.equal(check().status, 0, check().stderr);
+      for (let i = 1; i <= total; i++) {
+        rmSync(filename(i));
+        assert.notEqual(check().status, 0, `missing shard ${i} must fail`);
+        writeFileSync(filename(i), "{}");
+      }
+      writeFileSync(filename(1), "");
+      assert.notEqual(check().status, 0, "empty reports must fail");
+      writeFileSync(filename(1), "{}");
+      writeFileSync(filename(total + 1), "{}");
+      assert.notEqual(check().status, 0, "extra reports must fail");
+      rmSync(directory, { recursive: true });
+      mkdirSync(directory);
+      writeFileSync(filename(1, 1), "{}");
+      assert.notEqual(check().status, 0, "a blob cannot claim a smaller matrix");
+    } finally {
+      rmSync(temporary, { recursive: true, force: true });
+    }
+  });
+}
+
+test("only host-core shards carry native and sandboxed browser setup", () => {
+  const names = jobs["test-host-core"].steps.map((step) => step.name);
+  assert.ok(names.includes("Build node-pty for Node"));
+  assert.ok(names.includes("Install Chrome for Testing, sandboxed"));
+  assert.ok(names.includes("Probe Chromium's sandbox under the hostd unit"));
 });
 
 test("host coverage retains raw native output and worker diagnostics without hiding the gate", () => {

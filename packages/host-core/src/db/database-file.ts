@@ -272,9 +272,14 @@ function stagedSchemaVersion(path: string): number {
 function preflight(
   dbPath: string,
   fullCheck: boolean,
+  busyTimeoutMs: number,
 ): { compatibility: SchemaCompatibility; fullyClean: boolean | undefined } {
   assertDatabaseHeader(dbPath);
-  const check = new Database(dbPath, { readonly: true, fileMustExist: true });
+  const check = new Database(dbPath, {
+    readonly: true,
+    fileMustExist: true,
+    timeout: busyTimeoutMs,
+  });
   try {
     if (!checksClean(check)) {
       throw new Error(
@@ -359,15 +364,20 @@ export function openVolliDb(
     normalizeCloudShadows?: boolean;
     /** Tests/dev opt into failure; packaged startup explicitly uses logging. */
     onTransactionViolation?: TransactionViolationHandler;
+    /** SQLite lock wait in milliseconds; tests may shorten the production 5000 ms default. */
+    busyTimeoutMs?: number;
   } = {},
 ): Database.Database {
+  const busyTimeoutMs = options.busyTimeoutMs ?? 5000;
   // A crash or full disk during publication must never turn a missing live
   // pathname into an apparently successful, empty first-run database.
   if (!options.allowPendingRecovery) assertNoPendingDatabaseRecovery(dbPath);
   // Hold the startup mutex across construction AND first SQLite operations.
   // A swap holds the same mutex through publication, so a dormant boot
   // handle cannot resume against a different inode after a successful swap.
-  const openLock = options.allowPendingRecovery ? undefined : acquireDatabaseOpenLock(dbPath);
+  const openLock = options.allowPendingRecovery
+    ? undefined
+    : acquireDatabaseOpenLock(dbPath, busyTimeoutMs);
   try {
     // Under the lock no rollback point is being published: any pending copy
     // is from an attempt that died before it could publish. It may still be
@@ -379,7 +389,7 @@ export function openVolliDb(
     let fullyClean: boolean | undefined;
     if (exists(dbPath)) {
       try {
-        ({ compatibility, fullyClean } = preflight(dbPath, abandoned.length > 0));
+        ({ compatibility, fullyClean } = preflight(dbPath, abandoned.length > 0, busyTimeoutMs));
       } catch (error) {
         throw keepingAbandonedCopies(error, abandoned);
       }
@@ -409,11 +419,11 @@ export function openVolliDb(
     // with migrations pending); it fails open when the disk cannot be measured.
     const pendingFrom = compatibility?.schemaVersion ?? 0;
     if (pendingFrom > 0 && pendingFrom < SCHEMA_HEAD) assertMigrationDiskSpace(dbPath);
-    const db = new Database(dbPath);
+    // Set the timeout at construction, before even journal_mode can encounter a lock.
+    const db = new Database(dbPath, { timeout: busyTimeoutMs });
     try {
       db.pragma("journal_mode = WAL");
       db.pragma("foreign_keys = ON");
-      db.pragma("busy_timeout = 5000");
       db.pragma("synchronous = NORMAL");
       // VC-355 read tuning. `cache_size` is negative = KiB (64 MB); `mmap_size`
       // lets SQLite read pages straight from the page cache of the OS. Both are
@@ -804,6 +814,8 @@ export interface StagedProfileSwap {
    */
   companions?: readonly string[];
   faults?: DatabaseFileFaults;
+  /** SQLite lock wait in milliseconds; tests may shorten the production 5000 ms default. */
+  busyTimeoutMs?: number;
 }
 
 /**
@@ -840,6 +852,8 @@ export interface DatabaseFileRestore {
   schemaVersion: number;
   /** Crash tests only. */
   faults?: DatabaseFileFaults;
+  /** SQLite lock wait in milliseconds; tests may shorten the production 5000 ms default. */
+  busyTimeoutMs?: number;
 }
 
 export interface DatabaseFileRestoreResult {
@@ -881,6 +895,7 @@ export function restoreDatabaseFile(request: DatabaseFileRestore): DatabaseFileR
       restoreSchema: schemaVersion,
       restoreSource: resolve(sourcePath),
       faults: request.faults,
+      busyTimeoutMs: request.busyTimeoutMs,
     });
     return {
       preservedDirectory: asideDirectory,
@@ -952,7 +967,7 @@ function swapStagedProfile(request: SwapRequest): string | undefined {
   (request.faults ?? noFaults)("swap:lock");
   let lock: Database.Database;
   try {
-    lock = acquireDatabaseOpenLock(dbPath);
+    lock = acquireDatabaseOpenLock(dbPath, request.busyTimeoutMs);
   } catch (error) {
     if (isBusy(error)) throw new DatabaseFileBusyError("opening", { cause: error });
     throw error;
@@ -1129,9 +1144,11 @@ class Swap {
     // Failed SQLite ownership acquisition can delete malformed WAL/SHM on
     // close. A non-SQLite header must fail before creating that connection.
     assertDatabaseHeader(dbPath);
-    const owner = new Database(dbPath, { fileMustExist: true });
+    const owner = new Database(dbPath, {
+      fileMustExist: true,
+      timeout: this.request.busyTimeoutMs ?? 5000,
+    });
     try {
-      owner.pragma("busy_timeout = 5000");
       owner.pragma("locking_mode = EXCLUSIVE");
       try {
         owner.exec("BEGIN EXCLUSIVE; COMMIT");
@@ -1187,6 +1204,7 @@ class Swap {
     const restored = openVolliDb(this.request.dbPath, {
       allowPendingRecovery: true,
       normalizeCloudShadows: false,
+      busyTimeoutMs: this.request.busyTimeoutMs,
     });
     try {
       if (!checksClean(restored))
