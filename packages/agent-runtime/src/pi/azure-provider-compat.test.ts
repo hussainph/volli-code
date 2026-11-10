@@ -190,6 +190,10 @@ describe("Azure durable provider identity", () => {
     const agentDir = profile();
     const before = readFileSync(join(agentDir, "auth.json"), "utf8");
     const value = await access(agentDir);
+    expect(value.models.getProvider(PROVIDER)).toMatchObject({
+      id: PROVIDER,
+      name: "Azure OpenAI",
+    });
     const selection = JSON.parse('{"providerId":"azure-openai-responses","modelId":"gpt-5"}') as {
       providerId: string;
       modelId: string;

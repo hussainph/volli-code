@@ -94,6 +94,8 @@ export function withDurableAzureProvider(provider: Provider): Provider {
   return {
     ...provider,
     id: DURABLE_AZURE_ID,
+    // Keep Volli's existing sign-in and model labels across Pi's rename.
+    name: "Azure OpenAI",
     getModels: () => provider.getModels().map(durableIdentity),
     getAllModels: () => (provider.getAllModels?.() ?? provider.getModels()).map(durableIdentity),
     // The native Responses adapter allowlists `azure`, not our durable id.

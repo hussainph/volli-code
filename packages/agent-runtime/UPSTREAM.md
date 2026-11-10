@@ -338,8 +338,9 @@ Chord and telemetry. This is the published release, not upstream main.
   model's entry rather than retaining the old catalog's larger cap.
 - **Azure identity:** 1.0.3 renamed the provider to `azure`. Volli keeps the
   frozen durable id `azure-openai-responses` for credentials, selections,
-  caches, callbacks and emitted assistant messages. A request-time copy of the
-  model/history uses Pi's native id so its signed-thinking and composite tool-id
+  caches, callbacks and emitted assistant messages, plus the existing
+  `Azure OpenAI` provider label in sign-in and model controls. A request-time copy
+  of the model/history uses Pi's native id so its signed-thinking and composite tool-id
   replay checks still agree; neither stored history nor credentials are
   migrated. The public feed is read under `azure` and re-keyed only after the
   existing admission guard. An independently upgraded Pi CLI's native `azure`
