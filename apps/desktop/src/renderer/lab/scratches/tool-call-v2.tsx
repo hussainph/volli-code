@@ -1,16 +1,16 @@
 /** A simulated transcript comparison; no command or backend is run here. */
 import * as React from "react";
 import {
-  CaretRightIcon,
-  CheckCircleIcon,
-  FileTextIcon,
+  ChevronRightIcon,
+  SuccessIcon,
+  FileIcon,
   FolderIcon,
-  MagnifyingGlassIcon,
-  PencilSimpleIcon,
-  SpinnerGapIcon,
-  TerminalWindowIcon,
-  XCircleIcon,
-} from "@phosphor-icons/react";
+  SearchIcon,
+  EditIcon,
+  SpinnerIcon,
+  TerminalIcon,
+  ErrorIcon,
+} from "@renderer/components/ui/icon";
 import {
   ACTIVITY_METADATA_KEY,
   type ActivityDescriptor,
@@ -188,18 +188,18 @@ function Glyph({ part }: { part: DynamicToolUIPart }) {
     status === "denied" ||
     (kind === "run-command" && (activityDescriptor(part).outcome?.exitCode ?? 0) !== 0);
   const Icon = failed
-    ? XCircleIcon
+    ? ErrorIcon
     : status === "running" || status === "pending"
-      ? SpinnerGapIcon
+      ? SpinnerIcon
       : kind === "run-command"
-        ? TerminalWindowIcon
+        ? TerminalIcon
         : kind === "search"
-          ? MagnifyingGlassIcon
+          ? SearchIcon
           : kind === "list-directory"
             ? FolderIcon
             : kind === "edit-file" || kind === "write-file"
-              ? PencilSimpleIcon
-              : FileTextIcon;
+              ? EditIcon
+              : FileIcon;
   return (
     <Icon
       aria-hidden
@@ -292,7 +292,7 @@ function V2Row({
           </span>
         ) : null}
         {expandable ? (
-          <CaretRightIcon
+          <ChevronRightIcon
             aria-hidden
             className={cn("size-3 shrink-0 text-muted-foreground", open && "rotate-90")}
           />
@@ -338,7 +338,7 @@ function V2Bundle({
     (part) =>
       activityStatus(part) === "failed" || (activityDescriptor(part).outcome?.exitCode ?? 0) !== 0,
   );
-  const Icon = failed ? XCircleIcon : running ? SpinnerGapIcon : CheckCircleIcon;
+  const Icon = failed ? ErrorIcon : running ? SpinnerIcon : SuccessIcon;
   return (
     <div className="text-ui">
       <button
@@ -356,7 +356,7 @@ function V2Bundle({
           )}
         />
         {running ? <Shimmer as="span">{summary}</Shimmer> : <span>{summary}</span>}
-        <CaretRightIcon
+        <ChevronRightIcon
           aria-hidden
           className={cn("size-3 shrink-0 text-muted-foreground", open && "rotate-90")}
         />
