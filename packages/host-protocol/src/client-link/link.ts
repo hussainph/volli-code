@@ -277,14 +277,6 @@ const FENCE_REASONS: ReadonlySet<string> = new Set([
 const IDENTITY = { serialize: (value: unknown) => value, deserialize: (value: unknown) => value };
 const TRANSFORMER = { input: IDENTITY, output: IDENTITY };
 
-/**
- * tRPC's own reconnect never opens anything: the link retires a client at its
- * socket's first error, close or server-requested reconnect, before tRPC hears
- * it, and a retired Connection's captured constructor refuses. This only paces
- * the loop tRPC runs until it reads that it was closed.
- */
-const TRPC_RETRY_MS = 1_000;
-
 type Outcome = ReturnType<typeof classifyHandshakeFailure>;
 
 /** A socket permit is released only by physical close, not by link retirement. */
@@ -600,7 +592,8 @@ export function createClientLink<
       // The link's heartbeat replaces tRPC's: its timeout only starts a close
       // handshake, which a vanished peer never answers.
       keepAlive: { enabled: false },
-      retryDelayMs: () => TRPC_RETRY_MS,
+      // tRPC checks its closed flag before scheduling a reconnect. Retirement
+      // closes this client before tRPC hears the socket's close/error event.
     });
     readWelcome(current, handshake.welcomePath, true);
   }

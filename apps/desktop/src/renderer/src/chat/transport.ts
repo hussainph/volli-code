@@ -111,10 +111,10 @@ export function chatTransportFor(projectId: string | null): ChatSessionTransport
   return remoteTransports?.forProject(projectId!) ?? closedRemoteTransport(owner.hostName, window);
 }
 
-/** `session.command` as the router types it: its input and its answer. */
+/** Preserve the router's input/answer, not tRPC's client-only error promise tag. */
 export type SessionCommandDoor = (
   input: Parameters<RemoteSessionClient["session"]["command"]["mutate"]>[0],
-) => ReturnType<RemoteSessionClient["session"]["command"]["mutate"]>;
+) => Promise<Awaited<ReturnType<RemoteSessionClient["session"]["command"]["mutate"]>>>;
 
 /**
  * `session.command` for one Session, by its project (VC-713, B2): its host's
@@ -187,10 +187,12 @@ export function sourceIconsFor(projectId: string | null): TranscriptSourceIconsT
   };
 }
 
+type SessionPictureDoor = (
+  input: Parameters<RemoteSessionClient["session"]["picture"]["query"]>[0],
+) => Promise<Awaited<ReturnType<RemoteSessionClient["session"]["picture"]["query"]>>>;
+
 /** Saved images belong to the Session's host, never This Mac by fallback. */
-export function sessionPictureFor(
-  projectId: string | null,
-): RemoteSessionClient["session"]["picture"]["query"] {
+export function sessionPictureFor(projectId: string | null): SessionPictureDoor {
   if (launchStore() === "cloud")
     return () => Promise.reject(new Error("Saved pictures are not available yet in cloud"));
   const owner = remoteOwnerOf(projectId);
