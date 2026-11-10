@@ -194,10 +194,11 @@ export default defineConfig(({ mode, command }) => ({
         extends: true,
         test: { name: "renderer", setupFiles: [...diagnosticSetup, "test-setup.ts"] },
       },
-      // NOT extends: main tests need no plugins; a fresh entry avoids
-      // inheriting root src/renderer. It takes the renderer's alias alone
-      // (below). @volli/shared resolves via workspace link.
+      // Main tests take no renderer plugins or root; only its alias below.
+      // Vitest 5 makes inline projects inherit by default, so opt out explicitly
+      // to preserve the isolated Node project. @volli/shared uses its workspace link.
       {
+        extends: false,
         root: fileURLToPath(new URL(".", import.meta.url)),
         // The renderer's alias alone: the real-link Sessions test drives the
         // renderer's remote-Session binding and stores from desktop main.
