@@ -158,16 +158,22 @@ describe("running bash control", () => {
       toolCallId: "bash-1",
     });
   });
-  it("moves the addressed call without disclosing the command and disappears on success", async () => {
-    await mount();
-    const disclosure = container.querySelector("[aria-expanded]");
-    await act(async () => button()?.click());
-    expect(fixture.move).toHaveBeenCalledWith({ sessionId: SESSION, toolCallId: "bash-1" });
-    expect(disclosure?.getAttribute("aria-expanded")).toBe("false");
-    expect(button()).toBeUndefined();
-    await mount({ ...part, toolCallId: "next-bash" });
-    expect(button()?.disabled).toBe(false);
-  });
+  it.each([false, true])(
+    "moves the addressed call without changing the reader's open=%s disclosure and disappears on success",
+    async (open) => {
+      await mount();
+      const disclosure = container.querySelector<HTMLButtonElement>("[aria-expanded]")!;
+      // First output opens the v2 row; a reader may close it before moving it.
+      expect(disclosure.getAttribute("aria-expanded")).toBe("true");
+      if (!open) await act(async () => disclosure.click());
+      await act(async () => button()?.click());
+      expect(fixture.move).toHaveBeenCalledWith({ sessionId: SESSION, toolCallId: "bash-1" });
+      expect(disclosure.getAttribute("aria-expanded")).toBe(String(open));
+      expect(button()).toBeUndefined();
+      await mount({ ...part, toolCallId: "next-bash" });
+      expect(button()?.disabled).toBe(false);
+    },
+  );
   it("offers Ctrl+Shift+B inside the focused Session, and ignores other chords", async () => {
     await mount();
     const control = button()!;
