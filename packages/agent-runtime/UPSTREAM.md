@@ -87,8 +87,10 @@ Two Pi patches are declared in `pnpm-workspace.yaml` and stored in
   return-value and error bounds. Host/VM bounds
   cover text, console/image output, return values, error text and serialized
   call arguments before an oversized worker message reaches Electron main.
-  Defaults and failure text remain identical. `src/codemode/tool.test.ts`
-  covers each bound and the host/worker path.
+  Error truncation counts JSON escape widths in one pass per prefix, including
+  lone UTF-16 surrogates, then serializes once; it does not repeatedly encode
+  near-limit message/stack strings. Defaults and failure text remain identical.
+  `src/codemode/tool.test.ts` covers each bound and the host/worker path.
 
 The VC-1074 streaming-argument patch is dropped at 1.5: upstream now uses an
 incremental `StreamingJsonParser`/`ToolCallArgumentsStream` for every provider,

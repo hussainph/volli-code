@@ -47,7 +47,7 @@ packageExtensionsChecksum: sha256-q5WdBF7BCWKzly/tgcivWtVAQ00t1e/WaEGl0+mhjaI=
 patchedDependencies:
   '@dnd-kit/core@6.3.1': b27bef7dadf707ad29bd0f46903d9a5511eb602aae423b29b62b58aeef24571d
   '@earendil-works/pi-ai@1.5.0': fac11d5f250a9f5785f2bd464ba8cf7047393043cc0ae9ca55d28ce5ef65d6c2
-  '@earendil-works/pi-codemode@1.5.0': d827819a5f3b4aba78e7491736510ed4ea984fac79a52458df3e4d991145b90b
+  '@earendil-works/pi-codemode@1.5.0': 82d1cc0eaa6f6fd80d6614238f137da09c2773170c400f4550872a06d4150c16
 
 importers:
 
@@ -82,7 +82,7 @@ importers:
         version: 3.2.2(react@19.3.1)
       '@earendil-works/pi-codemode':
         specifier: 1.5.0
-        version: 1.5.0(patch_hash=d827819a5f3b4aba78e7491736510ed4ea984fac79a52458df3e4d991145b90b)
+        version: 1.5.0(patch_hash=82d1cc0eaa6f6fd80d6614238f137da09c2773170c400f4550872a06d4150c16)
       '@earendil-works/pi-mcp':
         specifier: 1.5.0
         version: 1.5.0
@@ -606,7 +606,7 @@ importers:
         version: 1.5.0(patch_hash=fac11d5f250a9f5785f2bd464ba8cf7047393043cc0ae9ca55d28ce5ef65d6c2)(@aws-sdk/credential-provider-node@3.972.86)(@smithy/signature-v4@5.7.4)(undici@8.12.2)(ws@8.21.0)(zod@4.6.7)
       '@earendil-works/pi-codemode':
         specifier: 1.5.0
-        version: 1.5.0(patch_hash=d827819a5f3b4aba78e7491736510ed4ea984fac79a52458df3e4d991145b90b)
+        version: 1.5.0(patch_hash=82d1cc0eaa6f6fd80d6614238f137da09c2773170c400f4550872a06d4150c16)
       '@earendil-works/pi-telemetry':
         specifier: 1.5.0
         version: 1.5.0
@@ -744,7 +744,7 @@ importers:
     devDependencies:
       '@earendil-works/pi-codemode':
         specifier: 1.5.0
-        version: 1.5.0(patch_hash=d827819a5f3b4aba78e7491736510ed4ea984fac79a52458df3e4d991145b90b)
+        version: 1.5.0(patch_hash=82d1cc0eaa6f6fd80d6614238f137da09c2773170c400f4550872a06d4150c16)
       '@modelcontextprotocol/server':
         specifier: 2.3.1
         version: 2.3.1
@@ -8422,7 +8422,7 @@ snapshots:
       - ws
       - zod
 
-  '@earendil-works/pi-codemode@1.5.0(patch_hash=d827819a5f3b4aba78e7491736510ed4ea984fac79a52458df3e4d991145b90b)':
+  '@earendil-works/pi-codemode@1.5.0(patch_hash=82d1cc0eaa6f6fd80d6614238f137da09c2773170c400f4550872a06d4150c16)':
     dependencies:
       quickjs-wasi: 3.6.2
 

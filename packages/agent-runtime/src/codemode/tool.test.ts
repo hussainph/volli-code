@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import { loadQuickJSWasm } from "@earendil-works/pi-codemode";
+import { CodemodeSandbox, loadQuickJSWasm } from "@earendil-works/pi-codemode";
 import { Type } from "typebox";
 import {
   MCP_RESULT_IMAGE_MAX_BYTES,
@@ -583,6 +583,43 @@ describe("limits", () => {
     expect(result.text).toContain("…");
     expect(result.text).not.toContain("error passed its limit");
   });
+
+  it.each([
+    ["JSON escapes", '"\\\b\t\n\f\r\u0000\u0001', false, false],
+    ["Unicode pairs and lone surrogates", "😀\ud800x\udc00", false, false],
+    ["a long name", "x", true, false],
+    ["a thrown string without name or stack", "\u0000", false, true],
+  ] as const)(
+    "keeps %s inside the encoded worker error budget",
+    async (_label, sample, longName, plain) => {
+      const limit = 1_024;
+      let exited: Promise<void> | undefined;
+      const sandbox = new CodemodeSandbox({
+        maxOutputChars: limit,
+        onWorkerStarted: (exit) => {
+          exited = exit;
+        },
+      });
+      try {
+        const result = await sandbox.execute(
+          plain
+            ? `throw ${JSON.stringify(sample)}.repeat(4096);`
+            : `const error = new Error(${JSON.stringify(sample)}.repeat(4096));
+               ${longName ? 'error.name = "x".repeat(4096);' : ""}
+               throw error;`,
+        );
+        expect(result.ok).toBe(false);
+        if (result.ok || result.error.kind !== "script") throw new Error("Expected a script error");
+        const { kind: _kind, ...error } = result.error;
+        expect(JSON.stringify(error).length).toBeLessThanOrEqual(limit);
+        expect(error.message).toContain("…");
+        expect(error.message).not.toContain("error passed its limit");
+      } finally {
+        await sandbox.close();
+        await exited;
+      }
+    },
+  );
 
   it("retains upstream's item bound even when every printed string is empty", async () => {
     const result = await run(fixture({ tools: [] }), 'while (true) text("");');

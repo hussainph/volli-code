@@ -350,16 +350,53 @@ index beb194ea11ae9b51167dab05224df674b275e755..fccc5fc657f336f986058642397313dd
      store: Record<string, string>;
      /**
 diff --git a/dist/runtime/vm.js b/dist/runtime/vm.js
-index 929527b976f8dc2b344b595f0dd87ac4af1874e9..7b47ad4175d61654f47e16f4c26299e10d1d39af 100644
+index 929527b976f8dc2b344b595f0dd87ac4af1874e9..1522d70afdffed7f35024986e5756bd19fe0ef28 100644
 --- a/dist/runtime/vm.js
 +++ b/dist/runtime/vm.js
-@@ -114,6 +114,38 @@ function describeException(error) {
+@@ -114,6 +114,75 @@ function describeException(error) {
      const stack = error.stack?.trimEnd();
      return JSON.stringify({ name: error.name, message: error.message, stack: stack ? `${head}\n${stack}` : head });
  }
 +/** Volli: keep error JSON bounded before it crosses the worker boundary. */
 +function limitFailure(message) {
 +    return JSON.stringify({ name: "RangeError", message, stack: `RangeError: ${message}` });
++}
++/** The longest prefix whose JSON string contents, including an ellipsis, fit. */
++function boundedJsonString(value, budget) {
++    let end = 0;
++    let length = 0;
++    while (end < value.length) {
++        const code = value.charCodeAt(end);
++        let width = 1;
++        let cost = 1;
++        if (code === 34 || code === 92 || code === 8 || code === 9 || code === 10 || code === 12 || code === 13) {
++            cost = 2;
++        }
++        else if (code < 32) {
++            cost = 6;
++        }
++        else if (code >= 0xd800 && code <= 0xdfff) {
++            const next = value.charCodeAt(end + 1);
++            if (code <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) {
++                width = 2;
++                cost = 2;
++            }
++            else {
++                cost = 6;
++            }
++        }
++        const next = end + width;
++        // A truncated string needs one more character for its ellipsis.
++        if (length + cost + (next < value.length ? 1 : 0) > budget)
++            break;
++        length += cost;
++        end = next;
++    }
++    if (end === value.length)
++        return { value, length };
++    return budget > 0
++        ? { value: `${value.slice(0, end)}…`, length: length + 1 }
++        : { value: "", length: 0 };
 +}
 +function boundedError(json, maxChars) {
 +    if (maxChars === undefined || json.length <= maxChars)
@@ -371,28 +408,28 @@ index 929527b976f8dc2b344b595f0dd87ac4af1874e9..7b47ad4175d61654f47e16f4c26299e1
 +    catch {
 +        return limitFailure("The script's error could not be reported");
 +    }
-+    // Binary search the encoded size: escaping can make a short string's JSON much larger.
-+    let low = 0;
-+    let high = Math.max(0, maxChars);
-+    let bounded = limitFailure("The script's error passed its output limit");
-+    while (low <= high) {
-+        const half = Math.floor((low + high) / 2);
-+        const cut = (value) => typeof value === "string" && value.length > half ? `${value.slice(0, half)}…` : value;
-+        const candidate = JSON.stringify({ name: cut(parsed.name), message: cut(parsed.message), stack: cut(parsed.stack) });
-+        if (candidate.length <= maxChars) {
-+            bounded = candidate;
-+            low = half + 1;
-+        }
-+        else {
-+            high = half - 1;
-+        }
++    const error = { name: parsed.name, message: parsed.message, stack: parsed.stack };
++    const strings = Object.keys(error).filter((key) => typeof error[key] === "string");
++    const fixed = { ...error };
++    for (const key of strings)
++        fixed[key] = "";
++    let remaining = maxChars - JSON.stringify(fixed).length;
++    if (remaining < 0)
++        return limitFailure("The script's error passed its output limit");
++    // Count each prefix once and serialize once, rather than re-encoding a
++    // near-limit message/stack for every step of a binary search. Unused space
++    // from a short name is shared by the remaining fields.
++    for (const [index, key] of strings.entries()) {
++        const cut = boundedJsonString(error[key], Math.floor(remaining / (strings.length - index)));
++        error[key] = cut.value;
++        remaining -= cut.length;
 +    }
-+    return bounded;
++    return JSON.stringify(error);
 +}
  /** Promise jobs run between two `shouldInterrupt` polls while draining the job queue. */
  const JOBS_PER_POLL = 50;
  function crashMessage(error) {
-@@ -121,6 +153,14 @@ function crashMessage(error) {
+@@ -121,6 +190,14 @@ function crashMessage(error) {
  }
  export async function startVm(options) {
      const { data, post } = options;
@@ -407,7 +444,7 @@ index 929527b976f8dc2b344b595f0dd87ac4af1874e9..7b47ad4175d61654f47e16f4c26299e1
      const maxStackSize = options.maxStackSize ?? MAX_STACK_SIZE;
      const deterministic = data.deterministic;
      const clock = deterministic && {
-@@ -212,48 +252,63 @@ export async function startVm(options) {
+@@ -212,48 +289,63 @@ export async function startVm(options) {
      try {
          // Called from the prelude with primitives only.
          const bridge = vm.newFunction("bridge", (kind, a, b, c) => {
@@ -490,7 +527,7 @@ index 929527b976f8dc2b344b595f0dd87ac4af1874e9..7b47ad4175d61654f47e16f4c26299e1
          // These handles live as long as the VM, which the caller disposes as a whole.
          api = vm.withScope((scope) => scope.escape(vm.callFunction(vm.evalCode(PRELUDE_SOURCE, "codemode-prelude.js"), vm.undefined, bridge, vm.newString(JSON.stringify(data.tools)), vm.newString(JSON.stringify(data.globals)), vm.newString(JSON.stringify(data.store)))));
          settle = api.getProp("settle");
-@@ -276,7 +331,7 @@ export async function startVm(options) {
+@@ -276,7 +368,7 @@ export async function startVm(options) {
          catch (error) {
              if (!(error instanceof JSException))
                  throw error;
