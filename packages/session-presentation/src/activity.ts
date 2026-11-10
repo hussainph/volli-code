@@ -5,7 +5,7 @@
  * harness tool names in this file and there must never be: a second adapter
  * renames every tool and the transcript still reads correctly. When a harness
  * has not stamped a descriptor yet the row degrades to the `"other"` presenter,
- * which names the tool in readable words (`Used Linear · create issue`) and
+ * which names the tool in readable words (`Used Linear · Create issue`) and
  * keeps the raw name in its detail — a first-class shape rather than a broken
  * one.
  *
@@ -27,6 +27,7 @@ import {
   type ActivityKind,
 } from "@volli/shared";
 import type { DynamicToolUIPart, ReasoningUIPart, UIMessage } from "ai";
+import { humanMcpToolName, humanToolName } from "./tool-names";
 
 type MessagePart = UIMessage["parts"][number];
 
@@ -61,9 +62,8 @@ export type BundleRow =
  * The old model had four nested levels — turn fold over block over group header
  * over rows — and each level needed its own spacing rule, its own left edge and
  * its own fold state. They composed into a rhythm no single rule could fix.
- * Here depth is never indentation: a bundle's rows sit at the same left edge as
- * the summary that counts them, and the caret is the only thing that says one
- * contains the other.
+ * A bundle owns the rows behind one disclosure; its rendering and guide rail
+ * belong to the client, not this projection.
  *
  */
 export type ChatSegment =
@@ -299,10 +299,9 @@ export function isBundleStreaming(rows: readonly BundleRow[]): boolean {
 }
 
 /**
- * A failure or a denial inside the bundle, which is reason enough to open it.
- * Judged by the status each row shows, so a bundle opens for exactly the rows
- * whose titles say something went wrong: a command that exited non-zero
- * does, a search that found nothing does not.
+ * A failure or denial inside the bundle. This is an outcome signal, never an
+ * instruction to open the reader's disclosure. A non-zero command counts;
+ * a search that found nothing does not.
  */
 export function bundleNeedsAttention(rows: readonly BundleRow[]): boolean {
   return bundleToolRows(rows).some((row) => isAlarming(describeActivity(row.part).status));
@@ -318,9 +317,8 @@ function isAlarming(status: ActivityStatus): boolean {
  *
  * Phrases are per kind in first-appearance order, so the sentence reads in the
  * order the work happened. While any row is in flight every phrase takes the
- * present participle and the sentence takes an ellipsis, which is how a live bundle reports
- * progress without expanding — the only thing on screen while the agent works,
- * so it has to carry the whole load.
+ * present participle. The client supplies the progress glyph, never an ellipsis.
+ * This is the detailed breakdown; workGist supplies the compact group title.
  *
  * Reasoning is deliberately uncounted. It is a row inside, and a header that
  * also said "thought twice" would be describing the rows rather than the work.
@@ -333,16 +331,19 @@ export function bundleSummary(rows: readonly BundleRow[]): SummarySegment[] {
 
   // A Map iterates in insertion order, and a kind is inserted the first time it
   // appears — so the Map itself is the first-appearance order the sentence needs.
-  // A legacy row whose call never produced an execution result is left out of
-  // the counts: the phrase says what happened, and what did not is confessed
-  // after it, quietly, rather than folded into a verb it never earned.
+  // Only successful or active rows earn a kind's completion/progress verb.
+  // Failed edits may have changed nothing (or only part of a file), denials
+  // never executed, and legacy not-run calls have no receipt. Count those
+  // endings separately rather than calling them completed work.
   const groups = new Map<ActivityKind, DynamicToolUIPart[]>();
   let notRun = 0;
   for (const row of tools) {
-    if (activityStatus(row.part) === "not-run") {
+    const status = describeActivity(row.part).status;
+    if (status === "not-run") {
       notRun += 1;
       continue;
     }
+    if (isAlarming(status)) continue;
     const kind = activityDescriptor(row.part).kind;
     const group = groups.get(kind);
     if (group) group.push(row.part);
@@ -643,7 +644,8 @@ export const ACTIVITY_PRESENTERS: Record<ActivityKind, ActivityParse> = {
         detail: outputDetail(context),
       };
     }
-    const exitCode = isSettled(context.status) ? commandExitCode(context) : null;
+    const exitCode =
+      isSettled(context.status) && context.status !== "denied" ? commandExitCode(context) : null;
     if (exitCode !== null && isSearchMiss(object, exitCode)) {
       // A search that found nothing exits 1, and that is an answer: the row
       // reads as a command that ran, never as one that failed.
@@ -797,7 +799,7 @@ export const ACTIVITY_PRESENTERS: Record<ActivityKind, ActivityParse> = {
 
   other: (context) => {
     // A tool this file has no words for is named in readable ones — an MCP
-    // tool by its server and tool (`Used Linear · create issue`), anything
+    // tool by its server and tool (`Used Linear · Create issue`), anything
     // else by its own name with the separators taken out. The raw name is
     // never the verb; it stays in the detail, where the call's shape is.
     const nativeToolName = context.descriptor.nativeToolName;
@@ -965,16 +967,12 @@ const PAGE_INPUT_ACTIONS: ReadonlySet<ActivityBrowseAction> = new Set(["press", 
  * Only once the call has settled; a live row's status is always the harness's.
  */
 function presentedStatus(context: ActivityContext): ActivityStatus {
-  if (!isSettled(context.status)) return context.status;
+  if (!isSettled(context.status) || context.status === "denied") return context.status;
   const facet = context.descriptor.browse ?? null;
   if (facet !== null) {
     return facet.refusal !== null || facet.error !== null ? "failed" : context.status;
   }
-  if (
-    context.descriptor.kind !== "run-command" ||
-    context.status === "denied" ||
-    isShellStop(context.descriptor)
-  ) {
+  if (context.descriptor.kind !== "run-command" || isShellStop(context.descriptor)) {
     return context.status;
   }
   const exitCode = commandExitCode(context);
@@ -1086,15 +1084,25 @@ function quotedTarget(target: string | null): string | null {
 }
 
 /**
- * The exit code a settled command reports: the descriptor's, else the last
- * line of Pi's bash failure (`Command exited with code 1`), which is the only
- * place that tool records it. That line is the vendored tool's own fixed
- * sentence (`vendor/pi-harness/tools/bash.ts`), never the command's output.
+ * The exit code a settled command reports: the descriptor's, else the final
+ * receipt in a failed command. Pi bash appends `Command exited with code N`
+ * (`agent-runtime/src/pi/vendor/pi-harness/tools/bash.ts`). Its activity error
+ * passes through `safeStopMessage`, collapsing newlines; the descriptor summary
+ * retains the original failure text. Read that anchored receipt for failed bash
+ * only, never infer an exit from successful stdout or an arbitrary substring.
  */
 function commandExitCode(context: ActivityContext): number | null {
   const recorded = context.descriptor.outcome?.exitCode ?? null;
   if (recorded !== null) return recorded;
-  const match = /(?:^|\n)Command exited with code (\d+)\s*$/.exec(context.errorText ?? "");
+  // Keep the recorded failure evidence even after a search miss is presented
+  // as done; only output-error parts carry errorText in the SDK union.
+  if (context.errorText === null) return null;
+  const receipt = /(?:^|\n)Command exited with code (\d+)\s*$/;
+  const match =
+    receipt.exec(context.errorText) ??
+    (context.descriptor.nativeToolName === "bash"
+      ? receipt.exec(context.descriptor.outcome?.summary ?? "")
+      : null);
   return match?.[1] === undefined ? null : Number(match[1]);
 }
 
@@ -1126,11 +1134,42 @@ const SEARCH_COMMAND = /^(?:\S*\/)?(?:rg|grep|egrep|fgrep|ag|ack|git\s+grep)(?:\
  */
 function isSearchMiss(command: string | null, exitCode: number): boolean {
   if (exitCode !== 1 || command === null) return false;
-  const last = command
-    .replace(/^[\s\S]*(?:&&|\|\||;|\||\n)/, "")
-    .trim()
-    .replace(/^(?:[A-Za-z_]\w*=\S*\s+)*/, "");
-  return SEARCH_COMMAND.test(last);
+  const last = lastCommand(command);
+  return last !== null && SEARCH_COMMAND.test(last.replace(/^(?:[A-Za-z_]\w*=\S*\s+)*/, ""));
+}
+
+/**
+ * Find the final shell step without treating a regex's quoted `|` or `;` as
+ * shell syntax. Substitutions, groups, redirections and backgrounding are
+ * deliberately opaque: exit 1 there need not be a search result at all.
+ */
+function lastCommand(command: string): string | null {
+  let start = 0;
+  let quote: string | null = null;
+  let escaped = false;
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command.charAt(index);
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (character === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote !== null) {
+      if (character === quote) quote = null;
+      else if (quote === '"' && (character === "`" || command.startsWith("$(", index))) return null;
+      continue;
+    }
+    if (character === "'" || character === '"') quote = character;
+    else if (character === "|" || command.startsWith("&&", index)) {
+      if (command.startsWith("||", index) || command.startsWith("&&", index)) index += 1;
+      start = index + 1;
+    } else if (character === ";" || character === "\n") start = index + 1;
+    else if ("&()`<>#".includes(character)) return null;
+  }
+  return quote !== null || escaped ? null : command.slice(start).trim();
 }
 
 function commandInput(input: unknown): string | null {
@@ -1448,33 +1487,16 @@ export function reasoningStatus(
 /* ------------------------------------------------------------------- shared */
 
 /**
- * The provider-safe name an MCP tool is registered under
- * (`mcpProviderToolName` in `@volli/shared`): server and tool segments, then
- * an identity hash. Read here for display only — identity is never recovered
- * by splitting it, and a segment that itself holds `__` reads a little oddly
- * rather than wrongly.
- */
-const MCP_TOOL_NAME = /^mcp__(.+?)__(.+)__[0-9a-f]{8}$/;
-
-/**
- * A tool's name in words: `Linear · create issue` for an MCP tool, and
- * `web search` for `web_search` or `webSearch`. Never empty — a name with no
- * letters in it is returned as it came.
+ * Share the specialized row's readable fallback. This is display only: configured
+ * MCP names still join by exact identity in `transcriptMcpNames`, and override
+ * this fallback in `presentTranscriptTool`. Never infer identity from the name.
  */
 function readableToolName(nativeToolName: string): string {
-  const mcp = MCP_TOOL_NAME.exec(nativeToolName);
-  if (mcp?.[1] !== undefined && mcp[2] !== undefined) {
-    return `${upperFirst(words(mcp[1]))} · ${words(mcp[2])}`;
+  if (nativeToolName.startsWith("mcp__")) {
+    const { server, tool } = humanMcpToolName(nativeToolName);
+    return `${server} · ${tool}`;
   }
-  return words(nativeToolName) || nativeToolName;
-}
-
-function words(identifier: string): string {
-  return identifier
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/[_\-\s]+/g, " ")
-    .trim()
-    .toLowerCase();
+  return humanToolName(nativeToolName).trim().toLowerCase() || nativeToolName;
 }
 
 /**

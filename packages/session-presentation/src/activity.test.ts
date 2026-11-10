@@ -438,10 +438,27 @@ describe("bundleSummary", () => {
       ),
     );
     expect(bundleSummary(rows)).toEqual([
-      { text: "Ran 2 commands, read 1 file", tone: "neutral" },
+      { text: "Ran 1 command", tone: "neutral" },
       { text: "1 failed", tone: "danger" },
       { text: "1 denied", tone: "danger" },
     ]);
+  });
+
+  it("never claims failed or denied edits completed, including failure-only bundles", () => {
+    const failed = tool("edit-file", { state: "output-error", descriptor: subjectOf("gone.ts") });
+    const denied = tool("write-file", { state: "output-denied", descriptor: subjectOf("new.ts") });
+    expect(bundleSummary(bundleOf(segmentMessageParts([failed, denied], "failed")))).toEqual([
+      { text: "1 failed", tone: "danger" },
+      { text: "1 denied", tone: "danger" },
+    ]);
+    const reading = tool("read-file", { state: "input-available" });
+    const edited = tool("edit-file", { descriptor: subjectOf("done.ts") });
+    expect(bundleSummary(bundleOf(segmentMessageParts([reading, edited, failed], "live")))).toEqual(
+      [
+        { text: "Reading 1 file, editing done.ts", tone: "neutral" },
+        { text: "1 failed", tone: "danger" },
+      ],
+    );
   });
 
   it("does not count a legacy not-run row among the work that happened", () => {
@@ -1846,11 +1863,11 @@ describe("state-true titles", () => {
         ...subjectOf("VC-12 chat seam"),
       },
       titles: {
-        pending: "Use Linear · create issue VC-12 chat seam",
-        running: "Using Linear · create issue VC-12 chat seam",
-        done: "Used Linear · create issue VC-12 chat seam",
-        failed: "Failed to use Linear · create issue VC-12 chat seam",
-        denied: "Denied using Linear · create issue VC-12 chat seam",
+        pending: "Use Linear · Create issue VC-12 chat seam",
+        running: "Using Linear · Create issue VC-12 chat seam",
+        done: "Used Linear · Create issue VC-12 chat seam",
+        failed: "Failed to use Linear · Create issue VC-12 chat seam",
+        denied: "Denied using Linear · Create issue VC-12 chat seam",
         "not-run": "Not run VC-12 chat seam",
       },
     },
@@ -1894,6 +1911,17 @@ describe("state-true titles", () => {
     expect(rowTitle(part("output-available", "click"))).toBe("Clicked “Sign in”");
     expect(rowTitle(part("output-error", "click"))).toBe("Failed to click “Sign in”");
     expect(rowTitle(part("output-denied", "click"))).toBe("Denied clicking “Sign in”");
+    const denied = part("output-denied", "click");
+    const deniedDescriptor = activityContext(denied).descriptor;
+    expect(
+      describeActivity({
+        ...denied,
+        toolMetadata: metadata({
+          ...deniedDescriptor,
+          browse: { ...deniedDescriptor.browse!, refusal: "browser.tab-held" },
+        }),
+      }),
+    ).toMatchObject({ status: "denied", verb: "Denied clicking" });
     expect(rowTitle(part("input-available", "open"))).toBe("Opening example.com");
     expect(rowTitle(part("output-error", "open"))).toBe("Failed to open example.com");
     expect(rowTitle(part("input-available", "screenshot"))).toBe("Taking a screenshot example.com");
@@ -1957,15 +1985,23 @@ describe("state-true titles", () => {
         tool("run-command", { descriptor: { outcome: { ...emptyOutcome, exitCode: 2 } } }),
       ),
     ).toMatchObject({ verb: "Exited with code 2", object: null, after: null, status: "failed" });
-    // A denial outranks whatever exit was recorded.
-    expect(
-      describeActivity(
-        tool("run-command", {
-          state: "output-denied",
-          descriptor: { outcome: { ...emptyOutcome, exitCode: 1 } },
-        }),
-      ).status,
-    ).toBe("denied");
+    // A denial outranks whatever exit was recorded, including a search miss.
+    for (const command of ["pnpm lint", "rg seam"]) {
+      expect(
+        describeActivity(
+          tool("run-command", {
+            state: "output-denied",
+            input: { command },
+            descriptor: { outcome: { ...emptyOutcome, exitCode: 1 } },
+          }),
+        ),
+      ).toMatchObject({
+        status: "denied",
+        verb: "Denied running",
+        object: command,
+        after: null,
+      });
+    }
     // A live command has no exit to report yet, whatever the descriptor says.
     expect(
       rowTitle(
@@ -1976,6 +2012,50 @@ describe("state-true titles", () => {
         }),
       ),
     ).toBe("Running pnpm build");
+  });
+
+  it("reads Pi bash's final failure receipt when runtime diagnostics collapsed its newlines", () => {
+    const command = "printf 'lint failed: an example diagnostic\\n' >&2; exit 2";
+    const summary = "lint failed: an example diagnostic\n\nCommand exited with code 2";
+    const part = tool("run-command", {
+      toolName: "volli.activity",
+      state: "output-error",
+      input: { command },
+      errorText: "lint failed: an example diagnostic Command exited with code 2",
+      descriptor: { nativeToolName: "bash", outcome: { ...emptyOutcome, summary } },
+    });
+    expect(describeActivity(part)).toMatchObject({
+      verb: "",
+      object: command,
+      after: "exited with code 2",
+      status: "failed",
+    });
+    expect(rowTitle(part)).toBe(`${command} exited with code 2`);
+    // Never infer a failure from successful stdout, a non-bash result, an
+    // embedded sentence or a receipt followed by more diagnostics.
+    for (const [state, name, text] of [
+      ["output-available", "bash", summary],
+      ["output-error", "other-command", summary],
+      ["output-error", "bash", "stdout says Command exited with code 2"],
+      ["output-error", "bash", `${summary}\nMore diagnostics`],
+    ] as const) {
+      expect(
+        describeActivity(
+          tool("run-command", {
+            state,
+            descriptor: { nativeToolName: name, outcome: { ...emptyOutcome, summary: text } },
+          }),
+        ).after,
+      ).toBeNull();
+    }
+    expect(
+      describeActivity(
+        tool("run-command", {
+          state: "output-error",
+          descriptor: { nativeToolName: "bash" },
+        }),
+      ).after,
+    ).toBeNull();
   });
 
   it("says a deliberate background stop stopped, whatever its signal's exit", () => {
@@ -2029,7 +2109,7 @@ describe("state-true titles", () => {
     expect(bundleNeedsAttention(missOnly)).toBe(false);
     const withExit = bundleOf(segmentMessageParts([miss, exited], "exit"));
     expect(bundleSummary(withExit)).toEqual([
-      { text: "Ran 2 commands", tone: "neutral" },
+      { text: "Ran 1 command", tone: "neutral" },
       { text: "1 failed", tone: "danger" },
     ]);
     expect(bundleNeedsAttention(withExit)).toBe(true);
@@ -2041,6 +2121,16 @@ describe("state-true titles", () => {
       "cd src && grep -rn seam .",
       "FORCE_COLOR=0 /usr/bin/egrep seam",
       "git grep seam",
+      "rg 'foo|bar'",
+      'rg "foo;bar$"',
+      'rg "foo\\\"|bar"',
+      "rg foo\\|bar",
+      "rg foo\\\nbar",
+      "grep 'literal \\ and ` and $(text)'",
+      "false || rg seam",
+      "printf words | rg seam",
+      "printf words; rg seam",
+      "printf words\nrg seam",
     ]) {
       const part = tool("run-command", {
         state: "output-error",
@@ -2053,7 +2143,21 @@ describe("state-true titles", () => {
     }
     // Exit 2 is grep's real error, a pipeline's status is its last command's,
     // and `git` alone is not a search.
-    for (const command of ["rg seam --bad-flag", "rg seam | head", "git log"]) {
+    for (const command of [
+      "rg seam --bad-flag",
+      "rg seam | head",
+      "git log",
+      "rg foo > /protected/output",
+      "rg foo &",
+      "(rg foo)",
+      "rg `command`",
+      'rg "$(command)"',
+      'rg "`command`"',
+      "rg foo # comment; rg bar",
+      "rg 'unfinished",
+      "rg trailing\\",
+      "sh -c 'exit 1; rg seam'",
+    ]) {
       const exit = command.startsWith("rg seam --") ? 2 : 1;
       const row = describeActivity(
         tool("run-command", {
@@ -2087,7 +2191,7 @@ describe("state-true titles", () => {
     // A harness that knew no better subject repeated the tool name; the verb
     // already says it, so the object does not.
     expect(mcp).toMatchObject({
-      verb: "Used Github enterprise · list pull requests",
+      verb: "Used Github enterprise · List Pull Requests",
       object: null,
     });
     expect(detailText(mcp.detail)).toBe(

@@ -133,7 +133,7 @@ describe("collapsed live bundles", () => {
       />,
     );
     expect(html.match(/animate-spin/g)).toHaveLength(1);
-    expect(html).toContain("Reading");
+    expect(html).toContain("Exploring");
   });
 
   it("draws every progress mark as the shared Spinner in a fixed slot, stilled for reduced motion", () => {
@@ -805,7 +805,7 @@ describe("ToolRow copy control", () => {
     const html = renderToStaticMarkup(<ToolRow part={bashRow} />);
 
     expect(html).toContain("pnpm run typecheck &amp;&amp;\npnpm run test");
-    expect(html).toContain('class="min-w-0 truncate font-mono text-ui text-foreground"');
+    expect(html).toContain('class="min-w-0 truncate text-ui text-foreground font-mono"');
     expect(html).toContain("cursor-default hover:bg-muted/30 hover:text-foreground");
     expect(html).toContain('aria-label="Show details"');
     expect(html).not.toContain('title="Show details"');
@@ -825,4 +825,151 @@ describe("ToolRow copy control", () => {
 
     await expect(copyActivityObject("src/session.ts", { writeText })).resolves.toBe("failed");
   });
+});
+
+describe("v2 group and live command rows", () => {
+  const live = (output?: string): Extract<DynamicToolUIPart, { state: "output-available" }> => ({
+    ...bashRow,
+    toolCallId: "streaming-command",
+    state: "output-available",
+    preliminary: true,
+    output: { content: [{ type: "text", text: output ?? "" }] },
+    toolMetadata: {
+      [ACTIVITY_METADATA_KEY]: {
+        ...descriptor,
+        kind: "run-command",
+        nativeToolName: "bash",
+        subject: { label: "pnpm build", path: null, lineRange: null },
+        startedAt: Date.now() - 2000,
+        endedAt: null,
+      },
+    } as DynamicToolUIPart["toolMetadata"],
+  });
+
+  it("opens on first output, shows a bounded tail and a ticking sans timer, and respects a reader close", () => {
+    vi.useFakeTimers();
+    try {
+      const part = live();
+      const render = (next: DynamicToolUIPart) => act(() => root!.render(<ToolRow part={next} />));
+      render(part);
+      expect(container!.querySelector('[aria-label="Show details"]')).not.toBeNull();
+      const output = Array.from({ length: 40 }, (_, index) => `output-line-${index}`).join("\n");
+      render({ ...part, output: { content: [{ type: "text", text: output }] } });
+      expect(container!.querySelector('[aria-label="Hide details"]')).not.toBeNull();
+      expect(container!.textContent).toContain("output-line-39");
+      expect(container!.textContent).not.toContain("output-line-0");
+      const timer = container!.querySelector(".tabular-nums")!;
+      expect(timer.textContent).toBe("2.0s");
+      expect(timer.classList.contains("font-mono")).toBe(false);
+      act(() => vi.advanceTimersByTime(1000));
+      expect(timer.textContent).toBe("3.0s");
+      act(() =>
+        container!.querySelector<HTMLButtonElement>('[aria-label="Hide details"]')!.click(),
+      );
+      render({ ...part, output: { content: [{ type: "text", text: "new output" }] } });
+      expect(container!.querySelector('[aria-label="Show details"]')).not.toBeNull();
+      expect(container!.textContent).not.toContain("new output");
+      render({ ...bashRow, toolCallId: part.toolCallId });
+      expect(container!.textContent).toContain("Ran");
+      expect(container!.querySelector('[aria-label="Show details"]')).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("honours an early reader choice and keeps arriving failures behind the disclosure", () => {
+    const part = live();
+    act(() => root!.render(<ToolRow part={part} />));
+    act(() => container!.querySelector<HTMLButtonElement>('[aria-label="Show details"]')!.click());
+    act(() => container!.querySelector<HTMLButtonElement>('[aria-label="Hide details"]')!.click());
+    act(() => root!.render(<ToolRow part={{ ...part, output: "first output" }} />));
+    expect(container!.textContent).not.toContain("first output");
+    act(() =>
+      root!.render(
+        <ToolRow
+          part={{
+            ...part,
+            state: "output-error",
+            output: undefined,
+            errorText: "diagnostic failure",
+          }}
+        />,
+      ),
+    );
+    expect(container!.textContent).toContain("Failed to run");
+    expect(container!.textContent).not.toContain("diagnostic failure");
+  });
+
+  it("keeps gist on opening, adds a guide rail and moves the breakdown into the list", () => {
+    const rows: BundleRow[] = [{ kind: "tool", key: "read", part: row }];
+    act(() => root!.render(<ActivityBundle rows={rows} />));
+    const header = container!.querySelector<HTMLButtonElement>(
+      '[data-slot="activity-bundle-header"]',
+    )!;
+    const gist = header.textContent;
+    expect(gist).toContain("Explored 1 file");
+    expect(container!.querySelector(".transcript-work-rail")).toBeNull();
+    act(() => header.click());
+    expect(header.textContent).toBe(gist);
+    expect(container!.querySelector(".transcript-work-rail")).not.toBeNull();
+    expect(
+      container!.querySelector('[data-slot="activity-bundle-viewport"]')!.textContent,
+    ).toContain("Readsrc/session.ts");
+    const path = [...container!.querySelectorAll("span.text-foreground")].find(
+      (span) => span.textContent === "src/session.ts",
+    )!;
+    expect(path).toBeDefined();
+    expect(path.closest(".font-mono")).toBeNull();
+    expect(path.querySelector(".text-muted-foreground")?.textContent).toBe("src/");
+  });
+});
+
+it("aggregates raw and envelope failures once in the collapsed gist", () => {
+  const web: DynamicToolUIPart = {
+    type: "dynamic-tool",
+    toolName: "web_fetch",
+    toolCallId: "web-failed",
+    state: "output-available",
+    input: { url: "https://example.org/missing" },
+    output:
+      "404 Not Found for https://example.org/missing, and nothing was fetched.\nThe page was not found.\nReported as response.http. This is what the request met, not a Volli policy: correct the URL, try again later, or read another source, with web_fetch.",
+  };
+  act(() =>
+    root!.render(
+      <ActivityBundle
+        rows={[
+          { kind: "tool", key: "failed", part: failed },
+          { kind: "tool", key: "web-failed", part: web },
+        ]}
+      />,
+    ),
+  );
+  const header = container!.querySelector('[data-slot="activity-bundle-header"]')!;
+  expect(header.textContent).toBe("2 failed");
+});
+
+it("keeps paused MCP, code and web rows static without turning their group into a success", () => {
+  const rows: BundleRow[] = ["mcp__linear__create_issue__abcd1234", "codemode", "web_search"].map(
+    (toolName) => ({
+      kind: "tool",
+      key: toolName,
+      part: {
+        type: "dynamic-tool",
+        toolName,
+        toolCallId: toolName,
+        state: "input-available",
+        input: { query: "test" },
+      },
+    }),
+  );
+  act(() => root!.render(<ActivityBundle rows={rows} progressEnabled={false} />));
+  const header = container!.querySelector<HTMLButtonElement>(
+    '[data-slot="activity-bundle-header"]',
+  )!;
+  const pending = renderToStaticMarkup(<ActivityBundle rows={rows} progressEnabled={false} />);
+  expect(pending).not.toContain("animate-spin");
+  act(() => header.click());
+  expect(container!.querySelector(".chat-shimmer")).toBeNull();
+  expect(container!.querySelector(".animate-spin")).toBeNull();
+  expect(container!.textContent).toContain("Using");
 });

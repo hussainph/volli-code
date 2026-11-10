@@ -239,7 +239,7 @@ it.each(["coalesced", "separate"] as const)(
     const cold = appendFrames(EMPTY_TRANSCRIPT, settled.frames);
     expect(cold.messages).toEqual(settled.durableMessages);
     expect(cold.activityFirstOverlaySequence.size).toBe(0);
-    expect(work(cold).map(workDurationLabel)).toEqual(["Work details"]);
+    expect(work(cold).map(workDurationLabel)).toEqual(["Thought"]);
   },
 );
 
@@ -330,7 +330,7 @@ it.each(["no-reset", "turn-close", "age-window"] as const)(
       type: "reasoning",
       text: "Unrelated thought",
     });
-    expect(work(host.state).map(workDurationLabel)).toEqual(["Work details"]);
+    expect(work(host.state).map(workDurationLabel)).toEqual(["Thought"]);
     expect(host.state.activityFirstOverlaySequence.size).toBe(0);
     expect(host.state.messages.at(-1)?.id).toBe("pi:attachment:entry:unrelated");
     expect(host.state.frames.map((frame) => frame.sequence)).toEqual(

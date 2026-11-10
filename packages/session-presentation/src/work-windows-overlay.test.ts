@@ -212,13 +212,13 @@ it("freezes a real turn's receipt at the durable boundary without hiding its run
   if (turn === null) throw new Error("Expected decoded turn start");
   let state = start(appendFrames(EMPTY_TRANSCRIPT, [prompt, turn]), "live", 1000);
   expect(state.turnActive).toBe(true);
-  expect(workDurationLabel(windows(state)[0]!)).toBe("Working");
+  expect(workDurationLabel(windows(state)[0]!)).toBe("Using 1 tool");
   const delivery = noticeFrame(3, 2500);
   state = appendFrames(state, [delivery]);
   expect(windows(state)[0]!.state).toBe("complete");
   expect(windows(state)[0]!.endedAt).toBe(2500);
   expect(windows(state)[0]!.rows[0]!.part.state).toBe("input-available");
-  expect(workDurationLabel(windows(state)[0]!)).toBe("Work details");
+  expect(workDurationLabel(windows(state)[0]!)).toBe("Using 1 tool");
   state = appendFrames(state, [settle(4, "live", 1000, 8000)]);
   expect(windows(state)[0]!.endedAt).toBe(2500);
   expect(windows(state)[0]!.rows[0]!.part.state).toBe("output-available");
@@ -247,7 +247,7 @@ it("does not let reverse parallel settlement overlap ownership or count a spanni
       [3000, 6000],
     ]);
     expect(work[0]!.endedAt!).toBeLessThanOrEqual(work[1]!.startedAt!);
-    expect(work.map(workDurationLabel)).toEqual(["Work details", "Work details"]);
+    expect(work.map(workDurationLabel)).toEqual(["Used 2 tools", "Used 1 tool"]);
   }
 });
 
@@ -265,7 +265,7 @@ it("retains actual live position with unknown clocks through settlement and hist
   expect(project(state).map((row) => row.kind)).toEqual(["turn", "work", "host-notice"]);
   expect(windows(state)[0]!.startedAt).toBeNull();
   expect(windows(state)[0]!.endedAt).toBeNull();
-  expect(workDurationLabel(windows(state)[0]!)).toBe("Work details");
+  expect(workDurationLabel(windows(state)[0]!)).toBe("Used 1 tool");
   const paged = prependTranscriptHistory(
     { ...state, frames: state.frames.filter((held) => held.sequence >= 2), before: 2 },
     2,
@@ -275,7 +275,7 @@ it("retains actual live position with unknown clocks through settlement and hist
   expect(ids(paged)).toEqual([["untimed"]]);
   // Replay without start/overlay evidence cannot recover that missing order.
   const replay = appendFrames(EMPTY_TRANSCRIPT, state.frames);
-  expect(workDurationLabel(windows(replay)[0]!)).toBe("Work details");
+  expect(workDurationLabel(windows(replay)[0]!)).toBe("Used 1 tool");
 });
 
 it("uses retained ledger order for equal-millisecond starts and preserves placement without it", () => {
@@ -339,7 +339,7 @@ it("requires endpoint coverage for every terminal row, not the maximum of a time
   ]);
   expect(windows(state)[0]!.startedAt).toBe(1000);
   expect(windows(state)[0]!.endedAt).toBeNull();
-  expect(workDurationLabel(windows(state)[0]!)).toBe("Work details");
+  expect(workDurationLabel(windows(state)[0]!)).toBe("Used 2 tools");
 });
 
 it("places context facts at their exact message anchor inside a grouped assistant turn", () => {
