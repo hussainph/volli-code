@@ -1,67 +1,103 @@
 ---
 title: Configure MCP servers
-description: Add a project MCP server, discover its tools, and choose which tools new Sessions can use.
+description: Connect local and remote MCP servers, sign in or supply credentials, and choose the tools offered to new Sessions across your projects.
 sidebar:
   label: MCP servers
 ---
 
-Use **Configure → MCP Servers** to connect a project to Model Context Protocol
-(MCP) tools. You can add a local process or a remote Streamable HTTP endpoint,
-test the connection, and choose tools explicitly.
+Use **Settings → All projects → MCP Servers** to connect Model Context Protocol
+(MCP) servers. Connections and selected tools apply across projects on this
+Mac. You can run a local process or connect to a remote Streamable HTTP
+endpoint.
 
 ## Add a server
 
-Have the server’s executable and arguments, or its Streamable HTTP endpoint,
-ready. **Test and discover** starts a local command as your macOS user, or
-connects to the remote endpoint. Review the command or endpoint before testing.
+Have the executable and arguments, or the server's endpoint URL, ready.
+**Connect** starts a local command as your macOS user or contacts the remote
+server. Review it before connecting.
 
-1. In the project, open **Configure → MCP Servers** and select **Add server**.
-2. Enter a **Name**, then choose a **Transport**.
-3. For **Standard input/output**, enter the **Executable** and **Arguments (one per line)**. For **Streamable HTTP**, enter the **Endpoint URL**.
-4. Select **Test and discover**. When the catalog loads, select only the tools you want to offer. Newly discovered tools are not selected for you.
-5. Select **Save server**. Testing alone does not save the configuration.
+1. In **MCP Servers**, select **Add server**.
+2. Under **Location**, choose **Remote** or **Local**.
+3. For **Remote**, enter **Server URL**. For **Local**, enter **Executable**
+   and **Arguments**, one argument per line. **Name (optional)** lets you
+   replace the suggested name.
+4. Add any required headers or environment variables, as described below.
+5. Select **Connect**. If the server needs OAuth, select **Sign in** and finish
+   in your browser.
+6. In **Tools for new Sessions**, select the tools you want to offer.
+7. Select **Add server** to save the connection and tool selection.
 
-To change an existing server, select **Edit** in its row. You can change its
-configuration, enable or disable the server, and choose which discovered tools
-to enable. Use **Refresh** to read its tool catalog again.
+Connecting alone does not save the server. Newly discovered tools start
+unselected.
+
+## Credentials and sign-in
+
+Remote servers support custom **Headers**. Local processes support
+**Environment variables**. Each value has two choices:
+
+- **Stored secret** is a write-only value. After saving, the field shows
+  **Stored** and accepts a replacement without revealing the old value.
+- **Environment variable** stores a reference such as `${API_KEY}`. Volli
+  resolves it from the app's environment when the server connects.
+
+For an API-key server, use the header name and value format its documentation
+requires. Keep credentials out of **Server URL**. Volli sends credentials only
+over HTTPS or to this machine, and does not forward them across origins.
+
+Remote servers without an **Authorization** header can use OAuth. **Sign in**
+opens the browser only when you request it. Connections can reuse and refresh
+a saved token; a server that needs another sign-in shows that action.
+**Cancel sign-in** stops waiting, and **Sign out** removes the saved sign-in.
+
+For a server that requires a pre-registered OAuth client, expand **Custom OAuth
+client**. It provides **Client ID**, **Client secret**, **Callback port**,
+**Callback URL**, and **Scope**. Use the values registered with that server.
+Adding your own **Authorization** header bypasses OAuth sign-in.
 
 ## Choose tools for Sessions
 
-The server’s **On** checkbox and each tool checkbox control what new root Sessions
-for this project can use. Existing Sessions keep every tool they already hold
-and can gain additions. Tools routed only through Code Mode become available
-before the next program. Their short announcement waits for a cold prompt cache,
-compaction or model switch unless the model supports mid-conversation system
-messages. Other additions wait for those same boundaries. Each update appears
-as an expandable “Tools updated” transcript row.
+Open a saved server by its name or use its menu's **Choose tools** action.
+**Filter tools** narrows the list. **Select all** and group checkboxes affect
+the listed tools. A read-only grouping reflects the server's own claims, not
+a Volli security guarantee. Select **Save** to keep your choices.
 
-Delegated helpers inherit their parent's current recorded MCP tools, including
-refreshed additions, not the project's later selection. Running helpers gain
-additions by the same rules, bounded by their parent.
+Use **Edit connection** to change the command, endpoint, or credentials.
+**Refresh tools** reads the catalog again. Existing tools on the same endpoint
+keep their choices; a changed endpoint starts with its tools unselected.
+**Recent activity** records configuration operations and their outcomes.
 
-When [Code Mode](/guides/code-mode/) is on, a server with more than 20 enabled
-tools, or with very long tool definitions, is not sent to the model tool by
-tool. A Session sees the server's name and tool count and finds the tools it
-needs from a short program, which keeps every request smaller. Enabling only
-the tools you need keeps a server under that size.
+The server's enabled switch and tool selection determine what new root
+Sessions receive. Switching a server off keeps its configuration for existing
+Sessions and their recorded tool names, but calls to that server fail until
+you enable it again.
 
-Prefer switching a server off when you want new root Sessions to stop receiving
-its tools. This keeps the configuration older Sessions need and does not revoke
-their existing tools or those inherited by their delegated helpers.
+Existing Sessions keep their recorded tools and can gain additions. Tools
+routed only through [Code Mode](/guides/code-mode/) can become callable before
+the next program. Other additions wait for a cold prompt cache, compaction,
+or model switch. Updates appear in an expandable **Tools updated** transcript
+row.
 
-Removing a server leaves its existing tool names on updated Sessions; calls
-return a named unavailable error. Re-adding the server under its original ID
-restores the connection. On older app builds, the missing configuration may
-prevent reattachment until it is restored under that ID.
+Delegated helpers inherit their parent's recorded MCP tools, including
+refreshed additions. They do not independently receive the later global
+selection. Running helpers gain additions within their parent's tool surface.
+
+Large servers use Code Mode discovery rather than declaring every tool on
+every request. This applies above 20 enabled tools or about 3,000 tokens of
+definitions, including in **Direct tools** mode. Enable only what you need.
+
+## Remove a server
+
+Use the server menu's **Remove** action. Existing Sessions keep its tool names,
+but calls return an unavailable error while the configuration is missing.
+Keep a server enabled while existing Sessions still need it. Disabling keeps
+the configuration for later use, but blocks calls until you re-enable it.
 
 ## Review the trust boundary
 
-A local MCP command runs as you. A remote server receives the arguments sent to
-its tools. Treat server metadata and tool results as untrusted data, not as
-instructions. Review the discovered tool names and descriptions before enabling
-them.
+A local MCP command runs as you. A remote server receives the arguments sent
+to its tools. Treat metadata, descriptions, and results as untrusted content,
+and review tools before enabling them.
 
 Volli supports standard input/output and Streamable HTTP, not legacy SSE-only
-endpoints. It does not support authenticated HTTP endpoints, custom headers, or
-secret environment fields. Use a server that needs none of those options. Do
-not put credentials in the endpoint URL.
+endpoints. See [Local data and network access](/reference/data-and-privacy/)
+for credential storage and other network connections.

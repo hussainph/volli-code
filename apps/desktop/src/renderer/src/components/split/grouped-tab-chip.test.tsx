@@ -20,6 +20,8 @@ import {
   type SessionPresentationProjection,
 } from "@volli/shared";
 import { seedSlice } from "@volli/session-presentation";
+import { ChatProviderIcon } from "@renderer/components/sessions/chat-provider-icon";
+import { projectChatProviders, ticketChatProviders } from "@renderer/lib/session-provider-index";
 import { ChatIcon } from "@renderer/components/ui/icon";
 import { Tab, TabStrip } from "@renderer/components/ui/tab-strip";
 import { GroupedTabList, groupTabItems, type TabGroup } from "./grouped-tab-chip";
@@ -256,7 +258,10 @@ describe("one capsule per group", () => {
     const card = document.querySelector('[data-slot="hover-card-content"]')!;
     expect(card.getAttribute("aria-label")).toBe("Tab group items");
     expect(card.textContent).toContain("Chat");
-    expect(card.textContent).toContain("working");
+    expect(card.textContent).not.toContain("working");
+    expect(
+      card.querySelector('[data-session-glyph="working"]')?.getAttribute("aria-label"),
+    ).toContain("working");
     const notes = [...card.querySelectorAll("button")].find((button) =>
       button.textContent?.includes("Notes"),
     )!;
@@ -320,6 +325,79 @@ describe("one capsule per group", () => {
       expect(onClose).toHaveBeenCalledExactlyOnceWith(member);
       expect(onSelect).toHaveBeenCalledTimes(1);
       expect(document.querySelector('[data-slot="dropdown-menu-content"]')).toBeNull();
+    },
+  );
+
+  it.each([undefined, "Workspace"])(
+    "only shows an explicitly set group header (%s)",
+    async (title) => {
+      home(chat.id, [{ ...group, title }]);
+      const trigger = container.querySelector(`[aria-label="Actions for ${title ?? "Chat"}"]`)!;
+      await act(async () =>
+        trigger.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })),
+      );
+      const menu = document.querySelector('[data-slot="dropdown-menu-content"]')!;
+      expect(menu.querySelector('[data-slot="group-member-heading"]')?.textContent ?? null).toBe(
+        title ?? null,
+      );
+      expect(menu.textContent?.match(/Chat/g)).toHaveLength(1);
+      expect([...menu.querySelectorAll("[data-tab-id]")].map((row) => row.textContent)).toEqual([
+        "Chat",
+        "Notes",
+        "Page",
+      ]);
+    },
+  );
+
+  it.each([undefined, null, "src/session.ts"])(
+    "keeps chat detail %s without a redundant status word",
+    async (detail) => {
+      const member = { id: "member" };
+      act(() =>
+        root.render(
+          <TabStrip label="Tabs">
+            <GroupedTabList
+              tabs={[member]}
+              groups={[
+                {
+                  id: "group",
+                  panes: [{ paneId: "pane", tabIds: [member.id], activeTabId: member.id }],
+                },
+              ]}
+              activeTabId={member.id}
+              shownGroupId="group"
+              describe={() => ({
+                label: "Session",
+                icon: ChatIcon,
+                detail,
+                status: "ready",
+                memberGlyph: (
+                  <ChatProviderIcon sessionId={null} savedProviderId="anthropic" state="ready" />
+                ),
+              })}
+              onSelect={noop}
+            >
+              {() => <Tab label="Session" active tabStop onActivate={noop} />}
+            </GroupedTabList>
+          </TabStrip>,
+        ),
+      );
+      const trigger = container.querySelector('[aria-label="Actions for Session"]')!;
+      await act(async () =>
+        trigger.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })),
+      );
+      const row = document.querySelector(
+        '[data-slot="dropdown-menu-content"] [data-tab-id="member"]',
+      )!;
+      expect(row.closest(".list-row")?.getAttribute("data-density")).toBe(
+        detail == null ? "row" : "two-line",
+      );
+      expect(row.querySelector(".list-row-secondary")?.textContent ?? null).toBe(detail ?? null);
+      expect(row.textContent).toBe(`Session${detail ?? ""}`);
+      expect(
+        row.querySelector('[data-session-glyph="ready"]')?.getAttribute("aria-label"),
+      ).toContain("ready");
+      expect(row.querySelectorAll("svg")).toHaveLength(2);
     },
   );
 
@@ -451,6 +529,62 @@ function saveProvider(providerId: string | null) {
   });
 }
 
+it("indexes each roster once, not once per icon or unrelated store update", () => {
+  const rows = Array.from({ length: 1000 }, (_, index) => ({
+    ...savedChat("anthropic"),
+    sessionId: String(index),
+  }));
+  const ticketRows = rows.map((record) => ({
+    kind: "chat" as const,
+    record,
+    usage: EMPTY_SESSION_USAGE_SUMMARY,
+    provenance: { kind: "user" as const },
+  }));
+  const projectScan = vi.spyOn(rows, "map");
+  const ticketScan = vi.spyOn(ticketRows, "flatMap");
+  const projects = projectChatProviders(rows);
+  const tickets = ticketChatProviders(ticketRows);
+  for (const row of rows) {
+    expect(projectChatProviders(rows).get(row.sessionId)).toBe("anthropic");
+    expect(ticketChatProviders(ticketRows).get(row.sessionId)).toBe("anthropic");
+  }
+  expect(projectChatProviders(rows)).toBe(projects);
+  expect(ticketChatProviders(ticketRows)).toBe(tickets);
+  expect(projectScan).toHaveBeenCalledTimes(1);
+  expect(ticketScan).toHaveBeenCalledTimes(1);
+  expect(
+    projectChatProviders([{ ...savedChat(null), sessionId: "__proto__" }]).get("__proto__"),
+  ).toBeNull();
+  expect(projectChatProviders(undefined).size).toBe(0);
+  expect(ticketChatProviders(undefined).size).toBe(0);
+  // Icons consume row data; they must never independently read either roster.
+  act(() =>
+    root.render(
+      <>
+        {rows.map((row) => (
+          <ChatProviderIcon
+            key={row.sessionId}
+            sessionId={row.sessionId}
+            savedProviderId="anthropic"
+          />
+        ))}
+      </>,
+    ),
+  );
+  projectScan.mockClear();
+  ticketScan.mockClear();
+  act(() => {
+    useProjectSessionsStore.setState({
+      byProject: { other: { terminal: [], chat: rows, provenance: {} } },
+    });
+    useTicketSessionRecordsStore.setState({ byTicket: { other: ticketRows } });
+  });
+  expect(projectScan).not.toHaveBeenCalled();
+  expect(ticketScan).not.toHaveBeenCalled();
+  projectScan.mockRestore();
+  ticketScan.mockRestore();
+});
+
 function ticketGroup() {
   act(() =>
     root.render(
@@ -482,6 +616,16 @@ function expectProvider(node: Element, providerId: string) {
   );
 }
 
+function expectChatMember(row: Element) {
+  expect(row.textContent).toBe("Chat");
+  expect(row.querySelector(".list-row-secondary")).toBeNull();
+  expect(row.closest(".list-row")?.getAttribute("data-density")).toBe("row");
+  const glyph = row.querySelector('[data-session-glyph="working"]')!;
+  expect(glyph.getAttribute("aria-label")).toContain("working");
+  expect(glyph.closest('[aria-hidden="true"]')).toBeNull();
+  expect(glyph.querySelector('[class*="animate-spin"]')).not.toBeNull();
+}
+
 describe.each(["Home", "Ticket"] as const)("%s grouped chat artwork", (surface) => {
   const mount = () => (surface === "Home" ? home(chat.id) : ticketGroup());
 
@@ -507,23 +651,45 @@ describe.each(["Home", "Ticket"] as const)("%s grouped chat artwork", (surface) 
       await new Promise((done) => setTimeout(done, 300));
     });
     const hover = document.querySelector('[data-slot="hover-card-content"]')!;
-    expectProvider(hover.querySelector(`[data-tab-id="${chat.id}"]`)!, "openai-codex");
+    const hoverRow = hover.querySelector(`[data-tab-id="${chat.id}"]`)!;
+    expectProvider(hoverRow, "openai-codex");
+    expectChatMember(hoverRow);
+    expect(hover.querySelector('[data-slot="group-member-heading"]')).toBeNull();
+    expect(disc.querySelector("[data-session-glyph]")).toBeNull();
     await act(async () =>
       chip
         .querySelector('[aria-label="Actions for Chat"]')!
         .dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })),
     );
     const dropdown = document.querySelector('[data-slot="dropdown-menu-content"]')!;
-    expectProvider(dropdown.querySelector(`[data-tab-id="${chat.id}"]`)!, "openai-codex");
+    const dropdownRow = dropdown.querySelector(`[data-tab-id="${chat.id}"]`)!;
+    expectProvider(dropdownRow, "openai-codex");
+    expectChatMember(dropdownRow);
+    expect(dropdown.querySelector('[data-slot="group-member-heading"]')).toBeNull();
   });
 
-  it.each([null, "unknown-provider"])("keeps the chat fallback for provider %s", (providerId) => {
-    saveProvider(providerId);
-    mount();
-    const svg = container.querySelector(".group-icon-disc svg")!;
-    expect(svg.classList.contains("text-muted-foreground")).toBe(true);
-    expect(svg.getAttribute("fill")).not.toBe(providerMark("anthropic")!.tint);
-  });
+  it.each([null, "unknown-provider"])(
+    "keeps the chat fallback for provider %s",
+    async (providerId) => {
+      saveProvider(providerId);
+      mount();
+      const svg = container.querySelector(".group-icon-disc svg")!;
+      expect(svg.classList.contains("text-muted-foreground")).toBe(true);
+      expect(svg.getAttribute("fill")).not.toBe(providerMark("anthropic")!.tint);
+      await act(async () =>
+        container
+          .querySelector('[aria-label="Actions for Chat"]')!
+          .dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })),
+      );
+      const row = document.querySelector(
+        `[data-slot="dropdown-menu-content"] [data-tab-id="${chat.id}"]`,
+      )!;
+      expectChatMember(row);
+      expect(
+        row.querySelector("[data-session-glyph] svg")?.classList.contains("text-muted-foreground"),
+      ).toBe(true);
+    },
+  );
 
   it("prefers a resident model selection to the saved provider and reacts without remounting", () => {
     saveProvider("anthropic");

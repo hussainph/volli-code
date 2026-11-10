@@ -101,9 +101,13 @@ permissions:
 # cancelled runs were holding runners the next PR needed. The release guard
 # reads the run for the exact commit it releases, so a release waits for the
 # head's run rather than trusting a cancelled one.
+# A PR's newer push supersedes its older run. A push to main is grouped per
+# commit and never cancelled: the release guard needs ci.yml green on the
+# exact commit it ships, and a merge burst must not leave that commit with only
+# a cancelled run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Coarse, provable gate: which conditional lanes are relevant to this change?
@@ -330,10 +334,12 @@ jobs:
           apps/desktop/e2e/volli-drive/lib/rehearsal-ui.test.mjs
           apps/desktop/e2e/volli-drive/lib/stop.test.mjs
           apps/desktop/e2e/volli-drive/lib/fake-provider.test.mjs
+          apps/desktop/e2e/volli-drive/lib/readme-demo.test.mjs
           apps/desktop/e2e/volli-drive/lib/remote-acceptance.test.mjs
           apps/desktop/e2e/volli-drive/lib/native-window-lifecycle.test.mjs
           apps/desktop/e2e/volli-drive/lib/sshd-fixture.test.mjs
           apps/desktop/e2e/volli-drive/lib/cloud-acceptance.test.mjs
+          apps/desktop/e2e/volli-drive/lib/staging-token.test.mjs
           apps/desktop/e2e/volli-drive/lib/cloud-automation-acceptance.test.mjs
           apps/desktop/e2e/volli-drive/lib/cloud-transcript-acceptance.test.mjs
           apps/desktop/e2e/bench/chat-window/integration.test.mjs

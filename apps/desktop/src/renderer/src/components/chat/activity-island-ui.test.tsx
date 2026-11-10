@@ -3,14 +3,16 @@
  * The island as a person meets it (VC-256): nothing when there is nothing to
  * model, clusters that come and go with their subjects, a card that pins and
  * releases, destructive actions that arm before they fire, and verbs that name
- * the right subject. Recurring updates are static; the real popover primitive
- * retains ownership of occasional pointer disclosure motion.
+ * the right subject. The approved liquid material animates while disclosure
+ * retains the shared popover primitive. Skip animation clocks in these
+ * interaction tests; geometry and lifecycle rules have focused coverage.
  *
  * jsdom rather than static markup: the cards are Radix popovers portalled to
  * the body, and every promise here is an interaction.
  */
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { MotionGlobalConfig } from "motion/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
@@ -26,8 +28,10 @@ import {
 } from "@volli/session-presentation";
 
 import { ActivityIsland } from "./activity-island-ui";
+import { selectTurnActivity, type TurnActivity } from "@renderer/chat/turn-activity";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import type { ModelCatalogue } from "@renderer/lib/use-model-catalogue";
+import { GLASS_MOTION } from "@renderer/lib/glass-motion";
 
 const heldCatalogue = vi.hoisted(() => ({ value: null as ModelCatalogue | null }));
 vi.mock("@renderer/lib/use-model-catalogue", () => ({
@@ -95,11 +99,12 @@ async function render(
   model: ActivityIslandModel,
   actions: ActivityIslandActions = actionsSpy(),
   feel: Partial<ActivityIslandFeel> = FEEL,
+  activity: TurnActivity | null = null,
 ) {
   await act(async () => {
     root?.render(
       <TooltipProvider delayDuration={0}>
-        <ActivityIsland model={model} actions={actions} feel={feel} />
+        <ActivityIsland model={model} actions={actions} feel={feel} activity={activity} />
       </TooltipProvider>,
     );
   });
@@ -179,6 +184,7 @@ function unhover(target: Element, to: Element | null = null): void {
 
 beforeEach(() => {
   heldCatalogue.value = null;
+  MotionGlobalConfig.skipAnimations = true;
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   // jsdom ships no `matchMedia`; the island reads it through use-reduced-motion.
   vi.stubGlobal("matchMedia", (query: string) => ({
@@ -199,6 +205,7 @@ afterEach(async () => {
   root = null;
   container?.remove();
   container = null;
+  MotionGlobalConfig.skipAnimations = false;
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
@@ -261,6 +268,153 @@ describe("the empty rule", () => {
 
     await render({ ...EMPTY_ACTIVITY_ISLAND, tabs: [tab()] });
     expect(island()).not.toBeNull();
+  });
+});
+
+describe("the hanging turn", () => {
+  const thinking = selectTurnActivity("session", {
+    messages: [],
+    working: true,
+    turnActive: true,
+    projection: null,
+    liveCompaction: null,
+  })!;
+
+  it("is a plain pill on an empty island and announces semantic activity once", async () => {
+    await render(EMPTY_ACTIVITY_ISLAND, actionsSpy(), FEEL, thinking);
+    expect(island()).not.toBeNull();
+    expect(container?.querySelector('[data-liquid-island="pill"]')).not.toBeNull();
+    expect(container?.querySelector("[data-island-verb]")?.textContent).toBe("Mulling");
+    expect(container?.querySelectorAll('[role="status"]')).toHaveLength(1);
+    expect(container?.querySelector('[role="status"]')?.textContent).toBe("Reasoning");
+    expect(container?.textContent).not.toContain("Working");
+  });
+
+  it("uses explicit binary luminance masks, not theme-dependent colour ink", async () => {
+    await render(EMPTY_ACTIVITY_ISLAND, actionsSpy(), FEEL, thinking);
+    const masks = container?.querySelectorAll<SVGMaskElement>("mask");
+    expect(masks).toHaveLength(2);
+    for (const mask of masks ?? []) {
+      expect(mask.style.maskType).toBe("luminance");
+      expect(mask.querySelector("rect")?.getAttribute("fill")).toBe("white");
+      expect(mask.querySelector("path")?.getAttribute("fill")).toBe("black");
+    }
+  });
+
+  it("keeps one shell as clusters arrive and empty without replacing the turn status", async () => {
+    await render(EMPTY_ACTIVITY_ISLAND, actionsSpy(), FEEL, thinking);
+    const material = container?.querySelector("[data-liquid-island]");
+    const status = container?.querySelector('[role="status"]');
+    await render({ ...EMPTY_ACTIVITY_ISLAND, tabs: [tab()] }, actionsSpy(), FEEL, thinking);
+    expect(container?.querySelector('[data-liquid-island="bead"]')).toBe(material);
+    expect(clusters()).toEqual(["tabs"]);
+    await render(EMPTY_ACTIVITY_ISLAND, actionsSpy(), FEEL, thinking);
+    expect(container?.querySelector('[data-liquid-island="pill"]')).toBe(material);
+    expect(container?.querySelector('[role="status"]')).toBe(status);
+  });
+
+  it("swells the same bead for a flash, then returns to the verb", async () => {
+    vi.useFakeTimers();
+    await render(
+      { ...EMPTY_ACTIVITY_ISLAND, flash: { id: "flash", event: "Opened", payload: "github.com" } },
+      actionsSpy(),
+      FEEL,
+      thinking,
+    );
+    const material = container?.querySelector("[data-liquid-island]");
+    expect(container?.querySelector("[data-island-flash]")?.textContent).toBe(
+      "Opened · github.com",
+    );
+    await act(async () => {
+      vi.advanceTimersByTime(1700);
+    });
+    expect(container?.querySelector("[data-island-flash]")).toBeNull();
+    expect(container?.querySelector("[data-liquid-island]")).toBe(material);
+    expect(container?.querySelector("[data-island-verb]")?.textContent).toBe("Mulling");
+    expect(container?.querySelector('[role="status"]')?.textContent).toBe("Reasoning");
+  });
+
+  it("ends the turn immediately even while a flash is held", async () => {
+    const model = {
+      ...EMPTY_ACTIVITY_ISLAND,
+      tabs: [tab()],
+      flash: { id: "exit-flash", event: "Opened", payload: "github.com" },
+    };
+    await render(model, actionsSpy(), FEEL, thinking);
+    expect(container?.querySelector("[data-island-flash]")).not.toBeNull();
+    await render(model);
+    expect(container?.querySelector("[data-island-flash]")).toBeNull();
+    expect(container?.querySelector('[role="status"]')?.textContent).toBe("");
+  });
+
+  it("keeps multiline commands on one visual line without changing the announcement", async () => {
+    const payload = 'for file in *.ts; do\n  cat "$file";\ndone';
+    await render(EMPTY_ACTIVITY_ISLAND, actionsSpy(), FEEL, {
+      key: "multiline",
+      activity: "run",
+      word: "Running",
+      payload,
+      waiting: false,
+      announcement: `Running ${payload}`,
+    });
+    expect(container?.querySelector("[data-island-verb]")?.textContent).toBe(
+      'Running for file in *.ts; do cat "$file"; done',
+    );
+    expect(container?.querySelector('[role="status"]')?.textContent).toBe(`Running ${payload}`);
+  });
+
+  it("crossfades the outgoing controls too, even after React removes their cluster", async () => {
+    const original = Object.getOwnPropertyDescriptor(Element.prototype, "animate");
+    const animate = vi.fn((_keyframes: Keyframe[], _options: KeyframeAnimationOptions) => ({
+      cancel() {},
+      onfinish: null,
+    }));
+    Object.defineProperty(Element.prototype, "animate", { configurable: true, value: animate });
+    try {
+      await render({ ...EMPTY_ACTIVITY_ISLAND, tabs: [tab()] }, actionsSpy(), FEEL, thinking);
+      await render(EMPTY_ACTIVITY_ISLAND, actionsSpy(), FEEL, thinking);
+      const ghost = container?.querySelector("[data-liquid-island-ghost]");
+      expect(ghost?.querySelector('[data-island-cluster="tabs"]')).not.toBeNull();
+      expect(ghost?.getAttribute("aria-hidden")).toBe("true");
+      expect((ghost as HTMLElement).inert).toBe(true);
+      expect(
+        animate.mock.calls.some(([, options]) => options.duration === GLASS_MOTION.menuIn),
+      ).toBe(true);
+    } finally {
+      if (original) Object.defineProperty(Element.prototype, "animate", original);
+      else Reflect.deleteProperty(Element.prototype, "animate");
+    }
+  });
+
+  it("uses still ink for a question, never a shimmer", async () => {
+    await render(
+      EMPTY_ACTIVITY_ISLAND,
+      actionsSpy(),
+      { forceReducedMotion: false },
+      {
+        key: "ask",
+        activity: "askUser",
+        word: "Asking",
+        payload: null,
+        waiting: true,
+        announcement: "Waiting for you",
+      },
+    );
+    expect(container?.querySelector(".liquid-island-waiting")).not.toBeNull();
+    expect(container?.querySelector(".liquid-island-shimmer")).toBeNull();
+  });
+
+  it("retires an empty turn after the exit drawing instead of leaving a ledge", async () => {
+    vi.useFakeTimers();
+    await render(EMPTY_ACTIVITY_ISLAND, actionsSpy(), FEEL, thinking);
+    await render(EMPTY_ACTIVITY_ISLAND);
+    await act(async () => {
+      vi.advanceTimersByTime(1200);
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(200);
+    });
+    expect(island()).toBeNull();
   });
 });
 
@@ -853,7 +1007,7 @@ describe("destructive actions", () => {
 });
 
 describe("the now channel", () => {
-  it("replaces frequent announcements immediately without retaining an exiting copy", async () => {
+  it("announces the latest flash immediately and replaces its text in the same single bead", async () => {
     await render({
       ...EMPTY_ACTIVITY_ISLAND,
       tabs: [tab()],
@@ -864,11 +1018,15 @@ describe("the now channel", () => {
       tabs: [tab()],
       flash: { id: "new", event: "Opened", payload: "example.com" },
     });
+    expect(container?.querySelector('[role="status"]')?.textContent).toBe("Opened · example.com");
+    // Word changes still use the approved mode="wait" channel, never a queue
+    // of extra drops. The next text enters after the old text has left.
+    await settle();
     expect(container?.querySelectorAll("[data-island-flash]")).toHaveLength(1);
     expect(container?.querySelector("[data-island-flash]")?.textContent).toBe(
       "Opened · example.com",
     );
-    expect(container?.querySelector("[data-activity-island]")?.getAttribute("style")).toBeNull();
+    expect(container?.querySelectorAll("[data-liquid-island]")).toHaveLength(1);
     expect(container?.querySelector("[data-activity-island]")?.classList.contains("isolate")).toBe(
       true,
     );

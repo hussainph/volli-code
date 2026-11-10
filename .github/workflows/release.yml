@@ -108,6 +108,14 @@ jobs:
       # workflows: ci.yml is the PR gate, and ci-extended.yml carries the
       # smoke journeys and cloud acceptance that left that gate (VC-934), so a
       # release still needs every journey green on the commit it ships.
+      #
+      # ci.yml must be green on this exact SHA (it is ~10 minutes). The long
+      # ci-extended.yml may instead be green on a first-parent ancestor when
+      # every file changed since that ancestor is inert prose/website — the
+      # same `inert` set ci.yml's Scope uses to skip core e2e — so a docs
+      # merge does not cost a full extended cycle before a release. Anything
+      # outside that set (source, packages, e2e, workflows, manifests) still
+      # needs extended green on the exact SHA.
       - name: "Guard: CI is green on this commit"
         if: inputs.require_green
         env:
@@ -116,20 +124,41 @@ jobs:
           set -euo pipefail
           sha="$(git rev-parse HEAD)"
           echo "releasing $sha"
-          for workflow in ci.yml ci-extended.yml; do
+          inert='^(docs/|reference/|lessons/|assets/|apps/website/|apps/docs/|\.github/ISSUE_TEMPLATE/|[^/]*\.md$|LICENSE$)'
+          green_on() { # <workflow> <sha> -> 0 when a completed run on <sha> succeeded
+            local conclusions
             conclusions=$(gh api \
-              "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs?head_sha=${sha}&status=completed" \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/$1/runs?head_sha=$2&status=completed" \
               -q '.workflow_runs[].conclusion' || true)
-            if [ -z "$conclusions" ]; then
-              echo "::error::No completed $workflow run for $sha. Wait for it to finish on main (or start one: gh workflow run $workflow --ref main), or re-run with require_green=false if you know why it is missing."
-              exit 1
+            grep -qx success <<<"$conclusions"
+          }
+          if ! green_on ci.yml "$sha"; then
+            echo "::error::ci.yml is not green on $sha. Wait for it to finish on main (or start one: gh workflow run ci.yml --ref main), or re-run with require_green=false if you know why it is missing."
+            exit 1
+          fi
+          echo "ci.yml is green on $sha"
+          if green_on ci-extended.yml "$sha"; then
+            echo "ci-extended.yml is green on $sha"
+            exit 0
+          fi
+          # Walk back along main's first parents to the newest commit whose
+          # extended run succeeded, then require everything since it to be inert.
+          for base in $(git rev-list --first-parent --max-count=30 "$sha"); do
+            [ "$base" = "$sha" ] && continue
+            green_on ci-extended.yml "$base" || continue
+            changed="$(git diff --name-only "$base" "$sha")"
+            live="$(grep -vE "$inert" <<<"$changed" || true)"
+            if [ -z "$live" ]; then
+              echo "ci-extended.yml is green on ancestor $base; everything since is inert:"
+              sed 's/^/  /' <<<"$changed"
+              exit 0
             fi
-            if ! grep -qx success <<<"$conclusions"; then
-              echo "::error::$workflow did not succeed on $sha (saw: $(tr '\n' ' ' <<<"$conclusions")). Fix main before releasing."
-              exit 1
-            fi
-            echo "$workflow is green on $sha"
+            echo "::error::ci-extended.yml is not green on $sha. The newest green ancestor $base is followed by non-inert changes:"
+            sed 's/^/  /' <<<"$live"
+            exit 1
           done
+          echo "::error::ci-extended.yml is not green on $sha or on any of its last 30 first-parent ancestors. Wait for it on main, or re-run with require_green=false if you know why it is missing."
+          exit 1
 
       - name: Resolve version
         id: resolve

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { CHAT_DRAFTS_APP_STATE_KEY } from "@volli/shared";
 import { toast } from "sonner";
 import { createStore } from "zustand/vanilla";
 import { createJSONStorage, persist } from "zustand/middleware";
@@ -80,6 +81,64 @@ describe("seedAppStateCache", () => {
 
   it("leaves unseeded keys reading null", () => {
     expect(appStateStorage.getItem("volli:projects-ui")).toBeNull();
+  });
+});
+
+describe("main-window draft ownership", () => {
+  it("makes Settings draft reads, writes, and removals no-ops without changing authoritative cached drafts", async () => {
+    const authoritative = '{"drafts":{"session":{"text":"keep this draft"}}}';
+    seedAppStateCache({ [CHAT_DRAFTS_APP_STATE_KEY]: authoritative });
+    const location = { hash: "#settings" };
+    vi.stubGlobal("window", { location, api: { appState: { set: setMock } } });
+
+    expect(appStateStorage.getItem(CHAT_DRAFTS_APP_STATE_KEY)).toBeNull();
+    appStateStorage.setItem(CHAT_DRAFTS_APP_STATE_KEY, '{"drafts":{}}');
+    expect(appStateStorage.getItem(CHAT_DRAFTS_APP_STATE_KEY)).toBeNull();
+    appStateStorage.removeItem(CHAT_DRAFTS_APP_STATE_KEY);
+    await expect(flushAllPendingAppState()).resolves.toBe(true);
+    await settle();
+    expect(setMock).not.toHaveBeenCalled();
+
+    location.hash = "";
+    expect(appStateStorage.getItem(CHAT_DRAFTS_APP_STATE_KEY)).toBe(authoritative);
+  });
+
+  it("keeps main-window draft reads, writes, and removals durable", async () => {
+    vi.stubGlobal("window", {
+      location: { hash: "" },
+      api: { appState: { set: setMock } },
+    });
+    const draft = '{"drafts":{"session":{"text":"new draft"}}}';
+    expect(appStateStorage.getItem(CHAT_DRAFTS_APP_STATE_KEY)).toBeNull();
+    appStateStorage.setItem(CHAT_DRAFTS_APP_STATE_KEY, draft);
+    expect(appStateStorage.getItem(CHAT_DRAFTS_APP_STATE_KEY)).toBe(draft);
+    await expect(flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY)).resolves.toBe(true);
+    expect(setMock).toHaveBeenNthCalledWith(1, CHAT_DRAFTS_APP_STATE_KEY, draft);
+
+    appStateStorage.removeItem(CHAT_DRAFTS_APP_STATE_KEY);
+    expect(appStateStorage.getItem(CHAT_DRAFTS_APP_STATE_KEY)).toBeNull();
+    await expect(flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY)).resolves.toBe(true);
+    expect(setMock).toHaveBeenNthCalledWith(2, CHAT_DRAFTS_APP_STATE_KEY, "");
+    expect(setMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps non-draft preferences writable in Settings", async () => {
+    vi.stubGlobal("window", {
+      location: { hash: "#settings" },
+      api: { appState: { set: setMock } },
+    });
+    appStateStorage.setItem("volli:ui", '{"sidebarWidth":420}');
+    expect(appStateStorage.getItem("volli:ui")).toBe('{"sidebarWidth":420}');
+    await expect(flushPendingAppStateKey("volli:ui")).resolves.toBe(true);
+    expect(setMock).toHaveBeenCalledExactlyOnceWith("volli:ui", '{"sidebarWidth":420}');
+  });
+
+  it("can read cached drafts without a browser window", () => {
+    const draft = '{"drafts":{"session":{"text":"cached draft"}}}';
+    seedAppStateCache({ [CHAT_DRAFTS_APP_STATE_KEY]: draft });
+    vi.stubGlobal("window", undefined);
+    expect(appStateStorage.getItem(CHAT_DRAFTS_APP_STATE_KEY)).toBe(draft);
+    expect(setMock).not.toHaveBeenCalled();
   });
 });
 

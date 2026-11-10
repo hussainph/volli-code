@@ -14,10 +14,12 @@ keeps the documents and chats you open. The rail beside it has four pages:
 
 ## Now
 
-**Now** shows what is true of the whole ticket, in three sections:
+Edit status, priority, and labels beside the title in the **Ticket Body** tab.
+Changing status updates the board. Starting a chat or an Automation Run is a
+separate action.
 
-- **Properties**: status, priority, and labels. Changing status updates the
-  board. Starting a chat or an Automation Run is a separate action.
+**Now** has two sections:
+
 - **Sessions**: the ticket's chats and terminal Sessions. Ended Sessions are
   folded under the section heading. Open one to return to its history.
 - **Automations**: the saved Automations this ticket can run.
@@ -26,15 +28,15 @@ A row pinned at the bottom of **Now** shows the ticket's cost. The worktree row
 is pinned under every page: it shows the branch and opens to the base branch,
 worktree, changes, and pull-request state.
 
-A ticket chat carries the task's context and works from that ticket's worktree.
-Reconnecting it does not create a second chat history. What a chat is holding
-(its Browser Tabs, subagents, plan, and background shells) appears in the
-Activity Island above that chat's composer, not in the rail.
+A ticket chat carries the task's context and uses its selected checkout:
+**New worktree** or **Project checkout**. Reconnecting it does not create a
+second chat history. Its Browser Tabs, subagents, plan, and background shells
+appear in the Activity Island above the composer.
 
-Configure [Models](/guides/models/) first, then use **Chat** in the
-**Sessions** heading to open a draft. Send the first message to start the
-Session. The **Chat** menu also opens a
-[terminal companion](/guides/terminal-companions/) or a
+Configure [Models](/guides/models/) first. In the tab strip or **Sessions**
+heading, select **Open a tab** (`+`), then **Chat**, to open a draft. Sending
+the first message starts the Session. The same menu offers **Terminal** for a
+[terminal companion](/guides/terminal-companions/) and **Browser** for a
 [Browser Tab](/guides/browser-tabs/).
 
 ### Run an Automation on this ticket
@@ -54,12 +56,27 @@ Select **Open Automations** in the section heading to create or edit Automation
 records; authoring lives only on that page. For one-off work that you don't want
 to save, start a chat instead.
 
+## Tabs and panes
+
+Keep several documents and conversations open in the tab strip. To rename a
+chat or terminal tab, double-click its title or choose **Rename** from its
+context menu. Closing a chat tab keeps the Session's history; closing an
+unsent Chat Draft discards the draft.
+
+Use [split view](/guides/split-view/) to arrange tabs side by side or above one
+another. Each pane has its own stack of tabs. The top strip shows the group as
+one chip with stacked icons, including provider logos for recognized chat
+providers. Hover over the chip or open its menu to find a grouped tab. Select
+an ordinary tab to show it on its own, then select the group chip to return
+to its arrangement.
+
 ## Files and references
 
 The **Files** rail shows file references from the Ticket Body, attached files,
 and the ticket worktree's directory tree. Use `@` in the Ticket Body to add a
-file reference. Selecting a file opens a preview tab; keeping it open pins the
-tab.
+file reference. Selecting a file opens a preview tab. Double-click its tab,
+or choose **Keep Open** from its context menu, to pin it so another preview
+does not replace it.
 
 Ticket files come from the worktree. The project-level **Files** navigator in
 **Home** reads from the main checkout, so the same path can hold different

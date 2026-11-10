@@ -650,8 +650,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                     <span aria-hidden className={`inline-flex ${PALETTE_ROW_ICON}`}>
                       <ChatProviderIcon
                         sessionId={item.sessionId}
-                        projectId={item.projectId}
-                        ticketId={item.scope.kind === "ticket" ? item.scope.ticketId : undefined}
+                        savedProviderId={item.savedProviderId}
                       />
                     </span>
                   ) : (

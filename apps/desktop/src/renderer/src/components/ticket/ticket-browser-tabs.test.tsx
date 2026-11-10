@@ -30,6 +30,8 @@ vi.mock("@renderer/lib/app-state-storage", () => {
       setItem: (name: string, value: string) => data.set(name, value),
       removeItem: (name: string) => data.delete(name),
     },
+    // stores/ui and stores/style register preference defaults at module scope.
+    registerSharedPreferenceDefaults: () => {},
   };
 });
 vi.mock("@renderer/terminal/xterm-engine", () => ({ XtermEngine: vi.fn() }));

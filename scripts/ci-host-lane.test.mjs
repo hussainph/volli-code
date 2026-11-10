@@ -83,7 +83,13 @@ test("a PR runs exactly one macOS job; the extended lanes left ci.yml", () => {
   assert.deepEqual(macos, ["smoke-boot"]);
   assert.equal(jobs["smoke-rest"], undefined);
   assert.equal(jobs["smoke-cloud"], undefined);
-  assert.equal(workflow.concurrency["cancel-in-progress"], true);
+  // A PR's newer push supersedes its run; a main commit's run is never cancelled
+  // (the release guard needs ci.yml green on the exact commit it ships).
+  assert.equal(
+    workflow.concurrency["cancel-in-progress"],
+    "${{ github.event_name == 'pull_request' }}",
+  );
+  assert.match(workflow.concurrency.group, /github\.event_name == 'push' && github\.sha/);
 });
 
 test("gate accepts only success or the precise conditional skip", () => {
@@ -293,8 +299,9 @@ test("extended lanes run after merge, nightly and on demand — never as a PR ga
 test("cloud acceptance is macOS-only and separate from flag-off core e2e", () => {
   const job = extended.jobs["smoke-cloud"];
   assert.equal(job["runs-on"], "macos-15");
-  // One macOS slot at a time, and a red rest tier still runs it.
-  assert.equal(job.needs, "smoke-rest");
+  // Beside the other macOS lanes, never chained behind them, and run whatever
+  // another lane's outcome.
+  assert.equal(job.needs, undefined);
   assert.equal(job.if, "${{ !cancelled() }}");
   assert.equal(
     job.steps.find((step) => step.name === "Checkout").with.ref,

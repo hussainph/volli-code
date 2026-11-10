@@ -26,7 +26,7 @@ import Base from "../layouts/Base.astro";
 const WHY = [
   {
     title: "Agents never collide",
-    body: "Each ticket can get its own worktree and branch, so agents never write over each other's code.",
+    body: "Each ticket gets its own worktree and branch, so agents never write over each other's code.",
   },
   {
     title: "Diff to pull request",
@@ -37,8 +37,8 @@ const WHY = [
     body: "Run any command-line agent in a terminal tab, right inside the ticket's worktree.",
   },
   {
-    title: "Local when signed out",
-    body: "Signed-out projects, tickets and chats stay on your Mac. Signed-in preview history syncs to the cloud. You choose your model connection.",
+    title: "Local without an account",
+    body: "Local projects, tickets and chats stay on your Mac. You choose the model provider or gateway that receives your requests.",
   },
   {
     title: "Free and open source",
@@ -47,16 +47,17 @@ const WHY = [
 ] as const;
 
 // Invented, public-safe work in the register of the film's sidebar.
+// Each row is a ticket's chat, so it carries that ticket's id.
 const AGENTS = [
-  "Split the billing service",
-  "Profile slow search query",
-  "Migrate auth to passkeys",
-  "Draft release notes",
-  "Cache avatar thumbnails",
+  { title: "Split the billing service", ticket: "VLT-41" },
+  { title: "Profile slow search query", ticket: "VLT-37" },
+  { title: "Migrate auth to passkeys", ticket: "VLT-12" },
+  { title: "Draft release notes", ticket: "VLT-44" },
+  { title: "Cache avatar thumbnails", ticket: "VLT-39" },
 ] as const;
 
 const description =
-  "Build like a team of twenty. Volli is a Mac app for building ambitious software with many coding agents, all at once. Every task runs in its own worktree and branch, so agents never collide — and every change lands on one board for review.";
+  "Build like a team of twenty. Volli is a Mac app for building ambitious software with many coding agents, all at once. Every ticket runs in its own worktree and branch, so agents never collide — and every change lands on one board for review.";
 ---
 
 <Base
@@ -78,8 +79,8 @@ const description =
           />
           <p class="hero-lede hero-rise" style="--rise: 3">
             Volli is a Mac app for building ambitious software with many coding agents, all at
-            once. Every task runs in its own worktree and branch, so agents never collide — and
-            every change lands on one board for review.
+            once. Every ticket runs in its own worktree and branch, so agents never collide —
+            and every change lands on one board for review.
           </p>
         </div>
         <div class="hero-action hero-rise" style="--rise: 4">
@@ -97,8 +98,7 @@ const description =
       {/* The real app, not a mock: a sweep down a sidebar of live agents that
           pulls back to the whole window, then drifts forever. Two videos: the
           intro plays once and hands off to a loop that starts on its last
-          frame. Under reduced motion the page shows only that frame.
-          (apps/desktop/scripts/film/web-hero.mjs) */}
+          frame. Under reduced motion the page shows only that frame. */}
       <div class="hero-film hero-rise" style="--rise: 5" data-hero-film>
         <img
           class="hero-poster"
@@ -147,7 +147,7 @@ const description =
         span={7}
         world="ember"
         still={still("rail")}
-        alt="A ticket's sidebar: its status, priority and labels, its two chats, and its branch."
+        alt="A ticket's brief with its status, priority and labels beneath the title, beside its chats and branch in the Now rail."
         beats={[{ text: "Never lose" }, { text: "the thread", bold: true }]}
         body="Every task keeps its brief, chats, branch and changes. Come back in a week and it's all still there."
       />
@@ -169,6 +169,7 @@ const description =
         span={5}
         world="rose"
         still={still("split")}
+        fit="contain"
         alt="A split view: a terminal running tests beside a chat."
         beats={[{ text: "Tabs for everything," }, { text: "side by side", bold: true }]}
         body="Chats, terminals, files and browsers each open in a tab. Split the view to keep any of them next to each other."
@@ -204,7 +205,8 @@ const description =
         span={5}
         world="lime"
         still={still("models")}
-        alt="Default models for board chats, ticket chats, and the Fast, Deep and Visual tiers."
+        fit="contain"
+        alt="Default models for Board chats, Utility, Ticket Sessions, and the Fast, Deep and Visual tiers."
         beats={[{ text: "Bring your" }, { text: "own tokens", bold: true }]}
         body="Connect any of 40+ model providers with the plan or API key you already have. Pick the right model for each task."
       />
@@ -217,7 +219,7 @@ const description =
         still={still("armed")}
         alt="Three tickets land in a Doing column set to start agents; each shows an Implement countdown with a Cancel button."
         beats={[{ text: "Automate" }, { text: "the routine work", bold: true }]}
-        body="Save a workflow once. Run it on a schedule, or whenever a ticket lands in a column."
+        body="Save a workflow once. Run it by hand, on a schedule, or whenever a ticket lands in a column."
       />
 
       <Chapter
@@ -227,7 +229,7 @@ const description =
         world="ember"
         still={still("limits")}
         alt="The usage limits popover: session and weekly windows with time left until they reset."
-        beats={[{ text: "No surprise", bold: true }, { text: "usage limits." }]}
+        beats={[{ text: "See your", bold: true }, { text: "usage limits." }]}
       />
 
       <Chapter
@@ -236,6 +238,7 @@ const description =
         span={3}
         world="cobalt"
         still={still("mcp")}
+        fit="contain"
         alt="Settings, MCP servers: four servers, their tools, and their status."
         beats={[{ text: "Bring your tools", bold: true }, { text: "with MCP servers." }]}
       />

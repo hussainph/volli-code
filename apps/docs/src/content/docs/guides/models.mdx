@@ -1,41 +1,42 @@
 ---
 title: Model access and usage
-description: Connect providers, choose default models, and read Volli's usage numbers.
+description: Connect model providers, choose defaults and reasoning levels, configure a decision model, and read Volli's usage numbers.
 sidebar:
   label: Models and usage
 ---
 
-Use **Settings → Models** to connect provider accounts, choose default models,
-control which models appear in pickers, set automatic compaction, and choose
-how models use Code Mode. When
-Volli creates a Session, it records the model for that Session. Changing a
-default does not change the model already recorded for an existing Session.
+Use **Settings → All projects → Models** to connect providers, choose default
+models and reasoning levels, and control which models appear in pickers.
+**Agents** is a separate Settings page for decision models, automatic model
+choice, compaction, and Code Mode.
 
 ## Connect a provider
 
-1. In **Settings → Models → Available to connect**, find your provider.
-2. Select **Sign in** and follow the provider's prompts. Depending on the
-   provider, you may sign in with a browser, a device code, or an API key.
+1. In **Models → Available to connect**, find your provider.
+2. Select **Sign in** and follow the provider's prompts. Providers may use a
+   browser, a device code, or an API key.
 3. In **Default models → Board chats**, choose an available model.
 4. Optional: Set a different **Ticket Sessions** model for ticket work.
 
-A provider appears under **Signed in** once its credentials are saved. If a
-request later fails to authenticate, repair the connection there and follow
-[Recover a Session](/guides/recover-session/).
+The provider appears under **Signed in** after you connect. If a request later
+fails to authenticate, repair the connection there, then
+[recover the Session](/guides/recover-session/).
 
 ## Choose a default model
 
-New chats choose a model in this order: the composer's model choice, then the
-project's override, then the matching app-wide default. To set the project
-override, open **Configure → Sessions → Chat → Model** and choose a model and
-reasoning level. The override applies to new Board and Ticket chats in that
+New chats use the composer's explicit model choice, then the project's
+override, then the matching app-wide default. Changing a default does not
+change an existing Session's selected model. You can change that Session's
+model through its own model picker.
+
+For a project override, select the project in Settings, then **Sessions →
+Chat → Model**. **Configure → Sessions** opens the same page. Choose the model
+and its reasoning level. This applies to new Board and Ticket chats in that
 project. An Automation's **Project default** uses the same override.
 
-**Default models** in **Settings → Models** has six app-wide rows. Each row
-stores a model and its reasoning level when you choose one. The table shows
-what applies when no project override or explicit model choice is set. When you
-pick a named tier, that tier's app-wide row applies instead of the project
-override.
+**Models → Default models** has six app-wide rows. Each stores a model and
+its reasoning level. A named tier uses its app-wide row rather than the
+project's model override.
 
 | Row | Used for | When unset |
 | --- | --- | --- |
@@ -43,130 +44,107 @@ override.
 | **Ticket Sessions** | Ticket Sessions | Uses **Board chats**. |
 | **Fast** | Quick, low-cost work | Uses **Ticket Sessions**. |
 | **Deep** | Complex reasoning, planning, and review | Uses **Ticket Sessions**. |
-| **Visual** | Work with images, screenshots, and pages | Uses **Ticket Sessions** only if that model accepts images. Otherwise, choose a Visual model. |
-| **Utility** | Chat names and summaries | Uses the chat’s own model. |
+| **Visual** | Work with images, screenshots, and pages | Uses **Ticket Sessions** only if that model accepts images. Otherwise, choose a model that does. |
+| **Utility** | Chat names and summaries | Uses the chat's own model. |
 
-Choose **Settings → Models**, then select a model in the row for the kind of
-work you want to configure. If you choose a model explicitly, select one of its
-available reasoning levels in the control beside it. The **Visual** row offers
-only models that accept image input.
+Choose a model, then select one of its available reasoning levels in the same
+control. **Visual** offers only models that accept images.
 
 ## Provider accounts and model pickers
 
-In **Signed in**, manage the providers you have connected. **Available to
-connect** lists other providers. A provider's models appear in default-model
-selectors when your account can use them. Use **Catalog** to hide or show
-individual models in pickers. Hiding a model does not remove the provider
-account.
+**Signed in** lists your connected providers. **Available to connect** lists
+other providers. Use **Catalog** to hide or show individual models in pickers.
+Hiding a model does not remove its provider connection. **Refresh models**
+checks for catalog changes.
 
 ## Decision model
 
-A decision model is a second, much smaller kind of model. It does not write
-text. It reads some structured data and answers typed questions about it:
-pick one of several options, place it on a scale, or answer yes or no. Each
-answer comes with probabilities and a confidence. Because it writes nothing,
-it answers in a fraction of a second for a fraction of the cost of a chat
-model.
+A decision model answers typed questions about structured data. It can pick an
+option, score something on a scale, or answer yes or no, with probabilities
+and confidence. It does not write prose.
 
-Agents use it through the **classify** tool, for decisions they repeat many
-times: labelling or triaging a list, checking which state a web page is in,
-or filtering inside a script. Volli features can use it too.
+Agents can use the `classify` tool for repeated decisions, such as labeling a
+list or checking a page's state. Configure it in **Settings → All projects →
+Agents → Decision model**:
 
-In **Settings → Models → Decision model**, choose one of three options:
+- **None** is the default. Decision-model calls are disabled.
+- **Local** uses a llama.cpp `llama-server` on this Mac. Enter **Server**, such
+  as `http://127.0.0.1:8080`, and optionally **Model id** for a multi-model
+  server. Select **Test**, then **Save**. Only loopback addresses are accepted.
+- **Cloud** uses a provider-hosted classifier. Choose **Cloud model**, review
+  the disclosure, and select **Allow**. If it shows **Needs setup**, use the
+  provider's sign-in action to connect it on the **Models** page.
 
-- **None** (the default). Nothing uses a decision model, and agents do not get
-  the classify tool.
-- **Local**. A model you run with llama.cpp's `llama-server` on this Mac.
-  Enter the server address (for example `http://127.0.0.1:8080`) and, for a
-  server that loads several models, the model id. Select **Test** to ask the
-  server one question, then **Save**. Only addresses on this Mac are accepted
-  (`localhost`, `127.0.0.1` or `[::1]`), so nothing leaves the machine.
-- **Cloud**. A classifier from a provider, such as TypeSafe's Jev on
-  TypeSafe, OpenRouter, Cloudflare Workers AI, Vercel AI Gateway or OpenCode
-  Zen. When you choose one, Volli asks you to allow sending data to it and
-  says what is sent. If the provider is not signed in yet, the row says
-  **Needs setup**; select **Sign in** and enter the key under
-  **Available to connect**, like any other provider.
-
-The decision model is not a permission judge. Selecting one does not enable
-per-call review or change workspace and host-API boundaries.
+The decision model does not approve tool calls or change a Session's
+[authority](/guides/authority/).
 
 ### What leaves your Mac
 
-A local model sends nothing off your Mac. A cloud model receives whatever is
-being classified. For the classify tool, that is whatever the agent passes
-it: Session text, tool results and page content. Volli never puts your
-provider key in a Session, a prompt or a tool, and no agent can set one.
+A local classifier receives its input on this Mac. A provider-hosted classifier
+receives the data being classified. For `classify`, that is whatever the agent
+passes to it, which can include Session text, tool results, and page content.
+Provider credentials stay outside prompts, transcripts, and tool arguments.
 
 ### Turning it off
 
-Choose **None**. Calls stop immediately, including calls from Sessions that
-already have the classify tool: the tool then tells the agent that no
-decision model is configured, and the agent decides for itself. A project can
-use a different decision model, or turn it off for itself, in
-**Configure → Sessions → Chat → Decision model**. A project with its own
-choice there keeps it, so to turn decision models off everywhere, also reset
-or set to **None** any project that overrides the app-wide setting.
+Choose **None** to stop calls immediately. A Session that already has
+`classify` keeps the tool, but calls report that no decision model is
+configured. The agent then decides for itself.
 
-The classify tool is added only to Sessions created while a decision model is
-set. Turning one on does not add the tool to Sessions that already exist.
-Decision calls are counted in each Session's usage and in `volli cost`.
+A project can choose another classifier or **None** in its **Sessions →
+Chat → Decision model** row. To disable classifiers everywhere, also remove or
+disable project overrides. Use the row's reset control and **Revert to global
+default** to inherit the app-wide choice again.
+
+Sessions created with a decision model receive `classify`. Starting without
+one does not give the Session that tool. Decision calls count toward Session
+usage and `volli cost`.
 
 ### Picking models automatically
 
-With a **Cloud** decision model, **Pick models automatically** is a switch
-under it, off by default. Turn it on and Volli asks once, saying what is sent:
-the first message of a new chat, a delegated task or an Automation run, along
-with the models you have set up. From then on, a new Session that was not told
-which model to use has one chosen from the models you already set up in
-**Settings → Models** (the Session's default and your Fast, Deep, Ticket
-Sessions and Board chats rows), each at the reasoning level you gave it.
+With a **Cloud** decision model, **Pick models automatically** is off by
+default. Enabling it asks permission to send the first message of a new chat,
+delegated task, or Automation Run, along with the configured model choices.
 
-- It applies to a new chat sent with the default model, to `session_start` and
-  `session_delegate` calls that name no model, tier or reasoning level, and to
-  Automations that do not pin a Runtime. A model or tier you or an agent name is
-  never overridden.
-- The choice is made once, when the Session is created. A Session that is
-  already running never changes model.
-- If the decision model is unavailable, slow or unsure, the Session uses your
-  default model, with no message and no delay.
-- The Session's model picker says **Auto-picked** with the model and effort,
-  and lists the alternatives it passed over, so you can switch to one in a
-  press.
+Automatic choice applies only when no model, tier, or reasoning level was
+specified. It chooses from your configured defaults and tiers, using their
+saved reasoning levels. It never overrides an explicit choice.
 
-Choose a different model or turn the switch off at any time. A project that
-has its own Cloud decision model has its own switch in **Configure →
-Sessions**.
+The choice happens when the Session starts. An unavailable, slow, or uncertain
+classifier falls back to the configured default. **Auto-picked** in the
+Session's model picker shows the selection and alternatives. You can still
+choose another model yourself.
+
+A project with its own provider-hosted decision model has its own **Pick
+models automatically** switch under **Sessions**.
 
 ## Automatic compaction
 
-**Automatic compaction** is on by default. When a Session's conversation nears
-its context limit, Volli shortens it automatically. Turn the setting off if
-you don't want that. Turning it off does not disable `/compact` or recovery
-after a provider rejects a turn because the context is too large.
+In **Settings → All projects → Agents → Compaction**, **Automatic compaction**
+is on by default. It summarizes older model context as a Session approaches
+its context limit. The Session's durable history remains available.
+
+Turning it off does not disable `/compact` or recovery after a provider
+rejects a turn because the context is too large.
 
 ## Code Mode
 
-**Code Mode** is on by default. It lets a Session write a short program that
-calls its tools, so a loop over files, pages or Sessions returns only what
-matters. Each model gets its own mode, and you can pin a different one under
-**Advanced**. See [Code Mode](/guides/code-mode/) for what programs can do and
-how to turn it off.
+**Settings → All projects → Agents** also contains Code Mode's **Default** and
+**Exceptions** controls. Code Mode lets a Session run a short JavaScript
+program that combines calls to its own tools. See [Code Mode](/guides/code-mode/)
+for the available modes and limits.
 
 ## Usage readings
 
 Volli shows two kinds of usage:
 
-- **Session usage** totals the model operations recorded for a Session. Volli
-  marks the total **Provider-reported**, **Estimated** (priced from its own
-  catalog), or **Unverified**. When Volli can price only some of a Session's
-  operations, it marks the total as partial. A catalog estimate is an
-  estimate, not an invoice.
-- **Usage limits** shows the subscription usage windows that supported
-  providers report. Open the **Usage limits** control beside `⌘K` to check
-  them; they are not in **Settings → Models**.
+- Session usage totals recorded model operations. A cost is marked
+  **Provider-reported**, **Estimated** from the catalog, or **Unverified**.
+  A partial total means some operations could not be priced. Estimates are not
+  invoices.
+- **Usage limits**, beside `⌘K`, shows subscription allowance windows reported
+  by supported providers. These are separate from Session cost totals.
 
-See [Settings and configuration](/guides/settings/#configure) for project
-configuration and the other Settings pages, and [Chats and
-worktrees](/guides/agents-and-worktrees/) for the Board and Ticket Session
-workflows.
+**Settings → All projects → General → Show cost and token usage** controls
+whether usage appears in the interface. Use `volli cost` to inspect recorded
+usage from the CLI.

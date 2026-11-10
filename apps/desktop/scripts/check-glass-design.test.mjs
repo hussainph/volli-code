@@ -89,6 +89,33 @@ const cases = [
 for (const [source, expected, path = PATH] of cases)
   test(source, () => assert.deepEqual(rules(source, path), expected));
 
+test("explicit luminance masks accept only binary coverage, never visible or themed paint", () => {
+  assert.deepEqual(
+    rules(
+      '<svg><mask style={{ maskType: "luminance" }}><rect fill="white" /><path fill={"black"} /></mask></svg>',
+    ),
+    [],
+  );
+  for (const source of [
+    '<svg><path fill="black" /></svg>',
+    '<svg><mask><path fill="black" /></mask></svg>',
+    '<svg><mask style={{ maskType: "alpha" }}><path fill="white" /></mask></svg>',
+    '<svg><mask style={{ maskType: "luminance" }} {...props}><path fill="white" /></mask></svg>',
+    '<svg><mask style={{ ...style, maskType: "luminance" }}><path fill="white" /></mask></svg>',
+    '<svg><mask style={{ maskType: "luminance" }}><g><path fill="white" /></g></mask></svg>',
+    '<svg><mask style={{ maskType: "luminance" }}><path fill="red" /></mask></svg>',
+    '<svg><mask style={{ maskType: "luminance" }}><path style={{ color: "white" }} /></mask></svg>',
+    '<svg><mask style={{ maskType: "luminance" }}><foreignObject fill="white" /></mask></svg>',
+  ])
+    assert.deepEqual(rules(source), ["colour-literal"], source);
+  assert.deepEqual(
+    rules(
+      '<svg><mask style={{ maskType: "luminance" }}><path fill="black" /></mask><path fill="white" /></svg>',
+    ),
+    ["colour-literal"],
+  );
+});
+
 test("CSS declarations, comments, variables and zero resets", () => {
   assert.deepEqual(
     rules(

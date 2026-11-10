@@ -31,6 +31,7 @@ import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
+import { PathText } from "@renderer/components/ui/path-text";
 
 interface ProjectTileProps {
   project: Project;
@@ -175,7 +176,7 @@ export function ProjectTile({ project, index, dimmed, presentation = "rail" }: P
               )}
               <div className="mt-2 flex items-start gap-2 rounded-control border border-border/30 px-2 py-1">
                 <FolderOpenIcon aria-hidden className="mt-1 size-4 shrink-0" />
-                <span className="min-w-0 font-mono [overflow-wrap:anywhere]">{project.path}</span>
+                <PathText path={project.path} />
               </div>
             </TooltipContent>
           </Tooltip>

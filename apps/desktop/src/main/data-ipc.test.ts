@@ -5112,13 +5112,16 @@ describe("cross-window preference snapshot writes (VC-1121)", () => {
     },
   );
 
-  it("keeps nonshared keys as opaque replacement strings even when a baseline is supplied", () => {
-    const key = "volli:projects-ui";
-    const baseline = '{"state":{"selectedProjectId":"first"}}';
-    seed(key, '{"state":{"selectedProjectId":"peer"}}');
-    expect(writeFrom(101, key, "legacy opaque value", baseline)).toEqual({ ok: true });
-    expect(stored(key)).toBe("legacy opaque value");
-  });
+  it.each(["volli:projects-ui", "volli:chat-drafts", "volli:workspace"])(
+    "persists %s as an opaque replacement without broadcasting it to peers",
+    (key) => {
+      const baseline = '{"state":{"selectedProjectId":"first"}}';
+      seed(key, '{"state":{"selectedProjectId":"peer"}}');
+      expect(writeFrom(101, key, "legacy opaque value", baseline)).toEqual({ ok: true });
+      expect(stored(key)).toBe("legacy opaque value");
+      expect(appStateChangedSends).toEqual([]);
+    },
+  );
 
   it.each([
     { baseline: null },

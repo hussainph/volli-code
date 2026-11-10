@@ -40,6 +40,8 @@ export interface TabMenuLabel {
   icon: Icon;
   /** Optional vendor artwork, kept inside the existing icon box. */
   artwork?: React.ReactNode;
+  /** A chat member's accessible provider/state glyph; the stack stays badge-free. */
+  memberGlyph?: React.ReactNode;
   /**
    * The second line that tells two like tabs apart — a Browser Tab's
    * host:port/path, a File tab's folder. `null` when the title is enough.
@@ -109,7 +111,7 @@ function MemberIcon({ description, className }: { description: TabMenuLabel; cla
   );
 }
 
-/** The same two-line member rows serve hover inspection and the tab dropdown. */
+/** The same member rows serve hover inspection and the tab dropdown. */
 function GroupMemberRows<T extends { id: string }>({
   tabs,
   describe,
@@ -124,17 +126,19 @@ function GroupMemberRows<T extends { id: string }>({
   const dismiss = React.useContext(TabDropdownDismissContext);
   return tabs.map((tab) => {
     const description = describe(tab);
-    const { label, detail, status } = description;
+    const { label, detail, status, memberGlyph } = description;
     return (
       <ListRow
         key={tab.id}
         data-tab-id={tab.id}
-        density="two-line"
-        leading={<MemberIcon description={description} className="size-4 shrink-0" />}
+        density={memberGlyph !== undefined && detail == null ? "row" : "two-line"}
+        leading={
+          memberGlyph ?? <MemberIcon description={description} className="size-4 shrink-0" />
+        }
         primary={label}
         secondary={detail ?? undefined}
         trailing={
-          status ? (
+          memberGlyph === undefined && status ? (
             <span className="text-label text-muted-foreground capitalize">{status}</span>
           ) : undefined
         }
@@ -201,7 +205,11 @@ function GroupedTabChip<T extends { id: string }>({
   ];
   const rows = (
     <>
-      <div className="truncate px-2 py-2 text-ui font-semibold">{title}</div>
+      {item.group.title !== undefined ? (
+        <div data-slot="group-member-heading" className="truncate px-2 py-2 text-ui font-semibold">
+          {item.group.title}
+        </div>
+      ) : null}
       <GroupMemberRows
         tabs={tabs}
         describe={describe}

@@ -21,8 +21,7 @@ const toolingIgnorePatterns = [
   // makes the generated file permanently "stale" and the gate unpassable.
   // The same reasoning as `docs` above, with a build gate behind it.
   "apps/desktop/licensing",
-  // Vendored third-party agent skills (npx skills add) — reformatting would
-  // drift them from their skills-lock.json content hashes.
+  // Agent skills keep their authored Markdown layout.
   ".agents",
   // The Document-view markdown corpus keeps the exact variants (`*` vs `_`,
   // Setext underlines, tilde fences) a formatter exists to normalise away.

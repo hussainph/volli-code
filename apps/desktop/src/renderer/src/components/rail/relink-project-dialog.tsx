@@ -38,6 +38,7 @@ import { Notice } from "@renderer/components/ui/notice";
 import { Spinner } from "@renderer/components/ui/spinner";
 import { toastError } from "@renderer/lib/toast";
 import { useProjectsStore } from "@renderer/stores/projects";
+import { PathText } from "@renderer/components/ui/path-text";
 
 interface RelinkProjectDialogProps {
   project: Project;
@@ -110,9 +111,7 @@ export function RelinkProjectDialog({
         {aftermath === null ? (
           <div className="flex min-w-0 items-center gap-2 rounded-control border border-border bg-muted/30 px-2 py-2">
             <FolderOpenIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-            <span className="min-w-0 font-mono text-ui text-foreground [overflow-wrap:anywhere]">
-              {project.path}
-            </span>
+            <PathText path={project.path} className="text-ui text-foreground" />
           </div>
         ) : (
           <div className="flex flex-col gap-2">

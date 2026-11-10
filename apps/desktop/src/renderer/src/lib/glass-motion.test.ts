@@ -14,6 +14,19 @@ it.each(["-1ms", "Infinitys", "NaNs", "12", "1px", "", "1s junk"])(
   "rejects invalid CSS time %s",
   (value) => expect(cssTimeMs(value)).toBeNull(),
 );
+it("gives the approved activity shimmer one global clock and static motion-off values", () => {
+  const css = readFileSync(new URL("../globals.css", import.meta.url), "utf8");
+  const clock = css.match(/--duration-activity-shimmer:\s*([^;]+);/)![1]!;
+  expect(cssTimeMs(clock)).toBe(1800);
+  expect(css.match(/--ease-linear:\s*([^;]+);/)![1]!.trim()).toBe(GLASS_MOTION.linear);
+  expect(css.match(/--duration-activity-shimmer: 0ms;/g)).toHaveLength(2);
+  const island = readFileSync(
+    new URL("../components/chat/liquid-island.css", import.meta.url),
+    "utf8",
+  );
+  expect(island).toContain("var(--duration-activity-shimmer) var(--ease-linear)");
+});
+
 describe("finite spring clocks", () => {
   it("derives API seconds from milliseconds", () => {
     expect(GLASS_MOTION.snappySeconds * 1000).toBe(GLASS_MOTION.snappy);

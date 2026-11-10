@@ -1,5 +1,5 @@
 import { DIAGNOSTIC_SECRET_CASES, diagnosticCredentialRedaction } from "./diagnostic-fixtures";
-import type { Api, Model, Models } from "@earendil-works/pi-ai";
+import type { Api, Model, Models, ToolResultMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { COMPACTION_SUMMARY_PREFIX } from "./harness-compaction";
 import {
@@ -505,6 +505,65 @@ describe("compactProviderNative — Anthropic", () => {
     const wire = toAnthropicMessages(withSystem, ANTHROPIC_MODEL);
     expect(wire).toEqual(toAnthropicMessages(base, ANTHROPIC_MODEL));
     expect(JSON.stringify(wire)).not.toContain('"tool_result"');
+  });
+
+  it.each([
+    { name: "Code Mode failure with images", isError: true, withText: true, withImage: true },
+    { name: "MCP image-only failure", isError: true, withText: false, withImage: true },
+    { name: "text-only failure", isError: true, withText: true, withImage: false },
+    { name: "success with images", isError: false, withText: true, withImage: true },
+  ])("projects $name safely for the standalone summarizer", ({ isError, withText, withImage }) => {
+    const header = "Program failed in 0.2 s · 2 calls: 1 ok, 1 failed. 1 image(s) attached";
+    const result: ToolResultMessage = {
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "codemode",
+      isError,
+      timestamp: 4,
+      content: [
+        ...(withText ? [{ type: "text" as const, text: header }] : []),
+        ...(withImage ? [{ type: "image" as const, data: "ccc", mimeType: "image/png" }] : []),
+      ],
+    };
+    const original = structuredClone(result);
+    const visionModel: Model<Api> = { ...ANTHROPIC_MODEL, input: ["text", "image"] };
+    const messages = [
+      user("run it"),
+      {
+        ...assistant(""),
+        api: visionModel.api,
+        provider: visionModel.provider,
+        model: visionModel.id,
+        stopReason: "toolUse" as const,
+        content: [{ type: "toolCall" as const, id: "call_1", name: "codemode", arguments: {} }],
+      },
+      result,
+    ];
+    const wire = toAnthropicMessages(messages, visionModel);
+    expect(typeof wire).not.toBe("string");
+    if (typeof wire === "string") return;
+    expect(wire[2]).toEqual({
+      role: "user",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "call_1",
+          is_error: isError && !withImage,
+          content: withImage
+            ? [
+                ...(isError ? [{ type: "text", text: "The tool call failed." }] : []),
+                ...(withText ? [{ type: "text", text: header }] : []),
+                {
+                  type: "image",
+                  source: { type: "base64", media_type: "image/png", data: "ccc" },
+                },
+              ]
+            : header,
+        },
+      ],
+    });
+    expect(result).toEqual(original);
+    expect(toAnthropicMessages(messages, visionModel)).toEqual(wire);
   });
 
   it("projects tool use and results to the wire", () => {

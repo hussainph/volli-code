@@ -21,6 +21,7 @@ import { sessionPanes, useSessionsStore } from "@renderer/stores/sessions";
 import { busySessionInfo } from "@renderer/terminal/close-guard";
 
 import { openTurnCount, removeProjectBusyLines, runningShellCount } from "./remove-project-busy";
+import { PathText } from "@renderer/components/ui/path-text";
 
 interface RemoveProjectDialogProps {
   project: Project;
@@ -101,7 +102,7 @@ export function RemoveProjectDialog({ project, open, onOpenChange }: RemoveProje
         </AlertDialogHeader>
         <div className="flex min-w-0 items-center gap-2 rounded-control border border-border bg-muted/30 px-2 py-2">
           <FolderOpenIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 font-mono text-ui [overflow-wrap:anywhere]">{project.path}</span>
+          <PathText path={project.path} className="text-ui" />
         </div>
         <AlertDialogFooter>
           <AlertDialogCancel disabled={removing}>Cancel</AlertDialogCancel>

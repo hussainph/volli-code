@@ -1,5 +1,6 @@
 import { Agent, type AgentTool } from "@earendil-works/pi-agent-core";
-import { Type, type Model } from "@earendil-works/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import {
   mcpProviderToolName,
   mcpToolKey,

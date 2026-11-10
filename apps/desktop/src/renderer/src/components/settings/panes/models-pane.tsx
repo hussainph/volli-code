@@ -4,7 +4,7 @@ import {
   offerableModels,
   providerLabelFor,
 } from "@renderer/components/pages/model-access-settings";
-import { OverrideLinks } from "../settings-navigation";
+import { OverrideMenu } from "../settings-navigation";
 import { useProjectsStore } from "@renderer/stores/projects";
 import {
   RefreshIcon,
@@ -293,7 +293,7 @@ export function ModelAccessSettings({
           action={
             <div className="flex flex-wrap items-center gap-2">
               {hostName === undefined ? (
-                <OverrideLinks
+                <OverrideMenu
                   projects={projects.filter((p) => p.sessionModel != null)}
                   page="sessions"
                 />

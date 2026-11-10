@@ -292,6 +292,16 @@ describe("buildCommandPaletteItems", () => {
     ]);
   });
 
+  it.each([null, "openai-codex"])("carries saved provider %s in palette rows", (providerId) => {
+    const alpha = project("p1", "Alpha", "ALP");
+    const record = chat({
+      ticketId: null,
+      model: providerId === null ? null : { providerId, modelId: "test", reasoningLevel: "off" },
+    });
+    const result = buildCommandPaletteItems([alpha], {}, {}, alpha.id, [record]);
+    expect(result.sessions[0]?.savedProviderId).toBe(providerId);
+  });
+
   it("adds durable chats and overlays a title that just changed in a resident client", () => {
     const alpha = project("p1", "Alpha", "ALP");
     const linked = ticket("t1", alpha.id, 1, "Fix auth", 10);

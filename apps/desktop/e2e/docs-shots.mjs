@@ -9,8 +9,9 @@
  *   ticket-workspace.png — a ticket's Body and its review rail, with Chat as the
  *                          explicit next action and Automations visible.
  *   automations.png      — the Automations page with one saved project Automation.
- *   canvas-editor.png    — Settings → Appearance's canvas editor, with the pad,
- *                          colour stops, swatches, and vibrancy/grain faders.
+ *   canvas-editor.png    — the Settings window's Appearance page, with the Canvas
+ *                          popover's pad and colour stops open beside the
+ *                          accent swatches and vibrancy/grain faders.
  *
  * `theme-picker.png` used to be the third. Its surface — Settings → Appearance's
  * app-theme picker — went with the seed-based theming system, and the file is
@@ -290,18 +291,24 @@ try {
     const settings = settingsPage.getByRole("navigation", { name: "Settings categories" });
     await settings.getByRole("button", { name: "Appearance", exact: true }).click();
     await settingsPage.getByTestId("appearance-mode").waitFor({ timeout: 15000 });
-    const pad = settingsPage.getByTestId("canvas-pad");
-    await pad.waitFor({ timeout: 15000 });
-    await pad.scrollIntoViewIfNeeded();
-    await settingsPage.getByTestId("canvas-stop-orb-0").waitFor({ timeout: 15000 });
     await settingsPage
       .getByRole("slider", { name: "Vibrancy", exact: true })
       .waitFor({ timeout: 15000 });
     await settingsPage
       .getByRole("slider", { name: "Grain", exact: true })
       .waitFor({ timeout: 15000 });
+    // The gradient pad lives in the Canvas row's popover; open it so the shot
+    // shows the pad and its colour stops beside the faders.
+    const editCanvas = settingsPage.getByRole("button", { name: "Edit canvas", exact: true });
+    await editCanvas.scrollIntoViewIfNeeded();
     await parkPointer(settingsPage);
-    await sleep(600);
+    await editCanvas.click();
+    const pad = settingsPage.getByTestId("canvas-pad");
+    await pad.waitFor({ timeout: 15000 });
+    await settingsPage.getByTestId("canvas-stop-orb-0").waitFor({ timeout: 15000 });
+    await parkPointer(settingsPage);
+    // Let the popover's open transition finish; a capture mid-fade is translucent.
+    await sleep(1500);
     return capture("canvas-editor.png", settingsPage);
   });
 } catch (error) {

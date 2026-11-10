@@ -21,6 +21,7 @@ import { Button } from "@renderer/components/ui/button";
 import { Notice } from "@renderer/components/ui/notice";
 import { useProjectFolder } from "@renderer/hooks/use-project-folder";
 import { useProjectsStore } from "@renderer/stores/projects";
+import { PathText } from "@renderer/components/ui/path-text";
 
 /**
  * Takes an id rather than the row: the board is handed a `projectId` and a
@@ -49,7 +50,7 @@ export function ProjectFolderBanner({ projectId }: { projectId: string }) {
         detail={
           <span className="flex min-w-0 items-center gap-2 rounded-control border border-border bg-(--card-face) px-2 py-1 text-foreground">
             <FolderOpenIcon aria-hidden className="size-4 shrink-0" />
-            <span className="min-w-0 font-mono [overflow-wrap:anywhere]">{project.path}</span>
+            <PathText path={project.path} />
           </span>
         }
         actions={

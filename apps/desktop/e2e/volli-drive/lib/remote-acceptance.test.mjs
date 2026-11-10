@@ -622,6 +622,7 @@ function liftedKeepaliveRetirement(started, quitAttempted, tools) {
     let nativeQuitAttempted = ${quitAttempted};
     const LOCAL_KEEPALIVE = "[slow:120000] local-menu-bar-keepalive";
     const { call, selectHost, click, wait } = tools;
+    const driveWindows = { useMainWindow: tools.useMainWindow };
     ${body}
     return { run: stopLocalKeepalive, active: () => localKeepaliveStarted };
   `,
@@ -661,7 +662,7 @@ test("the local keepalive opens Home's scoped tab chooser and waits for its real
 test("keepalive retirement reopens normally and stops only the named local synthetic Session", async () => {
   const calls = [];
   const tools = Object.fromEntries(
-    ["call", "selectHost", "click", "wait"].map((name) => [
+    ["call", "selectHost", "click", "wait", "useMainWindow"].map((name) => [
       name,
       async (...args) => calls.push([name, ...args]),
     ]),
@@ -672,6 +673,7 @@ test("keepalive retirement reopens normally and stops only the named local synth
   const active = liftedKeepaliveRetirement(true, true, tools);
   await active.run();
   assert.deepEqual(calls, [
+    ["useMainWindow"],
     ["call", "native-reopen"],
     ["selectHost", "This Mac"],
     ["click", "button", "local-menu-bar-keepalive No ticket", { contains: true }],
@@ -683,6 +685,7 @@ test("keepalive retirement reopens normally and stops only the named local synth
 });
 test("failed local interruption remains pending for cleanup retry, never claims a retired turn", async () => {
   const active = liftedKeepaliveRetirement(true, false, {
+    useMainWindow: () => {},
     call: async () => {
       throw new Error("turn still stopping");
     },

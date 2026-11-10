@@ -10,7 +10,7 @@
  * same tick sees it) and fire-and-forget the SQLite write, surfacing a
  * failure via a toast (CLAUDE.md: never silently swallow a failed mutation).
  */
-import { errorMessage } from "@volli/shared";
+import { CHAT_DRAFTS_APP_STATE_KEY, errorMessage } from "@volli/shared";
 import type { PersistOptions, StateStorage } from "zustand/middleware";
 
 import { toastError } from "@renderer/lib/toast";
@@ -99,8 +99,9 @@ async function persist(
         for (const listener of preferenceListeners) listener(key);
       }
       return true;
+    } else {
+      toastError(`Couldn't ${failureVerb} "${key}": ${result.error}`);
     }
-    toastError(`Couldn't ${failureVerb} "${key}": ${result.error}`);
   } catch (error: unknown) {
     toastError(`Couldn't ${failureVerb} "${key}": ${errorMessage(error)}`);
   }
@@ -297,14 +298,24 @@ export interface SyncStateStorage {
  * The persist stores' storage adapter (see stores/ui.ts, stores/project-ui.ts,
  * stores/chat-drafts.ts).
  */
+function ownsDraftStorage(key: string): boolean {
+  return (
+    key !== CHAT_DRAFTS_APP_STATE_KEY ||
+    typeof window === "undefined" ||
+    window.location?.hash !== "#settings"
+  );
+}
+
 export const appStateStorage: StateStorage & SyncStateStorage = {
-  getItem: (key) => cache.get(key) ?? null,
+  getItem: (key) => (ownsDraftStorage(key) ? (cache.get(key) ?? null) : null),
   setItem: (key, value) => {
+    if (!ownsDraftStorage(key)) return;
     const baseValue = cache.get(key) ?? preferenceDefaults.get(key);
     cache.set(key, value);
     persistDebounced(key, value, "save", isSharedPreference(key) ? baseValue : undefined);
   },
   removeItem: (key) => {
+    if (!ownsDraftStorage(key)) return;
     const baseValue = cache.get(key);
     cache.delete(key);
     persistDebounced(key, "", "clear", isSharedPreference(key) ? baseValue : undefined);

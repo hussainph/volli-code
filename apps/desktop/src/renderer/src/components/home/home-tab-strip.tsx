@@ -29,6 +29,7 @@ import { HOME_BOARD_TAB_ID } from "@renderer/components/home/home-tabs";
 import { CloudCheckoutControl } from "@renderer/components/cloud-checkout/cloud-checkout-control";
 import { SessionGlyph } from "@renderer/components/sessions/session-glyph";
 import { ChatProviderIcon } from "@renderer/components/sessions/chat-provider-icon";
+import { projectChatProviders } from "@renderer/lib/session-provider-index";
 import { providerIdentityOf, providerLabelOf } from "@renderer/components/models/model-identity";
 import { useModelCatalogue } from "@renderer/lib/use-model-catalogue";
 import { TabContextActions, type TabAction } from "@renderer/components/ui/tab-actions";
@@ -283,14 +284,29 @@ function reorderFor({ tabs, groups, onReorder }: HomeTabListProps) {
 }
 
 /** What a group chip's menu says about a Home tab. */
-function homeTabMenuLabel(tab: HomeTabDescriptor, projectId: string): TabMenuLabel {
+function homeTabMenuLabel(
+  tab: HomeTabDescriptor,
+  providers: ReadonlyMap<string, string | null>,
+): TabMenuLabel {
   if (tab.kind === "board") return { label: "Board", icon: BoardIcon };
   if (tab.kind === "terminal") return { label: tab.tab.title, icon: TerminalIcon };
   if (tab.kind === "chat") {
     return {
       label: tab.title,
       icon: ChatIcon,
-      artwork: <ChatProviderIcon sessionId={tab.sessionId} projectId={projectId} />,
+      artwork: (
+        <ChatProviderIcon
+          sessionId={tab.sessionId}
+          savedProviderId={providers.get(tab.sessionId) ?? null}
+        />
+      ),
+      memberGlyph: (
+        <ChatProviderIcon
+          sessionId={tab.sessionId}
+          savedProviderId={providers.get(tab.sessionId) ?? null}
+          state={tab.status}
+        />
+      ),
       status: tab.status,
     };
   }
@@ -330,6 +346,9 @@ function HomeTabList({
   onCloseOtherFiles,
 }: HomeTabListProps) {
   const [editingId, setEditingId] = React.useState<string | null>(null);
+  const providers = useProjectSessionsStore((state) =>
+    projectChatProviders(state.byProject[projectId]?.chat),
+  );
   return (
     <GroupedTabList
       tabs={tabs}
@@ -337,7 +356,7 @@ function HomeTabList({
       activeTabId={activeTabId}
       shownGroupId={shownGroupId}
       edgeTargets={groups !== undefined}
-      describe={(tab) => homeTabMenuLabel(tab, projectId)}
+      describe={(tab) => homeTabMenuLabel(tab, providers)}
       onSelect={onSelect}
       onUngroup={onUngroup}
       onClose={onClose}
@@ -781,9 +800,7 @@ function ChatTab({
     (state) => state.sessions[sessionId]?.projection?.modelSelection?.providerId ?? null,
   );
   const savedProvider = useProjectSessionsStore(
-    (state) =>
-      state.byProject[projectId]?.chat.find((record) => record.sessionId === sessionId)?.model
-        ?.providerId ?? null,
+    (state) => projectChatProviders(state.byProject[projectId]?.chat).get(sessionId) ?? null,
   );
   const providerId = liveProvider ?? savedProvider;
   const catalogue = useModelCatalogue();

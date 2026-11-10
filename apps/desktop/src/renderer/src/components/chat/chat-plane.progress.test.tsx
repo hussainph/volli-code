@@ -1,12 +1,11 @@
 // @vitest-environment jsdom
-/** Visible progress is exclusive; the accessible turn never blinks. */
+/** The island owns progress; its former transcript row reserves bead clearance. */
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { MotionGlobalConfig } from "motion/react";
 import type { UIMessage } from "ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { ChatTurn, PendingMessage, TurnRunningMark, type TurnContext } from "./chat-plane";
-import { liveTurnHasProgress } from "./chat-plane-model";
 
 const context: TurnContext = { onOpenFile: () => {}, interactions: new Map() };
 const user: UIMessage = {
@@ -14,27 +13,6 @@ const user: UIMessage = {
   role: "user",
   parts: [{ type: "text", text: "Keep these words" }],
 };
-const assistant = (parts: UIMessage["parts"]): UIMessage[] => [
-  { id: "assistant", role: "assistant", parts },
-];
-const thought: UIMessage["parts"][number] = {
-  type: "reasoning",
-  text: "Considering the change",
-  state: "streaming",
-};
-const runningTool: UIMessage["parts"][number] = {
-  type: "dynamic-tool",
-  toolName: "bash",
-  toolCallId: "shell",
-  state: "input-available",
-  input: { command: "long-running check" },
-};
-const finishedTool: UIMessage["parts"][number] = {
-  ...runningTool,
-  state: "output-available",
-  output: "done",
-};
-
 let container: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
@@ -64,90 +42,17 @@ const advance = async (ms: number) => {
   await act(async () => vi.advanceTimersByTime(ms));
 };
 const footer = () => container.querySelector('[data-slot="message-delivery"]');
-const visualMark = () => container.querySelector('[role="status"] > [aria-hidden]');
 
-describe("the live turn's actual visible progress", () => {
-  it.each([
-    ["no live turn", null, false],
-    ["empty turn", [], false],
-    ["user message", [user], false],
-    ["streaming thought", assistant([thought]), true],
-    ["running shell", assistant([runningTool]), true],
-    ["preliminary long-running output", assistant([{ ...finishedTool, preliminary: true }]), true],
-    [
-      "completed background receipt",
-      assistant([{ ...finishedTool, output: "Moved command to background shell shell-1." }]),
-      false,
-    ],
-    ["tool input streaming", assistant([{ ...runningTool, state: "input-streaming" }]), true],
-    ["settled tool", assistant([finishedTool]), false],
-    ["stale streaming thought before settled tool", assistant([thought, finishedTool]), false],
-    [
-      "stale streaming thought before settled reply",
-      assistant([thought, { type: "text", text: "Done", state: "done" }]),
-      false,
-    ],
-    ["streaming reply", assistant([{ type: "text", text: "Answer", state: "streaming" }]), true],
-    ["empty streaming text", assistant([{ type: "text", text: "", state: "streaming" }]), false],
-    [
-      "whitespace-only streaming text",
-      assistant([{ type: "text", text: " \n", state: "streaming" }]),
-      false,
-    ],
-    ["settled reply", assistant([{ type: "text", text: "Answer", state: "done" }]), false],
-  ] as const)("%s", (_name, messages, expected) => {
-    expect(liveTurnHasProgress(messages)).toBe(expected);
-  });
-});
-
-describe("Working visual and screen-reader lifetimes", () => {
-  it("shows immediately before progress and keeps the same accessible status during every visual transition", async () => {
+describe("the turn's reserved transcript row", () => {
+  it("reserves bead clearance without another Working line or live region", async () => {
     await render(<TurnRunningMark />);
-    const status = container.querySelector('[role="status"]');
-    const visual = visualMark();
-    expect(status?.querySelector(".sr-only")?.textContent).toBe("Working");
-    expect(visual?.classList.contains("invisible")).toBe(false);
-
-    await render(<TurnRunningMark progressVisible />);
-    expect(visualMark()).toBe(visual);
-    expect(visual?.classList.contains("invisible")).toBe(true);
-    await advance(1_000);
-    expect(container.querySelector('[role="status"]')).toBe(status);
-    expect(status?.querySelector(".sr-only")?.textContent).toBe("Working");
-
-    await render(<TurnRunningMark progressVisible={false} />);
-    await advance(299);
-    expect(visual?.classList.contains("invisible")).toBe(true);
-    await advance(1);
-    expect(visual?.classList.contains("invisible")).toBe(false);
-    expect(container.querySelector('[role="status"]')).toBe(status);
-    expect(status?.querySelector(".sr-only")?.textContent).toBe("Working");
-  });
-
-  it("requires one continuous 300ms gap, not the sum of several short gaps", async () => {
-    await render(<TurnRunningMark progressVisible />);
-    expect(visualMark()?.classList.contains("invisible")).toBe(true);
-    await render(<TurnRunningMark progressVisible={false} />);
-    await advance(250);
-    await render(<TurnRunningMark progressVisible />);
-    await advance(100);
-    expect(visualMark()?.classList.contains("invisible")).toBe(true);
-    await render(<TurnRunningMark progressVisible={false} />);
-    await advance(299);
-    expect(visualMark()?.classList.contains("invisible")).toBe(true);
-    await advance(1);
-    expect(visualMark()?.classList.contains("invisible")).toBe(false);
-    await render(<TurnRunningMark progressVisible />);
-    expect(visualMark()?.classList.contains("invisible")).toBe(true);
-  });
-
-  it("does not revive Working after the turn unmounts during a gap", async () => {
-    await render(<TurnRunningMark progressVisible />);
-    await render(<TurnRunningMark progressVisible={false} />);
-    await advance(100);
-    await render(null);
-    await advance(1_000);
+    const row = container.querySelector("[data-turn-bead-clearance]");
+    expect(row?.classList.contains("h-10")).toBe(true);
+    expect(row?.getAttribute("aria-hidden")).toBe("true");
+    expect(container.textContent).toBe("");
     expect(container.querySelector('[role="status"]')).toBeNull();
+    await render(null);
+    expect(container.querySelector("[data-turn-bead-clearance]")).toBeNull();
   });
 });
 
