@@ -183,8 +183,6 @@ export const CORE_E2E = new Set([
   "composer-basics-smoke.mjs",
   "terminal-smoke.mjs",
   "worktree-smoke.mjs",
-  "agent-socket-smoke.mjs",
-  "session-rpc-transport-smoke.mjs",
   "agent-cli-roundtrip-smoke.mjs",
   "database-recovery-smoke.mjs",
   "canvas-theming-smoke.mjs",

@@ -46,6 +46,9 @@
  *  10. Directory refresh is LIVE — a file created on disk inside the
  *      navigator's current folder appears with no manual refresh.
  *
+ *  QO1–QO8. Real ⌘P Main/worktree indexing, fuzzy ranking, preview/pin and
+ *      destination activation, in a separate project AFTER the two-boot proof.
+ *
  * Every assertion polls (expect-style waits); no bare sleep stands in for a
  * condition (the few fixed sleeps only pace UI settling, never assert).
  *
@@ -71,6 +74,7 @@ import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
+import { createTicketViaBridge } from "./lib/agent-kit.mjs";
 import {
   assertProfileIsolated,
   createRunner,
@@ -295,10 +299,395 @@ function watchForMonacoFailures(page, sink) {
   });
 }
 
+// ---- M8: real quick-open checks, isolated from the restart checkpoint --------
+
+const PROJECT = { id: "quick-open-project", name: "Quick Open Project", prefix: "QO" };
+
+// ---- the seeded repository -------------------------------------------------
+// Everything committed here exists in BOTH checkouts once the worktree is cut,
+// so none of it could tell the two scopes apart. The two files that can are
+// written after the cut: MAIN_ONLY into the main checkout and WORKTREE_ONLY
+// into the worktree (both untracked — `git ls-files --others` lists them).
+const ALPHA_TS = "src/alpha-widget.ts";
+const BETA_TS = "src/beta-widget.ts";
+const GAMMA_MD = "docs/gamma-notes.md";
+const MAIN_FILE = "main-checkout-file.ts";
+// The audit's worked example (VC-299 / A13), verbatim. The artifact is NOT a
+// basename match for `README` — its path is, scattered across
+// a-r-t-i-f-a-c-t-s / d-e-s-i-g-n / a-u-d-i-t — which is exactly the shape the
+// +1000 artifact bonus used to promote over an exact name.
+const ROOT_README = "README.md";
+const AUDIT_ARTIFACT = ".volli/artifacts/design-audit/audit-motion-perf.md";
+const MAIN_ONLY = "main-untracked-only.ts";
+const WORKTREE_ONLY = "worktree-only-file.ts";
+const WORKTREE_SECOND = "second-worktree-file.ts";
+
+const git = (cwd, args) => execFileAsync("git", args, { cwd });
+
+// ---- DOM helpers -----------------------------------------------------------
+
+const quickOpenList = (page) => page.getByTestId("quick-open-list");
+
+/** Every offered row's text, top-ranked first (label + its folder). */
+async function quickOpenRows(page) {
+  return page.evaluate(() =>
+    Array.from(document.querySelectorAll('[data-testid="quick-open-list"] [cmdk-item]')).map(
+      (row) => (row.textContent ?? "").trim(),
+    ),
+  );
+}
+
+/**
+ * Press ⌘P, wait for the overlay AND for its rows — the index is fetched fresh
+ * per open (an IPC round trip), so an overlay that is on screen is not yet an
+ * overlay with anything in it. Types `query` before waiting when given.
+ */
+async function openQuickOpen(page, query = "") {
+  await page.keyboard.press("Meta+p");
+  await waitUntil("quick-open overlay", async () => (await quickOpenList(page).count()) === 1);
+  if (query !== "") {
+    await page.keyboard.type(query);
+    await sleep(150);
+  }
+  await waitUntil("quick-open rows", async () => (await quickOpenRows(page)).length > 0, {
+    timeout: 15000,
+  });
+}
+
+async function closeQuickOpen(page) {
+  if ((await quickOpenList(page).count()) === 1) {
+    await page.keyboard.press("Escape");
+    await waitUntil("quick-open closed", async () => (await quickOpenList(page).count()) === 0);
+  }
+}
+
+/** Home's File tabs, left to right — identity, preview state, selection. */
+async function readQuickOpenHomeTabs(page) {
+  return page.evaluate(() =>
+    Array.from(document.querySelectorAll('[data-testid="home-file-tab"]')).map((tab) => ({
+      relPath: tab.getAttribute("data-rel-path"),
+      preview: tab.getAttribute("data-preview"),
+      active: tab.getAttribute("aria-selected") === "true",
+    })),
+  );
+}
+
+/**
+ * Ticket File tabs keep basename accessible names. The witnesses here are
+ * root-level paths, so exact names identify them without Home-strip captions.
+ */
+async function readTicketTabs(page) {
+  return page.evaluate(() =>
+    Array.from(document.querySelectorAll('[role="tablist"] [role="tab"]')).map((tab) => ({
+      label: tab.getAttribute("aria-label") ?? "",
+      preview: tab.getAttribute("data-preview"),
+      active: tab.getAttribute("aria-selected") === "true",
+    })),
+  );
+}
+
+const ticketTab = (tabs, relPath) => tabs.find((tab) => tab.label === relPath);
+
+async function makeQuickOpenRepo() {
+  const projectPath = await makeGitRepo(scratch, "quick-open-");
+  await fs.mkdir(join(projectPath, "src"), { recursive: true });
+  await fs.mkdir(join(projectPath, "docs"), { recursive: true });
+  await fs.writeFile(join(projectPath, ALPHA_TS), "export const a = 1;\n");
+  await fs.writeFile(join(projectPath, BETA_TS), "export const b = 1;\n");
+  await fs.writeFile(join(projectPath, GAMMA_MD), "# gamma\n");
+  await fs.writeFile(join(projectPath, MAIN_FILE), "export const m = 1;\n");
+  await fs.writeFile(join(projectPath, ROOT_README), "# Quick Open Project\n");
+  await git(projectPath, ["add", "-A"]);
+  await git(projectPath, ["commit", "-q", "-m", "seed files"]);
+  // Force-included by `buildFileIndex` (never committed, `.volli` is ignored):
+  // it reaches the index the same way a real design-audit artifact does.
+  await fs.mkdir(join(projectPath, ".volli/artifacts/design-audit"), { recursive: true });
+  await fs.writeFile(join(projectPath, AUDIT_ARTIFACT), "# audit: motion perf\n");
+
+  return projectPath;
+}
+
+async function runQuickOpenChecks(page, projectPath, { attempt, must }) {
+  // A different project, AFTER the original two-boot restore/lazy/guard proof.
+  // None of these transient tabs can contaminate its exact four-tab checkpoint.
+  await page
+    .getByRole("button", { name: PROJECT.name, exact: true })
+    .and(page.locator("button"))
+    .click();
+  await waitUntil(
+    "quick-open project selected",
+    async () =>
+      (await page
+        .locator(`button[data-project-tile="${PROJECT.id}"]`)
+        .getAttribute("aria-current")) === "true",
+  );
+  await waitUntil(
+    "fresh quick-open Home strip",
+    async () => (await readQuickOpenHomeTabs(page)).length === 0,
+  );
+  let shellSessionId = null;
+  // Leave every independent check with the overlay closed, even on failure.
+  // QO1 deliberately leaves it open for QO2's actual typing/Enter path.
+  const probe = (id, label, run) =>
+    attempt(id, label, async () => {
+      try {
+        return await run();
+      } finally {
+        await closeQuickOpen(page);
+      }
+    });
+  try {
+    // ---- 1. The chord, and the Main index -----------------------------------
+    await must("QO1", "⌘P over Home opens the overlay listing the MAIN checkout", async () => {
+      await openQuickOpen(page);
+      const rows = await quickOpenRows(page);
+      return {
+        ok: rows.some((row) => row.includes(MAIN_FILE)) && rows.length >= 4,
+        detail: `rows=${rows.length} ${JSON.stringify(rows.slice(0, 5))}`,
+      };
+    });
+
+    // ---- 2. Typing narrows; Enter PREVIEWS ----------------------------------
+    await must(
+      "QO2",
+      "typing narrows by name, and Enter opens ONE preview Home File tab",
+      async () => {
+        await page.keyboard.type("alphawid");
+        const rows = await waitUntil("alphawid fuzzy match", async () => {
+          const matches = await quickOpenRows(page);
+          return matches.length === 1 && matches[0].includes("alpha-widget.ts") ? matches : null;
+        });
+        await page.keyboard.press("Enter");
+        await waitUntil(
+          "one Home File tab",
+          async () => (await readQuickOpenHomeTabs(page)).length === 1,
+        );
+        const tabs = await readQuickOpenHomeTabs(page);
+        return {
+          ok:
+            rows.length === 1 &&
+            rows[0].includes("alpha-widget.ts") &&
+            tabs[0]?.relPath === ALPHA_TS &&
+            tabs[0]?.preview === "true" &&
+            tabs[0]?.active === true &&
+            (await quickOpenList(page).count()) === 0,
+          detail: `matched=${JSON.stringify(rows)} tabs=${JSON.stringify(tabs)}`,
+        };
+      },
+    );
+
+    // ---- 3. A second invoke pins --------------------------------------------
+    await probe("QO3", "a second invoke of the file in front PINS it", async () => {
+      await openQuickOpen(page, "alphawid");
+      await page.keyboard.press("Enter");
+      await waitUntil(
+        "tab pinned",
+        async () => (await readQuickOpenHomeTabs(page))[0]?.preview === "false",
+      );
+      const tabs = await readQuickOpenHomeTabs(page);
+      return {
+        ok: tabs.length === 1 && tabs[0].preview === "false" && tabs[0].active,
+        detail: JSON.stringify(tabs),
+      };
+    });
+
+    // ---- 4. ⌘Enter pins outright --------------------------------------------
+    await probe("QO4", "⌘⏎ opens a file straight into a PINNED tab", async () => {
+      await openQuickOpen(page, "gammanotes");
+      await page.keyboard.press("Meta+Enter");
+      await waitUntil(
+        "second Home File tab",
+        async () => (await readQuickOpenHomeTabs(page)).length === 2,
+      );
+      const tabs = await readQuickOpenHomeTabs(page);
+      const gamma = tabs.find((tab) => tab.relPath === GAMMA_MD);
+      return {
+        ok: gamma?.preview === "false" && gamma.active === true,
+        detail: JSON.stringify(tabs),
+      };
+    });
+
+    // ---- 5. The worked example, ranked in a running app ---------------------
+    await probe("QO5", "`README` offers the root README.md first, and Enter opens IT", async () => {
+      await openQuickOpen(page, "README");
+      const rows = await quickOpenRows(page);
+      // Both are in the index; only the order is under test. A row reads
+      // "<basename><its folder>", so the root README's is bare.
+      const offersArtifact = rows.some((r) => r.includes("audit-motion-perf.md"));
+      await page.keyboard.press("Enter");
+      await waitUntil("README File tab in front", async () =>
+        (await readQuickOpenHomeTabs(page)).some((t) => t.relPath === ROOT_README && t.active),
+      );
+      const tabs = await readQuickOpenHomeTabs(page);
+      const readme = tabs.find((tab) => tab.relPath === ROOT_README);
+      return {
+        ok:
+          rows[0]?.startsWith("README.md") === true &&
+          offersArtifact &&
+          readme?.preview === "true" &&
+          readme.active === true,
+        detail: `rows=${JSON.stringify(rows.slice(0, 3))} tabs=${JSON.stringify(tabs)}`,
+      };
+    });
+
+    // ---- A real ticket worktree ---------------------------------------------
+    const { projectId, ticketId, displayId } = await createTicketViaBridge(page, PROJECT.name, {
+      status: "todo",
+      title: "Quick-open scope proof",
+      priority: "medium",
+    });
+    const created = await page.evaluate(
+      ({ workspaceId, cwd, tid }) =>
+        window.api.terminal.create({
+          workspaceId,
+          cwd,
+          cols: 80,
+          rows: 24,
+          ticket: { ticketId: tid },
+        }),
+      { workspaceId: projectId, cwd: projectPath, tid: ticketId },
+    );
+    if (!created.ok) throw new Error(`terminal.create failed: ${created.error}`);
+    shellSessionId = created.sessionId;
+    if (created.session.launchKind !== "shell" || created.session.activeHarnessId !== null) {
+      throw new Error("quick-open worktree materializer must be a bare shell, not an agent");
+    }
+
+    const row = await waitUntil(
+      "ticket row stamped with worktreePath",
+      async () => {
+        const tickets = await page.evaluate(async (pid) => {
+          const boot = await window.api.data.bootstrap();
+          return boot.ok ? (boot.data.ticketsByProject?.[pid] ?? []) : [];
+        }, projectId);
+        const found = tickets.find((ticket) => ticket.id === ticketId);
+        return found?.worktreePath ? found : null;
+      },
+      { timeout: 40000 },
+    );
+    const worktreeDir = row.worktreePath;
+    if (created.session.cwd !== worktreeDir || worktreeDir === projectPath) {
+      throw new Error(
+        `shell worktree cwd mismatch: session=${created.session.cwd} ticket=${worktreeDir} main=${projectPath}`,
+      );
+    }
+    await fs.writeFile(join(worktreeDir, WORKTREE_ONLY), "export const w = 1;\n");
+    await fs.writeFile(join(worktreeDir, WORKTREE_SECOND), "export const s = 1;\n");
+    // Into MAIN only, and only now: everything committed before the cut lives in
+    // both checkouts and could not tell the two scopes apart.
+    await fs.writeFile(join(projectPath, MAIN_ONLY), "export const mu = 1;\n");
+
+    await page.reload();
+    await page.waitForLoadState("domcontentloaded");
+    await waitUntil("app surface", () =>
+      page.evaluate(() => document.querySelector("[data-volli-surface]") !== null),
+    );
+    // Home restored a File tab; the board (and its cards) sit behind the Board tab.
+    const boardTab = page.locator('[role="tab"]', { hasText: "Board" }).first();
+    await waitUntil("Board tab", async () => (await boardTab.count()) === 1);
+    await boardTab.click();
+    await sleep(400);
+    const card = page
+      .locator("article")
+      .filter({ visible: true })
+      .filter({
+        has: page.locator("span.font-mono", { hasText: new RegExp(`^${displayId}$`) }),
+      });
+    await waitUntil("ticket card", async () => (await card.count()) === 1);
+    await card.dblclick();
+    await waitUntil("ticket detail", async () => (await page.getByRole("tablist").count()) >= 1);
+
+    // ---- 6. Scope follows the surface ---------------------------------------
+    await probe("QO6", "in the Ticket view ⌘P indexes THAT WORKTREE, not Main", async () => {
+      await openQuickOpen(page);
+      const rows = await quickOpenRows(page);
+      const offersWorktreeFile = rows.some((r) => r.includes(WORKTREE_ONLY));
+      const offersMainOnlyFile = rows.some((r) => r.includes(MAIN_ONLY));
+      await closeQuickOpen(page);
+      return {
+        ok: offersWorktreeFile && !offersMainOnlyFile,
+        detail: `worktreeOnly=${offersWorktreeFile} mainOnly=${offersMainOnlyFile} rows=${rows.length}`,
+      };
+    });
+
+    // ---- 7. The pick lands in the surface it was invoked from ----------------
+    const homeTabsBeforeTicketPick = await readQuickOpenHomeTabs(page);
+    await probe("QO7", "Enter previews into the TICKET's own tab strip", async () => {
+      await openQuickOpen(page, "worktreeonly");
+      await page.keyboard.press("Enter");
+      await waitUntil(
+        "ticket File tab in front",
+        async () => ticketTab(await readTicketTabs(page), WORKTREE_ONLY)?.active === true,
+      );
+      const tabs = await readTicketTabs(page);
+      const tab = ticketTab(tabs, WORKTREE_ONLY);
+      const homeTabsAfter = await readQuickOpenHomeTabs(page);
+      const sameHome = JSON.stringify(homeTabsAfter) === JSON.stringify(homeTabsBeforeTicketPick);
+      return {
+        ok:
+          tab?.preview === "true" &&
+          tab.active &&
+          sameHome &&
+          (await quickOpenList(page).count()) === 0,
+        detail: `ticket=${JSON.stringify(tabs)} homeUnchanged=${sameHome}`,
+      };
+    });
+
+    // ---- 8. ⌘⏎ on an open-but-behind ticket file brings it to the front ------
+    await probe(
+      "QO8",
+      "⌘⏎ on a ticket file already open BUT BEHIND brings it to the front",
+      async () => {
+        await openQuickOpen(page, "worktreeonly");
+        await page.keyboard.press("Meta+Enter");
+        await waitUntil("first file pinned", async () => {
+          const tab = ticketTab(await readTicketTabs(page), WORKTREE_ONLY);
+          return tab?.active === true && tab.preview !== "true";
+        });
+        // Put another file in front, so the target is open-and-behind.
+        await openQuickOpen(page, "secondworktree");
+        await page.keyboard.press("Meta+Enter");
+        await waitUntil(
+          "second file in front",
+          async () => ticketTab(await readTicketTabs(page), WORKTREE_SECOND)?.active === true,
+        );
+        await openQuickOpen(page, "worktreeonly");
+        await page.keyboard.press("Meta+Enter");
+        await waitUntil(
+          "target back in front",
+          async () => ticketTab(await readTicketTabs(page), WORKTREE_ONLY)?.active === true,
+          { timeout: 8000 },
+        );
+        const tabs = await readTicketTabs(page);
+        const target = ticketTab(tabs, WORKTREE_ONLY);
+        return {
+          ok:
+            target?.active === true &&
+            target.preview !== "true" &&
+            tabs.filter((tab) => tab.label === WORKTREE_ONLY).length === 1 &&
+            (await quickOpenList(page).count()) === 0,
+          detail: JSON.stringify(tabs),
+        };
+      },
+    );
+  } finally {
+    try {
+      await closeQuickOpen(page);
+    } finally {
+      if (shellSessionId !== null) {
+        await attempt("QO-cleanup", "quick-open materializer shell stops", async () => {
+          const killed = await page.evaluate((id) => window.api.terminal.kill(id), shellSessionId);
+          return { ok: killed.ok, detail: killed.ok ? shellSessionId : killed.error };
+        });
+      }
+    }
+  }
+}
+
 // ---- main ------------------------------------------------------------------
 
 async function main() {
-  const { attempt, summarize } = createRunner();
+  const { attempt, must, summarize } = createRunner();
   const monacoRuntimeFailures = [];
 
   // A REAL git repo (Home's Files navigator is rooted in the project's Main
@@ -311,6 +700,8 @@ async function main() {
   await fs.writeFile(join(projectDir, LIB_APP_TS), LIB_APP_TS_CONTENT, "utf8");
   await execFileAsync("git", ["add", "-A"], { cwd: projectDir });
   await execFileAsync("git", ["commit", "-q", "-m", "seed files"], { cwd: projectDir });
+
+  const quickOpenProjectDir = await makeQuickOpenRepo();
 
   let app = await launch({ dbPath, userDataDir });
 
@@ -325,6 +716,7 @@ async function main() {
 
     await seedProjects(page, [
       { id: PROJECT_SEED_ID, name: PROJECT_NAME, path: projectDir, prefix: TICKET_PREFIX },
+      { ...PROJECT, path: quickOpenProjectDir },
     ]);
 
     // ===================================================================
@@ -726,6 +1118,8 @@ async function main() {
         return { ok, detail: `absentBefore=${absent} appeared=${!!appeared}` };
       },
     );
+
+    await runQuickOpenChecks(page, quickOpenProjectDir, { attempt, must });
 
     if (monacoRuntimeFailures.length > 0) {
       console.log(`\nMonaco runtime failures observed: ${JSON.stringify(monacoRuntimeFailures)}`);

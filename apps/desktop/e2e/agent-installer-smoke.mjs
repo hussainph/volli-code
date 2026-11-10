@@ -2,8 +2,9 @@
  * E2e probe: installer idempotency against a fake $HOME.
  *
  * Runs the REAL install pipeline (detect → plan → apply with manifest) through
- * the app, against a throwaway $HOME, three times — asserting these guarantees
- * on disk:
+ * the app, against a throwaway $HOME, three times, plus an independent skipped
+ * profile's fourth boot — asserting these guarantees on disk and through the
+ * live CLI status bridge:
  *   1. First install writes the managed skill pack (canonical copy + Claude
  *      symlink + OpenCode command + manifest) for the detected harnesses.
  *   2. A second run is idempotent: the managed files are byte-identical AND
@@ -11,9 +12,11 @@
  *      and a user-owned `custom/` file is never touched.
  *   3. A hand-edited managed file comes back as a CONFLICT — it is preserved,
  *      not overwritten — while `custom/` still stands.
+ *   4. The first boot links an executable profile shim and reports ours+live;
+ *      an independent VOLLI_SKIP_AGENT_TOOLS=1 boot installs nothing for 3s.
  *
- * Every run takes the same path now: the background install (VC-52) is
- * user-space and dialog-free, so all three boots are the identical
+ * Each installed-profile run takes the same path: the background install
+ * (VC-52) is user-space and dialog-free, so those three boots use the identical
  * hash-guarded pipeline — which is exactly what idempotency means. Smoke-kit
  * defaults VOLLI_SKIP_AGENT_TOOLS=1 (home isolation for every other probe);
  * this probe opts back in with "0" against its throwaway VOLLI_AGENT_HOME.
@@ -54,6 +57,7 @@ const manifestPath = join(canonical, ".volli-managed.json");
 const claudeLink = join(fakeHome, ".claude/skills/volli");
 const opencodeCmd = join(fakeHome, ".config/opencode/command/volli.md");
 const customFile = join(canonical, "custom/mine.md");
+const userLink = join(fakeHome, ".local/bin/volli");
 
 function bootWith(extraEnv) {
   // VOLLI_AGENT_HOME redirects the installer's home (app.getPath("home") ignores
@@ -83,6 +87,33 @@ async function main() {
     await page.waitForLoadState("domcontentloaded");
     await waitUntil("first install to land", () => pathExists(manifestPath), { timeout: 20000 });
     await waitUntil("skill file to land", () => pathExists(skillMd), { timeout: 20000 });
+    await attempt(
+      "BG1",
+      "first boot links the executable profile shim and reports ours+live",
+      async () => {
+        await waitUntil("user-space CLI link to land", () => pathExists(userLink), {
+          timeout: 20000,
+        });
+        const expectedShim = join(userDataDir, "bin", "volli");
+        const linkStat = await fs.lstat(userLink);
+        const target = await fs.readlink(userLink);
+        // macOS exposes the same scratch directory as /tmp and /private/tmp.
+        const linkOk =
+          linkStat.isSymbolicLink() &&
+          (await fs.realpath(userLink)) === (await fs.realpath(expectedShim));
+        const shimStat = await fs.stat(expectedShim);
+        const executable = shimStat.isFile() && (shimStat.mode & 0o111) !== 0;
+        const status = await page.evaluate(() => window.api.cli.status());
+        const statusOk =
+          status.ok === true &&
+          status.status.link.state === "ours" &&
+          status.status.socket.live === true;
+        return {
+          ok: linkOk && executable && statusOk,
+          detail: `link=${linkOk} (→ ${target}) executable=${executable} status=${JSON.stringify(status)}`,
+        };
+      },
+    );
   } finally {
     await app.close();
   }
@@ -172,6 +203,46 @@ async function main() {
       const customIntact = await pathExists(customFile);
       const ok = preserved && customIntact;
       return { ok, detail: `edit preserved=${preserved} customIntact=${customIntact}` };
+    },
+  );
+
+  // ---- Independent skipped-install profile: FOURTH boot, not a refresh ----
+  const skipHome = join(scratch, "skip-home");
+  const skipUserDataDir = join(scratch, "skip-ud");
+  await fs.mkdir(skipHome, { recursive: true });
+  await attempt(
+    "BG2",
+    "VOLLI_SKIP_AGENT_TOOLS=1 leaves an independent home untouched for 3s",
+    async () => {
+      const skippedApp = await launch({
+        dbPath: join(scratch, "skip.db"),
+        userDataDir: skipUserDataDir,
+        extraEnv: {
+          VOLLI_AGENT_HOME: skipHome,
+          PATH: fakePath,
+          VOLLI_SKIP_AGENT_TOOLS: "1",
+        },
+      });
+      try {
+        await assertProfileIsolated(skippedApp, skipUserDataDir);
+        const page = await skippedApp.firstWindow();
+        await page.waitForLoadState("domcontentloaded");
+        // Let an erroneous fire-and-forget install write before the negative check.
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        const noManifest = !(await pathExists(
+          join(skipHome, ".agents/skills/volli/.volli-managed.json"),
+        ));
+        const noLink = await fs.lstat(join(skipHome, ".local/bin/volli")).then(
+          () => false,
+          (error) => {
+            if (error.code === "ENOENT") return true;
+            throw error;
+          },
+        );
+        return { ok: noManifest && noLink, detail: `noManifest=${noManifest} noLink=${noLink}` };
+      } finally {
+        await skippedApp.close();
+      }
     },
   );
 

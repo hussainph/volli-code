@@ -175,7 +175,15 @@ describe("one summary per Session", () => {
       expect(row.closest("ul")?.classList.contains("shrink-0")).toBe(true);
       expect(row.closest(".overflow-y-auto")).not.toBeNull();
     }
-    expect(container.querySelector<HTMLElement>("[data-peek-card]")?.style.maxHeight).toBe("240px");
+    const card = container.querySelector<HTMLElement>("[data-peek-card]");
+    expect(card?.style.maxHeight).toBe("240px");
+    const body = card?.querySelector(".overflow-y-auto");
+    const header = card?.querySelector("header");
+    expect(body?.classList.contains("min-h-0")).toBe(true);
+    expect(header).not.toBeNull();
+    expect(header?.parentElement).toBe(card);
+    expect(header?.classList.contains("shrink-0")).toBe(true);
+    expect(body?.contains(header ?? null)).toBe(false);
   });
 
   it("gives each Session its mark, its title, its age and its own summary", () => {

@@ -12,9 +12,9 @@
  *     pushed, so `origin/<base>` exists for the best-effort fetch), and
  *   • a FAKE `gh` shim — an executable shell script in a scratch bin dir that is
  *     PREPENDED to PATH via `launch({ extraEnv })`, so it shadows any real `gh`.
- *     It appends its argv to a log file and is deterministic: `gh pr list …`
- *     prints nothing and exits 0 (no open PR → ghFindPr sees `url: null`);
- *     `gh pr create …` prints a canned URL to stdout and exits 0.
+ *     It logs its argv, keeps open-PR lookup empty for publication, and creates
+ *     a canned draft URL. Retention discovery reports a different MERGED PR
+ *     only for a branch explicitly registered in a scratch control file.
  *
  * The scenario boots a ticket session so main's ensure pipeline materializes the
  * worktree (worktree-smoke.mjs is the template for that), dirties the worktree
@@ -35,6 +35,11 @@
  * bridge (the DB/git/gh assertions are identical either way); the summary line
  * reports whether each step went via "ui" or "bridge".
  *
+ * R1–R4 then exercise retention on TWO independent additional tickets: branch-
+ * only MERGED discovery (no stored PR URL) and its real rail primary, Keep /
+ * unkeep, real archive-and-clean with the branch retained, and dirty-untracked
+ * refusal without disk / board / roster changes. R1 has NO bridge UI fallback.
+ *
  *   Run:
  *     vp run --filter @volli/desktop build
  *     node apps/desktop/e2e/done-flow-smoke.mjs
@@ -50,6 +55,7 @@ import { createTicketViaBridge } from "./lib/agent-kit.mjs";
 import {
   assertProfileIsolated,
   createRunner,
+  goToBoard,
   launch,
   makeGitRepo,
   makeScratch,
@@ -68,6 +74,8 @@ const { attempt, summarize } = createRunner();
 const PROJECT = { id: "done-flow-project", name: "Done Flow Project", prefix: "DF" };
 const DEFAULT_HARNESS_ID = "claude-code";
 const CANNED_PR_URL = "https://github.com/fake/repo/pull/42";
+const MERGED_PR_URL = "https://github.com/fake/repo/pull/76";
+const MERGED_AT = "2026-07-21T00:00:00Z";
 
 // ---- small local helpers ---------------------------------------------------
 
@@ -95,22 +103,63 @@ async function refExists(cwd, ref) {
   }
 }
 
-/**
- * Write the fake `gh` shim: an executable POSIX-sh script that appends its argv
- * (one line per arg, after a header) to `logPath`, answers `pr list` with an
- * empty result (no open PR → ghFindPr sees `url: null`) and `pr create` with
- * the canned URL, and exits 0 for anything else. The log path is baked in
- * literally so the shim needs no env of its own.
- */
-async function writeGhShim(binDir, logPath) {
+/** The two lookup codecs differ: publication reads jq URL lines, retention JSON. */
+async function writeGhShim(binDir, logPath, mergedFile) {
   await fs.mkdir(binDir, { recursive: true });
   const shimPath = join(binDir, "gh");
+  const mergedRows = JSON.stringify(
+    JSON.stringify([{ url: MERGED_PR_URL, state: "MERGED", updatedAt: MERGED_AT }]),
+  );
+  const mergedView = JSON.stringify(
+    JSON.stringify({
+      state: "MERGED",
+      mergedAt: MERGED_AT,
+      mergeStateStatus: "CLEAN",
+      statusCheckRollup: [],
+    }),
+  );
+  const openView = JSON.stringify(
+    JSON.stringify({
+      state: "OPEN",
+      mergedAt: null,
+      mergeStateStatus: "CLEAN",
+      statusCheckRollup: [],
+    }),
+  );
   const script = `#!/bin/sh
 {
   echo "=== gh invocation ==="
   for arg in "$@"; do echo "$arg"; done
 } >> ${JSON.stringify(logPath)}
+head=""
+state=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "--head" ]; then head="$arg"; fi
+  if [ "$prev" = "--state" ]; then state="$arg"; fi
+  prev="$arg"
+done
 if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
+  # ghFindPr's open-only --jq lookup must stay empty, NOT print a JSON array.
+  if [ "$state" = "all" ]; then
+    if [ -n "$head" ] && grep -qxF "$head" ${JSON.stringify(mergedFile)} 2>/dev/null; then
+      printf '%s\\n' ${mergedRows}
+    else
+      printf '%s\\n' '[]'
+    fi
+  fi
+  exit 0
+fi
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  branch=$(git symbolic-ref --short HEAD)
+  if [ "$3" = ${JSON.stringify(MERGED_PR_URL)} ] && grep -qxF "$branch" ${JSON.stringify(mergedFile)} 2>/dev/null; then
+    printf '%s\\n' ${mergedView}
+  elif [ "$3" = ${JSON.stringify(CANNED_PR_URL)} ]; then
+    printf '%s\\n' ${openView}
+  else
+    echo "Unexpected PR view: $3 ($branch)" >&2
+    exit 1
+  fi
   exit 0
 fi
 if [ "$1" = "pr" ] && [ "$2" = "create" ]; then
@@ -125,12 +174,14 @@ exit 0
 }
 
 async function main() {
-  const fakeHome = join(scratch, "home");
+  // Match the ensure pipeline's resolved cwd even under macOS /var symlinks.
+  const fakeHome = await fs.realpath(await fs.mkdtemp(join(scratch, "home-")));
   const binDir = join(scratch, "bin");
   const ghLog = join(scratch, "gh-invocations.log");
-  await fs.mkdir(fakeHome, { recursive: true });
+  const mergedFile = join(scratch, "merged-branches");
+  await fs.writeFile(mergedFile, "");
 
-  await writeGhShim(binDir, ghLog);
+  await writeGhShim(binDir, ghLog, mergedFile);
   // Shadowing takes BOTH halves since VC-94: boot adoption installs the union of
   // this launch PATH and `$SHELL`'s answer with the LOGIN entries FIRST, so a
   // prepended bin dir alone lands behind `/opt/homebrew/bin` and the app calls
@@ -147,14 +198,17 @@ async function main() {
       // the union keeps reachable behind the login half.
       PATH: `${binDir}:${process.env.PATH ?? ""}`,
       SHELL: fakeShell,
+      VOLLI_RETENTION_INTERVAL_MS: "300",
+      VOLLI_RETENTION_MAX_BACKOFF_MS: "1000",
     },
   });
 
   const liveSessionIds = [];
+  let page;
 
   try {
     await assertProfileIsolated(app, userDataDir);
-    const page = await app.firstWindow();
+    page = await app.firstWindow();
     await page.waitForLoadState("domcontentloaded");
     await sleep(1000);
 
@@ -197,7 +251,7 @@ async function main() {
     async function ticketRow(ticketId) {
       const tickets = await page.evaluate(async (pid) => {
         const boot = await window.api.data.bootstrap();
-        if (!boot.ok) return [];
+        if (!boot.ok) throw new Error(`data.bootstrap failed: ${JSON.stringify(boot)}`);
         return boot.data.ticketsByProject?.[pid] ?? [];
       }, projectId);
       return tickets.find((t) => t.id === ticketId);
@@ -208,7 +262,79 @@ async function main() {
         (tid) => window.api.tickets.events({ ticketId: tid }),
         ticketId,
       );
-      return res.ok ? res.events : [];
+      if (!res.ok) throw new Error(`tickets.events failed: ${JSON.stringify(res)}`);
+      return res.events;
+    }
+
+    async function retentionState(ticketId) {
+      const res = await page.evaluate((tid) => window.api.retention.state(tid), ticketId);
+      if (!res.ok || !res.state) throw new Error(`retention.state failed: ${JSON.stringify(res)}`);
+      return res.state;
+    }
+
+    async function pollAndRead(ticketId) {
+      const res = await page.evaluate(() => window.api.retention.poll());
+      if (!res.ok) throw new Error(`retention.poll failed: ${JSON.stringify(res)}`);
+      return retentionState(ticketId);
+    }
+
+    async function archivedTickets() {
+      const res = await page.evaluate((pid) => window.api.tickets.listArchived(pid), projectId);
+      if (!res.ok) throw new Error(`tickets.listArchived failed: ${JSON.stringify(res)}`);
+      return res.tickets;
+    }
+
+    async function seedWorktreeTicket(title) {
+      const { ticketId, displayId } = await createTicketViaBridge(page, PROJECT.name, {
+        title,
+        status: "todo",
+      });
+      const created = await bootSession(ticketId, title);
+      if (!created.ok) throw new Error(`terminal.create failed: ${created.error}`);
+      liveSessionIds.push(created.sessionId);
+      const row = await waitUntil(
+        "retention ticket stamped with worktreePath + branch",
+        async () => {
+          const r = await ticketRow(ticketId);
+          return r?.worktreePath && r.branch ? r : null;
+        },
+        { timeout: 30000 },
+      );
+      return {
+        ticketId,
+        displayId,
+        sessionId: created.sessionId,
+        worktreeDir: row.worktreePath,
+        branch: row.branch,
+      };
+    }
+
+    // Killing is not an exit barrier. Wait for the durable terminal roster to
+    // report no live attachment before either destructive retention call.
+    async function killAndWait(ticketId, sessionId) {
+      const killed = await page.evaluate((id) => window.api.terminal.kill(id), sessionId);
+      if (!killed.ok && killed.error !== "Unknown terminal session") {
+        throw new Error(`terminal.kill failed: ${JSON.stringify(killed)}`);
+      }
+      await waitUntil(
+        "retention ticket PTY ended",
+        async () => {
+          const res = await page.evaluate(
+            (tid) => window.api.sessions.listForTicket({ ticketId: tid }),
+            ticketId,
+          );
+          if (!res.ok) throw new Error(`sessions.listForTicket failed: ${JSON.stringify(res)}`);
+          return (
+            res.sessions.some((row) => row.kind === "terminal") &&
+            res.sessions.every((row) =>
+              row.kind === "terminal" ? row.record.endedAt !== null : !row.record.live,
+            )
+          );
+        },
+        { timeout: 15000 },
+      );
+      const index = liveSessionIds.indexOf(sessionId);
+      if (index !== -1) liveSessionIds.splice(index, 1);
     }
 
     // ---- UI helpers (mirror ticket-detail-smoke) ---------------------------
@@ -493,12 +619,246 @@ async function main() {
 
     console.log(`\n  path: stacked commit→push→PR via ${flowVia}`);
 
-    // Kill any live PTYs so teardown's close gate has nothing busy to negotiate.
-    for (const sessionId of liveSessionIds) {
-      await page.evaluate((id) => window.api.terminal.kill(id), sessionId).catch(() => {});
-    }
+    // === R1. Branch-only MERGED discovery, independent of publication ======
+    let mergeTicket = null;
+    await attempt(
+      "R1",
+      'Branch-only MERGED discovery: URL/state/readiness/reason/event and the real "Archive & clean" rail primary',
+      async () => {
+        const t = await seedWorktreeTicket("Retention merge ticket");
+        mergeTicket = t;
+        const before = await ticketRow(t.ticketId);
+        const branchOnlyBefore =
+          before?.branch === t.branch && before?.worktreePath === t.worktreeDir && !before?.prUrl;
+        if (!branchOnlyBefore) {
+          return {
+            ok: false,
+            detail: `not branch-only before discovery: ${JSON.stringify(before)}`,
+          };
+        }
+
+        // Do NOT clear the published ticket's URL: this is a new ticket, and
+        // only its branch becomes discoverable. The first ticket stays OPEN.
+        await fs.appendFile(mergedFile, `${t.branch}\n`);
+        const state = await waitUntil(
+          "retention state archive-ready after branch discovery",
+          async () => {
+            const s = await pollAndRead(t.ticketId);
+            return s.archiveReady ? s : null;
+          },
+          { timeout: 20000 },
+        );
+        const row = await ticketRow(t.ticketId);
+        const urlStamped = state.prUrl === MERGED_PR_URL && row?.prUrl === MERGED_PR_URL;
+        const merged = state.prState === "merged";
+        const ready = state.archiveReady === true;
+        const reasonMerged = state.reason === "pr-merged";
+        const events = await eventsFor(t.ticketId);
+        const mergedEvent = events.some(
+          (e) => e.payload.kind === "pr_merged" && e.payload.url === MERGED_PR_URL,
+        );
+        const publishedStillOwnPr =
+          (await ticketRow(committedTicket?.ticketId))?.prUrl === CANNED_PR_URL;
+
+        // Publication left another Ticket in front. Return to the actual Board
+        // before looking for the new visible card, then use the real shown rail.
+        // This observation MUST NOT use the publication bridge fallback.
+        await goToBoard(page);
+        await openDetail(t.displayId);
+        await unfoldWorktreeBody();
+        const primary = page
+          .locator('[data-inspector-panel][data-shown="true"]')
+          .getByRole("button", { name: "Archive & clean", exact: true });
+        const archiveButtonShown = await waitUntil(
+          'real rail "Archive & clean" visible and enabled',
+          async () => (await primary.isVisible()) && (await primary.isEnabled()),
+          { timeout: 10000 },
+        )
+          .then(() => true)
+          .catch(() => false);
+        return {
+          ok:
+            branchOnlyBefore &&
+            urlStamped &&
+            merged &&
+            ready &&
+            reasonMerged &&
+            mergedEvent &&
+            publishedStillOwnPr &&
+            archiveButtonShown,
+          detail:
+            `branchOnlyBefore=${branchOnlyBefore} urlStamped=${urlStamped} ` +
+            `prState=${JSON.stringify(state.prState)} ready=${ready} reason=${JSON.stringify(state.reason)} ` +
+            `prMergedEvent=${mergedEvent} publishedStillOwnPr=${publishedStillOwnPr} ` +
+            `archiveButtonShown=${archiveButtonShown}`,
+        };
+      },
+    );
+
+    // === R2. Keep is a hard, immediate exemption ===========================
+    await attempt(
+      "R2",
+      "Keep suppresses archive readiness; unkeep immediately restores merged readiness",
+      async () => {
+        if (!mergeTicket) return { ok: false, detail: "no merge ticket from R1" };
+        const { ticketId } = mergeTicket;
+        const setOn = await page.evaluate(
+          (tid) => window.api.retention.setKeep(tid, true),
+          ticketId,
+        );
+        const kept = await retentionState(ticketId);
+        const keepOn = setOn.ok && kept.keep === true && kept.archiveReady === false;
+        const setOff = await page.evaluate(
+          (tid) => window.api.retention.setKeep(tid, false),
+          ticketId,
+        );
+        const unkept = await retentionState(ticketId);
+        const keepOff = setOff.ok && unkept.keep === false && unkept.archiveReady === true;
+        return {
+          ok: keepOn && keepOff,
+          detail:
+            `setOn=${JSON.stringify(setOn)} kept(keep=${kept.keep},ready=${kept.archiveReady}) ` +
+            `setOff=${JSON.stringify(setOff)} unkept(keep=${unkept.keep},ready=${unkept.archiveReady})`,
+        };
+      },
+    );
+
+    // === R3. Actual clean archive retains the branch and history ===========
+    await attempt(
+      "R3",
+      "Clean archive after PTY exit: directory/checkout removed, branch retained, archived roster/board/event agree",
+      async () => {
+        if (!mergeTicket) return { ok: false, detail: "no merge ticket from R1" };
+        const { ticketId, worktreeDir, branch, sessionId } = mergeTicket;
+        await killAndWait(ticketId, sessionId);
+        const cleanBefore =
+          (await git(worktreeDir, ["status", "--porcelain"])).stdout.trim() === "";
+        const branchBefore = await gitOut(projectPath, ["rev-parse", `refs/heads/${branch}`]);
+        const registeredBefore = (
+          await git(projectPath, ["worktree", "list", "--porcelain"])
+        ).stdout.includes(`worktree ${worktreeDir}\n`);
+        const result = await page.evaluate(
+          (tid) => window.api.retention.archiveAndClean(tid),
+          ticketId,
+        );
+        const worktreeGone = !(await fs.stat(worktreeDir).then(
+          () => true,
+          (error) => {
+            if (error.code === "ENOENT") return false;
+            throw error;
+          },
+        ));
+        const branchAfter = await gitOut(projectPath, ["rev-parse", `refs/heads/${branch}`]);
+        const branchSurvives = branchBefore.length > 0 && branchAfter === branchBefore;
+        const checkoutGone = !(
+          await git(projectPath, ["worktree", "list", "--porcelain"])
+        ).stdout.includes(`worktree ${worktreeDir}\n`);
+        const archived = (await archivedTickets()).some((t) => t.id === ticketId);
+        const goneFromBoard = (await ticketRow(ticketId)) === undefined;
+        const archivedEvent = (await eventsFor(ticketId)).some(
+          (e) => e.payload.kind === "archived",
+        );
+        return {
+          ok:
+            cleanBefore &&
+            registeredBefore &&
+            result.ok === true &&
+            worktreeGone &&
+            branchSurvives &&
+            checkoutGone &&
+            archived &&
+            goneFromBoard &&
+            archivedEvent,
+          detail:
+            `cleanBefore=${cleanBefore} registeredBefore=${registeredBefore} result=${JSON.stringify(result)} ` +
+            `worktreeGone=${worktreeGone} branchSurvives=${branchSurvives} checkoutGone=${checkoutGone} ` +
+            `archived=${archived} goneFromBoard=${goneFromBoard} archivedEvent=${archivedEvent}`,
+        };
+      },
+    );
+
+    // === R4. A THIRD, dirty-untracked checkout must remain untouched =======
+    await attempt(
+      "R4",
+      "Dirty-untracked refusal: error names dirty work; disk, live ticket and archive/git rosters stay unchanged",
+      async () => {
+        const t = await seedWorktreeTicket("Retention dirty ticket");
+        const dirtyFile = join(t.worktreeDir, "unsaved-work.txt");
+        const contents = "in progress\n";
+        await fs.writeFile(dirtyFile, contents);
+        await killAndWait(t.ticketId, t.sessionId);
+        const statusBefore = (await git(t.worktreeDir, ["status", "--porcelain"])).stdout;
+        const untrackedBefore = statusBefore.split("\n").includes("?? unsaved-work.txt");
+        const rowBefore = await ticketRow(t.ticketId);
+        const archivedBefore = (await archivedTickets()).map((row) => row.id).toSorted();
+        const rosterBefore = (await git(projectPath, ["worktree", "list", "--porcelain"])).stdout;
+        const headBefore = await gitOut(t.worktreeDir, ["rev-parse", "HEAD"]);
+        const preconditions =
+          untrackedBefore &&
+          rowBefore?.worktreePath === t.worktreeDir &&
+          rowBefore?.branch === t.branch &&
+          !rowBefore?.prUrl &&
+          !archivedBefore.includes(t.ticketId) &&
+          rosterBefore.includes(`worktree ${t.worktreeDir}\n`);
+        if (!preconditions) {
+          return {
+            ok: false,
+            detail: `dirty fixture invalid: status=${JSON.stringify(statusBefore)} row=${JSON.stringify(rowBefore)}`,
+          };
+        }
+        const result = await page.evaluate(
+          (tid) => window.api.retention.archiveAndClean(tid),
+          t.ticketId,
+        );
+        const refused = result.ok === false;
+        const errorNamesDirty =
+          refused &&
+          typeof result.error === "string" &&
+          result.error.includes("Worktree has uncommitted work");
+        const fileUnchanged = (await fs.readFile(dirtyFile, "utf8")) === contents;
+        const statusUnchanged =
+          (await git(t.worktreeDir, ["status", "--porcelain"])).stdout === statusBefore;
+        const headUnchanged =
+          headBefore.length > 0 &&
+          (await gitOut(t.worktreeDir, ["rev-parse", "HEAD"])) === headBefore;
+        const rowAfter = await ticketRow(t.ticketId);
+        const stillOnBoardUnchanged = JSON.stringify(rowAfter) === JSON.stringify(rowBefore);
+        const archivedAfter = (await archivedTickets()).map((row) => row.id).toSorted();
+        const archiveRosterUnchanged =
+          JSON.stringify(archivedAfter) === JSON.stringify(archivedBefore);
+        const gitRosterUnchanged =
+          (await git(projectPath, ["worktree", "list", "--porcelain"])).stdout === rosterBefore;
+        const noArchivedEvent = !(await eventsFor(t.ticketId)).some(
+          (e) => e.payload.kind === "archived",
+        );
+        return {
+          ok:
+            refused &&
+            errorNamesDirty &&
+            fileUnchanged &&
+            statusUnchanged &&
+            headUnchanged &&
+            stillOnBoardUnchanged &&
+            archiveRosterUnchanged &&
+            gitRosterUnchanged &&
+            noArchivedEvent,
+          detail:
+            `untrackedBefore=${untrackedBefore} refused=${refused} errorNamesDirty=${errorNamesDirty} ` +
+            `error=${JSON.stringify(refused ? result.error : null)} fileUnchanged=${fileUnchanged} ` +
+            `statusUnchanged=${statusUnchanged} headUnchanged=${headUnchanged} liveTicketUnchanged=${stillOnBoardUnchanged} ` +
+            `archiveRosterUnchanged=${archiveRosterUnchanged} gitRosterUnchanged=${gitRosterUnchanged} noArchivedEvent=${noArchivedEvent}`,
+        };
+      },
+    );
   } finally {
-    await app.close();
+    // Also clean up PTYs when setup or a later check throws before the summary.
+    try {
+      for (const sessionId of liveSessionIds) {
+        await page?.evaluate((id) => window.api.terminal.kill(id), sessionId).catch(() => {});
+      }
+    } finally {
+      await app.close();
+    }
   }
   return summarize();
 }

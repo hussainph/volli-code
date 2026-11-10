@@ -78,7 +78,7 @@ Workflow:
 
 ## CI is the gate
 
-CI owns the full suite, coverage thresholds and smoke lanes; `CI gate` sums every required check. Which lane runs what: `docs/development/ci.md`. This machine runs many Sessions at once, so local runs stay small:
+CI owns the full suite, coverage thresholds and smoke lanes; `CI gate` sums every required check. Which lane runs what: `docs/development/ci.md`. Core e2e is `board`, `composer-basics`, `terminal`, `worktree`, `agent-cli-roundtrip`, `database-recovery`, and `canvas-theming` (`-smoke.mjs` filenames); the CLI journey includes raw socket checks and the composer journey includes Session RPC checks. This machine runs many Sessions at once, so local runs stay small:
 
 - **Before pushing:** `vp check`, typecheck each touched package (`vp run --filter <package> typecheck`; `vp exec tsc --noEmit -p tsconfig.json` for root), and only the test files you touched or that directly cover your change (`vp test run path/to/file.test.ts` from that package). For a file on a protected coverage list: `vp test run <its test> --coverage --coverage.include=<the file>`.
 - **Renderer pre-push gates:** also run `vp run --filter @volli/desktop check:design-tokens` and `vp run --filter @volli/desktop check:glass-design`; `vp check` does not run these source guards. When changing CSS tokens, run `vp run --filter @volli/desktop check:theme-css` too.

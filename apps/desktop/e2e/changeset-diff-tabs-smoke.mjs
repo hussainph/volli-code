@@ -11,10 +11,11 @@
  *   4. Editing the modified side marks the Diff tab dirty.
  *   5. Opening the same path via Files shares the model (same edit + dirty).
  *   6. ⌘S clears dirty on both representations and writes disk.
- *   7. Filesystem Change Set refresh never auto-opens a tab.
+ *   7. Filesystem Change Set refresh never auto-opens a tab or steals focus.
  *   8. (cheap) Side-by-side presentation toggle flips layout without a new tab.
+ *   files-root. Files lists worktree roots and the exact referenced context path.
  *
- * Also captures shots under /tmp/vc109-shots/.
+ * Captures Diff, Changes, root Files and mode-strip shots in an attempt-local directory.
  *
  *   env -u ELECTRON_RUN_AS_NODE node apps/desktop/e2e/changeset-diff-tabs-smoke.mjs
  *
@@ -30,6 +31,7 @@ import {
   assertProfileIsolated,
   clickMonaco,
   createRunner,
+  evidenceDir,
   launch,
   makeGitRepo,
   makeScratch,
@@ -40,7 +42,7 @@ import {
 } from "./lib/smoke-kit.mjs";
 
 const execFileAsync = promisify(execFile);
-const SHOT_DIR = "/tmp/vc109-shots";
+const SHOT_DIR = await evidenceDir("changeset-diff-tabs");
 const EDIT_MARKER = "// VC109-DIFF-EDIT";
 const TARGET = "src/edit-me.ts";
 
@@ -48,7 +50,6 @@ const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("volli-chang
 const { attempt, summarize } = createRunner();
 
 const PROJECT = { id: "changeset-diff-proj", name: "Changeset Diff", prefix: "CD" };
-const DEFAULT_HARNESS_ID = "claude-code";
 
 async function git(cwd, args) {
   return execFileAsync("git", args, { cwd });
@@ -273,22 +274,27 @@ async function main() {
     );
 
     const createResult = await page.evaluate(
-      ({ workspaceId, cwd, tid, harnessId }) =>
+      ({ workspaceId, cwd, tid }) =>
         window.api.terminal.create({
           workspaceId,
           cwd,
           cols: 80,
           rows: 24,
-          ticket: { ticketId: tid, kickoff: { harnessId, prompt: "smoke" } },
+          ticket: { ticketId: tid },
         }),
       {
         workspaceId: projectId,
         cwd: projectPath,
         tid: ticketId,
-        harnessId: DEFAULT_HARNESS_ID,
       },
     );
     if (!createResult.ok) throw new Error(`terminal.create failed: ${createResult.error}`);
+    if (
+      createResult.session.launchKind !== "shell" ||
+      createResult.session.activeHarnessId !== null
+    ) {
+      throw new Error("Change Set worktree materializer must be a bare shell, not an agent");
+    }
 
     const row = await waitUntil(
       "ticket row stamped with worktreePath",
@@ -299,6 +305,11 @@ async function main() {
       { timeout: 30000 },
     );
     const worktreeDir = row.worktreePath;
+    if (createResult.session.cwd !== worktreeDir || worktreeDir === projectPath) {
+      throw new Error(
+        `shell worktree cwd mismatch: session=${createResult.session.cwd} ticket=${worktreeDir} main=${projectPath}`,
+      );
+    }
 
     // ---- Seed Change Set mix ------------------------------------------------
     await fs.writeFile(join(worktreeDir, "src", "committed.ts"), "export const c = 1;\n");
@@ -462,6 +473,43 @@ async function main() {
       };
     });
 
+    // ---- M7. Observe root entries BEFORE expanding the referenced folder ---
+    await attempt("files-root", "Files lists worktree roots before expanding src", async () => {
+      await aside.getByTestId("ticket-rail-tab-files").click();
+      const tree = aside.getByRole("tree", { name: "Files" });
+      await waitUntil("root Files tree loaded", async () => {
+        if ((await aside.getByTestId("file-tree-loading").count()) !== 0) return false;
+        return (await tree.count()) === 1;
+      });
+      await waitUntil("worktree root listing", async () => {
+        const text = await tree.innerText();
+        return text.includes("README") || text.includes("src");
+      });
+      const rootText = await tree.innerText();
+      const hasWorktree = /src/i.test(rootText) || /readme/i.test(rootText);
+      return { ok: hasWorktree, detail: `root=${JSON.stringify(rootText)}` };
+    });
+    // Preserve the root-listing evidence, not a screenshot of an expanded src.
+    await attempt("shot-files", "screenshot nav-files.png (root)", async () => {
+      await aside.getByRole("tree", { name: "Files" }).waitFor({ state: "visible" });
+      const path = join(SHOT_DIR, "nav-files.png");
+      await page.screenshot({ path, fullPage: false });
+      const stat = await fs.stat(path);
+      return { ok: stat.size > 1000, detail: path };
+    });
+    await attempt(
+      "files-referenced",
+      "Files exposes exact referenced src/keep.ts treeitem",
+      async () => {
+        const tree = aside.getByRole("tree", { name: "Files" });
+        const src = tree.locator('[data-testid="ticket-files-row"][data-path="src"]');
+        if ((await src.getAttribute("aria-expanded")) !== "true") await src.click();
+        const ref = tree.getByRole("treeitem", { name: "src/keep.ts, referenced", exact: true });
+        await waitUntil("referenced src/keep.ts row", async () => (await ref.count()) === 1);
+        return { ok: true, detail: "src/keep.ts, referenced" };
+      },
+    );
+
     // ---- 5. File tab shares model + dirty -----------------------------------
     await attempt(5, "Files open of same path shares model content and dirty", async () => {
       await aside.getByTestId("ticket-rail-tab-files").click();
@@ -594,57 +642,71 @@ async function main() {
     });
 
     // ---- 7. Refresh never auto-opens tabs -----------------------------------
-    await attempt(7, "filesystem Change Set refresh does not auto-open tabs", async () => {
-      await aside.getByTestId("ticket-rail-tab-changes").click();
-      await waitUntil(
-        "changes list for refresh check",
-        async () => (await aside.getByTestId("ticket-changes-list").count()) === 1,
-      );
-      const rowBtn = aside.locator(`[data-testid="ticket-changes-row"][data-path="${TARGET}"]`);
-      await waitUntil("edit-me row for refresh", async () => (await rowBtn.count()) === 1);
-      await rowBtn.focus();
+    await attempt(
+      7,
+      "filesystem Change Set refresh does not auto-open tabs or steal focus",
+      async () => {
+        await aside.getByTestId("ticket-rail-tab-changes").click();
+        await waitUntil(
+          "changes list for refresh check",
+          async () => (await aside.getByTestId("ticket-changes-list").count()) === 1,
+        );
+        const rowBtn = aside.locator(`[data-testid="ticket-changes-row"][data-path="${TARGET}"]`);
+        await waitUntil("edit-me row for refresh", async () => (await rowBtn.count()) === 1);
+        await rowBtn.focus();
 
-      const tabsBefore = await readTicketTabs(page, ticketId);
-      const tabLabelsBefore = await page.getByRole("tab").allTextContents();
-      const activeBefore = await page.evaluate(() => {
-        const active = document.querySelector('[role="tab"][aria-selected="true"]');
-        return active?.getAttribute("aria-label") ?? active?.textContent ?? null;
-      });
+        const focusedBefore = await page.evaluate(
+          () =>
+            document.activeElement?.getAttribute("data-path") ?? document.activeElement?.tagName,
+        );
+        const tabsBefore = await readTicketTabs(page, ticketId);
+        const tabLabelsBefore = await page.getByRole("tab").allTextContents();
+        const activeBefore = await page.evaluate(() => {
+          const active = document.querySelector('[role="tab"][aria-selected="true"]');
+          return active?.getAttribute("aria-label") ?? active?.textContent ?? null;
+        });
 
-      await fs.writeFile(join(worktreeDir, "src", "fresh-untracked.ts"), "export const f = 1;\n");
+        await fs.writeFile(join(worktreeDir, "src", "fresh-untracked.ts"), "export const f = 1;\n");
 
-      await waitUntil(
-        "fresh-untracked appears in Changes",
-        async () => {
-          const text = await aside.getByTestId("ticket-changes-list").innerText();
-          return text.includes("fresh-untracked.ts");
-        },
-        { timeout: 10000 },
-      );
+        await waitUntil(
+          "fresh-untracked appears in Changes",
+          async () => {
+            const text = await aside.getByTestId("ticket-changes-list").innerText();
+            return text.includes("fresh-untracked.ts");
+          },
+          { timeout: 10000 },
+        );
 
-      const tabsAfter = await readTicketTabs(page, ticketId);
-      const tabLabelsAfter = await page.getByRole("tab").allTextContents();
-      const activeAfter = await page.evaluate(() => {
-        const active = document.querySelector('[role="tab"][aria-selected="true"]');
-        return active?.getAttribute("aria-label") ?? active?.textContent ?? null;
-      });
+        const focusedAfter = await page.evaluate(
+          () =>
+            document.activeElement?.getAttribute("data-path") ?? document.activeElement?.tagName,
+        );
+        const focusOk =
+          focusedAfter === TARGET || focusedAfter === focusedBefore || focusedAfter === "BUTTON";
+        const tabsAfter = await readTicketTabs(page, ticketId);
+        const tabLabelsAfter = await page.getByRole("tab").allTextContents();
+        const activeAfter = await page.evaluate(() => {
+          const active = document.querySelector('[role="tab"][aria-selected="true"]');
+          return active?.getAttribute("aria-label") ?? active?.textContent ?? null;
+        });
 
-      const sameDiffs =
-        JSON.stringify(tabsBefore?.diffs ?? []) === JSON.stringify(tabsAfter?.diffs ?? []);
-      const sameFiles =
-        JSON.stringify(tabsBefore?.files ?? []) === JSON.stringify(tabsAfter?.files ?? []);
-      const sameActive = tabsBefore?.active === tabsAfter?.active && activeBefore === activeAfter;
-      const noFreshTab = !tabLabelsAfter.some(
-        (t) =>
-          t.includes("fresh-untracked") &&
-          !tabLabelsBefore.some((b) => b.includes("fresh-untracked")),
-      );
+        const sameDiffs =
+          JSON.stringify(tabsBefore?.diffs ?? []) === JSON.stringify(tabsAfter?.diffs ?? []);
+        const sameFiles =
+          JSON.stringify(tabsBefore?.files ?? []) === JSON.stringify(tabsAfter?.files ?? []);
+        const sameActive = tabsBefore?.active === tabsAfter?.active && activeBefore === activeAfter;
+        const noFreshTab = !tabLabelsAfter.some(
+          (t) =>
+            t.includes("fresh-untracked") &&
+            !tabLabelsBefore.some((b) => b.includes("fresh-untracked")),
+        );
 
-      return {
-        ok: sameDiffs && sameFiles && sameActive && noFreshTab,
-        detail: `diffs ${JSON.stringify(tabsBefore?.diffs)}→${JSON.stringify(tabsAfter?.diffs)}; files ${JSON.stringify(tabsBefore?.files)}→${JSON.stringify(tabsAfter?.files)}; active ${tabsBefore?.active}→${tabsAfter?.active}; labels ${tabLabelsBefore.length}→${tabLabelsAfter.length}`,
-      };
-    });
+        return {
+          ok: sameDiffs && sameFiles && sameActive && noFreshTab && focusOk,
+          detail: `diffs ${JSON.stringify(tabsBefore?.diffs)}→${JSON.stringify(tabsAfter?.diffs)}; files ${JSON.stringify(tabsBefore?.files)}→${JSON.stringify(tabsAfter?.files)}; active ${tabsBefore?.active}→${tabsAfter?.active}; labels ${tabLabelsBefore.length}→${tabLabelsAfter.length}; focus ${focusedBefore}→${focusedAfter}`,
+        };
+      },
+    );
 
     // ---- 8. Side-by-side toggle (optional / cheap) --------------------------
     await attempt(8, "Side by side toggle updates DiffEditor layout in place", async () => {
@@ -719,6 +781,28 @@ async function main() {
         ok: !!sided && !!inlined && sameTab && before.presentation === "inline",
         detail: `before=${before.presentation} fit=${fit.fit}/${fit.width}px sided=${sided?.presentation}/${sided?.sideBySideClass} inlined=${inlined?.presentation} sameTab=${sameTab} active=${afterTabs?.active}`,
       };
+    });
+
+    // ---- M7. Navigator screenshots -----------------------------------------
+    await attempt("shot-changes", "screenshot nav-changes.png", async () => {
+      await aside.getByTestId("ticket-rail-tab-changes").click();
+      await waitUntil(
+        "changes list for shot",
+        async () => (await aside.getByTestId("ticket-changes-list").count()) === 1,
+      );
+      const path = join(SHOT_DIR, "nav-changes.png");
+      await page.screenshot({ path, fullPage: false });
+      const stat = await fs.stat(path);
+      return { ok: stat.size > 1000, detail: path };
+    });
+    await attempt("shot-mode", "screenshot nav-mode-strip-active.png", async () => {
+      await aside.getByTestId("ticket-rail-tab-changes").click();
+      const box = await aside.boundingBox();
+      if (box === null) return { ok: false, detail: "visible aside has no bounding box" };
+      const path = join(SHOT_DIR, "nav-mode-strip-active.png");
+      await page.screenshot({ path, clip: box });
+      const stat = await fs.stat(path);
+      return { ok: stat.size > 500, detail: path };
     });
 
     // ---- Screenshots --------------------------------------------------------

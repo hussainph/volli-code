@@ -20,11 +20,12 @@ import type { HostClientEventSink, HostEventMap, HostEventTopic } from "../ports
 import { syncProjectRoots } from "../project-roots";
 import { worktreeDeps } from "../worktree-runtime";
 import { PtyManager, type PtyManagerPorts } from "./manager";
+import { FLOW_CONTROL_HIGH_WATERMARK } from "./output";
 import { parkConfigFromEnv } from "./park";
 import type { ParkLedger } from "./park-controller";
 
-/** A client connection: what it was sent, and a disconnect the test pulls. */
-function makeClient(id: string) {
+/** A client connection: what it was sent, optional consumption, and a disconnect the test pulls. */
+function makeClient(id: string, consume?: (data: TerminalDataEvent) => void) {
   const events: Array<{ topic: HostEventTopic; payload: unknown }> = [];
   const closeListeners = new Set<() => void>();
   let closed = false;
@@ -39,6 +40,11 @@ function makeClient(id: string) {
     },
     publish<T extends HostEventTopic>(topic: T, payload: HostEventMap[T]) {
       events.push({ topic, payload });
+      if (topic === "terminal-data" && consume !== undefined) {
+        // The pipeline accounts the send AFTER publish returns. A real client's
+        // ACK arrives later, not reentrantly inside that accounting boundary.
+        queueMicrotask(() => consume(payload as TerminalDataEvent));
+      }
     },
   };
   return {
@@ -351,18 +357,94 @@ describe("terminal supervisor on node-pty under plain Node (VC-560)", () => {
     });
   });
 
-  it("delivers a large final output and UTF-8 tail before exit", async () => {
-    const owner = makeClient("owner");
-    const sessionId = await start(owner);
-    const publish = owner.sink.publish.bind(owner.sink);
-    owner.sink.publish = (topic, payload) => {
-      publish(topic, payload);
-      if (topic === "terminal-data") {
-        const data = payload as TerminalDataEvent;
-        // Model a consuming client, after the pipeline has accounted its send.
-        queueMicrotask(() => manager.ack(owner.sink, sessionId, data.data.length));
+  it("completes two numbered finite bursts across the flow watermark, then accepts another command (VC-1191)", async () => {
+    let holdAcks = false;
+    let heldChars = 0;
+    let ackedChars = 0;
+    const owner = makeClient("burst-owner", ({ sessionId, data }) => {
+      if (holdAcks) heldChars += data.length;
+      else {
+        manager.ack(owner.sink, sessionId, data.length);
+        ackedChars += data.length;
       }
-    };
+    });
+    const sessionId = await start(owner);
+    const pid = ledger.pids[0];
+    if (pid === undefined) throw new Error("no burst shell was recorded");
+    expect(manager.write(owner.sink, sessionId, "echo burst-ready-$((1+1))\r")).toEqual({
+      ok: true,
+    });
+    await until(() => owner.output().includes("burst-ready-2"), "the burst shell to be ready");
+
+    // Each round is larger than the flow limit AND the maximum output batch.
+    // Holding real stream ACKs makes unacked credit (not just total output)
+    // cross the production watermark again on the SAME still-live terminal.
+    const linesPerRound = 40_000;
+    for (const round of [1, 2]) {
+      const outputStart = owner.output().length;
+      const ackedBefore = ackedChars;
+      const sentinel = `burst-${round}-end-${round + linesPerRound}`;
+      const expectedBody = Array.from(
+        { length: linesPerRound },
+        (_, index) => `burst-${round}-${String(index + 1).padStart(6, "0")}\r\n`,
+      ).join("");
+      expect(expectedBody.length).toBeGreaterThan(FLOW_CONTROL_HIGH_WATERMARK);
+      holdAcks = true;
+      expect(heldChars).toBe(0);
+      expect(
+        manager.write(
+          owner.sink,
+          sessionId,
+          `i=1; while [ "$i" -le ${linesPerRound} ]; do printf 'burst-${round}-%06d\\n' "$i"; i=$((i+1)); done; printf 'burst-${round}-end-%s\\n' $(( ${round}+${linesPerRound} ))\r`,
+        ),
+      ).toEqual({ ok: true });
+      await until(
+        () => heldChars > FLOW_CONTROL_HIGH_WATERMARK,
+        `round ${round} to deliver over-watermark unacknowledged output`,
+      );
+      // These counts are collected after send accounting, through the actual
+      // manager -> pipeline -> node-pty flow, without a mocked PTY or pipeline.
+      // Completion must still be blocked until the client returns its credit.
+      expect(ackedChars).toBe(ackedBefore);
+      expect(owner.output().slice(outputStart)).not.toContain(sentinel);
+      expect(heldChars).toBeLessThan(expectedBody.length);
+      holdAcks = false;
+      manager.ack(owner.sink, sessionId, heldChars);
+      ackedChars += heldChars;
+      heldChars = 0;
+
+      await until(
+        () => owner.output().slice(outputStart).includes(sentinel),
+        `round ${round}'s computed non-echo end sentinel after ACK/resume`,
+      );
+      const output = owner.output().slice(outputStart);
+      // Every uniquely numbered line must arrive once, in order, without gaps;
+      // a sentinel alone would not detect lost or duplicated middle batches.
+      expect(output).toContain(`${expectedBody}${sentinel}\r\n`);
+      expect(output.match(new RegExp(`burst-${round}-\\d{6}\\r\\n`, "g"))).toHaveLength(
+        linesPerRound,
+      );
+      expect(output.split(sentinel)).toHaveLength(2);
+      expect(ackedChars - ackedBefore).toBe(output.length);
+      expect(isAlive(pid)).toBe(true);
+    }
+
+    expect(manager.write(owner.sink, sessionId, "echo after-bursts-$((20+22))\r")).toEqual({
+      ok: true,
+    });
+    await until(() => owner.output().includes("after-bursts-42"), "the post-burst command");
+    expect(manager.kill(owner.sink, sessionId)).toEqual({ ok: true });
+    await until(() => ledger.exited.has(0), "the burst shell's ledger exit after kill");
+    expect(manager.peek(sessionId, 1)).toBeUndefined();
+    expect(isAlive(pid)).toBe(false);
+    expect(owner.hasCloseHook()).toBe(false);
+  }, 30_000);
+
+  it("delivers a large final output and UTF-8 tail before exit", async () => {
+    const owner = makeClient("owner", ({ sessionId, data }) => {
+      manager.ack(owner.sink, sessionId, data.length);
+    });
+    const sessionId = await start(owner);
     manager.write(
       owner.sink,
       sessionId,

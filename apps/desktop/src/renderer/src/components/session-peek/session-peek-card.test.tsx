@@ -307,7 +307,18 @@ describe("the summary", () => {
     for (const block of body?.children ?? []) {
       expect(block.classList.contains("shrink-0")).toBe(true);
     }
-    expect(container.querySelector<HTMLElement>("[data-peek-card]")?.style.maxHeight).toBe("240px");
+    const card = container.querySelector<HTMLElement>("[data-peek-card]");
+    expect(card?.style.maxHeight).toBe("240px");
+    const header = card?.querySelector("header");
+    const footer = card?.querySelector("footer");
+    expect(header).not.toBeNull();
+    expect(footer).not.toBeNull();
+    expect(header?.parentElement).toBe(card);
+    expect(footer?.parentElement).toBe(card);
+    expect(header?.classList.contains("shrink-0")).toBe(true);
+    expect(footer?.classList.contains("shrink-0")).toBe(true);
+    expect(body?.contains(header ?? null)).toBe(false);
+    expect(body?.contains(footer ?? null)).toBe(false);
   });
 
   it.each([undefined, null])(
