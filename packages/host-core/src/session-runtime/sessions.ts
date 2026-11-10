@@ -23,7 +23,6 @@ import type { SessionOrigin } from "@volli/shared";
 
 import type { SessionRuntime, SessionRuntimeCommandResult } from "@volli/session-engine";
 import {
-  ATTACH_TIMEOUT_CODE,
   AUTO_SELECT_TIERS,
   autoSelectCandidates,
   DECISION_PURPOSE_POLICY,
@@ -1120,7 +1119,7 @@ export function createSessions(options: SessionsOptions): Sessions {
         "fresh",
         origin,
       );
-      // An attach that merely outlasted its ceiling ran nothing to
+      // An attach that merely outlasted the legacy admission bound ran nothing to
       // completion: under a busy host its executor was still starting, and the
       // runtime released whatever it finished late. That is the transient
       // failure the start retries, once, before handing the Session to a
@@ -1128,6 +1127,10 @@ export function createSessions(options: SessionsOptions): Sessions {
       // own, so a replayed start replays both attempts' receipts rather than
       // attaching a third time, and the caller's kickoff still waits on the
       // one answer it gets back here.
+      // A direct attach now has three minutes of its own (VC-1072). Exhausting
+      // that ceiling needs explicit recovery, not another three-minute attempt.
+      // In particular, Stop can reach the first attempt while its timeout is
+      // settling; automatically attaching again would open over that stop.
       if (attachTimedOut(attached)) {
         attached = await attachStructuredSession(
           options.runtime,
@@ -1222,13 +1225,11 @@ async function attachStructuredSession(
  */
 const START_RETRY_SUFFIX = ":retry";
 
-/** A start whose attach outlasted its direct ceiling, or an older admission bound. */
+/** Only the old short admission timeout retries automatically; direct ceilings do not. */
 function attachTimedOut(result: SessionStartResult): boolean {
   const receipt = result.receipt;
   return (
-    receipt !== null &&
-    receipt.status === "rejected" &&
-    (receipt.code === "queue_admission_timeout" || receipt.code === ATTACH_TIMEOUT_CODE)
+    receipt !== null && receipt.status === "rejected" && receipt.code === "queue_admission_timeout"
   );
 }
 

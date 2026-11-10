@@ -1492,106 +1492,124 @@ describe("Sessions", () => {
     ]);
   });
 
-  describe.each(["queue_admission_timeout", "attach_timeout"])(
-    "a start whose attach answered %s (VC-1099, VC-1072)",
-    (code) => {
-      const timedOut = (request: SessionRuntimeCommandRequest): SessionRuntimeCommandResult => {
-        const rejected = result(request, "rejected");
-        return {
-          ...rejected,
-          receipt: {
-            ...rejected.receipt!,
-            code,
-            detail: `${code}: executor attach did not finish.`,
-          } as SessionRuntimeCommandResult["receipt"],
-        };
+  describe("a start whose attach outlasted the legacy admission bound (VC-1099)", () => {
+    const code = "queue_admission_timeout";
+    const timedOut = (request: SessionRuntimeCommandRequest): SessionRuntimeCommandResult => {
+      const rejected = result(request, "rejected");
+      return {
+        ...rejected,
+        receipt: {
+          ...rejected.receipt!,
+          code,
+          detail: `${code}: executor attach did not finish.`,
+        } as SessionRuntimeCommandResult["receipt"],
       };
+    };
 
-      it("retries the attach once, under a command derived from the start's", async () => {
-        const commands: SessionRuntimeCommandRequest[] = [];
-        const { sessions: door } = sessions({
-          commands,
-          runtime: {
-            command: async (request) => {
-              commands.push(request);
-              return request.commandId === "operation-slow:start"
-                ? timedOut(request)
-                : result(
-                    request,
-                    request.command.kind === "adapter.attach" ? "accepted" : undefined,
-                  );
-            },
+    it("retries the attach once, under a command derived from the start's", async () => {
+      const commands: SessionRuntimeCommandRequest[] = [];
+      const { sessions: door } = sessions({
+        commands,
+        runtime: {
+          command: async (request) => {
+            commands.push(request);
+            return request.commandId === "operation-slow:start"
+              ? timedOut(request)
+              : result(request, request.command.kind === "adapter.attach" ? "accepted" : undefined);
           },
-        });
-
-        const started = await door.start(startInput("operation-slow"));
-
-        expect(started).toMatchObject({ state: "ready", receipt: { status: "accepted" } });
-        expect(commands.map(({ commandId }) => commandId)).toEqual([
-          "operation-slow:create",
-          "operation-slow:model",
-          "operation-slow:start",
-          "operation-slow:retry:start",
-        ]);
-        expect(commands.at(-1)).toMatchObject({
-          command: { kind: "adapter.attach", continuity: "fresh" },
-        });
+        },
       });
 
-      it("gives up after the one retry, and a replay asks for the same two attaches", async () => {
-        const commands: SessionRuntimeCommandRequest[] = [];
-        const { sessions: door } = sessions({
-          commands,
-          runtime: {
-            command: async (request) => {
-              commands.push(request);
-              return request.command.kind === "adapter.attach"
-                ? timedOut(request)
-                : result(request);
-            },
+      const started = await door.start(startInput("operation-slow"));
+
+      expect(started).toMatchObject({ state: "ready", receipt: { status: "accepted" } });
+      expect(commands.map(({ commandId }) => commandId)).toEqual([
+        "operation-slow:create",
+        "operation-slow:model",
+        "operation-slow:start",
+        "operation-slow:retry:start",
+      ]);
+      expect(commands.at(-1)).toMatchObject({
+        command: { kind: "adapter.attach", continuity: "fresh" },
+      });
+    });
+
+    it("gives up after the one retry, and a replay asks for the same two attaches", async () => {
+      const commands: SessionRuntimeCommandRequest[] = [];
+      const { sessions: door } = sessions({
+        commands,
+        runtime: {
+          command: async (request) => {
+            commands.push(request);
+            return request.command.kind === "adapter.attach" ? timedOut(request) : result(request);
           },
-        });
-
-        const started = await door.start(startInput("operation-stalled"));
-        await door.start(startInput("operation-stalled"));
-
-        expect(started).toMatchObject({
-          state: "needs-recovery",
-          receipt: { status: "rejected", code },
-        });
-        const attaches = commands
-          .filter(({ command }) => command.kind === "adapter.attach")
-          .map(({ commandId }) => commandId);
-        expect(attaches).toEqual([
-          "operation-stalled:start",
-          "operation-stalled:retry:start",
-          "operation-stalled:start",
-          "operation-stalled:retry:start",
-        ]);
+        },
       });
 
-      it("does not retry an attach that answered with no receipt", async () => {
-        const commands: SessionRuntimeCommandRequest[] = [];
-        const { sessions: door } = sessions({
-          commands,
-          runtime: {
-            command: async (request) => {
-              commands.push(request);
-              return request.command.kind === "adapter.attach"
-                ? { ...result(request), receipt: null }
-                : result(request);
-            },
-          },
-        });
+      const started = await door.start(startInput("operation-stalled"));
+      await door.start(startInput("operation-stalled"));
 
-        expect(await door.start(startInput("operation-silent"))).toMatchObject({
-          state: "needs-recovery",
-          receipt: null,
-        });
-        expect(commands.at(-1)?.commandId).toBe("operation-silent:start");
+      expect(started).toMatchObject({
+        state: "needs-recovery",
+        receipt: { status: "rejected", code },
       });
-    },
-  );
+      const attaches = commands
+        .filter(({ command }) => command.kind === "adapter.attach")
+        .map(({ commandId }) => commandId);
+      expect(attaches).toEqual([
+        "operation-stalled:start",
+        "operation-stalled:retry:start",
+        "operation-stalled:start",
+        "operation-stalled:retry:start",
+      ]);
+    });
+
+    it("does not retry an attach that answered with no receipt", async () => {
+      const commands: SessionRuntimeCommandRequest[] = [];
+      const { sessions: door } = sessions({
+        commands,
+        runtime: {
+          command: async (request) => {
+            commands.push(request);
+            return request.command.kind === "adapter.attach"
+              ? { ...result(request), receipt: null }
+              : result(request);
+          },
+        },
+      });
+
+      expect(await door.start(startInput("operation-silent"))).toMatchObject({
+        state: "needs-recovery",
+        receipt: null,
+      });
+      expect(commands.at(-1)?.commandId).toBe("operation-silent:start");
+    });
+  });
+
+  it("requires explicit recovery after the generous direct attach ceiling", async () => {
+    const commands: SessionRuntimeCommandRequest[] = [];
+    const { sessions: door } = sessions({
+      commands,
+      runtime: {
+        command: async (request) => {
+          commands.push(request);
+          const rejected = result(request, "rejected");
+          return request.command.kind === "adapter.attach"
+            ? { ...rejected, receipt: { ...rejected.receipt!, code: "attach_timeout" } }
+            : result(request);
+        },
+      },
+    });
+    expect(await door.start(startInput("operation-direct-timeout"))).toMatchObject({
+      state: "needs-recovery",
+      receipt: { status: "rejected", code: "attach_timeout" },
+    });
+    expect(commands.map(({ commandId }) => commandId)).toEqual([
+      "operation-direct-timeout:create",
+      "operation-direct-timeout:model",
+      "operation-direct-timeout:start",
+    ]);
+  });
 
   it("replays the same operation through stable idempotency keys", async () => {
     const { commands, sessions: door } = sessions();
