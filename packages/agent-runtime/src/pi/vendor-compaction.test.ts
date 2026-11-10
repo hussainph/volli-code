@@ -367,6 +367,8 @@ describe("vendored compaction generation boundaries", () => {
       cacheRetention: "none",
       signal: controller.signal,
     });
+    expect(opts.telemetry).toBe(scoped.telemetry);
+    expect(opts).not.toHaveProperty("telemetryContext");
     const generated = createSummaryRequestOptions({}, context);
     expect(generated.sessionId).toBeTruthy();
     expect(generated.sessionId).not.toBe(createSummaryRequestOptions({}, context).sessionId);

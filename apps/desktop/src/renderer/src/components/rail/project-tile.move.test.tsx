@@ -46,7 +46,7 @@ afterEach(async () => {
   container.remove();
   vi.unstubAllGlobals();
 });
-async function menu(key?: "ContextMenu" | "F10") {
+async function draw() {
   await act(async () =>
     root.render(
       <TooltipProvider>
@@ -67,6 +67,9 @@ async function menu(key?: "ContextMenu" | "F10") {
       </TooltipProvider>,
     ),
   );
+}
+async function menu(key?: "ContextMenu" | "F10") {
+  await draw();
   await act(async () =>
     container
       .querySelector("button")!
@@ -103,7 +106,7 @@ describe("project menu Move to Volli Cloud", () => {
     const items = [...document.querySelectorAll('[role="menuitem"]')];
     const index = items.findIndex((item) => item.textContent === "Move to Volli Cloud…");
     expect(index).toBeGreaterThan(-1);
-    expect(items[index + 1]?.textContent).toBe("Remove from Volli…");
+    expect(items[index + 1]?.textContent).toBe("Remove from Volli");
     await act(async () => (items[index] as HTMLElement).click());
     expect(useCloudMovesStore.getState().sheet).toEqual(
       expect.objectContaining({ kind: "prepare", projectIds: ["project"] }),
@@ -136,3 +139,20 @@ describe("project menu Move to Volli Cloud", () => {
     },
   );
 });
+
+it.each([
+  [0, "keyboard"],
+  [1, "pointer"],
+] as const)(
+  "forwards click detail %s as %s origin when selecting a project",
+  async (detail, origin) => {
+    await draw();
+    mocks.select.mockClear();
+    await act(async () =>
+      container
+        .querySelector("button")!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true, detail })),
+    );
+    expect(mocks.select).toHaveBeenCalledWith("project", origin);
+  },
+);

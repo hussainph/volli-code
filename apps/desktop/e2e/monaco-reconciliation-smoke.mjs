@@ -377,11 +377,14 @@ async function findInDiff(page, text) {
 async function openFileFromRail(aside, path = TARGET, { pin = false } = {}) {
   await aside.getByTestId("ticket-rail-tab-files").click();
   await waitUntil(
-    "Files list",
-    async () => (await aside.getByTestId("ticket-files-list").count()) === 1,
+    "Files tree",
+    async () => (await aside.getByRole("tree", { name: "Files" }).count()) === 1,
   );
+  // Expand src/ only while it is folded: a click on an open folder folds it.
   const src = aside.locator('[data-testid="ticket-files-row"][data-path="src"]');
-  if ((await src.count()) === 1) await src.click();
+  if ((await src.count()) === 1 && (await src.getAttribute("aria-expanded")) !== "true") {
+    await src.click();
+  }
   const row = aside.locator(`[data-testid="ticket-files-row"][data-path="${path}"]`);
   await waitUntil(`${path} Files row`, async () => (await row.count()) === 1);
   if (pin) await row.dblclick();
@@ -493,12 +496,15 @@ async function main() {
 
     await page.reload();
     await page.waitForLoadState("domcontentloaded");
-    const card = page.locator("article").filter({
-      has: page.locator("span.font-mono", { hasText: new RegExp(`^${displayId}$`) }),
-    });
+    const card = page
+      .locator("article")
+      .filter({ visible: true })
+      .filter({
+        has: page.locator("span.font-mono", { hasText: new RegExp(`^${displayId}$`) }),
+      });
     await waitUntil("ticket card", async () => (await card.count()) === 1);
     await card.dblclick();
-    const aside = page.locator("aside");
+    const aside = page.locator('[data-inspector-panel][data-shown="true"]');
     await waitUntil("ticket rail", async () => (await aside.count()) === 1);
     await openFileFromRail(aside);
     await waitFileText(page, "export const changeSet = 1;", false);

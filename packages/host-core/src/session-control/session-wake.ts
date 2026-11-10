@@ -73,6 +73,7 @@ import {
   decodeSessionEventCursor,
   listSessionEventsAfter,
 } from "../db/session-events-cursor-repo";
+import { withMainSpan } from "../log/context";
 import { hostLogger } from "../log/root";
 
 const log = hostLogger("session-wake");
@@ -125,7 +126,12 @@ export function createSessionWakeBus(
   // a launch never replays the whole ledger as fresh wakes.
   let announced = currentSessionEventSequence(ports.db);
 
+  /** Timed as main-thread work (VC-1090): a read, then every listener, after each write. */
   function drain(): void {
+    withMainSpan({ door: "runtime", operation: "wake" }, announce);
+  }
+
+  function announce(): void {
     let wakes: readonly SessionWake[];
     try {
       wakes = listSessionEventsAfter(ports.db, announced);
@@ -170,14 +176,37 @@ export function createSessionWakeBus(
     getOrRecordSessionInput: (request) =>
       afterCommit(() => engine.getOrRecordSessionInput(request)),
     recordToolRefresh: (request) => afterCommit(() => engine.recordToolRefresh(request)),
-    observe: (observation) => afterCommit(() => engine.observe(observation)),
+    // The fact's transaction runs synchronously: timed under the Session (VC-1090).
+    observe: (observation) =>
+      afterCommit(() =>
+        withMainSpan(
+          {
+            door: "runtime",
+            operation: `observe:${observation.kind}`,
+            sessionId: observation.sessionId,
+          },
+          () => engine.observe(observation),
+        ),
+      ),
     submit: (request) => afterCommit(() => engine.submit(request)),
     completeModelSelection: (request) => afterCommit(() => engine.completeModelSelection(request)),
     // Enumerated, not spread: a future Engine WRITE adopted silently by a
     // spread would commit without ever waking an observer, and the compile
     // error a new method causes here is the prompt to decide which it is.
-    getSession: (query) => engine.getSession(query),
+    // A read that folds the Session's projection on main: timed (VC-1090), as a
+    // listing's many reads run after the door that asked has returned.
+    getSession: (query) =>
+      withMainSpan(
+        { door: "projection", operation: "get-session", sessionId: query.sessionId },
+        () => engine.getSession(query),
+      ),
     getBaseSession: (query) => engine.getBaseSession(query),
+    // The listing fold one row at a time (VC-1101): timed like `getSession`.
+    getSessionListing: (query) =>
+      withMainSpan(
+        { door: "projection", operation: "get-session-listing", sessionId: query.sessionId },
+        () => engine.getSessionListing(query),
+      ),
     listSessions: (query) => engine.listSessions(query),
     countSessions: (query) => engine.countSessions(query),
     listAttachedSessions: () => engine.listAttachedSessions(),

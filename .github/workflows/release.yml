@@ -32,11 +32,11 @@ name: Release
 #     (see docs/runbooks/hostd-release.md); dry runs and tags never read it
 # Missing credentials fail preflight rather than falling back to ad-hoc signing.
 #
-# Hyphenated tags are prereleases (EP_PRE_RELEASE=true); only canary-enabled
-# installs follow them. Bare tags produce drafts; publish the draft after
-# reviewing its release notes to put it on the updater feed. Pre-create the
-# release once, then upload into it to avoid races between publisher instances.
-# Reruns replace owned assets and remove stale ones.
+# Every tag starts as a draft, invisible to the public updater feed. Upload
+# the complete signed/stapled asset set and verify its downloaded bytes before
+# publishing hyphenated tags as prereleases. Bare tags stay manual drafts.
+# Published-tag reruns verify only; draft reruns replace assets and remove stale
+# ones. Finally check the public latest-mac.yml URL without authentication.
 # The updater reads the release feed unauthenticated: keep it publicly readable.
 
 on:
@@ -108,6 +108,14 @@ jobs:
       # workflows: ci.yml is the PR gate, and ci-extended.yml carries the
       # smoke journeys and cloud acceptance that left that gate (VC-934), so a
       # release still needs every journey green on the commit it ships.
+      #
+      # ci.yml must be green on this exact SHA (it is ~10 minutes). The long
+      # ci-extended.yml may instead be green on a first-parent ancestor when
+      # every file changed since that ancestor is inert prose/website — the
+      # same `inert` set ci.yml's Scope uses to skip core e2e — so a docs
+      # merge does not cost a full extended cycle before a release. Anything
+      # outside that set (source, packages, e2e, workflows, manifests) still
+      # needs extended green on the exact SHA.
       - name: "Guard: CI is green on this commit"
         if: inputs.require_green
         env:
@@ -116,20 +124,41 @@ jobs:
           set -euo pipefail
           sha="$(git rev-parse HEAD)"
           echo "releasing $sha"
-          for workflow in ci.yml ci-extended.yml; do
+          inert='^(docs/|reference/|lessons/|assets/|apps/website/|apps/docs/|\.github/ISSUE_TEMPLATE/|[^/]*\.md$|LICENSE$)'
+          green_on() { # <workflow> <sha> -> 0 when a completed run on <sha> succeeded
+            local conclusions
             conclusions=$(gh api \
-              "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs?head_sha=${sha}&status=completed" \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/$1/runs?head_sha=$2&status=completed" \
               -q '.workflow_runs[].conclusion' || true)
-            if [ -z "$conclusions" ]; then
-              echo "::error::No completed $workflow run for $sha. Wait for it to finish on main (or start one: gh workflow run $workflow --ref main), or re-run with require_green=false if you know why it is missing."
-              exit 1
+            grep -qx success <<<"$conclusions"
+          }
+          if ! green_on ci.yml "$sha"; then
+            echo "::error::ci.yml is not green on $sha. Wait for it to finish on main (or start one: gh workflow run ci.yml --ref main), or re-run with require_green=false if you know why it is missing."
+            exit 1
+          fi
+          echo "ci.yml is green on $sha"
+          if green_on ci-extended.yml "$sha"; then
+            echo "ci-extended.yml is green on $sha"
+            exit 0
+          fi
+          # Walk back along main's first parents to the newest commit whose
+          # extended run succeeded, then require everything since it to be inert.
+          for base in $(git rev-list --first-parent --max-count=30 "$sha"); do
+            [ "$base" = "$sha" ] && continue
+            green_on ci-extended.yml "$base" || continue
+            changed="$(git diff --name-only "$base" "$sha")"
+            live="$(grep -vE "$inert" <<<"$changed" || true)"
+            if [ -z "$live" ]; then
+              echo "ci-extended.yml is green on ancestor $base; everything since is inert:"
+              sed 's/^/  /' <<<"$changed"
+              exit 0
             fi
-            if ! grep -qx success <<<"$conclusions"; then
-              echo "::error::$workflow did not succeed on $sha (saw: $(tr '\n' ' ' <<<"$conclusions")). Fix main before releasing."
-              exit 1
-            fi
-            echo "$workflow is green on $sha"
+            echo "::error::ci-extended.yml is not green on $sha. The newest green ancestor $base is followed by non-inert changes:"
+            sed 's/^/  /' <<<"$live"
+            exit 1
           done
+          echo "::error::ci-extended.yml is not green on $sha or on any of its last 30 first-parent ancestors. Wait for it on main, or re-run with require_green=false if you know why it is missing."
+          exit 1
 
       - name: Resolve version
         id: resolve
@@ -768,13 +797,14 @@ jobs:
             echo "::error::root package.json is $root but apps/desktop/package.json is $pkg — bump both together."
             exit 1
           fi
-          # Channel routing (see header): hyphenated = prerelease tag, goes
-          # live immediately; bare = stable, drafted for manual publish.
+          # Both channels remain private until their complete assets verify.
+          # Only prereleases then publish automatically; stable stays manual.
+          echo "EP_DRAFT=true" >> "$GITHUB_ENV"
           if [[ "$version" == *-* ]]; then
             echo "EP_PRE_RELEASE=true" >> "$GITHUB_ENV"
-            echo "prerelease tag — will publish live as a GitHub pre-release"
+            echo "prerelease tag — draft until uploaded assets verify"
           else
-            echo "bare tag — will be created as a draft (edit notes, then publish)"
+            echo "bare tag — draft for manual publication after verification"
           fi
 
       - name: "Guard: tag is on main"
@@ -850,8 +880,8 @@ jobs:
           fi
           echo "CSC_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
 
-      # Download and verify before creating a live canary pre-release: missing
-      # or corrupt hostd inputs must not leave an empty release behind.
+      # Download and verify before creating even a draft: missing or corrupt
+      # hostd inputs must not leave an empty release behind.
       - name: Download verified hostd release assets
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -872,11 +902,6 @@ jobs:
           done
           shasum -a 256 -c SHA256SUMS
 
-      # Seed the release for this tag before electron-builder runs, so its
-      # racing publisher instances all find and reuse one release instead of
-      # each trying to create it (see header). Hyphenated tag = live
-      # pre-release, bare tag = draft. Skips if a release already exists
-      # (re-run safety).
       - name: Download verified runner release assets
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -894,23 +919,12 @@ jobs:
             [ -s "$asset" ] || { echo "::error::runner release asset missing or empty: $asset"; exit 1; }
           done
 
+      # Drafts are not discoverable by updater clients while building or
+      # attaching assets. Reuse an existing draft without changing its notes.
       - name: Pre-create GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          version="${REF_NAME#v}"
-          existing=$(curl -sf -H "Authorization: Bearer $GH_TOKEN" \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases?per_page=100" |
-            jq -r --arg t "$REF_NAME" '[.[] | select(.tag_name == $t)] | length')
-          if [ "$existing" -gt 0 ]; then
-            echo "release for $REF_NAME already exists — electron-builder will upload into it"
-            exit 0
-          fi
-          if [[ "$version" == *-* ]]; then draft=false; prerelease=true; else draft=true; prerelease=false; fi
-          curl -sf -X POST -H "Authorization: Bearer $GH_TOKEN" \
-            -d "{\"tag_name\":\"$REF_NAME\",\"name\":\"$version\",\"draft\":$draft,\"prerelease\":$prerelease}" \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases" > /dev/null
-          echo "created $([ "$draft" = true ] && echo draft || echo "live pre-release") release for $REF_NAME"
+        run: node scripts/release-publication.mjs prepare
 
       # Mirrors ci.yml. run-install triggers apps/desktop's postinstall
       # (rebuild:native) — proven to survive on the macOS image by ci.yml's
@@ -1071,27 +1085,10 @@ jobs:
           fi
           echo "latest-mac.yml dmg entry synced to ${dmgs[0]}"
 
-          # Drop anything already on this release that is not part of the set
-          # about to go up, so re-running a job — or refreshing a draft whose
-          # assets predate the rename above — replaces assets instead of
-          # colliding with them.
-          while read -r name; do
-            [ -n "$name" ] || continue
-            # VC-727's advisory job attaches this after publication. Preserve
-            # a prior capture if that job fails on a re-run.
-            [ "$name" != canary-peer.json ] || continue
-            keep=false
-            for f in "${files[@]}"; do
-              if [ "$name" = "$f" ]; then keep=true; break; fi
-            done
-            if [ "$keep" = false ]; then
-              echo "removing asset not in this build: $name"
-              gh release delete-asset "$REF_NAME" "$name" --yes
-            fi
-          done < <(gh release view "$REF_NAME" --json assets -q '.assets[].name')
-
-          gh release upload "$REF_NAME" "${files[@]}" --clobber
-          echo "published to $REF_NAME: ${files[*]}"
+          # Replace assets only on a draft, download and compare every upload,
+          # then publish canaries. Stable drafts stay manual. A published-tag
+          # rerun verifies without mutating live assets (including peer capture).
+          node ../../../scripts/release-publication.mjs upload . "${files[@]}"
 
       - name: Scrub credentials
         if: always()

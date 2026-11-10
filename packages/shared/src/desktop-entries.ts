@@ -733,6 +733,13 @@ export const DESKTOP_ENTRIES = [
     idempotency: "read",
     summary: "Read a content-free move report.",
   },
+  {
+    key: "sourceIcons.watch",
+    compatibility: "host-command",
+    placement: "workspace",
+    idempotency: "read",
+    summary: "Follow this Session's cached source icon references without acquiring any icons.",
+  },
 ] as const satisfies readonly DesktopEntryDeclaration[];
 
 export type DesktopEntry = (typeof DESKTOP_ENTRIES)[number];

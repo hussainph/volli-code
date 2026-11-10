@@ -26,6 +26,7 @@ export function DesktopModelAccessProvider({ children }: React.PropsWithChildren
   const client = React.useMemo<ModelAccessClient>(() => {
     const rpc = sessionRpcClient();
     return {
+      subscribeChanges: (listener) => window.api.modelAccess.onChanged(listener),
       inspect: (input) => rpc.modelAccess.inspect.query(input),
       defaults: () => rpc.modelAccess.defaults.query(),
       setDefault: (purpose, selection) => rpc.modelAccess.setDefault.mutate({ purpose, selection }),
@@ -40,6 +41,7 @@ export function DesktopModelAccessProvider({ children }: React.PropsWithChildren
       setCodeModePolicy: (policy) =>
         rpc.modelAccess.setCodeModePolicy.mutate({
           enabled: policy.enabled,
+          ...(policy.defaultMode === undefined ? {} : { defaultMode: policy.defaultMode }),
           models: { ...policy.models },
         }),
       pickerView: () => rpc.modelAccess.pickerView.query(),

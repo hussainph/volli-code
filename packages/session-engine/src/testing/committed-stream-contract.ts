@@ -177,6 +177,7 @@ export function describeCommittedSessionStreamContract(
       await expect(
         Promise.all([
           engine.listSessions({ projectId: PROJECT, scope: "all" }),
+          engine.getSessionListing({ sessionId: "session-reads" }),
           engine.countSessions({ projectId: PROJECT, scope: "all" }),
           engine.listAttachedSessions(),
           engine.listSessionStarts({ sinceMs: 0 }),
@@ -185,6 +186,7 @@ export function describeCommittedSessionStreamContract(
         ]),
       ).resolves.toMatchObject([
         [{ session: { id: "session-reads" } }],
+        { session: { id: "session-reads" } },
         1,
         [],
         [expect.any(Number)],

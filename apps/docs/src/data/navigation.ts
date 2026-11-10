@@ -40,14 +40,6 @@ export const DOC_SECTIONS: DocSection[] = [
     ],
   },
   {
-    label: "Runners",
-    items: [
-      { label: "Overview", slug: "runners" },
-      { label: "Add a Linux runner", slug: "runners/linux" },
-      { label: "Run a runner on a VPS", slug: "runners/vps" },
-    ],
-  },
-  {
     label: "Automations",
     items: [
       { label: "Overview", slug: "guides/automations" },
@@ -65,10 +57,11 @@ export const DOC_SECTIONS: DocSection[] = [
       { label: "Skills and commands", slug: "guides/skills-and-commands" },
       { label: "MCP servers", slug: "guides/mcp-servers" },
       { label: "Agent authority", slug: "guides/authority" },
+      { label: "Session credentials", slug: "guides/session-credentials" },
       { label: "Settings", slug: "guides/settings" },
       { label: "Theming", slug: "guides/theming" },
       { label: "Storage and backups", slug: "guides/storage" },
-      { label: "Local and cloud data and network access", slug: "reference/data-and-privacy" },
+      { label: "Local data and network access", slug: "reference/data-and-privacy" },
     ],
   },
   {
@@ -88,6 +81,9 @@ export const DOC_SECTIONS: DocSection[] = [
   },
   {
     label: "Releases",
-    items: [{ label: "What's new in 0.2", slug: "releases/whats-new-0-2" }],
+    items: [
+      { label: "What's new in 0.3", slug: "releases/whats-new-0-3" },
+      { label: "What's new in 0.2", slug: "releases/whats-new-0-2" },
+    ],
   },
 ];

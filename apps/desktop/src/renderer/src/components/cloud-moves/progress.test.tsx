@@ -203,10 +203,10 @@ describe("Move progress and outcomes", () => {
     expect(api.command).not.toHaveBeenCalled();
   });
   it.each(["backup", "export"] as const)(
-    "explains the uninterruptible snapshot during %s",
+    "carries no explanation of the snapshot during %s",
     async (step) => {
       await mount({ state: "moving", step });
-      expect(container.textContent).toContain("snapshot cannot stop immediately");
+      expect(container.textContent).not.toContain("snapshot cannot stop immediately");
     },
   );
   it("opens the cancel confirmation from the paused banner without mutating first", async () => {
@@ -264,8 +264,8 @@ describe("Move progress and outcomes", () => {
       "becomes writable",
     );
     await act(async () =>
-      [...document.querySelectorAll("button")]
-        .findLast((item) => item.textContent === "Cancel move")!
+      [...document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
+        .find((item) => item.textContent === "Cancel move")!
         .click(),
     );
     expect(api.command).toHaveBeenLastCalledWith({ moveId: "move", action: "cancel" });

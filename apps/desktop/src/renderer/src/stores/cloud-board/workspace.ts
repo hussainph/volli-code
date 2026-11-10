@@ -68,8 +68,13 @@ function mostRecentlyJoined(rows: readonly WorkspaceRow[]): WorkspaceRow | undef
 const selections = new Set<(session: CloudSession, row: WorkspaceRow) => void>();
 let selectionRequest = 0;
 
-/** Opens an accepted Workspace; hydration persists the selection with its projects. */
-export async function selectCloudWorkspace(id: string, session = cloudSession()): Promise<void> {
+/** Opens an accepted Workspace; cancelled presentation requests never apply a late answer. */
+export async function selectCloudWorkspace(
+  id: string,
+  session = cloudSession(),
+  signal?: AbortSignal,
+): Promise<void> {
+  signal?.throwIfAborted();
   if (session === null) throw new Error(NOT_CONNECTED);
   if (
     !session.client.connectionState().isWebSocketConnected ||
@@ -81,6 +86,7 @@ export async function selectCloudWorkspace(id: string, session = cloudSession())
   try {
     // Resolve after acceptance, rather than waiting for listMine's subscription to catch up.
     const row = await session.client.query(session.api.workspaces.get, { workspaceId: id });
+    signal?.throwIfAborted();
     if (request !== selectionRequest) return;
     if (
       !session.client.connectionState().isWebSocketConnected ||
@@ -88,8 +94,10 @@ export async function selectCloudWorkspace(id: string, session = cloudSession())
       !useCloudLinkInputs.getState().input.online
     )
       throw new Error(CLOUD_READ_ONLY);
+    signal?.throwIfAborted();
     for (const select of selections) select(session, row);
   } catch (error) {
+    if (signal?.aborted) throw signal.reason;
     throw new Error(cloudFailure(error).message, { cause: error });
   }
 }

@@ -19,6 +19,7 @@ import type { AsyncState } from "./kit";
 export interface AgentIndex {
   templates: readonly PromptTemplate[];
   skills: readonly SkillReference[];
+  omittedSkillDirectories?: number;
 }
 
 export function useAgentIndex(projectId: string | null): {
@@ -47,7 +48,11 @@ export function useAgentIndex(projectId: string | null): {
       }
       setState({
         status: "ready",
-        data: { templates: result.templates, skills: result.skills },
+        data: {
+          templates: result.templates,
+          skills: result.skills,
+          omittedSkillDirectories: result.omittedSkillDirectories,
+        },
       });
     } catch (error) {
       if (!fetcher.isCurrent(token)) return;

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { MCP_CONNECTION_TIMEOUT_MS, MCP_ERROR_MAX_CHARS } from "@volli/shared";
 import type { McpProtocolClient } from "./discovery";
 import { detachProject, insertProject } from "../db/projects-repo";
+import { putMcpServer } from "../db/mcp-servers-repo";
 import { MemoryMcpCredentialStore } from "./credential-store";
 import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
 import { McpSettingsService, MCP_CANCELLED_MESSAGE } from "./settings";
@@ -161,6 +162,41 @@ describe("McpSettingsService", () => {
     expect(closed).toHaveBeenCalledOnce();
   });
 
+  it.each([false, true])(
+    "preserves a same-millisecond Settings edit while discovery settles (failed: %s)",
+    async (fails) => {
+      const settings = service();
+      await settings.save({ projectId: "p1", server: draft, enabledTools: ["echo"] });
+      const connecting = new McpSettingsService({
+        db: ctx.db,
+        now: () => 100,
+        open: async (): Promise<McpProtocolClient> => ({
+          listTools: async () => {
+            expect(
+              settings.setEnabled({ projectId: "p1", serverId: draft.id, enabled: false }).ok,
+            ).toBe(true);
+            if (fails) throw new Error("discovery failed after the edit");
+            return listedTools;
+          },
+          callTool: vi.fn(),
+          close: closed,
+        }),
+      });
+
+      expect(
+        await connecting.save({ projectId: "p1", server: draft, enabledTools: ["echo"] }),
+      ).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("was changed while this was connecting"),
+      });
+      expect(settings.list("p1")[0]).toMatchObject({
+        enabled: false,
+        stale: false,
+        updatedAt: 100,
+      });
+    },
+  );
+
   it("a failed refresh preserves the last catalog and marks it stale with a clear error", async () => {
     const settings = service();
     await settings.save({ projectId: "p1", server: draft, enabledTools: ["echo"] });
@@ -274,7 +310,7 @@ describe("McpSettingsService", () => {
     expect(settings.remove({ projectId: "p1", serverId: "server-1" })).toEqual({ ok: true });
     expect(settings.list("p1")).toEqual([]);
     expect(settings.surfaceRevision("p1")).toBe(5);
-    expect(settings.surfaceRevision("other-project")).toBe(0);
+    expect(settings.surfaceRevision("other-project")).toBe(5);
     expect(settings.remove({ projectId: "p1", serverId: "missing" }).ok).toBe(false);
     expect(settings.surfaceRevision("p1")).toBe(5);
   });
@@ -284,8 +320,8 @@ describe("McpSettingsService", () => {
     expect(settings.configured("p1", "server-1")).toBeUndefined();
     await settings.save({ projectId: "p1", server: draft, enabledTools: ["echo"] });
     expect(settings.configured("p1", "server-1")).toEqual({ enabled: true });
-    // Another project's id is not this project's server.
-    expect(settings.configured("other-project", "server-1")).toBeUndefined();
+    // Every project reads the same local server configuration.
+    expect(settings.configured("other-project", "server-1")).toEqual({ enabled: true });
 
     // A write behind the service's back (nothing in the app does this) goes
     // unseen: the answer is remembered, not re-read per call.
@@ -353,12 +389,17 @@ describe("McpSettingsService", () => {
 // nobody can see is one nobody would think to revoke. They go by name, once
 // the project is off the rail.
 describe("McpSettingsService on a project's removal", () => {
-  it("names the project's servers, then forgets the credentials of every one off the rail", async () => {
+  it("keeps cloud project credential cleanup unchanged", async () => {
     const credentials = new MemoryMcpCredentialStore();
     const settings = new McpSettingsService({
       db: ctx.db,
       now: () => 100,
       credentials,
+      machinePaths: {
+        kind: "cloud",
+        projectPath: (id) => (id === "p1" ? "/repo/project" : "/repo/other"),
+        ticket: () => null,
+      },
       open: async (): Promise<McpProtocolClient> => ({
         listTools: async () => listedTools,
         callTool: vi.fn(async () => ({ content: [] })),
@@ -559,5 +600,75 @@ describe("McpSettingsService cancellation and provenance (VC-380)", () => {
     expect(refreshed.ok).toBe(true);
     if (!refreshed.ok) return;
     expect(refreshed.server.provenance).toMatchObject({ source: "npm", version: "1.4.2" });
+  });
+});
+
+describe("MCP machine scope", () => {
+  it("keeps MCP reachable without any project and preserves duplicate frozen identities", async () => {
+    const settings = service();
+    const saved = await settings.save({ projectId: "p1", server: draft, enabledTools: ["echo"] });
+    if (!saved.ok) throw new Error(saved.error);
+    const alias = { ...saved.server, id: "old-copy", catalog: [] };
+    putMcpServer(ctx.db, alias);
+    expect(settings.list("")).toHaveLength(1);
+    expect(
+      settings
+        .forSession("p1", [{ ...saved.server.catalog[0]!.definition!, serverId: "old-copy" }])
+        .map(({ id }) => id),
+    ).toEqual(["old-copy"]);
+    expect((await settings.save({ projectId: "p1", server: alias, enabledTools: [] })).ok).toBe(
+      false,
+    );
+    ctx.db.prepare("DELETE FROM projects").run();
+    expect(settings.list("")).toHaveLength(1);
+    expect(settings.setEnabled({ projectId: "", serverId: draft.id, enabled: false }).ok).toBe(
+      true,
+    );
+    expect(settings.configured("p1", "old-copy")).toEqual({ enabled: false });
+    expect(settings.remove({ projectId: "", serverId: draft.id }).ok).toBe(true);
+    expect(settings.configured("p1", "old-copy")).toBeUndefined();
+  });
+
+  it("new Sessions in another project get the shared set, with global invalidation and edits", async () => {
+    insertProject(ctx.db, testProject({ id: "p2", path: "/repo/other" }));
+    const settings = service();
+    await settings.save({ projectId: "p1", server: draft, enabledTools: ["echo"] });
+    expect(settings.selectedTools("p2")).toEqual(settings.selectedTools("p1"));
+    expect(settings.list("p2")).toEqual(settings.list("p1"));
+    expect(settings.configured("p2", draft.id)).toEqual({ enabled: true });
+    settings.setEnabled({ projectId: "p1", serverId: draft.id, enabled: false });
+    expect(settings.configured("p2", draft.id)).toEqual({ enabled: false });
+    expect(settings.selectedTools("p2")).toEqual([]);
+    expect(settings.setEnabled({ projectId: "p2", serverId: draft.id, enabled: true }).ok).toBe(
+      true,
+    );
+    const frozen = settings.selectedTools("p1");
+    expect(settings.forSession("p2", frozen).map(({ id }) => id)).toEqual([draft.id]);
+    expect(settings.disconnectProject("p1")).toEqual([]);
+    detachProject(ctx.db, "p1", 200);
+    expect(settings.list("p2")).toHaveLength(1);
+    expect(settings.remove({ projectId: "p2", serverId: draft.id })).toEqual({ ok: true });
+    expect(settings.forSession("p2", frozen)).toEqual([]);
+    expect(frozen.map(({ toolName }) => toolName)).toEqual(["echo"]);
+  });
+
+  it("cloud launches keep separate project configurations", async () => {
+    insertProject(ctx.db, testProject({ id: "p2", path: "/repo/other" }));
+    const settings = new McpSettingsService({
+      db: ctx.db,
+      machinePaths: { kind: "cloud", projectPath: () => "/repo/project", ticket: () => null },
+      open: async (): Promise<McpProtocolClient> => ({
+        listTools: async () => listedTools,
+        callTool: async () => ({ content: [] }),
+        close: closed,
+      }),
+    });
+    await settings.save({ projectId: "p1", server: draft, enabledTools: ["echo"] });
+    expect(settings.list("p2")).toEqual([]);
+    expect(settings.selectedTools("p2")).toEqual([]);
+    expect(settings.configured("p2", draft.id)).toBeUndefined();
+    expect(settings.setEnabled({ projectId: "p2", serverId: draft.id, enabled: false }).ok).toBe(
+      false,
+    );
   });
 });

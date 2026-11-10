@@ -42,6 +42,7 @@ import { remoteHostNow } from "@renderer/stores/remote-project";
 interface PromptLists {
   readonly templates: readonly PromptTemplate[];
   readonly skills: readonly SkillReference[];
+  readonly omittedSkillDirectories: number;
 }
 
 export interface PromptSupply extends PromptLists {
@@ -56,7 +57,7 @@ export interface PromptSupply extends PromptLists {
   reload(): Promise<boolean>;
 }
 
-const NO_LISTS: PromptLists = { templates: [], skills: [] };
+const NO_LISTS: PromptLists = { templates: [], skills: [], omittedSkillDirectories: 0 };
 
 interface PromptListsState {
   /** The project + skill policy these lists were read under. */
@@ -91,12 +92,19 @@ export function promptSupplyKey(
 async function readSupply(projectId: string): Promise<SupplyRead> {
   // A remote project's commands and skills are its host's (VC-711): none here.
   if (remoteHostNow(projectId) !== null) {
-    return { ok: true, lists: { templates: [], skills: [] } };
+    return { ok: true, lists: NO_LISTS };
   }
   try {
     const result = await window.api.files.promptTemplates({ projectId });
     if (!result.ok) return { ok: false, error: result.error };
-    return { ok: true, lists: { templates: result.templates, skills: result.skills } };
+    return {
+      ok: true,
+      lists: {
+        templates: result.templates,
+        skills: result.skills,
+        omittedSkillDirectories: result.omittedSkillDirectories ?? 0,
+      },
+    };
   } catch (error) {
     return { ok: false, error: errorMessage(error) };
   }

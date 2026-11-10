@@ -34,6 +34,7 @@ import {
 } from "../ipc-registry";
 import { ModelAccessSignInService, type SignInOwner } from "@volli/host-core/session-runtime";
 import { onDocumentGone } from "../document-lifetime";
+import { broadcastModelAccessChanged } from "./changes";
 
 const SIGN_IN_EVENT = "volli:model-access-sign-in" satisfies VolliIpcEvent;
 
@@ -73,6 +74,11 @@ export function registerModelAccessIpcHandlers(
     let pageGone = false;
     const owner: SignInOwner = {
       send: (update: ModelAccessSignInUpdate): void => {
+        if (update.kind === "settled" && update.outcome.kind === "signed-in") {
+          // Even if the opener went away just as the credential was saved,
+          // surviving windows (including its replacement page) must re-read.
+          broadcastModelAccessChanged(pageGone ? undefined : sender.id);
+        }
         if (pageGone || sender.isDestroyed()) return;
         sender.send(SIGN_IN_EVENT, update);
       },
@@ -92,7 +98,11 @@ export function registerModelAccessIpcHandlers(
     "volli:model-access-sign-in-respond": (attemptId, promptId, value): Result =>
       service.respond(attemptId, promptId, value),
     "volli:model-access-sign-in-cancel": (attemptId): Result => service.cancel(attemptId),
-    "volli:model-access-sign-out": (providerId): Promise<Result> => service.signOut(providerId),
+    "volli:model-access-sign-out": async (providerId, sender): Promise<Result> => {
+      const result = await service.signOut(providerId);
+      if (result.ok) broadcastModelAccessChanged(sender.id);
+      return result;
+    },
   };
   registerGuardedIpcHandlers(MODEL_ACCESS_IPC, handlers);
 }

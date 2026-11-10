@@ -26,7 +26,11 @@ export function hostModelAccessClient(
       rpc.setCompactionPolicy.mutate({ autoCompaction: policy.autoCompaction }),
     codeModePolicy: () => rpc.codeModePolicy.query(),
     setCodeModePolicy: (policy) =>
-      rpc.setCodeModePolicy.mutate({ enabled: policy.enabled, models: { ...policy.models } }),
+      rpc.setCodeModePolicy.mutate({
+        enabled: policy.enabled,
+        ...(policy.defaultMode === undefined ? {} : { defaultMode: policy.defaultMode }),
+        models: { ...policy.models },
+      }),
     pickerView: () => rpc.pickerView.query(),
     setPickerView: (view) => rpc.setPickerView.mutate(view),
     // Account management belongs to the already-owned host sign-in sheet.

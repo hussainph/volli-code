@@ -12,7 +12,12 @@ import type {
   SegmentCommitResult,
 } from "@volli/shared/cloud";
 import type { BackendLink } from "../cloud-runner/backend-link";
-import type { AcceptCall, DrainCursorStore, DrainLedger } from "../cloud-runner/drain";
+import {
+  encodeDrainEvent,
+  type AcceptCall,
+  type DrainCursorStore,
+  type DrainLedger,
+} from "../cloud-runner/drain";
 import { acceptOverLink } from "../cloud-runner/sync";
 import { createCloudFunctionsClient, CloudOfflineError } from "../cloud-agent/functions-client";
 import { PresignedObjectStore } from "../transcript-spool/object-store";
@@ -218,6 +223,22 @@ export function createCloudTranscriptPublisher(options: {
       prefix = await acceptOverLink(live.link)(
         { ...args, events: args.events.slice(0, firstBody) },
         callOptions,
+      );
+    } else if (cursor.acceptedThrough === 0) {
+      // Live facts are separate pipelined calls. Their HTTP spill presign
+      // cannot rely on the WebSocket birth having committed yet. Replay only
+      // the exact first fact and await its acknowledgement before staging;
+      // intake verifies an already accepted birth as an idempotent duplicate.
+      const birth = options.ledger.listEvents({
+        sessionId: args.sessionId,
+        afterSequence: 0,
+        limit: 1,
+      })[0];
+      if (birth?.sequence !== 1) throw new Error("The Session's first fact is unavailable.");
+      const event = encodeDrainEvent(birth);
+      await acceptOverLink(live.link)(
+        { ...args, events: [event] },
+        { ...callOptions, bytes: Buffer.byteLength(event, "utf8") },
       );
     }
     try {

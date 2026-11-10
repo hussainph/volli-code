@@ -638,9 +638,11 @@ describe("the receipt the card leaves in its own place", () => {
 
     const receipt = host.querySelector("[role='status']");
     expect(receipt?.textContent).toBe("Sent: Detailed");
-    // The question it answered stays beside it, and nothing is left to press.
+    // The question it answered stays beside it, and nothing is left to press:
+    // the one focus stop is the shared reveal of its clipped heading.
     expect(host.textContent).toContain("How much detail do you want?");
-    expect(host.querySelectorAll("button")).toHaveLength(0);
+    expect(host.querySelectorAll("button:not([data-slot='value-reveal'])")).toHaveLength(0);
+    expect(host.querySelectorAll("[data-slot='value-reveal']")).toHaveLength(1);
   });
 
   it("says a decline and a stopped turn in their own words", () => {

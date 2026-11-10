@@ -12,6 +12,7 @@ import { parse } from "yaml";
 import "./runner-install.test.mjs";
 import "./runner-release-manifest.test.mjs";
 import "./runner-native-build.test.mjs";
+import "./release-publication.test.mjs";
 
 const workflow = parse(
   readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8"),
@@ -312,7 +313,7 @@ test("peer capture is advisory, resolves the release commit, and exercises dry r
   const publish = workflow.jobs.release.steps.find(
     (step) => step.name === "Publish artifacts to the release",
   );
-  assert.match(publish.run, /\[ "\$name" != canary-peer\.json \] \|\| continue/);
+  assert.match(publish.run, /release-publication\.mjs upload/);
 });
 
 test("dry-run provenance resolution never uses a distributable tag", (t) => {
@@ -477,6 +478,45 @@ test("release guard requires a green ci.yml AND ci-extended.yml run on the exact
       env: { ...process.env, GITHUB_REPOSITORY: "owner/repo", CI: ci, EXTENDED: extended },
     });
     assert.equal(run.status === 0, green, `ci=${ci} extended=${extended}\n${run.stdout}`);
+  }
+});
+
+test("release guard accepts extended green on an ancestor only across inert changes", () => {
+  const greenGuard = workflow.jobs.prepare.steps.find(
+    (step) => step.name === "Guard: CI is green on this commit",
+  );
+  // HEAD (head1) has ci.yml green but no extended run; base0 has extended green.
+  const stub = `git() {
+    case "$1" in
+      rev-parse) echo head1 ;;
+      rev-list) printf 'head1\\nmid2\\nbase0\\n' ;;
+      diff) printf '%b' "$CHANGED" ;;
+    esac
+  }
+  gh() {
+    case "$2" in
+      */workflows/ci.yml/runs?head_sha=head1*) echo success ;;
+      */workflows/ci-extended.yml/runs?head_sha=base0*) echo success ;;
+      */workflows/ci-extended.yml/runs?head_sha=mid2*) echo failure ;;
+      *) return 0 ;;
+    esac
+  }\n`;
+  const cases = [
+    ["README.md\\napps/docs/src/content/x.md\\napps/website/src/pages/index.astro", true],
+    ["docs/development/ci.md", true],
+    ["README.md\\napps/desktop/src/main/index.ts", false],
+    ["apps/desktop/e2e/volli-drive/supervisor.mjs", false],
+    [".github/workflows/ci.yml", false],
+    ["packages/shared/src/index.ts", false],
+    ["convex/functions/board.ts", false],
+    ["apps/docs/package.json\\npnpm-lock.yaml", false],
+  ];
+  for (const [changed, green] of cases) {
+    const run = spawnSync("bash", ["-c", stub + greenGuard.run], {
+      encoding: "utf8",
+      env: { ...process.env, GITHUB_REPOSITORY: "owner/repo", CHANGED: changed },
+    });
+    assert.equal(run.status === 0, green, `changed=${changed}\n${run.stdout}${run.stderr}`);
   }
 });
 

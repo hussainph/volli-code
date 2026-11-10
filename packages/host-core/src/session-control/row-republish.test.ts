@@ -45,7 +45,7 @@ describe("publishSessionListingRow", () => {
     await publishSessionListingRow(
       {
         db: ctx.db,
-        getSession: (query) => engine.getSession(query),
+        getSessionListing: (query) => engine.getSessionListing(query),
         liveAttachmentIds: () => new Set(),
         publish,
       },
@@ -67,7 +67,7 @@ describe("publishSessionListingRow", () => {
     await publishSessionListingRow(
       {
         db: ctx.db,
-        getSession: () => Promise.resolve(null),
+        getSessionListing: () => Promise.resolve(null),
         liveAttachmentIds: () => new Set(),
         publish,
       },

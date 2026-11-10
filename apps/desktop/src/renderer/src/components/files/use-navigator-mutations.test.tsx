@@ -48,7 +48,13 @@ function api() {
   };
 }
 
-const host = { refresh: vi.fn(), openCreated: vi.fn(), renameTab: vi.fn() };
+const host = {
+  refresh: vi.fn(),
+  openCreated: vi.fn(),
+  renameTab: vi.fn(),
+  createdDirectory: vi.fn(),
+  removed: vi.fn(),
+};
 
 /** Mounts the hook and hands back its live controls, plus the stubbed IPC surface. */
 async function mount(scope: FileNavigatorScope, cwd: string) {
@@ -85,6 +91,8 @@ beforeEach(() => {
   host.refresh.mockReset();
   host.openCreated.mockReset();
   host.renameTab.mockReset();
+  host.createdDirectory.mockReset();
+  host.removed.mockReset();
 });
 
 afterEach(async () => {
@@ -117,9 +125,20 @@ describe("creating", () => {
     await act(async () => read().commitDraft("components"));
 
     expect(files.createDirectory).toHaveBeenCalledWith({ projectId: "p1", relPath: "components" });
+    expect(host.createdDirectory).toHaveBeenCalledWith("components");
     expect(files.create).not.toHaveBeenCalled();
     expect(host.openCreated).not.toHaveBeenCalled();
     expect(host.refresh).toHaveBeenCalled();
+  });
+
+  it("never adds a directory row when its creation failed", async () => {
+    const { read, files } = await mount({ projectId: "p1" }, "");
+    files.createDirectory.mockResolvedValueOnce({ ok: false, error: "Refused" });
+    await act(async () => read().startDraft("directory"));
+    await act(async () => read().commitDraft("components"));
+    expect(host.createdDirectory).not.toHaveBeenCalled();
+    expect(host.refresh).not.toHaveBeenCalled();
+    expect(toastError).toHaveBeenCalledWith("Couldn't create components: Refused");
   });
 
   it("carries the ticket scope, so a Ticket navigator writes into its worktree", async () => {

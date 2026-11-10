@@ -48,22 +48,12 @@
  * at the bottom of the range and the control plainly radiates at `max`. Nothing
  * is legible through a halo, so nothing caps it.
  *
- * TWO MOTION IDEAS WERE TRIED IN THE LAB AND ONE MORE WAS REJECTED THERE.
- * The composer-redesign lab scratch (retired; git history) mounted three
- * CSS-only variants over this exact component, hung off attributes it already
- * publishes. **Grip** (the handle swelling and taking a halo while held) and
- * **Cascade** (the notches dealt in left to right on open) are shipped below
- * and no longer have toggles. **Ignite** — every notch flaring as the wash
- * crosses it — was rejected and retired with the scratch: it
- * fires on a *sweep*, so dragging through five stops set off five flares in a
- * row, and a control that sparkles while you use it is decorating the gesture
- * rather than reporting it. All three obeyed the same house rules the shipped
- * pair still obeys: compositor properties only, `--ease-out`, nothing that
- * moves layout, and a `motion-reduce` gate that switches the idea off rather
- * than shortening it.
+ * Stops are immediately countable on open. Pointer manipulation tracks 1:1;
+ * only its release may settle for the shared press clock. Keyboard changes,
+ * app Motion-off and OS reduced motion always render the final state.
  */
 import * as React from "react";
-import { CaretUpDownIcon, GaugeIcon } from "@phosphor-icons/react";
+import { UnfoldIcon, GaugeIcon } from "@renderer/components/ui/icon";
 
 import {
   EFFORT_DEAD_ZONE,
@@ -79,7 +69,7 @@ import {
 import {
   COMPOSER_CONFIG_CHIP,
   COMPOSER_CONTROL_SIZE,
-  COMPOSER_GLYPH_WEIGHT,
+  COMPOSER_GLYPH_STROKE,
 } from "@renderer/components/chat/composer-chrome";
 import { Button } from "@renderer/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
@@ -139,9 +129,9 @@ export function EffortPill({
               and a bigger `size-*` could not fix it. `fill` would be wrong for
               the other reason: this chip is one of two peers in a control row,
               not the exception among them. */}
-          <GaugeIcon className="shrink-0" weight={COMPOSER_GLYPH_WEIGHT} />
+          <GaugeIcon className="shrink-0" strokeWidth={COMPOSER_GLYPH_STROKE} />
           <span className="min-w-0 truncate">{effortLabel(value)}</span>
-          <CaretUpDownIcon className="shrink-0" weight={COMPOSER_GLYPH_WEIGHT} />
+          <UnfoldIcon className="shrink-0" strokeWidth={COMPOSER_GLYPH_STROKE} />
         </Button>
       </PopoverTrigger>
       <PopoverContent
@@ -166,17 +156,6 @@ export function EffortPill({
     </Popover>
   );
 }
-
-/**
- * How far apart the notches are dealt in when the popover opens.
- *
- * 35ms: fast enough that seven of them finish inside 400ms — under the window
- * where a staggered entrance stops reading as one gesture and starts reading as
- * a queue — and slow enough that the order is legible rather than simultaneous.
- * A stylesheet cannot express this, because the delay is a function of a tick's
- * index and the index is data.
- */
-const EFFORT_NOTCH_STAGGER_MS = 35;
 
 /**
  * The halo, at full strength. How much of it is on is the ramp's job
@@ -233,6 +212,8 @@ export function EffortSlider({
 }) {
   const reduced = useReducedMotion();
   const [dragging, setDragging] = React.useState(false);
+  const [pointerMotion, setPointerMotion] = React.useState(false);
+  const instant = reduced || !pointerMotion;
   // The elastic pull, held as what it draws. `anchor` is sticky across the
   // release so the spring-back runs from the end that was actually pulled —
   // resetting it with the scale would snap the origin to the pill's middle
@@ -241,6 +222,12 @@ export function EffortSlider({
     scaleX: 1,
     anchor: "left",
   });
+
+  React.useEffect(() => {
+    if (!reduced) return;
+    setPointerMotion(false);
+    setPull((current) => ({ ...current, scaleX: 1 }));
+  }, [reduced]);
 
   const stops = levels.length;
   const last = stops - 1;
@@ -310,6 +297,7 @@ export function EffortSlider({
       aria-valuenow={index}
       aria-valuetext={effortLabel(value)}
       data-dragging={dragging ? "" : undefined}
+      data-effort-instant={instant ? "" : undefined}
       className={cn(
         "group/rail relative w-56 shrink-0 cursor-default touch-none select-none outline-none",
         "data-[dragging]:cursor-grabbing",
@@ -321,6 +309,7 @@ export function EffortSlider({
         event.preventDefault();
         railRef.current?.focus();
         event.currentTarget.setPointerCapture(event.pointerId);
+        setPointerMotion(true);
         setDragging(true);
         // macOS: pressing the track jumps to where you pressed, and the same
         // press continues as a drag. One gesture, not two.
@@ -336,6 +325,8 @@ export function EffortSlider({
       }}
       onPointerCancel={release}
       onKeyDown={(event) => {
+        setPointerMotion(false);
+        setPull((current) => ({ ...current, scaleX: 1 }));
         if (event.key === "Escape") {
           // The app's Esc guard reads a bare Escape as "leave the surface".
           // Closing a control you opened is not leaving anything — the
@@ -379,11 +370,8 @@ export function EffortSlider({
           wash, so the light and the substance are the same object seen twice,
           and the seam is a hot edge rather than the middle of a lit box.
 
-          AND IT DOES NOT STRETCH. The pill's elastic overdrag is the material
-          giving; light is not material, and a 7px slip inside a 30px blur is
-          not a thing anyone can see. Leaving the pull off it keeps the halo's
-          own transition free to run at the wash's duration instead of being
-          switched off mid-drag with the stretch. */}
+          The halo updates directly. Neither its width nor its shadow is
+          interpolated while the pointer aims at the stops. */}
       <span
         aria-hidden
         data-slot="effort-halo"
@@ -392,15 +380,14 @@ export function EffortSlider({
           opacity: effortGlow(index, stops),
           boxShadow: EFFORT_HALO_SHADOW,
         }}
-        className={cn(
-          "pointer-events-none absolute inset-y-0 left-0 rounded-full",
-          "transition-[width,opacity] duration-150 ease-out",
-          "group-data-[dragging]/rail:duration-100 motion-reduce:transition-none!",
-        )}
+        className="pointer-events-none absolute inset-y-0 left-0 rounded-full"
       />
 
       <div
-        style={{ scale: `${pull.scaleX} 1`, transformOrigin: `${pull.anchor} center` }}
+        style={{
+          scale: `${instant ? 1 : pull.scaleX} 1`,
+          transformOrigin: `${pull.anchor} center`,
+        }}
         className={cn(
           // `--border-strong` unfilled and the accent filled: the same two
           // tokens `globals.css` paints `input[type="range"]` with, so this
@@ -420,7 +407,7 @@ export function EffortSlider({
           // finger that is already there; the spring back on release is the
           // only part that animates, and `--ease-out` is a hard decelerate, so
           // it reads as the material settling rather than as a second gesture.
-          "transition-[scale] duration-200 ease-out",
+          "transition-[scale] duration-(--duration-press) ease-out",
           "group-data-[dragging]/rail:transition-none motion-reduce:transition-none!",
         )}
       >
@@ -473,10 +460,9 @@ export function EffortSlider({
           }}
           className={cn(
             "absolute inset-0",
-            "transition-[clip-path] duration-150 ease-out",
-            // Shorter under the hand: 150ms reads as a snap when you click a
-            // stop and as drag lag when you sweep through five of them.
-            "group-data-[dragging]/rail:duration-100 motion-reduce:transition-none!",
+            "transition-[clip-path] duration-(--duration-press) ease-out",
+            // Direct tracking while held; no lag between the pointer and wash.
+            "group-data-[dragging]/rail:transition-none motion-reduce:transition-none!",
           )}
         />
 
@@ -501,16 +487,7 @@ export function EffortSlider({
             a non-text mark is owed. At `/90` the same rung reads 4.40:1 dark and
             6.75:1 light. So a passed tick takes a rung up, which is also the
             honest reading: the ones behind the grip have been crossed. */}
-        {/* AND THEY DROP IN, LEFT TO RIGHT, WHEN THE POPOVER OPENS. The comb is
-            the only thing on this control that says the axis has STOPS rather
-            than a range, and at rest it is five hairlines nobody reads. Dealt
-            in — 180ms each, 35ms apart, growing down from the top edge they
-            hang off — the count is delivered as a fact instead of waiting to be
-            noticed, and the direction is the axis's own.
-            {@link EFFORT_NOTCH_STAGGER_MS} carries the delay, because the
-            stagger is per-tick data and a stylesheet cannot know an index.
-            The animation runs on mount, which is exactly once per opening:
-            Radix unmounts the popover's content on close. */}
+        {/* Every stop is visible immediately, including keyboard-opened controls. */}
         {levels.slice(1, -1).map((level, at) => (
           <span
             key={level}
@@ -518,13 +495,10 @@ export function EffortSlider({
             data-passed={index >= at + 1 ? "" : undefined}
             style={{
               left: `${effortStopPercent(at + 1, stops)}%`,
-              animationDelay: `${at * EFFORT_NOTCH_STAGGER_MS}ms`,
             }}
             className={cn(
               "absolute top-1 h-1 w-px origin-top rounded-full bg-foreground/50",
-              "transition-colors duration-150 ease-out motion-reduce:transition-none!",
               "data-[passed]:bg-foreground/90",
-              "animate-[effort-notch_180ms_var(--ease-out)_both] motion-reduce:animate-none!",
             )}
           />
         ))}
@@ -588,8 +562,8 @@ export function EffortSlider({
             style={{ transform: `translateX(${filled}%)` }}
             className={cn(
               "absolute inset-y-0 left-0 w-full",
-              "transition-transform duration-150 ease-out",
-              "group-data-[dragging]/rail:duration-100 motion-reduce:transition-none!",
+              "transition-transform duration-(--duration-press) ease-out",
+              "group-data-[dragging]/rail:transition-none motion-reduce:transition-none!",
             )}
           >
             <span
@@ -615,7 +589,7 @@ export function EffortSlider({
                 // ONCE PER GESTURE, for free: `data-dragging` arrives on
                 // pointer-down and leaves on release, so the swell and the
                 // spring back are the two edges of one attribute.
-                "transition-[scale,box-shadow] duration-150 ease-out",
+                "transition-[scale] duration-(--duration-press) ease-out",
                 "group-data-[dragging]/rail:scale-x-200 group-data-[dragging]/rail:scale-y-115",
                 "group-data-[dragging]/rail:ring-3 group-data-[dragging]/rail:ring-foreground/30",
                 "motion-reduce:scale-100! motion-reduce:ring-0! motion-reduce:transition-none!",

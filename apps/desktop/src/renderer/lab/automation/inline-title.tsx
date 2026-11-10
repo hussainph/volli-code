@@ -7,7 +7,7 @@
  * focus ring once you commit to editing.
  */
 import * as React from "react";
-import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
+import { EditIcon } from "@renderer/components/ui/icon";
 
 import { cn } from "@renderer/lib/utils";
 
@@ -86,8 +86,7 @@ export function InlineTitle({
           invalid && "text-destructive",
         )}
       />
-      <PencilSimpleIcon
-        weight="fill"
+      <EditIcon
         aria-hidden
         className={cn(
           "mr-1 size-3.5 shrink-0 text-muted-foreground",

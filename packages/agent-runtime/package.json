@@ -9,6 +9,14 @@
       "types": "./src/index.ts",
       "import": "./src/index.ts"
     },
+    "./web-extract-worker": {
+      "types": "./src/web/extract-worker.ts",
+      "import": "./src/web/extract-worker.ts"
+    },
+    "./source-icon-worker": {
+      "types": "./src/web/source-icon-worker.ts",
+      "import": "./src/web/source-icon-worker.ts"
+    },
     "./bench/mcp-parallel": {
       "types": "./bench/mcp-parallel/driver.ts",
       "import": "./bench/mcp-parallel/driver.ts"
@@ -34,11 +42,11 @@
   },
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "0.0.79",
-    "@earendil-works/chord": "1.0.0",
-    "@earendil-works/pi-agent-core": "1.0.0",
-    "@earendil-works/pi-ai": "1.0.0",
-    "@earendil-works/pi-codemode": "1.0.0",
-    "@earendil-works/pi-telemetry": "1.0.0",
+    "@earendil-works/chord": "1.5.0",
+    "@earendil-works/pi-agent-core": "1.5.0",
+    "@earendil-works/pi-ai": "1.5.0",
+    "@earendil-works/pi-codemode": "1.5.0",
+    "@earendil-works/pi-telemetry": "1.5.0",
     "@mozilla/readability": "^0.6.0",
     "@volli/shared": "workspace:*",
     "acorn": "8.19.0",

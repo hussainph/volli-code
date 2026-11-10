@@ -30,7 +30,7 @@
 
 import { Agent } from "@earendil-works/pi-agent-core";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vite-plus/test";
 

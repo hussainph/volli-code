@@ -1,10 +1,10 @@
 import * as React from "react";
-import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
+import { CheckIcon } from "@renderer/components/ui/icon";
+
 import { Command } from "cmdk";
 
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
-import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { cn } from "@renderer/lib/utils";
 
@@ -120,7 +120,7 @@ export function ThemeComboBox<Value extends string>({
             className="h-9 border-b border-border bg-transparent px-4 text-sm text-foreground outline-none placeholder:text-muted-foreground"
           />
           <Command.List className="max-h-64 overflow-y-auto p-1">
-            <Command.Empty className={EMPTY_INLINE}>{empty}</Command.Empty>
+            <Command.Empty className="sr-only">{empty}</Command.Empty>
             {items.map((item) => (
               <Command.Item
                 key={item.value}
@@ -141,7 +141,7 @@ export function ThemeComboBox<Value extends string>({
               >
                 <span className="truncate">{item.label}</span>
                 {item.value === activeValue ? (
-                  <CheckIcon weight="bold" className="size-3.5" />
+                  <CheckIcon strokeWidth={2.25} className="size-3.5" />
                 ) : null}
               </Command.Item>
             ))}

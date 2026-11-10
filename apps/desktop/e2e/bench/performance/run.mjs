@@ -16,13 +16,31 @@ import {
   launch,
   startTerminalSession,
   tabStrip,
-  tabStripNewChatButton,
+  openNewChatTab,
   TICKET_TAB_STRIP,
 } from "../../lib/smoke-kit.mjs";
 import { busyLoadName, startBusyLoad } from "./background-load.mjs";
 import { assertFixtureBandsCurrent, generateFixture, verifyFixture } from "./fixture.mjs";
+import {
+  DRAFT_TEXT,
+  measureDraftTyping,
+  measureFleetStorm,
+  measureWorkspaceSwitch,
+  STORM_DEFAULTS,
+  stormSessionIds,
+} from "./interaction-arms.mjs";
 import { DEFAULT_SEED, PRESET_NAMES, REAL_BUSY_CORE_DEFAULT, presetNamed } from "./presets.mjs";
 import { sessionProjectionRequest, sessionRpcRoundTrip } from "./session-rpc-round-trip.mjs";
+import {
+  armSignals,
+  MAIN_STALL_DEFAULT_THRESHOLD_MS,
+  mainStallSampleFields,
+  mainStallsByWindow,
+  readProfileStalls,
+  RENDERER_STALL_FLUSH_WAIT_MS,
+  repetitionSignals,
+  signalsMarkdown,
+} from "./stall-signals.mjs";
 import { ticketSwitchBreakdown, TICKET_SWITCH_MARKS } from "./ticket-switch-breakdown.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -47,10 +65,16 @@ const INTERACTIONS = Object.freeze([
   ["new_terminal", "New terminal session"],
   ["sidebar_toggle", "Sidebar open/close frame times"],
   ["ticket_switch", "Switch between Ticket views"],
+  ["chat_tab_switch", "Switch between two open chat tabs"],
+  ["board_return", "Return to board from a Ticket view"],
   ["board_render", "Board render"],
   ["board_scroll", "Board column scroll"],
   ["board_filter", "Board filter apply"],
   ["rpc_round_trip", "Session RPC projection round trip"],
+  // VC-1093: the switches and load the 2026-11 stutter audit found missing.
+  ["workspace_switch", "Switch back to the fixture workspace"],
+  ["fleet_storm", "Fleet activity storm"],
+  ["draft_typing", "Draft typing during a fleet storm"],
 ]);
 /** Every interaction id, in order — what a run with no `--interactions` covers. */
 export const INTERACTION_IDS = Object.freeze(INTERACTIONS.map(([id]) => id));
@@ -71,6 +95,10 @@ export function parseArgs(argv) {
     skipBuild: false,
     keepFixture: false,
     streamOnly: false,
+    mainStallMs: MAIN_STALL_DEFAULT_THRESHOLD_MS,
+    stormSessions: STORM_DEFAULTS.sessions,
+    stormIntervalMs: STORM_DEFAULTS.intervalMs,
+    stormDurationMs: STORM_DEFAULTS.durationMs,
   };
   const valueAfter = (argument, index) => {
     const value = argv[index + 1];
@@ -100,7 +128,15 @@ export function parseArgs(argv) {
     else if (argument === "--skip-build") args.skipBuild = true;
     else if (argument === "--keep-fixture") args.keepFixture = true;
     else if (argument === "--stream-only") args.streamOnly = true;
-    else if (argument === "--interactions")
+    else if (argument === "--main-stall-ms") {
+      args.mainStallMs = Number(valueAfter(argument, index++));
+    } else if (argument === "--storm-sessions") {
+      args.stormSessions = Number(valueAfter(argument, index++));
+    } else if (argument === "--storm-interval-ms") {
+      args.stormIntervalMs = Number(valueAfter(argument, index++));
+    } else if (argument === "--storm-duration-ms") {
+      args.stormDurationMs = Number(valueAfter(argument, index++));
+    } else if (argument === "--interactions")
       args.interactions = valueAfter(argument, index++).split(",");
     else if (argument === "--help") args.help = true;
     else throw new Error(`Unknown benchmark argument ${argument}`);
@@ -128,6 +164,16 @@ export function parseArgs(argv) {
   }
   if (!Number.isFinite(args.streamTokenRate) || args.streamTokenRate <= 0) {
     throw new Error("--stream-token-rate must be a positive number");
+  }
+  for (const [flag, value] of [
+    ["--main-stall-ms", args.mainStallMs],
+    ["--storm-sessions", args.stormSessions],
+    ["--storm-interval-ms", args.stormIntervalMs],
+    ["--storm-duration-ms", args.stormDurationMs],
+  ]) {
+    if (!Number.isSafeInteger(value) || value < 1) {
+      throw new Error(`${flag} must be a positive integer`);
+    }
   }
   if (args.interactions !== undefined) {
     const known = new Set(INTERACTIONS.map(([id]) => id));
@@ -158,6 +204,12 @@ export function usage() {
     "  --stream-only              run only the stream+scroll renderer bench",
     `  --interactions a,b         measure only these (${INTERACTIONS.map(([id]) => id).join(", ")})`,
     "  --keep-fixture             keep generated fixture and run profiles",
+    `  --main-stall-ms N          app's main-stall threshold (default: ${MAIN_STALL_DEFAULT_THRESHOLD_MS}, production's)`,
+    `  --storm-sessions N         Sessions in a fleet storm (default: ${STORM_DEFAULTS.sessions})`,
+    `  --storm-interval-ms N      ms between one Session's pushes (default: ${STORM_DEFAULTS.intervalMs})`,
+    `  --storm-duration-ms N      storm length (default: ${STORM_DEFAULTS.durationMs})`,
+    "",
+    "Compare two runs: pnpm bench:desktop:compare -- BASELINE CANDIDATE [--budgets FILE]",
     "",
     WARNING,
   ].join("\n");
@@ -204,11 +256,18 @@ export function aggregateInteraction(id, label, samples) {
     Array.isArray(sample.settleLongTasksMs) ? sample.settleLongTasksMs : [],
   );
   const extra = {};
+  // Each keystroke of a draft-typing sample (VC-1093), pooled like frames.
+  const keyToPaint = samples.flatMap((sample) =>
+    Array.isArray(sample.keyToPaintMs) ? sample.keyToPaintMs : [],
+  );
+  if (keyToPaint.length > 0) extra.keyToPaintMs = summarize(keyToPaint);
   for (const key of [
     "firstPaintMs",
     "openMs",
     "closeMs",
     "settleLatencyMs",
+    "inputToPaintMs",
+    "rendererCpuMs",
     "scrollDistancePx",
     "streamedCharacters",
     "liveCodeBlocks",
@@ -237,6 +296,18 @@ export function aggregateInteraction(id, label, samples) {
     // How long each Session band actually was (VC-316).
     "sidebarRows_active",
     "sidebarRows_previous",
+    // Main stalls inside this interaction's own window (VC-1093), from the
+    // profile's `main-stall` lines.
+    "mainStallCount",
+    "mainStallMs",
+    "mainStallMaxMs",
+    // Workspace switch's other direction, and the fleet storm's own numbers.
+    "toLightMs",
+    "stormPushes",
+    "stormLagMs",
+    "stormSettleMs",
+    "stormRoundTripP95Ms",
+    "activityNotices",
   ]) {
     const summary = summarize(samples.map((sample) => sample[key]));
     if (summary !== null) extra[key] = summary;
@@ -419,7 +490,9 @@ async function startCapture(page) {
       started: performance.now(),
       frames: [],
       longTasks: [],
+      inputs: [],
       observer: null,
+      inputObserver: null,
     };
     const observer = new PerformanceObserver((list) => {
       for (const entry of list.getEntries()) capture.longTasks.push(entry.duration);
@@ -429,6 +502,21 @@ async function startCapture(page) {
       capture.observer = observer;
     } catch {
       observer.disconnect();
+    }
+    // Event Timing (VC-1080): a trusted input's duration runs from the input to
+    // the next paint after its handlers — React's discrete-event render and
+    // commit included — so it is the switch as a person feels it, without the
+    // harness's own polling in it.
+    const inputObserver = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        if (entry.startTime >= capture.started) capture.inputs.push(entry.duration);
+      }
+    });
+    try {
+      inputObserver.observe({ type: "event", durationThreshold: 16, buffered: false });
+      capture.inputObserver = inputObserver;
+    } catch {
+      inputObserver.disconnect();
     }
     const pump = (stamp) => {
       if (!capture.active) return;
@@ -449,6 +537,10 @@ async function stopCapture(page) {
     const capture = window.vc353Capture;
     capture.active = false;
     capture.observer?.disconnect();
+    for (const entry of capture.inputObserver?.takeRecords() ?? []) {
+      if (entry.startTime >= capture.started) capture.inputs.push(entry.duration);
+    }
+    capture.inputObserver?.disconnect();
     const frameTimesMs = capture.frames
       .slice(1)
       .map((value, index) => value - capture.frames[index]);
@@ -467,17 +559,43 @@ async function stopCapture(page) {
       refreshIntervalMs,
       droppedFrames,
       longTasksMs: capture.longTasks,
+      // The slowest input in the window. Event Timing reports nothing under its
+      // 16 ms floor (and rounds to 8 ms), so an input it did not report is
+      // recorded AT the floor: within one frame, not unmeasured.
+      inputToPaintMs: Math.max(16, ...capture.inputs),
     };
   });
 }
 
+/**
+ * The window renderer's cumulative CPU time, in milliseconds, or null where
+ * Electron does not report it. A difference of two readings is what one
+ * interaction cost the renderer in CPU, which — unlike its wall-clock latency —
+ * barely moves when other processes are competing for the machine.
+ */
+async function rendererCpuMs(app) {
+  return app.evaluate(({ app: electronApp, BrowserWindow }) => {
+    const pid = BrowserWindow.getAllWindows()[0]?.webContents.getOSProcessId();
+    const metric = electronApp.getAppMetrics().find((entry) => entry.pid === pid);
+    const seconds = metric?.cpu.cumulativeCPUUsage;
+    return typeof seconds === "number" ? seconds * 1_000 : null;
+  });
+}
+
 async function measured(page, app, action, ready) {
+  const cpuBefore = await rendererCpuMs(app);
   await startCapture(page);
   try {
     await action();
     await ready();
     await settleFrames(page);
-    return { ...(await stopCapture(page)), rendererRssMb: await rendererRssMb(app) };
+    const capture = await stopCapture(page);
+    const cpuAfter = await rendererCpuMs(app);
+    return {
+      ...capture,
+      rendererCpuMs: cpuBefore === null || cpuAfter === null ? null : cpuAfter - cpuBefore,
+      rendererRssMb: await rendererRssMb(app),
+    };
   } catch (error) {
     await stopCapture(page).catch(() => null);
     throw error;
@@ -600,7 +718,7 @@ async function measureNewChat(page, app, displayId) {
   return measured(
     page,
     app,
-    () => tabStripNewChatButton(page, TICKET_TAB_STRIP).click(),
+    () => openNewChatTab(page, TICKET_TAB_STRIP),
     async () => {
       await page.waitForFunction(
         ({ expected }) =>
@@ -843,6 +961,182 @@ async function measureTicketSwitch(page, app, targetTitle, targetDisplayId) {
 }
 
 /**
+ * Whether a transcript is drawn on screen: a visible `role="log"` holding at
+ * least one turn. A hidden plane kept mounted behind another tab (VC-1080) is in
+ * the document too, so presence alone would answer before the switch landed.
+ */
+async function waitForShownTranscript(page, timeout = 60_000) {
+  await page.waitForFunction(
+    () =>
+      Array.from(document.querySelectorAll('[role="log"]')).some(
+        (log) =>
+          log instanceof HTMLElement &&
+          log.offsetParent !== null &&
+          log.querySelector(".is-user, .is-assistant") !== null,
+      ),
+    undefined,
+    { timeout },
+  );
+}
+
+const TICKET_STRIP_TABS = '[role="tablist"][aria-label="Ticket tabs"] [role="tab"]';
+
+/** The index of the Ticket strip's selected tab, or -1. */
+async function selectedTicketTabIndex(page) {
+  return page.evaluate(
+    (selector) =>
+      Array.from(document.querySelectorAll(selector)).findIndex(
+        (tab) => tab.getAttribute("aria-selected") === "true",
+      ),
+    TICKET_STRIP_TABS,
+  );
+}
+
+/**
+ * Select the Ticket strip's tab at `index` and wait for it to be in front. By
+ * position, not label: a chat tab reads "Chat" until its Session's title lands,
+ * so two chat tabs can share a label for a while.
+ */
+async function selectTicketTabAt(page, index) {
+  await page.locator(TICKET_STRIP_TABS).nth(index).click();
+  await page.waitForFunction(
+    ({ selector, wanted }) =>
+      document.querySelectorAll(selector)[wanted]?.getAttribute("aria-selected") === "true",
+    { selector: TICKET_STRIP_TABS, wanted: index },
+    { timeout: 30_000 },
+  );
+}
+
+/**
+ * Switching from a second chat tab back to the long chat (VC-1080).
+ *
+ * The pair is the long-chat Session and a fresh chat opened beside it in the
+ * same Ticket view. One round trip runs before the capture so the measured
+ * switch is a RETURN to a chat that has already been drawn once — the case a
+ * kept-alive view answers and a remount pays for in full (markdown parse,
+ * highlight, scroll restore). Readiness is the long chat's tab selected and its
+ * transcript visible.
+ */
+async function measureChatTabSwitch(page, app, displayId, longChatTitle) {
+  await clickTicketBody(page, displayId);
+  const row = page.getByText(longChatTitle, { exact: true }).first();
+  await row.waitFor({ state: "visible", timeout: 30_000 });
+  await row.click();
+  await waitForShownTranscript(page, 120_000);
+  const longIndex = await selectedTicketTabIndex(page);
+  if (longIndex < 0) throw new Error("chat_tab_switch: the long chat opened no tab");
+  const before = await page.locator(TICKET_STRIP_TABS).count();
+  await openNewChatTab(page, TICKET_TAB_STRIP);
+  await page.waitForFunction(
+    ({ selector, count, previous }) => {
+      const tabs = Array.from(document.querySelectorAll(selector));
+      const selected = tabs.findIndex((tab) => tab.getAttribute("aria-selected") === "true");
+      return tabs.length > count && selected >= 0 && selected !== previous;
+    },
+    { selector: TICKET_STRIP_TABS, count: before, previous: longIndex },
+    { timeout: 30_000 },
+  );
+  const otherIndex = await selectedTicketTabIndex(page);
+  // The warm round trip: long chat drawn once more, then the other tab in front.
+  await selectTicketTabAt(page, longIndex);
+  await waitForShownTranscript(page);
+  await settleFrames(page);
+  await selectTicketTabAt(page, otherIndex);
+  await settleFrames(page);
+  // A trusted click, so Event Timing sees it; readiness is polled inside the
+  // page once per frame rather than through Playwright's retry backoff
+  // (0/20/50/100 ms), which would otherwise be most of a number this small.
+  return measured(
+    page,
+    app,
+    () => page.locator(TICKET_STRIP_TABS).nth(longIndex).click(),
+    () =>
+      page.waitForFunction(
+        ({ selector, wanted }) =>
+          document.querySelectorAll(selector)[wanted]?.getAttribute("aria-selected") === "true" &&
+          Array.from(document.querySelectorAll('[role="log"]')).some(
+            (log) =>
+              log instanceof HTMLElement &&
+              log.offsetParent !== null &&
+              log.querySelector(".is-user, .is-assistant") !== null,
+          ),
+        { selector: TICKET_STRIP_TABS, wanted: longIndex },
+        { timeout: 30_000, polling: "raf" },
+      ),
+  );
+}
+
+/**
+ * Escape out of a Ticket view back to the board it was opened from (VC-1080).
+ *
+ * The board is put in front and drawn first, then the long-chat ticket is
+ * opened from its card, so the measured return is to a board this launch has
+ * already built — the path a kept-alive Home plane answers by revealing it and
+ * an unmounted one answers by rebuilding every column. Escape is the product's
+ * own way back; focus is parked on the body so no field claims the key.
+ */
+async function measureBoardReturn(page, app, ticketCount, displayId) {
+  await page.getByRole("button", { name: "Home", exact: true }).first().click();
+  if (
+    await tabStrip(page, TICKET_TAB_STRIP)
+      .isVisible()
+      .catch(() => false)
+  ) {
+    await page.evaluate(() => {
+      if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    });
+    await page.keyboard.press("Escape");
+  }
+  const boardTab = tabStrip(page, "Home tabs").getByRole("tab", { name: "Board", exact: true });
+  if (await boardTab.isVisible().catch(() => false)) await boardTab.click();
+  await waitForShownBoard(page, ticketCount);
+  await settleFrames(page);
+  await openTicket(page, displayId);
+  await settleFrames(page);
+  await page.evaluate(() => {
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+  });
+  // Readiness polled inside the page, once per frame, for the reason the chat
+  // switch gives; the full board check runs after the window closes.
+  const sample = await measured(
+    page,
+    app,
+    () => page.keyboard.press("Escape"),
+    () =>
+      page.waitForFunction(
+        (expected) => {
+          const board = document.querySelector("[data-board-ticket-count]");
+          if (!(board instanceof HTMLElement) || board.offsetParent === null) return false;
+          if (Number(board.getAttribute("data-board-ticket-count")) !== expected) return false;
+          return Array.from(document.querySelectorAll("[data-board-ticket-slot]")).some(
+            (slot) => slot instanceof HTMLElement && slot.offsetParent !== null,
+          );
+        },
+        ticketCount,
+        { timeout: 60_000, polling: "raf" },
+      ),
+  );
+  await waitForShownBoard(page, ticketCount);
+  return { ...sample, ...(await boardMountCounts(page)) };
+}
+
+/** {@link waitForBoard}, and the board on screen rather than kept hidden behind a Ticket view. */
+async function waitForShownBoard(page, ticketCount) {
+  await waitForBoard(page, ticketCount);
+  await page.waitForFunction(
+    () => {
+      const board = document.querySelector("[data-board-ticket-count]");
+      if (!(board instanceof HTMLElement) || board.offsetParent === null) return false;
+      return Array.from(document.querySelectorAll("[data-board-ticket-slot]")).some(
+        (slot) => slot instanceof HTMLElement && slot.offsetParent !== null,
+      );
+    },
+    undefined,
+    { timeout: 60_000 },
+  );
+}
+
+/**
  * What the board is actually holding in the DOM right now (VC-316).
  *
  * `boardTickets` is what the columns HOLD and `mountedCards` is what they have
@@ -1024,12 +1318,18 @@ async function fullAppIteration({
   manifest,
   wanted,
   signal,
+  measurement = defaultMeasurement(manifest),
 }) {
   const profile = join(runRoot, `${armName}-${String(index + 1).padStart(2, "0")}`);
   await cloneFixture(fixtureDirectory, profile);
   const errors = [];
+  // Each measured interaction's wall-clock window, so the profile's
+  // `main-stall` lines can be put in the interaction they happened in.
+  const windows = [];
+  let outcome = null;
   let app;
   let launchStarted;
+  let launchStartedWall;
   let abortedClose;
   const closeOnAbort = () => {
     if (app !== undefined && abortedClose === undefined) {
@@ -1044,9 +1344,11 @@ async function fullAppIteration({
       userDataDir: profile,
       beforeLaunch: () => {
         launchStarted = performance.now();
+        launchStartedWall = Date.now();
       },
       extraEnv: {
         VOLLI_QUIET_WINDOWS: "1",
+        VOLLI_MAIN_STALL_MS: String(measurement.mainStallMs),
         PI_CODING_AGENT_DIR: join(profile, "pi-agent"),
         VOLLI_WORKTREE_HOME_DIR: join(profile, "runtime-worktrees"),
       },
@@ -1065,6 +1367,7 @@ async function fullAppIteration({
     const coldPaint = await page.evaluate(
       () => performance.getEntriesByName("first-contentful-paint").at(0)?.startTime ?? null,
     );
+    windows.push({ id: "cold_launch", startMs: launchStartedWall, endMs: Date.now() });
     const cold = {
       latencyMs: performance.now() - launchStarted,
       firstPaintMs: coldPaint,
@@ -1074,11 +1377,20 @@ async function fullAppIteration({
       rendererRssMb: await rendererRssMb(app),
     };
 
+    /** Runs `run` as interaction `id`'s window: its main stalls are its own. */
+    const timed = async (id, run) => {
+      const startMs = Date.now();
+      try {
+        return await run();
+      } finally {
+        windows.push({ id, startMs, endMs: Date.now() });
+      }
+    };
     /** Runs one measurement, or skips it when this run did not ask for it. */
     const measure = async (id, label, run) => {
       if (!wanted.has(id)) return null;
       console.log(`  measuring ${label}`);
-      return run();
+      return timed(id, run);
     };
 
     await openTicket(page, manifest.longChat.displayId);
@@ -1091,6 +1403,9 @@ async function fullAppIteration({
     );
     const newChat = await measure("new_chat", "new chat", () =>
       measureNewChat(page, app, manifest.longChat.displayId),
+    );
+    const chatTabSwitch = await measure("chat_tab_switch", "chat tab switch", () =>
+      measureChatTabSwitch(page, app, manifest.longChat.displayId, manifest.longChat.title),
     );
     const terminal = await measure("new_terminal", "new terminal", () =>
       measureNewTerminal(page, app, join(profile, "terminal-ready.txt")),
@@ -1112,10 +1427,15 @@ async function fullAppIteration({
         manifest.longChat.displayId,
       );
       console.log("  measuring ticket switch");
-      ticketSwitch = await measureTicketSwitch(page, app, switchTitle, switchDisplayId);
+      ticketSwitch = await timed("ticket_switch", () =>
+        measureTicketSwitch(page, app, switchTitle, switchDisplayId),
+      );
     }
     const rpc = await measure("rpc_round_trip", "RPC", () =>
       measureRpc(page, app, manifest.longChat.sessionId),
+    );
+    const boardReturn = await measure("board_return", "board return", () =>
+      measureBoardReturn(page, app, manifest.counts.tickets, manifest.longChat.displayId),
     );
     const board = await measure("board_render", "board render", () =>
       measureBoardRender(page, app, manifest.counts.tickets),
@@ -1132,7 +1452,7 @@ async function fullAppIteration({
     if (wanted.has("board_scroll")) {
       if (board === null) await bringBoardForward();
       console.log("  measuring board scroll");
-      boardScroll = await measureBoardScroll(page, app);
+      boardScroll = await timed("board_scroll", () => measureBoardScroll(page, app));
     }
     // Same precondition, and it restores the unfiltered board before returning,
     // so it is safe wherever it falls in the order.
@@ -1140,9 +1460,41 @@ async function fullAppIteration({
     if (wanted.has("board_filter")) {
       if (board === null && boardScroll === null) await bringBoardForward();
       console.log("  measuring board filter");
-      boardFilter = await measureBoardFilter(page, app);
+      boardFilter = await timed("board_filter", () => measureBoardFilter(page, app));
     }
-    return {
+    // VC-1093's arms. Each puts its own precondition in front, so any subset
+    // runs alone; the storms go last because they move read receipts.
+    const kit = {
+      measured,
+      settleFrames,
+      waitForBoard,
+      openTicket,
+      bringBoardForward: async () => bringBoardForward(),
+    };
+    const workspaceState = {};
+    const workspaceSwitch = await measure("workspace_switch", "workspace switch", () =>
+      measureWorkspaceSwitch(kit, {
+        page,
+        app,
+        profile,
+        ticketCount: manifest.counts.tickets,
+        state: workspaceState,
+      }),
+    );
+    const fleetStorm = await measure("fleet_storm", "fleet storm", () =>
+      measureFleetStorm(kit, {
+        page,
+        app,
+        ticketCount: manifest.counts.tickets,
+        storm: measurement.storm,
+      }),
+    );
+    const draftTyping = await measure("draft_typing", "draft typing", () =>
+      measureDraftTyping(kit, { page, app, manifest, storm: measurement.storm }),
+    );
+    // The window's stalls reach main's log in batches; let the last one land.
+    await page.waitForTimeout(RENDERER_STALL_FLUSH_WAIT_MS);
+    outcome = {
       samples: {
         cold_launch: wanted.has("cold_launch") ? cold : null,
         long_chat: longChat,
@@ -1150,21 +1502,72 @@ async function fullAppIteration({
         new_terminal: terminal,
         sidebar_toggle: sidebar,
         ticket_switch: ticketSwitch,
+        chat_tab_switch: chatTabSwitch,
+        board_return: boardReturn,
         board_render: board,
         board_scroll: boardScroll,
         board_filter: boardFilter,
         rpc_round_trip: rpc,
+        workspace_switch: workspaceSwitch,
+        fleet_storm: fleetStorm,
+        draft_typing: draftTyping,
       },
       rendererErrors: errors.slice(0, 20),
     };
   } finally {
     signal?.removeEventListener("abort", closeOnAbort);
-    if (abortedClose !== undefined) await abortedClose;
-    else if (app !== undefined) await closeAppBounded(app).catch(() => null);
+    let closed = null;
+    if (abortedClose !== undefined) closed = await abortedClose;
+    else if (app !== undefined) closed = await closeAppBounded(app).catch(() => null);
+    // Read only after the app has quit: its quit writes the log's tail.
+    if (outcome !== null) {
+      attachStallSignals(outcome, await readProfileStalls(profile), windows, closed?.kind ?? null);
+    }
     if (process.env.VOLLI_PERF_KEEP_RUNS !== "1") {
       await fs.rm(profile, { recursive: true, force: true });
     }
   }
+  return outcome;
+}
+
+/** What a repetition measures with when the caller names nothing: production thresholds, VC-1078's storm. */
+function defaultMeasurement(manifest) {
+  return {
+    mainStallMs: MAIN_STALL_DEFAULT_THRESHOLD_MS,
+    storm: {
+      sessionIds: stormSessionIds(manifest.counts.sessions, STORM_DEFAULTS.sessions),
+      intervalMs: STORM_DEFAULTS.intervalMs,
+      durationMs: STORM_DEFAULTS.durationMs,
+    },
+  };
+}
+
+/** The measurement settings a run's arguments name. */
+export function measurementFor(args, manifest) {
+  return {
+    mainStallMs: args.mainStallMs,
+    storm: {
+      sessionIds: stormSessionIds(manifest.counts.sessions, args.stormSessions),
+      intervalMs: args.stormIntervalMs,
+      durationMs: args.stormDurationMs,
+    },
+  };
+}
+
+/**
+ * Puts a repetition's logged stalls on it (VC-1093): the repetition's own
+ * signals, and on each measured sample the main stalls inside its window.
+ * `closeKind` is how the app ended; a forced kill may lose the log's tail,
+ * and the raw report says so rather than reading as a quiet run.
+ */
+export function attachStallSignals(outcome, parsed, windows, closeKind) {
+  const byWindow = mainStallsByWindow(parsed.main, windows);
+  for (const [id, sample] of Object.entries(outcome.samples)) {
+    if (sample === null || byWindow[id] === undefined) continue;
+    Object.assign(sample, mainStallSampleFields(byWindow[id]));
+  }
+  outcome.signals = { ...repetitionSignals(parsed, windows), closeKind, windows };
+  return outcome;
 }
 
 function isRecord(value) {
@@ -1478,6 +1881,9 @@ async function runArm({ args, fixtureDirectory, runRoot, manifest, loaded, chatB
   const byInteraction = Object.fromEntries(INTERACTIONS.map(([id]) => [id, []]));
   const wanted = new Set(args.interactions ?? INTERACTIONS.map(([id]) => id));
   const rendererErrors = [];
+  const measurement = measurementFor(args, manifest);
+  // Each summarized repetition's logged stalls; the warm-up's are discarded with it.
+  const repetitionStalls = [];
   const underLoad = (label, operation) =>
     load === null ? operation(undefined) : load.run(label, operation);
   let completingExposure = false;
@@ -1509,6 +1915,7 @@ async function runArm({ args, fixtureDirectory, runRoot, manifest, loaded, chatB
           manifest,
           wanted,
           signal,
+          measurement,
         }),
       );
       // A broken renderer during warm-up is still a broken renderer.
@@ -1525,9 +1932,11 @@ async function runArm({ args, fixtureDirectory, runRoot, manifest, loaded, chatB
             manifest,
             wanted,
             signal,
+            measurement,
           }),
         );
         validateRendererErrors(result.rendererErrors, `${name} ${label}`);
+        repetitionStalls.push(result.signals);
         for (const [id, sample] of Object.entries(result.samples)) {
           if (sample !== null) byInteraction[id].push(sample);
         }
@@ -1544,6 +1953,7 @@ async function runArm({ args, fixtureDirectory, runRoot, manifest, loaded, chatB
             : [aggregateInteraction(id, label, byInteraction[id])],
         ),
         rendererErrors: rendererErrors.slice(0, 50),
+        ...stallSignalsFor(repetitionStalls, measurement),
       };
       if (load !== null) {
         completingExposure = true;
@@ -1583,6 +1993,7 @@ async function runArm({ args, fixtureDirectory, runRoot, manifest, loaded, chatB
         errors: chat.errors,
       },
       rendererErrors: rendererErrors.slice(0, 50),
+      ...stallSignalsFor(repetitionStalls, measurement),
     };
     if (load !== null) {
       completingExposure = true;
@@ -1610,6 +2021,19 @@ async function runArm({ args, fixtureDirectory, runRoot, manifest, loaded, chatB
     }
     throw error;
   }
+}
+
+/**
+ * An arm's stall signals, and each repetition's raw ones for benchmark.json.
+ * Empty for a stream-only arm, which launches no full app and so has no
+ * profile log to read.
+ */
+function stallSignalsFor(repetitions, measurement) {
+  if (repetitions.length === 0) return {};
+  return {
+    signals: armSignals(repetitions, { summarize, mainStallThresholdMs: measurement.mainStallMs }),
+    repetitionSignals: repetitions,
+  };
 }
 
 export function summaryReport(report) {
@@ -1640,6 +2064,16 @@ export function summaryReport(report) {
     },
     repetitions: report.config.repetitions,
     warmupIterationsPerArm: report.config.warmupIterationsPerArm ?? 0,
+    // VC-1093: what a compare needs to refuse an unlike pair, beyond the above.
+    ...(report.config.mainStallThresholdMs === undefined
+      ? {}
+      : {
+          signalConfig: {
+            mainStallThresholdMs: report.config.mainStallThresholdMs,
+            storm: report.config.storm,
+          },
+          interactionsMeasured: report.config.interactions,
+        }),
     arms: report.arms.map((arm) => ({
       name: arm.name,
       busyCores: arm.busyCores,
@@ -1648,6 +2082,7 @@ export function summaryReport(report) {
         label: interaction.label,
         aggregates: interaction.summary,
       })),
+      ...(arm.signals === undefined ? {} : { signals: arm.signals }),
     })),
     armGap: report.backgroundLoadGap,
   };
@@ -1711,10 +2146,32 @@ export function markdown(report) {
           `| ${arm.name} | ↳ mounted cards / held | ${summary.mountedCards?.p50 ?? "—"} / ${summary.boardTickets?.p50 ?? "—"} | ${summary.mountedCards?.p95 ?? "—"} / ${summary.boardTickets?.p95 ?? "—"} | — | — | — | — | — |`,
         );
       }
+      if (interaction.id === "chat_tab_switch" || interaction.id === "board_return") {
+        lines.push(
+          `| ${arm.name} | ↳ input to next paint | ${summary.inputToPaintMs?.p50 ?? "—"} ms | ${summary.inputToPaintMs?.p95 ?? "—"} ms | — | — | — | — | — |`,
+          `| ${arm.name} | ↳ renderer CPU | ${summary.rendererCpuMs?.p50 ?? "—"} ms | ${summary.rendererCpuMs?.p95 ?? "—"} ms | — | — | — | — | — |`,
+        );
+      }
       if (interaction.id === "sidebar_toggle") {
         lines.push(
           `| ${arm.name} | ↳ close / open | ${summary.closeMs?.p50 ?? "—"} / ${summary.openMs?.p50 ?? "—"} ms | ${summary.closeMs?.p95 ?? "—"} / ${summary.openMs?.p95 ?? "—"} ms | — | — | — | — | — |`,
           `| ${arm.name} | ↳ band rows, Active / Previous | ${summary.sidebarRows_active?.p50 ?? "—"} / ${summary.sidebarRows_previous?.p50 ?? "—"} | ${summary.sidebarRows_active?.p95 ?? "—"} / ${summary.sidebarRows_previous?.p95 ?? "—"} | — | — | — | — | — |`,
+        );
+      }
+      if (summary.toLightMs !== undefined) {
+        lines.push(
+          `| ${arm.name} | ↳ to the one-ticket workspace | ${summary.toLightMs?.p50 ?? "—"} ms | ${summary.toLightMs?.p95 ?? "—"} ms | ${summary.toLightMs?.variance ?? "—"} ms² | — | — | — | — |`,
+        );
+      }
+      if (summary.keyToPaintMs !== undefined) {
+        lines.push(
+          `| ${arm.name} | ↳ keydown to painted (each key) | ${summary.keyToPaintMs.p50} ms | ${summary.keyToPaintMs.p95} ms | ${summary.keyToPaintMs.variance} ms² | — | — | — | — |`,
+        );
+      }
+      if (summary.stormPushes !== undefined) {
+        lines.push(
+          `| ${arm.name} | ↳ storm lag / setRead round trip p95 | ${summary.stormLagMs?.p50 ?? "—"} / ${summary.stormRoundTripP95Ms?.p50 ?? "—"} ms | ${summary.stormLagMs?.p95 ?? "—"} / ${summary.stormRoundTripP95Ms?.p95 ?? "—"} ms | — | — | — | — | — |`,
+          `| ${arm.name} | ↳ pushes / activity notices | ${summary.stormPushes?.p50 ?? "—"} / ${summary.activityNotices?.p50 ?? "—"} | ${summary.stormPushes?.p95 ?? "—"} / ${summary.activityNotices?.p95 ?? "—"} | — | — | — | — | — |`,
         );
       }
       if (interaction.id === "ticket_switch") {
@@ -1751,6 +2208,8 @@ export function markdown(report) {
       ),
     );
   }
+  const labelOf = (id) => INTERACTIONS.find(([known]) => known === id)?.[1] ?? id;
+  lines.push(...signalsMarkdown(report.arms, labelOf));
   lines.push(
     "",
     "## Method",
@@ -1762,6 +2221,12 @@ export function markdown(report) {
     `- The loaded arm is named \`N-busy-core-for-${report.config.loadDurationSeconds}s\`: N Node worker threads run one fixed integer-mixing loop against a shared monotonic deadline. A full arm fails if measurement reaches that deadline. What happens otherwise depends on the run, and the "Loaded-arm ending" line above states which of these this one did: a full arm holds the load until the configured exposure is complete (\`fixed-duration-complete\`), a quick stream-only smoke stops early (\`quick-smoke-early-stop\`), and a run narrowed with \`--interactions\` stops as soon as its measurements are done (\`narrowed-interactions-early-stop\`) — that last exposure is sized to the measurements, so it is comparable to another narrowed run but not to a full matrix.`,
     "- Ticket switching first makes both workspaces usable, returns to the first, then times selection and focus-readiness of the already-open second workspace.",
     "- RSS is Electron `app.getAppMetrics()` renderer working-set size. RPC is the native tRPC `session.projection` request through the preload IPC bridge.",
+    ...(report.config.storm === undefined
+      ? []
+      : [
+          `- Workspace switch adds a one-ticket second project through \`projects.create\`, then times ⌘N back to the fixture's project until its board holds every ticket. Fleet storm: ${report.config.storm.sessions} Sessions each call \`sessions.setRead\` every ${report.config.storm.intervalMs} ms for ${report.config.storm.durationMs} ms (main reads, writes the receipt, rebuilds and broadcasts the listing row on \`volli:session-activity\`), with the board in front. Draft typing types ${DRAFT_TEXT.length} keys into a new chat's composer on the long chat's ticket during the same storm.`,
+          `- Stall signals come from the app's own log in each repetition's profile: \`main-stall\` (threshold ${report.config.mainStallThresholdMs} ms) and \`renderer-stall\`. A main stall belongs to the interaction whose wall-clock window its line falls in; the rest are \`between-interactions\` (harness setup).`,
+        ]),
     "",
     "Raw samples and complete host/fixture metadata are in benchmark.json; benchmark.summary.json is the compact, committable aggregate artifact.",
     "",
@@ -1857,6 +2322,14 @@ async function main() {
       // and the other measured all nine.
       interactions: args.interactions ?? INTERACTIONS.map(([id]) => id),
       arms: args.arms,
+      // The signal settings (VC-1093): the app's main-stall threshold and the
+      // storm shape both change what the numbers mean, so a compare checks them.
+      mainStallThresholdMs: args.mainStallMs,
+      storm: {
+        sessions: Math.min(args.stormSessions, generated.manifest.counts.sessions),
+        intervalMs: args.stormIntervalMs,
+        durationMs: args.stormDurationMs,
+      },
     },
     arms: [],
   };

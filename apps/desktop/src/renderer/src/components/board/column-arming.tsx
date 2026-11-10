@@ -1,3 +1,6 @@
+import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
+import { SearchableCommand } from "@renderer/components/ui/searchable-command";
+import { CheckIcon } from "@renderer/components/ui/icon";
 /**
  * The column-header bolt (VC-112, "Surfaces"): arm this column, or disarm it.
  *
@@ -16,17 +19,18 @@
  * in both states for the same reason: the answer to "nothing is offered here"
  * and to "I want a different one" is the same page.
  *
- * The bolt is always visible: outline means unarmed, fill means armed.
- * Automatic triggers are a separate machine-local choice. An armed Automation
- * with those paused keeps its filled mark, but uses muted ink and names the
- * pause explicitly. The menu exposes that switch beside the arming choice.
+ * The bolt is always outline: accent ink means armed and ready. Automatic
+ * triggers are a separate machine-local choice. With those paused, selected
+ * background retains the armed distinction, muted ink and the name say paused.
+ * The menu exposes that switch beside the arming choice.
  *
  * The list is re-read on open. Arming is machine-local and the record is not:
  * an Automation authored anywhere else in the app is a change this menu's own
  * open is the moment to notice, which is the palette's convention too.
  */
 import * as React from "react";
-import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
+import { AutomationIcon, AutomationOffIcon, RemoveCircleIcon } from "@renderer/components/ui/icon";
+
 import {
   offeredAutomationsForColumn,
   TICKET_STATUS_LABELS,
@@ -109,16 +113,129 @@ function LocalColumnArmingButton({
         ? `${TICKET_STATUS_LABELS[status]} runs ${armed.name}`
         : `${TICKET_STATUS_LABELS[status]} is armed with ${armed.name} — automatic triggers off`;
 
+  const [open, setOpen] = React.useState(false);
+  const [query, setQuery] = React.useState("");
+  const opening = (next: boolean) => {
+    setOpen(next);
+    if (!next) {
+      setQuery("");
+      return;
+    }
+    void refresh(projectId);
+    void refreshArming(projectId);
+    void refreshOrder(projectId);
+    void refreshEnablement();
+  };
+  const choose = (value: string) => {
+    if (!guardWrite(projectId)) return;
+    void arm({ projectId, status, automationId: value === DISARMED ? null : value }).then(
+      (refusal) => {
+        if (refusal !== null) toastError(`Couldn't arm this column: ${refusal}`);
+      },
+    );
+  };
+  if (offered.length > 12) {
+    const choices = [
+      { id: DISARMED, name: "No automation" },
+      ...offered.filter(
+        (automation) =>
+          automation.id === armed?.id ||
+          automation.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()),
+      ),
+    ];
+    return (
+      <Popover open={open} onOpenChange={opening}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <PopoverTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                {...readOnlyControl(canWrite)}
+                aria-label={label}
+                data-column-arming={status}
+                data-armed={armed?.id}
+                data-arming-state={armingState}
+                className={cn(
+                  "shrink-0",
+                  armed !== null && armingState !== "ready" && "bg-accent",
+                  armingState === "ready" ? "text-primary-text" : "text-muted-foreground",
+                )}
+              >
+                <AutomationIcon data-arming-mark={armed === null ? "unarmed" : "armed"} />
+              </Button>
+            </PopoverTrigger>
+          </TooltipTrigger>
+          <TooltipContent>{label}</TooltipContent>
+        </Tooltip>
+        <PopoverContent align="start" className="w-80 gap-0 p-0">
+          {query.trim() &&
+          !offered.some((automation) =>
+            automation.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()),
+          ) ? (
+            <p role="status" className="px-3 py-2 text-ui text-muted-foreground">
+              No matching automations
+            </p>
+          ) : null}
+          <SearchableCommand
+            items={choices}
+            keyOf={(automation) => automation.id}
+            query={query}
+            onQueryChange={setQuery}
+            placeholder="Search automations"
+            onSelect={(automation) => {
+              choose(automation.id);
+              setOpen(false);
+              setQuery("");
+            }}
+            renderItem={(automation) => (
+              <>
+                {automation.id === DISARMED ? (
+                  <RemoveCircleIcon />
+                ) : enabledIds.includes(automation.id) ? (
+                  <AutomationIcon />
+                ) : (
+                  <AutomationOffIcon />
+                )}
+                <span className="min-w-0 flex-1 truncate" title={automation.name}>
+                  {automation.name}
+                </span>
+                {(armed?.id ?? DISARMED) === automation.id ? <CheckIcon /> : null}
+              </>
+            )}
+          />
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border p-2">
+            {armed === null ? null : (
+              <Button
+                variant="ghost"
+                size="sm"
+                role="switch"
+                aria-checked={enabledIds.includes(armed.id)}
+                onClick={() => void setEnabled(armed.id, !enabledIds.includes(armed.id))}
+              >
+                <AutomationIcon />
+                Automatic triggers
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setOpen(false);
+                useProjectUiStore.getState().setNav(projectId, "automations");
+              }}
+            >
+              <AutomationIcon />
+              Automations
+            </Button>
+          </div>
+        </PopoverContent>
+      </Popover>
+    );
+  }
+
   return (
-    <DropdownMenu
-      onOpenChange={(open) => {
-        if (!open) return;
-        void refresh(projectId);
-        void refreshArming(projectId);
-        void refreshOrder(projectId);
-        void refreshEnablement();
-      }}
-    >
+    <DropdownMenu open={open} onOpenChange={opening}>
       <Tooltip>
         <TooltipTrigger asChild>
           <DropdownMenuTrigger asChild>
@@ -132,56 +249,45 @@ function LocalColumnArmingButton({
               data-arming-state={armingState}
               className={cn(
                 "shrink-0",
-                armingState === "ready" ? "text-foreground" : "text-muted-foreground",
+                armed !== null && armingState !== "ready" && "bg-accent",
+                armingState === "ready" ? "text-primary-text" : "text-muted-foreground",
               )}
             >
-              <LightningIcon
-                weight={armed === null ? "regular" : "fill"}
-                data-arming-mark={armed === null ? "unfilled" : "filled"}
-              />
+              <AutomationIcon data-arming-mark={armed === null ? "unarmed" : "armed"} />
             </Button>
           </DropdownMenuTrigger>
         </TooltipTrigger>
         <TooltipContent>{label}</TooltipContent>
       </Tooltip>
-      <DropdownMenuContent align="start" className="w-60">
+      <DropdownMenuContent align="start" className="w-80">
         <DropdownMenuLabel>Arrives in {TICKET_STATUS_LABELS[status]}</DropdownMenuLabel>
         {offered.length === 0 ? (
-          <DropdownMenuItem disabled>No automation is offered here</DropdownMenuItem>
+          <div className="sr-only">No automations in this column</div>
         ) : (
-          <DropdownMenuRadioGroup
-            value={armed?.id ?? DISARMED}
-            onValueChange={(value) => {
-              // A menu opened before the host went away cannot arm through it.
-              if (!guardWrite(projectId)) return;
-              void arm({
-                projectId,
-                status,
-                automationId: value === DISARMED ? null : value,
-              }).then((refusal) => {
-                // A refusal here is not a correction to something still on
-                // screen — the menu closed on select — so it toasts, like every
-                // other failed mutation.
-                if (refusal !== null) toastError(`Couldn't arm this column: ${refusal}`);
-              });
-            }}
-          >
-            <DropdownMenuRadioItem value={DISARMED}>No Automation</DropdownMenuRadioItem>
+          <DropdownMenuRadioGroup value={armed?.id ?? DISARMED} onValueChange={choose}>
+            <DropdownMenuRadioItem value={DISARMED}>
+              <RemoveCircleIcon />
+              No automation
+            </DropdownMenuRadioItem>
             {offered.map((automation) => (
-              <DropdownMenuRadioItem key={automation.id} value={automation.id}>
-                {automation.name}
-                {/* An Automation that is switched off on this machine can be
-                    armed — arming is the column's choice and the switch is the
-                    record's — but it will not fire until someone turns it on,
-                    so the row says so. The switch below and the Automations
-                    page both update the same machine-local preference.
-                    (VC-112: a machine fires nothing until someone turns
-                    something on there.) */}
-                {enabledIds.includes(automation.id) ? null : (
-                  <span className="ml-auto shrink-0 text-label text-muted-foreground">
-                    {SWITCHED_OFF_NOTE}
-                  </span>
-                )}
+              <DropdownMenuRadioItem
+                key={automation.id}
+                value={automation.id}
+                title={
+                  enabledIds.includes(automation.id)
+                    ? automation.name
+                    : `${automation.name} · ${SWITCHED_OFF_NOTE}`
+                }
+                aria-label={
+                  enabledIds.includes(automation.id)
+                    ? automation.name
+                    : `${automation.name} · ${SWITCHED_OFF_NOTE}`
+                }
+              >
+                {enabledIds.includes(automation.id) ? <AutomationIcon /> : <AutomationOffIcon />}
+                <span className="min-w-0 flex-1 whitespace-normal wrap-anywhere">
+                  {automation.name}
+                </span>
               </DropdownMenuRadioItem>
             ))}
           </DropdownMenuRadioGroup>
@@ -193,21 +299,19 @@ function LocalColumnArmingButton({
               checked={enabledIds.includes(armed.id)}
               onCheckedChange={(enabled) => void setEnabled(armed.id, enabled)}
             >
+              <AutomationIcon />
               Automatic triggers
             </DropdownMenuCheckboxItem>
           </>
         )}
         <DropdownMenuSeparator />
-        <DropdownMenuLabel className="text-label font-normal text-muted-foreground">
-          ⌥-drag a ticket to choose an automation
-        </DropdownMenuLabel>
         {/* The link, not an editor: authoring lives on the page (VC-112), and
             what a column offers is decided by an Automation's Trigger there. */}
         <DropdownMenuItem
           data-column-arming-page
           onSelect={() => useProjectUiStore.getState().setNav(projectId, "automations")}
         >
-          <LightningIcon />
+          <AutomationIcon />
           Automations
         </DropdownMenuItem>
       </DropdownMenuContent>

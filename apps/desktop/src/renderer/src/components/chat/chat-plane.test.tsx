@@ -53,9 +53,12 @@ describe("the desktop transcript-row mapping", () => {
       <ChatTranscriptRow row={row} context={context} live={false} />,
     );
     expect(html).toContain("Tools updated: 1 added");
-    expect(html).toContain("Cold turn");
-    expect(html).toContain("codemode (updated)");
-    expect(html).toContain("<details");
+    // The shared Collapsible, closed at rest: the trigger says what changed;
+    // the trigger and names wait behind it (tool-refresh-notice-ui.tsx).
+    expect(html).toContain('data-slot="collapsible"');
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).not.toContain("Cold turn");
+    expect(html).not.toContain("<details");
     expect(html).not.toContain("is-user");
     expect(html).not.toContain('role="alert"');
   });
@@ -82,6 +85,8 @@ describe("the desktop transcript-row mapping", () => {
       ],
       [],
       [],
+      [],
+      new Map([["notice-1", { kind: "volli", reason: "subagent-notice" }]]),
     );
     if (row === undefined) throw new Error("expected one transcript row");
 
@@ -89,10 +94,63 @@ describe("the desktop transcript-row mapping", () => {
       <ChatTranscriptRow row={row} context={context} live={false} />,
     );
     expect(html).toContain("Review tests");
-    expect(html).toContain("done");
+    expect(html).toContain("finished");
     expect(html).not.toContain(modelText);
     expect(html).not.toContain("is-user");
-    expect(html).not.toContain('aria-label="Copy"');
+    expect(html).not.toContain('aria-label="Copy message"');
+  });
+});
+
+describe("recorded message authorship", () => {
+  const sessionId = "child123456789";
+  const prefix =
+    "[Steering from supervising Session child123 — owner direction, not your user's own message]";
+  const message: UIMessage = {
+    id: "steer",
+    role: "user",
+    parts: [{ type: "text", text: `${prefix}\n\nCheck dark mode too.` }],
+  };
+  it("keeps Session authorship distinct without stripping a kickoff's quoted supervision marker", () => {
+    const html = renderToStaticMarkup(
+      <ChatTurn
+        messages={[message]}
+        context={{
+          ...context,
+          messageOrigins: new Map([[message.id, { kind: "session", sessionId }]]),
+          deliveryLabels: new Map([[message.id, "Delivered"]]),
+          toolContext: { sessionNames: new Map([[sessionId, "Contrast audit"]]) },
+        }}
+        live={false}
+      />,
+    );
+    expect(html).toContain("is-user");
+    expect(html).toContain("Message from Contrast audit");
+    expect(html).toContain("Check dark mode too.");
+    expect(html).not.toContain(">steered<");
+    expect(html).toContain("Original output");
+    expect(html).toContain("Steering from supervising Session child123");
+    expect(html).not.toContain("You steered");
+    expect(message.parts[0]).toEqual({ type: "text", text: `${prefix}\n\nCheck dark mode too.` });
+  });
+  it("does not turn a person's quoted marker into trusted steering", () => {
+    const html = renderToStaticMarkup(
+      <ChatTurn
+        messages={[message]}
+        context={{ ...context, messageOrigins: new Map([[message.id, { kind: "user" }]]) }}
+        live={false}
+      />,
+    );
+    expect(html).toContain("Steering from supervising Session child123");
+    expect(html).not.toContain("Message from Contrast audit");
+    expect(html).not.toContain(">steered<");
+    expect(html).not.toContain("Original output");
+  });
+  it("uses a neutral legacy label and preserves unknown provenance verbatim", () => {
+    const html = turn(message);
+    expect(html).toContain(">Message</bdi>");
+    expect(html).toContain("Steering from supervising Session child123");
+    expect(html).not.toContain(">steered<");
+    expect(html).not.toContain("You steered");
   });
 });
 
@@ -144,7 +202,13 @@ describe("ChatTurn copy control", () => {
       parts: [{ type: "text", text: `${role} message` }],
     });
 
-    expect(html).toContain('aria-label="Copy"');
+    expect(html).toContain('aria-label="Copy message"');
+    expect(html).toContain('data-size="icon-sm"');
+    expect(html).toContain('data-message-copy=""');
+    expect(html).toContain("size-3.5");
+    expect(html).not.toContain('title="Copy"');
+    expect(html).not.toContain("left-[calc(100%");
+    expect(html).not.toContain("pointer-events-none absolute top-0");
   });
 });
 
@@ -173,10 +237,14 @@ describe("SessionBlocker hit testing", () => {
     // rather than a behaviour. Keeps main's `data-slot` requirement, since the
     // slot is how this element is addressed, without re-pinning the position
     // of the next attribute somebody adds.
-    expect(html).toMatch(
-      /^<div class="pointer-events-none"><div\b[^>]*\bdata-slot="session-blocker"[^>]*\bclass="[^"]*\bpointer-events-auto\b/,
-    );
-    expect(html).toContain('aria-label="Dismiss"');
+    const blocker = /^<div class="pointer-events-none">(<div\b[^>]*>)/.exec(html)?.[1] ?? "";
+    expect(blocker).toContain('data-slot="session-blocker"');
+    expect(blocker).toMatch(/\bclass="[^"]*\bpointer-events-auto\b/);
+    // Drawn by the shared Notice: its dismissal, its copy and its recovery.
+    expect(html).toContain('aria-label="Dismiss notice"');
+    expect(html).toContain(">Retry</button>");
+    expect(html).toContain("Copy error");
+    expect(html).toContain("Stream ended without finish_reason");
   });
 
   // VC-584: the failed environment setup's row, the one with a third act.

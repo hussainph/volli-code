@@ -116,7 +116,7 @@ describe("ShellOutputView", () => {
     }));
     await render({ tail });
     expect(standing()).toBe("gone");
-    expect(pre()).toContain("attachment ended");
+    expect(pre()).toBe("Shell gone · Session detached");
   });
 
   it("names the exit signal for a killed shell", async () => {

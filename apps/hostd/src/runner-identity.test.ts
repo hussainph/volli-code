@@ -12,7 +12,7 @@ import {
   type TestDb,
   createSqliteSessionLedger,
 } from "@volli/host-core/testing";
-import { closeStaleAttachments } from "@volli/host-core/session-runtime";
+import { closeStaleAttachments, createBootRecoveryEngine } from "@volli/host-core/session-runtime";
 // hostd does not depend on the engine package; host-core's own copy is the one it runs.
 import {
   createSessionEngine,
@@ -116,11 +116,11 @@ function stop({ db }: Booted): void {
   db.pragma("wal_checkpoint(TRUNCATE)");
   db.close();
 }
-async function sweep({ engine }: Booted, venue: RunnerIdentity, projectId: string) {
+async function sweep({ db, engine }: Booted, venue: RunnerIdentity, projectId: string) {
   const onError = vi.fn();
   let n = 0;
   const closed = await closeStaleAttachments({
-    engine,
+    engine: createBootRecoveryEngine({ db, engine }),
     venue,
     reconcile: () => Promise.reject(new Error("no structured turn is open")),
     projectIds: [projectId],

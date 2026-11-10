@@ -14,9 +14,7 @@
  */
 import * as React from "react";
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
-import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
-import { WifiSlashIcon } from "@phosphor-icons/react/dist/csr/WifiSlash";
+import { RefreshIcon, WarningIcon, OfflineIcon } from "@renderer/components/ui/icon";
 
 import { Button } from "@renderer/components/ui/button";
 import { cn } from "@renderer/lib/utils";
@@ -39,8 +37,8 @@ const TONE: Record<HostSurfaceTone, string> = {
 };
 
 const ICON = {
-  reconnect: ArrowClockwiseIcon,
-  offline: WifiSlashIcon,
+  reconnect: RefreshIcon,
+  offline: OfflineIcon,
   warning: WarningIcon,
 } as const;
 
@@ -150,7 +148,7 @@ function SurfaceBody({ host, surface }: { host: HostRecord; surface: HostSurface
     <>
       <Icon
         aria-hidden
-        weight={surface.tone === "quiet" ? "regular" : "fill"}
+
         className={cn(
           "size-4 shrink-0",
           TONE[surface.tone],

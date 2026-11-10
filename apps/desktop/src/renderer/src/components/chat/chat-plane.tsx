@@ -9,7 +9,7 @@
  * device drafts and unsent recovery live in `stores/chat-drafts.ts`. This view
  * owns only measurements and which controls have a command in flight.
  */
-import { sessionPictureFor } from "@renderer/chat/transport";
+import { sessionPictureFor, sourceIconsFor } from "@renderer/chat/transport";
 import { CodeModePictureHostContext } from "./activity-ui";
 import { readCodeModePicture } from "./code-mode-output-model";
 import * as React from "react";
@@ -18,15 +18,18 @@ import { SessionTeamHeader } from "@renderer/components/sessions/session-team";
 import { toast } from "sonner";
 import { useStore } from "zustand";
 
+import { holdInteraction, markInteraction } from "@renderer/lib/renderer-stalls";
 import { toastError } from "@renderer/lib/toast";
 import type { BlobLinkView } from "@volli/shared";
-import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
-import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
-import { ClockIcon } from "@phosphor-icons/react/dist/csr/Clock";
-import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
-import { XCircleIcon } from "@phosphor-icons/react/dist/csr/XCircle";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import {
+  GuideIcon,
+  SuccessIcon,
+  ClockIcon,
+  CopyIcon,
+  WarningIcon,
+  ErrorIcon,
+} from "@renderer/components/ui/icon";
+
 import type {
   HiddenModelRef,
   ModelAccessDefaults,
@@ -68,15 +71,23 @@ import {
   useMaterializedAttachments,
 } from "@renderer/hooks/use-materialized-attachments";
 import { Message, MessageContent } from "@renderer/components/ui/ai-elements/message";
-import { ReasoningLine } from "@renderer/components/ui/ai-elements/reasoning";
 import {
   groupTurns,
   currentTurnReply,
   isDeliverable,
   readInteractionResolutionMessage,
+  indexInteractionResolutionMessages,
   segmentTurn,
   sessionContextUsage,
   projectTranscriptRows,
+  projectWorkWindows,
+  transcriptMessageTimes,
+  transcriptMessageOrigins,
+  transcriptMessageAttribution,
+  deliveredAnswer,
+  presentTranscriptTool,
+  activityDescriptor,
+  EMPTY_TRANSCRIPT,
   messageDeliveryLabels,
   type MessageDeliveryLabel,
   type ChatSegment,
@@ -84,16 +95,27 @@ import {
   type InteractionSubmission,
   type MessageDelivery,
   type QueuedMessage,
-  type TranscriptRow,
+  type WorkTranscriptRow as TranscriptRow,
+  type TranscriptToolContext as ToolDisplayContext,
 } from "@volli/session-presentation";
 import {
   useSessionController,
   type ChatSessionsStore,
 } from "@renderer/chat/use-session-controller";
 import { useActivityIsland } from "@renderer/chat/use-activity-island";
+import { useTurnActivity } from "@renderer/chat/use-turn-activity";
+import { selectTurnExitKind } from "@renderer/chat/turn-activity";
 import { useChatBrowserTabs } from "@renderer/chat/use-island-tabs";
 import { ActivityIsland } from "@renderer/components/chat/activity-island-ui";
-import { ActivityBundle, copyText } from "@renderer/components/chat/activity-ui";
+import { ActivityBundle } from "@renderer/components/chat/activity-ui";
+import { copyText, COPY_FEEDBACK_MS } from "./transcript-copy";
+import {
+  OriginalOutput,
+  TranscriptToolContext,
+} from "@renderer/components/chat/presented-tool-row";
+import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
+import { TranscriptSourceIcons, type TranscriptSourceIconsApi } from "./transcript-source-icons";
+import { useTranscriptMcpNames } from "./use-transcript-mcp-names";
 import { RunningBashProvider } from "@renderer/components/chat/running-bash-control";
 import {
   CompactionBoundary,
@@ -116,7 +138,6 @@ import {
   resolvingWith,
   restoreStripAttachments,
   sameInteractionId,
-  liveTurnHasProgress,
   sameMessages,
   sameQueuedMessage,
   sessionBlocker,
@@ -190,7 +211,6 @@ import { notAvailableOn, useRemoteHostName } from "@renderer/components/hosts/us
 import { useRemoteSessionOnScreen } from "@renderer/lib/remote-sessions";
 import { useCloudSessionOnScreen } from "@renderer/lib/use-cloud-session-on-screen";
 import { ChatEmptyState } from "@renderer/components/chat/empty/chat-empty-state";
-import { TranscriptSkeleton } from "@renderer/components/chat/transcript-skeleton";
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
@@ -200,7 +220,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
-import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
+import { Notice } from "@renderer/components/ui/notice";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
 import { delayUntil } from "@renderer/lib/boundary-timer";
 
@@ -243,44 +264,6 @@ const EMPTY_MODEL_SELECTION: ComposerModelSelection = {
 const EMPTY_ATTENTION: SessionAttentionProjection = { active: [], primary: null };
 const EMPTY_RESOLVING: ReadonlySet<string> = new Set();
 
-/**
- * The transcript's dissolve into the composer — 64px of ramp above an opaque bar.
- *
- * Something has to sit here: the scroller runs the full height of the plane and
- * the composer is opaque, so without a ramp a line scrolling under it is cut by
- * a straight horizontal edge, mid-glyph, with nothing to say it was scrolling
- * rather than broken. That is the same cut `sidebar-scroll.tsx` softens at the
- * nav and the footer.
- *
- * WHAT THE SHAPE IS FOR, and why it is not a plain linear ramp. Alpha has to
- * reach 1 BEFORE the seam: a linear fade is still ~2% short one pixel above the
- * composer, so the last of the ink survives to the seam and is then hard-cut by
- * an opaque edge — the ghost this gradient has always been trying to avoid. The
- * first fix for that was a flat 2rem of solid background at the bottom, which
- * bought a clean seam by DELETING a whole line: text did not fade out, it hit
- * an invisible wall 32px above the composer and vanished, leaving a stripe of
- * half-glyphs at the wall and dead paper below it.
- *
- * So the ramp is EASED instead of flattened. Stops are sampled from smootherstep
- * — S(x) = 6x⁵ − 15x⁴ + 10x³, alpha = 1 − S, over the band above the seam — so
- * the curve is flat at both ends and steep in the middle: opaque with margin at
- * the seam, imperceptible at the top edge where the fade begins, and dissolving
- * fastest in between. Full background is reached 5px above the composer rather
- * than 32, which is the whole gain: three lines dissolve where one used to be
- * erased. The percentages are samples of that curve, not picks off the alpha
- * ladder in docs/DESIGN.md — changing one in isolation puts a kink in a curve.
- */
-const COMPOSER_SCRIM = [
-  "linear-gradient(to top",
-  "var(--background) 0 8%",
-  "color-mix(in oklab, var(--background) 95%, transparent) 25%",
-  "color-mix(in oklab, var(--background) 77%, transparent) 40%",
-  "color-mix(in oklab, var(--background) 48%, transparent) 55%",
-  "color-mix(in oklab, var(--background) 20%, transparent) 70%",
-  "color-mix(in oklab, var(--background) 3%, transparent) 85%",
-  "transparent 100%)",
-].join(",");
-
 export interface ChatPlaneProps {
   sessionId: string;
   /** Project scope for Model Access and file navigation. */
@@ -314,6 +297,26 @@ export interface ChatPlaneProps {
   store?: ChatSessionsStore;
 }
 
+/**
+ * Holds a visible plane's Session resident (VC-515): adopts it if nothing has
+ * yet — a tab restored at relaunch is opened, not adopted, until a pane shows
+ * it — wakes it if its idle client was let go, and keeps it off the eviction
+ * list while on screen. A provisional Draft has no Session to show.
+ */
+function useChatSessionShown(
+  sessionsStore: ChatSessionsStore,
+  sessionId: string | null,
+  projectId: string,
+): void {
+  const provisional = useChatDraftsStore((state) =>
+    sessionId === null ? false : state.drafts[sessionId]?.provisional !== undefined,
+  );
+  React.useEffect(() => {
+    if (sessionId === null || provisional) return;
+    return sessionsStore.getState().showChatSession(sessionId, projectId);
+  }, [projectId, provisional, sessionId, sessionsStore]);
+}
+
 export function ChatPlane(props: ChatPlaneProps) {
   return (
     <BlobReadProvider projectId={props.projectId}>
@@ -338,6 +341,7 @@ function ChatPlaneContent({
   // keeps what it shows while the listing says whether it waits on anyone.
   useRemoteSessionOnScreen(surfaceVisible ? projectId : null, sessionId);
   useCloudSessionOnScreen(surfaceVisible ? sessionId : null);
+  useChatSessionShown(store ?? useChatSessionsStore, surfaceVisible ? sessionId : null, projectId);
   const browser = useChatBrowserTabs(sessionId, projectId);
   // Where a background shell's tail opens (VC-270's hand-off): a modal over
   // this chat, mounted only while open — see `ShellOutputDialog`. The shells
@@ -416,6 +420,16 @@ function ChatPlaneContent({
     [island.model.agents, peekedAgentId],
   );
   const sessionsStore = store ?? useChatSessionsStore;
+  const committedFrames = useStore(
+    sessionsStore,
+    (state) => state.sessions[sessionId]?.transcript.frames,
+  );
+  // Streamed text does not change the committed frame array. Do not rescan a
+  // long open turn on every token or on another Session's store update.
+  const committedExitKind = React.useMemo(
+    () => selectTurnExitKind(committedFrames ?? []),
+    [committedFrames],
+  );
   const {
     cancelQueued,
     steerQueued,
@@ -432,6 +446,15 @@ function ChatPlaneContent({
     cancelScheduledResume,
   } = controller;
   const session = controller.session;
+  // The local intent covers a stop before a stream turn has even opened.
+  // Committed renderer frames below also carry interruptions from another client.
+  const [turnExitKind, setTurnExitKind] = React.useState<"done" | "abort">("done");
+  const requestInterrupt = React.useCallback(async () => {
+    setTurnExitKind("abort");
+    const accepted = await interrupt();
+    if (!accepted) setTurnExitKind("done");
+    return accepted;
+  }, [interrupt]);
 
   // The half-typed message is part of the Session, not this view: it has to
   // survive both a tab switch (this component unmounts) and a relaunch, so it
@@ -1683,6 +1706,7 @@ function ChatPlaneContent({
   const {
     templates: promptTemplates,
     skills,
+    omittedSkillDirectories,
     reload: reloadPromptSupply,
   } = usePromptTemplates(projectId);
 
@@ -1824,6 +1848,7 @@ function ChatPlaneContent({
    */
   const submitComposer = React.useCallback(
     (text: string, intent: ComposerIntent) => {
+      markInteraction("send");
       // Read-only (VC-576): the box is already inert; a press that raced the
       // host going away keeps its draft and says why.
       if (teamReadOnly) return;
@@ -1852,14 +1877,14 @@ function ChatPlaneContent({
   const withdraw = React.useCallback(
     (interactionId: string): Promise<boolean> =>
       withdrawInteraction(interactionId, {
-        interrupt,
+        interrupt: requestInterrupt,
         cancel: cancelInteraction,
         resolving: (id, active) => setResolving((current) => resolvingWith(current, id, active)),
       }).then(
         (landed) => landed,
         () => false,
       ),
-    [cancelInteraction, interrupt],
+    [cancelInteraction, requestInterrupt],
   );
 
   /**
@@ -1880,6 +1905,97 @@ function ChatPlaneContent({
     session.sessionError !== null ||
     projection?.attention.active.some((attention) => attention.kind === "transport_retrying") ===
       true;
+  const transcriptFrames = useStore(
+    sessionsStore,
+    (state) => state.sessions[sessionId]?.transcript.frames,
+  );
+  const activityFirstOverlaySequence = useStore(
+    sessionsStore,
+    (state) =>
+      state.sessions[sessionId]?.transcript.activityFirstOverlaySequence ??
+      EMPTY_TRANSCRIPT.activityFirstOverlaySequence,
+  );
+  const messageTimes = React.useMemo(
+    () => transcriptMessageTimes(transcriptFrames ?? EMPTY_TRANSCRIPT.frames),
+    [transcriptFrames],
+  );
+  const messageOrigins = React.useMemo(
+    () => transcriptMessageOrigins(transcriptFrames ?? EMPTY_TRANSCRIPT.frames),
+    [transcriptFrames],
+  );
+  const interactionReceipts = React.useMemo(
+    () => indexInteractionResolutionMessages(transcriptFrames ?? EMPTY_TRANSCRIPT.frames),
+    [transcriptFrames],
+  );
+  const sourceIconsAvailable = sourceIconsFor(projectId) !== null;
+  const mcpToolsKey = React.useMemo(
+    () =>
+      JSON.stringify(
+        [
+          ...new Set(
+            transcriptMessages.flatMap((message) =>
+              message.parts.flatMap((part) => {
+                if (part.type !== "dynamic-tool") return [];
+                const name = activityDescriptor(part).nativeToolName;
+                return name.startsWith("mcp__") ? [name] : [];
+              }),
+            ),
+          ),
+        ].toSorted(),
+      ),
+    [transcriptMessages],
+  );
+  const mcpNames = useTranscriptMcpNames(
+    projectId,
+    transcriptFrames ?? EMPTY_TRANSCRIPT.frames,
+    mcpToolsKey,
+    sourceIconsAvailable,
+  );
+  const namedSessions = useProjectSessionsStore((state) => state.byProject[projectId]);
+  const toolContext = React.useMemo<ToolDisplayContext>(() => {
+    const names = new Map<string, string>();
+    const records = [
+      ...(namedSessions?.chat ?? []).map((record) => ({
+        id: record.sessionId,
+        title: record.title,
+      })),
+      ...(namedSessions?.terminal ?? []),
+    ];
+    const ids = new Map<string, string>();
+    const counts = new Map<string, number>();
+    const ordinals = new Map<string, number>();
+    const shortIds = new Map<string, string | null>();
+    for (const record of records) {
+      const title = record.title?.trim() || "Untitled session";
+      counts.set(title, (counts.get(title) ?? 0) + 1);
+    }
+    for (const record of records) {
+      const title = record.title?.trim() || "Untitled session";
+      const ordinal = (ordinals.get(title) ?? 0) + 1;
+      ordinals.set(title, ordinal);
+      names.set(record.id, (counts.get(title) ?? 0) > 1 ? `${title} · ${ordinal}` : title);
+      ids.set(record.id, record.id);
+      const short = record.id.slice(0, 8);
+      shortIds.set(short, shortIds.has(short) ? null : record.id);
+    }
+    for (const [short, id] of shortIds)
+      if (id !== null) {
+        names.set(short, names.get(id)!);
+        ids.set(short, id);
+      }
+    const sessionParents = new Map(
+      (namedSessions?.chat ?? []).map((record) => [record.sessionId, record.parentSessionId]),
+    );
+    return { sessionNames: names, sessionIds: ids, sessionParents, mcpNames };
+  }, [namedSessions, mcpNames]);
+  const sourceIconsApi = React.useMemo(
+    () => (sourceIconsAvailable ? (sourceIconsFor(projectId) ?? undefined) : undefined),
+    [projectId, sourceIconsAvailable],
+  );
+  const sourceMessages = React.useMemo(
+    () => new Map(session.durableMessages.map((message) => [message.id, message])),
+    [session.durableMessages],
+  );
   const turnContext = React.useMemo<TurnContext>(
     () => ({
       onOpenFile,
@@ -1887,8 +2003,28 @@ function ChatPlaneContent({
       interactions: session.openedInteractions,
       deliveryLabels,
       progressPaused,
+      messageTimes,
+      messageOrigins,
+      interactionReceipts,
+      toolContext,
+      sourceMessages,
+      sourceIconPicture: pictureApi,
+      sourceIconsApi,
     }),
-    [deliveryLabels, onOpenFile, onOpenSession, session.openedInteractions, progressPaused],
+    [
+      deliveryLabels,
+      onOpenFile,
+      onOpenSession,
+      session.openedInteractions,
+      progressPaused,
+      messageTimes,
+      messageOrigins,
+      interactionReceipts,
+      toolContext,
+      sourceMessages,
+      pictureApi,
+      sourceIconsApi,
+    ],
   );
 
   // Grouping is O(messages), so it is memoized and then held per turn: a turn
@@ -1902,15 +2038,37 @@ function ChatPlaneContent({
   // and durable context notices in their transcript order. Every input is held
   // to its identity, so this recomputes when the conversation moves and not
   // once per streamed frame.
-  const rows = React.useMemo(
-    () =>
-      projectTranscriptRows(
-        turns,
+  const rows = useStableList(
+    React.useMemo(
+      () =>
+        projectWorkWindows(
+          projectTranscriptRows(
+            turns,
+            session.compactions,
+            session.reasoningDrops,
+            session.toolRefreshes,
+            messageOrigins,
+          ),
+          messageTimes,
+          turnActive,
+          {
+            frames: transcriptFrames ?? EMPTY_TRANSCRIPT.frames,
+            activityFirstOverlaySequence,
+          },
+        ),
+      [
         session.compactions,
         session.reasoningDrops,
         session.toolRefreshes,
-      ),
-    [session.compactions, session.reasoningDrops, session.toolRefreshes, turns],
+        turns,
+        messageTimes,
+        messageOrigins,
+        turnActive,
+        transcriptFrames,
+        activityFirstOverlaySequence,
+      ],
+    ),
+    samePresentedRow,
   );
   // Identity, not an index. A boundary between the turns means a turn's place in
   // `rows` is no longer its place in `turns` — and the last ROW can be a
@@ -1918,13 +2076,24 @@ function ChatPlaneContent({
   // saying so. Stream-owned `turnActive`, rather than the wider Session
   // lifecycle, keeps a transient error from treating incomplete content as
   // settled and an optimistic submit from reopening the previous Turn.
-  const liveTurn = turnActive
-    ? (rows.findLast((row) => row.kind === "turn")?.messages ?? null)
-    : null;
-  const turnHasProgress = React.useMemo(() => liveTurnHasProgress(liveTurn), [liveTurn]);
+  const liveTurn = turnActive ? (turns.at(-1) ?? null) : null;
 
-  const stopTurn = React.useCallback(() => void interrupt(), [interrupt]);
+  const stopTurn = React.useCallback(() => void requestInterrupt(), [requestInterrupt]);
   const turnRunning = working || turnActive || openingSendIds.size > 0;
+  React.useEffect(() => {
+    if (turnRunning) setTurnExitKind("done");
+  }, [turnRunning]);
+  const turnActivity = useTurnActivity(sessionId, {
+    messages: liveTurn ?? [],
+    working: turnRunning && !progressPaused,
+    turnActive: turnActive && !progressPaused,
+    projection: progressPaused ? null : projection,
+    liveCompaction: progressPaused ? null : liveCompaction,
+  });
+  // A turn running in view: its frames are the stream's unless a person's own
+  // interaction claims them (VC-1091).
+  React.useEffect(() => (turnRunning ? holdInteraction("stream") : undefined), [turnRunning]);
+
   // Runtime failures need recovery only once work has stopped. A new turn
   // removes the old failure surface, even before Attention catches up — all
   // but a row about that turn itself (a restart resume's).
@@ -1948,6 +2117,23 @@ function ChatPlaneContent({
       !durableMessageIds.has(message.id) &&
       !queue.some((entry) => entry.id === message.id),
   );
+  // A read failure is not an empty conversation. Keep its recovery at the
+  // transcript's start instead of drawing a clipped empty-state illustration.
+  const initialReadFailed =
+    transcriptMessages.length === 0 &&
+    pendingMessages.length === 0 &&
+    projection === null &&
+    provisional === undefined &&
+    session.sessionError !== null;
+
+  const quietEmpty =
+    !initialReadFailed &&
+    transcriptMessages.length === 0 &&
+    session.historyBefore === null &&
+    !historyPending &&
+    pendingMessages.length === 0 &&
+    !turnRunning &&
+    timelineBlocker === null;
   const planeStyle = { "--composer-height": `${composerHeight.height}px` } as React.CSSProperties;
 
   // A size query container, not just an inline one: the pending question below
@@ -1986,29 +2172,29 @@ function ChatPlaneContent({
               and this is what turns that back into the Blob it names. */}
             <MarkdownAttachmentsProvider attachments={materializedAttachments}>
               <RunningBashProvider sessionId={sessionId} active={surfaceVisible}>
-                <Conversation className="min-h-0 bg-background">
+                <Conversation className="chat-transcript min-h-0 bg-background">
                   {/* The bottom padding clears the composer plus the h-16 gradient over
               it, with enough left that the last line lands on clean background
               rather than inside the fade. */}
-                  <ConversationContent className="gap-4 px-0 pt-5 pb-[calc(var(--composer-height)+12rem)]">
-                    {transcriptMessages.length === 0 &&
-                    session.historyBefore === null &&
-                    historyPending ? (
-                      // History is on its way (VC-383). A null projection with no
-                      // Draft behind it means the snapshot has not landed, and the
-                      // empty state below would say "nothing was ever said here"
-                      // about a Session that may hold a thousand turns.
-                      <TranscriptSkeleton />
+                  <ConversationContent
+                    className={
+                      quietEmpty
+                        ? "chat-quiet-content h-full"
+                        : "gap-4 px-0 pt-5 pb-[calc(var(--composer-height)+1rem)]"
+                    }
+                  >
+                    {initialReadFailed ? (
+                      <ContentColumn>
+                        {blocker ? <SessionBlocker blocker={blocker} /> : null}
+                      </ContentColumn>
                     ) : transcriptMessages.length === 0 &&
                       session.historyBefore === null &&
-                      pendingMessages.length === 0 &&
-                      !turnRunning &&
-                      timelineBlocker === null ? (
+                      historyPending ? null : quietEmpty ? ( // Pending history is neither an empty Session nor fabricated rows.
                       // Where this Session runs, drawn (VC-55). It replaces the bare
                       // mark that stood here — see `empty/chat-empty-state.tsx` for why
                       // that reversal is deliberate. What blocks TYPING still sits on
                       // the composer, where the typing is.
-                      <ConversationEmptyState className={cn(EMPTY_PAGE, "min-h-80")}>
+                      <ConversationEmptyState className="chat-quiet-layout min-h-0 flex-1">
                         <ChatEmptyState projectId={projectId} ticketId={ticketId} />
                       </ConversationEmptyState>
                     ) : (
@@ -2036,13 +2222,7 @@ function ChatPlaneContent({
                             />
                           ))}
                         {liveCompaction ? <CompactionProgress compaction={liveCompaction} /> : null}
-                        {turnRunning ? (
-                          <TurnRunningMark
-                            progressVisible={
-                              liveCompaction !== null || (!progressPaused && turnHasProgress)
-                            }
-                          />
-                        ) : null}
+                        {turnRunning ? <TurnRunningMark /> : null}
                         {pendingMessages
                           .filter(
                             (message) => !message.deliveryAccepted || message.delivery === "queue",
@@ -2058,21 +2238,11 @@ function ChatPlaneContent({
                       </ChatTranscript>
                     )}
                   </ConversationContent>
-                  {/* A short fade keyed to the measured composer — see {@link COMPOSER_SCRIM}
-              for the curve. It lives inside the Conversation, ahead of the
-              button, so paint order is structural: content, then fade, then
-              button. */}
-                  <div
-                    className="pointer-events-none absolute inset-x-0 bottom-[var(--composer-height)] h-16"
-                    style={{ backgroundImage: COMPOSER_SCRIM }}
-                  />
-
-                  {/* Glass, not a plug: this button only exists while the reader is
-              scrolled up, so there is always live text behind it. An empty
-              transcript never gets one — the empty state is taller than the
-              plane, so the scroller is legitimately not at its bottom. */}
+                  {/* The bounded viewport owns the scroll-edge mask. While
+                    detached, it reserves a text-free band for the latest button
+                    above the composer. Empty transcripts never get the button. */}
                   {messages.length > 0 ? (
-                    <ConversationScrollButton className="bottom-[calc(var(--composer-height)+0.75rem)] bg-background/70 shadow-raised backdrop-blur-md dark:hover:bg-muted/70" />
+                    <ConversationScrollButton className="bottom-[calc(var(--composer-height)+0.75rem)] glass-control shadow-glass-small" />
                   ) : null}
                 </Conversation>
               </RunningBashProvider>
@@ -2088,16 +2258,18 @@ function ChatPlaneContent({
         ref={composerHeight.ref}
         data-slot="chat-composer-dock"
         className={cn(
-          "pointer-events-none absolute inset-x-0 bottom-0 bg-background pb-4",
+          "pointer-events-none absolute inset-x-0 bottom-0 pb-4",
           constrainComposer && "pointer-events-auto max-h-[70%] overflow-y-auto overscroll-contain",
         )}
       >
-        <ContentColumn>
+        <ContentColumn className="max-w-(--container-composer)">
           {/* Above whatever the slot holds, card included. A card answers the
               question it was asked; it does not answer a failure — and the
               failure most worth seeing here is the decision that never reached
               the harness, which leaves the card looking answerable. */}
-          {blocker && timelineBlocker === null ? <SessionBlocker blocker={blocker} /> : null}
+          {blocker && timelineBlocker === null && !initialReadFailed ? (
+            <SessionBlocker blocker={blocker} />
+          ) : null}
           {/* The Activity Island (VC-268): what this Session holds beyond the
               chat stream — its Browser Tabs, its plan, its background shells
               — a SIBLING of the interaction stack, sharing its shell material
@@ -2110,6 +2282,8 @@ function ChatPlaneContent({
           <ActivityIsland
             model={island.model}
             actions={island.actions}
+            activity={turnActivity}
+            exitKind={turnExitKind === "abort" ? "abort" : committedExitKind}
             className="pointer-events-auto mb-2"
           />
           {/* Overlay on the composer, never in its place. Ask-user cards
@@ -2121,9 +2295,11 @@ function ChatPlaneContent({
               className="pointer-events-auto px-4 py-4 text-ui text-muted-foreground"
             >
               {team?.ended ??
-                (team === null
-                  ? "Loading Session owner…"
-                  : `Only ${team.ownerName === "Unknown" ? "the owner" : team.ownerName} can send to this Session.`)}
+                (team === null ? (
+                  <LoadingLabel>Loading Session owner</LoadingLabel>
+                ) : (
+                  `Only ${team.ownerName === "Unknown" ? "the owner" : team.ownerName} can send to this Session.`
+                ))}
             </p>
           ) : (
             <>
@@ -2182,6 +2358,8 @@ function ChatPlaneContent({
                   // Skills, verbs and `@` files are this Mac's; a cloud
                   // Session's runner reads none of them (VC-895).
                   skills={cloudLaunch ? undefined : skills}
+                  omittedSkillDirectories={cloudLaunch ? 0 : omittedSkillDirectories}
+                  onOpenSkills={() => useUiStore.getState().requestConfigureCategory("skills")}
                   verbs={cloudLaunch ? undefined : verbSupply}
                   modelPickerOpen={modelPickerOpen}
                   onModelPickerOpenChange={setModelPickerOpen}
@@ -2372,23 +2550,10 @@ function useModelAccess(active: boolean): {
 
 /* ---------------------------------------------------------------- running */
 
-/** The status region lasts the whole turn. Its visual is only a fallback:
- * reserve its row, hide immediately behind live content, and wait out short
- * inter-step gaps before showing it again. No crossfade means no overlap. */
-export const TurnRunningMark = React.memo(function TurnRunningMark({
-  progressVisible = false,
-}: {
-  progressVisible?: boolean;
-}) {
-  const visible = useDelayedPresence(!progressVisible, 300, !progressVisible);
-  return (
-    <div role="status" className="flex min-w-0 flex-col">
-      <span className="sr-only">Working</span>
-      <div aria-hidden className={cn("flex min-w-0", !visible && "invisible")}>
-        <ReasoningLine verb="Working" meta={null} streaming />
-      </div>
-    </div>
-  );
+/** The island owns the turn's status now. Keep its former transcript row
+ * as bottom clearance so the always-attached bead cannot cover the last line. */
+export const TurnRunningMark = React.memo(function TurnRunningMark() {
+  return <div aria-hidden data-turn-bead-clearance="" className="h-10 shrink-0" />;
 });
 
 /** The copy that left the composer, before any host frame or queue owns it. */
@@ -2405,9 +2570,8 @@ export function PendingMessage({
         ? "Queued"
         : undefined
       : message.delivery === "queue"
-        ? "Queuing…"
-        : "Sending…";
-
+        ? "Queuing"
+        : "Sending";
   return (
     <ChatTurn
       messages={[pendingUserMessage(message)]}
@@ -2438,100 +2602,78 @@ function pendingUserMessage(message: QueuedMessage): UIMessage {
 /* ---------------------------------------------------------------- blocked */
 
 export function SessionBlocker({ blocker }: { blocker: SessionBlockerState }) {
+  // The first-run provider menu, ahead of the plain action: choosing who to
+  // sign in to IS the recovery, and Settings beside it stays the long way
+  // around for everything else the pane holds.
+  const signIn = blocker.signInMenu ? (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button size="sm">{blocker.signInMenu.label}</Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="max-h-72 overflow-y-auto">
+        {blocker.signInMenu.options.map((option) => (
+          <DropdownMenuItem key={option.id} onSelect={() => blocker.signInMenu?.choose(option.id)}>
+            {option.label}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  ) : null;
+  const actions =
+    signIn !== null || blocker.action || blocker.secondaryAction || blocker.tertiaryAction ? (
+      <>
+        {signIn}
+        {blocker.action ? (
+          <Button
+            size="sm"
+            variant={signIn === null ? "default" : "ghost"}
+            onClick={blocker.action.act}
+          >
+            {blocker.action.label}
+          </Button>
+        ) : null}
+        {blocker.secondaryAction ? (
+          <Button size="xs" variant="ghost" onClick={blocker.secondaryAction.act}>
+            {blocker.secondaryAction.label}
+          </Button>
+        ) : null}
+        {blocker.tertiaryAction ? (
+          <Button size="xs" variant="ghost" onClick={blocker.tertiaryAction.act}>
+            {blocker.tertiaryAction.label}
+          </Button>
+        ) : null}
+      </>
+    ) : undefined;
   return (
     // The composer overlay ignores hits so its empty padding does not cover the
     // transcript. This row carries recovery controls, so it must opt back in.
-    <div
+    // A timeline report is one more beat of the conversation, spaced by the
+    // transcript's own gap; on the composer it keeps its 8px off the box.
+    <Notice
       data-slot="session-blocker"
-      className={cn(
-        "pointer-events-auto mb-2 flex items-center gap-2 rounded-lg border bg-card px-4 py-1 text-ui shadow-raised",
-        blocker.tone === "error" ? "border-destructive/30" : "border-border",
-      )}
-    >
-      {/* A wait is not a failure: a rate limit or a reconnect wearing the
-          triangle would read as broken when the state is "not yet". */}
-      {blocker.tone === "error" ? (
-        <WarningIcon aria-hidden className="size-3.5 shrink-0 text-destructive" weight="fill" />
-      ) : null}
-      {blocker.tone === "waiting" ? (
-        <ClockIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
-      ) : null}
-      <div className="min-w-0 flex-1">
-        {/* Both lines are clipped by CSS, so both keep the hover that is the
-            only way to read the rest of one. A headline is not automatically
-            short: `sessionError` is a transport failure's own words. */}
-        <p className="truncate text-muted-foreground" title={blocker.message}>
-          {blocker.message}
-        </p>
-        {/* The cause, under the headline it qualifies. "Session stopped" alone
-            names the state and not one thing about why, and the harness's own
-            wording is the only place the reason is ever written down — so it is
-            read on sight, not hidden behind a hover a pointer has to find.
-            Empty counts as absent: an error carrying no text would otherwise
-            draw a blank line under the headline. */}
-        {blocker.detail ? (
-          <p className="truncate text-muted-foreground/70" title={blocker.detail}>
-            {blocker.detail}
-          </p>
-        ) : null}
-      </div>
-      {/* The first-run provider menu, ahead of the plain action: choosing who
-          to sign in to IS the recovery, and Settings beside it stays the
-          long way around for everything else the pane holds. */}
-      {blocker.signInMenu ? (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button size="xs" variant="secondary" className="shrink-0">
-              {blocker.signInMenu.label}
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="max-h-72 overflow-y-auto">
-            {blocker.signInMenu.options.map((option) => (
-              <DropdownMenuItem
-                key={option.id}
-                onSelect={() => blocker.signInMenu?.choose(option.id)}
-              >
-                {option.label}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      ) : null}
-      {blocker.action ? (
-        <Button size="xs" variant="ghost" className="shrink-0" onClick={blocker.action.act}>
-          {blocker.action.label}
-        </Button>
-      ) : null}
-      {blocker.secondaryAction ? (
-        <Button
-          size="xs"
-          variant="ghost"
-          className="shrink-0"
-          onClick={blocker.secondaryAction.act}
-        >
-          {blocker.secondaryAction.label}
-        </Button>
-      ) : null}
-      {blocker.tertiaryAction ? (
-        <Button size="xs" variant="ghost" className="shrink-0" onClick={blocker.tertiaryAction.act}>
-          {blocker.tertiaryAction.label}
-        </Button>
-      ) : null}
-      {/* Every error can be retired locally without claiming its recovery has
-          happened. An icon, not a labeled button: it competes with nothing,
-          and the row's words are the recovery's business, not its. */}
-      {blocker.dismiss ? (
-        <Button
-          size="icon-xs"
-          variant="ghost"
-          className="shrink-0"
-          aria-label={blocker.dismiss.label}
-          onClick={blocker.dismiss.act}
-        >
-          <XIcon aria-hidden className="size-3" />
-        </Button>
-      ) : null}
-    </div>
+      // A wait is not a failure: a rate limit or a reconnect wearing the error
+      // mark would read as broken when the state is "not yet".
+      tone={blocker.tone === "error" ? "error" : "neutral"}
+      {...(blocker.tone === "waiting" ? { icon: ClockIcon } : {})}
+      // Stacked: the recoveries sit under the report rather than beside it,
+      // so a split-width pane never squeezes a long error into a sliver.
+      layout="stack"
+      className={cn("pointer-events-auto", blocker.placement !== "timeline" && "mb-2")}
+      // Transport errors may be long: Notice clamps them to two lines with
+      // Show more, so recovery stays reachable at split widths.
+      title={blocker.message}
+      // The cause, under the headline it qualifies. "Session stopped" alone
+      // names the state and not one thing about why, and the harness's own
+      // wording is the only place the reason is ever written down — so it is
+      // read on sight, not hidden behind a hover. Empty counts as absent: an
+      // error carrying no text would otherwise draw a blank line.
+      {...(blocker.detail ? { detail: blocker.detail } : {})}
+      actions={actions}
+      // Every error can be retired locally without claiming its recovery has
+      // happened. The plane owns the dismissal (`visibleBlocker`), so no
+      // `dismissalKey`: a changed or re-raised report must come back.
+      {...(blocker.dismiss ? { onDismiss: blocker.dismiss.act } : {})}
+    />
   );
 }
 
@@ -2554,7 +2696,9 @@ const SEGMENT_GAP = "space-y-4";
  * speakers is what gives the feed its paragraph structure: a turn holds
  * together, and the hand-off to the other voice reads as a break.
  */
-export const MESSAGE_GAP = "flex flex-col gap-6";
+export const MESSAGE_GAP = "flex flex-col gap-4";
+
+const EMPTY_TOOL_CONTEXT: ToolDisplayContext = {};
 
 export interface TurnContext {
   onOpenFile(path: string): void;
@@ -2564,6 +2708,16 @@ export interface TurnContext {
   interactions: ReadonlyMap<string, RendererSessionInteraction>;
   deliveryLabels?: ReadonlyMap<string, MessageDeliveryLabel>;
   progressPaused?: boolean;
+  messageTimes?: ReadonlyMap<string, number>;
+  messageOrigins?: ReturnType<typeof transcriptMessageOrigins>;
+  interactionReceipts?: ReturnType<typeof indexInteractionResolutionMessages>;
+  toolContext?: ToolDisplayContext;
+  sourceMessages?: ReadonlyMap<string, UIMessage>;
+  sourceIconsApi?: TranscriptSourceIconsApi;
+  sourceIconPicture?: Pick<
+    import("@renderer/components/browser/browser-api").BrowserApi,
+    "picture"
+  >;
 }
 
 /**
@@ -2932,32 +3086,70 @@ function ChatTranscript({
     };
   }, [control, sessionId]);
 
+  const sourceOrigins = mounted.flatMap((row) =>
+    row.kind === "work"
+      ? row.work.rows.flatMap((activity) =>
+          activity.kind === "tool"
+            ? (() => {
+                const presentation = presentTranscriptTool(activity.part, context.toolContext);
+                const urls = [
+                  ...(presentation?.sources ?? []).map((source) => source.url),
+                  presentation?.originUrl,
+                ];
+                return urls.flatMap((url) => {
+                  try {
+                    const parsed = new URL(url ?? "");
+                    return ["http:", "https:"].includes(parsed.protocol) ? [parsed.origin] : [];
+                  } catch {
+                    return [];
+                  }
+                });
+              })()
+            : [],
+        )
+      : [],
+  );
   return (
-    <ContentColumn className={MESSAGE_GAP}>
-      {hasEarlier ? (
-        <div ref={sentinel} className="flex justify-center">
-          <Button
-            size="xs"
-            variant="ghost"
-            className="text-muted-foreground"
-            onClick={reveal}
-            data-transcript-earlier={shown.earlier}
-          >
-            Show earlier
-          </Button>
-        </div>
-      ) : null}
-      {mounted.map((row, index) => (
-        <ChatTranscriptRow
-          key={mountedKeys[index]}
-          row={row}
-          context={context}
-          live={row.kind === "turn" && row.messages === liveTurn}
-          {...(onOpenSession === undefined ? {} : { onOpenSession })}
-        />
-      ))}
-      {children}
-    </ContentColumn>
+    <TranscriptSourceIcons
+      sessionId={sessionId}
+      origins={sourceOrigins}
+      api={context.sourceIconsApi}
+      picture={context.sourceIconPicture}
+    >
+      <ContentColumn className={cn("max-w-(--container-transcript)", MESSAGE_GAP)}>
+        {hasEarlier ? (
+          <div ref={sentinel} className="flex justify-center">
+            <Button
+              size="xs"
+              variant="ghost"
+              className="text-muted-foreground"
+              onClick={reveal}
+              data-transcript-earlier={shown.earlier}
+            >
+              Show earlier
+            </Button>
+          </div>
+        ) : null}
+        {mounted.map((row, index) => (
+          <ChatTranscriptRow
+            key={mountedKeys[index]}
+            row={row}
+            context={context}
+            live={
+              liveTurn !== null &&
+              (row.kind === "work"
+                ? row.work.state === "open"
+                : row.kind === "turn" &&
+                  row.messages.some((message) =>
+                    liveTurn.some((source) => source.id === message.id),
+                  ))
+            }
+            {...(onOpenSession === undefined ? {} : { onOpenSession })}
+          />
+        ))}
+        {children}
+      </ContentColumn>
+    </TranscriptSourceIcons>
   );
 }
 
@@ -3060,8 +3252,10 @@ function transcriptRowIndex(rows: readonly TranscriptRow[], key: string): number
 
 function transcriptRowKey(row: TranscriptRow): string {
   switch (row.kind) {
+    case "work":
+      return row.work.key;
     case "turn":
-      return row.messages[0]?.id ?? "empty-turn";
+      return row.viewKey ?? row.messages[0]?.id ?? "empty-turn";
     case "host-notice":
       return row.messageId;
     case "compaction":
@@ -3071,6 +3265,44 @@ function transcriptRowKey(row: TranscriptRow): string {
     case "tool-refresh":
       return `tool-refresh:${row.refresh.sequence}`;
   }
+}
+
+function samePresentedRow(left: TranscriptRow, right: TranscriptRow): boolean {
+  if (left === right) return true;
+  if (left.kind === "turn" && right.kind === "turn")
+    return (
+      left.viewKey === right.viewKey &&
+      left.messages.length === right.messages.length &&
+      left.messages.every((message, index) => {
+        const other = right.messages[index]!;
+        return (
+          message.id === other.id &&
+          message.role === other.role &&
+          message.metadata === other.metadata &&
+          message.parts.length === other.parts.length &&
+          message.parts.every((part, partIndex) => part === other.parts[partIndex])
+        );
+      })
+    );
+  if (left.kind === "work" && right.kind === "work")
+    return (
+      left.work.key === right.work.key &&
+      left.work.startedAt === right.work.startedAt &&
+      left.work.endedAt === right.work.endedAt &&
+      left.work.state === right.work.state &&
+      left.work.rows.length === right.work.rows.length &&
+      left.work.rows.every((row, index) => {
+        const other = right.work.rows[index]!;
+        return (
+          row.key === other.key &&
+          row.kind === other.kind &&
+          row.part === other.part &&
+          (row.kind !== "reasoning" ||
+            (other.kind === "reasoning" && row.streaming === other.streaming))
+        );
+      })
+    );
+  return false;
 }
 
 /** The desktop mapping of one portable transcript row; it owns no projection rules. */
@@ -3086,13 +3318,44 @@ export function ChatTranscriptRow({
   onOpenSession?(sessionId: string): void;
 }) {
   switch (row.kind) {
-    case "host-notice":
+    case "work":
       return (
-        <HostNoticeRow
-          notice={row.notice}
-          {...(onOpenSession === undefined ? {} : { onOpenSession })}
-        />
+        <TranscriptToolContext.Provider value={context.toolContext ?? EMPTY_TOOL_CONTEXT}>
+          <div className="is-assistant" data-transcript-anchor={row.work.key}>
+            <ActivityBundle
+              rows={row.work.rows}
+              work={row.work}
+              progressEnabled={live && !context.progressPaused}
+              onOpenFile={context.onOpenFile}
+              onOpenSession={context.onOpenSession}
+            />
+          </div>
+        </TranscriptToolContext.Provider>
       );
+    case "host-notice": {
+      const source = context.sourceMessages?.get(row.messageId);
+      const answer =
+        source && row.notice.kind === "subagent"
+          ? deliveredAnswer(source, row.notice, context.messageOrigins?.get(row.messageId))
+          : null;
+      return (
+        <div className="min-w-0">
+          <HostNoticeRow
+            notice={row.notice}
+            {...(onOpenSession === undefined ? {} : { onOpenSession })}
+          />
+          {answer ? (
+            <div className="my-2">
+              <GuardedResponse>{answer.text}</GuardedResponse>
+              {answer.excerpt ? (
+                <span className="text-ui text-muted-foreground">Excerpt</span>
+              ) : null}
+            </div>
+          ) : null}
+          {source ? <OriginalOutput part={source} /> : null}
+        </div>
+      );
+    }
     case "compaction":
       return <CompactionBoundary compaction={row.compaction} />;
     case "reasoning-drop":
@@ -3100,7 +3363,9 @@ export function ChatTranscriptRow({
     case "tool-refresh":
       return <ToolRefreshNotice refresh={row.refresh} />;
     case "turn":
-      return <ChatTurn messages={row.messages} context={context} live={live} />;
+      return (
+        <ChatTurn messages={row.messages} context={context} live={live} anchorKey={row.viewKey} />
+      );
   }
 }
 
@@ -3119,8 +3384,10 @@ export const ChatTurn = React.memo(function ChatTurn({
   context,
   live,
   deliveryLabel,
+  anchorKey,
 }: {
   messages: readonly UIMessage[];
+  anchorKey?: string;
   context: TurnContext;
   /** This turn is the one the harness is still writing into. Only it animates. */
   live: boolean;
@@ -3129,14 +3396,34 @@ export const ChatTurn = React.memo(function ChatTurn({
 }) {
   const first = messages[0] ?? null;
   const role = first?.role ?? null;
+  const attribution = React.useMemo(
+    () =>
+      first === null
+        ? null
+        : transcriptMessageAttribution(
+            first,
+            context.messageOrigins?.get(first.id),
+            context.toolContext?.sessionNames,
+          ),
+    [first, context.messageOrigins, context.toolContext],
+  );
   // A receipt lands where it happened. Answering an interaction commits a
   // durable message at that point in the conversation, so the transcript draws
-  // it there — whether or not a tool row was ever correlated to the question. An
-  // interaction the log has no record of opening draws nothing rather than an id.
+  // it there only when the recorded resolve command proves its producer and
+  // the interaction is known. Missing history stays neutral, fully inspectable
+  // content; a caller's metadata/data part can never erase ordinary prose.
   const answered = React.useMemo(
-    () => (first !== null && role === "user" ? readInteractionResolutionMessage(first) : null),
-    [first, role],
+    () =>
+      first !== null && role === "user" && messages.length === 1
+        ? readInteractionResolutionMessage(first, context.interactionReceipts?.get(first.id))
+        : null,
+    [first, role, messages.length, context.interactionReceipts],
   );
+  const hasResolutionContent =
+    role === "user" &&
+    messages.some((message) =>
+      message.parts.some((part) => part.type === "data-interaction-resolution"),
+    );
   const segments = React.useMemo(
     () => (role === "assistant" ? segmentTurn(messages) : null),
     [messages, role],
@@ -3182,11 +3469,21 @@ export const ChatTurn = React.memo(function ChatTurn({
 
   if (first === null || role === null) return null;
 
-  if (answered) {
-    const interaction = context.interactions.get(answered.interactionId);
-    return interaction ? (
-      <InteractionReceiptLine interaction={interaction} resolution={answered.resolution} />
-    ) : null;
+  // The cumulative opened map is only the question's wording; the receipt's
+  // own settled attachment must still be the one that asked it.
+  const answeredInteraction = answered
+    ? context.interactions.get(answered.interactionId)
+    : undefined;
+  if (answered && answeredInteraction?.attachmentId === answered.attachmentId) {
+    return (
+      <div>
+        <InteractionReceiptLine
+          interaction={answeredInteraction}
+          resolution={answered.resolution}
+        />
+        <OriginalOutput part={first} />
+      </div>
+    );
   }
 
   // Plan-only projections must not leave an empty bubble.
@@ -3199,8 +3496,25 @@ export const ChatTurn = React.memo(function ChatTurn({
     (context.deliveryLabels?.get(first.id) === "Not delivered" ? "Not delivered" : undefined);
 
   return (
-    <Message from={role} className="relative max-w-full">
-      <MessageContent className="gap-0 group-[.is-user]:rounded-xl group-[.is-user]:bg-muted group-[.is-user]:px-4 group-[.is-user]:py-2">
+    <Message from={role} className="max-w-full">
+      <MessageContent className="gap-0">
+        {attribution?.label ? (
+          <div className="pb-2 text-ui text-muted-foreground">
+            {attribution.sessionId &&
+            context.onOpenSession &&
+            context.toolContext?.sessionNames?.has(attribution.sessionId) ? (
+              <button
+                type="button"
+                className="rounded-sm text-start outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                onClick={() => context.onOpenSession?.(attribution.sessionId!)}
+              >
+                <bdi>{attribution.label}</bdi>
+              </button>
+            ) : (
+              <bdi>{attribution.label}</bdi>
+            )}
+          </div>
+        ) : null}
         {/* Thumbs above the words, matching the composer the message left from. */}
         {attachedFiles.length > 0 ? (
           <AttachmentStrip
@@ -3212,12 +3526,16 @@ export const ChatTurn = React.memo(function ChatTurn({
           {segments
             ? segments.map((segment) => (
                 // An anchor for the reader's place across a history page (VC-315).
-                <div key={segment.key} data-transcript-anchor={segment.key}>
+                <div key={segment.key} data-transcript-anchor={anchorKey ?? segment.key}>
                   {renderSegment(segment, role, context, live)}
                 </div>
               ))
             : prose.map((entry) => <GuardedResponse key={entry.key}>{entry.text}</GuardedResponse>)}
         </div>
+        {hasResolutionContent && prose.length === 0 ? (
+          <span className="text-ui text-muted-foreground">Interaction record</span>
+        ) : null}
+        {attribution?.sessionId || hasResolutionContent ? <OriginalOutput part={first} /> : null}
         {skillChips.length > 0 ? (
           // A skill name is a mono outline Badge behind a book icon, wherever
           // it appears. This is the only place the transcript says one: the
@@ -3228,7 +3546,7 @@ export const ChatTurn = React.memo(function ChatTurn({
             role="group"
             aria-label="Skills delivered with this message"
           >
-            <BookOpenIcon aria-hidden className="size-3.5 shrink-0" />
+            <GuideIcon aria-hidden className="size-3.5 shrink-0" />
             {skillChips.map((name) => (
               <Badge key={name} variant="outline" className="font-mono">
                 {name}
@@ -3237,46 +3555,59 @@ export const ChatTurn = React.memo(function ChatTurn({
           </div>
         ) : null}
       </MessageContent>
-      {role === "user" && footer !== undefined ? (
-        <MessageDelivery key={first.id} label={footer} />
+      {/* One in-flow footer under the bubble: where the words stand, then the
+          copy action. The copy button sets the row's height, so a delivery
+          state arriving or leaving never moves the bubble or the next turn. */}
+      {(role === "user" && footer !== undefined) || copyableText !== null ? (
+        <div
+          data-slot="message-footer"
+          className={cn(
+            "transcript-message-footer flex min-w-0 flex-wrap items-center gap-2 text-muted-foreground",
+            role === "user" && "justify-end",
+          )}
+        >
+          {role === "user" && footer !== undefined ? (
+            <MessageDelivery key={first.id} label={footer} />
+          ) : null}
+          {copyableText !== null ? (
+            <MessageCopyAction
+              text={copyableText}
+              timestamp={context.messageTimes?.get(first.id)}
+            />
+          ) : null}
+        </div>
       ) : null}
-      {copyableText !== null ? <MessageCopyAction text={copyableText} from={role} /> : null}
     </Message>
   );
 });
 
-/** A quiet tab attached to the bubble, inside the existing 24px message gap.
- * It never changes bubble or row geometry when delivery ownership changes.
- * Refusals remain immediate; ordinary round trips never show waiting copy. */
+/** Where a sent message stands, in the footer under its bubble.
+ * Refusals remain immediate; ordinary round trips never show waiting copy:
+ * an in-progress state waits 600ms, so a quick send never flashes it. */
 function MessageDelivery({ label }: { label: string }) {
   const failed = label === "Not delivered";
   const waited = useDelayedPresence(!failed, 600);
   if (!failed && !waited) return null;
-  const Icon = failed ? WarningIcon : ClockIcon;
   return (
-    <span
-      data-slot="message-delivery"
-      className="absolute top-full right-0 flex max-w-full items-center gap-1 rounded-b-lg bg-muted px-2 text-ui text-muted-foreground"
-      title={label}
-    >
-      <Icon aria-hidden className="size-3 shrink-0" weight="bold" />
-      <span className="truncate">{label}</span>
+    <span data-slot="message-delivery" className="flex min-w-0 items-center text-ui">
+      {label === "Sending" || label === "Queuing" ? (
+        // In flight: the shared spinner, never punctuation.
+        <LoadingLabel>{label}</LoadingLabel>
+      ) : (
+        // A settled state is a chip. A refusal keeps the quiet chip and lets
+        // the mark carry the alarm, so it reads as the message's state rather
+        // than a second failure report beside the timeline's.
+        <Badge variant="outline">
+          {failed ? <WarningIcon aria-hidden className="size-3 text-destructive" /> : null}
+          {label}
+        </Badge>
+      )}
     </span>
   );
 }
 
-/** The feed-wide copy verdict holds long enough to be read, then returns to rest. */
-const COPY_FEEDBACK_MS = 1200;
-
-/**
- * Copy is a hover/focus action in the message's outside gutter.
- *
- * The message remains the reading target; the action occupies no resting space
- * and never competes with the prose for a line. User bubbles expose it on their
- * leading side and assistant turns on their trailing side, so the control stays
- * outside the message surface at either edge of the feed.
- */
-function MessageCopyAction({ text, from }: { text: string; from: UIMessage["role"] }) {
+/** A stable action below the response, reachable without crossing a hover gap. */
+function MessageCopyAction({ text, timestamp }: { text: string; timestamp?: number }) {
   const [copyState, setCopyState] = React.useState<"idle" | "copied" | "failed">("idle");
   React.useEffect(() => {
     if (copyState === "idle") return;
@@ -3284,26 +3615,38 @@ function MessageCopyAction({ text, from }: { text: string; from: UIMessage["role
     return () => window.clearTimeout(timer);
   }, [copyState]);
   const CopyStateIcon =
-    copyState === "copied" ? CheckCircleIcon : copyState === "failed" ? XCircleIcon : CopyIcon;
+    copyState === "copied" ? SuccessIcon : copyState === "failed" ? ErrorIcon : CopyIcon;
 
+  const label =
+    copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : "Copy message";
   return (
     <span
-      className={cn(
-        "pointer-events-none absolute top-0 flex opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100",
-        from === "user" ? "right-[calc(100%+0.25rem)]" : "left-[calc(100%+0.25rem)]",
-      )}
+      className="transcript-message-meta"
+      data-feedback={copyState === "idle" ? undefined : copyState}
     >
+      {timestamp !== undefined && Number.isFinite(timestamp) ? (
+        <time className="text-label tabular-nums" dateTime={new Date(timestamp).toISOString()}>
+          {new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+        </time>
+      ) : null}
       <Button
         type="button"
         variant="ghost"
-        size="icon-xs"
-        aria-label={
-          copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : "Copy"
-        }
+        size="icon-sm"
+        data-message-copy=""
+        data-feedback={copyState === "idle" ? undefined : copyState}
+        aria-label={label}
         onClick={() => void copyText(text).then(setCopyState)}
       >
-        <CopyStateIcon className={cn("size-3", copyState === "failed" && "text-destructive")} />
+        <CopyStateIcon className={cn("size-3.5", copyState === "failed" && "text-destructive")} />
       </Button>
+      <span
+        className="sr-only"
+        aria-live="polite"
+        role={copyState === "idle" ? undefined : "status"}
+      >
+        {copyState === "idle" ? "" : label}
+      </span>
     </span>
   );
 }

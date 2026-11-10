@@ -58,6 +58,13 @@ export interface CodeModeDescription {
   declarationTokens: number;
 }
 
+/**
+ * These declaration bytes are part of existing Sessions' frozen Cache Prefix,
+ * independently of their descriptionVersion. Pi 1.2 added constraint comments;
+ * retain Pi 1.0 rendering for both full declarations and discovery samples.
+ */
+const FROZEN_DECLARATIONS = { legacy: true } as const;
+
 export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
@@ -139,7 +146,7 @@ function isTypedSchema(schema: unknown): boolean {
     typeof schema === "object" &&
     schema !== null &&
     Object.keys(schema).length > 0 &&
-    schemaToType(schema as JsonSchema) !== "unknown" &&
+    schemaToType(schema as JsonSchema, FROZEN_DECLARATIONS) !== "unknown" &&
     !(
       (schema as JsonSchema)["type"] === "object" &&
       (schema as JsonSchema)["properties"] === undefined
@@ -154,13 +161,13 @@ function isTypedSchema(schema: unknown): boolean {
  */
 function specificOutput(tool: CallableTool): string | undefined {
   if (tool.nativeStructuredOutput === true || tool.name === "browser_screenshot") {
-    return schemaToType(tool.outputSchema);
+    return schemaToType(tool.outputSchema, FROZEN_DECLARATIONS);
   }
   const properties = tool.outputSchema["properties"];
   if (typeof properties !== "object" || properties === null) return undefined;
   const { details, structuredContent } = properties as Record<string, unknown>;
   if (!isTypedSchema(details) && !isTypedSchema(structuredContent)) return undefined;
-  return schemaToType(tool.outputSchema);
+  return schemaToType(tool.outputSchema, FROZEN_DECLARATIONS);
 }
 
 /** Which declared tools a program may call, said the shorter way. */
@@ -191,6 +198,8 @@ export function describeCodeMode(input: {
   tools: readonly CallableTool[];
   /** A pre-0.2.2 record keeps its original provider-visible wording. */
   legacy?: boolean;
+  /** Frozen separately: old declarations stay byte-identical on reattachment. */
+  mcpResultVersion?: 1 | undefined;
   /**
    * Wire names of the tools declared to the model that a program may NOT
    * call. When they are fewer than the ones it may, the description names
@@ -205,7 +214,7 @@ export function describeCodeMode(input: {
   const chosen: CallableTool[] = [];
   let spent = 0;
   for (const tool of input.tools.filter((candidate) => candidate.listed && !candidate.declared)) {
-    const cost = estimateTokens(renderToolSample(rendered(tool)));
+    const cost = estimateTokens(renderToolSample(rendered(tool), FROZEN_DECLARATIONS));
     if (spent + cost > input.budgetTokens) break;
     chosen.push(tool);
     spent += cost;
@@ -239,6 +248,11 @@ export function describeCodeMode(input: {
           `Results: ${has("bash") ? "`bash` → { output, exitCode, truncated, fullOutputPath? } for any exit code; " : ""}MCP tools → { text, structuredContent?, isError, images, omittedImages }; Volli verbs → { text, details? }; schema-bearing Session tools → their structured answers; Browser screenshots and other image-bearing text tools → { text, images, omittedImages }; other tools → their text.`,
           "Nested images are opaque handles (bytes stay outside the program); image(handle) or handles inside a returned value send bounded images after the text, with source framing; the header names any left out.",
         ]),
+    ...(input.mcpResultVersion === 1
+      ? [
+          "MCP results also carry result: { version: 1, truncated, output?, structuredContentOmittedBytes? }. Prefer structuredContent when present; text is display text, not guaranteed JSON. Check result.truncated and result.output.fullOutputPath before processing cut text; saved output is bounded and may be unavailable. A failed program does not roll back completed calls; inspect partial completion before retrying changes.",
+        ]
+      : []),
     `Per run: ${input.limits.maxNestedCalls} calls, ${seconds} s of running time (waiting on a person is free), ${formatBytes(input.limits.maxOutputBytes)} of output (the rest is saved). A first line \`// @options: {"timeout_ms": 30000, "max_output_tokens": 2000}\` lowers them. The program is checked whole before anything runs.`,
     "A run that called a web, Browser or MCP tool, or read another agent's words, returns its output inside untrusted-content markers.",
     ...(input.legacy
@@ -264,6 +278,7 @@ export function describeCodeMode(input: {
       : [
           "",
           renderDeclarations({
+            ...FROZEN_DECLARATIONS,
             tools: chosen.map(rendered),
             globals: left.length === 0 ? [] : DISCOVERY_SIGNATURES,
           }),
@@ -383,7 +398,7 @@ export function describeTool(tools: readonly CallableTool[], name: string): stri
   if (tool === undefined) {
     throw new Error(`No code-callable tool is named ${JSON.stringify(name)}. Try searchTools().`);
   }
-  return renderToolSample(rendered(tool));
+  return renderToolSample(rendered(tool), FROZEN_DECLARATIONS);
 }
 
 export { toCodemodeIdentifier };

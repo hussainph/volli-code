@@ -54,6 +54,7 @@ export * from "./credential-stream-redaction";
 export * from "./json-redaction";
 export * from "./secret-name";
 export * from "./structured-log";
+export * from "./renderer-stall";
 export * from "./model-auto-select";
 export * from "./model-mark-color";
 export * from "./model-access-sign-in";
@@ -70,6 +71,7 @@ export * from "./authority-config";
 export * from "./authority-policy";
 export * from "./web-address-policy";
 export * from "./web-target-policy";
+export * from "./source-icons";
 export * from "./session-activity";
 export * from "./browser-trace";
 export * from "./session-host-notice";
@@ -140,6 +142,7 @@ export * from "./scheduled-resume";
 export * from "./performance-observer";
 export * from "./session-usage";
 export * from "./session-usage-report";
+export * from "./perf-stalls";
 export * from "./session-streak";
 export * from "./working-copy";
 export * from "./session-event-codec";
@@ -233,3 +236,5 @@ export type {
   CloudMoveStatus,
   CloudMoveSnapshot,
 } from "./cloud-moves";
+
+export * from "./settings-icon-colors";

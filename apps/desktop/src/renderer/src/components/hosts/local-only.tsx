@@ -10,6 +10,9 @@
  */
 import type * as React from "react";
 
+import { EmptyState } from "@renderer/components/ui/empty-state";
+
+import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { cn } from "@renderer/lib/utils";
 
 import { notAvailableOn, useRemoteProjectHost } from "@renderer/stores/remote-project";
@@ -54,8 +57,15 @@ export function LocalOnly({
   if (host === null) return children;
   if (fallback !== undefined) return fallback;
   return (
-    <div className={cn("flex h-full min-h-0 items-center justify-center p-6", className)}>
-      <NotAvailableOnHost hostName={host.name} />
+    <div className={cn("h-full min-h-0", EMPTY_PAGE, className)}>
+      <div data-slot="host-local-only" role="status">
+        <EmptyState
+          tier="page"
+          illustration="folder"
+          status="unavailable"
+          title={notAvailableOn({ name: host.name })}
+        />
+      </div>
     </div>
   );
 }

@@ -642,9 +642,8 @@ describe("Sessions", () => {
   });
 
   it("resolves the surface for the Role the mint is creating (VC-162)", async () => {
-    // Role determines the tool bundle, and `ticketId !== null` IS the Role on
-    // start. Before this argument existed every Session resolved the same list
-    // and Role-scoped availability was true only in CONTEXT.md.
+    // Session Role determines the tool bundle (CONTEXT.md#session-role);
+    // minting must resolve the surface for the Role it will record.
     const roles: string[] = [];
     const door = () =>
       sessions({
@@ -1491,6 +1490,99 @@ describe("Sessions", () => {
       "operation-recovery:model",
       "operation-recovery:start",
     ]);
+  });
+
+  describe("a start whose attach outlasted its admission bound (VC-1099)", () => {
+    const timedOut = (request: SessionRuntimeCommandRequest): SessionRuntimeCommandResult => {
+      const rejected = result(request, "rejected");
+      return {
+        ...rejected,
+        receipt: {
+          ...rejected.receipt!,
+          code: "queue_admission_timeout",
+          detail: "queue_admission_timeout: executor attach did not finish.",
+        } as SessionRuntimeCommandResult["receipt"],
+      };
+    };
+
+    it("retries the attach once, under a command derived from the start's", async () => {
+      const commands: SessionRuntimeCommandRequest[] = [];
+      const { sessions: door } = sessions({
+        commands,
+        runtime: {
+          command: async (request) => {
+            commands.push(request);
+            return request.commandId === "operation-slow:start"
+              ? timedOut(request)
+              : result(request, request.command.kind === "adapter.attach" ? "accepted" : undefined);
+          },
+        },
+      });
+
+      const started = await door.start(startInput("operation-slow"));
+
+      expect(started).toMatchObject({ state: "ready", receipt: { status: "accepted" } });
+      expect(commands.map(({ commandId }) => commandId)).toEqual([
+        "operation-slow:create",
+        "operation-slow:model",
+        "operation-slow:start",
+        "operation-slow:retry:start",
+      ]);
+      expect(commands.at(-1)).toMatchObject({
+        command: { kind: "adapter.attach", continuity: "fresh" },
+      });
+    });
+
+    it("gives up after the one retry, and a replay asks for the same two attaches", async () => {
+      const commands: SessionRuntimeCommandRequest[] = [];
+      const { sessions: door } = sessions({
+        commands,
+        runtime: {
+          command: async (request) => {
+            commands.push(request);
+            return request.command.kind === "adapter.attach" ? timedOut(request) : result(request);
+          },
+        },
+      });
+
+      const started = await door.start(startInput("operation-stalled"));
+      await door.start(startInput("operation-stalled"));
+
+      expect(started).toMatchObject({
+        state: "needs-recovery",
+        receipt: { status: "rejected", code: "queue_admission_timeout" },
+      });
+      const attaches = commands
+        .filter(({ command }) => command.kind === "adapter.attach")
+        .map(({ commandId }) => commandId);
+      expect(attaches).toEqual([
+        "operation-stalled:start",
+        "operation-stalled:retry:start",
+        "operation-stalled:start",
+        "operation-stalled:retry:start",
+      ]);
+    });
+
+    it("does not retry an attach that answered with no receipt", async () => {
+      const commands: SessionRuntimeCommandRequest[] = [];
+      const { sessions: door } = sessions({
+        commands,
+        runtime: {
+          command: async (request) => {
+            commands.push(request);
+            return request.command.kind === "adapter.attach"
+              ? { ...result(request), receipt: null }
+              : result(request);
+          },
+        },
+      });
+
+      expect(await door.start(startInput("operation-silent"))).toMatchObject({
+        state: "needs-recovery",
+        receipt: null,
+      });
+      expect(commands.at(-1)?.commandId).toBe("operation-silent:start");
+    });
   });
 
   it("replays the same operation through stable idempotency keys", async () => {

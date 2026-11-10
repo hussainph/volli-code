@@ -109,7 +109,15 @@ export function getRetentionWatcher(
       // `swept` for a reclaim, operational for a failed write — and the
       // preference is read there, not here.
       notify: (request) => ports.attention.deliver(request),
-      onChange: () => ports.events.publish("data-changed", {}),
+      // One notice per ticket the cycle changed, scoped to it (VC-1077). An
+      // untargeted `{}` made every window re-read the whole board after any
+      // cycle that moved anything; a scoped one re-reads that project's
+      // roster and only that ticket's retention surfaces.
+      onChange: (changes) => {
+        for (const { ticketId, projectId, kind } of changes) {
+          ports.events.publish("data-changed", { ticketId, projectId, kind });
+        }
+      },
       // No seams, no reclaim: an app that cannot ask whether a directory is
       // busy has no business deleting one.
       reclaim:

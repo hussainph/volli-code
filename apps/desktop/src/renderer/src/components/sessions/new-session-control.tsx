@@ -1,45 +1,10 @@
-/**
- * Starting a Session — one control, wherever one is offered.
- *
- * A split button: `[ + Chat │ ▾ ]`. The press starts a chat, the caret admits
- * the exception exists, and right-click reaches the same two items wherever the
- * caret happens to be drawn. It replaces the two shapes this app used to have
- * for one job — a two-button Chat/Terminal cluster in the ticket surfaces and a
- * bare "+" menu on the project's own strip — which cost the ticket a peer it
- * does not have and cost the project's strip a click on the act it exists for.
- *
- * The asymmetry it draws is one the code already has and neither shipped drawing
- * expressed: `@volli/agent-runtime` is the one structured executor, and a
- * terminal is an explicit manual companion, never a silent structured fallback
- * (CLAUDE.md). A split says exactly that — the default is a press, the companion
- * is a press plus something — where two identical ghost icon buttons say the
- * opposite.
- *
- * Browser joins the menu below a separator rather than standing as its own
- * button in the strip. One "+" is the workspace's single answer to "open
- * something here", and a second labelled button beside it re-asked the question
- * the split was built to settle. The separator carries the real distinction:
- * above it are Sessions, which run something; below it is a surface, which
- * shows something.
- *
- * "Chat with skill" is deliberately absent. A skill is a property of the chat
- * you are about to have, not a kind of thing to open, and pricing it at the top
- * level put a rarely-taken branch in front of the act this control exists for.
- *
- * The word earns its width twice over: it is what a first-run user reads, and a
- * labelled target is a BIGGER target, so Fitts pays for it again at the
- * hundredth use.
- *
- * Motion is CSS and compositor-only (transform/opacity/color), interruptible
- * because a transition restarts from the computed value, and given overshoot
- * nowhere — none of these presses carries momentum.
+import { TabCascadeContext } from "@renderer/components/ui/tab-cascade";
+/** One anchored tab chooser; direct Session shortcuts keep their existing scope.
+ * The context menu is the same offer. A Browser is a tab, not a Session, and a
+ * cloud launch offers only Chat plus the existing Runner picker.
  */
 import * as React from "react";
-import { BrowserIcon } from "@phosphor-icons/react/dist/csr/Browser";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
+import { BrowserIcon, ChatIcon, AddIcon, TerminalIcon } from "@renderer/components/ui/icon";
 
 import { readOnlyMark } from "@renderer/components/hosts/use-hosts";
 import { useCanSendSession } from "@renderer/lib/cloud-session-read-only";
@@ -74,20 +39,12 @@ const CHORD = { chat: "⌘T", terminal: "⌥⌘T" } as const;
  */
 export type NewSessionPlacement = "strip" | "rail" | "empty";
 
-/** Pill scale, emphasis and label per room. */
+/** Control scale, emphasis and label per room. */
 const DRAWING = {
-  // A tab strip: h-6 beside h-7/h-8 tabs, ghost so the tabs stay the loud thing.
-  strip: { size: "sm", caret: "icon-sm", variant: "ghost", label: "Chat" },
-  // The 300px ticket rail's Sessions header: one step down, level with a
-  // text-label heading.
-  rail: { size: "xs", caret: "icon-xs", variant: "ghost", label: "Chat" },
-  // The only affordance on an empty surface, so it is solid and says what it
-  // does rather than naming a kind among tabs that no longer exist.
-  empty: { size: "sm", caret: "icon-sm", variant: "default", label: "New chat" },
-} as const satisfies Record<
-  NewSessionPlacement,
-  { size: "sm" | "xs"; caret: "icon-sm" | "icon-xs"; variant: "ghost" | "default"; label: string }
->;
+  strip: { size: "icon", variant: "ghost" },
+  rail: { size: "icon-xs", variant: "ghost" },
+  empty: { size: "icon-sm", variant: "default" },
+} as const;
 
 /** What every row in either menu needs, and nothing about how it is drawn. */
 export interface NewSessionMenuRowHandlers {
@@ -117,12 +74,12 @@ export function newSessionMenuRows(
   if (menu === "context") {
     return (
       <>
-        <ContextMenuItem icon={ChatCircleIcon} onSelect={onNewChat}>
+        <ContextMenuItem icon={ChatIcon} onSelect={onNewChat}>
           Chat
           {shortcuts ? <ContextMenuShortcut>{CHORD.chat}</ContextMenuShortcut> : null}
         </ContextMenuItem>
         {onNewTerminal === undefined ? null : (
-          <ContextMenuItem icon={TerminalWindowIcon} onSelect={onNewTerminal}>
+          <ContextMenuItem icon={TerminalIcon} onSelect={onNewTerminal}>
             Terminal
             {shortcuts ? <ContextMenuShortcut>{CHORD.terminal}</ContextMenuShortcut> : null}
           </ContextMenuItem>
@@ -141,13 +98,13 @@ export function newSessionMenuRows(
   return (
     <>
       <DropdownMenuItem onSelect={onNewChat}>
-        <ChatCircleIcon />
+        <ChatIcon />
         Chat
         {shortcuts ? <DropdownMenuShortcut>{CHORD.chat}</DropdownMenuShortcut> : null}
       </DropdownMenuItem>
       {onNewTerminal === undefined ? null : (
         <DropdownMenuItem onSelect={onNewTerminal}>
-          <TerminalWindowIcon />
+          <TerminalIcon />
           Terminal
           {shortcuts ? <DropdownMenuShortcut>{CHORD.terminal}</DropdownMenuShortcut> : null}
         </DropdownMenuItem>
@@ -178,7 +135,7 @@ export function NewSessionControl({
 }: {
   /**
    * The project a new Session would run in. While its host cannot serve
-   * (VC-576) the whole control stands down, greyed as in the lab.
+   * (VC-576) the whole control stands down.
    */
   projectId: string | null;
   /** A Session of either kind is already booting. */
@@ -213,6 +170,8 @@ export function NewSessionControl({
   onNewTerminal(): void;
 }) {
   const drawing = DRAWING[placement];
+  const cascade = React.useContext(TabCascadeContext);
+  const pointer = React.useRef(false);
   const runners = useRunnerPicker(projectId);
   // A new chat is a send (VC-895): in a cloud launch this Mac's runner starts
   // it, so the cloud link decides. Terminals and Browser Tabs are this Mac's
@@ -253,93 +212,58 @@ export function NewSessionControl({
 
   const items = newSessionMenuRows("dropdown", {
     shortcuts,
-    onNewChat,
-    onNewBrowser: handleNewBrowser,
-    onNewTerminal: newTerminal,
+    onNewChat: () => {
+      cascade?.open(pointer.current);
+      onNewChat();
+    },
+    onNewBrowser: handleNewBrowser
+      ? () => {
+          cascade?.open(pointer.current);
+          handleNewBrowser();
+        }
+      : undefined,
+    onNewTerminal: newTerminal
+      ? () => {
+          cascade?.open(pointer.current);
+          newTerminal();
+        }
+      : undefined,
   });
 
   return (
-    <div className="inline-flex min-w-0 items-center gap-1">
+    <div {...readOnlyMark(canWrite)} className="inline-flex min-w-0 items-center gap-1">
       <ContextMenu>
-        <ContextMenuTrigger asChild>
-          {/* The press-scale sits on the WRAPPER, not on each half: `:active`
-            matches an ancestor of the pressed element, so the whole pill
-            depresses as one object. Halves scaling independently would open a
-            seam mid-press, which reads as two buttons that happen to touch —
-            the exact thing this shape is trying not to be. Disabled dims here
-            too (and the halves cancel their own `disabled:opacity-50`, which
-            would otherwise multiply into an unreadable 25%). */}
-          <div
-            {...readOnlyMark(canWrite)}
-            className={cn(
-              // `transition-transform` already covers `scale` (v4 expands it to
-              // transform,translate,scale,rotate), so only the reduced-motion
-              // cancel had to change: `transform: none` cannot cancel a `scale`
-              // declaration. See the press note in `ui/button.tsx`.
-              "inline-flex shrink-0 items-center rounded-full transition-transform duration-100 ease-out active:scale-[0.97] motion-reduce:scale-100!",
-              disabled && "pointer-events-none opacity-50",
-              className,
-            )}
+        <DropdownMenu>
+          <ContextMenuTrigger asChild disabled={disabled}>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                variant={drawing.variant}
+                size={drawing.size}
+                disabled={disabled}
+                aria-label="Open a tab"
+                title="Open a tab"
+                className={cn("shrink-0", className)}
+              >
+                <AddIcon />
+              </Button>
+            </DropdownMenuTrigger>
+          </ContextMenuTrigger>
+          <DropdownMenuContent
+            onPointerDownCapture={() => {
+              pointer.current = true;
+            }}
+            onKeyDownCapture={() => {
+              pointer.current = false;
+            }}
+            className="min-w-52"
+            align={align}
+            onCloseAutoFocus={handleCloseAutoFocus}
           >
-            <Button
-              type="button"
-              variant={drawing.variant}
-              size={drawing.size}
-              disabled={disabled}
-              aria-label="New chat"
-              {...(shortcuts ? { "aria-keyshortcuts": "Meta+T" } : {})}
-              onClick={onNewChat}
-              // `scale-100!`, not `scale-100`: both halves' opt-out and the
-              // Button's own `active:scale-[0.97]` land on the same element at
-              // the same (0,1,1), and Tailwind emits the arbitrary value last —
-              // so the plain cancel lost, and each half depressed inside the
-              // wrapper that was already depressing.
-              className="rounded-r-none pr-1 active:scale-100! disabled:opacity-100"
-            >
-              {/* Outline, the baseline. The Button's own size rule draws this at
-                14px in `strip`/`empty`, above CLAUDE.md's ≤12px small-size tier
-                — and a weight step that only half its rooms earn is not a step.
-                The caret below is `size-3` in every room, so it keeps bold. */}
-              <PlusIcon />
-              {drawing.label}
-            </Button>
-            <span aria-hidden className="h-3 w-px bg-border" />
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  type="button"
-                  variant={drawing.variant}
-                  size={drawing.caret}
-                  disabled={disabled}
-                  // Not "other session kinds" any more: a Browser Tab is not a
-                  // Session, and this menu now holds both.
-                  aria-label="Other things to open"
-                  // Narrower than a stock icon button: this segment holds one
-                  // 12px caret and exists to be SEEN, not aimed at — the whole
-                  // menu is also on right-click, so a tab strip pays the smallest
-                  // width that still says "there is another kind".
-                  className="group w-4! rounded-l-none px-0 active:scale-100! disabled:opacity-100"
-                >
-                  <CaretDownIcon
-                    weight="bold"
-                    // The flip is STATE, not decoration, so reduced motion drops
-                    // the travel and keeps the end position — `transition-none`,
-                    // not a cancelled rotation. (`transform-none` was neither:
-                    // v4 compiles `rotate-180` to the standalone `rotate`
-                    // property, which `transform: none` cannot touch.)
-                    className="size-3 transition-transform duration-150 ease-out group-data-[state=open]:rotate-180 motion-reduce:transition-none"
-                  />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align={align} onCloseAutoFocus={handleCloseAutoFocus}>
-                {items}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        </ContextMenuTrigger>
-        {/* The same items on right-click, so turning to the caret is a
-          convenience and never the only route. */}
-        <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
+            {items}
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <ContextMenuContent className="min-w-52" onCloseAutoFocus={handleCloseAutoFocus}>
           {newSessionMenuRows("context", {
             shortcuts,
             onNewChat,

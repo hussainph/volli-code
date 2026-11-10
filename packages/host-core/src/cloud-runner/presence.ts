@@ -20,6 +20,7 @@ import {
   type RunnerLoad,
   type RunnerReportedState,
 } from "@volli/shared/cloud";
+import { withMainSpan } from "../log/context";
 
 export interface RunnerPresenceBackend {
   heartbeat(args: { bootId: string; load: RunnerLoad }): Promise<RunnerHeartbeatReply>;
@@ -205,7 +206,7 @@ export function createRunnerPresence(options: RunnerPresenceOptions): RunnerPres
       stopped = false;
       if (interval === null && !revoked) {
         interval = timers.setInterval(
-          () => void beat(),
+          () => void withMainSpan({ door: "timer", operation: "runner-heartbeat" }, beat),
           options.intervalMs ?? RUNNER_HEARTBEAT_INTERVAL_MS,
         );
       }

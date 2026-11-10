@@ -24,25 +24,10 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/*
- * Prompt materials (VC-335). A quiet writing sheet, an accent-tinted tray,
- * and a directional edge highlight make this a distinct object at rest.
- * No backdrop blur, moving glow, or focus-triggered repaint of the shell.
- * Layers are opaque over --card: transcript text cannot bleed into the draft.
- */
+/* Prompt writing uses a thick sheet inside the regular material frame. */
 @layer components {
   .prompt-surface {
-    border-color: transparent;
-    background:
-      linear-gradient(var(--card), var(--card)) padding-box,
-      linear-gradient(
-          135deg,
-          color-mix(in oklab, var(--primary) 50%, var(--border-strong)),
-          var(--border-strong) 38%,
-          var(--border) 72%,
-          color-mix(in oklab, var(--primary) 30%, var(--border-strong))
-        )
-        border-box;
+    border-color: var(--border-strong);
   }
 
   .prompt-toolbar {
@@ -56,48 +41,22 @@
 
   .prompt-add {
     border: 1px solid var(--border-strong);
-    background-color: var(--card);
+    background-color: var(--card-face);
+  }
+
+  /* A draft file is an object on the chat writing rail, not another footer
+   * action. Keep this face local to chat; ticket capture owns its own layout.
+   * Component-layer paint lets the shared button's hover/focus states win. */
+  .session-prompt [data-slot="composer-attachments"] > button {
+    border: 1px solid var(--border);
+    background-color: var(--card-face);
   }
 
   .prompt-primary {
     /* Keep the solved foreground/fill pair intact; only the bevel takes ink. */
     box-shadow:
-      inset 0 1px 0 color-mix(in srgb, var(--primary-foreground) 30%, transparent),
-      var(--shadow-raised);
-  }
-}
-
-/* THE SKELETON RECIPE (VC-383).
- *
- * `Skeleton` and Monaco's pseudo-elements cannot share a React child, but they
- * must share the same material. These properties are the one recipe: every bar
- * reads its fill, corner, and animation from them. The reduced-motion query
- * changes that recipe rather than making a second gate at each consumer, so a
- * primitive change cannot leave Monaco moving differently.
- *
- * The selector pair is intentional. `data-slot="skeleton"` is the React
- * primitive's stable hook; Monaco's loading host is the one non-React shape
- * that inherits the recipe into its pseudo-elements.
- */
-[data-slot="skeleton"],
-[data-monaco-status="loading"] {
-  --skeleton-fill: color-mix(in oklab, var(--accent) 70%, transparent);
-  --skeleton-radius: var(--radius-md);
-  --skeleton-animation: var(--animate-pulse);
-}
-
-@layer components {
-  [data-slot="skeleton"] {
-    border-radius: var(--skeleton-radius);
-    background-color: var(--skeleton-fill);
-    animation: var(--skeleton-animation);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  [data-slot="skeleton"],
-  [data-monaco-status="loading"] {
-    --skeleton-animation: none;
+      inset 0 1px 0 color-mix(in oklab, var(--primary-foreground) 25%, transparent),
+      0 1px 2px color-mix(in oklab, var(--scrim) 15%, transparent);
   }
 }
 
@@ -262,43 +221,43 @@
 :root.dark {
   color-scheme: dark;
   /* Two-tier sidebar depth: rail darkest, panel between rail and content. */
-  --rail: #170f0b;
-  --background: #1c1310;
-  --card: #211815;
-  --popover: #251b18;
-  --muted: #271d1a;
-  --accent: #2d2220;
-  --sidebar: #211815;
-  --foreground: #e8e4e2;
-  --muted-foreground: #bdbab8;
-  --sidebar-foreground: #d0cdcb;
-  --border: #312623;
-  --border-strong: #423632;
-  --sidebar-border: #2d241f;
+  --rail: #34241e;
+  --background: #1e1e1e;
+  --card: #1e1e1e;
+  --popover: #34241e;
+  --muted: #34241e;
+  --accent: #3e2920;
+  --sidebar: #34241e;
+  --foreground: #ededed;
+  --muted-foreground: #ead5cc;
+  --sidebar-foreground: #ededed;
+  --border: #4f3e37;
+  --border-strong: #6a5750;
+  --sidebar-border: #4f3e37;
   /* The canvas accent fill and label solved together for APCA Lc 60 AND
    WCAG AA 4.5:1. Vibrancy still supplies hue/chroma; lightness yields
    to legibility. The pair is shared by both appearances. */
-  --primary: #b85d38;
+  --primary: #cd4d00;
   --primary-foreground: #ffffff;
-  /* The accent solved to APCA Lc 60 on the card for body-sized accent text. */
-  --primary-text: #fc9a74;
+  /* Accent ink solved against the stronger selected paper tint for body-sized text. */
+  --primary-text: #ffc8b2;
   /* Opaque surface-legible accent ink, re-solved in each appearance. Do not
    dilute focus indicators: the shipped control surfaces require 3:1. */
-  --ring: #fc9a74;
+  --ring: #ffc8b2;
   /* The hue-locked family: green/amber/blue/red mean working, waiting, moved
    and gone by convention, so their HUE never follows the canvas — a red
    canvas would otherwise make “delete” indistinguishable from “primary”.
    Everything else about them is solved against the card at APCA Lc 65, so
-   all four read at one weight in either appearance, and each label is
-   whichever of white or a near-black tint of its own hue wins on the fill
-   — which is why they flip polarity between the two blocks. */
-  --destructive: #ffa49f;
+   all four read at one weight in either appearance. Labels prefer the
+   perceptual white/near-black pair, falling back to a neutral ink pole
+   where needed to retain small-text WCAG AA without moving the fill. */
+  --destructive: #ffa5a0;
   --destructive-foreground: #290b0b;
-  --positive: #27d496;
+  --positive: #29d597;
   --positive-foreground: #001c10;
-  --attention: #ffaa2f;
+  --attention: #ffab33;
   --attention-foreground: #221200;
-  --info: #65c6ff;
+  --info: #68c7ff;
   --info-foreground: #001827;
   --radius: 0.75rem;
   /* Veils (#74). The canvas paints the whole window behind the chrome, so the
@@ -306,31 +265,46 @@
    rail, so plain transparency would darken it. Each veil is the color that,
    at 10% over the surface named beside it, composites to the opaque token
    above byte-exactly. */
-  --sidebar-veil: rgb(123 105 111 / 0.1);
-  --sidebar-accent-veil: rgb(153 124 131 / 0.1);
-  --sidebar-border-veil: rgb(153 144 121 / 0.1);
-  /* THE CANVAS ITSELF, and the ten values derived alongside it
+  --sidebar-veil: rgb(52 36 30 / 0.1);
+  --sidebar-accent-veil: rgb(152 86 50 / 0.1);
+  --sidebar-border-veil: rgb(255 255 255 / 0.1);
+  /* THE CANVAS ITSELF, and the values derived alongside it
    (`CANVAS_TOKEN_NAMES`, renderer/src/theme/canvas-paint.ts). The gradient
    is a `background` value, grain layer included, so the window can paint
    itself before any JS runs. */
   --canvas:
     url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22140%22%20height%3D%22140%22%3E%3Cfilter%20id%3D%22n%22%20x%3D%220%22%20y%3D%220%22%20width%3D%22100%25%22%20height%3D%22100%25%22%3E%3CfeTurbulence%20type%3D%22fractalNoise%22%20baseFrequency%3D%220.9%22%20numOctaves%3D%222%22%20seed%3D%227%22%20stitchTiles%3D%22stitch%22%2F%3E%3CfeColorMatrix%20type%3D%22luminanceToAlpha%22%2F%3E%3CfeComponentTransfer%3E%3CfeFuncA%20type%3D%22linear%22%20slope%3D%220.083%22%2F%3E%3C%2FfeComponentTransfer%3E%3C%2Ffilter%3E%3Crect%20width%3D%22100%25%22%20height%3D%22100%25%22%20filter%3D%22url(%23n)%22%2F%3E%3C%2Fsvg%3E")
       0 0 / 140px 140px repeat,
-    radial-gradient(ellipse 130% 110% at 68% 30%, #55220b, transparent 75.6%), #481600;
+    radial-gradient(
+      62% 70% at 12% 8%,
+      color-mix(in oklab, #e8652a 58%, transparent),
+      transparent 74%
+    ),
+    radial-gradient(
+      58% 70% at 88% 38%,
+      color-mix(in oklab, #e0457b 58%, transparent),
+      transparent 74%
+    ),
+    radial-gradient(
+      70% 62% at 30% 100%,
+      color-mix(in oklab, #f3a33c 58%, transparent),
+      transparent 74%
+    ),
+    #45291e;
   /* The on-canvas copy ladder, head first — solved against the gradient and
    the lifted tiers on it, NOT against the card. `--foreground` and
    `--muted-foreground` answer the same question for the other side of the
    card's edge; neither set can serve both surfaces. */
   --canvas-ink: #fbf1ed;
-  --canvas-ink-label: #d2c8c5;
-  --canvas-ink-muted: #b6aca9;
+  --canvas-ink-label: #ece2de;
+  --canvas-ink-muted: #e1d8d4;
   /* Cumulative lift per on-canvas tier. Tier 1 (chrome band, project rail)
    takes a share of zero — the frame reads as a frame only if it is
    uniform — so it is `transparent` by design, not by omission. */
   --lift-1: transparent;
   --lift-2: rgb(251 241 237 / 0.03);
   /* The card's micro-label tier, between body and secondary. */
-  --label-ink: #d5d1cf;
+  --label-ink: #e0e0e0;
   /* The three shadow tiers: raised on a surface, the card, and overlays. */
   --shadow-raised: 0 1px 2px 0px rgb(2 0 0 / 0.09), 0 2px 7px -1px rgb(2 0 0 / 0.135);
   --shadow-card: 0 1px 3px 0px rgb(2 0 0 / 0.075), 0 10px 30px -6px rgb(2 0 0 / 0.18);
@@ -339,6 +313,74 @@
    spread over the whole window instead of pooled under one edge, so it
    dims the canvas in the canvas's own hue rather than in neutral black. */
   --scrim: rgb(2 0 0 / 0.5);
+  --canvas-accent: #e8652a;
+  --canvas-secondary-stop: #e0457b;
+  --flow: linear-gradient(120deg, #e8652a, #e0457b, #f3a33c);
+  --accent-tint: color-mix(in srgb, #e8652a 10%, #1e1e1e);
+  --accent-selected: color-mix(in srgb, #e8652a 18%, #1e1e1e);
+  --tertiary-foreground: #c3aea5;
+  --glass-fill: #34241e;
+  --glass-edge: rgb(0 0 0 / 0.6);
+  --canvas-mesh:
+    radial-gradient(
+      62% 70% at 12% 8%,
+      color-mix(in oklab, #e8652a 58%, transparent),
+      transparent 74%
+    ),
+    radial-gradient(
+      58% 70% at 88% 38%,
+      color-mix(in oklab, #e0457b 58%, transparent),
+      transparent 74%
+    ),
+    radial-gradient(
+      70% 62% at 30% 100%,
+      color-mix(in oklab, #f3a33c 58%, transparent),
+      transparent 74%
+    );
+  --glass-veil: rgb(52 36 30 / 0.56);
+  --glass-pane-veil: rgb(26 26 28 / 0.52);
+  --glass-writing-veil: rgb(52 36 30 / 0.56);
+  --glass-tone: brightness(1.56971) contrast(0.6149) brightness(0.7124) saturate(2.79074);
+  --glass-rim: linear-gradient(
+    180deg,
+    rgb(255 255 255 / 0.21),
+    transparent 22%,
+    transparent 78%,
+    rgb(255 255 255 / 0.21)
+  );
+  --glass-ink: #f5f5f5;
+  --glass-secondary: #e4cfc6;
+  --fill-row-selected: color-mix(in oklab, #fff2ed 9%, transparent);
+  --fill-row-hover: color-mix(in oklab, #fff2ed 4.7%, transparent);
+  --fill-quaternary: rgb(254 232 223 / 0.027);
+  --fill-secondary: rgb(254 232 223 / 0.078);
+  /* Opaque objects on neutral paper: composite the 2.7% / 7.8% neutral rung
+   first, then tint its final face. The translucent fill tokens remain
+   separate for glass and overlays on arbitrary underlying colours. */
+  --surface-quaternary: #2f201a;
+  --surface-secondary: #3a2a24;
+  /* Tinted material paint, not text. Navigation substitutes glass-wash-ink
+   to follow its own ink polarity; bare canvas substitutes the adaptive
+   --canvas-ink. Body foreground remains neutral. */
+  --wash-ink: #fee8df;
+  --glass-wash-ink: #fff2ed;
+  --card-face: #362620;
+  --card-shadow: 0 1px 2px rgb(0 0 0 / 0.35), 0 0 0 0.5px rgb(255 255 255 / 0.06);
+  --paper-shadow: 0 1px 3px rgb(0 0 0 / 0.06), 0 0 0 0.5px var(--glass-edge);
+  --tab-selected-face: rgb(254 232 223 / 0.14);
+  --control-face: rgb(254 232 223 / 0.14);
+  /* Navigation outline press only: 7.8% optical shade/highlight opposite
+   the navigation ink. Paper and other control variants retain their fills. */
+  --glass-outline-pressed: rgb(0 0 0 / 0.078);
+  /* Outline/secondary buttons on floating writing glass: light keeps the opaque
+   control face and shared press; dark shades opposite the body ink. */
+  --writing-control-face: rgb(0 0 0 / 0.14);
+  --writing-control-pressed: rgb(0 0 0 / 0.078);
+  --control-bezel-shadow:
+    0 0.5px 1.5px rgb(0 0 0 / 0.5), 0 0 0 0.5px rgb(0 0 0 / 0.35),
+    inset 0 0.5px 0 rgb(255 255 255 / 0.14);
+  --diff-added: #55f3b3;
+  --diff-removed: #ffcdc9;
 }
 
 /* Later in the file at equal specificity (0,2,0) to `:root.dark` and higher
@@ -347,75 +389,90 @@
 :root.light {
   color-scheme: light;
   /* Two-tier sidebar depth: rail darkest, panel between rail and content. */
-  --rail: #edd1c6;
-  --background: #fdded2;
-  --card: #f4d4c8;
-  --popover: #f7d8cc;
-  --muted: #eacabd;
-  --accent: #dab9ad;
-  --sidebar: #e2c3b7;
-  --foreground: #120906;
-  --muted-foreground: #514541;
-  --sidebar-foreground: #080302;
-  --border: #d8b6a9;
-  --border-strong: #d5b2a5;
-  --sidebar-border: #ddbbad;
+  --rail: #fde4db;
+  --background: #ffffff;
+  --card: #ffffff;
+  --popover: #fff9f6;
+  --muted: #fde4db;
+  --accent: #fdf1ec;
+  --sidebar: #fde4db;
+  --foreground: #272727;
+  --muted-foreground: #5a463f;
+  --sidebar-foreground: #272727;
+  --border: #e4ccc3;
+  --border-strong: #c0aaa1;
+  --sidebar-border: #e4ccc3;
   /* The canvas accent fill and label solved together for APCA Lc 60 AND
    WCAG AA 4.5:1. Vibrancy still supplies hue/chroma; lightness yields
    to legibility. The pair is shared by both appearances. */
-  --primary: #b85d38;
+  --primary: #cd4d00;
   --primary-foreground: #ffffff;
-  /* The accent solved to APCA Lc 60 on the card for body-sized accent text. */
-  --primary-text: #9c441e;
+  /* Accent ink solved against the stronger selected paper tint for body-sized text. */
+  --primary-text: #862f00;
   /* Opaque surface-legible accent ink, re-solved in each appearance. Do not
    dilute focus indicators: the shipped control surfaces require 3:1. */
-  --ring: #9c441e;
+  --ring: #862f00;
   /* The hue-locked family: green/amber/blue/red mean working, waiting, moved
    and gone by convention, so their HUE never follows the canvas — a red
    canvas would otherwise make “delete” indistinguishable from “primary”.
    Everything else about them is solved against the card at APCA Lc 65, so
-   all four read at one weight in either appearance, and each label is
-   whichever of white or a near-black tint of its own hue wins on the fill
-   — which is why they flip polarity between the two blocks. */
-  --destructive: #9b1e28;
-  --destructive-foreground: #ffffff;
-  --positive: #005f40;
-  --positive-foreground: #ffffff;
-  --attention: #764900;
-  --attention-foreground: #ffffff;
-  --info: #005880;
-  --info-foreground: #ffffff;
+   all four read at one weight in either appearance. Labels prefer the
+   perceptual white/near-black pair, falling back to a neutral ink pole
+   where needed to retain small-text WCAG AA without moving the fill. */
+  --destructive: #d85959;
+  --destructive-foreground: #000000;
+  --positive: #009567;
+  --positive-foreground: #000000;
+  --attention: #b77400;
+  --attention-foreground: #000000;
+  --info: #008bc5;
+  --info-foreground: #000000;
   --radius: 0.75rem;
   /* Veils (#74). The canvas paints the whole window behind the chrome, so the
    sidebar cannot keep an opaque fill — but it is a LIGHTER rung than the
    rail, so plain transparency would darken it. Each veil is the color that,
    at 10% over the surface named beside it, composites to the opaque token
    above byte-exactly. */
-  --sidebar-veil: rgb(127 69 48 / 0.1);
-  --sidebar-accent-veil: rgb(146 95 83 / 0.1);
-  --sidebar-border-veil: rgb(176 115 83 / 0.1);
-  /* THE CANVAS ITSELF, and the ten values derived alongside it
+  --sidebar-veil: rgb(253 228 219 / 0.1);
+  --sidebar-accent-veil: rgb(253 255 255 / 0.1);
+  --sidebar-border-veil: rgb(3 0 0 / 0.1);
+  /* THE CANVAS ITSELF, and the values derived alongside it
    (`CANVAS_TOKEN_NAMES`, renderer/src/theme/canvas-paint.ts). The gradient
    is a `background` value, grain layer included, so the window can paint
    itself before any JS runs. */
   --canvas:
     url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22140%22%20height%3D%22140%22%3E%3Cfilter%20id%3D%22n%22%20x%3D%220%22%20y%3D%220%22%20width%3D%22100%25%22%20height%3D%22100%25%22%3E%3CfeTurbulence%20type%3D%22fractalNoise%22%20baseFrequency%3D%220.9%22%20numOctaves%3D%222%22%20seed%3D%227%22%20stitchTiles%3D%22stitch%22%2F%3E%3CfeColorMatrix%20type%3D%22luminanceToAlpha%22%2F%3E%3CfeComponentTransfer%3E%3CfeFuncA%20type%3D%22linear%22%20slope%3D%220.083%22%2F%3E%3C%2FfeComponentTransfer%3E%3C%2Ffilter%3E%3Crect%20width%3D%22100%25%22%20height%3D%22100%25%22%20filter%3D%22url(%23n)%22%2F%3E%3C%2Fsvg%3E")
       0 0 / 140px 140px repeat,
-    radial-gradient(ellipse 130% 110% at 68% 30%, #ffb294, transparent 75.6%), #ff9970;
+    radial-gradient(
+      62% 70% at 12% 8%,
+      color-mix(in oklab, #e8652a 62%, transparent),
+      transparent 74%
+    ),
+    radial-gradient(
+      58% 70% at 88% 38%,
+      color-mix(in oklab, #e0457b 62%, transparent),
+      transparent 74%
+    ),
+    radial-gradient(
+      70% 62% at 30% 100%,
+      color-mix(in oklab, #f3a33c 62%, transparent),
+      transparent 74%
+    ),
+    #f6d4c6;
   /* The on-canvas copy ladder, head first — solved against the gradient and
    the lifted tiers on it, NOT against the card. `--foreground` and
    `--muted-foreground` answer the same question for the other side of the
    card's edge; neither set can serve both surfaces. */
   --canvas-ink: #1c110d;
-  --canvas-ink-label: #392c28;
-  --canvas-ink-muted: #4c3f3a;
+  --canvas-ink-label: #271b17;
+  --canvas-ink-muted: #2d211d;
   /* Cumulative lift per on-canvas tier. Tier 1 (chrome band, project rail)
    takes a share of zero — the frame reads as a frame only if it is
    uniform — so it is `transparent` by design, not by omission. */
   --lift-1: transparent;
-  --lift-2: rgb(253 222 210 / 0.175);
+  --lift-2: rgb(255 255 255 / 0.175);
   /* The card's micro-label tier, between body and secondary. */
-  --label-ink: #2f2521;
+  --label-ink: #3e3e3e;
   /* The three shadow tiers: raised on a surface, the card, and overlays. */
   --shadow-raised: 0 1px 2px 0px rgb(72 42 30 / 0.09), 0 2px 7px -1px rgb(72 42 30 / 0.135);
   --shadow-card: 0 1px 3px 0px rgb(72 42 30 / 0.075), 0 10px 30px -6px rgb(72 42 30 / 0.18);
@@ -424,12 +481,89 @@
    spread over the whole window instead of pooled under one edge, so it
    dims the canvas in the canvas's own hue rather than in neutral black. */
   --scrim: rgb(72 42 30 / 0.3);
+  --canvas-accent: #e8652a;
+  --canvas-secondary-stop: #e0457b;
+  --flow: linear-gradient(120deg, #e8652a, #e0457b, #f3a33c);
+  --accent-tint: color-mix(in srgb, #e8652a 10%, #ffffff);
+  --accent-selected: color-mix(in srgb, #e8652a 18%, #ffffff);
+  --tertiary-foreground: #746059;
+  --glass-fill: #fff9f6;
+  --glass-edge: rgb(0 0 0 / 0.11);
+  --canvas-mesh:
+    radial-gradient(
+      62% 70% at 12% 8%,
+      color-mix(in oklab, #e8652a 62%, transparent),
+      transparent 74%
+    ),
+    radial-gradient(
+      58% 70% at 88% 38%,
+      color-mix(in oklab, #e0457b 62%, transparent),
+      transparent 74%
+    ),
+    radial-gradient(
+      70% 62% at 30% 100%,
+      color-mix(in oklab, #f3a33c 62%, transparent),
+      transparent 74%
+    );
+  --glass-veil: rgb(255 249 246 / 0.56);
+  --glass-pane-veil: rgb(255 255 255 / 0.46);
+  --glass-writing-veil: rgb(255 249 246 / 0.56);
+  --glass-tone: contrast(0.44174) brightness(1.44847) saturate(1.91139);
+  --glass-rim: linear-gradient(
+    180deg,
+    rgb(255 255 255 / 0.17),
+    transparent 22%,
+    transparent 78%,
+    rgb(255 255 255 / 0.17)
+  );
+  --glass-ink: #171717;
+  --glass-secondary: #645049;
+  --fill-row-selected: color-mix(in oklab, #22120c 9%, transparent);
+  --fill-row-hover: color-mix(in oklab, #22120c 4.7%, transparent);
+  --fill-quaternary: rgb(52 34 28 / 0.027);
+  --fill-secondary: rgb(52 34 28 / 0.078);
+  /* Opaque objects on neutral paper: composite the 2.7% / 7.8% neutral rung
+   first, then tint its final face. The translucent fill tokens remain
+   separate for glass and overlays on arbitrary underlying colours. */
+  --surface-quaternary: #fff7f4;
+  --surface-secondary: #ffe9e0;
+  /* Tinted material paint, not text. Navigation substitutes glass-wash-ink
+   to follow its own ink polarity; bare canvas substitutes the adaptive
+   --canvas-ink. Body foreground remains neutral. */
+  --wash-ink: #34221c;
+  --glass-wash-ink: #22120c;
+  --card-face: #fff9f6;
+  --card-shadow: 0 1px 2px rgb(0 0 0 / 0.05), 0 0 0 0.5px rgb(0 0 0 / 0.07);
+  --paper-shadow: 0 1px 3px rgb(0 0 0 / 0.06), 0 0 0 0.5px var(--glass-edge);
+  --tab-selected-face: #fff9f6;
+  --control-face: #fff9f6;
+  /* Navigation outline press only: 7.8% optical shade/highlight opposite
+   the navigation ink. Paper and other control variants retain their fills. */
+  --glass-outline-pressed: rgb(255 255 255 / 0.078);
+  /* Outline/secondary buttons on floating writing glass: light keeps the opaque
+   control face and shared press; dark shades opposite the body ink. */
+  --writing-control-face: #fff9f6;
+  --writing-control-pressed: rgb(52 34 28 / 0.078);
+  --control-bezel-shadow:
+    0 0.5px 1.5px rgb(0 0 0 / 0.16), 0 0 0 0.5px rgb(0 0 0 / 0.09),
+    inset 0 0.5px 0 rgb(255 255 255 / 1);
+  --diff-added: #005639;
+  --diff-removed: #941522;
 }
 /* GENERATED THEME TOKENS — END */
+
+/* Geometry and lift are authored, not generated colors. Override the legacy
+ * generated radius fallback in every appearance without editing its block. */
+:root,
+:root.dark,
+:root.light {
+  --radius: 0.5rem;
+}
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-wash-ink: var(--wash-ink);
   --color-card: var(--card);
   --color-popover: var(--popover);
   --color-primary: var(--primary);
@@ -442,6 +576,8 @@
   --color-destructive-foreground: var(--destructive-foreground);
   --color-positive: var(--positive);
   --color-positive-foreground: var(--positive-foreground);
+  --color-diff-added: var(--diff-added);
+  --color-diff-removed: var(--diff-removed);
   --color-attention: var(--attention);
   --color-attention-foreground: var(--attention-foreground);
   --color-info: var(--info);
@@ -478,6 +614,8 @@
   --shadow-raised: var(--shadow-raised);
   --shadow-card: var(--shadow-card);
   --shadow-overlay: var(--shadow-overlay);
+  --shadow-glass: var(--shadow-glass);
+  --shadow-glass-small: var(--shadow-glass-small);
   /* The overlay wash, as `bg-scrim`. Solved beside the tiers above and for the
    * same reason: a scrim is the window's shadow spread over everything, so it
    * follows the canvas instead of being a neutral `bg-black/N` that a warm
@@ -494,26 +632,80 @@
   /* macOS-feel motion: fast start, long gentle settle (the iOS sheet curve).
    * Used for structural transitions like the sidebar collapse. */
   --ease-swift: cubic-bezier(0.32, 0.72, 0, 1);
-  --font-sans: "Mona Sans Variable", system-ui, -apple-system, sans-serif;
-  --font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
-  /* Radius ladder (docs/DESIGN.md). Three rungs and one relation:
-   * a CONTROL is 12, a CONTAINER is 20, and anything that acts is a pill.
-   * `--radius-row` is not a fourth rung — it is the container seen from
-   * inside: a row sitting in a surface's own 4px inset takes 20 − 4 so the
-   * two corners stay concentric. Change the inset and this moves with it.
-   * The derived sm/md/lg/xl rungs below ride `--radius` (12px, = control) and
-   * exist for the surfaces that predate the ladder. */
-  --radius-control: 12px;
-  --radius-container: 20px;
-  --radius-row: 16px;
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+  --font-sans: var(--ui-font, system-ui, -apple-system, sans-serif);
+  --font-display: "Mona Sans Variable", var(--font-sans);
+  --font-mono: "Space Mono", ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  /* Native geometry: 6px controls, 12px containers and menus, 5px menu items. */
+  --radius-native-control: var(--radius-native-control);
+  --radius-control-mini: 4px;
+  --radius-control-small: 5px;
+  --radius-control: 6px;
+  --radius-container: 12px;
+  --radius-row: 8px;
+  --radius-menu: 12px;
+  --radius-menu-item: 5px;
+  /* Volli Glass containers: in @theme so `rounded-card` etc. generate utilities. */
+  --radius-card: 10px;
+  --radius-sheet: 14px;
+  --radius-column: 16px;
+  --radius-floating: 20px;
+  --radius-keycap: calc(var(--radius-menu-item) - 2px);
+  --radius-sm: var(--radius-menu-item);
+  --radius-md: var(--radius-control);
+  --radius-lg: var(--radius-control);
+  --radius-xl: var(--radius-container);
+  /* Quiet lift resolves against each control's scoped semantic inks. */
+  --control-light: color-mix(
+    in oklab,
+    var(--background) var(--control-light-surface),
+    var(--foreground)
+  );
+  /* Shade/drop use generated canvas shadow ink, never neutral black. */
+  --control-shade: color-mix(in oklab, var(--scrim) var(--control-shade-strength), transparent);
+  --shadow-control-drop:
+    var(--control-drop-x) var(--control-drop-y) var(--control-drop-blur) var(--control-drop-spread)
+      color-mix(in oklab, var(--scrim) var(--control-drop-strength), transparent),
+    var(--control-tail-x) var(--control-tail-y) var(--control-tail-blur) var(--control-tail-spread)
+      color-mix(in oklab, var(--scrim) var(--control-tail-strength), transparent);
+  --shadow-control:
+    inset var(--control-edge-x) var(--control-edge-y) var(--control-edge-blur)
+      color-mix(in oklab, var(--control-light) var(--control-highlight), transparent),
+    inset calc(-1 * var(--control-edge-x)) calc(-1 * var(--control-edge-y)) var(--control-edge-blur)
+      var(--control-shade),
+    var(--shadow-control-drop);
+  --shadow-control-hover:
+    inset var(--control-edge-x) var(--control-edge-y) var(--control-edge-blur)
+      color-mix(in oklab, var(--control-light) var(--control-highlight-hover), transparent),
+    inset calc(-1 * var(--control-edge-x)) calc(-1 * var(--control-edge-y)) var(--control-edge-blur)
+      var(--control-shade),
+    var(--shadow-control-drop);
+  --shadow-control-pressed:
+    inset calc(var(--control-edge-x) * var(--control-pressed-depth))
+      calc(var(--control-edge-y) * var(--control-pressed-depth)) var(--control-pressed-blur)
+      color-mix(in oklab, var(--scrim) var(--control-pressed-shade), transparent),
+    inset calc(-1 * var(--control-edge-x)) calc(-1 * var(--control-edge-y)) var(--control-edge-blur)
+      color-mix(in oklab, var(--control-light) var(--control-pressed-highlight), transparent);
+  --color-control-secondary: var(--control-secondary);
+  /* Destructive reading ink is pale on dark paper. A filled action remains
+   * deep red in either appearance; retain the generated hue/chroma, cap its
+   * lightness, and pair it with bright ink. No generated colour is changed. */
+  --color-control-destructive: oklch(from var(--destructive) min(l, 0.5) c h);
+  --color-control-destructive-foreground: oklch(from var(--destructive-foreground) 0.98 0 h);
+  /* One height/inset scale, including attached fields and select triggers. */
+  --spacing-control-mini: 16px;
+  --spacing-control-xs: 20px;
+  --spacing-control-sm: 24px;
+  --spacing-control-default: 28px;
+  --spacing-control-lg: 36px;
+  --spacing-control-pad-xs: 8px;
+  --spacing-control-pad-sm: 8px;
+  --spacing-control-pad-default: 10px;
+  --spacing-control-pad-lg: 12px;
   /* Layout language (docs/DESIGN.md): the canonical reading measure (Tier A
    * surfaces center on it via <ContentColumn>) and the unified page gutter
    * every surface aligns its edges to. */
   --container-content: 45rem;
+  --container-document: 37.5rem;
   /* The Tier B ceiling. Settings and Configure are workbench surfaces: their
    * tables carry a name AND a description AND provenance, which the 45rem
    * reading measure truncates past legibility. Fluid, but not unbounded — on a
@@ -521,6 +713,178 @@
    * answers to, and the eye loses the pairing the row exists to draw. */
   --container-workbench: 80rem;
   --spacing-gutter: 1.5rem;
+}
+
+/* Glass, tuned: one top catch and a small drop in both appearances.
+ * Knobs remain scoped so the catalog can compare other treatments. */
+:root,
+.dark,
+.light {
+  --control-light-surface: 100%;
+  --control-edge-x: 0px;
+  --control-edge-y: 1px;
+  --control-edge-blur: 0px;
+  --control-highlight: 25%;
+  --control-highlight-hover: 36%;
+  --control-shade-strength: 0%;
+  --control-drop-x: 0px;
+  --control-drop-y: 1px;
+  --control-drop-blur: 2px;
+  --control-drop-spread: 0px;
+  --control-drop-strength: 15%;
+  --control-tail-x: 0px;
+  --control-tail-y: 0px;
+  --control-tail-blur: 0px;
+  --control-tail-spread: 0px;
+  --control-tail-strength: 0%;
+  --control-pressed-depth: 1;
+  --control-pressed-blur: 2px;
+  --control-pressed-shade: 22%;
+  --control-pressed-highlight: 0%;
+  --control-fill-lift: 0%;
+  --control-sheen: 0%;
+  --control-sheen-angle: 135deg;
+  --control-sheen-stop: 60%;
+}
+
+/* One face recipe. Style queries read inherited knobs from the containing
+ * scope. At zero there is NO fill override: existing caller washes and native
+ * sRGB edge rasterization stay pixel-identical, not just visually close. */
+@utility control-material {
+  @container not style(--control-fill-lift: 0%) {
+    /* Checked/hover background variants have two selectors. The face must
+     * still lift those fills; their state-specific --control-fill supplies ink. */
+    &.control-material.control-material {
+      background-color: color-mix(
+        in oklab,
+        var(--control-fill, var(--card)) calc(100% - var(--control-fill-lift)),
+        var(--foreground)
+      );
+    }
+  }
+}
+
+/* Quiet highlights use light paper in either appearance. */
+:root,
+.dark {
+  --control-light-paper: var(--foreground);
+  --control-light-ink: var(--background);
+  /* Dark paper needs real lift for a secondary face to read as a control. */
+  --control-secondary: color-mix(in oklab, var(--muted) 70%, var(--foreground));
+}
+:root.light,
+.light {
+  --control-light-paper: var(--background);
+  --control-light-ink: var(--foreground);
+  /* Light paper only needs a hint of ink: more turns the face a muddy
+   * mid-tone under dark text on tinted canvases. The top catch carries the lift. */
+  --control-secondary: color-mix(in oklab, var(--muted) 92%, var(--foreground));
+}
+
+/* Resolve derived values ON the control, not once at html: a stage/scope may
+ * override either knobs or theme tokens. Ghost/link keep their flat face. */
+.control-material,
+.control-lighting,
+.control-group {
+  --control-light: color-mix(
+    in oklab,
+    var(--control-light-paper) var(--control-light-surface),
+    var(--control-light-ink)
+  );
+  --control-shade: color-mix(in oklab, var(--scrim) var(--control-shade-strength), transparent);
+  --shadow-control-drop:
+    var(--control-drop-x) var(--control-drop-y) var(--control-drop-blur) var(--control-drop-spread)
+      color-mix(in oklab, var(--scrim) var(--control-drop-strength), transparent),
+    var(--control-tail-x) var(--control-tail-y) var(--control-tail-blur) var(--control-tail-spread)
+      color-mix(in oklab, var(--scrim) var(--control-tail-strength), transparent);
+}
+
+/* Joined actions share ONE drop and perimeter. Children retain their semantic
+ * fills and press feedback, but never put another bezel beside the seam.
+ * Plain ghost toolbars and nested groups keep their existing flat drawing. */
+.control-group:not(:has(> [data-slot="button-group"])):has(
+    > [data-control="button"].control-material,
+    > * > [data-control="button"].control-material
+  ) {
+  box-shadow: var(--shadow-control-drop);
+  border-radius: var(--radius-native-control);
+
+  & > [data-control="button"],
+  & > :not([data-slot="button-group"]) > [data-control="button"],
+  & > [data-slot="button-group-text"] {
+    box-shadow:
+      var(--tw-ring-offset-shadow, 0 0 transparent),
+      var(--tw-ring-shadow, 0 0 transparent),
+      inset 0 var(--control-edge-y) var(--control-edge-blur)
+        color-mix(in oklab, var(--control-light) var(--control-highlight), transparent),
+      inset 0 calc(-1 * var(--control-edge-y)) var(--control-edge-blur) var(--control-shade);
+    border-color: var(--border-strong);
+  }
+
+  /* A neighbour without an explicit separator earns a single hairline. */
+  & > [data-control="button"]:not(:first-child):not([data-slot="button-group-separator"] + *),
+  &
+    > [data-slot="button-group-text"]:not(:first-child):not(
+      [data-slot="button-group-separator"] + *
+    ),
+  &
+    > :not(:first-child):not([data-slot="button-group-separator"] + *):not(
+      [data-slot="button-group"]
+    )
+    > [data-control="button"] {
+    border-inline-start: 1px solid var(--border-strong);
+  }
+  &[data-orientation="vertical"] {
+    & > [data-control="button"]:not(:first-child):not([data-slot="button-group-separator"] + *),
+    &
+      > [data-slot="button-group-text"]:not(:first-child):not(
+        [data-slot="button-group-separator"] + *
+      ),
+    &
+      > :not(:first-child):not([data-slot="button-group-separator"] + *):not(
+        [data-slot="button-group"]
+      )
+      > [data-control="button"] {
+      border-inline-start: 0;
+      border-block-start: 1px solid var(--border-strong);
+    }
+  }
+  & > [data-control="button"]:active,
+  & > :not([data-slot="button-group"]) > [data-control="button"]:active {
+    box-shadow: var(--shadow-control-pressed);
+  }
+}
+
+/* Attached fields are content inside one lifted group, never a second face. */
+.control-flat {
+  background-color: transparent;
+  background-image: none;
+}
+
+@layer components {
+  .control-material {
+    --control-fill: var(--card-face);
+  }
+  @container not style(--control-sheen: 0%) {
+    .control-material {
+      background-image: linear-gradient(
+        var(--control-sheen-angle),
+        color-mix(in oklab, var(--foreground) var(--control-sheen), transparent),
+        transparent var(--control-sheen-stop)
+      );
+    }
+  }
+}
+
+/* Composer settings and command search use the same quiet control lift. */
+.prompt-config,
+[data-slot="command-input-wrapper"],
+[cmdk-dialog] [cmdk-root] > div:has(> [cmdk-input]) {
+  border-color: var(--border);
+  background-image: none;
+  box-shadow:
+    inset 0 1px 0 color-mix(in oklab, var(--control-light-paper) 25%, transparent),
+    0 1px 2px color-mix(in oklab, var(--scrim) 15%, transparent);
 }
 
 /*
@@ -588,7 +952,9 @@
     background: var(--canvas);
   }
   body {
-    @apply text-foreground font-sans;
+    /* Unsized UI and body portals share the UI rung, never browser-default 16px.
+     * Reading surfaces and headings declare their larger semantic rung. */
+    @apply text-foreground font-sans text-ui;
     background: transparent;
     font-synthesis: none;
   }
@@ -651,6 +1017,9 @@
 .app-region-drag {
   --foreground: var(--canvas-ink);
   --muted-foreground: var(--canvas-ink-muted);
+  /* Bare-canvas washes follow the already hue-tinted adaptive ink, not the
+     paper pole. Navigation glass overrides this in its own material scope. */
+  --wash-ink: var(--canvas-ink);
   /* The furniture rung — see the ladder below. Set here rather than there
      because it is the DEFAULT everything on the canvas inherits; those rules
      are the exceptions to it. */
@@ -699,21 +1068,8 @@
  * contrasts and neither of them was measured. A solved tier is the fix, and the
  * `color` (rather than a token override) is what actually kills the alpha —
  * redefining `--sidebar-foreground` on the element would only change what the
- * 70% is taken OF.
- *
- * `.uppercase` catches the second heading level, the session-band headers
- * ("ACTIVE", "PREVIOUS") that are a plain div rather than a group label.
- * Counted in the running sidebar, that class matches two elements and both are
- * headings — which is why one this generic is precise here. It is also the rule
- * that should survive a third: 11px letterspaced caps in a sidebar IS a section
- * heading, whatever component drew it. (The caps come from here, so the JSX
- * writes "Active" and "Previous" — the string is sentence case, the treatment
- * is not.)
- *
- * Each heading's COUNT rides with it rather than dropping to the mute. The two
- * bracket the row from opposite edges and read as one unit. */
-[data-slot="sidebar"] [data-slot="sidebar-group-label"],
-[data-slot="sidebar"] .uppercase {
+ * 70% is taken OF. */
+[data-slot="sidebar"] [data-slot="sidebar-group-label"] {
   color: var(--canvas-ink-label);
 }
 
@@ -757,18 +1113,37 @@
  * which the rule above has already remapped onto the title's ink tier, so the
  * sweep survives the sidebar's token remap in either appearance.
  *
- * The peak is `aria-hidden` and duplicates the title, so it must never be
- * reachable: `pointer-events: none` plus the parent's own truncation. Under
- * reduced motion it is dropped outright rather than parked mid-sweep — a frozen
- * highlight halfway along a word reads as a rendering bug, not as stillness. */
-@keyframes session-title-sweep {
+ * PAID FOR ON THE COMPOSITOR (VC-1078), the way the transcript's
+ * `.chat-shimmer` below is. This used to animate `mask-position`, which is a
+ * main-thread repaint of every working row's glyphs on every frame — and a
+ * band of running Sessions is exactly when the main thread has the least to
+ * spare. Now the masked BAND moves (`transform`) and the bright copy inside it
+ * runs the exact inverse translation, so the words stand still while the
+ * highlight crosses them. The band is one period wider than the title and
+ * travels one period per cycle, so the repeating mask reads as the same
+ * endless sweep it was. Change one keyframe and you must change its mirror, or
+ * the bright copy drifts off the words it lights.
+ *
+ * The band duplicates the title, so it must never be reachable: `aria-hidden`
+ * in the markup, `pointer-events: none` here, and the parent's own clipping.
+ * Under reduced motion it is dropped outright rather than parked mid-sweep — a
+ * frozen highlight halfway along a word reads as a rendering bug, not as
+ * stillness. */
+@keyframes session-title-sweep-band {
   from {
-    -webkit-mask-position: 0 center;
-    mask-position: 0 center;
+    transform: translateX(0);
   }
   to {
-    -webkit-mask-position: calc(-1 * var(--session-sweep-period)) center;
-    mask-position: calc(-1 * var(--session-sweep-period)) center;
+    transform: translateX(calc(-1 * var(--session-sweep-period)));
+  }
+}
+
+@keyframes session-title-sweep-ink {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(var(--session-sweep-period));
   }
 }
 
@@ -783,13 +1158,12 @@
   color: color-mix(in oklab, var(--sidebar-foreground) 68%, transparent);
 }
 
-.session-title-sweep > .session-title-peak {
+.session-title-sweep > .session-title-band {
   position: absolute;
-  inset: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--sidebar-foreground);
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: calc(100% + var(--session-sweep-period));
   pointer-events: none;
   -webkit-mask-image: linear-gradient(
     90deg,
@@ -813,13 +1187,27 @@
   mask-size: var(--session-sweep-period) 100%;
   -webkit-mask-repeat: repeat-x;
   mask-repeat: repeat-x;
-  animation: session-title-sweep 3.5s linear infinite;
+  animation: session-title-sweep-band 3.5s linear infinite;
+}
+
+/* Exactly the title's own box: the band is one period wider, and the copy must
+ * truncate where the title underneath it does. */
+.session-title-band > .session-title-peak {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: calc(100% - var(--session-sweep-period));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--sidebar-foreground);
+  animation: session-title-sweep-ink 3.5s linear infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .session-title-sweep > .session-title-peak {
-    animation: none;
-    opacity: 0;
+  .session-title-sweep > .session-title-band {
+    display: none;
   }
 }
 
@@ -850,59 +1238,18 @@
   }
 }
 
-/* An editor host while Monaco's runtime chunk is on its way (VC-383).
- *
- * The first ticket Body or File tab of an app run pays the runtime's lazy
- * import — the editor module, its workers and the Shiki bootstrap — and until
- * it lands the host is a bare box: `components/editor/monaco-*-editor.tsx`
- * stamp `data-monaco-status="loading"` on it and then hand the SAME node to
- * Monaco to mount into. That is why this is CSS and not children: React-owned
- * nodes inside Monaco's mount point would be reconciled against DOM the editor
- * manages. Two pseudo-elements draw the shape `ui/skeleton.tsx` draws — the
- * same fill, the same radius, the same pulse — as two text lines at the
- * editor's own top padding, so the first paint of the document lands where
- * the bars were. They leave with the attribute: the editor sets `ready` on
- * mount, `failed` on the fallback. The shared `--skeleton-*` recipe supplies
- * the fill, radius, pulse, and reduced-motion gate; the bars stay when motion
- * stops, because a still bar is still a placeholder.
- *
- * `height: 14px`, `top: 12px`, and `top: 36px` are the recorded VC-383
- * measurements: a 14px glyph surrogate at Monaco's 12px source inset, then a
- * second measured line position. Replacing them with ladder rungs moves this
- * first paint before Monaco replaces the host. */
+/* Pending editor hosts retain their box without painting fake text or bars. */
 [data-monaco-status="loading"] {
   position: relative;
 }
 
-[data-monaco-status="loading"]::before,
-[data-monaco-status="loading"]::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  height: 14px;
-  border-radius: var(--skeleton-radius);
-  background: var(--skeleton-fill);
-  pointer-events: none;
-  animation: var(--skeleton-animation);
-}
-
-[data-monaco-status="loading"]::before {
-  top: 12px;
-  width: 60%;
-}
-
-[data-monaco-status="loading"]::after {
-  top: 36px;
-  width: 85%;
-}
-
 /* The transcript's own sweep — the sidebar's effect, paid for differently.
  *
- * The row above animates `mask-position`, which is a repaint of the glyphs on
- * every frame. That is affordable for one sidebar row; it is not affordable on
- * a chat surface that is streaming, where the frames this would take are the
- * frames the answer needs. So the band here MOVES rather than the mask under
- * it: `transform` is the only property the compositor can advance on its own,
+ * The row above used to animate `mask-position`, which is a repaint of the
+ * glyphs on every frame — not affordable on a chat surface that is streaming,
+ * where the frames this would take are the frames the answer needs, and since
+ * VC-1078 not on the sidebar either. So the band here MOVES rather than the
+ * mask under it: `transform` is the only property the compositor can advance on its own,
  * and a translated layer is rastered once for the whole sweep.
  *
  * The words must stay put while the band crosses them, so `-ink` runs the exact
@@ -1157,15 +1504,11 @@
  * is affordable for this one mark and nowhere else, are in LIGHT IS SOLVED,
  * NOT THICKENED below.
  *
- * Reduced motion parks the travelling ring rather than dropping it, because
- * here the mark IS the information: a card with an agent on it must still be
- * findable when the travelling is gone. That does collapse `working` and
- * `waiting` onto one drawing separated only by hue — the same thing
- * `status-dot-live` already accepts when its breath stops, and the right trade,
- * since the alternative is a card that stops saying anything at all. The two
- * sweeps above drop themselves instead, and correctly — a frozen highlight
- * halfway along a word reads as a bug, while a still outline reads as an
- * outline. */
+ * Reduced motion keeps the whole perimeter visible, not a travelling arc
+ * frozen in a corner. On the board both states use the canvas accent, so a
+ * dashed working outline and a solid waiting outline preserve state without
+ * motion or a second colour. The two text sweeps above drop themselves instead
+ * — a frozen highlight halfway along a word reads as a bug. */
 @keyframes session-ring-sweep {
   from {
     transform: translate(-50%, -50%) rotate(0turn);
@@ -1338,260 +1681,376 @@
   }
 }
 
-/* ELEVATION — the lift overlays and the shadow set.
- *
- * Two tiers, applied outward from the gradient: tier 1 is the chrome band and
- * the project rail, tier 2 the inner sidebar. The lift is signed, so the SAME
- * rules serve both appearances — light walks its tiers toward paper and dark
- * away from it, and both arrive at a sidebar sitting just above its canvas.
- *
- * WHICH tiers move is the share table's call in `@volli/shared`, not this
- * file's — both rules stay unconditional and a tier meant to stay on the canvas
- * is given a share of zero, which reaches here as `transparent`. That is the
- * settled arrangement's own answer for tier 1: the frame reads as a frame only
- * if it is uniform, so the chrome band and rail ARE the gradient and the rule
- * below paints nothing. If the chrome does not respond, that table is why.
- *
- * Painted as a `background-image` rather than a `background-color` on purpose:
- * an image composites on top of a fill, so anything the element declares for
- * itself survives underneath and a share of zero keeps meaning "unchanged". */
-.app-region-drag {
-  background-image: linear-gradient(var(--lift-1), var(--lift-1));
-}
-/* The primary sidebar, by its own name rather than by a utility class it
- * happens to wear (app-shell.tsx) — the one thing that distinguishes it from
- * the two other `data-slot="sidebar"` roots in the same tree (the collapsible
- * wrapper and the project rail). */
-[data-volli-sidebar] {
-  background-image: linear-gradient(var(--lift-2), var(--lift-2));
-  /* …and no veil under it, in BOTH modes, so lift owns the tier relationship
-   * outright.
-   *
-   * The two worked against each other. `--sidebar-veil` reproduces the ladder's
-   * sidebar rung over whatever is beneath it, and in light that rung sits BELOW
-   * the rail — so the veil pulled the sidebar 0.015 of lightness DOWN at the
-   * same moment lift pushed it up. Dark is the same collision, not its absence:
-   * the dark ladder's `--sidebar` is L 0.199 while a dark canvas measures 0.276,
-   * so the veil reproduces a rung DARKER than the gradient under it, which is
-   * exactly what a positive lift does — at a fixed amount with no dial on it.
-   * Two mechanisms pushing the same way is not separation, it is a dial whose
-   * zero is somewhere other than zero.
-   *
-   * What it costs is the veil's own step at lift 0. That is the point rather
-   * than the price: lift 0 now means the same sentence in both modes (every
-   * on-canvas tier IS the canvas). The veil TOKENS stay — `ui/sidebar.tsx` uses
-   * `--sidebar-accent-veil` and `--sidebar-border-veil` for hover fills and
-   * hairlines, which do still need to composite over a gradient. */
-  background-color: transparent;
+/* Board live state uses the canvas accent in both states. Motion, not a
+ * second colour or badge, distinguishes working from waiting. */
+:root .session-ring.board-session-ring {
+  --session-ring-seed: var(--canvas-accent);
+  --session-ring-color: var(--canvas-accent);
 }
 
-/* SEAM GEOMETRY — how the sidebar, the canvas and the card meet.
- *
- * The problem all of this answers: a lifted sidebar sits at a lightness that is
- * neither the canvas nor the paper, and `SidebarInset`'s `m-2` leaves 8px of
- * bare gradient between it and the card. That is three backgrounds in one
- * window, and the middle one is the only one that cannot say what it is.
- *
- * What ships is Slack's arrangement, and the only one of the four tried that
- * stops treating the sidebar and the card as two objects. They become ONE inset
- * unit with a colour change down the middle: a single rounded outline around the
- * pair, no gutter between them, and the canvas running all the way around the
- * outside as a frame rather than the reverse-L the alternatives left.
- *
- * Built as two half-boxes because the DOM has no element that wraps exactly
- * these two: the sidebar lives inside the collapsible `Sidebar` (with the
- * project rail, which stays OUT on the canvas — it is the project switcher,
- * the thing Slack also keeps outside), and `SidebarInset` is that wrapper's
- * sibling. So each half draws its own outer corners and border and drops the
- * ones that face the seam; abutted, they read as one outline.
- *
- * `clip-path` is what makes that survive the shadow. Both halves cast the same
- * card shadow, and a shadow paints OUTSIDE its border box — so without a clip
- * the card's would fall across the sidebar's right edge and the sidebar's across
- * the card, drawing a dark bar down the middle of a unit whose whole claim is
- * that it has no middle. Each inset() clips flush at the seam side (0) and lets
- * the shadow run 60px past the other three, comfortably more than the widest
- * layer reaches. Nothing else is lost to it: the card already clips its content
- * with `overflow-hidden`, popovers portal to the body, and the seam edge is
- * square anyway.
- *
- * THE TWO HALVES ARE KEYED SEPARATELY, and for the length of a pin they are
- * allowed to disagree. The sidebar half answers to the SHELL
- * (`[data-volli-shell="framed"]`), which flips on the first frame of a pin; the
- * card half answers to the surface's own `[data-sidebar-layout]`, which does
- * not flip until the journey lands (app-shell.tsx, `useSidebarContentMotion`).
- * So during those ~200ms the sidebar is already drawing its docked half while
- * the card is still the floating card, sliding right on a compositor translate.
- *
- * That is the trade the transform bought, taken deliberately. Keying the card
- * to the shell too would put both halves in agreement at every instant — and
- * charge one full layout of every terminal canvas and Monaco editor in the
- * window at the start of the animation, and another at the end, purely to
- * exchange the card's 8px left inset for a square edge. The unit below is a
- * contract about where these two REST. Mid-journey the eye is tracking one
- * moving edge, and the moving edge is correct in both renderings. */
+/* A parked conic arc looks like a dead animation. Both motion preferences
+ * use complete outlines instead: dashed working, solid waiting. The border
+ * itself owns the static state, so no oversized rotating layer is needed. */
+:root[data-motion="off"] .board-session-ring[data-activity="working"],
+:root[data-motion="off"] .board-session-ring[data-activity="waiting"] {
+  padding: 0;
+  mask: none;
+  -webkit-mask: none;
+  border: 1.5px solid var(--session-ring-color);
+  transition: none;
+}
+:root[data-motion="off"] .board-session-ring[data-activity="working"] {
+  border-style: dashed;
+}
+:root[data-motion="off"] .board-session-ring::before {
+  content: none;
+  animation: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .session-ring.board-session-ring[data-activity="working"],
+  .session-ring.board-session-ring[data-activity="waiting"] {
+    padding: 0;
+    mask: none;
+    -webkit-mask: none;
+    border: 1.5px solid var(--session-ring-color);
+    transition: none;
+  }
+  .session-ring.board-session-ring[data-activity="working"] {
+    border-style: dashed;
+  }
+  .session-ring.board-session-ring::before {
+    content: none;
+    animation: none;
+  }
+}
 
-/* The two numbers the rest of this geometry is built from: the margin that
- * insets the unit, and the hairline it draws around it. `primary-sidebar.tsx`
- * sizes its absolutely-positioned presentation pane from `--sidebar-width`
- * minus `--rail-width` and `--sidebar-edge` — it has no way to know this seam
- * then narrows the sidebar's own box by a margin and wraps it in a border of its
- * own, so a hand-copied `0.5rem` here and a bare width calc there were free to
- * drift apart, and did (measured in a 1280x800 window: the sidebar box ran
- * 68→317 but the pane's content reached 327, 10px past the wall). Naming both
- * once and reusing them in every correction below makes that drift impossible
- * rather than just fixed for today. */
+/* Glass, tuned material ladder. Measured regular tone and blur, a static
+ * horizontal rim and two soft shadows. Pane is CSS-only; bounded full-tier
+ * overlays add cached displacement and post-lens reconstruction.
+ * Reading paper, terminals and native browser work planes remain opaque. */
+:root,
+.dark,
+.light {
+  --material-foreground: var(--foreground);
+  --material-muted-foreground: var(--muted-foreground);
+}
+.material-clear,
+[data-slot="tab-strip"] {
+  --material-opacity: 50%;
+  --material-solid-fill: var(--popover);
+}
+.material-regular,
+.prompt-surface,
+article.bg-card,
+section:has(> div > div > [data-slot="pref-section-title"]) > .bg-card {
+  --material-opacity: 100%;
+  --material-solid-fill: var(--card);
+}
+.material-thick,
+[data-volli-surface],
+[role="log"].bg-background,
+[data-diff-fit],
+.prompt-surface textarea,
+[data-terminal-renderer],
+[data-monaco-status],
+[data-monaco-fallback],
+[data-testid="markdown-preview"],
+table {
+  --material-opacity: 100%;
+  --material-solid-fill: var(--background);
+}
+.material-solid {
+  --material-opacity: 100%;
+  --material-solid-fill: var(--background);
+}
+:where(
+  .material-clear,
+  .material-regular,
+  .material-thick,
+  .material-solid,
+  [data-slot="tab-strip"],
+  .prompt-surface,
+  article.bg-card,
+  section:has(> div > div > [data-slot="pref-section-title"]) > .bg-card,
+  [data-volli-surface],
+  [role="log"].bg-background,
+  [data-diff-fit],
+  .prompt-surface textarea
+) {
+  --material-tint: color-mix(
+    in oklab,
+    var(--material-solid-fill) var(--material-opacity),
+    transparent
+  );
+  background: linear-gradient(var(--material-tint), var(--material-tint)), var(--canvas);
+  background-attachment: fixed;
+}
+[data-terminal-renderer],
+[data-monaco-status],
+[data-monaco-fallback],
+[data-testid="markdown-preview"],
+table {
+  background: var(--background);
+}
+.material-solid {
+  background: var(--material-solid-fill);
+  background-attachment: scroll;
+}
+.prompt-surface,
+[data-volli-sidebar].material-regular {
+  box-shadow:
+    inset 0 1px 0 color-mix(in oklab, var(--control-light-paper) 24%, transparent),
+    var(--shadow-card);
+}
+article.bg-card {
+  box-shadow:
+    inset 0 1px 0 color-mix(in oklab, var(--control-light-paper) 24%, transparent),
+    var(--shadow-raised);
+}
+section:has(> div > div > [data-slot="pref-section-title"]) > .bg-card {
+  box-shadow: inset 0 1px 0 color-mix(in oklab, var(--control-light-paper) 24%, transparent);
+}
+/* Contain panels, not chrome: chrome must let focus rings and tab ghosts out. */
+.material-regular,
+.material-thick,
+.prompt-surface,
+article.bg-card {
+  contain: paint;
+}
+/* The sidebar is tinted paper now; its own foreground must not inherit the
+ * on-canvas ink intended for the rail and title bar. The canvas solve stays
+ * on chrome; semantic inks stay on regular/thick reading surfaces. */
+[data-volli-sidebar].material-regular {
+  --foreground: var(--material-foreground);
+  --muted-foreground: var(--material-muted-foreground);
+  --sidebar-foreground: var(--material-foreground);
+  --material-solid-fill: var(--sidebar);
+}
+[data-volli-sidebar].material-regular [data-slot="sidebar-group-label"] {
+  color: var(--foreground);
+}
+[data-volli-sidebar].material-regular .session-row-dim.text-ui {
+  --sidebar-foreground: var(--material-foreground);
+  --muted-foreground: var(--material-foreground);
+}
+/* Keep backdrop-filter unprefixed here: the build optimizer adds any required
+ * prefix itself. Hand-writing both can discard Chromium's standard spelling. */
+.material-floating,
+[cmdk-dialog],
+.toaster [data-sonner-toast].material-floating {
+  --material-solid-fill: var(--popover);
+  contain: paint;
+}
+/* Only DOM-nested floats share their parent's material. Portaled submenus
+ * sample the page independently and keep the same glass as every other float. */
+.material-floating .material-floating,
+[cmdk-dialog] .material-floating,
+.material-floating [cmdk-dialog] {
+  background: var(--material-solid-fill);
+  /* A hard rendering budget, including Sonner's higher-specificity skin. */
+  backdrop-filter: none !important;
+}
+.material-floating [data-slot="command"],
+[cmdk-dialog] [cmdk-root] {
+  background: transparent;
+}
+/* cmdk owns a separate scrim. Blur belongs on its surface, never the scrim. */
+[cmdk-overlay] {
+  backdrop-filter: none;
+}
+/* Tooltip arrows extend beyond the label; contain:paint would clip them. */
+[data-slot="tooltip-content"].material-floating {
+  contain: none;
+}
+/* A lens belongs to one surface, not its descendants. Registering that fact
+ * also keeps the pre-paint optics write from restyling every row in a picker.
+ * Universal syntax preserves the empty fallback and exact cached URL bytes. */
+@property --glass-refraction {
+  syntax: "*";
+  inherits: false;
+}
+/* One material chain. Tint keeps the mock's neutral 46–56% veil over the
+ * actual canvas; never paint a duplicate canvas beneath the blur. */
+.glass,
+.material-floating,
+[cmdk-dialog] {
+  --glass-refraction: ;
+  --glass-post-blur: 0px;
+  background: var(--glass-veil);
+  border-color: transparent;
+  box-shadow: var(--shadow-glass);
+  color: var(--foreground);
+  backdrop-filter: blur(var(--glass-blur)) var(--glass-refraction,) blur(var(--glass-post-blur))
+    var(--glass-tone);
+}
+[data-glass-tier="full"] {
+  --glass-post-blur: 0.4px;
+}
+.glass::after,
+.material-floating::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  border-radius: inherit;
+  padding: 1px;
+  pointer-events: none;
+  background: var(--glass-rim);
+  mask:
+    linear-gradient(var(--foreground) 0 0) content-box,
+    linear-gradient(var(--foreground) 0 0);
+  mask-composite: exclude;
+  mix-blend-mode: plus-lighter;
+}
+.glass[data-tint="true"],
+.material-floating[data-tint="true"],
+.material-regular,
+.glass-tinted {
+  --glass-veil: var(--glass-pane-veil);
+  background: var(--glass-veil);
+}
+.session-prompt.glass[data-tint="true"] {
+  background: var(--glass-writing-veil);
+}
+/* Numerous small controls must not each pay for a masked rim. */
+[data-glass-size="control"]::after {
+  display: none;
+}
+[data-glass-size="control"] {
+  box-shadow:
+    var(--shadow-glass-small),
+    inset 0 0 0 0.5px var(--glass-edge);
+}
+/* Withdrawn resident panes keep identity but spend no descendant animation or
+ * blur budget. Do not pause the panel's own reveal/pour. Use the pane owner's
+ * state, not aria-hidden: modal isolation toggles that attribute throughout the
+ * app, needlessly invalidating every descendant of these rules on each open. */
+[data-pane-withdrawn] *,
+[data-pane-withdrawn] *::before,
+[data-pane-withdrawn] *::after {
+  animation-play-state: paused !important;
+}
+/* Keep the state mark, but spend no timeline work outside the visible window.
+ * Slot intersection is shared by the Board; no per-glyph React subscriptions. */
+[data-board-ticket-slot][data-viewport-hidden="true"] .session-ring::before,
+:root[data-document-hidden="true"] *,
+:root[data-document-hidden="true"] *::before,
+:root[data-document-hidden="true"] *::after {
+  animation-play-state: paused !important;
+}
+/* Hard blur budget: no nested passes, and no pass during a pour/morph. */
+:is(.glass, .material-floating) :is(.glass, .material-floating),
+[data-glass-blur="off"],
+[data-glass-blur="off"] :is(.glass, .material-floating) {
+  backdrop-filter: none !important;
+}
+/* Opaque neutral content: never sample the mesh through reading surfaces. */
+.material-thick,
+.material-solid,
+[data-volli-surface],
+[role="log"].bg-background,
+[data-diff-fit],
+.prompt-surface,
+article.bg-card,
+section:has(> div > div > [data-slot="pref-section-title"]) > .bg-card {
+  background: var(--material-solid-fill, var(--card));
+  background-attachment: scroll;
+  box-shadow: none;
+}
+
+@supports not (backdrop-filter: blur(1px)) {
+  :is(
+    .glass,
+    .material-clear,
+    .material-regular,
+    .material-thick,
+    .material-solid,
+    .material-floating,
+    [cmdk-dialog],
+    .toaster [data-sonner-toast].material-floating,
+    [data-slot="tab-strip"],
+    .prompt-surface,
+    article.bg-card,
+    section:has(> div > div > [data-slot="pref-section-title"]) > .bg-card,
+    [data-volli-surface],
+    [role="log"].bg-background,
+    [data-diff-fit],
+    .prompt-surface textarea,
+    [data-terminal-renderer],
+    [data-monaco-status],
+    [data-monaco-fallback],
+    [data-testid="markdown-preview"],
+    table
+  ) {
+    background: var(--material-solid-fill, var(--glass-fill)) !important;
+  }
+}
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  :is(
+    .glass,
+    .material-clear,
+    .material-regular,
+    .material-thick,
+    .material-solid,
+    .material-floating,
+    [cmdk-dialog],
+    .toaster [data-sonner-toast].material-floating,
+    [data-slot="tab-strip"],
+    .prompt-surface,
+    article.bg-card,
+    section:has(> div > div > [data-slot="pref-section-title"]) > .bg-card,
+    [data-volli-surface],
+    [role="log"].bg-background,
+    [data-diff-fit],
+    .prompt-surface textarea,
+    [data-terminal-renderer],
+    [data-monaco-status],
+    [data-monaco-fallback],
+    [data-testid="markdown-preview"],
+    table
+  ) {
+    background: var(--material-solid-fill, var(--glass-fill)) !important;
+    backdrop-filter: none !important;
+  }
+}
+
+/* SEAM GEOMETRY: independent cards, on a single window-coordinate canvas.
+ * The rail is 60px; the default sidebar is 236px, with no leading inset.
+ * Paper and the inspector are flow siblings, separated by the 6px gutter. */
+
 :root {
-  --shell-inset: 0.5rem;
-  --shell-edge: 1px;
+  --shell-inset: var(--glass-gap);
+  --shell-edge: 0px;
 }
 
-[data-volli-shell="framed"] [data-volli-sidebar] {
-  margin: var(--shell-inset) 0 var(--shell-inset) var(--shell-inset);
-  border: var(--shell-edge) solid var(--border);
-  border-right-width: 0;
-  /* The container rung, raw rather than through a utility — this is the
-   * outermost container on screen, and a shell rounded tighter than the
-   * dialogs and menus that open over it reads as the wrong way round. */
-  border-radius: var(--radius-container) 0 0 var(--radius-container);
-  box-shadow: var(--shadow-card);
-  clip-path: inset(-60px 0 -60px -60px);
+[data-volli-sidebar] {
+  border: var(--shell-edge) solid var(--glass-edge);
+  border-radius: var(--radius-floating);
+  box-shadow: var(--shadow-glass);
   overflow: hidden;
-  /* `h-full` is `height: 100%`, which measures the row and ignores the margins
-   * — so the unit would hang 16px past the bottom of the window with its lower
-   * corners cut off by the shell's clip. `auto` hands the sizing back to the
-   * flex row's own stretch, which subtracts them. Measured before/after: bottom
-   * 808 in an 800px window, then 792. */
-  height: auto;
+}
+[data-slot="sidebar-inset"][data-volli-surface] {
+  margin: 0 var(--shell-inset) var(--shell-inset);
+  border: 0;
+  border-radius: var(--radius-floating);
+  box-shadow: var(--paper-shadow);
+}
+[data-volli-shell="focused"] [data-slot="sidebar-inset"][data-volli-surface] {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
 }
 
-/* The framed content card, floating on the canvas — the other half of the unit,
- * keyed to the surface's own endpoint marker rather than to the shell. See the
- * seam block above for why the two halves are allowed to disagree while a pin
- * is travelling. */
-[data-slot="sidebar-inset"][data-sidebar-layout="framed"] {
-  /* 0, not −1px.
-   *
-   * The lab carried a 1px overlap justified by a `--sidebar-width` rounding tax
-   * ("the gap ends at 318, the sidebar at 317"). That tax was real only while
-   * `sidebar-container` still drew its own `border-r`; with that border zeroed
-   * below, the two halves are laid out from the same width token and meet
-   * exactly.
-   *
-   * Fractional widths, contrary to the migration note, ARE reachable — but not
-   * from the resize handle, which divides the pointer delta by `uiScale` and
-   * then hands it to `clampSidebarWidth`, where `Math.round` makes the stored
-   * width an integer every time. They come from `zoom: uiScale` on the content
-   * row: an integer CSS px inside a 0.9 or 1.25 zoom is a fractional used
-   * value, and both halves get the same fraction from the same token. Chromium
-   * lays them out against one another, so they still abut; a −1px overlap under
-   * zoom would instead paint a 1px column of the sidebar's fill over the card,
-   * scaled, which is the artifact rather than the fix. Verified by measurement
-   * at every zoom rung — see the note on this change. */
-  margin: var(--shell-inset) var(--shell-inset) var(--shell-inset) 0;
-  border-left-width: 0;
-  border-radius: 0 var(--radius-container) var(--radius-container) 0;
-  clip-path: inset(-60px -60px -60px 0);
-  box-shadow: var(--shadow-card);
-}
-
-/* Written for the collapsible wrapper that used to sit around both panes: it
- * clipped its children so the collapse animation had an edge to slide behind,
- * and clipped the sidebar half's shadow with them, leaving the frame shaded on
- * three sides and bare on the fourth. That wrapper is gone with the icon strip.
- *
- * What still matches this selector is the PROJECT RAIL, and that is why
- * app-shell.tsx's `opacity-0` on a hidden rail is load-bearing rather than
- * belt-and-braces: a hidden rail is a 0px box, `ProjectRail` centres a 36px tile
- * inside it, and centring in nothing puts half the tile at negative x. Its own
- * `overflow-hidden` would be the obvious answer and this rule revokes it, so
- * only opacity takes the tile away. */
 [data-volli-shell="framed"] [data-slot="sidebar"].overflow-hidden {
   overflow: visible;
 }
 
-/* `primary-sidebar.tsx`'s presentation pane is sized in TSX from
- * `--sidebar-width` minus `--rail-width` and `--sidebar-edge` — a fixed width,
- * deliberately, because the SAME pane serves both arrangements and their parent
- * boxes differ by exactly the borders `--sidebar-edge` names (one when docked
- * into this seam, two when floating inside its own card). That calc has no idea
- * this seam then insets the sidebar's own box by `--shell-inset`, so the pane
- * ran exactly that far past the right wall.
- *
- * The formula below re-derives the pane's true content box for THIS seam rather
- * than patching the app's, so it names the seam's own borders, not the app's.
- * `--sidebar-edge` is handed BACK here and the same pixel is immediately spent
- * again on `--shell-edge`, the sidebar half's own left border, which the pane
- * lives inside. Identical width, different border; subtracting it under its own
- * name is what keeps the two independent if either moves. */
-[data-volli-shell="framed"] [data-sidebar-presentation="expanded"] {
-  width: calc(var(--sidebar-width) - var(--rail-width) - var(--shell-inset) - var(--shell-edge));
-}
-
-/* Air against the fold, and deliberately almost none — outside the framed scope,
- * because the pane has the same right edge floating over the canvas as it does
- * docked into the seam, and a fold that only existed in one of them would be a
- * fold that moved on ⌘B.
- *
- * This padding STACKS on each tier's own inset rather than replacing it — the
- * tiers (`SidebarHeader` at `px-4`, `SidebarGroup` at `p-2`) are full-bleed to
- * the pane, so whatever goes here lands on top of 8px or 16px that is already
- * there. Measuring the pane's own edge makes any value look one-for-one;
- * measuring the INK is what shows the cost. At 13px the nav rows read 8px left
- * against 21px right, which puts the selected row's pill visibly off-centre.
- *
- * It was 6px, chosen as the largest value that still read as intent rather than
- * as drift. What moved it to 2 is that the fold was never the biggest number on
- * this edge: the sidebar's scroll container used to reserve 10px for a classic
- * scrollbar the moment its list overflowed, so every row's ink slid inward and
- * back out as the list grew. That reservation is gone (`sidebar-scroll.tsx`
- * draws an overlay thumb in the channel the row pill already leaves), and with
- * the edge finally still, 2px is the smallest value at which a hard seam still
- * reads differently from the soft canvas edge opposite it. */
 [data-sidebar-presentation="expanded"] {
-  padding-right: 2px;
+  padding-right: 0;
 }
 
-/* The grip is `absolute inset-y-0 right-0` against the panel's box, which docked
- * spans the full contain-layout row (y 40→800 in an 800px window) — 8px taller
- * at each end than the wall this seam actually draws (y 48→792, from the
- * sidebar's own `--shell-inset` margin). `right` is already correct since the
- * sidebar half has no right margin; only the two ends need pulling in. Floating,
- * the panel's box is already inset at both ends and this rule doesn't match. */
-[data-volli-shell="framed"] [data-slot="sidebar-resize-handle"] {
-  top: var(--shell-inset);
-  bottom: var(--shell-inset);
-}
-
-/* `project-rail.tsx`
- * centers its tile column and its `AddProjectTile` row inside the rail's own
- * 60px box, which is correct everywhere else. This geometry doesn't touch the
- * rail at all, but it DOES move what the eye reads as the rail's far edge: that
- * edge used to be the rail's own right side (60); now the sidebar unit starts
- * 8px further out (68), so the perceived band is 0→68 and a tile centered on the
- * wrong band lands 12px from the viewport edge but 20px from the unit.
- *
- * The fix is the FULL inset, not half of it: this centers twice (`items-center`
- * inside a stretched flex row), and each stretch-then-center layer halves
- * whatever asymmetry the padding introduces — confirmed empirically, not
- * assumed. `padding-left: 4px` only moved the tile to 14/18; 8px lands both
- * tiles at 16/16.
- *
- * `min(…, --rail-width)` rather than the inset alone, because the rail can be
- * hidden (the chrome band's workspace-switcher toggle), and hiding it sets
- * `--rail-width: 0px` — it does NOT unmount the element. A border-box width can
- * never fall below its own padding, so a flat 8px floored a rail asking for 0
- * at 8 instead, and the pane formula above still subtracted 0 — leaving the
- * presentation layer exactly 8px wider than the pane clipping it. Deriving the
- * cap from `--rail-width` keeps the padding from ever exceeding the box it is
- * padding.
- *
- * The rail declares its OWN `--rail-width` (app-shell.tsx) because the shell
- * sets that token to 0 at provider level: the rail is a flow sibling of the
- * panel now, so the pane's width calc must stop subtracting it while this rule
- * still has to read the real 60. */
 [data-volli-shell="framed"] [data-project-rail] {
-  padding-left: min(var(--shell-inset), var(--rail-width));
+  padding-left: 0;
 }
 
 /* The micro-label tier.
@@ -1617,8 +2076,8 @@
  * outer shell animates through intermediate widths. */
 [data-sidebar-presentation="expanded"] [data-sidebar="menu-button"] {
   width: 100% !important;
-  height: 2rem !important;
-  padding: 0.5rem !important;
+  height: var(--spacing-control-default) !important;
+  padding: 0 8px !important;
 }
 
 /* Multi-line rows (size="lg", e.g. Active Sessions) size to their content;
@@ -1644,9 +2103,12 @@
  * invisible at rest, visible while the scroll container is hovered, bright
  * while the thumb itself is grabbed. Chromium-only app, so the -webkit
  * pseudo-elements are authoritative (no scrollbar-width/color needed). */
+:root {
+  --scrollbar-size: 10px;
+}
 *::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
 }
 *::-webkit-scrollbar-track,
 *::-webkit-scrollbar-corner {
@@ -1660,10 +2122,11 @@
 *::-webkit-scrollbar-thumb {
   border: 3px solid transparent;
   border-radius: 9999px;
-  background-color: var(--border);
+  background-color: transparent;
   background-clip: content-box;
 }
-*:hover::-webkit-scrollbar-thumb {
+*:hover::-webkit-scrollbar-thumb,
+*[data-scrolling]::-webkit-scrollbar-thumb {
   background-color: var(--border-strong);
 }
 *::-webkit-scrollbar-thumb:hover,
@@ -1858,28 +2321,6 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   mix-blend-mode: plus-lighter;
 }
 
-/* The effort slider's notches, dealt in left to right when the popover opens
- * (`chat/composer-effort-ui.tsx`). Each one grows DOWN from the comb's top
- * edge, which is the edge it hangs off, so the entrance draws the object rather
- * than merely revealing it; the per-tick delay is a function of an index and
- * therefore an inline style, which is why only the shape lives here.
- *
- * `scale`, not `height`: the mark is a 4×1px bar inside an `overflow-hidden`
- * pill, and a height animation would relayout that pill on every frame of every
- * notch. The reduced-motion gate rides the utility that applies this
- * (`motion-reduce:animate-none!`) rather than sitting here, so the whole
- * decision can be read at the element that wears it. */
-@keyframes effort-notch {
-  from {
-    scale: 1 0.2;
-    opacity: 0;
-  }
-  to {
-    scale: 1 1;
-    opacity: 1;
-  }
-}
-
 /* Reduced motion (HIG §accessibility): nothing here translates or scales, so
  * there is no vestibular motion to remove — and an eased brightness change is
  * itself the accessible treatment for a whole-window repaint. Keep the shortest
@@ -1892,7 +2333,7 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
  * it inherit this from `:root`. */
 @media (prefers-reduced-motion: reduce) {
   :root {
-    --theme-scope-crossfade: 120ms;
+    --theme-scope-crossfade: 0ms;
   }
 }
 
@@ -1905,15 +2346,13 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   -webkit-app-region: no-drag;
 }
 
-/* A quiet first-run field: neutral on purpose, so the ember accent remains
- * reserved for the single action. The dot layer is static and fades before the
- * canvas edge; it adds depth without turning the empty state into onboarding.
- * Built from the body ink rather than a literal white so it holds in both
- * appearances — a hardcoded `white/N` is invisible on paper. */
+/* A quiet first-run field: the material's low-chroma wash, not raw accent or
+ * body ink. The static dots fade before the canvas edge and work in either
+ * appearance; the primary action keeps the stronger accent. */
 .empty-projects-canvas {
   background-image: radial-gradient(
     ellipse 72% 58% at 50% 48%,
-    color-mix(in srgb, var(--foreground) 3%, transparent),
+    color-mix(in srgb, var(--wash-ink) 3%, transparent),
     transparent 76%
   );
 }
@@ -1924,7 +2363,7 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   pointer-events: none;
   content: "";
   background-image: radial-gradient(
-    color-mix(in srgb, var(--foreground) 10%, transparent) 0.65px,
+    color-mix(in srgb, var(--wash-ink) 10%, transparent) 0.65px,
     transparent 0.8px
   );
   background-position: center;
@@ -1944,4 +2383,1452 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   transition:
     opacity 200ms var(--ease-out),
     filter 200ms var(--ease-out);
+}
+
+/* Volli Glass geometry and motion are shared, not canvas-authored. */
+:root {
+  --glass-gap: 6px;
+  --radius-native-control: 6px;
+  --radius-control-large: 7px;
+  --radius-control-extra-large: 9px;
+  --project-title-size: 15px;
+  --switch-width: 54px;
+  --switch-thumb-width: 32px;
+  --switch-thumb-height: 20px;
+  --switch-travel: 20px;
+  --radius-composer: 24px;
+  --radius-bubble: 18px;
+  --spacing-titlebar: 46px;
+  --spacing-chrome-control: 28px;
+  --spacing-board-column: 236px;
+  --container-transcript: 648px;
+  --container-composer: 608px;
+  --spacing-workspace-tile: 38px;
+  --radius-workspace-tile: 11px;
+  --duration-menu-in: 160ms;
+  --duration-menu-out: 110ms;
+  --duration-sheet: 220ms;
+  --duration-press: 120ms;
+  /* Activity life-sign cadence, distinct from navigation/entrance clocks. */
+  --duration-activity-shimmer: 1800ms;
+  --ease-linear: linear;
+  --press-scale: 0.97;
+  --glass-blur: 5.7px;
+  --shadow-glass: 0 4px 14px rgb(0 0 0 / 0.1), 0 0 0.5px rgb(0 0 0 / 0.1);
+  --shadow-glass-small: 0 1px 3px rgb(0 0 0 / 0.06);
+  --spring-smooth: linear(
+    0,
+    0.008092,
+    0.029669,
+    0.061252,
+    0.100018,
+    0.143692,
+    0.190453,
+    0.238858,
+    0.287775,
+    0.336328,
+    0.38385,
+    0.429847,
+    0.473964,
+    0.515956,
+    0.555669,
+    0.593022,
+    0.627986,
+    0.660578,
+    0.690848,
+    0.718868,
+    0.74473,
+    0.768538,
+    0.790403,
+    0.810439,
+    0.828763,
+    0.845492,
+    0.860738,
+    0.874611,
+    0.887218,
+    0.898658,
+    0.909027,
+    0.918415,
+    0.926904,
+    0.934574,
+    0.941497,
+    0.947739,
+    0.953364,
+    0.958428,
+    0.962984,
+    0.967079,
+    0.970758,
+    0.974062,
+    0.977026,
+    0.979683,
+    0.982065,
+    0.984199,
+    0.98611,
+    0.987819,
+    0.989348,
+    0.990715,
+    0.991937,
+    0.993029,
+    0.994003,
+    0.994873,
+    0.99565,
+    0.996342,
+    0.996959,
+    0.99751,
+    0.998,
+    0.998437,
+    0.998826,
+    0.999173,
+    0.999481,
+    0.999756,
+    1
+  );
+  --duration-smooth: 270ms;
+  --spring-snappy: linear(
+    0,
+    0.007,
+    0.026,
+    0.0544,
+    0.0899,
+    0.1307,
+    0.1751,
+    0.2218,
+    0.2698,
+    0.3182,
+    0.3661,
+    0.4131,
+    0.4587,
+    0.5026,
+    0.5445,
+    0.5842,
+    0.6217,
+    0.6568,
+    0.6896,
+    0.7201,
+    0.7484,
+    0.7744,
+    0.7983,
+    0.8202,
+    0.8402,
+    0.8584,
+    0.8749,
+    0.8898,
+    0.9032,
+    0.9153,
+    0.9261,
+    0.9358,
+    0.9444,
+    0.9521,
+    0.9589,
+    0.9649,
+    0.9702,
+    0.9748,
+    0.9789,
+    0.9824,
+    0.9855,
+    0.9882,
+    0.9905,
+    0.9924,
+    0.9941,
+    0.9955,
+    0.9967,
+    0.9978,
+    0.9986
+  );
+  --duration-snappy: 225ms;
+  --spring-bouncy: linear(
+    0,
+    0.006493,
+    0.024377,
+    0.051471,
+    0.08585,
+    0.125827,
+    0.169936,
+    0.21691,
+    0.265664,
+    0.315274,
+    0.364968,
+    0.414103,
+    0.462154,
+    0.508701,
+    0.553413,
+    0.596041,
+    0.636405,
+    0.674383,
+    0.709906,
+    0.742946,
+    0.773512,
+    0.801644,
+    0.827403,
+    0.850873,
+    0.87215,
+    0.891341,
+    0.908563,
+    0.923937,
+    0.937585,
+    0.949632,
+    0.9602,
+    0.969411,
+    0.97738,
+    0.984221,
+    0.990041,
+    0.994941,
+    0.999018,
+    1.002362,
+    1.005057,
+    1.007179,
+    1.008801,
+    1.009987,
+    1.010799,
+    1.011289,
+    1.011507,
+    1.011497,
+    1.011299,
+    1.010946,
+    1.01047,
+    1.009899,
+    1.009255,
+    1.00856,
+    1.007831,
+    1.007083,
+    1.006328,
+    1.005578,
+    1.004842,
+    1.004125,
+    1.003434,
+    1.002773,
+    1.002145,
+    1.001553,
+    1.000998,
+    1.00048,
+    1
+  );
+  --duration-bouncy: 240ms;
+}
+:root.dark {
+  --shadow-glass: 0 4px 14px rgb(0 0 0 / 0.14), 0 0 0.5px rgb(0 0 0 / 0.12);
+  --shadow-glass-small: 0 1px 3px rgb(0 0 0 / 0.25);
+}
+/* Flat faces. Tonal primary has a same-hue sheen, never a grey bevel. */
+[data-control="button"].control-material {
+  box-shadow:
+    var(--tw-ring-offset-shadow, 0 0 transparent), var(--tw-ring-shadow, 0 0 transparent),
+    var(--shadow-glass-small);
+  background-image: none;
+}
+.button-tonal {
+  background-image: linear-gradient(
+    150deg,
+    color-mix(in srgb, var(--canvas-accent) 8%, transparent),
+    transparent 65%
+  );
+}
+/* Popup anchors keep a stable rectangle. Scaling one makes Floating UI chase
+ * the press/release every frame, repeatedly restyling the newly opened list.
+ * Their existing face/ink press state still provides activation feedback. */
+[data-control="button"]:not([aria-haspopup]):active:not(:disabled):not([aria-disabled="true"]) {
+  transform: scale(var(--press-scale));
+}
+/* Keyboard-triggered activation and navigation are immediate. */
+[data-control="button"]:focus-visible:active {
+  transform: none;
+}
+/* Material defaults sit below utility states (hover, focus rings and caller selection). */
+@layer components {
+  .glass-control {
+    background: var(--glass-veil);
+    border: 0;
+    border-radius: 999px;
+    box-shadow:
+      var(--shadow-glass-small),
+      inset 0 0 0 0.5px var(--glass-edge);
+  }
+  .inspector-popup {
+    height: var(--spacing-control-default);
+    min-height: var(--spacing-control-default);
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    padding-inline: 0;
+    justify-content: flex-start;
+  }
+  /* Compact inspector properties align with 24px label chips. */
+  .inspector-popup[data-size="sm"] {
+    height: var(--spacing-control-sm);
+    min-height: var(--spacing-control-sm);
+  }
+  .search-capsule {
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
+    background: transparent;
+    box-shadow: none;
+  }
+}
+.segmented {
+  border-radius: var(--radius-native-control);
+  background: var(--fill-secondary);
+}
+.segmented::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  left: 1px;
+  top: 1px;
+  bottom: 1px;
+  width: calc((100% - 2px) / var(--segment-count));
+  border-radius: calc(var(--radius-native-control) - 1px);
+  background: var(--control-face);
+  box-shadow: var(--control-bezel-shadow);
+  transform: translateX(calc(var(--segment-index) * 100%));
+}
+.segmented[data-pointer-motion="true"]::before {
+  transition: transform var(--duration-snappy) var(--spring-snappy);
+}
+.segmented > [data-control="button"] {
+  position: relative;
+  border: 0;
+  border-radius: var(--radius-native-control);
+  background: transparent;
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 transparent), var(--tw-ring-shadow, 0 0 transparent);
+  transform: none;
+}
+.segmented > [aria-pressed="true"],
+.segmented > [aria-selected="true"] {
+  color: var(--primary-text);
+}
+.identity-tile {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  align-self: center;
+  border-radius: var(--radius-row);
+  corner-shape: squircle;
+  background: var(--accent-tint);
+  color: var(--primary-text);
+}
+/* Native sidebar identity size; list identities retain the 32px default. */
+.identity-tile[data-size="sm"] {
+  width: var(--spacing-control-xs);
+  height: var(--spacing-control-xs);
+  border-radius: var(--radius-control-small);
+}
+:is(
+  [data-slot="dropdown-menu-content"],
+  [data-slot="dropdown-menu-sub-content"],
+  [data-slot="context-menu-content"],
+  [data-slot="context-menu-sub-content"],
+  [data-slot="select-content"],
+  [data-slot="popover-content"]
+) {
+  border-radius: var(--radius-menu);
+  animation-duration: var(--duration-menu-in);
+  animation-timing-function: var(--ease-out);
+}
+:is(
+  [data-slot="dropdown-menu-content"],
+  [data-slot="dropdown-menu-sub-content"],
+  [data-slot="context-menu-content"],
+  [data-slot="context-menu-sub-content"],
+  [data-slot="select-content"],
+  [data-slot="popover-content"]
+)[data-state="closed"] {
+  animation-duration: var(--duration-menu-out);
+}
+:is([data-slot="dialog-content"], [data-slot="alert-dialog-content"]) {
+  border-radius: var(--radius-sheet);
+  animation-duration: var(--duration-sheet);
+}
+[data-slot="dialog-overlay"] {
+  animation-duration: var(--duration-sheet);
+}
+:is(
+  [data-slot="dialog-content"],
+  [data-slot="alert-dialog-content"],
+  [data-slot="dialog-overlay"],
+  [data-slot="alert-dialog-overlay"]
+)[data-state="closed"] {
+  animation-duration: var(--duration-menu-out);
+}
+[data-control="button"] {
+  transition-duration: var(--duration-press);
+}
+:root[data-motion="off"] {
+  --duration-snappy: 0ms;
+  --duration-smooth: 0ms;
+  --duration-bouncy: 0ms;
+  --duration-menu-in: 0ms;
+  --duration-menu-out: 0ms;
+  --duration-sheet: 0ms;
+  --duration-press: 0ms;
+  --duration-activity-shimmer: 0ms;
+  --press-scale: 1;
+}
+:root[data-motion="off"] *,
+:root[data-motion="off"] *::before,
+:root[data-motion="off"] *::after {
+  animation-duration: 0ms !important;
+  transition-duration: 0ms !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-snappy: 0ms;
+    --duration-smooth: 0ms;
+    --duration-bouncy: 0ms;
+    --duration-menu-in: 0ms;
+    --duration-menu-out: 0ms;
+    --duration-sheet: 0ms;
+    --duration-press: 0ms;
+    --duration-activity-shimmer: 0ms;
+    --press-scale: 1;
+  }
+}
+
+/* Navigation glass uses the semantic ink pair, not the bare canvas solve. */
+[data-volli-sidebar].glass,
+[data-volli-rail].glass {
+  --foreground: var(--glass-ink);
+  --muted-foreground: var(--glass-secondary);
+  --sidebar-foreground: var(--glass-ink);
+  --wash-ink: var(--glass-wash-ink);
+}
+[data-volli-sidebar].glass .session-row-dim.text-ui {
+  --sidebar-foreground: var(--material-foreground);
+  --muted-foreground: var(--material-foreground);
+}
+[data-volli-sidebar].glass [data-slot="sidebar-group-label"] {
+  color: var(--foreground);
+}
+[data-volli-sidebar] [data-slot="sidebar-menu-button"] {
+  border-radius: var(--radius-row);
+}
+.session-envelope {
+  background: color-mix(in oklab, var(--wash-ink) 3.5%, transparent);
+  box-shadow: inset 0 0 0 0.5px color-mix(in oklab, var(--wash-ink) 7%, transparent);
+}
+/* The inspector is a glass sibling of paper, never another paper column. */
+[data-inspector-dock][data-pinned] {
+  background: var(--canvas);
+  background-attachment: fixed;
+  background-size: 100vw 100vh;
+}
+[data-inspector-panel] {
+  --panel-hidden-shift: 16px;
+  position: absolute;
+  z-index: 30;
+  inset-block: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  max-width: calc(100vw - 2 * var(--glass-gap));
+  padding: 0 var(--glass-gap) var(--glass-gap) 0;
+  border-radius: var(--radius-floating);
+  translate: calc(100% + var(--panel-hidden-shift)) 0;
+  visibility: hidden;
+  transition: translate var(--reveal-duration, 200ms) var(--ease-swift);
+}
+[data-inspector-panel][data-shown],
+[data-inspector-panel][data-pane-pouring="true"] {
+  visibility: visible;
+}
+[data-inspector-panel][data-shown] {
+  translate: 0 0;
+}
+/* Controls on canvas share a neutral face; selected navigator rows share the
+ * exact 18% tint used by Session ListRow, independently of focus. */
+[data-slot="chrome-bar"] .search-capsule.glass-control {
+  background: var(--glass-veil);
+  border: 0;
+  box-shadow:
+    var(--shadow-glass-small),
+    inset 0 0 0 0.5px var(--glass-edge);
+  color: var(--canvas-ink);
+}
+[data-volli-sidebar] [data-slot="sidebar-menu-button"][data-active="true"] {
+  background: var(--fill-row-selected);
+}
+[data-volli-sidebar] [data-slot="sidebar-menu-button"]:hover:not([data-active="true"]) {
+  background: var(--fill-row-hover);
+}
+[data-volli-sidebar] [data-slot="sidebar-menu-button"][data-active="true"] > svg {
+  color: var(--primary-text);
+}
+[data-volli-rail].glass {
+  border: var(--shell-edge) solid var(--glass-edge);
+  border-radius: var(--radius-floating);
+  overflow: hidden;
+}
+.workspace-tile {
+  background: var(--tile-color, var(--flow));
+  color: var(--primary-foreground);
+  border: 0;
+  box-shadow: var(--shadow-glass-small);
+}
+.workspace-tile-selected::before {
+  content: "";
+  position: absolute;
+  left: -9px;
+  top: 9px;
+  bottom: 9px;
+  width: 3px;
+  border-radius: 999px;
+  background: var(--canvas-ink);
+}
+/* Transient controls share flat glass; context menus retain their action glyphs.
+ * Plain command menus show labels and selection marks, not decorative icons.
+ * Nested identity/status content is not a plain command glyph. */
+.plain-menu-row > svg:not([data-slot="menu-submenu-caret"]) {
+  display: none;
+}
+.material-floating,
+[cmdk-dialog],
+.toaster [data-sonner-toast].material-floating {
+  box-shadow: var(--shadow-glass);
+}
+[data-slot="tooltip-content"].material-floating {
+  box-shadow: var(--shadow-glass-small);
+}
+:is(
+  [data-slot="dialog-content"],
+  [data-slot="alert-dialog-content"],
+  [data-slot="dialog-overlay"],
+  [data-slot="alert-dialog-overlay"]
+) {
+  animation-timing-function: var(--ease-out);
+}
+[data-slot="alert-dialog-overlay"] {
+  animation-duration: var(--duration-sheet);
+}
+[data-slot="alert-dialog-overlay"][data-state="closed"] {
+  animation-duration: var(--duration-menu-out);
+}
+[data-slot="tooltip-content"][data-state="instant-open"] {
+  animation: none;
+}
+
+/* Sonner retargets its stack with transitions. Do not animate layout height. */
+.toaster [data-sonner-toast] {
+  transition-property: transform, opacity;
+  transition-duration: var(--duration-menu-in);
+  transition-timing-function: var(--ease-out);
+}
+.toaster [data-sonner-toast][data-removed="true"] {
+  transition-duration: var(--duration-menu-out);
+}
+
+/* One spacing owner for the Session composer. The shell and nested content
+ * each spend one 8px step: draft ink, attachment edges and queued ink share
+ * the 16px rail. Controls hang half a step out for optical glyph alignment;
+ * their targets keep the shared control sizes. No primitive adds a gutter. */
+.session-prompt {
+  --composer-gap: calc(var(--spacing) * 2);
+  --composer-gutter: calc(var(--composer-gap) * 2);
+  --composer-control-outset: var(--spacing);
+  border-radius: var(--radius-composer);
+  border: 0;
+  padding: var(--composer-gap);
+}
+.session-prompt .composer-queue {
+  gap: var(--composer-gap);
+  padding: 0;
+}
+.session-prompt .composer-queue::after {
+  content: "";
+  align-self: stretch;
+  margin-inline: var(--composer-gap);
+  border-bottom: 1px solid var(--border);
+}
+.session-prompt .composer-queued-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing);
+  padding: var(--composer-gap);
+}
+.session-prompt .composer-draft-attachments {
+  padding: var(--composer-gap) var(--composer-gap) 0;
+}
+.session-prompt:has(textarea:focus-visible) {
+  border-color: var(--ring);
+  outline: 2px solid var(--ring);
+  outline-offset: 0;
+}
+.session-prompt > [data-slot="input-group"] {
+  border-radius: inherit;
+  box-shadow: none;
+  outline: none;
+}
+.session-prompt .prompt-toolbar {
+  border-top: 0;
+  background: transparent;
+}
+.session-prompt .prompt-config,
+.new-ticket-sheet .prompt-config {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+.session-prompt .prompt-config:hover,
+.session-prompt .prompt-config[data-state="open"],
+.new-ticket-sheet .prompt-config:hover,
+.new-ticket-sheet .prompt-config[data-state="open"] {
+  background: var(--accent-tint);
+}
+.session-prompt .prompt-add,
+.new-ticket-sheet .prompt-add {
+  border-color: transparent;
+  background: transparent;
+  border-radius: 999px;
+}
+.session-prompt .prompt-add:hover,
+.new-ticket-sheet .prompt-add:hover {
+  background: var(--accent-tint);
+}
+.session-prompt .prompt-primary {
+  border-radius: 999px;
+  box-shadow: none;
+}
+/* Capture is one paper plane; controls borrow the Session composer family. */
+.new-ticket-sheet .prompt-toolbar {
+  border-top-color: var(--border);
+  background: transparent;
+}
+.new-ticket-sheet [data-monaco-status],
+.new-ticket-sheet [data-monaco-fallback] {
+  background: transparent;
+}
+
+/* Secondary automation navigation floats over the same viewport canvas. */
+.automation-workbench {
+  background: var(--canvas);
+  background-attachment: fixed;
+}
+
+/* Arrow-key disclosure is navigation, not choreography. */
+.session-envelope[data-motion-origin="keyboard"] svg {
+  transition: none;
+}
+
+[data-volli-sidebar] [data-slot="sidebar-menu-button"] {
+  transition-property: transform, scale;
+}
+[data-volli-sidebar] [data-slot="sidebar-menu-button"]:focus-visible:active {
+  scale: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-inspector-panel] {
+    transition: none;
+  }
+}
+
+/* Keep the footer's geometry and keyboard targets while quieting read mode.
+ * Touch has no hover: its actions remain visible. Feedback remains readable. */
+@media (hover: hover) and (pointer: fine) {
+  .is-user [data-message-copy]:not([data-feedback]),
+  .is-assistant [data-message-copy]:not([data-feedback]) {
+    opacity: 0;
+    transition: none;
+  }
+  .is-user:hover [data-message-copy],
+  .is-user:focus-within [data-message-copy],
+  .is-assistant:hover [data-message-copy],
+  .is-assistant:focus-within [data-message-copy] {
+    opacity: 1;
+  }
+}
+
+/* Per-activation keyboard/unknown gate, including live Motion cancellation. */
+[data-effort-instant] *,
+[data-effort-instant] *::before,
+[data-effort-instant] *::after {
+  transition: none !important;
+  animation: none !important;
+}
+[data-effort-instant] [data-slot="effort-handle"] {
+  scale: 1 !important;
+  box-shadow: none !important;
+}
+
+/* Portaled primitives retain activation provenance through their closing Presence.
+ * A Session ring is a persistent working-state signal, not an entrance: a
+ * keyboard-opened pane must not freeze its descendant card rings in a corner. */
+[data-motion-origin="keyboard"],
+[data-motion-origin="instant"],
+[data-motion-origin="keyboard"] *,
+[data-motion-origin="instant"] *,
+[data-motion-origin="keyboard"]::before,
+[data-motion-origin="keyboard"]::after,
+[data-motion-origin="instant"]::before,
+[data-motion-origin="instant"]::after,
+[data-motion-origin="keyboard"] *:not(.session-ring)::before,
+[data-motion-origin="keyboard"] *::after,
+[data-motion-origin="instant"] *:not(.session-ring)::before,
+[data-motion-origin="instant"] *::after {
+  animation: none !important;
+  transition: none !important;
+}
+
+/* Glass row anatomy: 18px name, 14px metadata, 5px vertical inset. */
+.list-row[data-density="two-line"] {
+  min-height: 42px;
+  padding-block: 5px;
+}
+.list-row[data-density="two-line"] .list-row-secondary,
+.session-row-meta {
+  font-size: var(--text-label);
+  line-height: 14px;
+}
+[data-volli-sidebar] .list-row[data-selected="true"] {
+  background: var(--fill-row-selected);
+}
+[data-volli-sidebar] .list-row:hover:not([data-selected="true"]) {
+  background: var(--fill-row-hover);
+}
+[data-slot="chrome-bar"] {
+  height: var(--spacing-titlebar);
+}
+[data-slot="chrome-bar"] [data-variant="toolbar"] {
+  width: var(--spacing-chrome-control);
+  height: var(--spacing-chrome-control);
+}
+[data-slot="chrome-bar"] .search-capsule {
+  height: var(--spacing-chrome-control);
+}
+.board-column {
+  width: var(--spacing-board-column);
+  padding: 6px;
+  background: var(--surface-quaternary);
+}
+.board-card {
+  padding: 12px 14px;
+  background: var(--card-face);
+  box-shadow: var(--card-shadow);
+}
+.board-card .board-card-key {
+  line-height: 14px;
+}
+.board-card .board-card-title {
+  margin-top: 3px;
+}
+.board-card .board-card-labels {
+  padding-top: 8px;
+}
+.session-prompt > [data-slot="input-group"] {
+  background: transparent;
+  border: 0;
+}
+.session-prompt textarea {
+  min-height: calc(var(--spacing) * 10);
+  padding: var(--composer-gap);
+  font-size: var(--text-ui);
+}
+.session-prompt .prompt-toolbar {
+  padding: 0 calc(var(--composer-gutter) - var(--composer-gap) - var(--composer-control-outset));
+  margin: 0;
+}
+.is-user > .message-content {
+  max-width: 420px;
+  padding: 7px 13px;
+  border-radius: var(--radius-bubble);
+  background: var(--surface-secondary);
+  color: var(--foreground);
+}
+
+.workspace-tile {
+  width: var(--spacing-workspace-tile);
+  height: var(--spacing-workspace-tile);
+  border-radius: var(--radius-workspace-tile);
+}
+
+/* One source-list inset: 10px to the fill, then 8px to the ink. */
+[data-volli-sidebar] {
+  --sidebar-row-inset: 10px;
+}
+[data-volli-sidebar] [data-slot="sidebar-group"],
+[data-volli-sidebar] [data-slot="sidebar-footer"],
+[data-volli-sidebar] .sidebar-section-header {
+  padding-inline: var(--sidebar-row-inset);
+}
+[data-volli-sidebar] [data-slot="sidebar-header"] {
+  padding-inline: calc(var(--sidebar-row-inset) + 8px);
+}
+[data-volli-sidebar] h3 {
+  font-size: var(--text-label);
+  line-height: 14px;
+  color: var(--muted-foreground);
+}
+.list-row[data-density="two-line"] .text-ui {
+  line-height: 18px;
+}
+
+.native-switch[data-state="checked"] {
+  background: var(--flow);
+}
+.native-switch-thumb {
+  box-shadow: var(--shadow-glass-small);
+}
+[data-control="button"].control-material:active:not(:disabled) {
+  background-image: linear-gradient(var(--fill-secondary), var(--fill-secondary));
+}
+/* Only navigation outline controls need the adaptive optical press. This
+ * unlayered image also wins during hover+press; the shared control face still
+ * wins over the layered hover fill. Paper descendants and floating writing
+ * surfaces keep their own material, as do secondary/inspector/toolbar buttons. */
+:is([data-volli-sidebar].glass, [data-volli-rail].glass)
+  [data-control="button"][data-variant="outline"].control-material:active:not(:disabled):not(
+    [data-material="paper"] *
+  ):not(.material-floating *):not([cmdk-dialog] *) {
+  background-image: linear-gradient(var(--glass-outline-pressed), var(--glass-outline-pressed));
+}
+[data-control="button"].glass-control {
+  background-image: none;
+}
+[data-control="button"].glass-control:active:not(:disabled) {
+  background-color: var(--fill-row-selected);
+}
+
+[data-control="button"].control-material {
+  box-shadow:
+    var(--tw-ring-offset-shadow, 0 0 transparent), var(--tw-ring-shadow, 0 0 transparent),
+    var(--control-bezel-shadow);
+}
+[data-control="button"]:is([data-variant="outline"], [data-variant="secondary"]) {
+  background-color: var(--control-face);
+  border-color: transparent;
+}
+/* Outline/secondary Buttons inside an untinted .material-floating or
+ * [cmdk-dialog] (popovers, floating dialogs and alerts, the palette) use the
+ * generated writing-control pair. Listed exceptions keep the shared face:
+ * inside a tinted float, a float nested in a float or palette (either order),
+ * or [data-material="paper"], .material-solid, .material-thick or
+ * [data-volli-surface] content. Other materials are not covered by this
+ * rule. The inspector's resting fill is unaffected. */
+:is(.material-floating, [cmdk-dialog]):not([data-tint="true"])
+  [data-control="button"]:is([data-variant="outline"], [data-variant="secondary"]):not(
+    [data-material="paper"] *
+  ):not(.material-solid *):not(.material-thick *):not([data-volli-surface] *):not(
+    .material-floating[data-tint="true"] *
+  ):not(.material-floating .material-floating *):not([cmdk-dialog] .material-floating *):not(
+    .material-floating [cmdk-dialog] *
+  ) {
+  background-color: var(--writing-control-face);
+}
+:is(.material-floating, [cmdk-dialog]):not([data-tint="true"])
+  [data-control="button"]:is(
+    [data-variant="outline"],
+    [data-variant="secondary"]
+  ).control-material:active:not(:disabled):not([data-material="paper"] *):not(
+    .material-solid *
+  ):not(.material-thick *):not([data-volli-surface] *):not(
+    .material-floating[data-tint="true"] *
+  ):not(.material-floating .material-floating *):not([cmdk-dialog] .material-floating *):not(
+    .material-floating [cmdk-dialog] *
+  ) {
+  background-image: linear-gradient(var(--writing-control-pressed), var(--writing-control-pressed));
+}
+.inspector-popup {
+  border-radius: var(--radius-native-control);
+  background: var(--fill-secondary);
+  padding-inline: 8px;
+}
+.board-card-labels [data-slot="badge"] {
+  min-height: var(--spacing-control-xs);
+  padding: 0 8px;
+  border: 0;
+  background: var(--fill-secondary);
+}
+[data-volli-sidebar] [data-session-glyph].size-6 {
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-control-small);
+}
+[data-volli-sidebar] [data-slot="sidebar-menu"] {
+  gap: 0;
+}
+
+[data-slot="tab-strip"] {
+  background: var(--background);
+  background-attachment: scroll;
+}
+.tab-track {
+  background: var(--surface-secondary);
+}
+
+[data-volli-sidebar] [data-slot="sidebar-header"] .font-display {
+  font-size: var(--project-title-size);
+  line-height: 20px;
+}
+.message-content {
+  line-height: 18px;
+}
+
+/* Border-shape is one contextual primitive decision. Per-corner seam resets
+ * remain utilities, so a fused group does not grow rounded inner edges. */
+[data-shape="rounded"] {
+  --radius-native-control: var(--radius-control);
+}
+[data-shape="capsule"],
+[data-shape="circle"] {
+  --radius-native-control: 999px;
+}
+[data-shape="rounded"][data-size="xs"] {
+  --radius-native-control: var(--radius-control-small);
+}
+[data-shape="rounded"][data-size="sm"] {
+  --radius-native-control: var(--radius-control);
+}
+
+[data-shape] {
+  --control-shape-size: var(--spacing-control-default);
+}
+[data-shape][data-size="xs"],
+[data-shape][data-size="icon-xs"] {
+  --control-shape-size: var(--spacing-control-xs);
+}
+[data-shape][data-size="sm"],
+[data-shape][data-size="icon-sm"] {
+  --control-shape-size: var(--spacing-control-sm);
+}
+[data-shape][data-size="lg"],
+[data-shape][data-size="icon-lg"] {
+  --control-shape-size: var(--spacing-control-lg);
+}
+:is(
+  [data-control="button"],
+  [data-slot="select-trigger"],
+  [data-slot="input"]
+)[data-shape="circle"] {
+  width: var(--control-shape-size);
+  height: var(--control-shape-size);
+  padding-inline: 0;
+}
+.segmented {
+  --segmented-height: var(--spacing-control-sm);
+  height: var(--segmented-height);
+  padding: 1px;
+}
+.segmented[data-size="default"] {
+  --segmented-height: var(--spacing-control-default);
+}
+.segmented > [data-control="button"] {
+  height: 100%;
+  min-height: 0;
+  padding-block: 0;
+}
+.segmented > [data-control="button"][data-shape="circle"] {
+  width: calc(var(--segmented-height) - 2px);
+  height: 100%;
+}
+.session-prompt .prompt-config {
+  --radius-native-control: 999px;
+}
+
+[data-shape="rounded"][data-size="mini"] {
+  --radius-native-control: var(--radius-control-mini);
+}
+[data-shape="rounded"][data-size="default"],
+[data-shape="rounded"][data-size="icon"] {
+  --radius-native-control: var(--radius-control-large);
+}
+[data-shape="rounded"][data-size="lg"],
+[data-shape="rounded"][data-size="icon-lg"] {
+  --radius-native-control: var(--radius-control-extra-large);
+}
+[data-shape="rounded"][data-size="icon-xs"] {
+  --radius-native-control: var(--radius-control-small);
+}
+[data-shape="rounded"][data-size="icon-sm"] {
+  --radius-native-control: var(--radius-control);
+}
+/* Natural toolbar layout and alert presentation normalize effective height.
+ * Sheet fields/choices are not alert buttons and keep their requested size. */
+[data-control-context="toolbar"][data-shape],
+[data-control-context="sheet"][data-control="button"] {
+  --control-shape-size: var(--spacing-control-default);
+}
+[data-control-context="toolbar"][data-shape],
+[data-control-context="sheet"][data-control="button"] {
+  height: var(--spacing-control-default);
+  min-height: var(--spacing-control-default);
+}
+[data-control-context="toolbar"][data-size^="icon"],
+[data-control-context="sheet"][data-control="button"][data-size^="icon"] {
+  width: var(--spacing-control-default);
+}
+.segmented[data-control-context="toolbar"] {
+  --segmented-height: var(--spacing-control-default);
+}
+.segmented > [data-control="button"][data-control-context] {
+  height: 100%;
+  min-height: 0;
+}
+/* Preserve the approved mock's 30px title-bar pills; native toolbar is 28pt. */
+[data-slot="chrome-bar"] [data-variant="toolbar"] {
+  width: var(--spacing-chrome-control);
+  height: var(--spacing-chrome-control);
+}
+.sidebar-band-count {
+  margin-left: 5px;
+  color: var(--tertiary-foreground);
+}
+[data-volli-sidebar] .sidebar-band-header h3 {
+  font-size: var(--text-ui);
+  line-height: var(--text-ui--line-height);
+  font-weight: 500;
+  color: var(--muted-foreground);
+}
+/* The form already clips to its 24px perimeter. A second rounded clip inside
+ * the writing inset cuts the first empty-state glyph and caret. */
+.session-prompt > [data-slot="input-group"] {
+  overflow: visible;
+  border-radius: 0;
+}
+
+/* The roster and automation offer each own overflow; metadata cannot push
+ * either heading out of the inspector. Small collections keep natural height. */
+.ticket-inspector-now {
+  container: ticket-inspector-now / size;
+}
+.ticket-inspector-now > [data-testid="ticket-rail-properties"] {
+  flex: none;
+}
+.ticket-inspector-now
+  > :is([data-testid="ticket-sessions"], [data-testid="ticket-rail-automations"]) {
+  flex: 0 1 auto;
+  min-height: 72px;
+  max-height: 50%;
+  overflow: hidden;
+}
+.ticket-inspector-now
+  > :is([data-testid="ticket-sessions"], [data-testid="ticket-rail-automations"])
+  > :first-child {
+  flex-shrink: 0;
+}
+.ticket-inspector-now [data-testid="ticket-sessions-peek"],
+.ticket-inspector-now [data-testid="ticket-rail-automation-list"] {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+/* A half-height section needs room for its heading, reason and action before
+ * decoration. Query the allocated inspector, not the window or rail width. */
+@container ticket-inspector-now (height < 520px) {
+  [data-testid="ticket-sessions-peek"] .empty-art {
+    display: none;
+  }
+}
+.session-navigator [data-nav-height] :is(.list-row, [data-slot="sidebar-menu-button"]) {
+  height: 100%;
+  min-height: 0;
+}
+/* Plain disclosure rows, never a card around a ticket and its children. */
+.session-navigator-child {
+  padding-inline: 4px;
+}
+
+/* Quiet center is one compact object; the composer is a separate anchored
+ * track, not part of the empty state's scrolling content. */
+.chat-quiet-content {
+  box-sizing: border-box;
+  min-height: 0;
+  padding: 16px 24px calc(var(--composer-height) + 32px);
+}
+.chat-quiet-layout {
+  min-height: 0;
+  padding: 0;
+}
+.chat-quiet-center {
+  width: 100%;
+  max-width: 640px;
+  gap: 12px;
+}
+.streak-summary {
+  display: flex;
+  width: 360px;
+  max-width: 100%;
+  flex-direction: column;
+  gap: 14px;
+}
+.streak-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 9px;
+}
+.streak-matrix {
+  display: grid;
+  grid-template-columns: repeat(26, minmax(0, 1fr));
+  grid-template-rows: repeat(7, 1fr);
+  grid-auto-flow: column;
+  gap: 4px;
+}
+.streak-cell {
+  width: 100%;
+  aspect-ratio: 1;
+}
+.streak-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  text-align: left;
+}
+.streak-stats > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+}
+.chat-transcript {
+  margin-top: 8px;
+  mask-image: linear-gradient(to bottom, transparent, black 8px);
+}
+/* An overlay has paper, not canvas, behind it: keep its explicit authored
+ * tint without painting a duplicate mesh. */
+[data-volli-shell="ephemeral"] [data-volli-sidebar].glass {
+  background: var(--glass-writing-veil);
+}
+.project-menu-tile {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+}
+.board-card[data-selected="true"] {
+  background: color-mix(in srgb, var(--wash-ink) 5%, var(--card-face));
+}
+
+/* Position belongs to layout, not material. Unlayered `position:relative` here
+ * used to beat dialog utilities and turn fixed viewport modals into flow boxes. */
+@layer base {
+  :where(.glass, .material-floating, [cmdk-dialog]) {
+    position: relative;
+  }
+}
+#volli-overlays {
+  display: contents;
+  position: static;
+  filter: none;
+  backdrop-filter: none;
+  transform: none;
+  translate: none;
+  contain: none;
+  will-change: auto;
+}
+/* No inspector content means no inspector control, including in the AX tree.
+ * Follow only the shell's resident dock path: a body-wide :has() invalidates
+ * unrelated controls on every portaled menu/dialog insertion and removal. */
+[data-volli-shell]:not(
+    :has(> [data-pane-row] > [data-inspector-host] > [data-inspector-dock][data-enabled])
+  )
+  [data-inspector-trigger="shell"] {
+  display: none;
+}
+
+/* Comfortable native source-list rhythm: 46px primary / 32px secondary, 2px air. */
+.session-navigator [data-nav-height] {
+  margin-bottom: 2px;
+}
+[data-session-band="previous"] {
+  margin-top: 16px;
+}
+[data-volli-sidebar] [data-sidebar="menu"] {
+  gap: 2px;
+}
+
+/* Accessory chrome is a glyph and a hit area, not a small bordered pushbutton. */
+[data-control="button"][data-variant="toolbar"] {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+[data-control="button"][data-variant="toolbar"]:hover {
+  background: var(--fill-secondary);
+}
+[data-control="button"][data-variant="toolbar"][aria-pressed="true"] {
+  background: var(--fill-row-selected);
+}
+[data-slot="segmented"][data-icon-only="true"] {
+  background: transparent;
+  box-shadow: none;
+  border-color: transparent;
+}
+[data-slot="segmented"][data-icon-only="true"]::before {
+  box-shadow: none;
+  background: var(--fill-row-selected);
+}
+
+.chat-transcript [data-conversation-scroller] {
+  scroll-padding-top: 16px;
+  scroll-padding-bottom: calc(var(--composer-height, 0px) + 16px);
+}
+/* The mask owns a bounded, non-scrolling viewport, never the full scrollback.
+ * The detached affordance has its own clear band rather than covering a line.
+ * A second opaque mask keeps the native scrollbar lane outside the text fade:
+ * masking the whole viewport made the thumb disappear beneath the composer. */
+.chat-transcript [data-conversation-viewport] {
+  --scroll-edge-clearance: 8px;
+  mask-image:
+    linear-gradient(
+      to bottom,
+      transparent,
+      black 12px,
+      black calc(100% - var(--composer-height, 0px) - var(--scroll-edge-clearance) - 20px),
+      transparent calc(100% - var(--composer-height, 0px) - var(--scroll-edge-clearance))
+    ),
+    linear-gradient(black, black);
+  mask-size:
+    100% 100%,
+    var(--scrollbar-size) 100%;
+  mask-position:
+    center,
+    right top;
+  mask-repeat: no-repeat;
+  mask-composite: add;
+}
+.chat-transcript:has([data-slot="conversation-scroll-button"]) [data-conversation-viewport] {
+  --scroll-edge-clearance: 48px;
+}
+
+/* Mirrored peeks: small spatial cue, fixed material, no width or filter tween. */
+[data-pane-side] {
+  opacity: 0;
+  translate: 12px 0;
+  transition-property: translate, opacity, visibility;
+  transition-duration: var(--reveal-duration, 170ms), var(--reveal-duration, 170ms), 0s;
+  transition-delay: 0s, 0s, var(--reveal-duration, 170ms);
+  transition-timing-function: var(--ease-out);
+  visibility: hidden;
+}
+[data-pane-side="left"] {
+  translate: -12px 0;
+}
+[data-pane-side][data-shown] {
+  transition-delay: 0s;
+  translate: 0 0;
+  opacity: 1;
+  visibility: visible;
+}
+
+/* Push and peek are separate journeys. Keep the pin owner through its closed
+ * endpoint so releasing the width driver cannot start a second peek tween. */
+[data-pane-side][data-pane-pin-motion],
+[data-motion="instant"] [data-pane-side],
+[data-pin-motion="instant"] [data-pane-side] {
+  transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-pane-side] {
+    transition: none;
+  }
+}
+
+/* Explicit native live-resize exception: one registered value drives both
+ * sides of each divider. Heavy descendants defer their resize until settled. */
+@property --left-pane-push {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+@property --right-pane-push {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+/* Only the geometry path inherits the animated values. Inheriting them through
+ * every transcript/board descendant invalidates that entire tree each frame,
+ * even though its content never consumes either value. The two edges still
+ * read the same shell-owned spring, without a second animation or FLIP. */
+[data-pane-row],
+[data-pane-reservation="left"],
+[data-pane-clip],
+[data-pane-side="left"] {
+  --left-pane-push: inherit;
+}
+[data-pane-row],
+[data-inspector-host],
+[data-inspector-dock],
+[data-pane-side="right"] {
+  --right-pane-push: inherit;
+}
+[data-volli-surface] {
+  contain: layout paint;
+}
+[data-left-pane-push-active] [data-pane-side="left"] {
+  translate: clamp(
+      calc(-1 * var(--pane-full-width)),
+      calc(var(--left-pane-push) * var(--pane-push-factor) + var(--pane-push-offset)),
+      0px
+    )
+    0;
+  opacity: 1;
+  visibility: visible;
+  transition: none;
+}
+[data-right-pane-push-active] [data-pane-side="right"] {
+  translate: clamp(
+      0px,
+      calc(var(--right-pane-push) * var(--pane-push-factor) + var(--pane-push-offset)),
+      var(--pane-full-width)
+    )
+    0;
+  opacity: 1;
+  visibility: visible;
+  transition: none;
+}
+
+/* Preferences owns a native window, not a floating overlay inside the workspace. */
+.settings-window {
+  overflow: hidden;
+}
+.settings-window-toolbar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  height: var(--spacing-titlebar);
+  padding: 6px 16px 6px 88px;
+}
+.settings-window [data-slot="pref-content"] {
+  border-radius: var(--radius-container) 0 0 0;
+}
+[data-settings-scope] [data-selected="true"] {
+  background: var(--fill-secondary);
+  box-shadow: inset 0 0 0 0.5px var(--border-strong);
+}
+[data-slot="pref-group"] {
+  overflow: clip;
+}
+.settings-window [data-slot="pref-group"] {
+  background: var(--surface-quaternary);
+  box-shadow: none;
+}
+/* These tracks sit on preference paper, not navigation glass. */
+.settings-window [data-slot="pref-content"] .segmented:not([data-icon-only="true"]) {
+  background: var(--surface-secondary);
+}
+
+[data-slot="canvas-instrument"] {
+  border-top: 0.5px solid var(--border);
+}
+.accent-swatch {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 0.5px var(--border-strong);
+  outline-offset: 3px;
+}
+.accent-swatch[aria-pressed="true"],
+.accent-swatch:focus-visible {
+  outline: 2px solid var(--ring);
+}
+.accent-canvas {
+  color: var(--foreground);
+}
+.accent-hue {
+  appearance: none;
+  height: 12px;
+  border-radius: 999px;
+}
+.accent-hue::-webkit-slider-thumb {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: transparent;
+  border: 2px solid var(--background);
+  box-shadow: 0 0 0 0.5px var(--foreground);
+}
+
+/* Reduced preference also settles residual CSS and pseudo-element effects. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+/* Repeated focus and ordinary row hover never travel. */
+:is(
+  input,
+  textarea,
+  [data-slot="sidebar-menu-button"],
+  [data-slot="dropdown-menu-item"],
+  [data-slot="context-menu-item"]
+) {
+  transition: none;
+}
+
+/* The arrow belongs to the bounded popover, outside its scrolling body. */
+[data-slot="popover-content"] {
+  contain: layout;
+}
+
+/* Presentation-aware anchored entrances. Presence remains Radix-owned: no
+ * completion event gates focus, input, selection or the command itself. */
+[data-motion-owner] {
+  --overlay-enter-transform: translateY(-3px) scale(0.97);
+  animation-timing-function: var(--ease-out);
+}
+:is([data-slot="dialog-content"], [data-slot="alert-dialog-content"])[data-motion-owner] {
+  --overlay-enter-transform: translateY(6px) scale(0.98);
+}
+[data-slot="tooltip-content"][data-motion-owner] {
+  --overlay-enter-transform: none;
+}
+[data-motion-owner][data-state="open"] {
+  animation-name: overlay-present-in;
+}
+[data-motion-owner][data-state="closed"] {
+  animation-name: overlay-present-out;
+}
+@keyframes overlay-present-in {
+  from {
+    opacity: var(--overlay-from-opacity, 0);
+    transform: var(--overlay-from-transform, var(--overlay-enter-transform));
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes overlay-present-out {
+  from {
+    opacity: var(--overlay-from-opacity, 1);
+    transform: var(--overlay-from-transform, none);
+  }
+  to {
+    opacity: 0;
+    transform: var(--overlay-from-transform, none);
+  }
+}
+
+/* Light writing glass needs a dark boundary as well as the bright refractive
+ * rim: a plus-lighter rim alone vanishes over nearly white paper. */
+:root.light .session-prompt.glass {
+  box-shadow:
+    inset 0 0 0 0.5px var(--glass-edge),
+    var(--shadow-card);
+}
+
+[data-slot="popover-body"] {
+  display: inherit;
+  flex-direction: inherit;
+  align-items: inherit;
+  justify-content: inherit;
+  grid-template-columns: inherit;
+  gap: inherit;
+}
+
+/* Preferences has its own authored canvas, a single tinted navigation glass
+ * pass, and independent paper content. The frame itself is not another blur. */
+.settings-window {
+  background: var(--canvas-mesh), var(--canvas);
+}
+[data-slot="pref-navigation"].glass {
+  border-radius: 0;
+  --settings-icon-ink: var(--control-light-paper);
 }

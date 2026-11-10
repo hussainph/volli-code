@@ -62,7 +62,15 @@ describe("retention runtime ports", () => {
     const { db, events, attention, worktree } = fixture();
     const watch = getRetentionWatcher(db, { events, attention }, worktree);
     watch.triggerNow();
-    await vi.waitFor(() => expect(events.publish).toHaveBeenCalledWith("data-changed", {}));
+    // Scoped to the ticket the cycle moved, never untargeted (VC-1077).
+    await vi.waitFor(() =>
+      expect(events.publish).toHaveBeenCalledWith("data-changed", {
+        ticketId: "t1",
+        projectId: "p1",
+        kind: "retention",
+      }),
+    );
+    expect(events.publish).not.toHaveBeenCalledWith("data-changed", {});
     expect(attention.deliver).toHaveBeenCalledWith(
       expect.objectContaining({ producer: "pull-request-merged" }),
     );
@@ -99,7 +107,11 @@ describe("retention runtime ports", () => {
       first.db.close();
       b.triggerNow();
       await b.settled();
-      expect(secondEvents.publish).toHaveBeenCalledWith("data-changed", {});
+      expect(secondEvents.publish).toHaveBeenCalledWith("data-changed", {
+        ticketId: "t1",
+        projectId: "p1",
+        kind: "retention",
+      });
       expect(first.events.publish).not.toHaveBeenCalled();
       b.stop();
     } finally {

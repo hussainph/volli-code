@@ -76,8 +76,8 @@ export async function activateNotificationTarget(
     target.kind === "session" ? surface.terminalPlacement(target.sessionId) : null,
   );
   if (route.kind === "update") {
-    // The existing update surface, not a new one: the dialog is where an
-    // install is accepted, and the badge beside it is the same state.
+    // Updates lives in the native Settings window; installation still takes
+    // its own explicit acceptance from that pane.
     surface.openUpdate();
     return;
   }

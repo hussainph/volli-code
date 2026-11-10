@@ -31,6 +31,8 @@ import {
   capPreviousEntries,
   isProjectSessionRowSelected,
   groupPreviousByTicket,
+  holdPreviousRows,
+  planningChangeCanMoveSignals,
   DONE_LINGER_MS,
   isCleanupExempt,
   isConcludedBusiness,
@@ -3196,5 +3198,118 @@ describe("buildActiveSessionListing — unread membership", () => {
     expect(unread.active).toHaveLength(1);
     expect(unread.previous).toHaveLength(1);
     expect(unread.nextBoundaryAt).toBeNull();
+  });
+});
+
+describe("holdPreviousRows (VC-1078)", () => {
+  const ticketA = ticket({ id: "ta", status: "doing" });
+  const heldBandRow = (
+    id: string,
+    target: PreviousSessionRow["target"],
+    overrides: Partial<PreviousSessionRow> = {},
+  ): PreviousSessionRow => ({
+    id,
+    ticket: ticketA,
+    title: `Session ${id}`,
+    kind: "terminal",
+    harnessId: null,
+    endedOrQuietAt: 10,
+    activity: null,
+    provenance: PERSON_STARTED,
+    target,
+    cleaned: false,
+    ...overrides,
+  });
+  const band = (): PreviousSessionRow[] => [
+    heldBandRow("session:a", { kind: "terminal", tabId: "a", paneId: "a" }),
+    heldBandRow("chat:b", { kind: "chat", tabId: "chat:b", sessionId: "b" }, { kind: "chat" }),
+    heldBandRow("session:c", { kind: "session-detail", projectId: "p", sessionId: "c" }),
+    heldBandRow("session:d", null),
+  ];
+
+  it("hands back the held band when a rebuild moved nothing in it", () => {
+    const held = band();
+    expect(holdPreviousRows(held, held)).toBe(held);
+    expect(holdPreviousRows(held, band())).toBe(held);
+  });
+
+  it("keeps the unchanged rows' objects when some rows moved", () => {
+    const held = band();
+    const next = band();
+    next[1] = { ...next[1]!, title: "Renamed" };
+    next.push(heldBandRow("session:e", null));
+
+    const result = holdPreviousRows(held, next);
+    expect(result).not.toBe(held);
+    expect(result.map((row) => row.title)).toEqual([
+      "Session session:a",
+      "Renamed",
+      "Session session:c",
+      "Session session:d",
+      "Session session:e",
+    ]);
+    expect(result[0]).toBe(held[0]);
+    expect(result[1]).toBe(next[1]);
+    expect(result[2]).toBe(held[2]);
+    expect(result[4]).toBe(next[4]);
+  });
+
+  it("tells targets apart by every field", () => {
+    const held = band();
+    const variants: PreviousSessionRow["target"][] = [
+      { kind: "terminal", tabId: "a", paneId: "other" },
+      { kind: "chat", tabId: "a", sessionId: "a" },
+      null,
+    ];
+    for (const target of variants) {
+      const next = band();
+      next[0] = { ...next[0]!, target };
+      expect(holdPreviousRows(held, next)[0]).toBe(next[0]);
+    }
+    for (const target of [
+      { kind: "chat", tabId: "chat:b", sessionId: "other" },
+      { kind: "terminal", tabId: "chat:b", paneId: "b" },
+    ] as const) {
+      const next = band();
+      next[1] = { ...next[1]!, target };
+      expect(holdPreviousRows(held, next)[1]).toBe(next[1]);
+    }
+    for (const target of [
+      { kind: "session-detail", projectId: "other", sessionId: "c" },
+      { kind: "chat", tabId: "c", sessionId: "c" },
+    ] as const) {
+      const next = band();
+      next[2] = { ...next[2]!, target };
+      expect(holdPreviousRows(held, next)[2]).toBe(next[2]);
+    }
+    const next = band();
+    next[3] = { ...next[3]!, target: { kind: "terminal", tabId: "d", paneId: "d" } };
+    expect(holdPreviousRows(held, next)[3]).toBe(next[3]);
+  });
+});
+
+function planningChange(
+  overrides: Partial<Parameters<typeof planningChangeCanMoveSignals>[0]> = {},
+): Parameters<typeof planningChangeCanMoveSignals>[0] {
+  return { ticketId: null, projectId: null, ...overrides };
+}
+
+describe("planningChangeCanMoveSignals (VC-1078)", () => {
+  const change = planningChange;
+
+  it("reads again for anything it cannot rule out", () => {
+    expect(planningChangeCanMoveSignals(change(), "p1", [])).toBe(true);
+    expect(planningChangeCanMoveSignals(change({ projectId: "p1" }), "p1", [])).toBe(true);
+    expect(planningChangeCanMoveSignals(change({ kind: "session" }), "p1", [])).toBe(true);
+    expect(planningChangeCanMoveSignals(change({ kind: "ticket" }), "p1", [])).toBe(true);
+    expect(planningChangeCanMoveSignals(change({ ticketId: "t1" }), "p1", ["t1"])).toBe(true);
+  });
+
+  it("stands down for a change that provably cannot reach a shown signal", () => {
+    expect(planningChangeCanMoveSignals(change({ projectId: "p2" }), "p1", ["t1"])).toBe(false);
+    expect(planningChangeCanMoveSignals(change({ ticketId: "t2" }), "p1", ["t1"])).toBe(false);
+    for (const kind of ["comment", "worktree", "retention"] as const) {
+      expect(planningChangeCanMoveSignals(change({ kind }), "p1", ["t1"])).toBe(false);
+    }
   });
 });

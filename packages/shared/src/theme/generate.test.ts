@@ -827,6 +827,18 @@ describe("the status family", () => {
     }
   });
 
+  it("keeps small status labels at AA, including neutral white reading paper", () => {
+    for (const surface of [...SURFACES, "#1e1e1e", "#808080"]) {
+      const status = solveStatusTokens(surface);
+      for (const fill of FILLS) {
+        expect(
+          wcagContrast(status[fill], status[`${fill}-foreground`]),
+          `${fill}/${surface}`,
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
   it("keeps each hue locked, whatever surface it is solved against", () => {
     // The solve moves lightness and gamut mapping takes chroma; neither may
     // touch hue, because hue is the only part of a status colour that MEANS

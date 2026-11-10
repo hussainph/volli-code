@@ -60,13 +60,16 @@
  * the drop confirmation says so at the moment it would otherwise be believed.
  */
 import * as React from "react";
-import { ArrowCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowCounterClockwise";
-import { ArrowRightIcon } from "@phosphor-icons/react/dist/csr/ArrowRight";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
-import { PlayIcon } from "@phosphor-icons/react/dist/csr/Play";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import {
+  UndoIcon,
+  ArrowRightIcon,
+  ChevronDownIcon,
+  AutomationIcon,
+  PlayIcon,
+  AddIcon,
+  CloseIcon,
+} from "@renderer/components/ui/icon";
+
 import {
   TICKET_STATUS_LABELS,
   TICKET_STATUSES,
@@ -411,7 +414,7 @@ function BoardCard({
               onClick={armed.onCancelRun}
               className="flex items-center gap-1 rounded-full border border-border bg-popover px-1.5 py-px text-label text-muted-foreground transition-colors hover:border-ring hover:text-foreground"
             >
-              <XIcon weight="bold" />
+              <CloseIcon strokeWidth={2.25} />
               Don&rsquo;t run
             </button>
             <button
@@ -420,7 +423,7 @@ function BoardCard({
               onClick={armed.onUndo}
               className="flex items-center gap-1 rounded-full border border-border bg-popover px-1.5 py-px text-label text-muted-foreground transition-colors hover:border-ring hover:text-foreground"
             >
-              <ArrowCounterClockwiseIcon weight="fill" />
+              <UndoIcon />
               Undo
             </button>
           </div>
@@ -485,13 +488,7 @@ function AdvanceButton({ state }: { state: TicketState }) {
   return (
     <div className="inline-flex w-fit shrink-0">
       <Button variant="outline" size="xs" className="rounded-r-none">
-        {resuming ? (
-          <PlayIcon weight="fill" />
-        ) : armed !== null ? (
-          <LightningIcon weight="fill" />
-        ) : (
-          <ArrowRightIcon />
-        )}
+        {resuming ? <PlayIcon /> : armed !== null ? <AutomationIcon /> : <ArrowRightIcon />}
         {primaryLabel}
       </Button>
       <DropdownMenu>
@@ -502,7 +499,7 @@ function AdvanceButton({ state }: { state: TicketState }) {
             aria-label="More options"
             className="-ml-px rounded-l-none"
           >
-            <CaretDownIcon weight="bold" />
+            <ChevronDownIcon strokeWidth={2.25} />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-80">
@@ -511,7 +508,7 @@ function AdvanceButton({ state }: { state: TicketState }) {
               {/* The rarer intent, made cheap without making it the default. */}
               <DropdownMenuItem className="justify-between gap-6">
                 <span className="flex items-center gap-2">
-                  <LightningIcon weight="fill" />
+                  <AutomationIcon />
                   Start a fresh Run · {armed.name}
                 </span>
                 <AutomationHarness automation={armed} className="text-xs" />
@@ -521,7 +518,7 @@ function AdvanceButton({ state }: { state: TicketState }) {
           ) : null}
           {armed !== null ? (
             <DropdownMenuItem>
-              <ArrowRightIcon weight="fill" />
+              <ArrowRightIcon />
               Move without running
             </DropdownMenuItem>
           ) : null}
@@ -533,7 +530,7 @@ function AdvanceButton({ state }: { state: TicketState }) {
           {offeredFor(ADVANCE_TARGET).map((automation) => (
             <DropdownMenuItem key={automation.id} className="justify-between gap-6">
               <span className="flex items-center gap-2">
-                <PlayIcon weight="fill" />
+                <PlayIcon />
                 {automation.name}
               </span>
               <AutomationHarness automation={automation} className="text-xs" />
@@ -663,7 +660,7 @@ function ColumnDefaultControl({
                   : "text-muted-foreground/50 hover:bg-accent hover:text-foreground",
               )}
             >
-              <LightningIcon weight={chosen ? "fill" : "regular"} />
+              <AutomationIcon />
             </button>
           </DropdownMenuTrigger>
         </TooltipTrigger>
@@ -691,9 +688,7 @@ function ColumnDefaultControl({
             className="justify-between gap-6"
           >
             <span className="flex items-center gap-1.5">
-              {armed?.id === automation.id ? (
-                <LightningIcon weight="fill" className="text-primary" />
-              ) : null}
+              {armed?.id === automation.id ? <AutomationIcon className="text-primary" /> : null}
               {automation.name}
             </span>
             <AutomationHarness automation={automation} className="text-xs" />
@@ -702,12 +697,12 @@ function ColumnDefaultControl({
         <DropdownMenuSeparator />
         {/* In-situ creation (#86a): authoring must never require a trip to settings. */}
         <DropdownMenuItem>
-          <PlusIcon weight="fill" />
+          <AddIcon />
           New automation…
         </DropdownMenuItem>
         {chosen ? (
           <DropdownMenuItem onSelect={onDisarm}>
-            <XIcon weight="fill" />
+            <CloseIcon />
             Clear default
           </DropdownMenuItem>
         ) : null}
@@ -810,7 +805,7 @@ function MoveSummary({
           automation === null ? "text-muted-foreground" : "text-primary-text",
         )}
       >
-        <LightningIcon weight={automation === null ? "regular" : "fill"} />
+        <AutomationIcon />
         {automation === null ? "No automation" : automation.name}
         {automation !== null ? <HarnessTrail harnessIds={harnessTrail(automation)} /> : null}
       </span>
@@ -1475,7 +1470,7 @@ function DragTab({
                       onClick={() => undoColumn(status)}
                       className="ml-auto flex shrink-0 items-center gap-1 rounded-full px-1.5 py-px text-label text-muted-foreground transition-colors hover:text-foreground"
                     >
-                      <ArrowCounterClockwiseIcon weight="fill" />
+                      <UndoIcon />
                       {armedInColumn === 1 ? "Undo move" : `Undo ${armedInColumn} moves`}
                     </button>
                   ) : null}
@@ -1591,7 +1586,7 @@ function DragTab({
               which ate the AUTOMATION NAME — the one fact the confirmation
               exists to deliver. Nothing here may be elided; two lines is fine. */}
           <p className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-foreground">
-            <LightningIcon weight="regular" className="text-muted-foreground" />
+            <AutomationIcon className="text-muted-foreground" />
             <span>Moved to {TICKET_STATUS_LABELS[confirmation.status]}</span>
           </p>
           {/* The confirmation is the only thing standing between this prototype

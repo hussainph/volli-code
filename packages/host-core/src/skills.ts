@@ -61,7 +61,9 @@ const MAX_SKILLS_PER_DIR = 200;
 const SKILL_FILE = "SKILL.md";
 
 /** Both tiers' reads, and what one of them failing means. */
-export type SkillReadResult = { ok: true; skills: SkillReference[] } | { ok: false; error: string };
+export type SkillReadResult =
+  | { ok: true; skills: SkillReference[]; omittedSkillDirectories?: number }
+  | { ok: false; error: string };
 
 /**
  * Every skill under `dir`, name-sorted.
@@ -96,11 +98,11 @@ export async function readSkillDir(
   const slugs = entries
     .filter((entry) => (entry.isDirectory() || entry.isSymbolicLink()) && isSkillName(entry.name))
     .map((entry) => entry.name)
-    .toSorted(compareSkillNames)
-    .slice(0, MAX_SKILLS_PER_DIR);
+    .toSorted(compareSkillNames);
+  const omittedSkillDirectories = Math.max(0, slugs.length - MAX_SKILLS_PER_DIR);
 
   const skills: SkillReference[] = [];
-  for (const slug of slugs) {
+  for (const slug of slugs.slice(0, MAX_SKILLS_PER_DIR)) {
     let raw: string;
     try {
       raw = await fsp.readFile(join(dir, slug, SKILL_FILE), "utf8");
@@ -133,7 +135,7 @@ export async function readSkillDir(
       root: rootFor(slug),
     });
   }
-  return { ok: true, skills };
+  return { ok: true, skills, ...(omittedSkillDirectories ? { omittedSkillDirectories } : {}) };
 }
 
 /**
@@ -148,14 +150,23 @@ export async function readSkillDir(
 export async function loadSkills(input: {
   projectSkillsDir: string;
   globalSkillsDir: string;
-}): Promise<{ ok: true; skills: readonly SkillReference[] } | { ok: false; error: string }> {
+}): Promise<
+  | { ok: true; skills: readonly SkillReference[]; omittedSkillDirectories?: number }
+  | { ok: false; error: string }
+> {
   const [project, global] = await Promise.all([
     readSkillDir(input.projectSkillsDir, skillRootDir),
     readSkillDir(input.globalSkillsDir, (slug) => `${input.globalSkillsDir}/${slug}`),
   ]);
   if (!project.ok) return project;
   if (!global.ok) return global;
-  return { ok: true, skills: mergeSkills({ project: project.skills, global: global.skills }) };
+  const omittedSkillDirectories =
+    (project.omittedSkillDirectories ?? 0) + (global.omittedSkillDirectories ?? 0);
+  return {
+    ok: true,
+    skills: mergeSkills({ project: project.skills, global: global.skills }),
+    ...(omittedSkillDirectories ? { omittedSkillDirectories } : {}),
+  };
 }
 
 /** ENOENT/ENOTDIR — the directory is absent, which this surface treats as empty. */

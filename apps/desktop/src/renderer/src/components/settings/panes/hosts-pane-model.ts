@@ -26,7 +26,7 @@ export function hostHealth(host: HostRecord): HostHealth {
       return { state: "ready", label: "Online" };
     case "connecting":
     case "reconnecting":
-      return { state: "working", label: "Connecting" };
+      return { state: "starting", label: "Connecting" };
     case "offline":
       return { state: "exited", label: "Offline" };
     case "version-skewed":
@@ -49,13 +49,13 @@ export function hostRowMeta(host: RemoteHost, projects: number): string {
 export interface HostFact {
   readonly label: string;
   readonly value: string;
-  /** The row's `(i)`. */
+  /** The row's one-line trust boundary, where its value alone hides one. */
   readonly hint?: string;
   /** The whole value, to copy, when `value` shows a short form of it (a host key). */
   readonly full?: string;
 }
 
-/** A host key fingerprint's short form, as the lab shows it: "q3Zt 9fK1 x0mV". */
+/** A host key fingerprint's short form: "q3Zt 9fK1 x0mV". */
 export function shortFingerprint(fingerprint: string): string {
   const body = fingerprint.replace(/^SHA256:/u, "");
   return (body.slice(0, 12).match(/.{1,4}/gu) ?? []).join(" ");
@@ -76,25 +76,16 @@ export function hostFacts(host: RemoteHost): HostFact[] {
     {
       label: "Connection",
       value: `SSH · ${host.target}`,
-      hint: "An SSH tunnel through this Mac’s own ssh: your keys, agent and ~/.ssh/config.",
     },
     host.agentsShareAccount
       ? {
           label: "Runs as",
           value: "Your account",
-          hint: `${agentsShareAccountLine(host.name)}: they can do whatever you can there. Installing with sudo gives them an account of their own.`,
+          hint: `${agentsShareAccountLine(host.name)}: they can do whatever you can there.`,
         }
-      : {
-          label: "Runs as",
-          value: "Its own account",
-          hint: "Volli host and its agents run as the volli account, apart from yours.",
-        },
+      : { label: "Runs as", value: "Its own account" },
     host.os === "macos"
-      ? {
-          label: "Starts",
-          value: `When you log in to ${host.name}`,
-          hint: "A Mac’s host is your login’s agent: after a restart it waits for you to log in.",
-        }
+      ? { label: "Starts", value: `When you log in to ${host.name}` }
       : { label: "Starts", value: "When it boots" },
   ];
   const [key] = host.hostKeys;
@@ -103,7 +94,6 @@ export function hostFacts(host: RemoteHost): HostFact[] {
     facts.push({
       label: "Host key",
       value: shortFingerprint(key),
-      hint: "The key you compared and trusted when you added it.",
       full: host.hostKeys.join("\n"),
     });
   }

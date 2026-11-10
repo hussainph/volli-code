@@ -93,8 +93,16 @@ export {
   type ShellToolDetails,
   type ShellToolId,
 } from "./pi/shell-tools";
+export { createWorkerWebExtractor, type WebExtractor } from "./web/extract-worker";
+export {
+  createWorkerSourceIconDecoder,
+  type SourceIconDecoder,
+  type SourceIconRaster,
+} from "./web/source-icon-decoder";
 export {
   createSafeWebFetch,
+  createSourceIconFetch,
+  type ReadSourceIconCandidate,
   WEB_FETCH_LIMITS,
   WEB_FETCH_RULE_IDS,
   WEB_FETCH_USER_AGENT,

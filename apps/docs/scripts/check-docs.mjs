@@ -87,6 +87,12 @@ function checkBuild() {
     const mirror = route === "/" ? "/index.md" : `${route.slice(0, -1)}.md`;
     const markdown = files.get(mirror);
     if (!markdown?.startsWith("# ")) problems.push(`${route}: missing Markdown mirror ${mirror}`);
+    if (markdown && /\bVC-\d+\b/.test(markdown)) {
+      problems.push(`${mirror}: internal ticket ID in published content`);
+    }
+    if (/\bVolli Cloud\b/.test(main) || (markdown && /\bVolli Cloud\b/.test(markdown))) {
+      problems.push(`${route}: experimental cloud guidance in published content`);
+    }
     if (route !== "/" && !indexed.includes(mirror)) problems.push(`${route}: absent from llms.txt`);
     if (markdown && /<(?:Agent(?:VerbEffects|ErrorRecovery|CapabilityChanges)|HarnessResume)\s*\/>/.test(markdown)) {
       problems.push(`${mirror}: unexpanded reference component`);
@@ -121,11 +127,23 @@ function checkBuild() {
   for (const [path, text] of [
     ["/reference/command-effects.md", "### `ticket.move`"],
     ["/reference/cli-errors.md", "### `APP_UNREACHABLE`"],
-    ["/reference/agent-capability-changes.md", "## VC-457"],
+    ["/reference/agent-capability-changes.md", "## Existing Sessions and new tools"],
     ["/reference/terminal-resume.md", "| Claude Code (`claude-code`) | `claude --resume <id>` |"],
   ]) {
     if (!files.get(path)?.includes(text))
       problems.push(`${path}: generated reference content missing`);
+  }
+  // Draft guides must stay out of every public representation, not only the sidebar.
+  for (const route of ["runners", "runners/linux", "runners/vps"]) {
+    if (files.has(`/${route}/index.html`) || files.has(`/${route}.md`)) {
+      problems.push(`Draft guide published: ${route}`);
+    }
+    for (const indexPath of ["/llms.txt", "/sitemap-0.xml"]) {
+      const content = readFileSync(join(dist, indexPath.slice(1)), "utf8");
+      if (content.includes(`${origin}/${route}/`) || content.includes(`${origin}/${route}.md`)) {
+        problems.push(`${indexPath}: draft guide indexed: ${route}`);
+      }
+    }
   }
   if (problems.length > 0) throw new Error(problems.join("\n"));
   console.log(

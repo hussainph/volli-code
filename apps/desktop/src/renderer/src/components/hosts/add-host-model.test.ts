@@ -70,6 +70,15 @@ const FOUND = {
 const all = (status: AddHostStepStatus) => STEPS.map((id) => ({ id, status }));
 
 describe("the checklist's rows", () => {
+  it("never spins a running step after the flow failed or was cancelled", () => {
+    expect(
+      stepRows(view({ status: "failed", steps: [{ id: "install", status: "running" }] }))[2]?.mark,
+    ).toBe("failed");
+    expect(
+      stepRows(view({ status: "cancelled", steps: [{ id: "install", status: "running" }] }))[2]
+        ?.mark,
+    ).toBe("pending");
+  });
   it("is five rows: uploading under Install, opening the connection under Pair", () => {
     const rows = stepRows(view());
     expect(rows.map((row) => [row.id, row.mark, row.label])).toEqual([
@@ -97,11 +106,11 @@ describe("the checklist's rows", () => {
       }),
     );
     expect(rows.map((row) => [row.mark, row.label])).toEqual([
-      ["active", "Connecting to hetzner-1…"],
+      ["active", "Connecting to hetzner-1"],
       ["pending", "Check the system"],
-      ["active", "Installing Volli host…"],
-      ["active", "Starting…"],
-      ["active", "Pairing…"],
+      ["active", "Installing Volli host"],
+      ["active", "Starting"],
+      ["active", "Pairing"],
     ]);
     // The check, running.
     expect(
@@ -113,7 +122,7 @@ describe("the checklist's rows", () => {
           ],
         }),
       )[1],
-    ).toMatchObject({ mark: "active", label: "Checking the system…" });
+    ).toMatchObject({ mark: "active", label: "Checking the system" });
     // Halfway, but stopped (a failure elsewhere): it waits.
     expect(
       stepRows(view({ status: "failed", steps: [{ id: "deliver", status: "done" }] }))[2],

@@ -98,7 +98,7 @@ The two-weight line is the brand's signature, shared with the film's supers.
 | `--hairline` | `rgb(245 242 238 / 0.1)`  | The only border.                                      |
 | `--ember`    | `#e8652a`                 | The primary button and the mark's card. Nowhere else. |
 
-Chapter canvases are the film's (`apps/desktop/src/flute/kit/world.tsx`).
+Chapter canvases use the release film's palette (`src/data/worlds.ts`).
 
 ## 7. Components — the whole vocabulary
 
