@@ -266,8 +266,7 @@ endpoint.
 
 ### The client and its protocol versions
 
-Since VC-470 the client is `@earendil-works/pi-mcp` (MIT), which replaced the
-official `@modelcontextprotocol/client` SDK. It opens with `initialize` at
+The client is `@earendil-works/pi-mcp` (MIT). It opens with `initialize` at
 protocol revision **`2025-11-25`** and accepts a server that answers
 `2025-06-18`, `2025-03-26` or `2024-11-05`.
 
@@ -289,21 +288,13 @@ Two things the SDK negotiated are gone, and both are worth naming:
   so not every such server can be identified by this legacy client.
 - **`2024-10-07`**, a pre-release revision no current server negotiates.
 
-The eventual upstream implementation must follow the spec's transport-specific
-compatibility rules: stdio probes `server/discover` and falls back to
-`initialize` on non-modern errors or a probe timeout; HTTP attempts a modern
-request and inspects a 400's JSON-RPC body before falling back. A recognized
-modern version error selects a mutually supported revision rather than falling
-back. These probes are **not implemented by pi-mcp yet**. Modern requests also
-carry version and capabilities in `_meta` (and required HTTP metadata headers),
-without protocol sessions; MRTR input requests and subscriptions replace the old
-server-initiated requests and GET stream. See the
-[revision changelog](https://modelcontextprotocol.io/specification/2026-07-28/changelog)
-and [compatibility rules](https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning).
-The structural-detection change does not change frozen tool surfaces, tool names,
-credential routing, per-request token reads, or these limits.
+Modern-only discovery is not implemented by the pinned client. The structural
+refusal detection does not change frozen tool names, credentials or per-call
+limits. Client negotiation and the detected refusal shape are defined in
+[client.ts](../packages/host-core/src/mcp/client.ts) and tested by the
+MCP client tests; a version named only in prose is not negotiation evidence.
 
-The bounds VC-8 set are kept: a 10-second limit on the handshake and on a
+Connection bounds: a 10-second limit on the handshake and on a
 catalog read, a 30-second limit on a tool call, and at most 64 pages of
 `tools/list` (a repeated cursor is refused). One message may be at most 8 MiB
 plus framing on either transport — VC-469's outer bound on a tool result — on

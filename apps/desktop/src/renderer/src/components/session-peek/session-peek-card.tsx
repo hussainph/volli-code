@@ -14,7 +14,7 @@
  *     questions, redirection, refusal and the submission latch that makes
  *     "exactly one of them happens" true (plan §1.3, §0.6).
  *   • NO UNDO, in any form (plan §3.2, amendment A4). Send is the composer's
- *     Send: one press, `Sending…`, then `Sent` for ~2s and the card closes; a
+ *     Send: one press, `Sending` with a spinner, then `Sent` for ~2s and the card closes; a
  *     failure keeps the words with a `Try again`.
  *   • A PEEK NEVER READS (D6). There is no read side effect anywhere in this
  *     file: it says `Unread` and leaves the dot alone. Only opening, replying,
@@ -25,17 +25,20 @@
  * `Summary unavailable` when neither is readable, and flags unreadable messages.
  */
 import * as React from "react";
-import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
-import { CaretLeftIcon } from "@phosphor-icons/react/dist/csr/CaretLeft";
-import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
-import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
-import { ClockCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ClockCounterClockwise";
-import { InfoIcon } from "@phosphor-icons/react/dist/csr/Info";
-import { PaperPlaneTiltIcon } from "@phosphor-icons/react/dist/csr/PaperPlaneTilt";
-import { QuestionIcon } from "@phosphor-icons/react/dist/csr/Question";
-import { TicketIcon } from "@phosphor-icons/react/dist/csr/Ticket";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import {
+  ExternalIcon,
+  ChevronLeftIcon,
+  ChatIcon,
+  SuccessIcon,
+  HistoryIcon,
+  InfoIcon,
+  DispatchIcon,
+  HelpIcon,
+  TicketIcon,
+  WarningIcon,
+  CloseIcon,
+} from "@renderer/components/ui/icon";
+
 import {
   displayTicketId,
   peekSummaryOf,
@@ -51,7 +54,7 @@ import { InteractionCard } from "@renderer/components/chat/interaction-ui";
 import { SessionGlyph } from "@renderer/components/sessions/session-glyph";
 import { ResolvedModelName } from "@renderer/components/models/resolved-model-name";
 import { Button } from "@renderer/components/ui/button";
-import { Skeleton } from "@renderer/components/ui/skeleton";
+import { Spinner } from "@renderer/components/ui/spinner";
 import { Textarea } from "@renderer/components/ui/textarea";
 import { relativeTime } from "@renderer/lib/relative-time";
 import { cn } from "@renderer/lib/utils";
@@ -75,13 +78,14 @@ export function peekFrameStyle(position: PeekPosition, width: number): React.CSS
 }
 
 export const PEEK_FRAME =
-  "flex flex-col overflow-hidden rounded-xl border border-border bg-popover text-ui shadow-overlay outline-none";
+  "material-floating flex flex-col overflow-hidden rounded-floating border border-border text-ui outline-none";
 /**
  * Every strip's inset is the card's measured 12px — `RAIL_PANEL_INSET`'s narrow
  * rung on a popover, off the spacing ladder by measurement and recorded in
  * `docs/DESIGN.md`: 8 halves the edge, 16 costs a line of the summary fold.
  */
-export const CARD_HEADER = "flex shrink-0 items-start gap-2 border-b border-border p-3";
+export const CARD_HEADER =
+  "flex shrink-0 items-start gap-2 p-3 relative after:absolute after:bottom-0 after:left-[10%] after:w-4/5 after:border-b after:border-border";
 /**
  * The header's text column: 2px down, so a 20px first line centres on the 24px
  * mark, and a 2px join that binds the title to its own meta line. Both measured
@@ -131,7 +135,7 @@ export function FolderStrip({ ticketLabel, onBack }: { ticketLabel: string; onBa
   return (
     <div
       data-peek-strip=""
-      className="flex shrink-0 items-center gap-1 border-b border-border bg-muted/30 px-3 py-1 text-muted-foreground"
+      className="flex shrink-0 items-center gap-1 relative after:absolute after:bottom-0 after:left-[10%] after:w-4/5 after:border-b after:border-border bg-muted/30 px-3 py-1 text-muted-foreground"
     >
       {onBack === undefined ? (
         <span className={cn("inline-flex h-5 items-center", crumb)}>
@@ -147,7 +151,7 @@ export function FolderStrip({ ticketLabel, onBack }: { ticketLabel: string; onBa
           className={crumb}
           onClick={onBack}
         >
-          <CaretLeftIcon />
+          <ChevronLeftIcon />
           <span className="font-mono text-label tracking-normal">{ticketLabel}</span>
         </Button>
       )}
@@ -205,11 +209,11 @@ function Identity({
         </span>
       </div>
       <Button size="icon-sm" variant="ghost" aria-label="Open session" onClick={onOpen}>
-        <ArrowSquareOutIcon />
+        <ExternalIcon />
       </Button>
       {pinned ? (
         <Button size="icon-sm" variant="ghost" aria-label="Close reply" onClick={onClose}>
-          <XIcon />
+          <CloseIcon />
         </Button>
       ) : null}
     </header>
@@ -255,7 +259,6 @@ function IdentityLine({ row }: { row: SessionPeekRow }) {
           <ResolvedModelName
             selection={row.model}
             providerLabel={row.providerLabel}
-            alwaysProvider
             trailing={started ?? undefined}
           />
         )}
@@ -276,17 +279,15 @@ function Summary({
   const summary = content === null ? null : (content.summary ?? peekSummaryOf(content.entries));
   const state = loading ? "loading" : summary === null || failed ? "unavailable" : "ready";
   return (
-    <CardBlock icon={<ClockCounterClockwiseIcon className="size-4 text-muted-foreground" />}>
+    <CardBlock icon={<HistoryIcon className="size-4 text-muted-foreground" />}>
       <div className="text-muted-foreground" data-summary-state={state} aria-busy={loading}>
         {state === "loading" ? (
-          <div role="status" aria-label="Reading the session" className="flex flex-col gap-2">
-            <Skeleton aria-hidden className="h-2 w-full" />
-            <Skeleton aria-hidden className="h-2 w-[90%]" />
-            <Skeleton aria-hidden className="h-2 w-[65%]" />
-          </div>
+          <div role="status" aria-label="Reading the session" className="flex flex-col gap-2"></div>
         ) : state === "unavailable" ? (
           <p>Summary unavailable</p>
         ) : (
+          // VC-473: the whole summary, unclamped; the card's body scroller is
+          // what bounds it, so its end stays reachable without a click.
           <p data-peek-summary="" className="whitespace-pre-wrap [overflow-wrap:anywhere]">
             {summary}
           </p>
@@ -458,7 +459,7 @@ export function SessionPeekCard({
           </CardBlock>
         ) : null}
         {question !== null && !pinned ? (
-          <CardBlock icon={<QuestionIcon className="size-4 text-attention" />}>
+          <CardBlock icon={<HelpIcon className="size-4 text-attention" />}>
             <p
               data-peek-question=""
               className="font-medium text-foreground [overflow-wrap:anywhere]"
@@ -518,14 +519,14 @@ export function SessionPeekCard({
       {send.kind === "sent" ? (
         <CardBlock
           role="status"
-          icon={<CheckCircleIcon className="size-4" />}
+          icon={<SuccessIcon className="size-4" />}
           className="shrink-0 border-t border-border py-2 text-positive"
         >
           Sent
         </CardBlock>
       ) : null}
       {transcript || canReply ? (
-        <footer className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-border bg-muted/30 px-3 py-2">
+        <footer className="flex shrink-0 flex-wrap items-center justify-between gap-2 relative before:absolute before:top-0 before:left-[10%] before:w-4/5 before:border-t before:border-border bg-muted/30 px-3 py-2">
           {transcript ? (
             <Button
               data-view-conversation=""
@@ -535,7 +536,7 @@ export function SessionPeekCard({
               className={GHOST_ON_LEAD}
               onClick={onViewConversation}
             >
-              <ChatCircleIcon />
+              <ChatIcon />
               View conversation
             </Button>
           ) : (
@@ -551,9 +552,9 @@ export function SessionPeekCard({
                 size="sm"
                 disabled={message.trim() === "" || send.kind === "sending" || send.kind === "sent"}
               >
-                <PaperPlaneTiltIcon />
+                {send.kind === "sending" ? <Spinner aria-label="Sending" /> : <DispatchIcon />}
                 {send.kind === "sending"
-                  ? "Sending…"
+                  ? "Sending"
                   : send.kind === "failed"
                     ? "Try again"
                     : "Send"}
@@ -561,7 +562,7 @@ export function SessionPeekCard({
             )
           ) : (
             <Button type="button" size="sm" variant="secondary" onClick={onPin}>
-              {question === null ? <PaperPlaneTiltIcon /> : <QuestionIcon />}
+              {question === null ? <DispatchIcon /> : <HelpIcon />}
               {question === null ? "Send" : "Answer"}
             </Button>
           )}

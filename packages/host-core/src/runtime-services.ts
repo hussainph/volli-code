@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import type Database from "better-sqlite3";
 import {
   createWorkerWebExtractor,
+  createWorkerSourceIconDecoder,
   piOwnedModelAccess,
   type PiModelAccess,
 } from "@volli/agent-runtime";
@@ -55,6 +56,8 @@ export function createHostRuntimeServices(
     webKeySealing?: WebKeySealingOptions;
     /** The bundled HTML extraction worker; absent, `web_fetch` parses on this thread. */
     webExtractWorker?: string | URL;
+    /** Absent means optional source icons stay unavailable. */
+    sourceIconWorker?: string | URL;
   },
 ) {
   const modelAccess = options.modelAccess ?? piOwnedModelAccess();
@@ -121,6 +124,10 @@ export function createHostRuntimeServices(
     options.webExtractWorker === undefined
       ? undefined
       : createWorkerWebExtractor(options.webExtractWorker);
-  return { modelAccess, decisions, mcp, webAccess, webExtract };
+  const sourceIconDecoder =
+    options.sourceIconWorker === undefined
+      ? undefined
+      : createWorkerSourceIconDecoder(options.sourceIconWorker);
+  return { modelAccess, decisions, mcp, webAccess, webExtract, sourceIconDecoder };
 }
 export type HostRuntimeServices = ReturnType<typeof createHostRuntimeServices>;

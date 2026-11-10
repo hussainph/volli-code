@@ -220,12 +220,12 @@ describe("checkMigrationHistory", () => {
     );
     db.prepare("DELETE FROM migration_history WHERE version = 60").run();
     db.prepare(
-      "INSERT INTO migration_history (version, fingerprint, applied_at, origin) VALUES (70, NULL, 1, 'applied')",
-    ).run();
+      "INSERT INTO migration_history (version, fingerprint, applied_at, origin) VALUES (?, NULL, 1, 'applied')",
+    ).run(SCHEMA_HEAD + 1);
     const report = checkMigrationHistory(db, SCHEMA_HEAD);
-    expect(report).toMatchObject({ diverged: [1], unrecorded: [60], ahead: [70] });
+    expect(report).toMatchObject({ diverged: [1], unrecorded: [60], ahead: [SCHEMA_HEAD + 1] });
     expect(describeMigrationHistory(report)).toContain(
-      `ran a different migration than this build at 1; has no record of 60; records 70 above its schema ${SCHEMA_HEAD}`,
+      `ran a different migration than this build at 1; has no record of 60; records ${SCHEMA_HEAD + 1} above its schema ${SCHEMA_HEAD}`,
     );
   });
 

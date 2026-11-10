@@ -1,48 +1,82 @@
 ---
 title: Create a manual Automation
-description: Save reusable instructions you can start by hand on a ticket.
+description: Save reusable instructions, choose a model and scope, and edit or draft an Automation with an agent.
 sidebar:
   label: Create
 ---
 
-Create a manual Automation when you want to reuse the same starting
-instructions without setting up an automatic Trigger. You can run it by hand
-whether or not **Automatic triggers** is on.
+Create a manual Automation to reuse starting instructions without setting up an
+automatic Trigger.
 
 ## Create an Automation
 
-1. Open **Automations** in the app navigation, then select **New Automation**.
+1. In your project's navigation, open **Automations**, then select **New automation**.
 2. In **Name**, enter a name you can recognize in a run menu.
 3. In **Instructions**, write the first message the new Session should receive.
-4. Leave **Ownership** set to **This project** so the Automation belongs to
-   this project.
-5. Leave **Trigger** set to **Only when I run it**.
-6. Leave **Runtime** set to **Project default** to use the project's Session
-   default when a Run starts.
-7. Select **Create automation**.
+4. Under **Trigger**, leave **None** selected.
+5. Under **Runtime → Model**, leave **Project default** selected to use the
+   project's Session defaults.
+6. In **Scope**, leave **This project** selected.
+7. Select **Create**.
+
+In **Instructions**, enter `/` to choose a Command or Skill, or `@` to reference
+a file. See [Skills and commands](/guides/skills-and-commands/).
+
+To make the Automation available in every project on this Mac, choose **All
+projects** in **Scope** before creating it. You cannot change a saved
+Automation's Scope. Scheduled Automations must belong to **This project**.
+
+The menu beside **New automation** offers **Morning review**, **Implement
+ticket**, and **Triage ticket** examples. Each opens a draft for you to review;
+it does not save or run anything. Check the instructions, referenced Skills or
+Commands, and any schedule's time zone before creating it.
 
 ## Set a Runtime
 
-**Project default** uses the model override in **Configure → Sessions → Chat**.
-If the project inherits, Volli uses **Settings → Models → Ticket Sessions** for
-a ticket Run or **Board chats** for a project Run, and chooses the model when the
-Run starts. See [Model defaults](/guides/models/#choose-a-default-model).
+**Project default** inherits the model override in **Configure → Sessions →
+Chat → Model**. Without an override, Volli uses **Settings → All projects → Models → Ticket
+Sessions** for a ticket Run or **Board chats** for a project Run.
 
-To pin a different choice, select a named default tier or an exact model under
-**Runtime**. If the model you select offers more than one reasoning level,
-choose one under **Reasoning effort**. Each Run's history records the model and
-reasoning that actually started its Session. Changing project defaults later
-affects future Runs, not the history of Runs that already started.
+If you enable **Pick models automatically** for the decision model, an
+Automation using **Project default** can choose among your configured default
+models based on its Instructions. If no automatic choice is available, the
+configured default stands. See [Model defaults](/guides/models/#choose-a-default-model).
 
-In **Instructions**, enter `/` to choose a Command or Skill, or `@` to reference
-a file. See [Skills and commands](/guides/skills-and-commands/). The Run sends
-these Instructions as the first message in a fresh Session; it does not continue
-an existing one.
+To pin a different choice, select a named tier under **Defaults** or an exact
+model in **Runtime → Model**. A tier resolves to its current model when each
+Run starts. If an exact model offers multiple reasoning levels, choose one
+under **Reasoning effort**. A named tier or exact model bypasses automatic
+model selection.
 
-The Automation appears in this project's Automations list. **Only when I run it**
-means it has no automatic start, and you can still run it while **Automatic
-triggers** is off. See [Run an Automation and read Runs](/guides/automations/run/)
-to choose a ticket and open the Session it creates.
+Run history records the model and reasoning that started the Session. Changing
+defaults later affects future Runs, not earlier Runs' history.
 
-To start work from a board-column move or a schedule, use [column
-Automations](/guides/automations/columns/) or [scheduled Automations](/guides/automations/schedules/).
+## Edit and restore drafts
+
+Select a saved Automation, then choose **Edit** beside **Trigger**,
+**Instructions**, or **Runtime**. Select **Save** in that section to apply its
+changes, or **Cancel** to restore its saved values. Select the Automation's
+name to rename it.
+
+Unsaved edits survive navigation. **Draft saved** marks unsaved work;
+**Draft restored** marks a draft reopened later. Select **Discard draft** to
+return to the saved record. For an unfinished new Automation, use **Resume
+draft** to return to it.
+
+In the saved Automation's **More actions** menu, **Duplicate** creates a copy.
+**Delete…** removes the Automation but keeps its past Runs and Sessions.
+
+## Draft instructions with an agent
+
+Write an idea in **Instructions**, then select **Draft in chat**. Volli opens a
+Board Session with your draft, Trigger, Runtime, and available Skill names. The
+agent proposes a name and instructions for you to review; this action does not
+save, arm, or run the Automation.
+
+Copy the proposed instructions back into the editor and save them. Your editor
+draft survives the trip to chat.
+
+To test the saved Automation, see [Run an Automation and read
+Runs](/guides/automations/run/). For automatic starts, use [column
+Automations](/guides/automations/columns/) or [scheduled
+Automations](/guides/automations/schedules/).

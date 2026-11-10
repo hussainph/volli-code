@@ -1,3 +1,4 @@
+import { isSharedPreferenceKey, mergePreferenceSnapshot } from "../preference-patch";
 import { pageClientEventSink } from "./client-event-sink";
 import { assertRendererAppStateKey } from "./app-state-key-guard";
 import { randomUUID } from "node:crypto";
@@ -182,7 +183,12 @@ import {
   type SessionListingSources,
   type SessionPeekContentPorts,
 } from "@volli/host-core/sessions";
-import { broadcastDataChanged, broadcastSessionActivity, windowEventBus } from "./broadcast";
+import {
+  broadcastAppStateChanged,
+  broadcastDataChanged,
+  broadcastSessionActivity,
+  windowEventBus,
+} from "./broadcast";
 import { deliverNotification } from "./notifications/runtime";
 import { exportDatabase } from "./menu";
 import {
@@ -714,13 +720,14 @@ export function registerDataIpcHandlers(
       }
       const project = updateProjectAuthorityPolicy(db, input.id, override, Date.now());
       if (!project) return { ok: false, error: "Unknown project" };
+      broadcastDataChanged();
       return { ok: true, project };
     },
 
     "volli:mcp-list": (input: McpProjectInput) => ({
       ok: true as const,
       servers: mcpSettings.list(input.projectId),
-      operations: listMcpOperations(db, input.projectId),
+      operations: listMcpOperations(db, mcpSettings.global ? null : input.projectId),
       access: mcpSettings.accessFor(input.projectId),
     }),
     "volli:mcp-test": (input: McpServerInput) => mcpSettings.test(input),
@@ -1134,7 +1141,10 @@ export function registerDataIpcHandlers(
       label: board("board.setLabelColor", input).label,
     }),
 
-    "volli:app-state-set": (key: string, value: string): AppStateSetResult => {
+    "volli:app-state-set": (key: string, value: string, ...rest): AppStateSetResult => {
+      const sender = rest.at(-1);
+      if (typeof sender !== "object" || sender === null) throw new Error("Missing app window.");
+      const baseValue = typeof rest[0] === "string" ? rest[0] : undefined;
       // The schema floor is the migration runner's alone (VC-602): a renderer
       // write could lock older builds out of this database, or let them in.
       if (key === MIN_READER_VERSION_KEY) {
@@ -1142,9 +1152,12 @@ export function registerDataIpcHandlers(
       }
       assertRendererAppStateKey(key);
       const previous = getAppState(db, key);
-      setAppState(db, key, value, Date.now());
+      const accepted = isSharedPreferenceKey(key)
+        ? mergePreferenceSnapshot(previous ?? undefined, baseValue, value)
+        : value;
+      setAppState(db, key, accepted, Date.now());
       try {
-        const acknowledged = options.onAppStateSet?.(key, value);
+        const acknowledged = options.onAppStateSet?.(key, accepted);
         if (acknowledged !== undefined && !acknowledged.ok) {
           restoreAppState(db, key, previous);
           return acknowledged;
@@ -1153,7 +1166,13 @@ export function registerDataIpcHandlers(
         restoreAppState(db, key, previous);
         return { ok: false, error: errorMessage(error) };
       }
-      return { ok: true };
+      // Only shared presentation snapshots use this generic write path.
+      // Theme/appearance and retention publish from their semantic handlers;
+      // drafts and workspace snapshots must not be serialized to peer windows.
+      if (isSharedPreferenceKey(key)) broadcastAppStateChanged(key, accepted, sender.id);
+      return isSharedPreferenceKey(key) && baseValue !== undefined
+        ? { ok: true, value: accepted }
+        : { ok: true };
     },
 
     "volli:worktree-remove": async (input: WorktreeRemoveInput): Promise<WorktreeRemoveResult> => {
@@ -1703,7 +1722,7 @@ export function registerDataIpcHandlers(
       return { ok: true, days: getRetentionTtlDays(db) };
     },
 
-    "volli:retention-ttl-set": (input: RetentionTtlSetInput): RetentionTtlResult => {
+    "volli:retention-ttl-set": (input: RetentionTtlSetInput, sender): RetentionTtlResult => {
       const stored = setRetentionTtlDays(db, input.days, Date.now());
       // Every eligibility date the cached scan proposed was measured against the
       // OLD window, so that proposal no longer describes this app's policy
@@ -1715,6 +1734,8 @@ export function registerDataIpcHandlers(
       // The TTL clock is GLOBAL — it moves every Done ticket's archive-readiness
       // at once, so this is untargeted: every retention surface must re-evaluate.
       broadcastDataChanged({ kind: "retention" });
+      // The board invalidation does not refresh a renderer's cached TTL.
+      broadcastAppStateChanged("volli:retention", JSON.stringify({ ttlDays: stored }), sender.id);
       return { ok: true, days: stored };
     },
 

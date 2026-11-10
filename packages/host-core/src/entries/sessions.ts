@@ -25,3 +25,4 @@ export {
 } from "../session-control";
 export { createSessionWakeBus } from "../session-control/session-wake";
 export { createSessionTokenRegistry } from "../session-tokens";
+export { serveUsageReportWorker } from "../session-control/usage-report-worker";

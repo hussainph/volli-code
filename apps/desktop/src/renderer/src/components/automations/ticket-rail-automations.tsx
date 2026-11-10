@@ -1,3 +1,4 @@
+import { Spinner } from "@renderer/components/ui/spinner";
 /**
  * The ticket rail's Automations block (VC-129): what this Ticket can be made
  * to run, and one press to run it, without leaving the current tab. VC-234
@@ -84,11 +85,13 @@
  *    hover title.
  */
 import * as React from "react";
-import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
-import { LightningSlashIcon } from "@phosphor-icons/react/dist/csr/LightningSlash";
-import { PlayIcon } from "@phosphor-icons/react/dist/csr/Play";
+import {
+  ExternalIcon,
+  ChevronDownIcon,
+  AutomationIcon,
+  AutomationOffIcon,
+  PlayIcon,
+} from "@renderer/components/ui/icon";
 
 import { displayTicketId, type ModelSelection, type Ticket } from "@volli/shared";
 
@@ -121,8 +124,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
-import { ListRow, ListRowSkeleton, type LoadingBarWidth } from "@renderer/components/ui/list-row";
-import { loadingRegionProps } from "@renderer/components/ui/loading-region";
+import { ListRow } from "@renderer/components/ui/list-row";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { cn } from "@renderer/lib/utils";
@@ -224,7 +226,7 @@ export function TicketAutomationsPanel({
         // header's own door is 20px above it, and a second copy of the same
         // door inside the empty state would be the same offer twice in one
         // glance.
-        <p className="px-2 text-label text-muted-foreground">No automations in this project yet.</p>
+        <p className="sr-only">No automations</p>
       ) : (
         <AutomationOfferList
           rows={rows}
@@ -332,47 +334,11 @@ function useRunLaunches(): RunLaunches {
   };
 }
 
-/**
- * The FIRST read's wait, at the list's own height.
- *
- * The rail re-reads on EVERY planning change — any board move, any label
- * edit, this Ticket's own status pill — and it used to draw that wait as one
- * line, "Reading automations…". A block that is three rows tall collapsing to
- * one line and re-expanding a moment later moves everything under it by a
- * hundred pixels, twice, for a read that almost always lands the same rows it
- * left.
- *
- * A re-read no longer reaches this at all: the rows it last read stay drawn
- * and the eyebrow carries the caveat, because a skeleton over retained data
- * hides the very thing the reader was looking at to say something they can
- * read in the heading instead. What is left here is the case with nothing to
- * retain — a first read, or an arrival on a project this block has not read —
- * drawn as two skeleton rows so the first landing moves as little as it can.
- * `ListRowSkeleton` is the roster's own placeholder, at the row's own inset
- * and height.
- */
-const UNREAD_WIDTHS: readonly LoadingBarWidth[] = ["w-2/5", "w-3/4", "w-1/2"];
-
+/** A re-read retains its last-good rows; first reads fabricate nothing. */
 const NO_ROWS: readonly RailAutomationRow[] = [];
 
 function UnreadRows() {
-  const rows = 2;
-  return (
-    <div
-      className="flex flex-col"
-      data-testid="ticket-rail-automations-unread"
-      {...loadingRegionProps("automations")}
-    >
-      {Array.from({ length: rows }, (_, index) => (
-        <ListRowSkeleton
-          key={index}
-          mark
-          primaryWidth={UNREAD_WIDTHS[index % UNREAD_WIDTHS.length] ?? "w-1/2"}
-          trailingWidth="w-12"
-        />
-      ))}
-    </div>
-  );
+  return null;
 }
 
 /**
@@ -400,7 +366,7 @@ function AutomationsPageDoor({ projectId }: { projectId: string }) {
           data-testid="ticket-rail-automations-page"
           onClick={() => useProjectUiStore.getState().setNav(projectId, "automations")}
         >
-          <ArrowSquareOutIcon weight="bold" />
+          <ExternalIcon strokeWidth={2.25} />
         </Button>
       </TooltipTrigger>
       <TooltipContent side="top">Open Automations</TooltipContent>
@@ -475,9 +441,8 @@ function AutomationOfferList({
  * One offered Automation: a row that INSPECTS, and an inspection that runs.
  *
  * THE BOLT SAYS THREE THINGS and the right edge says one (VC-406). The bolt
- * is `fill` on the armed row and outline on the rest — the weight pair the
- * app already uses to mark one item among its peers — and it wears a SLASH
- * (`LightningSlash`) on a record whose automatic triggers are off: nothing
+ * uses accent ink on the armed row and muted ink on the rest, always outline,
+ * and it wears a SLASH (`AutomationOffIcon`) on a record whose automatic triggers are off: nothing
  * fires this one by itself. The right edge then says only which column offers
  * the row, or `Armed` — or `Starting…` for as long as a launch this row
  * started is in flight, which is the one thing about the row that is happening
@@ -518,7 +483,7 @@ function AutomationOfferRow({
   const [open, setOpen] = React.useState(false);
   const switchedOff = !enabledIds.includes(row.automation.id);
   const qualifier = railRowQualifier(row, launch === "pending");
-  const Bolt = switchedOff ? LightningSlashIcon : LightningIcon;
+  const Bolt = switchedOff ? AutomationOffIcon : AutomationIcon;
   return (
     <li>
       <Popover open={open} onOpenChange={setOpen}>
@@ -542,13 +507,16 @@ function AutomationOfferRow({
               setOpen(true);
             }}
             leading={
-              <Bolt
-                weight={row.armed ? "fill" : undefined}
-                className={cn(
-                  "size-4 shrink-0",
-                  row.armed ? "text-primary" : "text-muted-foreground",
-                )}
-              />
+              launch === "pending" ? (
+                <Spinner aria-label="Starting" />
+              ) : (
+                <Bolt
+                  className={cn(
+                    "size-4 shrink-0",
+                    row.armed ? "text-primary" : "text-muted-foreground",
+                  )}
+                />
+              )
             }
             primary={
               <span className="min-w-24 flex-1 truncate text-ui">{row.automation.name}</span>
@@ -675,7 +643,7 @@ function AutomationInspectContent({
           push the Run out of the popover. */}
       <pre
         data-testid="ticket-rail-automation-instructions"
-        className="max-h-32 overflow-y-auto overscroll-contain rounded-row bg-muted/40 px-2 py-1.5 text-label whitespace-pre-wrap text-foreground/90"
+        className="max-h-32 overflow-y-auto overscroll-contain rounded-row bg-muted px-2 py-1.5 text-label whitespace-pre-wrap text-foreground"
       >
         {row.automation.instructions}
       </pre>
@@ -686,13 +654,16 @@ function AutomationInspectContent({
             <DropdownMenuTrigger asChild>
               <Button
                 size="sm"
-                variant="outline"
+                variant="inspector"
                 className={cn(RAIL_CONTROL, "min-w-0 gap-1.5 font-normal")}
                 aria-label="Run on model"
                 data-testid="ticket-rail-automation-model"
               >
                 <span className="min-w-0 truncate">{chosen?.label}</span>
-                <CaretDownIcon weight="bold" className="size-3 shrink-0 text-muted-foreground" />
+                <ChevronDownIcon
+                  strokeWidth={2.25}
+                  className="size-3 shrink-0 text-muted-foreground"
+                />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
@@ -735,7 +706,11 @@ function AutomationInspectContent({
           data-testid="ticket-rail-automation-run"
           onClick={() => onRun(chosen?.selection ?? null)}
         >
-          <PlayIcon weight="fill" className="size-3" />
+          {launch === "pending" ? (
+            <Spinner aria-label="Starting" />
+          ) : (
+            <PlayIcon className="size-3" />
+          )}
           {runLaunchLabel(launch)}
         </Button>
       </div>

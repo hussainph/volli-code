@@ -24,7 +24,7 @@ import {
   useCanWrite,
 } from "./use-hosts";
 
-const toast = vi.hoisted(() => Object.assign(vi.fn(), { success: vi.fn() }));
+const toast = vi.hoisted(() => Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }));
 vi.mock("sonner", () => ({ toast, Toaster: () => null }));
 
 const OFFLINE = { status: "offline", since: 0, retryAt: null } as const;

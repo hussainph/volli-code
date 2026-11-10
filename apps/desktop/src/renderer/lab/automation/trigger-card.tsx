@@ -9,10 +9,13 @@
  * not a dump of pills. The silhouette should feel related to the real board
  * the drag picker already polished.
  */
-import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { ClockIcon } from "@phosphor-icons/react/dist/csr/Clock";
-import { HandPointingIcon } from "@phosphor-icons/react/dist/csr/HandPointing";
+import {
+  AutomationIcon,
+  ChevronDownIcon,
+  ClockIcon,
+  PointerIcon,
+} from "@renderer/components/ui/icon";
+
 import { TICKET_STATUS_LABELS, TICKET_STATUSES, type TicketStatus } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
@@ -97,8 +100,8 @@ function KindPicker({
     trigger.kind === "schedule"
       ? ClockIcon
       : trigger.kind === "manual"
-        ? HandPointingIcon
-        : LightningIcon;
+        ? PointerIcon
+        : AutomationIcon;
 
   return (
     <DropdownMenu>
@@ -108,9 +111,9 @@ function KindPicker({
           size="xs"
           className="gap-1.5 border border-border active:scale-[0.97] transition-transform duration-100 ease-out"
         >
-          <Icon weight="fill" className="size-3.5 text-muted-foreground" />
+          <Icon className="size-3.5 text-muted-foreground" />
           {TRIGGER_KINDS[trigger.kind].label}
-          <CaretDownIcon weight="bold" className="size-3" />
+          <ChevronDownIcon strokeWidth={2.25} className="size-3" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-56">
@@ -148,11 +151,7 @@ export function TriggerCard({
   return (
     <div className="flex flex-col gap-2 rounded-xl border border-border bg-card px-3 py-3">
       <div className="flex items-center gap-2">
-        <LightningIcon
-          weight="fill"
-          aria-hidden
-          className="size-3.5 shrink-0 text-muted-foreground"
-        />
+        <AutomationIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
         <KindPicker trigger={trigger} onChange={onChange} />
         {offBoard ? (
           <span className="text-label text-muted-foreground">

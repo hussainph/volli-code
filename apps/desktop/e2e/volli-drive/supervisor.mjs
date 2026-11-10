@@ -36,6 +36,7 @@ import {
   HARNESS_VIOLATION_EXIT_CODE,
   RECORDED_SHELL_METHODS,
   SAFE_STORAGE_METHODS,
+  REPO,
   assertLaunchable,
   bundleCarriesGuard,
   createRegistry,
@@ -67,6 +68,7 @@ import {
 import { seedFixture } from "./lib/fixtures.mjs";
 import { serve } from "./lib/protocol.mjs";
 import { quitNativeWindow, reopenNativeWindow } from "./lib/native-window-lifecycle.mjs";
+import { settingsNative } from "./lib/settings-native.mjs";
 import {
   assertAcceptanceRunner,
   acceptanceScript,
@@ -74,6 +76,8 @@ import {
   prepareRemoteAcceptance,
 } from "./lib/remote-acceptance.mjs";
 
+import { guardedChatWindowBench } from "./lib/chat-window-bench.mjs";
+import { stopResult } from "./lib/stop-result.mjs";
 import { assertRestoreRestart } from "./lib/restore-acceptance.mjs";
 import { deploymentElectronEnv, recordedWorkosSignIn } from "./lib/deployment.mjs";
 
@@ -393,6 +397,19 @@ async function liveGuard() {
   );
 }
 
+/** Emulate only the browser media preference, never app stores or macOS settings. */
+async function configureMotionPreference(page) {
+  if (spec.reducedMotion === true) await page.emulateMedia({ reducedMotion: "reduce" });
+}
+
+/** Read the live renderer preference rather than trusting the requested option. */
+async function motionPreference() {
+  return {
+    forced: spec.reducedMotion === true,
+    matches: await mainPage.evaluate(() => matchMedia("(prefers-reduced-motion: reduce)").matches),
+  };
+}
+
 async function readGuardRecord() {
   try {
     return JSON.parse(await fs.readFile(join(L.harnessDir, "harness-guard.json"), "utf8"));
@@ -477,6 +494,13 @@ async function doctor() {
       problems.push(`${key.replace("Inside", "")} is outside the scratch tree`);
   }
   if (alive && !isolation.appSocketOwned) problems.push("the app socket is missing or not ours");
+  const reducedMotion = await motionPreference().catch((error) => ({
+    forced: spec.reducedMotion === true,
+    matches: null,
+    error: error.message,
+  }));
+  if (alive && reducedMotion.forced && reducedMotion.matches !== true)
+    problems.push("forced reduced motion is not active in the live renderer");
   return {
     id: spec.id,
     ok: problems.length === 0,
@@ -498,6 +522,7 @@ async function doctor() {
       violations: violated,
     },
     isolation,
+    reducedMotion,
     model: seeded?.model ?? null,
     windows: await windowsList(),
     memory: alive ? await memory().catch(() => null) : null,
@@ -654,11 +679,13 @@ async function boot() {
         : replies === undefined
           ? {}
           : {
-              // Tool-free refinements such as auto-title must not consume a scripted agent turn.
+              // Tool-free refinements such as auto-title must not consume a scripted
+              // agent turn. With --fake-tool-free-text they answer that fixed text;
+              // an absent spec field leaves undefined, so the default echo stands.
               script: (turn) =>
                 Array.isArray(turn.body.tools) && turn.body.tools.length > 0
                   ? replies.shift()
-                  : undefined,
+                  : spec.fakeToolFreeText,
             }),
       log: (record) => slog(`[fake-provider] ${JSON.stringify(record)}`),
     });
@@ -695,6 +722,33 @@ async function boot() {
           reasoningLevel: provider.reasoningLevel,
         }
       : null,
+    {
+      flushClientState: () =>
+        app.evaluate(async ({ BrowserWindow, ipcMain }) => {
+          const window = BrowserWindow.getAllWindows().find((candidate) =>
+            candidate.webContents.getURL().startsWith("volli-app:"),
+          );
+          if (!window) throw new Error("fixture window disappeared before flush");
+          const requestId = `drive-fixture-${Date.now()}`;
+          await new Promise((resolveFlush, rejectFlush) => {
+            const cleanup = () => {
+              clearTimeout(timer);
+              ipcMain.removeListener("volli:client-state-flushed", acked);
+            };
+            const acked = (event, id) => {
+              if (event.sender.id !== window.webContents.id || id !== requestId) return;
+              cleanup();
+              resolveFlush();
+            };
+            const timer = setTimeout(() => {
+              cleanup();
+              rejectFlush(new Error("fixture client-state flush timed out"));
+            }, 10000);
+            ipcMain.on("volli:client-state-flushed", acked);
+            window.webContents.send("volli:client-state-flush", requestId);
+          });
+        }),
+    },
   );
   mark("fixtureSeeded");
   await waitUntil("the app's agent socket", () => pathExists(L.appSocket), { timeout: 30_000 });
@@ -710,6 +764,7 @@ async function boot() {
     seeded,
     cloud: spec.cloud ?? null,
     deployment: spec.deployment ?? null,
+    reducedMotion: await motionPreference(),
     guard: { trapped: Object.keys(live.trapped), switches: record.chromiumSwitches },
   };
   await recordMembers();
@@ -783,6 +838,9 @@ async function startElectron(extraEnv) {
       `harness guard NOT proven active in the live process: ${JSON.stringify({ trapped: live.trapped, recorded: live.recorded, containment: record?.containment ?? null, recordPid: record?.pid, electronPid })}`,
     );
   }
+  await configureMotionPreference(page);
+  if (spec.reducedMotion === true && !(await motionPreference()).matches)
+    throw new Error("forced reduced motion is not active in the live renderer");
   return { page, live, record };
 }
 
@@ -920,6 +978,52 @@ async function handle(cmd, args) {
   armIdle();
   void recordMembers();
   switch (cmd) {
+    case "readme-demo": {
+      if (
+        spec.fixture !== "empty" ||
+        spec.model !== "fake" ||
+        !Array.isArray(spec.fakeScript) ||
+        spec.fakeScript.length === 0 ||
+        spec.cloud ||
+        spec.deployment ||
+        spec.remoteAcceptance
+      ) {
+        throw new Error("README capture requires an empty, local scripted fake-model instance");
+      }
+      const { page } = await pickWindow("main");
+      const { captureReadmeDemo } = await import("./readme-demo.mjs");
+      const result = await captureReadmeDemo({ page, app, layout: L });
+      transcript({ cmd: "readme-demo", ...result });
+      return result;
+    }
+    case "chat-window-bench": {
+      const report = await guardedChatWindowBench({
+        app,
+        spec,
+        layout: L,
+        repo: REPO,
+        settings: args.settings,
+        doctor,
+        expire: async (reason) => {
+          await finalize(reason);
+          process.exit(1);
+        },
+      });
+      const guardAfter = await doctor();
+      if (!guardAfter.ok) throw new Error(`bench guard failed: ${guardAfter.problems.join("; ")}`);
+      report.guardAfter = guardAfter;
+      writeFileSync(
+        join(L.evidence, "chat-window-bench.json"),
+        `${JSON.stringify(report, null, 2)}\n`,
+      );
+      transcript({
+        cmd,
+        arm: args.settings?.arm,
+        guard: report.guard.ok,
+        guardAfter: guardAfter.ok,
+      });
+      return report;
+    }
     case "acceptance-fixture":
       if (!remoteFixture) throw new Error("Not a remote acceptance instance");
       return { projectPath: remoteFixture.projectPath, originPath: remoteFixture.originPath };
@@ -948,6 +1052,11 @@ async function handle(cmd, args) {
       const ready = acceptanceWorkspaceReady(result.data);
       transcript({ cmd: "acceptance-workspace", ready });
       return { ready };
+    }
+    case "settings-native": {
+      const result = await settingsNative(app, args);
+      transcript({ cmd, action: args.action ?? "state", ...result });
+      return result;
     }
     case "native-quit": {
       // The real application's native Quit menu item, not the menu-bar test
@@ -1084,7 +1193,7 @@ async function handle(cmd, args) {
         keepScratch: Boolean(args.keepScratch),
       });
       setTimeout(() => process.exit(0), 100);
-      return { manifest: L.manifest, evidence: L.evidence, leftovers: manifest?.leftovers ?? [] };
+      return stopResult(manifest, { manifestPath: L.manifest, evidence: L.evidence });
     }
     default:
       throw new Error(`unknown command ${cmd}`);

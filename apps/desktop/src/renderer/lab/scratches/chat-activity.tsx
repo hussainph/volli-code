@@ -877,11 +877,9 @@ export default function ChatActivityScratch() {
         <ToolRow part={FAILED_RUN_ROW} />
       </Section>
 
-      {/* The fallback keeps its space and accessible status when live content
-          supplies the visible progress indicator. */}
-      <Section label="Turn · the mark that says the turn has not ended">
+      {/* The verb lives on the island; the transcript keeps only clearance. */}
+      <Section label="Turn · bead clearance (Simulated wiring)">
         <TurnRunningMark />
-        <TurnRunningMark progressVisible />
       </Section>
 
       <Section label="Bundle · everything between two things the agent said">

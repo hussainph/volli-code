@@ -39,15 +39,26 @@ describe("AttachmentThumbRow (VC-273)", () => {
     expect(html).toContain("spec.pdf · PDF");
   });
 
-  it("caps the row and counts the remainder", () => {
+  it("keeps one named card beside the queued message and names the overflow", () => {
     const html = renderToStaticMarkup(
       <AttachmentThumbRow attachments={[png(1), png(2), png(3), png(4), png(5)]} />,
     );
-    // Three drawn, two counted — the row shares one composer line with the
-    // message text and its three controls.
-    expect(html.match(/<img/g)).toHaveLength(3);
-    expect(html).toContain("+2");
+    expect(html.match(/<img/g)).toHaveLength(1);
+    expect(html).toContain("+4");
     expect(html).toContain("5 attachments");
+    expect(html).toContain("4 more attachments: shot-2.png, shot-3.png, shot-4.png, shot-5.png");
+    expect(html).toContain("PNG · 1.0 KB");
+    expect(html).toContain("Queued");
+    expect(html).toContain('title="shot-1.png"');
+    expect(html).toContain('class="sr-only">shot-1.png');
+  });
+
+  it("honors an explicit cap", () => {
+    const html = renderToStaticMarkup(
+      <AttachmentThumbRow attachments={[png(1), png(2), png(3), png(4)]} max={3} />,
+    );
+    expect(html.match(/<img/g)).toHaveLength(3);
+    expect(html).toContain("+1");
   });
 
   it("pluralizes its group label", () => {

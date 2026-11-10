@@ -1,26 +1,7 @@
-/**
- * What an empty chat opens on (VC-55).
- *
- * IT REPLACES A BARE MARK, and that reversal is deliberate rather than drift:
- * this surface used to draw one squircle and nothing else, on the argument that
- * an empty transcript has nothing to say. It has one thing to say, and it is
- * the thing no surface in the app was saying — WHERE this Session runs. A
- * Board Session works in the user's own main checkout; a Ticket Session works
- * in a throwaway worktree. That is "safe to let it run" against "it is editing
- * my working tree".
- *
- * It is answered by drawing rather than by labelling. The visual a scope can
- * offer is legible only at that scope ({@link resolveEmptyVisual}), so the SHAPE
- * carries the identity: Home can draw a field of many, a ticket draws one
- * thing's state, and many-against-one is read before anything is read. CLAUDE.md's
- * "let controls talk" is upheld, not broken — what replaces the mark is data
- * and controls, never prose.
- *
- * THE PICKER IS PART OF THE SIGNAL. Home offers three drawings and shows the
- * choice; a ticket offers one and shows no picker at all, because a menu with a
- * single item is a statement dressed as a question. The shortness is the point.
- */
+/** Quiet center: real practice history inline, with alternate charts one disclosure deeper. */
 import * as React from "react";
+import { ChevronDownIcon } from "@renderer/components/ui/icon";
+import { useSessionStartsStore } from "@renderer/stores/session-starts";
 
 import {
   EMPTY_VISUAL_LABELS,
@@ -30,9 +11,18 @@ import {
 } from "@renderer/components/chat/empty-visual";
 import { BoardVisual } from "@renderer/components/chat/empty/board-visual";
 import { StreakVisual } from "@renderer/components/chat/empty/streak-visual";
-import { WorkingCopyChips } from "@renderer/components/chat/empty/working-copy-chips";
 import { WorkingCopyVisual } from "@renderer/components/chat/empty/working-copy-visual";
-import { Segmented } from "@renderer/components/ui/segmented";
+import { Button } from "@renderer/components/ui/button";
+import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
+import { cn } from "@renderer/lib/utils";
+import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@renderer/components/ui/select";
 import { useUiStore } from "@renderer/stores/ui";
 import {
   useWorkingCopyStore,
@@ -58,6 +48,7 @@ export const ChatEmptyState = React.memo(function ChatEmptyState({
   const setVisual = useUiStore((state) => state.setHomeEmptyVisual);
   const visual = resolveEmptyVisual(scope, chosen);
   const offered = visualsForScope(scope);
+  const historyRead = useSessionStartsStore((state) => state.startedAt !== undefined);
 
   const workingCopy = useWorkingCopyStore(
     (state) => state.byScope[workingCopyKey(projectId, ticketId)],
@@ -76,20 +67,55 @@ export const ChatEmptyState = React.memo(function ChatEmptyState({
     void refreshWorkingCopy(projectId, ticketId);
   }, [projectId, ticketId, refreshWorkingCopy]);
 
+  const ready = historyRead && (scope === "project" || workingCopy?.status === "ready");
   return (
-    <div className="flex flex-col items-center gap-6">
-      {visual === "streak" ? <StreakVisual /> : null}
-      {visual === "board" ? <BoardVisual projectId={projectId} /> : null}
-      {visual === "venue" ? <WorkingCopyDrawing workingCopy={workingCopy} /> : null}
-      <WorkingCopyCaption workingCopy={workingCopy} />
-      {offered.length > 1 ? (
-        <Segmented
-          ariaLabel="Empty chat visual"
-          testId="empty-visual-picker"
-          value={visual}
-          options={offered.map((key) => ({ key, label: EMPTY_VISUAL_LABELS[key] }))}
-          onChange={setVisual}
-        />
+    <div
+      data-slot="chat-empty-state"
+      className={cn(EMPTY_PAGE, "chat-quiet-center max-w-full py-0")}
+    >
+      <StreakVisual />
+      {ready ? (
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button variant="ghost" size="sm" className="text-muted-foreground">
+              Session overview
+              <ChevronDownIcon strokeWidth={2.25} className="size-3" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent
+            className="flex w-auto max-w-[calc(100vw-2rem)] flex-col items-center gap-4 p-4"
+            side="top"
+          >
+            {offered.length > 1 ? (
+              <Select
+                value={visual}
+                onValueChange={(key) => {
+                  const next = offered.find((candidate) => candidate === key);
+                  if (next) setVisual(next);
+                }}
+              >
+                <SelectTrigger
+                  variant="inspector"
+                  aria-label="Empty chat visual"
+                  data-testid="empty-visual-picker"
+                  className="w-auto self-end"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {offered.map((key) => (
+                    <SelectItem key={key} value={key}>
+                      {EMPTY_VISUAL_LABELS[key]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : null}
+            {visual === "streak" ? <StreakVisual /> : null}
+            {visual === "board" ? <BoardVisual projectId={projectId} /> : null}
+            {visual === "venue" ? <WorkingCopyDrawing workingCopy={workingCopy} /> : null}
+          </PopoverContent>
+        </Popover>
       ) : null}
     </div>
   );
@@ -113,26 +139,5 @@ export const ChatEmptyState = React.memo(function ChatEmptyState({
 function WorkingCopyDrawing({ workingCopy }: { workingCopy: WorkingCopyEntry | undefined }) {
   if (workingCopy?.status === "ready")
     return <WorkingCopyVisual workingCopy={workingCopy.workingCopy} />;
-  // The waiting shape is the real one with nothing in it, rather than a height
-  // somebody measured once: an empty track and an invisible caption reserve
-  // exactly what the drawing will take, and stay right when it changes.
-  return (
-    <div
-      className="flex w-80 flex-col gap-3"
-      aria-hidden
-      data-working-copy-state={workingCopy?.status ?? "loading"}
-    >
-      <div className="h-8 rounded-control bg-muted" />
-      <div className="invisible flex items-baseline justify-center gap-3">
-        <span className="text-title">0</span>
-        <span className="text-ui">files changed</span>
-      </div>
-    </div>
-  );
-}
-
-/** The chips, once there is a working copy to name. */
-function WorkingCopyCaption({ workingCopy }: { workingCopy: WorkingCopyEntry | undefined }) {
-  if (workingCopy?.status !== "ready") return null;
-  return <WorkingCopyChips workingCopy={workingCopy.workingCopy} />;
+  return null;
 }

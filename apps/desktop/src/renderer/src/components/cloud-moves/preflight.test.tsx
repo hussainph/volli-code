@@ -32,7 +32,9 @@ vi.mock("@renderer/stores/project-ui", () => ({
 let root: Root;
 let container: HTMLElement;
 let api: ReturnType<typeof fakeApi>;
+const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
 beforeEach(() => {
+  HTMLElement.prototype.scrollIntoView = vi.fn();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   container = document.createElement("div");
   document.body.append(container);
@@ -41,6 +43,7 @@ beforeEach(() => {
   useCloudMovesStore.setState({ sheet: null });
 });
 afterEach(async () => {
+  HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
   await act(async () => root.unmount());
   container.remove();
   vi.clearAllMocks();
@@ -162,10 +165,16 @@ describe("Move pre-flight", () => {
     await mount(account);
     expect(button("Move").disabled).toBe(true);
     await act(async () => {
-      const select = container.querySelector("select")!;
-      select.value = "another";
-      select.dispatchEvent(new Event("change", { bubbles: true }));
+      container
+        .querySelector('[role="combobox"]')!
+        .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     });
+    const option = [...document.querySelectorAll('[role="option"]')].find(
+      (item) => item.textContent === "Another team",
+    )!;
+    await act(async () =>
+      option.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+    );
     expect(api.preflight).toHaveBeenCalledOnce();
     await act(async () => answer.resolve({ ...preflight, id: "the-dry-run" }));
     await click("Move");
@@ -187,9 +196,9 @@ describe("Move pre-flight", () => {
     ])
       await mount(blip);
     expect(api.preflight).toHaveBeenCalledOnce();
-    expect(container.textContent).toContain("Checking projects…");
+    expect(container.textContent).toContain("Checking projects");
     await act(async () => answer.resolve(preflight));
-    expect(container.textContent).not.toContain("Checking projects…");
+    expect(container.textContent).not.toContain("Checking projects");
     expect(button("Move").disabled).toBe(false);
   });
   it("shows the running dry run's project, phase and counts", async () => {

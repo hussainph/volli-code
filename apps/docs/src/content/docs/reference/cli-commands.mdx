@@ -1,6 +1,6 @@
 ---
 title: CLI commands
-description: Look up `volli` commands for tickets, worktrees, Sessions, models, and local installation checks.
+description: Look up `volli` commands for tickets, worktrees, Sessions, models, performance diagnostics, and local installation checks.
 ---
 
 import { Aside } from "@astrojs/starlight/components";
@@ -87,11 +87,16 @@ replies, compaction, utility work such as chat names, and decision-model calls.
 
 ```sh
 volli ticket list [--status <column>] [--priority low|medium|high]
-                  [--label <name>] [--project <name>] [--limit <n>]
+                  [--label <name>] [--project <name>] [--limit <n>] [--no-body]
 ```
 
 A project's tickets. Filters combine, so `--status doing --priority high`
 returns only tickets matching both.
+
+For a compact JSON result, use `--json --no-body`. Every field except the body
+stays. Use `ticket show VLT-12` to read one ticket's body. JSON includes bodies
+without the flag; the text table omits them either way. Older app builds may
+ignore `--no-body`, so use filters and `--limit` for large boards.
 
 ### volli ticket show
 
@@ -396,6 +401,56 @@ volli doctor [--fix] [--dry-run]
 Checks the live CLI, wrapper, harness, and shell integration. `--fix`
 regenerates the parts Volli owns and checks again. `--dry-run` only works with
 `--fix`; it previews the repair without changing anything.
+
+## Performance diagnostics
+
+These read-only commands inspect stalls recorded on this Mac. The default
+window is 24 hours. `--since` accepts a look-back such as `7d`, `24h`, or `90m`,
+or an RFC 3339 instant.
+
+### volli perf top
+
+```sh
+volli perf top [--since <when>] [--by operation|door|label|version|session]
+               [--process main|renderer] [--limit <n>]
+```
+
+Ranks groups by total stalled milliseconds. `--by` defaults to `operation`;
+`--limit` defaults to 10 and accepts at most 100. Output includes percentiles
+and rates per hour the app was observed running.
+
+### volli perf stalls
+
+```sh
+volli perf stalls [--since <when>] [--process main|renderer] [--door <door>]
+                  [--operation <op>] [--label <label>] [--version <build>]
+                  [--limit <n>]
+```
+
+Lists individual stalls, newest first, with their duration and any known
+operation, interaction label, Session, and build. `--limit` defaults to 20 and
+accepts at most 500. A `hint` names the last door call before an unattributed
+main-process stall; it is a lead to investigate, not a proven cause.
+
+### volli perf compare
+
+```sh
+volli perf compare --version <a> --version <b> [--since <when>]
+                   [--by operation|door|label|version|session]
+                   [--process main|renderer] [--limit <n>]
+```
+
+Pass `--version` exactly twice. Each value can match a version, a build label,
+or the version-plus-build printed by `perf top --by version`. A negative delta
+means build B stalled less per observed hour. `--by` defaults to `operation`;
+`--limit` defaults to 10 and accepts at most 100.
+
+Renderer diagnostics can include Long Animation Frame measurements for script,
+blocking, rendering, and style/layout work. Missing measurements mean unknown,
+not zero. These measurements overlap; do not add them together. GPU and
+compositor work is mostly outside these measurements.
+
+## Help and harness hooks
 
 ### volli help
 

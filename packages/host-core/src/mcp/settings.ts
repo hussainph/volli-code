@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import type Database from "better-sqlite3";
 import {
   MCP_CONNECTION_TIMEOUT_MS,
@@ -15,6 +16,11 @@ import {
 } from "@volli/shared";
 
 import {
+  deleteGlobalMcpServer,
+  globalMcpServerIds,
+  getGlobalMcpServer,
+  listGlobalMcpServers,
+  putGlobalMcpServer,
   deleteMcpServer,
   getMcpServer,
   getMcpServerEnabled,
@@ -179,6 +185,16 @@ export class McpSettingsService {
       });
   }
 
+  /** Cloud keeps its existing per-project configuration until that path migrates. */
+  get global(): boolean {
+    return this.#paths.kind !== "cloud";
+  }
+
+  /** Credential/process ids retained behind one deduplicated Settings row. */
+  identities(id: string): readonly string[] {
+    return this.global ? globalMcpServerIds(this.#db, id) : [id];
+  }
+
   /** The credential store this owner reads and writes, for the attachment hosts. */
   get credentials(): McpCredentialStore {
     return this.#store;
@@ -226,12 +242,16 @@ export class McpSettingsService {
     );
   }
 
-  list(projectId: string): readonly McpServerRecord[] {
-    return listMcpServers(this.#db, projectId);
+  /** Settings lists shared entries; an attachment lists only its frozen tool identities. */
+  list(projectId: string, tools?: readonly McpToolDefinition[]): readonly McpServerRecord[] {
+    if (tools !== undefined) return this.forSession(projectId, tools);
+    return this.#paths.kind === "cloud"
+      ? listMcpServers(this.#db, projectId)
+      : listGlobalMcpServers(this.#db);
   }
 
   /**
-   * Whether one server is configured in a project now, and enabled: what a
+   * Whether one server is configured now, and enabled: what a
    * running attachment checks before every call to it (VC-771). Remembered
    * until the project's MCP settings next change, which every write here
    * marks, so a call reads SQLite only after a person changed something.
@@ -241,23 +261,62 @@ export class McpSettingsService {
     const revision = this.surfaceRevision(projectId);
     const known = this.#configured.get(key);
     if (known !== undefined && known.revision === revision) return known.value;
-    const enabled = getMcpServerEnabled(this.#db, projectId, serverId);
+    const enabled =
+      this.#paths.kind === "cloud"
+        ? getMcpServerEnabled(this.#db, projectId, serverId)
+        : this.#get(serverId)?.enabled;
     const value = enabled === undefined ? undefined : { enabled };
     this.#configured.set(key, { revision, value });
     return value;
   }
 
   selectedTools(projectId: string): readonly McpToolDefinition[] {
-    return selectedMcpToolDefinitions(this.#db, projectId);
+    return this.#paths.kind === "cloud"
+      ? selectedMcpToolDefinitions(this.#db, projectId)
+      : this.list(projectId).flatMap((server) =>
+          server.enabled
+            ? server.catalog.flatMap((tool) =>
+                tool.enabled && tool.definition !== null ? [tool.definition] : [],
+              )
+            : [],
+        );
+  }
+
+  /** Resolve only the ids a Session already holds, including deduplicated legacy ids. */
+  forSession(projectId: string, tools: readonly McpToolDefinition[]): readonly McpServerRecord[] {
+    if (this.#paths.kind === "cloud") return this.list(projectId);
+    return [...new Set(tools.map((tool) => tool.serverId))].flatMap((id) => {
+      const server = this.#get(id);
+      return server ? [server] : [];
+    });
+  }
+
+  #disconnect(id: string): void {
+    for (const identity of this.identities(id)) disconnectMcpServer(identity);
+  }
+
+  #get(id: string): McpServerRecord | undefined {
+    return this.#paths.kind === "cloud"
+      ? getMcpServer(this.#db, id)
+      : getGlobalMcpServer(this.#db, id);
+  }
+
+  #put(server: McpServerRecord): McpServerRecord {
+    return this.#paths.kind === "cloud"
+      ? putMcpServer(this.#db, server)
+      : putGlobalMcpServer(this.#db, server);
   }
 
   /** In-process invalidation only; a relaunch starts with no cached Session checks. */
   surfaceRevision(projectId: string): number {
-    return this.#surfaceRevisions.get(projectId) ?? 0;
+    return this.#surfaceRevisions.get(this.#paths.kind === "cloud" ? projectId : "global") ?? 0;
   }
 
   #surfaceChanged(projectId: string): void {
-    this.#surfaceRevisions.set(projectId, this.surfaceRevision(projectId) + 1);
+    this.#surfaceRevisions.set(
+      this.#paths.kind === "cloud" ? projectId : "global",
+      this.surfaceRevision(projectId) + 1,
+    );
   }
 
   /**
@@ -276,10 +335,13 @@ export class McpSettingsService {
   }): Promise<McpCatalogResult> {
     const prepared = this.#prepare(input.projectId, input.server);
     if (!prepared.ok) return prepared;
-    // An id is a key into stored credentials: another project's server id
-    // must not connect with that project's tokens, or record against them.
-    const owner = getMcpServer(this.#db, prepared.server.id);
-    if (owner !== undefined && owner.projectId !== input.projectId) {
+    // Cloud retains project ownership; local servers are shared on this machine.
+    const owner = this.#get(prepared.server.id);
+    if (
+      owner !== undefined &&
+      this.#paths.kind === "cloud" &&
+      owner.projectId !== input.projectId
+    ) {
       return { ok: false, error: "That MCP server id belongs to another project." };
     }
     const signal = input.signal ?? new AbortController().signal;
@@ -336,8 +398,25 @@ export class McpSettingsService {
     if (frozen !== null) return frozen;
     const prepared = this.#prepare(input.projectId, input.server);
     if (!prepared.ok) return prepared;
-    const existing = getMcpServer(this.#db, prepared.server.id);
-    if (existing !== undefined && existing.projectId !== input.projectId) {
+    const existing = this.#get(prepared.server.id);
+    const storedBefore = JSON.stringify(existing);
+    const changedWhileConnecting = `${prepared.server.name} was changed while this was connecting, so nothing was written. Retry to use the current configuration.`;
+    if (
+      this.global &&
+      existing &&
+      !this.list(input.projectId).some((server) => server.id === existing.id)
+    ) {
+      return {
+        ok: false,
+        error:
+          "This imported server id is retained for existing Sessions. Edit its shared entry in Settings → MCP Servers.",
+      };
+    }
+    if (
+      existing !== undefined &&
+      this.#paths.kind === "cloud" &&
+      existing.projectId !== input.projectId
+    ) {
       return { ok: false, error: "That MCP server id belongs to another project." };
     }
     // Validated BEFORE anything is connected: a provenance note this build
@@ -373,12 +452,9 @@ export class McpSettingsService {
       // takes seconds; a person saving the same server in Settings meanwhile
       // (a header added, a secret stored) must not be written over by a save
       // that never saw it — nor have that secret pruned by `#keepSecrets`.
-      const latest = getMcpServer(this.#db, prepared.server.id);
-      if ((latest?.updatedAt ?? null) !== (existing?.updatedAt ?? null)) {
-        return {
-          ok: false,
-          error: `${prepared.server.name} was changed while this was connecting, so nothing was written. Retry to use the current configuration.`,
-        };
+      const latest = this.#get(prepared.server.id);
+      if (JSON.stringify(latest) !== storedBefore) {
+        return { ok: false, error: changedWhileConnecting };
       }
       const invalid = catalog.filter((tool) => tool.definition === null);
       if (existing !== undefined && invalid.length > 0) {
@@ -398,9 +474,9 @@ export class McpSettingsService {
       const frozenNow = this.#frozen(input.projectId);
       if (frozenNow !== null) return frozenNow;
       const now = this.#now();
-      const saved = putMcpServer(this.#db, {
+      const saved = this.#put({
         ...prepared.server,
-        projectId: input.projectId,
+        projectId: existing?.projectId ?? input.projectId,
         provenance: recorded,
         catalog,
         stale: false,
@@ -410,7 +486,7 @@ export class McpSettingsService {
         updatedAt: now,
       });
       this.#surfaceChanged(input.projectId);
-      if (!saved.enabled) disconnectMcpServer(saved.id);
+      if (!saved.enabled) this.#disconnect(saved.id);
       this.#keepSecrets(saved, pending);
       return { ok: true, server: saved };
     } catch (error) {
@@ -418,11 +494,18 @@ export class McpSettingsService {
       const blocked = mcpConnectionBlock(error);
       const routed = blocked === undefined ? {} : { blocked };
       if (existing === undefined) return { ok: false, error: errorText, ...routed };
+      // A failed discovery has no more right to overwrite a newer Settings
+      // edit than a successful one, including two writes in one millisecond.
+      if (JSON.stringify(this.#get(existing.id)) !== storedBefore)
+        return { ok: false, error: changedWhileConnecting };
       return {
         ok: false,
         error: errorText,
         ...routed,
-        server: markMcpServerRefreshFailure(this.#db, existing.id, errorText, this.#now()),
+        server:
+          this.#paths.kind === "cloud"
+            ? markMcpServerRefreshFailure(this.#db, existing.id, errorText, this.#now())
+            : this.#put({ ...existing, stale: true, error: errorText, updatedAt: this.#now() }),
       };
     }
   }
@@ -471,7 +554,7 @@ export class McpSettingsService {
     let server: McpServerDraft;
     let workspacePath: string;
     if (input.serverId !== undefined) {
-      const owned = this.#owned(input.projectId, input.serverId);
+      const owned = this.#owned(input.projectId, input.serverId, true);
       if (!owned.ok) return { ok: false, cancelled: false, message: owned.error };
       const prepared = this.#prepare(input.projectId, owned.server);
       if (!prepared.ok) return { ok: false, cancelled: false, message: prepared.error };
@@ -481,7 +564,7 @@ export class McpSettingsService {
         return {
           ok: false,
           cancelled: false,
-          message: `${prepared.server.name}'s address changed since this Session started, so Volli did not sign in to either one. Review it in Settings \u2192 Configure \u2192 MCP Servers.`,
+          message: `${prepared.server.name}'s address changed since this Session started, so Volli did not sign in to either one. Review it in Settings \u2192 MCP Servers.`,
         };
       }
       server = prepared.server;
@@ -493,8 +576,12 @@ export class McpSettingsService {
       if (frozen !== null) return { ok: false, cancelled: false, message: frozen.error };
       const prepared = this.#prepare(input.projectId, input.server);
       if (!prepared.ok) return { ok: false, cancelled: false, message: prepared.error };
-      const existing = getMcpServer(this.#db, prepared.server.id);
-      if (existing !== undefined && existing.projectId !== input.projectId) {
+      const existing = this.#get(prepared.server.id);
+      if (
+        existing !== undefined &&
+        this.#paths.kind === "cloud" &&
+        existing.projectId !== input.projectId
+      ) {
         return {
           ok: false,
           cancelled: false,
@@ -525,8 +612,12 @@ export class McpSettingsService {
   cancelSignIn(input: { projectId: string; serverId: string }): McpMutationResult {
     // A saved server is cancelled only from its own project; an editor
     // draft has no row yet, and its id is the pane's own.
-    const existing = getMcpServer(this.#db, input.serverId);
-    if (existing !== undefined && existing.projectId !== input.projectId) {
+    const existing = this.#get(input.serverId);
+    if (
+      existing !== undefined &&
+      this.#paths.kind === "cloud" &&
+      existing.projectId !== input.projectId
+    ) {
       return { ok: false, error: "MCP server not found." };
     }
     this.#oauth.cancelSignIn(input.serverId);
@@ -537,7 +628,7 @@ export class McpSettingsService {
   signOut(input: { projectId: string; serverId: string }): McpMutationResult {
     const existing = this.#owned(input.projectId, input.serverId);
     if (!existing.ok) return existing;
-    this.#oauth.signOut(input.serverId);
+    for (const id of this.identities(input.serverId)) this.#oauth.signOut(id);
     return { ok: true };
   }
 
@@ -547,7 +638,7 @@ export class McpSettingsService {
    * behind. A saved server's credentials are not touched by this.
    */
   discardDraft(input: { projectId: string; serverId: string }): McpMutationResult {
-    if (getMcpServer(this.#db, input.serverId) !== undefined) return { ok: true };
+    if (this.#get(input.serverId) !== undefined) return { ok: true };
     this.#store.delete(input.serverId);
     return { ok: true };
   }
@@ -573,7 +664,7 @@ export class McpSettingsService {
   setEnabled(input: { projectId: string; serverId: string; enabled: boolean }): McpServerResult {
     const existing = this.#owned(input.projectId, input.serverId);
     if (!existing.ok) return existing;
-    const server = putMcpServer(this.#db, {
+    const server = this.#put({
       ...existing.server,
       enabled: input.enabled,
       updatedAt: this.#now(),
@@ -581,7 +672,7 @@ export class McpSettingsService {
     this.#surfaceChanged(input.projectId);
     // Sessions that hold its tools keep them, but a server a person turned off
     // stops running for them too (VC-771).
-    if (!input.enabled) disconnectMcpServer(input.serverId);
+    if (!input.enabled) this.#disconnect(input.serverId);
     return { ok: true, server };
   }
 
@@ -599,7 +690,7 @@ export class McpSettingsService {
         return { ok: false, error: `Enabled MCP tool ${name} was not discovered.` };
       }
     }
-    const server = putMcpServer(this.#db, {
+    const server = this.#put({
       ...existing.server,
       catalog: existing.server.catalog.map((tool) =>
         Object.assign({}, tool, {
@@ -623,12 +714,18 @@ export class McpSettingsService {
   remove(input: { projectId: string; serverId: string }): McpMutationResult {
     const frozen = this.#frozen(input.projectId);
     if (frozen !== null) return frozen;
-    if (!deleteMcpServer(this.#db, input.projectId, input.serverId)) {
-      return { ok: false, error: "MCP server not found." };
-    }
+    const removed =
+      this.#paths.kind === "cloud"
+        ? deleteMcpServer(this.#db, input.projectId, input.serverId)
+          ? [input.serverId]
+          : []
+        : deleteGlobalMcpServer(this.#db, input.serverId);
+    if (removed.length === 0) return { ok: false, error: "MCP server not found." };
     this.#surfaceChanged(input.projectId);
-    this.#store.delete(input.serverId);
-    disconnectMcpServer(input.serverId);
+    for (const id of removed) {
+      this.#store.delete(id);
+      disconnectMcpServer(id);
+    }
     return { ok: true };
   }
 
@@ -639,6 +736,7 @@ export class McpSettingsService {
    * connections are its attachment's, and close when its binding is released.
    */
   disconnectProject(projectId: string): readonly string[] {
+    if (this.#paths.kind !== "cloud") return [];
     const serverIds = this.list(projectId).map(({ id }) => id);
     for (const serverId of serverIds) this.#oauth.cancelSignIn(serverId);
     return serverIds;
@@ -652,8 +750,9 @@ export class McpSettingsService {
    * removal did not commit) keeps its own.
    */
   forgetRemovedServers(serverIds: readonly string[]): void {
+    if (this.#paths.kind !== "cloud") return;
     for (const serverId of serverIds) {
-      const server = getMcpServer(this.#db, serverId);
+      const server = this.#get(serverId);
       if (server === undefined || !isProjectAttached(this.#db, server.projectId)) {
         this.#store.delete(serverId);
       }
@@ -664,7 +763,20 @@ export class McpSettingsService {
     projectId: string,
     candidate: unknown,
   ): { ok: true; server: McpServerDraft; workspacePath: string } | { ok: false; error: string } {
-    const workspacePath = this.#paths.projectPath(projectId);
+    // An empty context is the standalone machine pane, not a fabricated
+    // project. Existing relative commands retain their original working folder.
+    const candidateId =
+      candidate !== null && typeof candidate === "object"
+        ? (candidate as Record<string, unknown>)["id"]
+        : undefined;
+    const existing =
+      this.global && projectId === "" && typeof candidateId === "string"
+        ? this.#get(candidateId)
+        : undefined;
+    const workspacePath =
+      this.global && projectId === ""
+        ? ((existing ? this.#paths.projectPath(existing.projectId) : null) ?? homedir())
+        : this.#paths.projectPath(projectId);
     if (workspacePath === null)
       return {
         ok: false,
@@ -722,11 +834,13 @@ export class McpSettingsService {
     }
   }
 
-  #owned(projectId: string, serverId: string): McpServerResult {
+  #owned(projectId: string, serverId: string, retained = false): McpServerResult {
     const frozen = this.#frozen(projectId);
     if (frozen !== null) return frozen;
-    const server = getMcpServer(this.#db, serverId);
-    return server === undefined || server.projectId !== projectId
+    const server = this.#get(serverId);
+    return server === undefined ||
+      (this.#paths.kind === "cloud" && server.projectId !== projectId) ||
+      (this.global && !retained && !this.list(projectId).some((entry) => entry.id === serverId))
       ? { ok: false, error: "MCP server not found." }
       : { ok: true, server };
   }

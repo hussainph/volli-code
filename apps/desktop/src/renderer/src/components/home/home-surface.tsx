@@ -81,6 +81,7 @@ import { FileSaveGuardDialog } from "@renderer/components/files/save-guard-dialo
 import { useProjectFileWorkspace } from "@renderer/components/files/use-project-file-workspace";
 import { HOME_BOARD_TAB_ID, browserTabId, isHomeBoardTab, parseBrowserTabId } from "./home-tabs";
 import { openBrowserTab } from "@renderer/components/browser/open-browser-tab";
+import { hideBrowserTab, leaveHomeStrip } from "@renderer/components/browser/show-browser-tab";
 import { Board } from "@renderer/components/board/board";
 import { BoardBoundary } from "@renderer/components/board/board-boundary";
 import { ChatPlane } from "@renderer/components/chat/chat-plane";
@@ -115,7 +116,7 @@ import {
   topStripTabIds,
 } from "@renderer/components/split/split-tab-groups";
 import { TerminalPaneAnchor } from "@renderer/components/split/terminal-pane-anchor";
-import { RailResizeHandle } from "@renderer/components/ticket/rail-resize-handle";
+import { InspectorShell } from "@renderer/components/sidebar/inspector-shell";
 import { FileView } from "@renderer/components/ticket/file-view";
 import { TicketDetail } from "@renderer/components/ticket/ticket-detail";
 import { chatTabId, parseChatTabId } from "@renderer/components/ticket/ticket-chat-tab";
@@ -494,10 +495,8 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   // has none: a repository navigator or Session facts over the board would be
   // about an object that is not in front.
   const railCollapsed = useUiStore((state) => state.railCollapsed);
-  const railWidth = useUiStore((state) => state.railWidth);
   const toggleRailCollapsed = useUiStore((state) => state.toggleRailCollapsed);
-  const railVisible =
-    stripVisible && !boardTabActive && activeBrowserTab === undefined && !railCollapsed;
+  const railVisible = stripVisible && !boardTabActive && activeBrowserTab === undefined;
 
   // ── Starting a Session ───────────────────────────────────────────────────
   const startingTerminal = useSessionsStore((state) =>
@@ -517,10 +516,14 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   // nothing at all, silently.
   const createBrowser = React.useCallback(async () => {
     if (selectedId === null) return;
+    const destination =
+      useProjectUiStore.getState().byProject[selectedId]?.homeSplitView?.focusedPaneId;
     await openBrowserTab(browserApi, { projectId: selectedId }, (tabId) => {
+      if (destination !== undefined)
+        useProjectUiStore.getState().focusHomePane(selectedId, destination);
       releaseActive();
       // A new Browser Tab OPENS into the shown group's focused pane.
-      useProjectUiStore.getState().openHomeTab(selectedId, tabId);
+      useProjectUiStore.getState().openHomeTab(selectedId, tabId, destination);
     });
   }, [browserApi, releaseActive, selectedId]);
 
@@ -542,7 +545,6 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   const setHomeSplitRatio = useProjectUiStore((state) => state.setHomeSplitRatio);
   const closeHomePane = useProjectUiStore((state) => state.closeHomePane);
   const removeHomeTabFromSplit = useProjectUiStore((state) => state.removeHomeTabFromSplit);
-  const closeHomeBrowserTab = useProjectUiStore((state) => state.closeHomeBrowserTab);
   const setActiveSession = useSessionsStore((state) => state.setActiveSession);
 
   const handleSelect = React.useCallback(
@@ -595,7 +597,6 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   const closeBrowser = React.useCallback(
     (tabId: string) => {
       if (selectedId === null) return;
-      const id = browserTabId(tabId);
       void browserApi
         .close({ tabId })
         .then((result) => {
@@ -604,33 +605,26 @@ export function HomeSurface({ visible }: { visible: boolean }) {
             return;
           }
           useBrowserTabsStore.getState().remove(tabId);
-          // The split-view half of a close this store does not own — the same
-          // statement the chat and terminal branches make below. While split
-          // it lands the surface on the pane's own successor, so the MRU
-          // return inside closeHomeBrowserTab only ever runs unsplit.
-          removeHomeTabFromSplit(selectedId, id);
-          const sessions = useSessionsStore.getState().byOwner[selectedId]?.tabs ?? [];
-          const chats = useChatSessionsStore.getState().openTabs[selectedId] ?? [];
-          const projectUi = useProjectUiStore.getState().byProject[selectedId];
-          const files = projectUi?.projectFiles.tabs ?? [];
-          const browsers = stripBrowserTabs(
-            Object.values(useBrowserTabsStore.getState().byId).filter(
-              (tab) => tab.projectId === selectedId && tab.ticketId === null,
-            ),
-          );
-          closeHomeBrowserTab(selectedId, id, [
-            HOME_BOARD_TAB_ID,
-            ...sessions.map((tab) => tab.sessionId),
-            ...chats.map(chatTabId),
-            ...files.map((tab) => fileTabId(tab.relPath)),
-            ...browsers.map((tab) => browserTabId(tab.tabId)),
-          ]);
+          leaveHomeStrip(selectedId, tabId, orderedTabIds);
         })
         .catch((reason: unknown) => {
           toastError(`Could not close Browser Tab: ${errorMessage(reason)}`);
         });
     },
-    [browserApi, closeHomeBrowserTab, removeHomeTabFromSplit, selectedId],
+    [browserApi, selectedId, orderedTabIds],
+  );
+
+  /** Send a Session's Browser Tab back to its Activity Island (VC-1118). */
+  const hideBrowser = React.useCallback(
+    (tabId: string) => {
+      if (selectedId === null) return;
+      void hideBrowserTab(browserApi, tabId, () =>
+        leaveHomeStrip(selectedId, tabId, orderedTabIds),
+      ).catch((reason: unknown) => {
+        toastError(`Could not hide Browser Tab: ${errorMessage(reason)}`);
+      });
+    },
+    [browserApi, selectedId, orderedTabIds],
   );
 
   const handleClose = React.useCallback(
@@ -967,6 +961,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
             tabId={paneBrowserTab.tabId}
             visible={visible && !ticketTakesOver && visibleTabIds.includes(tabId)}
             onClose={() => closeBrowser(paneBrowserTab.tabId)}
+            onHide={() => hideBrowser(paneBrowserTab.tabId)}
           />
         ) : null}
         {relPath === null &&
@@ -980,14 +975,10 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   };
 
   const rail =
-    railVisible && selected !== null ? (
-      <aside
-        className="relative flex shrink-0 flex-col border-l border-sidebar-border bg-sidebar"
-        style={{ width: railWidth }}
-      >
-        <RailResizeHandle />
+    selected !== null ? (
+      <InspectorShell enabled={railVisible} owner="home">
         <HomeRail project={selected} activeTabId={activeTabId} />
-      </aside>
+      </InspectorShell>
     ) : null;
 
   return (
@@ -1033,6 +1024,8 @@ export function HomeSurface({ visible }: { visible: boolean }) {
               releaseActive();
               useProjectUiStore.getState().ungroupHome(selectedId, groupId);
             }}
+            onTakeOutTab={ungroupLocalTab}
+            onHideBrowser={hideBrowser}
             terminalTabs={terminalTabs}
             chatIds={openChatIds}
             fileTabs={fileTabs}
@@ -1103,6 +1096,8 @@ export function HomeSurface({ visible }: { visible: boolean }) {
                         projectId={selectedId}
                         tabIds={pane.tabIds}
                         activeTabId={pane.activeTabId ?? ""}
+                        onTakeOutTab={ungroupLocalTab}
+                        onHideBrowser={hideBrowser}
                         terminalTabs={terminalTabs}
                         chatIds={openChatIds}
                         fileTabs={fileTabs}
@@ -1213,6 +1208,8 @@ interface HomeStripProps {
   groups?: readonly TabGroup[];
   shownGroupId?: string | null;
   onUngroup?(groupId: string): void;
+  onTakeOutTab?(tabId: string): void;
+  onHideBrowser?(tabId: string): void;
   terminalTabs: readonly SessionTab[];
   chatIds: readonly string[];
   fileTabs: readonly FileWorkspaceTab[];
@@ -1256,6 +1253,8 @@ function HomeTabs({
     groups: strip.groups,
     shownGroupId: strip.shownGroupId,
     onUngroup: strip.onUngroup,
+    onTakeOutTab: strip.onTakeOutTab,
+    onHideBrowser: strip.onHideBrowser,
     activeTabId: strip.activeTabId,
     onReorder: strip.onReorder,
     onSelect: strip.onSelect,

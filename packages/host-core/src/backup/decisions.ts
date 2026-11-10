@@ -772,12 +772,24 @@ export const PROFILE_FILE_DECISIONS: readonly ProfileFileDecision[] = [
     decision: "exclude",
     reason: "Bounded capture cache for browser tabs; re-captured, never recovered.",
   },
+  {
+    area: "source-icons",
+    decision: "exclude",
+    reason:
+      "Machine-local network-derived icon cache keyed to account and Session authority; source URLs and transcript artifacts remain portable, and restored transcripts use the existing icon fallback.",
+  },
   // Other profile areas discovered from production host wiring, not a
   // second curated directory list in the test.
   {
     area: "hostd-cache",
     decision: "exclude",
     reason: "Downloaded host installation artifacts; fetched and verified again when needed.",
+  },
+  {
+    area: "settings-window-frame.json*",
+    decision: "exclude",
+    reason:
+      "Settings window placement and its atomic-write temporary belong to this machine's displays; a restored machine starts with its own usable frame.",
   },
   {
     area: "remote-hosts.json",

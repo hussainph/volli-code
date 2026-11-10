@@ -1,12 +1,12 @@
 import * as React from "react";
-import { DesktopIcon } from "@phosphor-icons/react/dist/csr/Desktop";
-import { CaretUpDownIcon } from "@phosphor-icons/react/dist/csr/CaretUpDown";
+import { ComputerIcon, UnfoldIcon } from "@renderer/components/ui/icon";
 
 import { cloudAccountScope, launchStore } from "@renderer/stores/launch";
 import { followCloudSession } from "@renderer/lib/cloud-client";
 import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
 import { appStateStorage, type SyncStateStorage } from "@renderer/lib/app-state-storage";
 import { cloudFailure } from "@renderer/stores/cloud-board/source";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import { Button } from "@renderer/components/ui/button";
 import {
   DropdownMenu,
@@ -157,7 +157,7 @@ export function RunnerPicker({
   const label =
     state.selected === null
       ? state.loading
-        ? "Loading runners…"
+        ? "Loading runners"
         : "Choose runner"
       : state.selected.status === "online"
         ? state.selected.name
@@ -174,9 +174,11 @@ export function RunnerPicker({
           aria-label={`Runner: ${label}`}
           title={state.error ?? (state.selected ? composerRunnerStatus(state.selected) : label)}
         >
-          <DesktopIcon />
-          <span className="max-w-32 truncate">{label}</span>
-          <CaretUpDownIcon className="size-3" weight="bold" />
+          <ComputerIcon />
+          <span className="max-w-32 truncate">
+            {state.loading ? <LoadingLabel>{label}</LoadingLabel> : label}
+          </span>
+          <UnfoldIcon className="size-3" strokeWidth={2.25} />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="max-w-80">
@@ -186,7 +188,7 @@ export function RunnerPicker({
           </p>
         ) : null}
         {state.runners.length === 0 && !state.error ? (
-          <p className="px-2 py-2 text-ui text-muted-foreground">No runners available</p>
+          <p className="sr-only">No runners available</p>
         ) : null}
         <DropdownMenuRadioGroup value={state.selected?.id ?? ""} onValueChange={state.choose}>
           {state.runners.map((runner) => (

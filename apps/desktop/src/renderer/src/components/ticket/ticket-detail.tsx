@@ -1,3 +1,4 @@
+import { TicketProperties } from "./ticket-properties";
 import * as React from "react";
 import { cloudSession, followCloudSession } from "@renderer/lib/cloud-client";
 import { BlobReadProvider } from "@renderer/components/attachments/blob-read";
@@ -42,7 +43,7 @@ import {
 } from "@renderer/components/sessions/session-create";
 import { FileView } from "@renderer/components/ticket/file-view";
 import { DiffView } from "@renderer/components/ticket/diff-view";
-import { RailResizeHandle } from "@renderer/components/ticket/rail-resize-handle";
+import { InspectorShell } from "@renderer/components/sidebar/inspector-shell";
 import { TICKET_BODY_TAB_ID } from "@renderer/components/ticket/ticket-body-tab";
 import {
   chatTabId,
@@ -73,6 +74,10 @@ import {
 import { TicketFilesPanel } from "@renderer/components/ticket/ticket-files-panel";
 import { TicketRail } from "@renderer/components/ticket/ticket-rail";
 import { openBrowserTab } from "@renderer/components/browser/open-browser-tab";
+import {
+  hideBrowserTab,
+  leaveTicketBrowserStrip,
+} from "@renderer/components/browser/show-browser-tab";
 import { PaneEmptyState } from "@renderer/components/split/pane-empty-state";
 import { SplitDnd } from "@renderer/components/split/split-dnd";
 import {
@@ -370,7 +375,6 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
   const durableChatIds = useChatSessionRecordIds(ticket.id);
   const railCollapsed = useUiStore((state) => state.railCollapsed);
   const toggleRailCollapsed = useUiStore((state) => state.toggleRailCollapsed);
-  const railWidth = useUiStore((state) => state.railWidth);
   const terminalFocusTarget = useUiStore((state) => state.terminalFocusTarget);
   const setTerminalFocusTarget = useUiStore((state) => state.setTerminalFocusTarget);
   const clearTerminalFocusUnlessTicket = useUiStore(
@@ -815,9 +819,11 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
    * or Browser Tab: while a group is shown it joins the focused pane's stack.
    */
   const openTab = React.useCallback(
-    (tabId: string) => {
+    (tabId: string, destination?: string) => {
+      if (destination !== undefined)
+        useProjectUiStore.getState().focusTicketPane(projectId, ticket.id, destination);
       releaseActive();
-      useProjectUiStore.getState().openTicketTab(projectId, ticket.id, tabId);
+      useProjectUiStore.getState().openTicketTab(projectId, ticket.id, tabId, destination);
     },
     [releaseActive, projectId, ticket.id],
   );
@@ -1152,7 +1158,7 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
       chat.openChatTab(ticket.id, relaunch.sessionId);
       return;
     }
-    recordResolvedTicketTab(projectId, ticket.id, BODY_TAB_ID);
+    recordResolvedTicketTab(projectId, ticket.id, BODY_TAB_ID, activeTabId);
   }, [
     activeTabId,
     activeTabIsRenderable,
@@ -1218,8 +1224,11 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
   // tab selection is stored here. Shared by the tab strip's "+" and the rail's
   // New-session button so both take the exact same path.
   const createSession = React.useCallback(async () => {
+    const destination =
+      useProjectUiStore.getState().byProject[projectId]?.ticketTabs[ticket.id]?.splitView
+        ?.focusedPaneId;
     const sessionId = await createTerminalSession(ticketScope(projectId, ticket.id));
-    if (sessionId !== null) openTab(sessionId);
+    if (sessionId !== null) openTab(sessionId, destination);
   }, [projectId, ticket.id, openTab]);
 
   // Opens the tab first and asks where to go second — see the note on Home's
@@ -1227,7 +1236,14 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
   // and threw from outside the try, so the press was swallowed whole.
   const createBrowser = React.useCallback(
     // The shared door refuses a remote project's (VC-711).
-    () => openBrowserTab(browserApi, { projectId, ticketId: ticket.id }, openTab),
+    () => {
+      const destination =
+        useProjectUiStore.getState().byProject[projectId]?.ticketTabs[ticket.id]?.splitView
+          ?.focusedPaneId;
+      return openBrowserTab(browserApi, { projectId, ticketId: ticket.id }, (tabId) =>
+        openTab(tabId, destination),
+      );
+    },
     [browserApi, projectId, openTab, ticket.id],
   );
 
@@ -1307,6 +1323,34 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
   useTicketEntryFocus(projectId, ticket.id);
 
   /**
+   * The workspace half of a Browser Tab leaving this strip once main has
+   * accepted it: closed, or hidden back to its Activity Island (VC-1118).
+   *
+   * The split-view half of a close this store does not own — the same
+   * statement the chat branch of `closeTab` makes. A tab of the group on
+   * screen hands over to its pane's successor; otherwise the reset to the Body
+   * applies only when the departing tab was the one in front.
+   */
+  function dropBrowserTab(tab: TicketTabDescriptor): void {
+    leaveTicketBrowserStrip(
+      projectId,
+      ticket.id,
+      tab.id,
+      tabs.map((candidate) => candidate.id),
+    );
+  }
+
+  /** Send a Session's Browser Tab back to its Activity Island (VC-1118). */
+  function hideBrowser(tab: TicketTabDescriptor): void {
+    if (tab.browserTabId === undefined) return;
+    void hideBrowserTab(browserApi, tab.browserTabId, () => dropBrowserTab(tab)).catch(
+      (reason: unknown) => {
+        toastError(`Could not hide Browser Tab: ${errorMessage(reason)}`);
+      },
+    );
+  }
+
+  /**
    * Close one tab, from whichever pane's strip raised it.
    *
    * The split view's half of a close is only owed by the two kinds this store
@@ -1335,15 +1379,7 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
             return;
           }
           useBrowserTabsStore.getState().remove(opaqueId);
-          // The split-view half of a close this store does not own — the same
-          // statement the chat branch below makes. A tab of the group on screen
-          // hands over to its pane's successor; otherwise the reset to the Body
-          // applies only when the closed tab was the one in front.
-          removeTicketTabFromSplit(projectId, ticket.id, tab.id);
-          const active =
-            useProjectUiStore.getState().byProject[projectId]?.ticketTabs?.[ticket.id]?.active ??
-            BODY_TAB_ID;
-          if (active === tab.id) setActiveTab(BODY_TAB_ID);
+          dropBrowserTab(tab);
         })
         .catch((reason: unknown) => {
           toastError(`Could not close Browser Tab: ${errorMessage(reason)}`);
@@ -1501,8 +1537,10 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
         )}
       >
         {tab.kind === "body" && (
-          <ContentColumn>
+          <ContentColumn measure="document">
+            <div className="mb-2 font-mono text-label text-primary-text">{displayId}</div>
             <TicketTitle ticket={ticket} />
+            <TicketProperties projectId={projectId} ticket={ticket} presentation="summary" />
             {/* "Running on hetzner-1" (VC-576): only for a host other than
                 This Mac, and only with the `cloud` flag on. */}
             <RunningOnLabel projectId={projectId} className="mt-2" />
@@ -1594,6 +1632,7 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
               tabId={paneBrowserTab.tabId}
               visible={split.panes.some((visiblePane) => visiblePane.activeTabId === tab.id)}
               onClose={() => closeTab(tab)}
+              onHide={() => hideBrowser(tab)}
             />
           ) : null}
           {tab.kind === "session" ? (
@@ -1646,6 +1685,8 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
               onSelectTab={setActiveTab}
               onReorderTabs={(movedId, ids) => reorderInPane(SPLIT_VIEW_ROOT_PANE_ID, movedId, ids)}
               onPinFileTab={(relPath) => pinTicketFile(projectId, ticket.id, relPath)}
+              onTakeOutTab={ungroupLocalTab}
+              onHideBrowser={hideBrowser}
               onCloseTab={closeTab}
               onRenameSessionTab={renameSessionTab}
               creating={creating || creatingChat}
@@ -1683,6 +1724,8 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
                     onSelectTab={setActiveTab}
                     onReorderTabs={(movedId, ids) => reorderInPane(pane.id, movedId, ids)}
                     onPinFileTab={(relPath) => pinTicketFile(projectId, ticket.id, relPath)}
+                    onTakeOutTab={ungroupLocalTab}
+                    onHideBrowser={hideBrowser}
                     onCloseTab={closeTab}
                     onRenameSessionTab={renameSessionTab}
                     onTakeOut={
@@ -1701,60 +1744,49 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
               }
             />
           )}
-          {railCollapsed || terminalFocused ? null : (
-            // Resizable details rail: a grip on its inner (left) edge widens it
-            // leftward, mirroring the left sidebar's outer-edge handle. `relative`
-            // makes the aside the grip's positioning context; the width persists
-            // app-wide via the ui store. The rail draws its own header and pages
-            // (TicketRail) — this only sizes and frames the column.
-            <aside
-              className="relative flex shrink-0 flex-col border-l border-sidebar-border bg-sidebar"
-              style={{ width: railWidth }}
-            >
-              <RailResizeHandle />
-              <TicketRail
-                projectId={projectId}
-                ticket={ticket}
-                creating={creating || creatingChat}
-                onNewSession={() => void createSession()}
-                onNewChat={() => void createChat()}
-                onNewBrowser={() => void createBrowser()}
-                onActivateSession={setActiveTab}
-                onActivateChat={activateChat}
-                activeTabId={activeTabId}
-                changesContent={
-                  <TicketChangesPanel
-                    ticket={ticket}
-                    activeTabId={activeTabId}
-                    recency={recencyOwner.recency}
-                    onOpenDiff={openDiff}
-                  />
-                }
-                filesContent={
-                  <TicketFilesPanel
-                    ticket={ticket}
-                    {...(launchStore() === "cloud"
-                      ? { attachments: materializedAttachments }
-                      : { handle: ticketAttachments })}
-                    onPreviewFile={previewFileFromRail}
-                    onPinFile={pinFileFromRail}
-                    onOpenCreatedFile={openCreatedFileFromRail}
-                    onRenameFile={renameFileFromRail}
-                  />
-                }
-                searchContent={
-                  // Scoped to THIS ticket, so the search runs in its worktree
-                  // through the same seam a read does — and a match opens in
-                  // the same preview slot a navigator row opens (VC-193).
-                  <FileSearchPanel
-                    scope={{ kind: "ticket", projectId, ticketId: ticket.id }}
-                    root={ticket.branch ?? ticket.baseBranch ?? "No branch yet"}
-                    onOpenMatch={previewFileFromRail}
-                  />
-                }
-              />
-            </aside>
-          )}
+          <InspectorShell enabled={!terminalFocused} owner="ticket">
+            <TicketRail
+              projectId={projectId}
+              ticket={ticket}
+              creating={creating || creatingChat}
+              onNewSession={() => void createSession()}
+              onNewChat={() => void createChat()}
+              onNewBrowser={() => void createBrowser()}
+              onActivateSession={setActiveTab}
+              onActivateChat={activateChat}
+              activeTabId={activeTabId}
+              changesContent={
+                <TicketChangesPanel
+                  ticket={ticket}
+                  activeTabId={activeTabId}
+                  recency={recencyOwner.recency}
+                  onOpenDiff={openDiff}
+                />
+              }
+              filesContent={
+                <TicketFilesPanel
+                  ticket={ticket}
+                  {...(launchStore() === "cloud"
+                    ? { attachments: materializedAttachments }
+                    : { handle: ticketAttachments })}
+                  onPreviewFile={previewFileFromRail}
+                  onPinFile={pinFileFromRail}
+                  onOpenCreatedFile={openCreatedFileFromRail}
+                  onRenameFile={renameFileFromRail}
+                />
+              }
+              searchContent={
+                // Scoped to THIS ticket, so the search runs in its worktree
+                // through the same seam a read does — and a match opens in
+                // the same preview slot a navigator row opens (VC-193).
+                <FileSearchPanel
+                  scope={{ kind: "ticket", projectId, ticketId: ticket.id }}
+                  root={ticket.branch ?? ticket.baseBranch ?? "No branch yet"}
+                  onOpenMatch={previewFileFromRail}
+                />
+              }
+            />
+          </InspectorShell>
         </div>
       </div>
       <ConfirmCloseDialog

@@ -12,7 +12,11 @@ import {
   type HostedSessionRuntime,
 } from "@volli/session-engine";
 import { sessionHostNoticeMetadata } from "@volli/shared";
-import { readHostNotice } from "@volli/session-presentation";
+import {
+  chatSessionFrame,
+  readHostNotice,
+  transcriptMessageOrigins,
+} from "@volli/session-presentation";
 import { scriptedProvider } from "../../../../../packages/agent-runtime/test-fixtures/scripted-provider";
 import {
   createSqliteSessionLedger,
@@ -182,6 +186,22 @@ async function reconstruct(
   return launch(handle, paths.directory, options);
 }
 
+function hostNotices(snapshot: Awaited<ReturnType<HostedSessionRuntime["snapshot"]>>) {
+  // Match the renderer's real codec/provenance path: metadata alone no longer
+  // establishes authorship. The reconstructed command must retain its producer.
+  const frames = snapshot.frames.map((frame) => {
+    const parsed = chatSessionFrame(frame);
+    if (parsed === null) throw new Error("Invalid reconstructed Session frame");
+    return parsed;
+  });
+  const origins = transcriptMessageOrigins(frames);
+  return snapshot.transcript.filter(({ message }) => {
+    if (message.role !== "user" || message.metadata === undefined) return false;
+    expect(origins.get(message.id)).toEqual({ kind: "volli", reason: "shell-notice" });
+    return readHostNotice(message, origins.get(message.id)) !== null;
+  });
+}
+
 describe("SQLite host notice outbox", () => {
   it("keeps the first complete payload, commits it independently of a failed Session transaction, and retains terminal ids", async () => {
     const paths = setup();
@@ -311,7 +331,7 @@ describe("SQLite host notice outbox", () => {
       expect(second.reports).toEqual([]);
       expect(second.script.requests).toHaveLength(1);
       const snapshot = await second.runtime.snapshot({ sessionId });
-      const notices = snapshot.transcript.filter(({ message }) => readHostNotice(message) !== null);
+      const notices = hostNotices(snapshot);
       expect(notices).toHaveLength(1);
       expect(notices[0]!.message.metadata).toEqual(value.metadata);
       expect(notices[0]!.message.parts).toEqual([{ type: "text", text: value.text }]);
@@ -385,9 +405,7 @@ describe("SQLite host notice outbox", () => {
       expect(await second.outbox.pending()).toEqual([]);
       expect(second.reports).toEqual([]);
       const snapshot = await second.runtime.snapshot({ sessionId });
-      const submitted = snapshot.transcript.filter(
-        ({ message }) => readHostNotice(message) !== null,
-      );
+      const submitted = hostNotices(snapshot);
       expect(submitted).toHaveLength(1);
       expect(submitted[0]!.message.parts).toEqual([{ type: "text", text: value.text }]);
       expect(second.script.requests).toHaveLength(1);
@@ -417,9 +435,7 @@ describe("SQLite host notice outbox", () => {
     expect(await second.outbox.pending()).toEqual([]);
     expect(second.script.requests).toEqual([]);
     const snapshot = await second.runtime.snapshot({ sessionId });
-    expect(
-      snapshot.transcript.filter(({ message }) => readHostNotice(message) !== null),
-    ).toHaveLength(1);
+    expect(hostNotices(snapshot)).toHaveLength(1);
   });
 
   it("a direct Engine stop drops a parked reader immediately, without waiting for another runtime frame", async () => {

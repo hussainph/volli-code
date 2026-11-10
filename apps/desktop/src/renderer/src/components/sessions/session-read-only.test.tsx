@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { LOCAL_LAUNCH } from "@volli/shared";
 import { adoptLaunch } from "@renderer/stores/launch";
@@ -96,8 +97,8 @@ function control(projectId: string, onNewChat = vi.fn()) {
 }
 
 function newChat(container: HTMLElement): HTMLButtonElement {
-  const button = container.querySelector<HTMLButtonElement>('[aria-label="New chat"]');
-  if (button === null) throw new Error("Missing New chat button");
+  const button = container.querySelector<HTMLButtonElement>('[aria-label="Open a tab"]');
+  if (button === null) throw new Error("Missing tab chooser");
   return button;
 }
 
@@ -109,7 +110,13 @@ describe("NewSessionControl host read-only", () => {
     const container = await world.render(control("local", onNewChat));
     expect(newChat(container).disabled).toBe(false);
     expect(container.querySelector('[aria-label="Not available yet in cloud"]')).toBeNull();
-    newChat(container).click();
+    // A press opens the chooser; Chat is still the only cloud offer.
+    await act(async () =>
+      newChat(container).dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true })),
+    );
+    const chat = document.querySelector<HTMLElement>('[role="menuitem"]');
+    expect(chat?.textContent).toContain("Chat");
+    await act(async () => chat?.click());
     expect(onNewChat).toHaveBeenCalledOnce();
     // The control follows the cloud link. The semantic start also checks the
     // actual client at the press; this fixture has none, so it opens no draft

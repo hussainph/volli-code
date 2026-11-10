@@ -24,22 +24,56 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 const button = (text: string) => {
-  const result = [...document.querySelectorAll("button")].find((item) => item.textContent === text);
+  const result = [...document.querySelectorAll("button")].find(
+    (item) => item.textContent === text || item.getAttribute("aria-label") === text,
+  );
   if (!result) throw new Error(`Missing button: ${text}`);
   return result;
 };
 const click = async (text: string) => {
   await act(async () => button(text).click());
 };
+const command = () => document.querySelector("pre")!.textContent!;
+/** What the sheet's notices announced, in order. */
+const announced = () =>
+  [...document.querySelectorAll("[aria-live]")].map((node) => node.textContent ?? "");
 const type = async (label: string, text: string) => {
-  const input = [...document.querySelectorAll("label")]
-    .find((item) => item.textContent?.includes(label))!
-    .querySelector("input")!;
+  const fieldLabel = [...document.querySelectorAll("label")].find((item) =>
+    item.textContent?.includes(label),
+  )!;
+  const input = fieldLabel.querySelector("input") ?? document.getElementById(fieldLabel.htmlFor)!;
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, text);
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
 };
+/** Opens the select labelled `label` from the keyboard, picks `option`, and returns every option's text. */
+async function pick(label: string, option: string): Promise<string[]> {
+  const labelled = [...document.querySelectorAll("label")].find(
+    (node) => node.textContent === label,
+  )!;
+  const trigger = document.getElementById(labelled.htmlFor)!;
+  expect(trigger.getAttribute("role")).toBe("combobox");
+  // jsdom has no layout; Radix scrolls the highlighted option into view.
+  const scrollIntoView = HTMLElement.prototype.scrollIntoView;
+  HTMLElement.prototype.scrollIntoView = () => {};
+  try {
+    trigger.focus();
+    await act(async () => {
+      trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    });
+    const options = [...document.querySelectorAll<HTMLElement>('[role="option"]')];
+    const chosen = options.find((node) => node.textContent === option);
+    if (chosen === undefined) throw new Error(`Missing option: ${option}`);
+    await act(async () => chosen.focus());
+    await act(async () => {
+      chosen.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    return options.map((node) => node.textContent ?? "");
+  } finally {
+    HTMLElement.prototype.scrollIntoView = scrollIntoView;
+  }
+}
 function fixture() {
   const grant = {
     installTokenId: "grant-id",
@@ -96,7 +130,7 @@ describe("Runner setup sheets", () => {
     await type("Runner name", "hetzner-1");
     await click("Create install command");
     expect(f.setup.create).toHaveBeenCalledWith("hetzner-1");
-    expect(document.body.textContent).toContain("Waiting for the box…");
+    expect(document.body.textContent).toContain("Waiting for the box");
     await click("Copy command");
     expect(copy.mock.calls[0]![0]).toContain("/v0.3.0/volli-runner-install.sh");
     expect(document.body.textContent).toContain("Copied");
@@ -112,11 +146,25 @@ describe("Runner setup sheets", () => {
       expiresAt: f.grant.expiresAt,
       runner: { id: "runner", name: "hetzner-1", status: "online" },
     });
-    expect(document.body.textContent).toContain("hetzner-1 is online. Pick it in the composer.");
+    expect(document.body.textContent).toContain("hetzner-1 is online");
+    expect(document.body.textContent).not.toContain("Pick it in the composer");
     await click("Done");
     expect(f.props.onClose).toHaveBeenCalledOnce();
     act(() => root.render(null));
     expect(f.stop).toHaveBeenCalledOnce();
+  });
+
+  it("switches the install command between the user, environment and system variants", async () => {
+    const f = fixture();
+    act(() => root.render(<AddRunnerSheet {...f.props} />));
+    await click("Create install command");
+    expect(command()).toContain("| sh -s --");
+    expect(await pick("Install command", "System install (sudo)")).toEqual([
+      "User install",
+      "Environment variable",
+      "System install (sudo)",
+    ]);
+    expect(command()).toContain("| sudo sh -s --");
   });
 
   it("does not claim success on failures, supports status retry and explicit revocation", async () => {
@@ -146,7 +194,7 @@ describe("Runner setup sheets", () => {
     await click("Create install command");
     act(() => vi.advanceTimersByTime(3600001));
     expect(document.body.textContent).not.toContain(f.grant.installToken);
-    expect(document.body.textContent).toContain("expired or been revoked");
+    expect(document.body.textContent).toContain("Token expired or revoked");
     await click("Create a fresh command");
     expect(f.setup.revoke).toHaveBeenCalledWith("grant-id");
     expect(f.setup.create).toHaveBeenCalledTimes(2);
@@ -163,7 +211,9 @@ describe("Runner setup sheets", () => {
     );
     act(() => root.render(<AddRunnerSheet {...f.props} />));
     await click("Create install command");
-    expect(document.body.textContent).toContain("Your request may still finish");
+    // The button's spinner says it is working; no sentence explains closing.
+    expect(document.body.textContent).toContain("Creating");
+    expect(document.body.textContent).not.toContain("Your request may still finish");
     await click("Close");
     expect(f.props.onClose).toHaveBeenCalledOnce();
     act(() => root.render(null));
@@ -196,7 +246,10 @@ describe("Runner setup sheets", () => {
     });
     act(() => root.render(<AddRunnerSheet {...f.props} />));
     await click("Create install command");
-    expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+    expect(announced().join("\n")).toContain("Couldn't add runner");
+    await act(async () => document.querySelector<HTMLElement>("details summary")?.click());
+    expect(document.querySelector("details")?.open).toBe(true);
+    expect(document.querySelector("details")?.textContent).toContain(
       "Settings → Account and sign in again",
     );
     expect(document.body.textContent).not.toContain(f.grant.installToken);
@@ -215,9 +268,8 @@ describe("Runner setup sheets", () => {
     act(() => root.render(<AddRunnerSheet {...f.props} />));
     await click("Create install command");
     await click("Copy command");
-    expect(document.querySelector('[role="alert"]')?.textContent).toBe(
-      "Couldn’t copy. Select the text and copy it manually.",
-    );
+    expect(announced()).toContain("Couldn’t copy. Select the text and copy it manually.");
+    expect(document.body.textContent).not.toContain("Copy error");
   });
 
   it("generates cloud-init with a fresh token and supports all three provider paths", async () => {
@@ -225,18 +277,12 @@ describe("Runner setup sheets", () => {
     act(() => root.render(<AlwaysOnRunnerSheet {...f.props} />));
     await click("Create install command");
     expect(document.body.textContent).toContain("#cloud-config");
-    expect(document.body.textContent).toContain("Start it within 1 hour");
-    const select = document.querySelector<HTMLSelectElement>('[aria-label="Provider"]')!;
-    expect([...select.options].map((option) => option.text)).toEqual([
+    expect(document.body.textContent).toContain("Ubuntu 24.04 user-data");
+    expect(await pick("Provider", "DigitalOcean")).toEqual([
       "Hetzner",
       "DigitalOcean",
       "Other (cloud-init)",
     ]);
-    await act(async () => {
-      select.value = "DigitalOcean";
-      select.dispatchEvent(new Event("change", { bubbles: true }));
-    });
-    expect(document.body.textContent).toContain("on DigitalOcean");
     f.push({ state: "revoked", expiresAt: f.grant.expiresAt, runner: null });
     expect(document.body.textContent).not.toContain("#cloud-config");
   });
@@ -330,4 +376,15 @@ describe("Runner setup sheets", () => {
     await click("Another code");
     expect(button("Check code")).toBeTruthy();
   });
+});
+
+it("keeps the exact runner-code source reachable without standing instructions", async () => {
+  const f = fixture();
+  act(() => root.render(<LinkRunnerSheet {...f.props} />));
+  expect(document.body.textContent).not.toContain("volli-runner link");
+  await act(async () =>
+    document.querySelector<HTMLButtonElement>('[aria-label="Runner code command"]')!.click(),
+  );
+  expect(document.querySelector("code")?.textContent).toBe("volli-runner link");
+  expect(document.querySelector("input")?.getAttribute("placeholder")).toBe("ABCD-EFGH");
 });

@@ -1,0 +1,38 @@
+/* Token composition is a ratio, not an allowance or capacity meter. */
+.usage-token-segment {
+  background: var(--usage-ink);
+}
+.usage-token-popover {
+  border-color: color-mix(in srgb, var(--usage-ink) 45%, var(--border));
+}
+.usage-token-cap {
+  background: var(--usage-ink);
+  color: var(--usage-on-ink);
+}
+@media (prefers-contrast: more), (prefers-reduced-transparency: reduce) {
+  .usage-token-segment {
+    background: var(--usage-ink);
+    box-shadow: none;
+  }
+}
+
+/* The bounded accounting drawer deliberately overrides the rail's hidden bars.
+ * Reserve the gutter before overflow; the thumb remains visible at rest. */
+[data-volli-rail] .usage-breakdown-scroll,
+.usage-breakdown-scroll {
+  scrollbar-width: auto;
+  scrollbar-gutter: stable;
+  outline: none;
+}
+.usage-breakdown-scroll:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--ring);
+}
+[data-volli-rail] .usage-breakdown-scroll::-webkit-scrollbar,
+.usage-breakdown-scroll::-webkit-scrollbar {
+  display: block;
+  width: 8px;
+}
+.usage-breakdown-scroll::-webkit-scrollbar-thumb {
+  background-color: var(--muted-foreground);
+  border-width: 2px;
+}

@@ -12,8 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 const preference = vi.hoisted(() => ({ reduce: true as boolean | null }));
 
-vi.mock("motion/react", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("motion/react")>()),
+vi.mock("@renderer/hooks/use-reduced-motion", () => ({
   useReducedMotion: () => preference.reduce,
 }));
 

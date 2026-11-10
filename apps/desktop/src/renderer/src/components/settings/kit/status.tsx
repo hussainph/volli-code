@@ -1,3 +1,4 @@
+import { Spinner } from "@renderer/components/ui/spinner";
 /**
  * Status has three roles on a settings surface, and therefore three shapes.
  *
@@ -30,8 +31,12 @@ import { cn } from "@renderer/lib/utils";
  */
 export function Health({ state, children }: { state: StatusDotState; children: string }) {
   return (
-    <span className="inline-flex items-center gap-1 text-ui text-muted-foreground">
-      <StatusDot state={state} />
+    <span className="inline-flex shrink-0 items-center gap-2 text-ui whitespace-nowrap text-muted-foreground">
+      {state === "starting" ? (
+        <Spinner aria-hidden role="presentation" />
+      ) : (
+        <StatusDot state={state} />
+      )}
       {children}
     </span>
   );

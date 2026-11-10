@@ -32,7 +32,7 @@ export interface UpdateStoreState {
   /** Versions whose one auto-open already happened this run. */
   promptedVersions: readonly string[];
   /** Accepts a snapshot (boot read or push) and applies the once-per-version auto-open. */
-  receive(state: UpdateUiState): void;
+  receive(state: UpdateUiState, prompt?: boolean): void;
   /** The badged icon's click — re-offers the install the user dismissed. Inert unless downloaded. */
   openDialog(): void;
   /** Closes the dialog, leaving the badge lit — the update stays visible. */
@@ -45,11 +45,12 @@ export function createUpdateStore() {
     dialogOpen: false,
     promptedVersions: [],
 
-    receive: (state) => {
+    receive: (state, prompt = true) => {
       const { promptedVersions, dialogOpen } = get();
       const ready = state.phase === "downloaded" && state.targetVersion !== null;
       if (
         ready &&
+        prompt &&
         state.targetVersion !== null &&
         !promptedVersions.includes(state.targetVersion)
       ) {

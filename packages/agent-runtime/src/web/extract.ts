@@ -24,6 +24,7 @@
 import { Readability } from "@mozilla/readability";
 import { JSDOM, VirtualConsole } from "jsdom";
 import TurndownService from "turndown";
+import { sameOriginIconUrl } from "./source-icon-target";
 
 /**
  * The bounds extraction runs inside, beside the transport's own.
@@ -726,6 +727,8 @@ function readMetadata(doc: Document): PageMetadata {
 
 /** What extraction produced, and how much of the page it stands for. */
 export interface ExtractedDocument {
+  /** Ephemeral metadata for the host, never copied into RuntimeWebDocument/tool output. */
+  sourceIconUrl?: string;
   /** The article as Markdown, unbounded — the caller owns the character bound. */
   text: string;
   /**
@@ -802,6 +805,17 @@ export function extractReadableMarkdown(
     const doc = dom.window.document;
     // Before sanitising, which removes the `<meta>` elements it reads.
     const metadata = readMetadata(doc);
+    // Parse already-admitted HTML once; no subresource loads are enabled.
+    // Retain one bounded URL, never the DOM/body, across the worker boundary.
+    let sourceIconUrl: string | null = null;
+    let links = 0;
+    for (const link of doc.head.querySelectorAll("link[rel][href]")) {
+      if (++links > 32) break;
+      if (!(link.getAttribute("rel") ?? "").toLowerCase().split(/\s+/u).includes("icon")) continue;
+      sourceIconUrl = sameOriginIconUrl(link.getAttribute("href") ?? "", url);
+      if (sourceIconUrl !== null) break;
+    }
+    const decoration = sourceIconUrl === null ? {} : { sourceIconUrl };
     sanitize(doc);
     // Before anything walks the tree for meaning. Readability's cost is a
     // function of the shape it is handed, so the shape is bounded first.
@@ -826,7 +840,7 @@ export function extractReadableMarkdown(
       const heading = title === "" ? "" : `# ${title}\n\n`;
       const text = `${heading}${turndown.turndown(content)}`.trim();
       /* v8 ignore next -- unreachable today and kept anyway: Readability only returns an article once it has found several hundred characters of text, so the conversion of one cannot come back empty. That is a fact about the version of a third-party library this happens to be pinned to, not a property of the contract, and the cost of being wrong about it is the empty result the fallbacks below exist to prevent. */
-      if (text !== "") return { text, extracted: true, truncated: cut };
+      if (text !== "") return { text, extracted: true, truncated: cut, ...decoration };
     }
 
     // The two fallbacks below exist because the honest answer to "what does
@@ -838,7 +852,7 @@ export function extractReadableMarkdown(
     // The whole body as Markdown: no article, but a page that is genuinely a
     // list of links, an index or a search result still has text on it.
     const whole = turndown.turndown(body).trim();
-    if (whole !== "") return { text: whole, extracted: false, truncated: cut };
+    if (whole !== "") return { text: whole, extracted: false, truncated: cut, ...decoration };
 
     // Nothing in the body at all, which is a client-rendered shell: the server
     // sent an empty mounting point and everything a reader wants arrives later
@@ -852,7 +866,7 @@ export function extractReadableMarkdown(
     const described = [metadata.title === "" ? "" : `# ${metadata.title}`, metadata.description]
       .filter((part) => part !== "")
       .join("\n\n");
-    return { text: described, extracted: false, truncated: cut };
+    return { text: described, extracted: false, truncated: cut, ...decoration };
   } finally {
     // The window holds timers and a document; without this it stays alive until
     // the collector notices, once per fetch.

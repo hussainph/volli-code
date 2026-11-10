@@ -23,7 +23,11 @@ describe("LabelPickerContent", () => {
   it("gives a label the ticket already carries a row of its own", () => {
     // Selected names come from props, so they are pickable (and un-pickable)
     // even before the project has a label row for them — the composer's case.
-    expect(render(["bug"])).toContain("bug");
+    const html = render(["bug"]);
+    expect(html).toContain("bug");
+    // cmdk expands unmarked spans; the colour mark must keep its glyph width.
+    expect(html).toContain('data-slot="label-mark"');
+    expect(html).toMatch(/data-slot="command-list"[^>]*class="[^"]*p-1/);
   });
 
   it("says so when there is nothing to pick", () => {

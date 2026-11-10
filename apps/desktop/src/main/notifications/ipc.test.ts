@@ -198,3 +198,20 @@ describe("registerNotificationIpcHandlers", () => {
     });
   });
 });
+
+it("Settings can read notification preferences without consuming the workbench's parked click", async () => {
+  pending = pendingPort({ kind: "update" });
+  registerNotificationIpcHandlers({
+    settings,
+    takePendingActivation: pending,
+    markRendererReady: (sender) => ready.push(sender.id),
+    mayActivate: () => false,
+  });
+  expect(await invoke("volli:notifications-get")).toMatchObject({ ok: true });
+  expect(await invoke("volli:notifications-pending-activation")).toEqual({
+    ok: true,
+    target: null,
+  });
+  expect(pending.calls).toBe(0);
+  expect(ready).toEqual([]);
+});

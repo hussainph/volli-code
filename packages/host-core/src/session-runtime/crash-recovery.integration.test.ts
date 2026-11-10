@@ -29,6 +29,7 @@ import {
   type BootRecoveredTurns,
   type BootRecoveryFailure,
 } from "./boot-recovery";
+import { createBootRecoveryEngine } from "./boot-recovery-reader";
 import { resumeRecoveredTurns } from "./restart-resume";
 import { createPiNativeAdapter } from "./pi-adapter";
 import { createFileTranscriptArtifactStore } from "./transcript-artifacts";
@@ -222,7 +223,7 @@ function fixture() {
   ) {
     const errors: unknown[] = [];
     const closed = await closeStaleAttachments({
-      engine: current.engine,
+      engine: createBootRecoveryEngine({ db: database.db, engine: current.engine }),
       reconcile: (input) => current.host.reconcile(input),
       // The lifecycle's own reading of a live binding.
       holdsBinding: (attachmentId) =>

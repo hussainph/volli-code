@@ -12,7 +12,7 @@
  * its own tooltip content `aria-hidden` when it duplicates a label, so this
  * does not double-announce.
  */
-import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
+import { type IconComponent } from "@renderer/components/ui/icon";
 
 import { Button } from "@renderer/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
@@ -36,7 +36,7 @@ export function RowAction({
    * thing, and repeating its name in a bubble anchored to that row is noise.
    */
   hint: string;
-  icon: PhosphorIcon;
+  icon: IconComponent;
   disabled?: boolean;
   /**
    * An irreversible act, inked as one so it never reads as a sibling of the
@@ -49,14 +49,14 @@ export function RowAction({
     <Tooltip>
       <TooltipTrigger asChild>
         <Button
-          size="icon-xs"
+          size="icon"
           variant="ghost"
           aria-label={label}
           disabled={disabled}
           className={destructive ? "text-destructive hover:text-destructive" : undefined}
           onClick={onAct}
         >
-          <Icon />
+          <Icon aria-hidden />
         </Button>
       </TooltipTrigger>
       <TooltipContent side="top">{hint}</TooltipContent>

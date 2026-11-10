@@ -1338,7 +1338,11 @@ function scrubSessionInputRecord(payload: PayloadOf<"session.input.recorded">) {
     ...surface
   } = input;
   if (frozenCodeMode === undefined) return { kind: payload.kind, input: surface };
-  const { descriptionVersion: _descriptionVersion, ...codeMode } = frozenCodeMode;
+  const {
+    descriptionVersion: _descriptionVersion,
+    mcpResultVersion: _mcpResultVersion,
+    ...codeMode
+  } = frozenCodeMode;
   return { kind: payload.kind, input: { ...surface, codeMode } };
 }
 
@@ -1485,6 +1489,8 @@ function decodeToolRefreshDelta(
     throw new Error(`${context}.askUserQuestions requires added ask_user`);
   if (row.descriptionVersion !== undefined && row.descriptionVersion !== 2)
     throw new Error(`${context}.descriptionVersion is 2 or absent`);
+  if (row.mcpResultVersion !== undefined && row.mcpResultVersion !== 1)
+    throw new Error(`${context}.mcpResultVersion is 1 or absent`);
   const routes: Record<string, ToolRoute> = {};
   if (row.routes !== undefined) {
     for (const [tool, route] of Object.entries(asRecord(row.routes, `${context}.routes`))) {
@@ -1501,6 +1507,7 @@ function decodeToolRefreshDelta(
     if (
       !added.includes(CODE_MODE_TOOL_ID) ||
       row.descriptionVersion !== undefined ||
+      row.mcpResultVersion !== undefined ||
       declaration.routes !== undefined
     )
       throw new Error(`${context}.codeMode is only for first acquisition, with routes separate`);
@@ -1520,6 +1527,7 @@ function decodeToolRefreshDelta(
     ...(row.routes === undefined ? {} : { routes }),
     ...(codeMode === undefined ? {} : { codeMode }),
     ...(row.descriptionVersion === 2 ? { descriptionVersion: 2 as const } : {}),
+    ...(row.mcpResultVersion === 1 ? { mcpResultVersion: 1 as const } : {}),
     ...(row.askUserQuestions === true ? { askUserQuestions: true as const } : {}),
     ...(row.refreshDescriptions === true ? { refreshDescriptions: true as const } : {}),
   };

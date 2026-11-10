@@ -7,7 +7,7 @@
  *
  * `workspace_id` holds a project id: the column was named when the host
  * protocol called a project a "Workspace", a word that now names the team
- * container (CONTEXT.md). Shipped schema is never renamed in place; code
+ * container (CONTEXT.md#workspace). Shipped schema is never renamed in place; code
  * reading the column calls it `projectId` (board/receipts.ts).
  */
 export const BOARD_COMMAND_RECEIPTS_MIGRATION = `

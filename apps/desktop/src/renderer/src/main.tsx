@@ -1,4 +1,5 @@
-import "@fontsource-variable/geist-mono/wght.css";
+import "@fontsource/space-mono/400.css";
+import "@fontsource/space-mono/700.css";
 import "@fontsource-variable/mona-sans/wght.css";
 import "@fontsource-variable/mona-sans/wght-italic.css";
 import "./globals.css";
@@ -8,6 +9,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { errorMessage } from "@volli/shared";
 import { toast } from "sonner";
+import { PauseCircleIcon, PlayCircleIcon } from "@renderer/components/ui/icon";
 
 import App from "./App";
 import { BootErrorPanel } from "./components/boot-error-panel";
@@ -18,7 +20,10 @@ import {
 import { interruptToastModel } from "./components/sessions/interrupt-toast";
 import { activateNotificationTarget } from "./lib/notification-activation";
 import { desktopNotificationSurface } from "./lib/notification-surface";
-import { sessionStartToastModel } from "./components/sessions/session-start-toast";
+import {
+  SessionStartToastTitle,
+  sessionStartToastModel,
+} from "./components/sessions/session-start-toast";
 import { chatTabId } from "./components/ticket/ticket-chat-tab";
 import {
   boot,
@@ -34,6 +39,7 @@ import { toastError } from "./lib/toast";
 import { useBoardStore } from "./stores/board";
 import { useChatSessionsStore } from "./stores/chat-sessions";
 import { useProjectsStore } from "./stores/projects";
+import { startStylePreferences } from "./stores/style";
 import { useThemeStore } from "./stores/theme";
 import { useExperimentsStore } from "./stores/experiments";
 import { launchStore } from "./stores/launch";
@@ -44,6 +50,13 @@ import { useUpdateStore } from "./stores/update";
 import { useProjectUiStore } from "./stores/project-ui";
 import { watchSystemAppearance } from "./theme/canvas-paint";
 import { initTerminalAppearance } from "./terminal/appearance";
+import {
+  acceptSettingsNavigation,
+  installSettingsWindowRouting,
+  isSettingsWindow,
+} from "./lib/settings-window";
+import { startWindowPreferenceSync } from "./lib/window-preferences";
+import { acceptWorkspaceNavigation } from "./lib/workspace-window-navigation";
 
 /** Interrupt toasts outlive sonner's ~4s default: an automated de-escalation
  *  must be seen, not glimpsed (same reasoning as `toastError`'s longer window). */
@@ -55,6 +68,10 @@ async function main() {
   // Its long frames and slow inputs, labelled by interaction (VC-1091).
   installRendererStallSignals();
   const root = createRoot(document.getElementById("root")!);
+  const settingsWindow = isSettingsWindow();
+  installSettingsWindowRouting();
+  const preferences = startWindowPreferenceSync();
+  window.addEventListener("pagehide", preferences.stop, { once: true });
 
   // Kick off the Ghostty-config fetch immediately, CONCURRENT with boot() —
   // it has no dependency on the SQLite bootstrap, and gating it behind the
@@ -62,12 +79,6 @@ async function main() {
   // paint lands on the token fallback (they re-theme live either way).
   void initTerminalAppearance();
 
-  // Same reasoning for the terminal/editor half of the theme state: it is a db
-  // read with no dependency on the bootstrap payload, so fetching it
-  // concurrently only narrows the window where a non-default value hasn't
-  // landed yet. The CANVAS half rides in on the bootstrap payload instead and
-  // is adopted in boot() — there is deliberately no second read path for it.
-  void useThemeStore.getState().hydrate();
   // The `auto` half of the appearance setting: a real OS flip, pushed from main
   // because this process cannot see one (its own `prefers-color-scheme` query
   // answers from the mode the app stamped — see theme/canvas-paint.ts).
@@ -95,7 +106,52 @@ async function main() {
   }
   if (!result.ok) {
     root.render(<BootErrorPanel error={result.error} />);
+    if (settingsWindow) {
+      // A broken bootstrap must be visible too, not an indefinitely hidden window.
+      void (async () => {
+        let pending = await window.api.settingsWindow.pendingNavigation();
+        while (pending.ok && pending.navigation !== null) {
+          const revision = pending.navigation.revision;
+          await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+          pending = await window.api.settingsWindow.ready(revision);
+          if (!pending.ok || pending.navigation?.revision === revision) break;
+        }
+      })().catch((error: unknown) =>
+        console.warn("[volli] couldn't show Settings failure:", error),
+      );
+    }
     return;
+  }
+
+  // boot() installs the stored canvas/appearance before its restored-project
+  // listener requests that scope's theme state. A concurrent global request
+  // could instead paint the default `auto` mode over preload's first-paint
+  // hint, exposing one dark frame in a stored-light launch. With no project,
+  // there is no selection announcement, so request the global terminal chain
+  // here. The independent Ghostty-config warmup above remains concurrent.
+  if (useProjectsStore.getState().selectedProjectId === null) {
+    void useThemeStore.getState().hydrate();
+  }
+  await startStylePreferences();
+  preferences.activate();
+  if (settingsWindow) {
+    window.api.settingsWindow.onNavigate(acceptSettingsNavigation);
+    const pending = await window.api.settingsWindow.pendingNavigation();
+    if (!pending.ok) {
+      root.render(<BootErrorPanel error={pending.error} />);
+      return;
+    }
+    if (pending.navigation !== null) acceptSettingsNavigation(pending.navigation);
+  } else {
+    let received = false;
+    window.api.settingsWindow.onWorkspaceNavigate((navigation) => {
+      received = true;
+      acceptWorkspaceNavigation(navigation);
+    });
+    const pending = await window.api.settingsWindow.pendingWorkspaceNavigation();
+    if (!pending.ok) toastError(`Couldn't open workspace: ${pending.error}`);
+    else if (!received && pending.navigation !== null)
+      acceptWorkspaceNavigation(pending.navigation);
   }
 
   root.render(
@@ -110,8 +166,10 @@ async function main() {
   // off this reads the flag and does nothing else.
   const cloudLaunch = launchStore() === "cloud";
   if (cloudLaunch) {
-    const stopSessions = bindCloudSessions();
-    window.addEventListener("pagehide", stopSessions, { once: true });
+    if (!settingsWindow) {
+      const stopSessions = bindCloudSessions();
+      window.addEventListener("pagehide", stopSessions, { once: true });
+    }
     void startCloudBoard();
   } else void startBoardProtocolIfEnabled();
 
@@ -120,7 +178,7 @@ async function main() {
   // agent sessions toasts where the mover is looking, with a jump-to-ticket
   // action. Fired for BOTH move choke points (renderer drag and socket/CLI).
   window.api.sessions.onInterrupted((event) => {
-    if (cloudLaunch) return;
+    if (cloudLaunch || settingsWindow) return;
     const model = interruptToastModel(
       event,
       useBoardStore.getState().ticketsByProject,
@@ -128,6 +186,7 @@ async function main() {
     );
     const target = model.target;
     toast(model.message, {
+      icon: <PauseCircleIcon aria-hidden className="size-4" />,
       duration: INTERRUPT_TOAST_DURATION_MS,
       ...(target === null
         ? {}
@@ -146,14 +205,16 @@ async function main() {
   });
 
   // Socket-originated Session starts (VC-13): the app must not navigate or
-  // steal focus when a `volli session start` lands — the toast names the actor
-  // and ticket, and its action is the only door into the new session's tab
+  // steal focus when a `volli session start` lands — the toast names the new
+  // Session separately from its starter; only its action opens the new tab
   // (the same adopt + open pair the sidebar's chat rows make).
   window.api.sessions.onStarted((notice) => {
-    if (cloudLaunch) return;
+    if (cloudLaunch || settingsWindow) return;
     const model = sessionStartToastModel(notice);
     const target = model.target;
-    toast(model.message, {
+    toast(<SessionStartToastTitle notice={notice} />, {
+      description: model.description,
+      icon: <PlayCircleIcon aria-hidden className="size-4" />,
       duration: INTERRUPT_TOAST_DURATION_MS,
       action: {
         label: "Open session",
@@ -178,33 +239,35 @@ async function main() {
   // every window closed opened this one, and its target has been waiting in
   // main ever since. Ordering the other way would drop a push that landed
   // between the read and the listener.
-  window.api.notifications.onActivated(
-    (target) => void activateNotificationTarget(target, desktopNotificationSurface),
-  );
-  window.api.notifications
-    .pendingActivation()
-    .then((pending) => {
-      if (pending.ok && pending.target !== null)
-        void activateNotificationTarget(pending.target, desktopNotificationSurface);
-    })
-    .catch((error: unknown) => {
-      // A click whose target could not be collected leaves the window open on
-      // whatever it was showing — which is where the click brought it anyway.
-      // There is no route the person can retry, but retain the diagnostic rather
-      // than silently losing the failure.
-      console.warn("[volli] couldn't collect notification activation:", error);
-    });
+  if (!settingsWindow) {
+    window.api.notifications.onActivated(
+      (target) => void activateNotificationTarget(target, desktopNotificationSurface),
+    );
+    window.api.notifications
+      .pendingActivation()
+      .then((pending) => {
+        if (pending.ok && pending.target !== null)
+          void activateNotificationTarget(pending.target, desktopNotificationSurface);
+      })
+      .catch((error: unknown) => {
+        // A click whose target could not be collected leaves the window open on
+        // whatever it was showing — which is where the click brought it anyway.
+        // There is no route the person can retry, but retain the diagnostic rather
+        // than silently losing the failure.
+        console.warn("[volli] couldn't collect notification activation:", error);
+      });
+  }
 
   // Self-update state (VC-59): subscribe FIRST, then prime with a one-time
   // read — a download that finished before this window existed must still
   // light the badge. The prime only fills an empty store: a push that raced
   // ahead of it is newer by construction and must not be clobbered.
-  window.api.updates.onState((state) => useUpdateStore.getState().receive(state));
+  window.api.updates.onState((state) => useUpdateStore.getState().receive(state, !settingsWindow));
   window.api.updates
     .state()
     .then((read) => {
       if (read.ok && useUpdateStore.getState().state === null) {
-        useUpdateStore.getState().receive(read.state);
+        useUpdateStore.getState().receive(read.state, !settingsWindow);
       }
     })
     .catch(() => {
@@ -225,7 +288,7 @@ async function main() {
     // Sessions on a remote host (VC-713): their chat, listing and re-reads go
     // over each project's Workspace link while `cloud` is on; off, nothing is
     // registered and every Session is This Mac's.
-    bindRemoteSessionsWhileCloud();
+    if (!settingsWindow) bindRemoteSessionsWhileCloud();
     // Each connected remote host's log, in the one log viewer (VC-712): only
     // hosts that store lists, so nothing registers while `cloud` is off. The
     // page owns it: pagehide unregisters every source and stops its readings.
@@ -238,7 +301,7 @@ async function main() {
   // whole snapshot; Cancel travels back to main with the exact arrival id.
   // Cloud arrivals come from the renderer’s Convex source. Never read or
   // subscribe to this Mac’s frozen countdowns in a cloud window.
-  if (!cloudLaunch) {
+  if (!cloudLaunch && !settingsWindow) {
     window.api.automations.onPendingArmedRunsChanged(receivePendingArmedRuns);
     window.api.automations.onPendingArmedRunSettled(announcePendingArmedRunSettlement);
     window.api.automations

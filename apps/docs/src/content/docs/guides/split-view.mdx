@@ -7,55 +7,76 @@ sidebar:
 
 import { CardGrid, LinkCard } from "@astrojs/starlight/components";
 
-Use **Split view** to show several tabs at once by grouping them. A **tab
-group** is two or more panes, side by side or stacked, and each pane holds its
-own stack of tabs. Home and each Ticket view keep their own groups, and a tab
-cannot move from Home to a Ticket view, or between Ticket views.
-
-The top tab strip shows a group as one chip. Each segment of the chip is the
-front tab of one pane. Select a segment to show the group with that pane
-focused. Select any other tab to show it on its own; select the chip again to
-return to the group exactly as you left it.
+Use split view to show several tabs at once. A **tab group** contains two or
+more panes, side by side or stacked. Each pane holds its own stack of tabs,
+with one tab in front. Home and each Ticket view keep their own groups. Tabs
+cannot move between those surfaces.
 
 ## Make a group
 
-- Press `⌘\` to open an empty pane to the right of the tab in front, or `⇧⌘\`
+- Press `⌘\` to open an empty pane to the right of the current tab, or `⇧⌘\`
   to open one below it. In a group, this splits the focused pane.
 - Drag a tab onto the left or right edge of another tab in the top strip.
-- Drag a tab, Session, or file onto an edge of the plane.
+- Drag a tab, Session row, or file onto any edge of a pane. Drop it in the
+  center instead to add it to that pane's stack without splitting.
 
-An empty pane offers **New chat**, **New terminal**, **New browser**, **Open
-file…**, and **Close pane**.
+The highlighted drop zone previews where the item will land. Session rows and
+files must belong to the same project or ticket as the destination.
+
+An empty pane offers **New chat**. Open **More** for **New terminal**, **New
+browser**, **Open file…**, or **Close pane**.
+
+For several shells inside one terminal tab, use the terminal's split
+shortcuts instead. See
+[Terminal companions](/guides/terminal-companions/#split-a-terminal).
 
 ## Open tabs into a group
 
-While a group is shown, anything new you open joins the focused pane, in
-front: a new chat or terminal, a new Browser Tab, or a file opened with `⌘P`
-or from a file list. Each pane has its own tab strip, so you can switch,
-close, rename, and reorder its tabs there.
+While a group is shown, new tabs join the focused pane, in front. This includes
+chats, terminals, Browser Tabs, and files opened with `⌘P` or from a file list.
+Each pane has its own tab strip for switching, closing, renaming, and
+reordering its tabs.
+
+Selecting an existing tab shows it where it already belongs. It does not move
+that tab into the focused pane.
+
+## Find a grouped tab
+
+The top strip represents a group with one chip and stacked tab icons. Chat
+icons use the model provider's logo when Volli recognizes it; an unknown
+provider uses the chat icon.
+
+Select the chip to return to the group. Hover over it, or open its tab menu,
+to see the group's tabs. Browser rows include the address, and file rows
+include the containing folder, so you can tell similarly named tabs apart.
+Select a row to bring that tab forward in its pane. The menu also offers
+individual tab actions such as **Close**.
+
+Selecting an ordinary tab outside the group shows it on its own. Select the
+group chip again to return to the saved arrangement.
 
 ## Move tabs between panes
 
 Drag a tab from a pane's strip:
 
-- Onto another pane's center or strip to move it into that pane.
-- Onto an edge of a pane to split there and place it in a new pane.
-- Onto the top strip to take it out of the group.
+- Onto another pane's center or strip to join that pane's stack.
+- Onto a pane's left, right, top, or bottom edge to split there.
+- Onto empty space in the top strip to take it out of the group.
 
-The highlight previews where the item will land. A pane emptied by a move
-closes, and a group left with one pane goes back to ordinary tabs.
+A pane emptied by a move closes. A group left with one pane returns to
+ordinary tabs.
 
 ## Focus, resize, and ungroup
 
 Select a pane or one of its tabs to focus it. The focused pane decides which
-tab is active and what the rail describes. Drag a divider to resize panes, and
-use `⌃⌘` plus an arrow key to move focus to an adjacent pane.
+tab is active and what the rail describes. Drag a divider to resize panes.
+Use `⌃⌘` plus an arrow key to move focus to an adjacent pane.
 
-Right-click a group's chip to see every tab in it, pane by pane, with each
-pane's front tab checked. Choose a tab to bring it forward, or choose
-**Ungroup** to split the group back into ordinary tabs. Closing a pane moves
-its tabs into the pane beside it. Ungrouping and closing panes never close a
-tab.
+Right-click the group's chip and choose **Ungroup** to return its tabs to the
+top strip. Closing a pane moves its tabs into a neighboring pane. Neither
+ungrouping nor closing a pane closes the tabs inside it. The group chip's
+close button closes its member tabs instead; use **Ungroup** if you want to
+keep them open.
 
 ## Next steps
 
@@ -69,10 +90,5 @@ tab.
     title="Use a chat"
     href="/guides/sessions/"
     description="Start Board and ticket Sessions to place in a pane."
-  />
-  <LinkCard
-    title="What's new in 0.2"
-    href="/releases/whats-new-0-2/"
-    description="Read about split view and other 0.2 features."
   />
 </CardGrid>

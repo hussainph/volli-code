@@ -53,8 +53,11 @@ const execFileAsync = promisify(execFile);
 
 const HELP = `volli-drive — drive an isolated, keychain-free live Volli build
 
-  launch [--fixture basic|empty|move] [--model fake|env] [--idle-min 20]
+  launch [--fixture basic|empty|move|empty-pane-left|empty-pane-right] [--model fake|env] [--idle-min 20]
+         [--reduced-motion]       emulate browser prefers-reduced-motion: reduce
          [--fake-script file.json] deterministic fake-provider reply sequence
+         [--fake-tool-free-text t] tool-free requests (auto-title) answer t while
+                                   a script runs, instead of the echo; needs --fake-script
          [--no-build] [--json]     start an instance (dev build only; packed
                                    apps are refused until VC-705); prints its
                                    id + evidence dir
@@ -90,12 +93,16 @@ const HELP = `volli-drive — drive an isolated, keychain-free live Volli build
   wait <id> --text t [--gone] [--timeout ms] [--find text]
   screenshot <id> [--name label] [--window w]
   windows <id>
+  settings-native <id> [--action state|watch|menu|close|frame] [--bounds JSON]
+                                   native Settings boundary; never activates a quiet window
   console <id> [--tail n] [--grep s]
   logs <id> [--tail n] [--grep s] [--trace id] [--follow] [--for ms]
   state <id> sql "<SELECT …>"      read-only query on the instance's database
   state <id> cli <volli args…>     the real volli CLI against the instance socket
   metrics <id>                     memory per Electron process
-  stop <id> [--keep-scratch]       stop what this instance started; evidence stays
+  chat-window-bench <id> --settings <json>
+                                   synthetic renderer bench, empty/fake/local only
+  stop <id> [--keep-scratch] [--json] stop what this instance started; evidence stays
 
 Evidence lives in ${evidenceRoot()}/<id>/ and survives stop.`;
 
@@ -158,6 +165,15 @@ function printSnapshot(snap, find) {
 // ---- launch --------------------------------------------------------------------
 
 async function gitFacts() {
+  // A comparison is an exact git archive plus a separately hashed e2e-only
+  // overlay, not a worktree whose parent checkout's HEAD is its identity.
+  const source = await fs
+    .readFile(join(REPO, ".chat-window-source.json"), "utf8")
+    .catch(() => null);
+  if (source) {
+    const metadata = JSON.parse(source);
+    return { commit: metadata.commit, dirty: false, driverOverlay: metadata.overlay };
+  }
   const run = async (args) =>
     (await execFileAsync("git", args, { cwd: REPO }).catch(() => ({ stdout: "" }))).stdout.trim();
   return {
@@ -181,6 +197,8 @@ async function ensureBuilt(flags) {
 }
 
 async function launch(flags) {
+  if (flags.reducedMotion !== undefined && flags.reducedMotion !== true)
+    fail("--reduced-motion is a boolean flag; omit it to use the system preference");
   const deployment = await readDeployment(flags, REPO);
   const fixture = flags.fixture ?? "basic";
   const model = flags.model ?? "fake";
@@ -199,6 +217,13 @@ async function launch(flags) {
     fakeScript = JSON.parse(await fs.readFile(flags.fakeScript, "utf8"));
     if (!Array.isArray(fakeScript))
       fail("--fake-script must contain a JSON array of fake-provider replies");
+  }
+  let fakeToolFreeText;
+  if (flags.fakeToolFreeText !== undefined) {
+    if (!flags.fakeScript) fail("--fake-tool-free-text refines --fake-script and requires it");
+    if (typeof flags.fakeToolFreeText !== "string" || flags.fakeToolFreeText.trim() === "")
+      fail("--fake-tool-free-text needs non-empty text");
+    fakeToolFreeText = flags.fakeToolFreeText;
   }
   let cloud = null;
   let cloudEnv = {};
@@ -263,8 +288,10 @@ async function launch(flags) {
     model,
     build,
     appBinary: null,
+    reducedMotion: flags.reducedMotion === true,
     remoteAcceptance,
     ...(fakeScript === undefined ? {} : { fakeScript }),
+    ...(fakeToolFreeText === undefined ? {} : { fakeToolFreeText }),
     cloud,
     deployment,
     bundle: BUILT_MAIN,
@@ -349,6 +376,7 @@ async function launch(flags) {
   out(
     `keychain guard: ACTIVE — ${ready.guard.trapped.length} safeStorage methods trapped; ${ready.guard.switches.join(" ")}`,
   );
+  out(`reduced motion: ${ready.reducedMotion.matches} (forced: ${ready.reducedMotion.forced})`);
   const s = ready.seeded;
   if (s?.project)
     out(
@@ -596,6 +624,9 @@ async function main() {
         out(
           `  app socket ${iso.appSocket} (ours: ${iso.appSocketOwned}); fake provider ${iso.providerUrl ?? "-"}`,
         );
+        out(
+          `  reduced motion: ${report.reducedMotion?.matches ?? "unknown"} (forced: ${report.reducedMotion?.forced ?? "unknown"})`,
+        );
         if (report.model) out(`  model: ${report.model.providerId}/${report.model.modelId}`);
         out(`  windows: ${report.windows.map((w) => `${w.name} "${w.title}"`).join(", ")}`);
         if (report.memory) out(`  memory: ${report.memory.totalMb} MB`);
@@ -674,6 +705,18 @@ async function main() {
     case "windows":
       for (const w of await call(id, "windows")) out(`${w.name}  "${w.title}"  ${w.url}`);
       break;
+    case "settings-native":
+      out(
+        JSON.stringify(
+          await call(id, "settings-native", {
+            action: flags.action,
+            bounds: flags.bounds === undefined ? undefined : JSON.parse(flags.bounds),
+          }),
+          null,
+          2,
+        ),
+      );
+      break;
     case "metrics": {
       const m = await call(id, "metrics");
       out(`total: ${m.totalMb} MB`);
@@ -693,6 +736,11 @@ async function main() {
       const raw = process.argv.slice(2);
       const at = raw.indexOf(id);
       await stateCmd(id, raw.slice(at + 1));
+      break;
+    }
+    case "chat-window-bench": {
+      const settings = JSON.parse(flags.settings ?? "{}");
+      out(JSON.stringify(await call(id, "chat-window-bench", { settings }, 330_000)));
       break;
     }
     case "stop": {
@@ -718,6 +766,10 @@ async function main() {
         // and descendants — and nothing matched by name or path. The
         // supervisor gets SIGTERM first so it can still write its manifest.
         result = await stopUnreachable(entry, Boolean(flags.keepScratch), error);
+      }
+      if (flags.json) {
+        out(JSON.stringify(result));
+        break;
       }
       out(`stopped ${id}`);
       if (result.note) out(`  ${result.note}`);

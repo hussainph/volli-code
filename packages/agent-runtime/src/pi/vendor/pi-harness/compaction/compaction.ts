@@ -13,7 +13,7 @@ import {
   uuidv7,
 } from "@earendil-works/pi-ai";
 import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { type Context, getTelemetryContext } from "../context";
+import { type Context } from "../context";
 import { convertToLlm, createBranchSummaryMessage } from "../messages";
 import { buildContextEntries, sessionEntryToContextMessages } from "../session/context";
 import type { CompactionEntry, Entry, JsonValue } from "../session/types";
@@ -114,7 +114,8 @@ export function createSummaryRequestOptions(
   return {
     ...options,
     signal: context.abortSignal,
-    telemetryContext: getTelemetryContext(context),
+    // Chord carries the span now; this embedding's context uses its no-op.
+    telemetry: context.telemetry,
     cacheRetention: "none",
     sessionId: options.sessionId ?? uuidv7(),
   };

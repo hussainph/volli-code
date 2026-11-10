@@ -1,4 +1,4 @@
-import { describe, expect, expectTypeOf, it } from "vite-plus/test";
+import { describe, expect, expectTypeOf, it, vi } from "vite-plus/test";
 import {
   SessionEngineCommandConflictError,
   SessionEngineConflictError,
@@ -4275,6 +4275,24 @@ function metered(overrides: Partial<SessionUsage> = {}): SessionUsage {
 }
 
 describe("reportUsage", () => {
+  it("uses a storage-owned report read without opening a transaction on the caller", async () => {
+    const { ledger, plane } = composition();
+    const query = { scope: { kind: "all" } as const, groupBy: "model" as const };
+    const report = await plane.reportUsage(query);
+    const reportUsage = vi.fn(async () => report);
+    const transaction = vi.spyOn(ledger, "transaction");
+    const engine = createSessionEngine({
+      ledger: { transaction: ledger.transaction.bind(ledger), reportUsage },
+      clock: { now: () => 0 },
+      ids: ids(),
+    });
+    expect(await engine.reportUsage(query)).toBe(report);
+    expect(reportUsage).toHaveBeenCalledExactlyOnceWith(query);
+    expect(transaction).not.toHaveBeenCalled();
+    reportUsage.mockRejectedValueOnce(new Error("reader failed"));
+    await expect(engine.reportUsage(query)).rejects.toThrow("reader failed");
+  });
+
   /** A Session in a named project/ticket, with one metered operation on it. */
   async function spend(
     plane: ReturnType<typeof createSessionEngine>,
@@ -4693,6 +4711,30 @@ describe("listSessions over a project roster (VC-388)", () => {
       await expect(plane.listSessions(query)).resolves.toHaveLength(
         SESSION_LISTING_CACHE_LIMIT + 1,
       );
+      expect(folded).toEqual([]);
+    },
+  );
+
+  it(
+    "sizes point-listing retention from a metadata-only whole-project count",
+    { timeout: 120_000 },
+    async () => {
+      const { plane, folded } = foldWatchingComposition();
+      const sessions: Session[] = [];
+      for (let index = 0; index <= SESSION_LISTING_CACHE_LIMIT; index += 1) {
+        sessions.push(
+          (await plane.createSession(createRequest(`counted-roster-${index}`))).session,
+        );
+      }
+      folded.length = 0;
+      expect(await plane.countSessions({ projectId: "project-1", scope: "all" })).toBe(
+        sessions.length,
+      );
+      expect(folded).toEqual([]);
+      for (const session of sessions) await plane.getSessionListing({ sessionId: session.id });
+      expect(folded).toHaveLength(sessions.length);
+      folded.length = 0;
+      for (const session of sessions) await plane.getSessionListing({ sessionId: session.id });
       expect(folded).toEqual([]);
     },
   );
@@ -5225,6 +5267,18 @@ describe("listSessions cached projections are frozen (VC-393)", () => {
 });
 
 describe("getSessionListing: one Session's listing row (VC-1101)", () => {
+  it("can build the shared listing cache without cold-path checkpoint writes", async () => {
+    const { plane, ledger } = composition();
+    const { session } = await plane.createSession(createRequest("read-only-listing"));
+    const query = { sessionId: session.id, persistCheckpoint: false };
+    expect(await ledger.transaction((tx) => tx.getProjectionCheckpoint(session.id))).toBeNull();
+    const first = await plane.getSessionListing(query);
+    expect(first?.session.id).toBe(session.id);
+    expect(await plane.getSessionListing(query)).toBe(first);
+    expect(Object.isFrozen(first)).toBe(true);
+    expect(await ledger.transaction((tx) => tx.getProjectionCheckpoint(session.id))).toBeNull();
+  });
+
   it("answers the row a listing folds, from the same cache, until the log moves", async () => {
     const { plane } = composition();
     const created = await plane.createSession(createRequest("command-one-row"));

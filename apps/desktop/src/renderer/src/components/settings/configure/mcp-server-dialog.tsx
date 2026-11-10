@@ -1,3 +1,4 @@
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 /**
  * One server, start to finish: how Volli reaches it, whether it needs a
  * person to sign in, and which of its tools new Sessions get — with one Save.
@@ -23,12 +24,15 @@
  * one, and *Select all* or a group's checkbox makes that one click.
  */
 import * as React from "react";
-import { GlobeIcon } from "@phosphor-icons/react/dist/csr/Globe";
-import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
-import { SignInIcon } from "@phosphor-icons/react/dist/csr/SignIn";
-import { SignOutIcon } from "@phosphor-icons/react/dist/csr/SignOut";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import {
+  GlobeIcon,
+  EditIcon,
+  SignInIcon,
+  SignOutIcon,
+  TerminalIcon,
+  CloseIcon,
+} from "@renderer/components/ui/icon";
+
 import {
   MCP_OAUTH_CLIENT_SECRET_SLOT,
   mcpCredentialSlot,
@@ -53,6 +57,7 @@ import {
   DialogTitle,
 } from "@renderer/components/ui/dialog";
 import { Input } from "@renderer/components/ui/input";
+import { Notice } from "@renderer/components/ui/notice";
 import { Segmented } from "@renderer/components/ui/segmented";
 import { Textarea } from "@renderer/components/ui/textarea";
 import { Health } from "@renderer/components/settings/kit";
@@ -189,7 +194,7 @@ function credentialNames(transport: McpTransportConfig): string | null {
 
 /** The transport's glyph: a globe for a remote server, a terminal for a local command. */
 export function TransportIcon({ type }: { type: McpTransportConfig["type"] }) {
-  return type === "stdio" ? <TerminalWindowIcon aria-hidden /> : <GlobeIcon aria-hidden />;
+  return type === "stdio" ? <TerminalIcon aria-hidden /> : <GlobeIcon aria-hidden />;
 }
 
 export function McpServerDialog({
@@ -204,7 +209,7 @@ export function McpServerDialog({
   onSignOut,
   onAccessChanged,
 }: {
-  project: Project;
+  project: Pick<Project, "id">;
   target: McpServerDialogTarget;
   /** The saved server's sign-in state and missing secrets, when it is a saved one. */
   access: McpServerAccess | undefined;
@@ -569,14 +574,17 @@ export function McpServerDialog({
             </DialogDescription>
           )}
           {health?.fix === "retry" && !connectedHere ? (
-            <p className="text-ui text-destructive">{health.detail}</p>
+            <Notice tone="error" title={health.detail ?? health.label} />
           ) : null}
         </DialogHeader>
 
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-4">
           <section aria-label="Connection" className="flex shrink-0 flex-col gap-2">
             <div className="flex items-center justify-between gap-2">
-              <h3 className="text-label text-muted-foreground uppercase">Connection</h3>
+              <h3 className="flex items-center gap-2 text-ui font-medium">
+                <GlobeIcon aria-hidden className="size-4 text-muted-foreground" />
+                Connection
+              </h3>
               {editing ? null : (
                 <Button
                   size="xs"
@@ -585,7 +593,7 @@ export function McpServerDialog({
                   disabled={busy !== null}
                   onClick={() => editConnection("endpoint")}
                 >
-                  <PencilSimpleIcon />
+                  <EditIcon />
                   Edit
                 </Button>
               )}
@@ -636,7 +644,10 @@ export function McpServerDialog({
 
           {showTools ? (
             <section aria-label="Tools" className="flex min-h-72 flex-1 flex-col gap-2">
-              <h3 className="text-label text-muted-foreground uppercase">Tools for new Sessions</h3>
+              <h3 className="flex items-center gap-2 text-ui font-medium">
+                <TerminalIcon aria-hidden className="size-4 text-muted-foreground" />
+                Tools for new Sessions
+              </h3>
               <McpToolPicker
                 serverName={draft.name.trim().length > 0 ? draft.name : suggested}
                 tools={catalog}
@@ -660,9 +671,13 @@ export function McpServerDialog({
                   : null}
               </span>
             ) : (
-              <p role="alert" className="text-ui text-destructive">
-                {error}
-              </p>
+              <Notice
+                tone="error"
+                announce
+                data-testid="mcp-error"
+                title="Couldn't update MCP server"
+                detail={error}
+              />
             )}
           </div>
           <div className="flex shrink-0 justify-end gap-2">
@@ -681,7 +696,7 @@ export function McpServerDialog({
                   variant="outline"
                   onClick={() => void cancelDraftSignIn().then(setError)}
                 >
-                  <XIcon />
+                  <CloseIcon />
                   Cancel sign-in
                 </Button>
               ) : (
@@ -692,11 +707,11 @@ export function McpServerDialog({
               )
             ) : editing ? (
               <Button size="sm" disabled={busy !== null || !ready} onClick={() => void connect()}>
-                {busy === "connect" ? "Connecting…" : "Connect"}
+                {busy === "connect" ? <LoadingLabel>Connecting</LoadingLabel> : "Connect"}
               </Button>
             ) : (
               <Button size="sm" disabled={!canSave} onClick={() => void save()}>
-                {busy === "save" ? "Saving…" : saveLabel}
+                {busy === "save" ? <LoadingLabel>Saving</LoadingLabel> : saveLabel}
               </Button>
             )}
           </div>
@@ -745,17 +760,19 @@ function ConnectionSummary({
       access.signIn !== "not-applicable" ? (
         <div className="flex items-center justify-between gap-2 text-ui">
           <span className="text-muted-foreground">
-            {waiting
-              ? "Waiting for the browser…"
-              : access.signIn === "signed-in"
-                ? "Signed in with OAuth"
-                : access.signIn === "needs-sign-in"
-                  ? "Needs sign-in"
-                  : "Not signed in"}
+            {waiting ? (
+              <LoadingLabel>Waiting for the browser</LoadingLabel>
+            ) : access.signIn === "signed-in" ? (
+              "Signed in with OAuth"
+            ) : access.signIn === "needs-sign-in" ? (
+              "Needs sign-in"
+            ) : (
+              "Not signed in"
+            )}
           </span>
           {waiting ? (
             <Button size="xs" variant="outline" onClick={onCancel}>
-              <XIcon />
+              <CloseIcon />
               Cancel sign-in
             </Button>
           ) : access.signIn === "signed-in" ? (
@@ -953,9 +970,9 @@ function ConnectResult({
   return (
     <div className="text-ui text-muted-foreground" role="status">
       {busy === "connect" ? (
-        "Connecting…"
+        <LoadingLabel>Connecting</LoadingLabel>
       ) : waiting ? (
-        <Health state="starting">Waiting for the browser…</Health>
+        <Health state="starting">Waiting for the browser</Health>
       ) : blocked?.kind === "sign-in" ? (
         <Health state="waiting">This server needs you to sign in</Health>
       ) : blocked?.kind === "credential" ? (

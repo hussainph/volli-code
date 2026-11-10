@@ -31,17 +31,18 @@ describe("MarkdownViewToggle", () => {
     expect(html).toContain('data-testid="file-view-control-band"');
   });
 
-  it("keeps each view's word as its accessible name once it is an icon", () => {
+  it("keeps each view's word visible in the shared segmented control", () => {
     const html = draw("source", PLAIN);
     expect(html).toContain('aria-label="Markdown view"');
     expect(html).toContain("Source");
     expect(html).toContain("Document");
+    expect(html).not.toContain('class="sr-only"');
     expect(html).toContain("<svg");
   });
 
   it("marks the view in front as pressed", () => {
-    expect(draw("source", PLAIN)).toContain('aria-pressed="true" data-choice="source"');
-    expect(draw("document", PLAIN)).toContain('aria-pressed="true" data-choice="document"');
+    expect(draw("source", PLAIN)).toMatch(/aria-pressed="true"[^>]*data-choice="source"/);
+    expect(draw("document", PLAIN)).toMatch(/aria-pressed="true"[^>]*data-choice="document"/);
   });
 
   it("offers only the editable pair for a file Document view can show", () => {
@@ -70,9 +71,9 @@ describe("MarkdownViewToggle", () => {
     expect(refused).toContain("YAML frontmatter (line 1) renders as a heading");
 
     const previewing = draw("preview", RAW_HTML);
-    expect(previewing).toContain('aria-pressed="true" data-choice="preview"');
-    expect(previewing).toContain("Read-only preview");
-    expect(previewing.toLowerCase()).toContain("unsupported html");
+    expect(previewing).toMatch(/aria-pressed="true"[^>]*data-choice="preview"/);
+    expect(previewing).toContain(">Read-only</p>");
+    expect(previewing.toLowerCase()).not.toContain("unsupported html");
     // The refusal it stopped repeating is still one hover away.
     expect(previewing).toContain('title="Document view can');
   });
@@ -81,9 +82,9 @@ describe("MarkdownViewToggle", () => {
     // Preview draws the file as last read or saved. With unsaved edits open in
     // Source that is a different string, and saying nothing would read as work
     // lost rather than work not previewed.
-    expect(draw("preview", RAW_HTML, { dirty: true })).toContain("Unsaved");
-    expect(draw("preview", RAW_HTML, { dirty: false })).not.toContain("Unsaved");
-    // Source is where the draft is, so it needs no such sentence.
-    expect(draw("source", RAW_HTML, { dirty: true })).not.toContain("Unsaved");
+    expect(draw("preview", RAW_HTML, { dirty: true })).toContain("unsaved edits not shown");
+    expect(draw("preview", RAW_HTML, { dirty: false })).not.toContain("unsaved");
+    // Source is where the draft is, so it needs no such status.
+    expect(draw("source", RAW_HTML, { dirty: true })).not.toContain("unsaved");
   });
 });

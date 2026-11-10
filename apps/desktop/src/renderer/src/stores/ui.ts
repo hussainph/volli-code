@@ -13,16 +13,16 @@
  * `railWidth` — the ticket-detail right rail's width, resizable via its own
  * left-edge grip (see rail-resize-handle.tsx) — persists app-wide by the same
  * reasoning: it's a global chrome preference, not per-project state.
- * `settingsOpen` is session-only: Settings is app-wide chrome (the sidebar
- * footer entry), not a per-project place, so it stays up across project
- * switches and closes when a nav page is picked. `newTicketOpen` is
+ * `settingsOpen` is renderer-local: only the Settings renderer marks itself
+ * open. Workbench commands use the native opener and never block workspace
+ * shortcuts or close that independent window on navigation. `newTicketOpen` is
  * session-only for the same reason: the global New-ticket dialog (board
  * header button + the "c" hotkey) is app-wide chrome, not per-project
  * state, so it never follows a project into persisted storage.
  *
  * `projectRailHidden` — whether the Slack-style project switcher is
  * visible — persists app-wide, under the stored key `workspaceRailHidden`.
- * (That key predates "Workspace" naming the team container, CONTEXT.md, and
+ * (That key predates "Workspace" naming the team container, CONTEXT.md#workspace, and
  * stays as wire format so N-1 builds keep reading it.) Hiding it returns its
  * full width to the active project while
  * project keyboard shortcuts remain available.
@@ -135,15 +135,24 @@ import {
   type TicketRailMode,
   resolvePersistedRailMode,
 } from "@renderer/components/ticket/ticket-rail-model";
-import { appStateStorage } from "@renderer/lib/app-state-storage";
+import { appStateStorage, registerSharedPreferenceDefaults } from "@renderer/lib/app-state-storage";
+import type { SettingsWindowOpenInput } from "../../../ipc/settings-window";
+
+let settingsWindowOpener: ((navigation: SettingsWindowOpenInput) => void) | null = null;
+/** Installed by the desktop entry, leaving injected/test stores transport-free. */
+export function setSettingsWindowOpener(
+  opener: ((navigation: SettingsWindowOpenInput) => void) | null,
+): void {
+  settingsWindowOpener = opener;
+}
 
 export const UI_APP_STATE_KEY = "volli:ui";
 
-export const SIDEBAR_DEFAULT_WIDTH = 318;
+export const SIDEBAR_DEFAULT_WIDTH = 296;
 export const SIDEBAR_MIN_WIDTH = 280;
 export const SIDEBAR_MAX_WIDTH = 640;
 
-export const RAIL_DEFAULT_WIDTH = 300;
+export const RAIL_DEFAULT_WIDTH = 278;
 // The rail's session rows / properties all wrap in min-w-0 + truncate, so they
 // reflow gracefully; 240 is the floor where the "Sessions" header + status chip
 // and the History search stay legible without crowding.
@@ -364,6 +373,12 @@ interface UiState {
   railWidth: number;
   uiScale: number;
   settingsOpen: boolean;
+  /** Addressed native navigation, not a persisted preference. */
+  settingsNavigationRevision: number;
+  settingsProjectId: string | null | undefined;
+  settingsWorkspaceId: string | undefined;
+  settingsNavigationPending: boolean;
+  settingsNavigationError: string | null;
   /**
    * Which category Settings should open on, or null for its own default.
    *
@@ -392,9 +407,9 @@ interface UiState {
    */
   settingsSignInProviderId: string | null;
   /**
-   * A Configure pane someone asked for by name, or null (VC-303).
+   * A legacy project-settings pane someone asked for by name, or null (VC-303).
    *
-   * Configure owns its own selected pane, so this is a REQUEST rather than a
+   * Settings owns its own selected pane, so this is a REQUEST rather than a
    * mirror of it: ⌘K sets it, the page takes it — on mount, or while already
    * on screen — and spends it ({@link UiState.consumeConfigureCategory}), so
    * a later visit opens wherever the page itself would. Session-only.
@@ -487,9 +502,9 @@ interface UiState {
    * anyway — not an auth flow.
    */
   consumeSettingsSignIn(): void;
-  /** Ask Configure to show one pane; the page spends it on arrival. */
+  /** Open Settings on a named agent or project pane; the page spends it on arrival. */
   requestConfigureCategory(key: string): void;
-  /** Spend {@link UiState.configureCategory} — the Configure page took it. */
+  /** Spend {@link UiState.configureCategory} — Settings took it. */
   consumeConfigureCategory(): void;
   setNewTicketOpen(open: boolean): void;
   /** Show one closed Session's saved record. Replaces whichever was open. */
@@ -592,6 +607,11 @@ export function createUiStore(storage?: StateStorage) {
         railWidth: RAIL_DEFAULT_WIDTH,
         uiScale: UI_SCALE_DEFAULT,
         settingsOpen: false,
+        settingsNavigationRevision: 0,
+        settingsProjectId: undefined,
+        settingsWorkspaceId: undefined,
+        settingsNavigationPending: false,
+        settingsNavigationError: null,
         settingsCategory: null,
         settingsSignInProviderId: null,
         configureCategory: null,
@@ -616,14 +636,31 @@ export function createUiStore(storage?: StateStorage) {
         stepUiScale: (delta) => set((state) => ({ uiScale: steppedScale(state.uiScale, delta) })),
         setUiScale: (scale) => set({ uiScale: sanitizeUiScale(scale) }),
         resetUiScale: () => set({ uiScale: UI_SCALE_DEFAULT }),
-        setSettingsOpen: (open, category, signInProviderId) =>
+        setSettingsOpen: (open, category, signInProviderId) => {
+          if (settingsWindowOpener !== null) {
+            // Closing an in-app route must never close an independent native window.
+            if (open) settingsWindowOpener({ category, signInProviderId });
+            return;
+          }
           set({
             settingsOpen: open,
             settingsCategory: category ?? null,
             settingsSignInProviderId: signInProviderId ?? null,
-          }),
+          });
+        },
         consumeSettingsSignIn: () => set({ settingsSignInProviderId: null }),
-        requestConfigureCategory: (key) => set({ configureCategory: key }),
+        requestConfigureCategory: (key) => {
+          if (settingsWindowOpener !== null) {
+            settingsWindowOpener({ configureCategory: key });
+            return;
+          }
+          set({
+            configureCategory: key,
+            settingsOpen: true,
+            settingsCategory: null,
+            settingsSignInProviderId: null,
+          });
+        },
         consumeConfigureCategory: () => set({ configureCategory: null }),
         setNewTicketOpen: (open) => set({ newTicketOpen: open }),
         openSessionDetail: (projectId, sessionId) =>
@@ -775,3 +812,4 @@ export function createUiStore(storage?: StateStorage) {
 
 /** App-wide singleton; components import this directly. */
 export const useUiStore = createUiStore();
+registerSharedPreferenceDefaults(useUiStore);

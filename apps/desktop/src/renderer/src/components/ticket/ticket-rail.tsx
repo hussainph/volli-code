@@ -70,15 +70,12 @@
  *   - Do NOT call those openers from agent/filesystem event handlers.
  */
 import * as React from "react";
-import { ChatCircleDotsIcon } from "@phosphor-icons/react/dist/csr/ChatCircleDots";
-import { FoldersIcon } from "@phosphor-icons/react/dist/csr/Folders";
-import { GitDiffIcon } from "@phosphor-icons/react/dist/csr/GitDiff";
-import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
+import { ChatPendingIcon, FoldersIcon, DiffIcon, SearchIcon } from "@renderer/components/ui/icon";
+
 import type { Ticket } from "@volli/shared";
 
 import { TicketAutomationsPanel } from "@renderer/components/automations/ticket-rail-automations";
 import { RailModeTabs, type RailModeTab } from "@renderer/components/ticket/rail-mode-tabs";
-import { TicketProperties } from "@renderer/components/ticket/ticket-properties";
 import { TicketRepositorySummary } from "@renderer/components/ticket/ticket-repository-summary";
 import { TicketUsageRailFooter } from "@renderer/components/usage/usage-rail";
 import { TicketSessionsPanel } from "@renderer/components/ticket/ticket-sessions-panel";
@@ -94,10 +91,10 @@ import { AutomationsOnly } from "@renderer/components/automations/automation-ava
 import { LocalOnly } from "@renderer/components/hosts/local-only";
 
 const MODE_ICONS: Record<TicketRailMode, RailModeTab<TicketRailMode>["icon"]> = {
-  now: ChatCircleDotsIcon,
-  changes: GitDiffIcon,
+  now: ChatPendingIcon,
+  changes: DiffIcon,
   files: FoldersIcon,
-  search: MagnifyingGlassIcon,
+  search: SearchIcon,
 };
 
 /** This surface's pages, in pill order, as {@link RailModeTabs} takes them. */
@@ -180,7 +177,8 @@ export function TicketRail({
     // hides scrollbars in — which is why it sits on this root rather than on
     // each scroller: the page that overflows is not always one this file owns.
     <div
-      className="group/rail flex min-h-0 min-w-0 flex-1 flex-col"
+      className="glass group/rail flex min-h-0 min-w-0 flex-1 flex-col"
+      data-tint="true"
       data-narrow={narrow ? "true" : "false"}
       data-volli-rail="ticket"
       data-testid="ticket-rail"
@@ -203,12 +201,9 @@ export function TicketRail({
           // blocks stack in it, and what is pinned under it stays readable at
           // any scroll position.
           <>
-            {/* `pb-8` here rather than on the last block: the scratch hangs it
-                off its session list, but that list is the one block this file
-                does not own, so the page keeps its own floor. */}
-            <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pb-8 [scroll-padding-bottom:2rem]">
-              {/* What this Ticket IS: status, priority, labels — as rows. */}
-              <TicketProperties projectId={projectId} ticket={ticket} />
+            {/* Independent working-set and offer scrollers. Ticket metadata
+                is edited beside its title on the document tab. */}
+            <div className="ticket-inspector-now flex min-h-0 flex-1 flex-col gap-4 overflow-hidden pb-2">
               {/* The working set, with the record folded under it. The block
                   a person reads most often, so it sits nearest the top. */}
               <TicketSessionsPanel

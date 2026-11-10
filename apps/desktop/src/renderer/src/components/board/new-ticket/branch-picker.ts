@@ -179,7 +179,7 @@ export function baseChipLabel(value: string | null, state: BranchListingState): 
   if (value !== null) return { text: value, spoken: value };
   switch (state.status) {
     case "loading":
-      return { text: "…", spoken: "reading branches" };
+      return { text: "Reading", spoken: "Reading branches" };
     case "failed":
       return { text: "unknown", spoken: "unknown" };
     case "loaded":

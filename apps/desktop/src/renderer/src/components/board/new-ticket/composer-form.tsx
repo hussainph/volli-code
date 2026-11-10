@@ -24,9 +24,9 @@ import { runAutomationOnTicket } from "@renderer/components/automations/run-auto
 import { useAutomationRunOffer } from "@renderer/components/automations/automation-run-menu";
 import {
   type DocumentFileRefs,
-  MonacoDocumentEditor,
   type MonacoDocumentEditorHandle,
 } from "@renderer/components/editor/monaco-document-editor";
+import { DraftDocumentEditor } from "@renderer/components/editor/draft-document-editor";
 import { startTicketChat } from "@renderer/components/sessions/session-create";
 import { useRunnerPicker } from "@renderer/components/chat/runner-picker";
 import { launchStore } from "@renderer/stores/launch";
@@ -447,8 +447,8 @@ export function ComposerForm({
     // thing holding it open — so the composer stayed wide, overflowed its
     // `overflow-hidden` panel to the right, and only recovered when the next
     // open remounted the editor. `min-w-0` lets the column shrink below its
-    // content, which lets the host shrink, which is the resize Monaco's
-    // `automaticLayout` observer was waiting for.
+    // content, which lets the host shrink, which is the resize the document
+    // editor's layout observer was waiting for.
     <div
       // `commit-tray`, not the bare marker every other prompt surface carries:
       // this footer's three welded commits leave the settings run ~215px less
@@ -495,9 +495,10 @@ export function ComposerForm({
             }
           }}
           placeholder="Ticket title"
+          aria-label="Ticket title"
           className="w-full border-none bg-transparent text-heading font-medium text-foreground outline-none placeholder:text-muted-foreground"
         />
-        <MonacoDocumentEditor
+        <DraftDocumentEditor
           ref={editorRef}
           // No ticket exists yet, so the draft body borrows a ticket-body
           // identity under a reserved id. Ticket ids are UUIDs, so this can
@@ -510,7 +511,6 @@ export function ComposerForm({
           viewId="composer:body"
           // The draft cache (draft.ts) keeps every edit, so the body is never
           // unsaved work; see DocumentSavePolicy.
-          savePolicy="draft"
           value={body}
           onChange={setBody}
           placeholder="Add description…"
@@ -552,11 +552,12 @@ export function ComposerForm({
           by 6px. */}
       <AttachmentStrip
         attachments={attachments}
+        presentation="composer"
         onRemove={(attachment) => void removeAttachment(attachment)}
         className="border-t border-border px-6 py-2"
       />
 
-      <ReadOnlyNote projectId={target.id} className="px-6 pt-3" />
+      <ReadOnlyNote projectId={target.id} className="px-6 pt-4" />
       <div className="prompt-toolbar px-6 py-4">
         <ComposerFooter
           projectId={target.id}

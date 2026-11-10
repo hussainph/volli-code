@@ -53,11 +53,12 @@ Data and UI:
 - Terminal access goes through the `TerminalEngine` seam: node-pty stays in the host, xterm.js in the renderer, and the user's Ghostty config is the appearance source. Run `pnpm -C apps/desktop run rebuild:native` after every install.
 - Live terminals must never be unmounted incidentally (e.g. selecting a card).
 - **Ship no third-party terminal themes**, not even excerpts. Themes come from the user's machine; the fallback palette derives from design tokens (`renderer/src/terminal/appearance.ts`). CI enforces it (`check-vendored-themes.mjs`).
+- **UI work loads `.agents/skills/volli-design/SKILL.md`** before feature design, implementation or visual review; `docs/DESIGN.md` is the Volli Glass spec.
 - **UI copy: let controls talk.** No `description` on `SettingsSection`/`SettingsRow`, no tutorial tooltips or explanatory paragraphs unless asked. Labels are nouns. Exceptions: irreversible confirms, one-line trust boundaries, blocked states with one recovery action. Module comments carry architecture; UI strings don't repeat them.
 - **Color tokens are generated, not authored**, from a stored canvas and appearance. Regenerate `globals.css` with `node apps/desktop/scripts/generate-theme-css.mjs`; never hand-tune it. New color tokens go in `THEME_TOKEN_NAMES`/`CANVAS_TOKEN_NAMES`. Never persist resolved tokens. Every surface must hold up across canvases in light and dark. Detail: `conventions.md`.
 - Spacing, width and type follow `docs/DESIGN.md`: no arbitrary `text-[Npx]`.
-- Every context-menu action carries a Phosphor icon via the shared primitive.
-- **Icons are outline by default.** `fill` marks only the one exception among neighbours; `bold` is the small-size weight; never `duotone`. Detail: `conventions.md`.
+- Every context-menu action carries an icon from the shared set via the shared primitive.
+- **Icons use the shared semantic seam** (`components/ui/icon.tsx`), backed only by Hugeicons free Stroke Rounded (MIT). Outline stroke is 1.5; ≤12px and deliberate heavier symbols use 2.25. Mark active/error exceptions with accent/destructive ink or selected backgrounds, never fake fill. No direct vendor imports outside the seam; never Pro, bulk, solid or `duotone`. Detail: `conventions.md`.
 - **Surface every failed mutation; never swallow errors.** The one exception is background work no one asked for (e.g. auto-titling), which logs and keeps its fallback. Errors are for failed operations, not for user choices we disagree with. Fault surfaces show the problem and one fixing action, and keep diagnostics in the support report.
 - **The shipped licence notice is generated.** Regenerate `apps/desktop/THIRD-PARTY-NOTICES` with `node scripts/generate-third-party-notices.mjs` after any production dependency change; CI's `check:notices` fails on drift. Detail: `conventions.md`.
 
@@ -80,6 +81,7 @@ Workflow:
 CI owns the full suite, coverage thresholds and smoke lanes; `CI gate` sums every required check. Which lane runs what: `docs/development/ci.md`. This machine runs many Sessions at once, so local runs stay small:
 
 - **Before pushing:** `vp check`, typecheck each touched package (`vp run --filter <package> typecheck`; `vp exec tsc --noEmit -p tsconfig.json` for root), and only the test files you touched or that directly cover your change (`vp test run path/to/file.test.ts` from that package). For a file on a protected coverage list: `vp test run <its test> --coverage --coverage.include=<the file>`.
+- **Renderer pre-push gates:** also run `vp run --filter @volli/desktop check:design-tokens` and `vp run --filter @volli/desktop check:glass-design`; `vp check` does not run these source guards. When changing CSS tokens, run `vp run --filter @volli/desktop check:theme-css` too.
 - **Never run locally** a full suite (`pnpm test`, `vp run -r test`), full coverage, or the smoke matrix (`run-smokes.mjs`) unless the ticket is about them.
 - **Push once**, when the work is done. Every push restarts CI.
 - **Watch CI without `sleep` loops**: one blocking `gh pr checks <pr> --watch --fail-fast`. On red, read only the failing log (`gh run view <run-id> --log-failed`), fix that, push once.

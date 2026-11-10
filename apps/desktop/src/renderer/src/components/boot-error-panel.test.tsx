@@ -14,7 +14,7 @@ import type {
 } from "../../../ipc/contract";
 import { BootErrorPanel, DOWNLOAD_URL, NEWER_VERSION_TITLE } from "./boot-error-panel";
 
-const RESTORE_LABEL = "Restore from the last backup that checks clean";
+const RESTORE_LABEL = "Restore latest clean backup";
 const CLEAN: DatabaseSafetyCopy = {
   name: "volli.db.backup-v2",
   modifiedAt: 2000,
@@ -164,9 +164,9 @@ describe("BootErrorPanel", () => {
       UNAVAILABLE.name,
     ]);
     expect(rows.map((row) => row.querySelector("span")?.textContent)).toEqual([
-      "damaged",
-      "clean",
-      "unavailable",
+      "Damaged",
+      "Clean",
+      "Unavailable",
     ]);
     expect(container.querySelectorAll("time")).toHaveLength(3);
     expect(main.list).toHaveBeenCalledOnce();
@@ -180,7 +180,7 @@ describe("BootErrorPanel", () => {
     // Main selects and rechecks the newest clean candidate: renderer sends no
     // filename or path, and does not reload against the degraded process.
     expect(main.restore).toHaveBeenCalledExactlyOnceWith();
-    expect(text()).toContain("Backup restored. Volli is restarting…");
+    expect(text()).toContain("Backup restored. Volli is restarting");
     expect(container.querySelector("[role='status']")?.textContent).toBeTruthy();
     expect(restoreButton().disabled).toBe(true);
     await act(async () => restoreButton().click());
@@ -193,9 +193,9 @@ describe("BootErrorPanel", () => {
     main.list.mockReturnValue(pending.promise);
     await mount();
 
-    expect(text()).toContain("Checking whether backup recovery is available…");
+    expect(text()).toContain("Checking backups");
     expect(container.querySelector("button")).toBeNull();
-    expect(text()).not.toContain("Local safety copies");
+    expect(text()).not.toContain("Local backups");
 
     await act(async () => pending.resolve({ ok: true, backups: [CLEAN] }));
     expect(restoreButton().disabled).toBe(false);
@@ -213,11 +213,11 @@ describe("BootErrorPanel", () => {
     });
     expect(main.restore).toHaveBeenCalledOnce();
     expect(restoreButton().disabled).toBe(true);
-    expect(text()).toContain("Restoring the last backup that checks clean…");
+    expect(text()).toContain("Restoring backup");
     expect(text()).not.toContain("Backup restored.");
 
     await act(async () => pending.resolve({ ok: true, restoredBackup: CLEAN.name }));
-    expect(text()).toContain("Volli is restarting…");
+    expect(text()).toContain("Volli is restarting");
     expect(restoreButton().disabled).toBe(true);
   });
 
@@ -226,10 +226,8 @@ describe("BootErrorPanel", () => {
     async ({ backups }) => {
       const main = bridge({ ok: true, backups });
       await mount();
-      expect(text()).toContain("No local backup checks clean. Nothing was restored.");
-      expect(text()).toContain(
-        "Your database and safety copies are preserved for manual recovery.",
-      );
+      expect(text()).toContain("No clean backup available. Nothing restored.");
+      expect(text()).toContain("Your database and backups are preserved for manual recovery.");
       expect(restoreButton().disabled).toBe(true);
       await act(async () => restoreButton().click());
       expect(main.restore).not.toHaveBeenCalled();
@@ -249,8 +247,8 @@ describe("BootErrorPanel", () => {
 
     expect(text()).toContain("A renderer preference failed to load");
     expect(text()).toContain("Backup recovery is unavailable. No files were changed.");
-    expect(text()).not.toContain("Local safety copies");
-    expect(text()).not.toContain("No local backup checks clean");
+    expect(text()).not.toContain("Local backups");
+    expect(text()).not.toContain("No clean backup available");
     expect(text()).not.toContain("/private/profile");
     expect(container.querySelector("button")).toBeNull();
     expect(main.restore).not.toHaveBeenCalled();
@@ -266,7 +264,7 @@ describe("BootErrorPanel", () => {
       await mount();
       await act(async () => restoreButton().click());
 
-      expect(text()).toContain("Couldn't restore a clean backup. Volli has not restarted.");
+      expect(text()).toContain("Couldn't restore the backup. Volli hasn't restarted.");
       expect(text()).toContain("preserved for manual recovery");
       expect(text()).not.toContain("/private/profile");
       expect(text()).not.toContain("Backup restored.");
@@ -276,14 +274,14 @@ describe("BootErrorPanel", () => {
       main.restore.mockResolvedValue({ ok: true, restoredBackup: CLEAN.name });
       await act(async () => restoreButton().click());
       expect(main.restore).toHaveBeenCalledTimes(2);
-      expect(text()).toContain("Backup restored. Volli is restarting…");
+      expect(text()).toContain("Backup restored. Volli is restarting");
       expect(text()).not.toContain("Couldn't restore");
     },
   );
 
   it("reports the explicit no-clean failure if backups changed after listing", async () => {
     const failure =
-      "No local backup checks clean. Nothing was restored. Your database and safety copies are preserved for manual recovery.";
+      "No clean backup available. Nothing restored. Your database and backups are preserved for manual recovery.";
     bridge({ ok: true, backups: [CLEAN] }, { ok: false, error: failure });
     await mount();
     await act(async () => restoreButton().click());
@@ -318,7 +316,7 @@ describe("BootErrorPanel", () => {
 
     await act(async () => stale.resolve({ ok: true, backups: [] }));
     expect(restoreButton().disabled).toBe(false);
-    expect(text()).not.toContain("No local backup checks clean");
+    expect(text()).not.toContain("No clean backup available");
   });
 
   it("names a database from a newer Volli, without the raw error", async () => {
@@ -327,16 +325,14 @@ describe("BootErrorPanel", () => {
       ok: true,
       backups: [CLEAN, { name: "volli.db.backup-v99", modifiedAt: 4000, integrity: "newer" }],
     });
-    await mount("This database was created by a newer version of Volli. Nothing was changed.");
+    await mount("Update Volli to open this database. Nothing was changed.");
 
     expect(container.querySelector("h1")?.textContent).toBe(NEWER_VERSION_TITLE);
-    expect(text()).toContain(
-      "This version can't open it, so nothing was changed. Update Volli, or restore an older backup.",
-    );
+    expect(text()).toContain("Nothing changed. Update Volli or restore an older backup.");
     expect(text()).not.toContain("Volli couldn't load its data");
     expect([...container.querySelectorAll("li span")].map((span) => span.textContent)).toEqual([
-      "newer version",
-      "clean",
+      "Newer version",
+      "Clean",
     ]);
     // Restoring an older backup is the same action as on the damaged screen.
     expect(restoreButton().disabled).toBe(false);
@@ -352,12 +348,10 @@ describe("BootErrorPanel", () => {
     // Nothing is said about the result until the check has actually run.
     expect(text()).not.toContain("No newer version");
     await act(async () => main.updates.push(updaterState({ phase: "checking" })));
-    expect(buttonLabelled("Checking…").disabled).toBe(true);
+    expect(buttonLabelled("Checking").disabled).toBe(true);
     await act(async () => main.updates.push(updaterState({ phase: "idle" })));
     expect(text()).toContain("No newer version on this update channel.");
-    expect(text()).toContain(
-      "This database needs a newer Volli. If you switched from Canary, reinstall Canary from the download page, or wait for a newer release here.",
-    );
+    expect(text()).toContain("Download a newer build. If you used Canary, reinstall Canary.");
     expect(downloadLink()?.target).toBe("_blank");
   });
 
@@ -367,7 +361,7 @@ describe("BootErrorPanel", () => {
     await act(async () =>
       main.updates.push(updaterState({ phase: "downloading", targetVersion: "0.5.0", percent: 3 })),
     );
-    expect(text()).toContain("Downloading Volli 0.5.0…");
+    expect(text()).toContain("Downloading Volli 0.5.0");
     expect(buttonLabelled("Check for updates").disabled).toBe(true);
     await act(async () =>
       main.updates.push(updaterState({ phase: "downloaded", targetVersion: "0.5.0" })),
@@ -397,7 +391,7 @@ describe("BootErrorPanel", () => {
   it("offers the download page instead of a check when this build has no updater", async () => {
     newerBridge("newer-version", updaterState({ supported: false }));
     await mount();
-    expect(downloadLink()?.textContent).toBe("Open the download page");
+    expect(downloadLink()?.textContent).toBe("Download Volli");
     expect(
       [...container.querySelectorAll("button")].some((b) => b.textContent === "Check for updates"),
     ).toBe(false);

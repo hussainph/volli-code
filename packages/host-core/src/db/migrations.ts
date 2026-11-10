@@ -1966,7 +1966,7 @@ CREATE INDEX IF NOT EXISTS idx_worktree_cleanup_receipts_command
  *
  * `occurred_at` cannot supply it, for migration 029's reasons verbatim: two
  * commits can share a millisecond and a timestamp is metadata rather than
- * ledger order (CONTEXT.md's Await entry says so in as many words). `rowid`
+ * ledger order (CONTEXT.md#session-event). `rowid`
  * cannot either — it may be reused after a cascading delete, and a Session
  * delete cascades this whole table.
  *
@@ -2849,6 +2849,16 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 69,
     name: "session birth owners — a trigger-kept cache of each Session's birth owner for roster reads (VC-1097)",
     sql: SESSION_BIRTH_OWNERS_MIGRATION,
+  },
+  {
+    version: 70,
+    name: "latest valid Session signal — metadata-only per-Session seek (VC-1146)",
+    // Additive and rebuildable: no facts change and older readers keep working.
+    // Include the id so the winner lookup never opens historical payload pages.
+    sql: `CREATE INDEX IF NOT EXISTS session_events_latest_signal
+      ON session_events(session_id, sequence DESC, id)
+      WHERE json_extract(payload, '$.kind') = 'session.signaled'
+        AND json_extract(payload, '$.signal') IN ('done', 'blocked');`,
   },
 ];
 

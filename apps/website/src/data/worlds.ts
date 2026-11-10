@@ -5,8 +5,7 @@
  * person authors in Settings → Appearance — and it is painted at build time by
  * the app's own canvas engine in `@volli/shared`, so the light behind a still
  * of the app is the light that app actually wears. The palette is the release
- * film's (`apps/desktop/src/flute/kit/world.tsx`): the site and the film tell
- * the same release in the same colours.
+ * film's, so the site and the film tell the same release in the same colours.
  *
  * Only build-time code reads this module. Nothing here reaches the browser but
  * the CSS strings it produces.
@@ -15,6 +14,7 @@ import {
   canvasBackground,
   DEFAULT_CANVAS,
   effectiveStopHexes,
+  windowBackground,
   type Canvas,
   type CanvasStop,
 } from "@volli/shared";
@@ -116,22 +116,13 @@ export function paintWorld(name: WorldName): PaintedWorld {
 
 /**
  * A world as numbers a shader can paint (the opt-in animated background,
- * `WorldShader.tsx`). Everything is read back out of the same `canvasBackground`
- * string the static world paints, so the shader starts from the exact light the
- * build-time canvas shows and the fade between them is a change of motion, not
- * of colour.
+ * `WorldShader.tsx`). Peak colours and the base come from the shared canvas
+ * engine's structured palette, not by parsing its CSS serialization. The
+ * animated mesh uses those colours; it does not reproduce the static geometry.
  */
 export interface WorldShaderPool {
-  /** The pool as the canvas paints it (dark band, vibrancy applied). */
+  /** The composited peak colour, with dark appearance and vibrancy applied. */
   hex: string;
-  /** Centre, as fractions of the frame. */
-  x: number;
-  y: number;
-  /** Ellipse radii, as fractions of the frame. */
-  rx: number;
-  ry: number;
-  /** Where the pool has faded to transparent, as a fraction of its radius. */
-  fade: number;
 }
 
 export interface WorldShaderPalette {
@@ -145,29 +136,15 @@ export interface WorldShaderPalette {
   grain: number;
 }
 
-const POOL_LAYER =
-  /radial-gradient\(ellipse ([\d.]+)% ([\d.]+)% at ([\d.]+)% ([\d.]+)%, (#[0-9a-f]{6}), transparent ([\d.]+)%\)/gi;
-
 export function shaderPalette(name: WorldName): WorldShaderPalette {
+  const world = WORLDS[name];
   const painted = paintWorld(name);
-  const layers = [...painted.background.matchAll(POOL_LAYER)].map(
-    ([, rx, ry, x, y, hex, fade]): WorldShaderPool => ({
-      hex: hex!,
-      x: Number(x) / 100,
-      y: Number(y) / 100,
-      rx: Number(rx) / 100,
-      ry: Number(ry) / 100,
-      fade: Number(fade) / 100,
-    }),
-  );
-  const base = painted.background.split(", ").at(-1)!.trim();
-  if (layers.length === 0 || !/^#[0-9a-f]{6}$/i.test(base)) {
-    throw new Error(`worlds: cannot read the painted canvas of "${name}" back as shader data`);
-  }
   return {
-    base,
-    // The CSS lists the topmost layer first; a shader paints bottom-up.
-    canvas: layers.toReversed(),
+    base: windowBackground(world, "dark"),
+    // Authored order is CSS top-first; the shader's deep colours are bottom-first.
+    canvas: effectiveStopHexes(world, "dark")
+      .map((hex) => ({ hex }))
+      .toReversed(),
     light: painted.pools,
     bloom: painted.bloom,
     grain: WORLDS[name].grain,
