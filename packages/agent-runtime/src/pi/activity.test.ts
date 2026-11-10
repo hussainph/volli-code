@@ -39,6 +39,17 @@ function project(value: unknown) {
   );
 }
 
+const label = (questions: unknown): unknown =>
+  mapPiActivity(
+    {
+      type: "tool_execution_start",
+      toolCallId: "c",
+      toolName: "classify",
+      args: { state: {}, questions },
+    },
+    activityContext({ observedAt: 1 }),
+  ).descriptor;
+
 describe("mapPiActivity", () => {
   it("bounds and validates partial-completion metadata without trusting malformed nested records", () => {
     const details = {
@@ -386,16 +397,6 @@ describe("mapPiActivity", () => {
   });
 
   it("names a classify row by the questions it asked (VC-478)", () => {
-    const label = (questions: unknown): unknown =>
-      mapPiActivity(
-        {
-          type: "tool_execution_start",
-          toolCallId: "c",
-          toolName: "classify",
-          args: { state: {}, questions },
-        },
-        activityContext({ observedAt: 1 }),
-      ).descriptor;
     expect(label({ approved: {}, category: {} })).toMatchObject({
       kind: "other",
       nativeToolName: "classify",
@@ -1510,6 +1511,12 @@ describe("mapPiActivity", () => {
   });
 });
 
+const facet = (toolName: string, args: Record<string, unknown>) =>
+  mapPiActivity(
+    { type: "tool_execution_start", toolCallId: "c", toolName, args },
+    activityContext({ observedAt: 1 }),
+  ).descriptor.browse;
+
 /**
  * Browser tools become `browse` rows with a facet the renderer reads instead
  * of tool names (VC-238). At start the facet is what the CALL says — the tab
@@ -1571,12 +1578,6 @@ describe("mapPiActivity browser tools (VC-238)", () => {
   });
 
   it("derives the action from the call for every browser tool before the host has answered", () => {
-    const facet = (toolName: string, args: Record<string, unknown>) =>
-      mapPiActivity(
-        { type: "tool_execution_start", toolCallId: "c", toolName, args },
-        activityContext({ observedAt: 1 }),
-      ).descriptor.browse;
-
     expect(facet("browser_navigate", { tabId: "t", action: "back" })).toMatchObject({
       action: "back",
       tabId: "t",

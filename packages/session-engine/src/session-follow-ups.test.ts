@@ -363,39 +363,39 @@ describe("follow-up retention compatibility", () => {
   });
 });
 
+async function queuedActive(f: ReturnType<typeof fixture>) {
+  const runtime = f.runtime();
+  const sessionId = await create(runtime);
+  await attach(runtime, sessionId);
+  await runtime.command({
+    commandId: "active",
+    sessionId,
+    command: { kind: "message.submit", message: message("active") },
+  });
+  await runtime.command({
+    commandId: "queued",
+    sessionId,
+    command: { kind: "message.submit", delivery: "queue", message: message("queued") },
+  });
+  return {
+    runtime,
+    sessionId,
+    steer: {
+      commandId: "steer",
+      sessionId,
+      command: {
+        kind: "message.submit" as const,
+        delivery: "steer" as const,
+        message: message("queued"),
+      },
+    },
+  };
+}
+
 describe("host follow-up commands", () => {
   it("retains replies for at least the backend terminal-job dedupe window", () => {
     expect(FOLLOW_UP_COMMAND_RETENTION_MS).toBeGreaterThanOrEqual(TERMINAL_JOB_TTL_MS);
   });
-
-  async function queuedActive(f: ReturnType<typeof fixture>) {
-    const runtime = f.runtime();
-    const sessionId = await create(runtime);
-    await attach(runtime, sessionId);
-    await runtime.command({
-      commandId: "active",
-      sessionId,
-      command: { kind: "message.submit", message: message("active") },
-    });
-    await runtime.command({
-      commandId: "queued",
-      sessionId,
-      command: { kind: "message.submit", delivery: "queue", message: message("queued") },
-    });
-    return {
-      runtime,
-      sessionId,
-      steer: {
-        commandId: "steer",
-        sessionId,
-        command: {
-          kind: "message.submit" as const,
-          delivery: "steer" as const,
-          message: message("queued"),
-        },
-      },
-    };
-  }
 
   it("steers the canonical host payload, never the Client's reconstruction", async () => {
     const f = fixture();
@@ -1748,6 +1748,39 @@ const queue = (runtime: Runtime, sessionId: string, id: string) =>
   });
 const tick = () => new Promise((resolve) => setTimeout(resolve, 1));
 
+async function activeWithQueue(f: ReturnType<typeof fixture>, ids: readonly string[]) {
+  const runtime = f.runtime();
+  const sessionId = await create(runtime);
+  await attach(runtime, sessionId);
+  await runtime.command({
+    commandId: "active",
+    sessionId,
+    command: { kind: "message.submit", message: message("active") },
+  });
+  for (const id of ids) await queue(runtime, sessionId, id);
+  return { runtime, sessionId };
+}
+
+async function interruptedRecovery(f: ReturnType<typeof fixture>) {
+  const runtime = f.runtime();
+  const sessionId = await create(runtime);
+  await attach(runtime, sessionId);
+  await runtime.command({
+    commandId: "active",
+    sessionId,
+    command: { kind: "message.submit", message: message("active") },
+  });
+  await f.adapter.emit({
+    kind: "attention",
+    state: "raised",
+    reason: "partial-turn",
+    message: RECOVERED_TURN_INTERRUPTED_DETAIL,
+  });
+  await f.adapter.emit({ kind: "turn", state: "interrupted", turnId: "turn:active" });
+  const attachmentId = (await f.engine.getSession({ sessionId }))!.liveExecutor!.id;
+  return { runtime, sessionId, attachmentId };
+}
+
 /**
  * VC-675 regressions for follow-ups that could get stuck with no exit.
  * Every path must settle or report a recoverable failure.
@@ -1763,19 +1796,6 @@ describe("host follow-ups never strand a row", () => {
       await gate;
       return super.attach(...args);
     }
-  }
-
-  async function activeWithQueue(f: ReturnType<typeof fixture>, ids: readonly string[]) {
-    const runtime = f.runtime();
-    const sessionId = await create(runtime);
-    await attach(runtime, sessionId);
-    await runtime.command({
-      commandId: "active",
-      sessionId,
-      command: { kind: "message.submit", message: message("active") },
-    });
-    for (const id of ids) await queue(runtime, sessionId, id);
-    return { runtime, sessionId };
   }
 
   it("P1: clearing the Attention that held a queue wakes it, with no restart", async () => {
@@ -2593,36 +2613,16 @@ describe("host follow-ups never strand a row", () => {
   });
 
   describe("a turn recovery found interrupted (VC-450)", () => {
-    async function recovered(f: ReturnType<typeof fixture>) {
-      const runtime = f.runtime();
-      const sessionId = await create(runtime);
-      await attach(runtime, sessionId);
-      await runtime.command({
-        commandId: "active",
-        sessionId,
-        command: { kind: "message.submit", message: message("active") },
-      });
-      await f.adapter.emit({
-        kind: "attention",
-        state: "raised",
-        reason: "partial-turn",
-        message: RECOVERED_TURN_INTERRUPTED_DETAIL,
-      });
-      await f.adapter.emit({ kind: "turn", state: "interrupted", turnId: "turn:active" });
-      const attachmentId = (await f.engine.getSession({ sessionId }))!.liveExecutor!.id;
-      return { runtime, sessionId, attachmentId };
-    }
-
     it("reads the executor's resume boundary, and null where it cannot say", async () => {
       const silent = fixture();
-      const unsaid = await recovered(silent);
+      const unsaid = await interruptedRecovery(silent);
       expect(unsaid.runtime.resumeBoundary({ attachmentId: unsaid.attachmentId })).toBeNull();
       expect(unsaid.runtime.resumeBoundary({ attachmentId: "unknown" })).toBeNull();
       await unsaid.runtime.close();
 
       const telling = fixture();
       telling.adapter.boundary = "tool-in-flight";
-      const said = await recovered(telling);
+      const said = await interruptedRecovery(telling);
       expect(said.runtime.resumeBoundary({ attachmentId: said.attachmentId })).toBe(
         "tool-in-flight",
       );
@@ -2632,7 +2632,7 @@ describe("host follow-ups never strand a row", () => {
     it("keeps the restart warning through a Retry, and lets a message answer it", async () => {
       for (const retry of ["person", "host"] as const) {
         const f = fixture();
-        const { runtime, sessionId, attachmentId } = await recovered(f);
+        const { runtime, sessionId, attachmentId } = await interruptedRecovery(f);
         await runtime.command({
           ...(retry === "host" ? { origin: { kind: "volli", reason: "relaunch-recovery" } } : {}),
           commandId:
@@ -2648,7 +2648,7 @@ describe("host follow-ups never strand a row", () => {
         await runtime.close();
       }
       const f = fixture();
-      const typed = await recovered(f);
+      const typed = await interruptedRecovery(f);
       await typed.runtime.command({
         commandId: "typed",
         sessionId: typed.sessionId,
@@ -3329,6 +3329,15 @@ describe("host follow-ups never strand a row", () => {
   });
 });
 
+async function bound(f: ReturnType<typeof fixture>) {
+  const runtime = f.runtime();
+  const sessionId = await create(runtime);
+  await attach(runtime, sessionId);
+  // The attach wakes the queue; let that (empty) drain decide first.
+  await runtime.recoverFollowUps();
+  return { runtime, sessionId };
+}
+
 /**
  * VC-577: the menu-bar host quits only when nothing is live, and "nothing is
  * live" must include work the runtime accepted whose turn has not opened yet.
@@ -3336,15 +3345,6 @@ describe("host follow-ups never strand a row", () => {
  * and a queued row waits, durable, for the next launch.
  */
 describe("accepted turn starts and the idle-exit latch", () => {
-  async function bound(f: ReturnType<typeof fixture>) {
-    const runtime = f.runtime();
-    const sessionId = await create(runtime);
-    await attach(runtime, sessionId);
-    // The attach wakes the queue; let that (empty) drain decide first.
-    await runtime.recoverFollowUps();
-    return { runtime, sessionId };
-  }
-
   it("counts a message from admission until its turn opens, not until its dispatch returns", async () => {
     const located = Promise.withResolvers<void>();
     let holdLocate = false;

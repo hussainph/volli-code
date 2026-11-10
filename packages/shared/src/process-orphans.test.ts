@@ -326,27 +326,28 @@ describe("formatProcessAge", () => {
   });
 });
 
+const candidate = (overrides: Partial<OrphanProcessCandidate> = {}): OrphanProcessCandidate => ({
+  itemId: "ledger:1:2",
+  source: "ledger",
+  stance: "reapable",
+  pid: 1,
+  pgid: 1,
+  startedAt: NOW - 30 * HOUR,
+  ageMs: 30 * HOUR,
+  rssBytes: 1024,
+  command: "next dev",
+  cwd: worktree.path,
+  tty: null,
+  sessionId: "session-ended",
+  ticketId: "ticket-341",
+  ticketDisplayId: "VC-341",
+  worktreePath: worktree.path,
+  reason: "",
+  ...overrides,
+});
+
 describe("selectAutoReapable", () => {
   const pressure: MemoryPressureReading = { underPressure: true, detail: "free 8%" };
-  const candidate = (overrides: Partial<OrphanProcessCandidate> = {}): OrphanProcessCandidate => ({
-    itemId: "ledger:1:2",
-    source: "ledger",
-    stance: "reapable",
-    pid: 1,
-    pgid: 1,
-    startedAt: NOW - 30 * HOUR,
-    ageMs: 30 * HOUR,
-    rssBytes: 1024,
-    command: "next dev",
-    cwd: worktree.path,
-    tty: null,
-    sessionId: "session-ended",
-    ticketId: "ticket-341",
-    ticketDisplayId: "VC-341",
-    worktreePath: worktree.path,
-    reason: "",
-    ...overrides,
-  });
 
   it("is off until a person turns it on", () => {
     expect(selectAutoReapable([candidate()], DEFAULT_AUTO_REAP_POLICY, pressure)).toEqual({

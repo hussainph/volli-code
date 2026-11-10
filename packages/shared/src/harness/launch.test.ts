@@ -54,6 +54,19 @@ describe("harnessEnvSuffix", () => {
   });
 });
 
+const hostile = (injection: HarnessAdapter["injection"]): HarnessAdapter =>
+  bareAdapter({
+    injection,
+    events: [
+      { event: "turn.completed", native: "__proto__", delivery: "async" },
+      { event: "turn.started", native: "constructor", delivery: "async" },
+    ],
+    launchSettings: [
+      { path: "__proto__.polluted", value: "yes" },
+      { path: "constructor.prototype.polluted", value: "yes" },
+    ],
+  });
+
 describe("buildLaunchConfig", () => {
   it("asks nothing of a harness that accepts no configuration", () => {
     const config = buildLaunchConfig(bareAdapter(), INPUT);
@@ -328,19 +341,6 @@ describe("buildLaunchConfig", () => {
    * refusals neither of which is load-bearing alone is the whole point.
    */
   describe("given prototype-chain names the parser would have refused", () => {
-    const hostile = (injection: HarnessAdapter["injection"]): HarnessAdapter =>
-      bareAdapter({
-        injection,
-        events: [
-          { event: "turn.completed", native: "__proto__", delivery: "async" },
-          { event: "turn.started", native: "constructor", delivery: "async" },
-        ],
-        launchSettings: [
-          { path: "__proto__.polluted", value: "yes" },
-          { path: "constructor.prototype.polluted", value: "yes" },
-        ],
-      });
-
     // `opencode-plugin` is absent on purpose: it renders through `plugin.ts`,
     // which still keys a plain object by native name and throws on
     // `constructor` before it can pollute anything. The parser refusal covers

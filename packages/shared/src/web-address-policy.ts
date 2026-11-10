@@ -129,6 +129,24 @@ function classifyIpv4(octets: Ipv4Octets): WebAddressVerdict {
  */
 type Ipv6Groups = readonly [number, number, number, number, number, number, number, number];
 
+const parseSide = (side: string): number[] | undefined => {
+  if (side === "") return [];
+  const groups: number[] = [];
+  const parts = side.split(":");
+  for (const [index, part] of parts.entries()) {
+    if (index === parts.length - 1 && part.includes(".")) {
+      const octets = ipv4Octets(part);
+      if (octets === undefined) return undefined;
+      groups.push((octets[0] << 8) | octets[1]);
+      groups.push((octets[2] << 8) | octets[3]);
+      continue;
+    }
+    if (!/^[0-9a-fA-F]{1,4}$/.test(part)) return undefined;
+    groups.push(Number.parseInt(part, 16));
+  }
+  return groups;
+};
+
 /**
  * Expand an IPv6 address into its eight 16-bit groups.
  *
@@ -147,24 +165,6 @@ function ipv6Groups(address: string): Ipv6Groups | undefined {
   const compressedAt = zoned.indexOf("::");
   // A second `::` makes the address ambiguous about where the zeros went.
   if (compressedAt !== -1 && zoned.indexOf("::", compressedAt + 1) !== -1) return undefined;
-
-  const parseSide = (side: string): number[] | undefined => {
-    if (side === "") return [];
-    const groups: number[] = [];
-    const parts = side.split(":");
-    for (const [index, part] of parts.entries()) {
-      if (index === parts.length - 1 && part.includes(".")) {
-        const octets = ipv4Octets(part);
-        if (octets === undefined) return undefined;
-        groups.push((octets[0] << 8) | octets[1]);
-        groups.push((octets[2] << 8) | octets[3]);
-        continue;
-      }
-      if (!/^[0-9a-fA-F]{1,4}$/.test(part)) return undefined;
-      groups.push(Number.parseInt(part, 16));
-    }
-    return groups;
-  };
 
   const head = parseSide(compressedAt === -1 ? zoned : zoned.slice(0, compressedAt));
   const tail = compressedAt === -1 ? [] : parseSide(zoned.slice(compressedAt + 2));

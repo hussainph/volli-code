@@ -175,6 +175,8 @@ describe("provider image limits", () => {
   });
 });
 
+const shot = (id: number) => screenshotResult(id, image(String(id).padStart(100, "0")));
+
 describe("provider image guard", () => {
   it("leaves a request with no images, and every non-image block, exactly as it was", async () => {
     const fit = keepAll();
@@ -291,7 +293,6 @@ describe("provider image guard", () => {
     const guard = createProviderImageGuard({ fit: keepAll() });
     // A 1000-byte budget at 100 bytes an image: ten fit.
     const small = withLimits({ maxRequestBytes: Math.ceil(1_000 / REQUEST_IMAGE_BUDGET_FRACTION) });
-    const shot = (id: number) => screenshotResult(id, image(String(id).padStart(100, "0")));
 
     const eleven = await guard.sanitize(
       Array.from({ length: 11 }, (_, id) => shot(id)),

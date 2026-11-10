@@ -670,24 +670,24 @@ describe("focusPane", () => {
   });
 });
 
-describe("focusAdjacentPane", () => {
-  // [ L | [ T / B ] ] — the right column split horizontally.
-  const geometry = (): SplitViewState =>
-    selectTab(
-      {
-        ...emptySplitView(null),
-        pairs: [
-          branch(
-            "s1",
-            "row",
-            pane("L", ["l"]),
-            branch("s2", "column", pane("T", ["t"]), pane("B", ["b"])),
-          ),
-        ],
-      },
-      "l",
-    );
+// [ L | [ T / B ] ] — the right column split horizontally.
+const geometry = (): SplitViewState =>
+  selectTab(
+    {
+      ...emptySplitView(null),
+      pairs: [
+        branch(
+          "s1",
+          "row",
+          pane("L", ["l"]),
+          branch("s2", "column", pane("T", ["t"]), pane("B", ["b"])),
+        ),
+      ],
+    },
+    "l",
+  );
 
+describe("focusAdjacentPane", () => {
   it("walks by geometry in each direction", () => {
     const fromL = geometry();
     expect(focusAdjacentPane(fromL, "right").focusedPaneId).toBe("T");

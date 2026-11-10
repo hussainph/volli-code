@@ -1571,6 +1571,13 @@ describe("features advertise; actor policy enforces (security N1)", () => {
   });
 });
 
+const call = (id: number, trace?: unknown) => ({
+  id,
+  method: "query",
+  params: { path: "session.projection", input: { sessionId: SESSION } },
+  ...(trace === undefined ? {} : { [HOST_TRACE_FIELD]: trace }),
+});
+
 describe("every request in its own trace (VC-699)", () => {
   const HELLO_TRACE = { traceId: "4bf92f3577b34da6a3ce929d0e0e4736", spanId: "00f067aa0ba902b7" };
   const CALL_TRACE = { traceId: "a3ce929d0e0e47364bf92f3577b34da6", spanId: "0ba902b700f067aa" };
@@ -1604,12 +1611,6 @@ describe("every request in its own trace (VC-699)", () => {
         [HOST_TRACE_FIELD]: HELLO_TRACE,
       }),
     );
-    const call = (id: number, trace?: unknown) => ({
-      id,
-      method: "query",
-      params: { path: "session.projection", input: { sessionId: SESSION } },
-      ...(trace === undefined ? {} : { [HOST_TRACE_FIELD]: trace }),
-    });
     // A batch: each request keeps its own trace; a malformed one is none.
     peer.socket.send(JSON.stringify([call(1, CALL_TRACE), call(2, { traceId: "nope" }), call(3)]));
     peer.socket.send(JSON.stringify(call(4, HELLO_TRACE)));

@@ -595,6 +595,11 @@ describe("AsyncQueue", () => {
   });
 });
 
+const pageWith = (value: unknown) => ({
+  frames: [{ ...frame(2), transcript: transcriptWith(value) }],
+  before: null,
+});
+
 describe("Session tRPC router", () => {
   it("reads and writes experimental flags through the registry-backed settings routes", async () => {
     const fixture = runtimeFixture();
@@ -905,10 +910,6 @@ describe("Session tRPC router", () => {
       cyclic,
       [1, Number.POSITIVE_INFINITY],
     ];
-    const pageWith = (value: unknown) => ({
-      frames: [{ ...frame(2), transcript: transcriptWith(value) }],
-      before: null,
-    });
     const callerFor = (page: unknown) =>
       createSessionRouter().createCaller(
         sessionContext({

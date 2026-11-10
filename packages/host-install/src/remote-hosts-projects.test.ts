@@ -771,15 +771,15 @@ describe("a host's projects", () => {
   });
 });
 
-describe("creating a project on a host", () => {
-  const added = (created = true) =>
-    projectScripts(() =>
-      said("volli-login=deploy\nvolli-token=yes", {
-        created,
-        project: { ...PROJECT, tickets: undefined, baseBranch: "main" },
-      }),
-    );
+const added = (created = true) =>
+  projectScripts(() =>
+    said("volli-login=deploy\nvolli-token=yes", {
+      created,
+      project: { ...PROJECT, tickets: undefined, baseBranch: "main" },
+    }),
+  );
 
+describe("creating a project on a host", () => {
   it("adds a folder by its path, and answers the project", async () => {
     const h = harness({ registry: registry(hostEntry()), overrides: [added()] });
     expect(

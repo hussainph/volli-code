@@ -48,6 +48,19 @@ describe("gatewayGrantSessionId", () => {
   });
 });
 
+const route = (overrides: Record<string, unknown>) => ({
+  routes: {
+    anthropic: {
+      conn: CONN,
+      kv: 3,
+      up: "https://api.anthropic.com",
+      api: "anthropic-messages",
+      sk: "sealed",
+      ...overrides,
+    },
+  },
+});
+
 describe("parseGatewayGrantClaims", () => {
   test("accepts a well-formed grant and keeps only known fields", () => {
     const parsed = parseGatewayGrantClaims(
@@ -87,19 +100,6 @@ describe("parseGatewayGrantClaims", () => {
     const parsed = parseGatewayGrantClaims(claims());
     expect(parsed && "prj" in parsed).toBe(false);
     expect(parsed && "hdr" in parsed.routes.anthropic!).toBe(false);
-  });
-
-  const route = (overrides: Record<string, unknown>) => ({
-    routes: {
-      anthropic: {
-        conn: CONN,
-        kv: 3,
-        up: "https://api.anthropic.com",
-        api: "anthropic-messages",
-        sk: "sealed",
-        ...overrides,
-      },
-    },
   });
 
   test.each([

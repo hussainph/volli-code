@@ -176,6 +176,11 @@ async function refusalFrom(pending: Promise<unknown>): Promise<WebSearchRefusal>
   throw new Error("the search resolved where a refusal was expected");
 }
 
+const keyed = (endpoint: string): WebSearchProvider =>
+  stubProvider(endpoint, {
+    describe: () => ({ url: endpoint, headers: { "x-subscription-token": KEY } }),
+  });
+
 describe("web search boundary", () => {
   it("reads a self-hosted instance end to end, with no seam replaced", async () => {
     const server = await serverAt(
@@ -908,10 +913,6 @@ describe("web search boundary", () => {
    * a transcript, a ledger and a model's context.
    */
   it("keeps the key out of every refusal it can produce", async () => {
-    const keyed = (endpoint: string): WebSearchProvider =>
-      stubProvider(endpoint, {
-        describe: () => ({ url: endpoint, headers: { "x-subscription-token": KEY } }),
-      });
     const server = await serverAt(servingJson("{not json", 500));
     const cases: { provider: WebSearchProvider; limits?: Partial<WebSearchLimits> }[] = [
       { provider: keyed("http://169.254.169.254/search") },

@@ -187,15 +187,17 @@ describe("the sandbox", () => {
     const release = Promise.withResolvers<void>();
     const once = Worker.prototype.once;
     // Real worker and codec; delay only delivery of its exit/release notification.
-    const observeExit = vi
-      .spyOn(Worker.prototype, "once")
-      .mockImplementation(function (this: Worker, event, listener) {
-        if (event !== "exit") return once.call(this, event, listener);
-        return once.call(this, event, (...args: unknown[]) => {
-          exited.resolve();
-          void release.promise.then(() => listener(...args));
-        });
+    const observeExit = vi.spyOn(Worker.prototype, "once").mockImplementation(function (
+      this: Worker,
+      event,
+      listener,
+    ) {
+      if (event !== "exit") return once.call(this, event, listener);
+      return once.call(this, event, (...args: unknown[]) => {
+        exited.resolve();
+        void release.promise.then(() => listener(...args));
       });
+    });
     let settled = false;
     const pending = run(fixture({ tools: [] }), "return 1;").then((result) => {
       settled = true;
@@ -1339,6 +1341,12 @@ describe("cancellation", () => {
   });
 });
 
+const surfaceVerb = (result: AgentToolResult<unknown>): SurfaceTool => ({
+  id: "session.start",
+  tool: resultTool("session_start", result),
+  verb: true,
+});
+
 describe("results", () => {
   it("gives bash a typed result for every exit code", async () => {
     const ok = fixture({
@@ -1534,28 +1542,30 @@ describe("results", () => {
   });
 
   it("gives a verb its text and details, and rejects a refused verb", async () => {
-    const verb = (result: AgentToolResult<unknown>): SurfaceTool => ({
-      id: "session.start",
-      tool: resultTool("session_start", result),
-      verb: true,
-    });
     const started = fixture({
       tools: [
-        verb({ content: [{ type: "text", text: "Started." }], details: { sessionId: "s-1" } }),
+        surfaceVerb({
+          content: [{ type: "text", text: "Started." }],
+          details: { sessionId: "s-1" },
+        }),
       ],
     });
     expect((await run(started, "return await tools.session_start({});")).text).toContain(
       'Returned: {"text":"Started.","details":{"sessionId":"s-1"}}',
     );
     const bare = fixture({
-      tools: [verb({ content: [{ type: "text", text: "Started." }], details: undefined })],
+      tools: [surfaceVerb({ content: [{ type: "text", text: "Started." }], details: undefined })],
     });
     expect((await run(bare, "return await tools.session_start({});")).text).toContain(
       'Returned: {"text":"Started."}',
     );
     const refused = fixture({
       tools: [
-        verb({ content: [{ type: "text", text: "No." }], details: undefined, isError: true }),
+        surfaceVerb({
+          content: [{ type: "text", text: "No." }],
+          details: undefined,
+          isError: true,
+        }),
       ],
     });
     expect(

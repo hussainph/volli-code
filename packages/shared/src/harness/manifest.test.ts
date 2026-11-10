@@ -20,6 +20,16 @@ function errorPaths(result: ManifestParse): string[] {
   return result.ok ? [] : result.errors.map((error) => error.path);
 }
 
+const envVarError = (envVar: string): { path: string; message: string } | undefined => {
+  const result = parseHarnessManifest(
+    minimal({ injection: { kind: "config-dir-env", envVar, filename: "volli.json" } }),
+  );
+  return result.ok ? undefined : result.errors[0];
+};
+
+const bindingErrorPaths = (binding: Record<string, unknown>): string[] =>
+  errorPaths(parseHarnessManifest(minimal({ events: [binding] })));
+
 describe("parseHarnessManifest", () => {
   it("turns a minimal manifest into a Declared-tier adapter", () => {
     const result = parseHarnessManifest(minimal());
@@ -328,12 +338,6 @@ describe("parseHarnessManifest", () => {
   // the declaring harness's, so these names are the user's shell and every
   // other agent beside it.
   it("refuses an environment variable that belongs to the session, not to a harness", () => {
-    const envVarError = (envVar: string): { path: string; message: string } | undefined => {
-      const result = parseHarnessManifest(
-        minimal({ injection: { kind: "config-dir-env", envVar, filename: "volli.json" } }),
-      );
-      return result.ok ? undefined : result.errors[0];
-    };
     for (const envVar of [
       "HOME",
       "PATH",
@@ -425,13 +429,13 @@ describe("parseHarnessManifest", () => {
   });
 
   it("refuses a binding Volli could not deliver", () => {
-    const bad = (binding: Record<string, unknown>): string[] =>
-      errorPaths(parseHarnessManifest(minimal({ events: [binding] })));
     const base = { event: "turn.started", native: "Start", delivery: "async" };
-    expect(bad({ ...base, native: "" })).toEqual(["events[0].native"]);
-    expect(bad({ ...base, delivery: "whenever" })).toEqual(["events[0].delivery"]);
-    expect(bad({ ...base, delivery: undefined })).toEqual(["events[0].delivery"]);
-    expect(bad(["turn.started"] as unknown as Record<string, unknown>)).toEqual(["events[0]"]);
+    expect(bindingErrorPaths({ ...base, native: "" })).toEqual(["events[0].native"]);
+    expect(bindingErrorPaths({ ...base, delivery: "whenever" })).toEqual(["events[0].delivery"]);
+    expect(bindingErrorPaths({ ...base, delivery: undefined })).toEqual(["events[0].delivery"]);
+    expect(bindingErrorPaths(["turn.started"] as unknown as Record<string, unknown>)).toEqual([
+      "events[0]",
+    ]);
   });
 
   // A manifest written against the build that had a per-binding `timeoutMs` is

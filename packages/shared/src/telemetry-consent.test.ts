@@ -374,9 +374,9 @@ describe("resolveTelemetry: no current choice", () => {
   });
 });
 
-describe("resolveTelemetry: a choice made under an older notice", () => {
-  const stale = (crash: boolean, usage: boolean) => choice(crash, usage, { noticeVersion: V - 1 });
+const stale = (crash: boolean, usage: boolean) => choice(crash, usage, { noticeVersion: V - 1 });
 
+describe("resolveTelemetry: a choice made under an older notice", () => {
   it("keeps the tiers it turned off and lets the region decide the rest", () => {
     expect(resolveTelemetry(inputs({ local: stale(false, true) }))).toMatchObject({
       crash: false,

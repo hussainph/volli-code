@@ -690,17 +690,19 @@ describe("Code Mode through the real Session path", () => {
     let asking = 0;
     let peakAsking = 0;
     const scoped: boolean[] = [];
+
+    // VC-470's host asks the person to sign in from inside the call; it
+    // runs the ask through the scope the call was lent.
+    const ask = async () => {
+      asking += 1;
+      peakAsking = Math.max(peakAsking, asking);
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      asking -= 1;
+    };
+
     const port: RuntimeMcpPort = {
       call: async (request, _signal, scope) => {
         scoped.push(scope !== undefined);
-        // VC-470's host asks the person to sign in from inside the call; it
-        // runs the ask through the scope the call was lent.
-        const ask = async () => {
-          asking += 1;
-          peakAsking = Math.max(peakAsking, asking);
-          await new Promise((resolve) => setTimeout(resolve, 600));
-          asking -= 1;
-        };
         await (scope === undefined ? ask() : scope.question(ask));
         return { content: [{ type: "text", text: request.toolName }], isError: false };
       },

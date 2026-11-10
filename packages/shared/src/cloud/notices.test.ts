@@ -137,6 +137,12 @@ function refusal(value: unknown): string {
   throw new Error(`accepted ${JSON.stringify(value)}`);
 }
 
+const watchWithChanges = (change: unknown, extra: Record<string, unknown> = {}) => ({
+  ...newWatchNotice(COMMAND),
+  changes: [change],
+  ...extra,
+});
+
 describe("the session.notice codec", () => {
   test("round-trips a watch notice with every change shape, and a subagent notice", () => {
     const watch = mergeWatchNotice(newWatchNotice(COMMAND), CHANGES);
@@ -168,63 +174,66 @@ describe("the session.notice codec", () => {
   });
 
   test("refuses malformed changes, naming where", () => {
-    const watch = (change: unknown, extra: Record<string, unknown> = {}) => ({
-      ...newWatchNotice(COMMAND),
-      changes: [change],
-      ...extra,
-    });
-    expect(refusal(watch(null, { changes: "no" }))).toMatch(/changes is not a list of at most 50/);
-    expect(refusal(watch(null))).toMatch(/changes\[0\] is not an object/);
-    expect(refusal(watch(CHANGES[0], { overflow: -1 }))).toMatch(
+    expect(refusal(watchWithChanges(null, { changes: "no" }))).toMatch(
+      /changes is not a list of at most 50/,
+    );
+    expect(refusal(watchWithChanges(null))).toMatch(/changes\[0\] is not an object/);
+    expect(refusal(watchWithChanges(CHANGES[0], { overflow: -1 }))).toMatch(
       /overflow is not a non-negative integer/,
     );
-    expect(refusal(watch({ ...CHANGES[0], occurredAt: 1.5 }))).toMatch(
+    expect(refusal(watchWithChanges({ ...CHANGES[0], occurredAt: 1.5 }))).toMatch(
       /changes\[0\]\.occurredAt is not a non-negative integer/,
     );
-    expect(refusal(watch({ ...CHANGES[0], pendingSubagents: ["x"] }))).toMatch(
+    expect(refusal(watchWithChanges({ ...CHANGES[0], pendingSubagents: ["x"] }))).toMatch(
       /changes\[0\]\.pendingSubagents\[0\] is not a UUID/,
     );
-    expect(refusal(watch({ ...CHANGES[0], title: 3 }))).toMatch(
+    expect(refusal(watchWithChanges({ ...CHANGES[0], title: 3 }))).toMatch(
       /title is not a string of at most 200/,
     );
     expect(
       refusal(
-        watch({
+        watchWithChanges({
           ...CHANGES[0],
           lastMessage: { state: "text", message: { text: "abc", totalChars: 2 } },
         }),
       ),
     ).toMatch(/lastMessage\.message\.totalChars is shorter than text/);
-    expect(refusal(watch({ ...CHANGES[0], lastMessage: { state: "none", extra: 1 } }))).toMatch(
-      /unexpected field "extra"/,
-    );
-    expect(refusal(watch({ ...CHANGES[2], stopDetail: { ...DETAIL, retry: "maybe" } }))).toMatch(
-      /stopDetail\.retry is not one of/,
-    );
-    expect(refusal(watch({ ...CHANGES[7], by: { kind: "session", sessionId: "x" } }))).toMatch(
-      /by\.sessionId is not a UUID/,
-    );
-    expect(refusal(watch({ ...CHANGES[8], by: { kind: "user", sessionId: TARGET } }))).toMatch(
-      /unexpected field "sessionId"/,
-    );
-    expect(refusal(watch({ ...CHANGES[9], to: "nowhere" }))).toMatch(/to is not one of/);
-    expect(refusal(watch({ ...CHANGES[9], display: "" }))).toMatch(
+    expect(
+      refusal(watchWithChanges({ ...CHANGES[0], lastMessage: { state: "none", extra: 1 } })),
+    ).toMatch(/unexpected field "extra"/);
+    expect(
+      refusal(watchWithChanges({ ...CHANGES[2], stopDetail: { ...DETAIL, retry: "maybe" } })),
+    ).toMatch(/stopDetail\.retry is not one of/);
+    expect(
+      refusal(watchWithChanges({ ...CHANGES[7], by: { kind: "session", sessionId: "x" } })),
+    ).toMatch(/by\.sessionId is not a UUID/);
+    expect(
+      refusal(watchWithChanges({ ...CHANGES[8], by: { kind: "user", sessionId: TARGET } })),
+    ).toMatch(/unexpected field "sessionId"/);
+    expect(refusal(watchWithChanges({ ...CHANGES[9], to: "nowhere" }))).toMatch(/to is not one of/);
+    expect(refusal(watchWithChanges({ ...CHANGES[9], display: "" }))).toMatch(
       /display is not text of 1 to 64/,
     );
-    expect(refusal(watch({ ...CHANGES[11], by: { kind: "person", sessionId: null } }))).toMatch(
-      /unexpected field "sessionId"/,
+    expect(
+      refusal(watchWithChanges({ ...CHANGES[11], by: { kind: "person", sessionId: null } })),
+    ).toMatch(/unexpected field "sessionId"/);
+    expect(refusal(watchWithChanges({ ...CHANGES[9], fact: "turn-completed" }))).toMatch(
+      /fact is not one of/,
     );
-    expect(refusal(watch({ ...CHANGES[9], fact: "turn-completed" }))).toMatch(/fact is not one of/);
-    expect(refusal(watch({ ...CHANGES[0], subject: "board" }))).toMatch(/subject is not one of/);
-    expect(refusal(watch({ ...CHANGES[0], stopDetail: null }))).toMatch(
+    expect(refusal(watchWithChanges({ ...CHANGES[0], subject: "board" }))).toMatch(
+      /subject is not one of/,
+    );
+    expect(refusal(watchWithChanges({ ...CHANGES[0], stopDetail: null }))).toMatch(
       /unexpected field "stopDetail"/,
     );
     for (const index of [2, 5, 7, 10, 12]) {
-      expect(refusal(watch({ ...CHANGES[index], extra: 1 }))).toMatch(/unexpected field "extra"/);
+      expect(refusal(watchWithChanges({ ...CHANGES[index], extra: 1 }))).toMatch(
+        /unexpected field "extra"/,
+      );
     }
     expect(
       refusal(
-        watch(null, {
+        watchWithChanges(null, {
           changes: Array.from({ length: WATCH_NOTICE_MAX_CHANGES + 1 }, () => CHANGES[1]),
         }),
       ),

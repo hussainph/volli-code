@@ -160,13 +160,14 @@ describe("canInviteAs", () => {
   });
 });
 
+const sentBy = (userId: UserId): InviteFacts => ({
+  workspaceId: WS,
+  invitedByUserId: userId,
+  role: "member",
+});
+
 describe("canRevokeInvite", () => {
   const viewer = { userId: ACTOR };
-  const sentBy = (userId: UserId): InviteFacts => ({
-    workspaceId: WS,
-    invitedByUserId: userId,
-    role: "member",
-  });
 
   test("the sender, or an owner or admin", () => {
     expect(canRevokeInvite(viewer, as("member"), sentBy(ACTOR))).toBe(true);
@@ -186,14 +187,15 @@ describe("canRevokeInvite", () => {
   });
 });
 
+const pending = (role: MemberRole, invitedByUserId: UserId = TARGET): InviteFacts => ({
+  workspaceId: WS,
+  invitedByUserId,
+  role,
+});
+
 describe("canReissueInvite", () => {
   const viewer = { userId: ACTOR };
   const members = { whoCanInvite: "members" as const };
-  const pending = (role: MemberRole, invitedByUserId: UserId = TARGET): InviteFacts => ({
-    workspaceId: WS,
-    invitedByUserId,
-    role,
-  });
 
   test("a member cannot take over someone else's invite", () => {
     expect(canReissueInvite(viewer, as("member"), pending("member"), "member", members)).toBe(

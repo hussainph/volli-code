@@ -284,21 +284,21 @@ describe("presentedScheduledResume", () => {
 
 const FIRE_AT = scheduledResumeFireAt(RESET);
 
-describe("scheduledResumeVerdict", () => {
-  const verdict = (
-    rows: readonly Row[],
-    options: {
-      now?: number;
-      overrides?: Partial<ProjectionPart>;
-      ticketSessions?: readonly ScheduledResumeSibling[];
-    } = {},
-  ) =>
-    scheduledResumeVerdict({
-      projection: projection(rows, options.overrides),
-      ticketSessions: options.ticketSessions ?? [],
-      now: options.now ?? FIRE_AT,
-    });
+const verdict = (
+  rows: readonly Row[],
+  options: {
+    now?: number;
+    overrides?: Partial<ProjectionPart>;
+    ticketSessions?: readonly ScheduledResumeSibling[];
+  } = {},
+) =>
+  scheduledResumeVerdict({
+    projection: projection(rows, options.overrides),
+    ticketSessions: options.ticketSessions ?? [],
+    now: options.now ?? FIRE_AT,
+  });
 
+describe("scheduledResumeVerdict", () => {
   it("has nothing to say without a pending schedule", () => {
     expect(verdict([])).toBeNull();
   });

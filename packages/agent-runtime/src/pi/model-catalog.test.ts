@@ -154,6 +154,35 @@ const signal = (): AbortSignal => new AbortController().signal;
 
 const ownRefresh = async (): Promise<void> => {};
 
+const cachedAdmissionModel = (admission: number): Model<Api> =>
+  ({
+    ...model("acme", `admitted-under-${admission}`),
+    __volliProtocolAdmission: admission,
+  }) as Model<Api>;
+
+const restore = async (overrides: Record<string, unknown>): Promise<readonly Model<Api>[]> => {
+  const wrapped = withRefreshableCatalog(
+    baseProvider("acme", [model("acme", "baseline")]),
+    scriptedSource({ models: [] }),
+  );
+  const cached = {
+    ...model("acme", "pipeline"),
+    __volliProtocolAdmission: 2,
+    ...overrides,
+  } as Model<Api>;
+  await wrapped.refreshModels?.(
+    refreshContext({
+      stored: {
+        models: [cached],
+        __volliCatalogFormat: 2,
+      } as never,
+      allowNetwork: false,
+      force: undefined,
+    }).context,
+  );
+  return wrapped.getModels();
+};
+
 // --- the wrapper -----------------------------------------------------------
 
 describe("withRefreshableCatalog", () => {
@@ -311,14 +340,9 @@ describe("withRefreshableCatalog", () => {
     // come back — it is re-fetched, or it is gone.
     const source = scriptedSource({ models: [] });
     const wrapped = withRefreshableCatalog(baseProvider("acme", baseline), source);
-    const cached = (admission: number): Model<Api> =>
-      ({
-        ...model("acme", `admitted-under-${admission}`),
-        __volliProtocolAdmission: admission,
-      }) as Model<Api>;
     const { context } = refreshContext({
       stored: {
-        models: [cached(1), cached(2), cached(99)],
+        models: [cachedAdmissionModel(1), cachedAdmissionModel(2), cachedAdmissionModel(99)],
         __volliCatalogFormat: 2,
         checkedAt: 1,
       } as never,
@@ -456,29 +480,6 @@ describe("withRefreshableCatalog", () => {
   });
 
   it("restores refreshed-only protocol only when every cached field remains safe", async () => {
-    const restore = async (overrides: Record<string, unknown>): Promise<readonly Model<Api>[]> => {
-      const wrapped = withRefreshableCatalog(
-        baseProvider("acme", [model("acme", "baseline")]),
-        scriptedSource({ models: [] }),
-      );
-      const cached = {
-        ...model("acme", "pipeline"),
-        __volliProtocolAdmission: 2,
-        ...overrides,
-      } as Model<Api>;
-      await wrapped.refreshModels?.(
-        refreshContext({
-          stored: {
-            models: [cached],
-            __volliCatalogFormat: 2,
-          } as never,
-          allowNetwork: false,
-          force: undefined,
-        }).context,
-      );
-      return wrapped.getModels();
-    };
-
     const invalid: Record<string, unknown>[] = [
       { api: "" },
       // The redirection guard, re-applied at restore: a cache is a file that
@@ -1712,9 +1713,9 @@ describe("piDevCatalogSource", () => {
   });
 });
 
-describe("PiFileModelsStore", () => {
-  const path = (): string => join(scratch(), "volli-models.json");
+const path = (): string => join(scratch(), "volli-models.json");
 
+describe("PiFileModelsStore", () => {
   it("round-trips an entry across store instances, which is what restart is", async () => {
     const file = path();
     const entry = {

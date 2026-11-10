@@ -644,16 +644,16 @@ describe("a board write's commandId", () => {
   });
 });
 
-describe("board.moveTickets", () => {
-  const move = (ticketIds: string[]) => ({
-    commandId: COMMAND,
-    projectId: WORKSPACE,
-    ticketIds,
-    toStatus: "doing",
-    toIndex: 2,
-    choice: { kind: "automation", automationId: "automation-1" },
-  });
+const move = (ticketIds: string[]) => ({
+  commandId: COMMAND,
+  projectId: WORKSPACE,
+  ticketIds,
+  toStatus: "doing",
+  toIndex: 2,
+  choice: { kind: "automation", automationId: "automation-1" },
+});
 
+describe("board.moveTickets", () => {
   it("hands the handler one card as ticketId, and a selection as ticketIds", async () => {
     const board = boardHarness({
       answers: { "board.moveTickets": () => ({ ...written, tickets: [ticket, second] }) },

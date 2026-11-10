@@ -429,6 +429,15 @@ describe("ask_user tool", () => {
   });
 });
 
+const fromRecordedSurface = (askUserQuestions?: true) =>
+  createSessionTools(
+    {
+      tools: { tools: [], askUserQuestions },
+      askUser: async () => CHOSE_ONE,
+    },
+    null as never,
+  )[0];
+
 describe("ask_user related questions", () => {
   const questions = [
     { question: "Which scope?", choices: ["Small", "Full"] },
@@ -454,14 +463,6 @@ describe("ask_user related questions", () => {
     expect(
       JSON.stringify({ description: old.description, parameters: old.parameters }),
     ).toMatchSnapshot();
-    const fromRecordedSurface = (askUserQuestions?: true) =>
-      createSessionTools(
-        {
-          tools: { tools: [], askUserQuestions },
-          askUser: async () => CHOSE_ONE,
-        },
-        null as never,
-      )[0];
     expect(fromRecordedSurface().description).toBe(old.description);
     expect(fromRecordedSurface().parameters).toEqual(old.parameters);
     expect(fromRecordedSurface(true).description).toBe(tool.description);

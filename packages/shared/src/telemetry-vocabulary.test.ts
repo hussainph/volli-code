@@ -384,6 +384,16 @@ describe("random events generated from the schema", () => {
   });
 });
 
+const rollupWithModel = (provider: unknown, model: unknown) =>
+  rollup({
+    models: [modelRow({ "gen_ai.provider.name": provider, "gen_ai.request.model": model })],
+  });
+
+const rollupWithTool = (provider: unknown, model: unknown) =>
+  rollup({
+    tools: [toolRow({ "gen_ai.provider.name": provider, "gen_ai.request.model": model })],
+  });
+
 // ── serializeTelemetryEvent ──────────────────────────────────────────────────
 
 describe("serializeTelemetryEvent", () => {
@@ -509,15 +519,7 @@ describe("serializeTelemetryEvent", () => {
   });
 
   it("holds every provider and model to the catalog", () => {
-    const models = (provider: unknown, model: unknown) =>
-      rollup({
-        models: [modelRow({ "gen_ai.provider.name": provider, "gen_ai.request.model": model })],
-      });
-    const tools = (provider: unknown, model: unknown) =>
-      rollup({
-        tools: [toolRow({ "gen_ai.provider.name": provider, "gen_ai.request.model": model })],
-      });
-    for (const build of [models, tools]) {
+    for (const build of [rollupWithModel, rollupWithTool]) {
       expect(accepts(build("anthropic", "claude-opus-4-1"))).toBe(true);
       expect(accepts(build("anthropic", "custom"))).toBe(true);
       expect(accepts(build("custom", "custom"))).toBe(true);
@@ -533,7 +535,7 @@ describe("serializeTelemetryEvent", () => {
     }
     // The same event against a catalog that lacks the model.
     const narrower = telemetryModelCatalog([["anthropic", []]]);
-    expect(send(models("anthropic", "claude-opus-4-1"), narrower)).toBeUndefined();
+    expect(send(rollupWithModel("anthropic", "claude-opus-4-1"), narrower)).toBeUndefined();
   });
 });
 

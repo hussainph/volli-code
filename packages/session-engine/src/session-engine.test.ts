@@ -131,6 +131,175 @@ function createdEvent(id: string, session: Session, commandId = "command-create"
   };
 }
 
+async function interrupted() {
+  const { plane } = composition();
+  const { session } = await plane.createSession(createRequest());
+  const running = attachment(session.id);
+  const observe = (id: string, occurredAt: number, payload: Record<string, unknown>) =>
+    plane.observe({
+      id,
+      sessionId: session.id,
+      attachmentId: running.id,
+      occurredAt,
+      provenance: adapterProvenance,
+      ...payload,
+    } as Parameters<typeof plane.observe>[0]);
+  await observe("open", 1, { kind: "attachment.opened", attachment: running });
+  await observe("start-1", 2, {
+    kind: "turn.started",
+    attachmentId: running.id,
+    turnId: "turn-1",
+  });
+  await observe("lost-1", 3, {
+    kind: "turn.interrupted",
+    attachmentId: running.id,
+    turnId: "turn-1",
+  });
+  const resume = (turnId = "turn-1") =>
+    plane.submit({
+      commandId: restartResumeCommandId(running.id, turnId),
+      sessionId: session.id,
+      intent: { kind: "executor.retry", attachmentId: running.id },
+      provenance: userProvenance,
+    });
+  return { plane, session, running, observe, resume };
+}
+
+/** An in-memory ledger whose checkpoint writes are counted, and can be made to fail. */
+function countingComposition() {
+  const stored = createInMemorySessionLedger();
+  const saved: number[] = [];
+  let failSaves: Error | null = null;
+  const ledger: SessionLedger = {
+    transaction: (work) =>
+      stored.transaction((transaction) =>
+        work(
+          new Proxy(transaction, {
+            get(target, property, receiver) {
+              if (property !== "saveProjectionCheckpoint") {
+                return Reflect.get(target, property, receiver);
+              }
+              return (checkpoint: SessionProjectionCheckpoint) => {
+                if (failSaves) throw failSaves;
+                saved.push(checkpoint.throughSequence);
+                transaction.saveProjectionCheckpoint(checkpoint);
+              };
+            },
+          }),
+        ),
+      ),
+  };
+  const reported: unknown[] = [];
+  const plane = createSessionEngine({
+    ledger,
+    clock: { now: () => 100 },
+    ids: ids(),
+    onProjectionCheckpointFailure: (error) => reported.push(error),
+  });
+  return {
+    plane,
+    ledger,
+    saved,
+    reported,
+    failWith: (error: Error | null) => {
+      failSaves = error;
+    },
+  };
+}
+
+async function retitle(
+  plane: ReturnType<typeof createSessionEngine>,
+  sessionId: string,
+  times: number,
+) {
+  for (let index = 0; index < times; index += 1) {
+    await plane.submit({
+      commandId: `command-retitle-${sessionId}-${index}-${Math.random()}`,
+      sessionId,
+      intent: { kind: "session.retitle", title: `Title ${index}` },
+      provenance: userProvenance,
+    });
+  }
+}
+
+function hotComposition() {
+  const stored = createInMemorySessionLedger();
+  const rowReads: string[] = [];
+  let rollBackNext = false;
+  let ticketDeleted = false;
+  let enclosed = false;
+  const ledger: SessionLedger = {
+    transaction: (work) =>
+      stored.transaction((transaction) => {
+        const value = work(
+          new Proxy(transaction, {
+            get(target, property, receiver) {
+              if (property === "enclosed") return enclosed;
+              if (property === "getProjectionCheckpoint") {
+                return (sessionId: string) => {
+                  rowReads.push(sessionId);
+                  return transaction.getProjectionCheckpoint(sessionId);
+                };
+              }
+              if (property === "getSession") {
+                return (sessionId: string) => {
+                  const session = transaction.getSession(sessionId);
+                  return session && ticketDeleted ? { ...session, ticketId: null } : session;
+                };
+              }
+              return Reflect.get(target, property, receiver);
+            },
+          }),
+        );
+        if (rollBackNext) {
+          rollBackNext = false;
+          throw new Error("rolled back");
+        }
+        return value;
+      }),
+  };
+  const plane = createSessionEngine({ ledger, clock: { now: () => 100 }, ids: ids() });
+  return {
+    plane,
+    ledger,
+    rowReads,
+    rollBack: () => {
+      rollBackNext = true;
+    },
+    deleteTicket: () => {
+      ticketDeleted = true;
+    },
+    enclose: (value: boolean) => {
+      enclosed = value;
+    },
+  };
+}
+
+async function liveSession(plane: ReturnType<typeof createSessionEngine>, commandId: string) {
+  const { session } = await plane.createSession(createRequest(commandId));
+  const opened = attachment(session.id, `attachment-${commandId}`);
+  await plane.observe({
+    id: `observation-${commandId}-opened`,
+    sessionId: session.id,
+    occurredAt: 200,
+    provenance: adapterProvenance,
+    kind: "attachment.opened",
+    attachment: opened,
+  });
+  let index = 0;
+  const fact = () =>
+    plane.observe({
+      id: `observation-${commandId}-${index}`,
+      sessionId: session.id,
+      occurredAt: 300 + index,
+      provenance: adapterProvenance,
+      attachmentId: opened.id,
+      kind: "attachment.native_referenced",
+      native: { id: `native-${index++}`, detail: null },
+    });
+  return { session, fact };
+}
+
 describe("SessionEngine creation and explicit commands", () => {
   it("stores the Role a Session is created under, independent of its Ticket (VC-9)", async () => {
     const { plane } = composition();
@@ -1231,40 +1400,6 @@ describe("SessionEngine creation and explicit commands", () => {
   });
 
   describe("a restart resume (VC-450)", () => {
-    async function interrupted() {
-      const { plane } = composition();
-      const { session } = await plane.createSession(createRequest());
-      const running = attachment(session.id);
-      const observe = (id: string, occurredAt: number, payload: Record<string, unknown>) =>
-        plane.observe({
-          id,
-          sessionId: session.id,
-          attachmentId: running.id,
-          occurredAt,
-          provenance: adapterProvenance,
-          ...payload,
-        } as Parameters<typeof plane.observe>[0]);
-      await observe("open", 1, { kind: "attachment.opened", attachment: running });
-      await observe("start-1", 2, {
-        kind: "turn.started",
-        attachmentId: running.id,
-        turnId: "turn-1",
-      });
-      await observe("lost-1", 3, {
-        kind: "turn.interrupted",
-        attachmentId: running.id,
-        turnId: "turn-1",
-      });
-      const resume = (turnId = "turn-1") =>
-        plane.submit({
-          commandId: restartResumeCommandId(running.id, turnId),
-          sessionId: session.id,
-          intent: { kind: "executor.retry", attachmentId: running.id },
-          provenance: userProvenance,
-        });
-      return { plane, session, running, observe, resume };
-    }
-
     it("accepts the resume of the interrupted latest turn", async () => {
       const { resume } = await interrupted();
       expect((await resume()).receipt?.status).not.toBe("rejected");
@@ -1396,11 +1531,12 @@ describe("SessionEngine creation and explicit commands", () => {
       ).toHaveLength(1);
     });
 
+    const refusals = async (resetsAt: number | null, overrides: Record<string, unknown>) => {
+      const { schedule } = await stoppedOnQuota(resetsAt);
+      return (await schedule("schedule-x", overrides)).receipt;
+    };
+
     it("refuses a schedule the failure did not offer", async () => {
-      const refusals = async (resetsAt: number | null, overrides: Record<string, unknown>) => {
-        const { schedule } = await stoppedOnQuota(resetsAt);
-        return (await schedule("schedule-x", overrides)).receipt;
-      };
       const unavailable = { status: "rejected", code: "resume_unavailable" };
       // A time the Attention did not state; an Attention stating none; an
       // Attention that is not live; one on another attachment.
@@ -1905,63 +2041,6 @@ describe("SessionEngine creation and explicit commands", () => {
   });
 
   describe("read paths persist the folds they had to do (VC-1076)", () => {
-    /** An in-memory ledger whose checkpoint writes are counted, and can be made to fail. */
-    function countingComposition() {
-      const stored = createInMemorySessionLedger();
-      const saved: number[] = [];
-      let failSaves: Error | null = null;
-      const ledger: SessionLedger = {
-        transaction: (work) =>
-          stored.transaction((transaction) =>
-            work(
-              new Proxy(transaction, {
-                get(target, property, receiver) {
-                  if (property !== "saveProjectionCheckpoint") {
-                    return Reflect.get(target, property, receiver);
-                  }
-                  return (checkpoint: SessionProjectionCheckpoint) => {
-                    if (failSaves) throw failSaves;
-                    saved.push(checkpoint.throughSequence);
-                    transaction.saveProjectionCheckpoint(checkpoint);
-                  };
-                },
-              }),
-            ),
-          ),
-      };
-      const reported: unknown[] = [];
-      const plane = createSessionEngine({
-        ledger,
-        clock: { now: () => 100 },
-        ids: ids(),
-        onProjectionCheckpointFailure: (error) => reported.push(error),
-      });
-      return {
-        plane,
-        ledger,
-        saved,
-        reported,
-        failWith: (error: Error | null) => {
-          failSaves = error;
-        },
-      };
-    }
-
-    async function retitle(
-      plane: ReturnType<typeof createSessionEngine>,
-      sessionId: string,
-      times: number,
-    ) {
-      for (let index = 0; index < times; index += 1) {
-        await plane.submit({
-          commandId: `command-retitle-${sessionId}-${index}-${Math.random()}`,
-          sessionId,
-          intent: { kind: "session.retitle", title: `Title ${index}` },
-          provenance: userProvenance,
-        });
-      }
-    }
-
     it("writes a listing's full fold back, so the next read resumes from it", async () => {
       const { plane, saved } = countingComposition();
       const { session } = await plane.createSession(createRequest("command-persist-get"));
@@ -2039,84 +2118,6 @@ describe("SessionEngine creation and explicit commands", () => {
   });
 
   describe("hot checkpoints for Sessions recording facts (VC-1076)", () => {
-    function hotComposition() {
-      const stored = createInMemorySessionLedger();
-      const rowReads: string[] = [];
-      let rollBackNext = false;
-      let ticketDeleted = false;
-      let enclosed = false;
-      const ledger: SessionLedger = {
-        transaction: (work) =>
-          stored.transaction((transaction) => {
-            const value = work(
-              new Proxy(transaction, {
-                get(target, property, receiver) {
-                  if (property === "enclosed") return enclosed;
-                  if (property === "getProjectionCheckpoint") {
-                    return (sessionId: string) => {
-                      rowReads.push(sessionId);
-                      return transaction.getProjectionCheckpoint(sessionId);
-                    };
-                  }
-                  if (property === "getSession") {
-                    return (sessionId: string) => {
-                      const session = transaction.getSession(sessionId);
-                      return session && ticketDeleted ? { ...session, ticketId: null } : session;
-                    };
-                  }
-                  return Reflect.get(target, property, receiver);
-                },
-              }),
-            );
-            if (rollBackNext) {
-              rollBackNext = false;
-              throw new Error("rolled back");
-            }
-            return value;
-          }),
-      };
-      const plane = createSessionEngine({ ledger, clock: { now: () => 100 }, ids: ids() });
-      return {
-        plane,
-        ledger,
-        rowReads,
-        rollBack: () => {
-          rollBackNext = true;
-        },
-        deleteTicket: () => {
-          ticketDeleted = true;
-        },
-        enclose: (value: boolean) => {
-          enclosed = value;
-        },
-      };
-    }
-
-    async function liveSession(plane: ReturnType<typeof createSessionEngine>, commandId: string) {
-      const { session } = await plane.createSession(createRequest(commandId));
-      const opened = attachment(session.id, `attachment-${commandId}`);
-      await plane.observe({
-        id: `observation-${commandId}-opened`,
-        sessionId: session.id,
-        occurredAt: 200,
-        provenance: adapterProvenance,
-        kind: "attachment.opened",
-        attachment: opened,
-      });
-      let index = 0;
-      const fact = () =>
-        plane.observe({
-          id: `observation-${commandId}-${index}`,
-          sessionId: session.id,
-          occurredAt: 300 + index,
-          provenance: adapterProvenance,
-          attachmentId: opened.id,
-          kind: "attachment.native_referenced",
-          native: { id: `native-${index++}`, detail: null },
-        });
-      return { session, fact };
-    }
-
     it("records facts without re-reading the checkpoint row, and folds to the same answer", async () => {
       const { plane, ledger, rowReads } = hotComposition();
       const { session, fact } = await liveSession(plane, "hot-facts");
@@ -4274,6 +4275,39 @@ function metered(overrides: Partial<SessionUsage> = {}): SessionUsage {
   };
 }
 
+/** A Session in a named project/ticket, with one metered operation on it. */
+async function spend(
+  plane: ReturnType<typeof createSessionEngine>,
+  options: {
+    commandId: string;
+    projectId: string;
+    ticketId: string | null;
+    occurredAt: number;
+    usage: SessionUsage;
+  },
+): Promise<string> {
+  const created = await plane.createSession({
+    commandId: options.commandId,
+    projectId: options.projectId,
+    ticketId: options.ticketId,
+    role: roleImpliedByTicket(options.ticketId),
+    parentSessionId: null,
+    title: options.commandId,
+    provenance: userProvenance,
+  });
+  await plane.observe({
+    id: `usage-${options.commandId}`,
+    kind: "usage.recorded",
+    sessionId: created.session.id,
+    occurredAt: options.occurredAt,
+    provenance: adapterProvenance,
+    attachmentId: null,
+    turnId: null,
+    usage: options.usage,
+  });
+  return created.session.id;
+}
+
 describe("reportUsage", () => {
   it("uses a storage-owned report read without opening a transaction on the caller", async () => {
     const { ledger, plane } = composition();
@@ -4292,39 +4326,6 @@ describe("reportUsage", () => {
     reportUsage.mockRejectedValueOnce(new Error("reader failed"));
     await expect(engine.reportUsage(query)).rejects.toThrow("reader failed");
   });
-
-  /** A Session in a named project/ticket, with one metered operation on it. */
-  async function spend(
-    plane: ReturnType<typeof createSessionEngine>,
-    options: {
-      commandId: string;
-      projectId: string;
-      ticketId: string | null;
-      occurredAt: number;
-      usage: SessionUsage;
-    },
-  ): Promise<string> {
-    const created = await plane.createSession({
-      commandId: options.commandId,
-      projectId: options.projectId,
-      ticketId: options.ticketId,
-      role: roleImpliedByTicket(options.ticketId),
-      parentSessionId: null,
-      title: options.commandId,
-      provenance: userProvenance,
-    });
-    await plane.observe({
-      id: `usage-${options.commandId}`,
-      kind: "usage.recorded",
-      sessionId: created.session.id,
-      occurredAt: options.occurredAt,
-      provenance: adapterProvenance,
-      attachmentId: null,
-      turnId: null,
-      usage: options.usage,
-    });
-    return created.session.id;
-  }
 
   it("answers every scope from the same facts", async () => {
     const { plane } = composition();
@@ -4464,6 +4465,57 @@ describe("usage whose Session is gone", () => {
 /** A listing that sees the whole stored roster. */
 const everyRow = (rows: readonly Session[]): readonly Session[] => rows;
 
+async function roster(count: number) {
+  const { plane } = composition();
+  const sessions = [];
+  for (let index = 0; index < count; index += 1) {
+    sessions.push((await plane.createSession(createRequest(`command-roster-${index}`))).session);
+  }
+  return { plane, sessions };
+}
+
+/**
+ * A ledger that reports which Sessions each read actually folded.
+ *
+ * `listProjectionEvents` is the fold's own read, so a Session that appears
+ * here was projected from its log and one that does not was answered from
+ * somewhere cheaper.
+ */
+function foldWatchingComposition(
+  /**
+   * Which of the stored rows a listing sees, so a test can shrink and grow
+   * one roster instead of building two.
+   */
+  visibleRows: (rows: readonly Session[]) => readonly Session[] = (rows) => rows,
+) {
+  const stored = createInMemorySessionLedger();
+  const folded: string[] = [];
+  const ledger: SessionLedger = {
+    transaction: (work) =>
+      stored.transaction((transaction) =>
+        work(
+          new Proxy(transaction, {
+            get(target, property, receiver) {
+              if (property === "listSessions") {
+                return (query: ListSessionsQuery) => visibleRows(transaction.listSessions(query));
+              }
+              if (property !== "listProjectionEvents") {
+                return Reflect.get(target, property, receiver);
+              }
+              return (query: Parameters<SessionLedgerTransaction["listProjectionEvents"]>[0]) => {
+                folded.push(query.sessionId);
+                return transaction.listProjectionEvents(query);
+              };
+            },
+          }),
+        ),
+      ),
+  };
+  let now = 100;
+  const plane = createSessionEngine({ ledger, clock: { now: () => now++ }, ids: ids() });
+  return { plane, folded };
+}
+
 /**
  * A project's whole roster, folded on the process that also serves every other
  * Session operation (VC-388).
@@ -4475,15 +4527,6 @@ const everyRow = (rows: readonly Session[]): readonly Session[] => rows;
  * the same span whether or not a skeleton is drawn over it.
  */
 describe("listSessions over a project roster (VC-388)", () => {
-  async function roster(count: number) {
-    const { plane } = composition();
-    const sessions = [];
-    for (let index = 0; index < count; index += 1) {
-      sessions.push((await plane.createSession(createRequest(`command-roster-${index}`))).session);
-    }
-    return { plane, sessions };
-  }
-
   it("lets a write commit while a listing is still in flight", async () => {
     const { plane, sessions } = await roster(40);
     const settled: string[] = [];
@@ -4558,48 +4601,6 @@ describe("listSessions over a project roster (VC-388)", () => {
     // Three chunks, and the yield is between them, not before the first.
     expect(yields).toBe(2);
   });
-
-  /**
-   * A ledger that reports which Sessions each read actually folded.
-   *
-   * `listProjectionEvents` is the fold's own read, so a Session that appears
-   * here was projected from its log and one that does not was answered from
-   * somewhere cheaper.
-   */
-  function foldWatchingComposition(
-    /**
-     * Which of the stored rows a listing sees, so a test can shrink and grow
-     * one roster instead of building two.
-     */
-    visibleRows: (rows: readonly Session[]) => readonly Session[] = (rows) => rows,
-  ) {
-    const stored = createInMemorySessionLedger();
-    const folded: string[] = [];
-    const ledger: SessionLedger = {
-      transaction: (work) =>
-        stored.transaction((transaction) =>
-          work(
-            new Proxy(transaction, {
-              get(target, property, receiver) {
-                if (property === "listSessions") {
-                  return (query: ListSessionsQuery) => visibleRows(transaction.listSessions(query));
-                }
-                if (property !== "listProjectionEvents") {
-                  return Reflect.get(target, property, receiver);
-                }
-                return (query: Parameters<SessionLedgerTransaction["listProjectionEvents"]>[0]) => {
-                  folded.push(query.sessionId);
-                  return transaction.listProjectionEvents(query);
-                };
-              },
-            }),
-          ),
-        ),
-    };
-    let now = 100;
-    const plane = createSessionEngine({ ledger, clock: { now: () => now++ }, ids: ids() });
-    return { plane, folded };
-  }
 
   it("re-folds only the Sessions whose log moved since the last listing", async () => {
     const { plane, folded } = foldWatchingComposition();
@@ -4863,6 +4864,35 @@ describe("listSessions over a project roster (VC-388)", () => {
   );
 });
 
+/** Opens an attachment on a fresh Session, and optionally closes it again. */
+async function attached(
+  plane: ReturnType<typeof createSessionEngine>,
+  name: string,
+  close: boolean,
+) {
+  const { session } = await plane.createSession(createRequest(`command-${name}`));
+  await plane.observe({
+    id: `${name}-opened`,
+    sessionId: session.id,
+    occurredAt: 1,
+    provenance: adapterProvenance,
+    kind: "attachment.opened",
+    attachment: attachment(session.id, `attachment-${name}`),
+  });
+  if (close) {
+    await plane.observe({
+      id: `${name}-closed`,
+      sessionId: session.id,
+      occurredAt: 2,
+      provenance: adapterProvenance,
+      kind: "attachment.closed",
+      attachmentId: `attachment-${name}`,
+      outcome: "completed",
+    });
+  }
+  return session;
+}
+
 /**
  * The concurrency budget's read (VC-403).
  *
@@ -4874,35 +4904,6 @@ describe("listSessions over a project roster (VC-388)", () => {
  * ordinary way, in the ordinary order.
  */
 describe("listAttachedSessions (VC-403)", () => {
-  /** Opens an attachment on a fresh Session, and optionally closes it again. */
-  async function attached(
-    plane: ReturnType<typeof createSessionEngine>,
-    name: string,
-    close: boolean,
-  ) {
-    const { session } = await plane.createSession(createRequest(`command-${name}`));
-    await plane.observe({
-      id: `${name}-opened`,
-      sessionId: session.id,
-      occurredAt: 1,
-      provenance: adapterProvenance,
-      kind: "attachment.opened",
-      attachment: attachment(session.id, `attachment-${name}`),
-    });
-    if (close) {
-      await plane.observe({
-        id: `${name}-closed`,
-        sessionId: session.id,
-        occurredAt: 2,
-        provenance: adapterProvenance,
-        kind: "attachment.closed",
-        attachmentId: `attachment-${name}`,
-        outcome: "completed",
-      });
-    }
-    return session;
-  }
-
   it("returns only the Sessions still holding an open attachment", async () => {
     const { plane } = composition();
     const open = await attached(plane, "open", false);

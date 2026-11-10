@@ -1175,33 +1175,35 @@ describe("browseCaption (VC-453)", () => {
   });
 });
 
-describe("browse presenter", () => {
-  const browse = (
-    action: ActivityBrowse["action"],
-    patch: Partial<ActivityBrowse> = {},
-    label: string | null = "example.com/sign-in",
-  ): DynamicToolUIPart =>
-    tool("browse", {
-      descriptor: {
-        subject: { label, path: null, lineRange: null },
-        startedAt: 0,
-        endedAt: 2400,
-        browse: {
-          action,
-          tabId: "tab-1",
-          url: "https://example.com/sign-in",
-          title: "Sign in — Example",
-          target: null,
-          picture: null,
-          errorCount: null,
-          ownerSessionId: "s1",
-          error: null,
-          refusal: null,
-          ...patch,
-        },
+const browse = (
+  action: ActivityBrowse["action"],
+  patch: Partial<ActivityBrowse> = {},
+  label: string | null = "example.com/sign-in",
+): DynamicToolUIPart =>
+  tool("browse", {
+    descriptor: {
+      subject: { label, path: null, lineRange: null },
+      startedAt: 0,
+      endedAt: 2400,
+      browse: {
+        action,
+        tabId: "tab-1",
+        url: "https://example.com/sign-in",
+        title: "Sign in — Example",
+        target: null,
+        picture: null,
+        errorCount: null,
+        ownerSessionId: "s1",
+        error: null,
+        refusal: null,
+        ...patch,
       },
-    });
+    },
+  });
 
+const page = (label: string) => browse("open", {}, label);
+
+describe("browse presenter", () => {
   it("reads a navigation as where the page went, and a history move by its direction", () => {
     expect(describeActivity(browse("open"))).toMatchObject({
       verb: "Opened",
@@ -1348,7 +1350,6 @@ describe("browse presenter", () => {
   });
 
   it("names up to three pages, then counts pages rather than calls", () => {
-    const page = (label: string) => browse("open", {}, label);
     expect(
       summaryText(bundleOf(segmentMessageParts([page("a.example"), page("b.example")], "m1"))),
     ).toEqual(["Browsed a.example and b.example"]);

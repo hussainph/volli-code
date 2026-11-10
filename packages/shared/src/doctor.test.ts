@@ -510,6 +510,18 @@ describe("runDoctorChecks — ordering", () => {
   });
 });
 
+const refusal = (
+  command: string,
+  reason: DoctorFacts["refused"][number]["reason"],
+): DoctorCheckFault =>
+  fault(
+    doctorChecks(
+      observation(),
+      facts({ refused: [{ command, resolvedPath: `/usr/bin/${command}`, reason }] }),
+    ),
+    `refused-${command}`,
+  );
+
 /**
  * VC-293. A finding's heading has to name the finding. These titles used to be
  * the check's positive claim, so a fault list read as a list of things that
@@ -592,18 +604,6 @@ describe("runDoctorChecks — failure titles", () => {
   });
 
   it("gives each wrapper refusal its own heading", () => {
-    const refusal = (
-      command: string,
-      reason: DoctorFacts["refused"][number]["reason"],
-    ): DoctorCheckFault =>
-      fault(
-        doctorChecks(
-          observation(),
-          facts({ refused: [{ command, resolvedPath: `/usr/bin/${command}`, reason }] }),
-        ),
-        `refused-${command}`,
-      );
-
     expect(refusal("git", "shadows-system-command").failureTitle).toBe(
       "`git` is not wrapped — the name belongs to a system command",
     );

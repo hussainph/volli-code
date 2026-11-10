@@ -133,9 +133,9 @@ describe("sessionSourceLabel", () => {
   });
 });
 
-describe("sessionSourceHarness", () => {
-  const sourceHarness = (session: SessionRecord) => sessionSourceHarness(terminalRow(session));
+const sourceHarness = (session: SessionRecord) => sessionSourceHarness(terminalRow(session));
 
+describe("sessionSourceHarness", () => {
   // The id half of the label's own verdict, reached by the same rule: a glyph
   // and the words beside it must never name two different harnesses.
   it("names the harness an agent launch is running", () => {

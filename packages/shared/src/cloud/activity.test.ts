@@ -94,6 +94,11 @@ describe("readActivityEvent", () => {
   });
 });
 
+const labels = (added: string[], removed: string[], at: number) =>
+  event({ kind: "labels_changed", added, removed }, at);
+
+const kinds = (events: ActivityEvent[]) => fold(events).length;
+
 describe("ActivityFold", () => {
   test("one person's consecutive edits to a ticket fold into their net change", () => {
     const events = [
@@ -147,8 +152,6 @@ describe("ActivityFold", () => {
   });
 
   test("label runs net out: added then removed, removed then added", () => {
-    const labels = (added: string[], removed: string[], at: number) =>
-      event({ kind: "labels_changed", added, removed }, at);
     const [item] = fold([
       // Newest first: newer ops, then older ones.
       labels(["Gone", "Back"], ["Temp", "Kept"], 3),
@@ -220,7 +223,6 @@ describe("ActivityFold", () => {
 
   test("a run breaks on another actor, ticket, project, a project-level event, or a nameless actor", () => {
     const body = { kind: "body_edited" } as const;
-    const kinds = (events: ActivityEvent[]) => fold(events).length;
     expect(kinds([event(body, 2), event(body, 1, { actor: person(bo) })])).toBe(2);
     expect(kinds([event(body, 2), event(body, 1, { ticketId: newId("ticket") })])).toBe(2);
     expect(kinds([event(body, 2), event(body, 1, { projectId: newId("project") })])).toBe(2);

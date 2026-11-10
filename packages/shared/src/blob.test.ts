@@ -164,11 +164,11 @@ describe("blobsSectionInput", () => {
   });
 });
 
-describe("materializedBlobNames", () => {
-  function link(linkId: string, originalName: string): NamedBlobLink {
-    return { linkId, blobHash: HASH, label: originalName, originalName };
-  }
+function link(linkId: string, originalName: string): NamedBlobLink {
+  return { linkId, blobHash: HASH, label: originalName, originalName };
+}
 
+describe("materializedBlobNames", () => {
   it("keeps a unique name verbatim", () => {
     const names = materializedBlobNames([link("l1", "spec.png"), link("l2", "notes.md")]);
     expect(names.get("l1")).toBe("spec.png");
@@ -319,19 +319,19 @@ describe("resolveAttachment", () => {
   });
 });
 
-describe("isBlobLinkView", () => {
-  function view(overrides: Partial<BlobLinkView> = {}): BlobLinkView {
-    return {
-      linkId: "link-1",
-      blobHash: HASH,
-      label: "shot.png",
-      originalName: "shot.png",
-      mime: "image/png",
-      sizeBytes: 2048,
-      ...overrides,
-    };
-  }
+function view(overrides: Partial<BlobLinkView> = {}): BlobLinkView {
+  return {
+    linkId: "link-1",
+    blobHash: HASH,
+    label: "shot.png",
+    originalName: "shot.png",
+    mime: "image/png",
+    sizeBytes: 2048,
+    ...overrides,
+  };
+}
 
+describe("isBlobLinkView", () => {
   it("accepts a well-shaped view, linked or not", () => {
     expect(isBlobLinkView(view())).toBe(true);
     expect(isBlobLinkView(view({ linkId: null }))).toBe(true);

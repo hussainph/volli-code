@@ -74,11 +74,11 @@ describe("source icon parent gate", () => {
         if (reason === "cancellation") abort.abort();
         return result;
       });
-      const terminate = vi
-        .spyOn(Worker.prototype, "terminate")
-        .mockImplementation(function (this: Worker) {
-          return gate.promise.then(() => originalTerminate.call(this));
-        });
+      const terminate = vi.spyOn(Worker.prototype, "terminate").mockImplementation(function (
+        this: Worker,
+      ) {
+        return gate.promise.then(() => originalTerminate.call(this));
+      });
       const decode = createWorkerSourceIconDecoder(HUNG);
       const input = { bytes: await png(), mime: "image/png" as const };
       try {

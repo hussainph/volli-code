@@ -1435,26 +1435,26 @@ describe("what a question is waiting for", () => {
   });
 });
 
-describe("the stepped question flow", () => {
-  const walk = () =>
-    question([
-      prompt({ id: "prompt:0" }),
-      prompt({ id: "prompt:1", label: "Which remote?" }),
-      prompt({ id: "prompt:2", label: "What else?", multiple: true }),
-    ]);
+const steppedQuestion = () =>
+  question([
+    prompt({ id: "prompt:0" }),
+    prompt({ id: "prompt:1", label: "Which remote?" }),
+    prompt({ id: "prompt:2", label: "What else?", multiple: true }),
+  ]);
 
+describe("the stepped question flow", () => {
   it("has no step on a request that declares no questions", () => {
     expect(interactionStep(question([]), {}, 0)).toBeNull();
   });
 
   it("clamps a stale index rather than stepping off the end", () => {
-    expect(interactionStep(walk(), {}, 9)?.index).toBe(2);
-    expect(interactionStep(walk(), {}, -4)?.index).toBe(0);
+    expect(interactionStep(steppedQuestion(), {}, 9)?.index).toBe(2);
+    expect(interactionStep(steppedQuestion(), {}, -4)?.index).toBe(0);
   });
 
   it("reports the position, the ends of the walk, and what is answered", () => {
     const draft = selectOption({}, prompt({ id: "prompt:1" }), "question:0:bWFpbg");
-    expect(interactionStep(walk(), draft, 1)).toMatchObject({
+    expect(interactionStep(steppedQuestion(), draft, 1)).toMatchObject({
       index: 1,
       count: 3,
       heading: "Which remote?",
@@ -1471,8 +1471,8 @@ describe("the stepped question flow", () => {
   it("offers a skip while there is somewhere to skip to", () => {
     // Movement, not an answer: nothing durable records a skip, so the last
     // question has nothing to step to and Submit still waits for it.
-    expect(interactionStep(walk(), {}, 0)?.skippable).toBe(true);
-    expect(interactionStep(walk(), {}, 2)?.skippable).toBe(false);
+    expect(interactionStep(steppedQuestion(), {}, 0)?.skippable).toBe(true);
+    expect(interactionStep(steppedQuestion(), {}, 2)?.skippable).toBe(false);
     expect(interactionStep(question([prompt()]), {}, 0)?.skippable).toBe(false);
   });
 
@@ -1480,7 +1480,7 @@ describe("the stepped question flow", () => {
     // A single choice used to send on the click that made it, so the step in
     // view had no control at all. Selecting is selecting: the reader says when
     // the answer goes, and the control saying so stands on every step.
-    expect(interactionStep(walk(), {}, 0)?.advanceLabel).toBe("Next");
+    expect(interactionStep(steppedQuestion(), {}, 0)?.advanceLabel).toBe("Next");
     const middle = question([
       prompt({ id: "prompt:0", multiple: true }),
       prompt({ id: "prompt:1" }),
@@ -1492,7 +1492,7 @@ describe("the stepped question flow", () => {
     // One name for the act that ends the question, whatever it is answered
     // with — a chosen row, several of them, or a paragraph. "Choose", "Answer",
     // "Submit" and "Send" were four words for one press.
-    expect(interactionStep(walk(), {}, 2)?.advanceLabel).toBe("Answer");
+    expect(interactionStep(steppedQuestion(), {}, 2)?.advanceLabel).toBe("Answer");
     expect(interactionStep(question([prompt()]), {}, 0)?.advanceLabel).toBe("Answer");
     expect(
       interactionStep(question([prompt({ options: [], custom: true })]), {}, 0)?.advanceLabel,
@@ -1503,7 +1503,7 @@ describe("the stepped question flow", () => {
     // A redirection outranks the walk it was going to finish, so the control
     // stops offering to step past questions its words have already answered.
     const draft = setPromptResponse({}, "prompt:0", "the release branch, actually");
-    expect(interactionStep(walk(), draft, 0)?.advanceLabel).toBe("Answer");
+    expect(interactionStep(steppedQuestion(), draft, 0)?.advanceLabel).toBe("Answer");
     const written = question([
       prompt({ id: "prompt:0", custom: true }),
       prompt({ id: "prompt:1" }),
@@ -1516,26 +1516,27 @@ describe("the stepped question flow", () => {
   });
 });
 
-describe("one press of the control that moves the flow on", () => {
-  const walk = () =>
-    question([
-      prompt({ id: "prompt:0" }),
-      prompt({ id: "prompt:1", label: "Which remote?" }),
-      prompt({ id: "prompt:2", label: "What else?", multiple: true }),
-    ]);
-  const answerAll = () => {
-    let draft: Record<string, { optionIds: readonly string[]; response: string }> = {};
-    for (const id of ["prompt:0", "prompt:1", "prompt:2"])
-      draft = selectOption(draft, prompt({ id }), "question:0:bWFpbg");
-    return draft;
-  };
+const questionToAdvance = () =>
+  question([
+    prompt({ id: "prompt:0" }),
+    prompt({ id: "prompt:1", label: "Which remote?" }),
+    prompt({ id: "prompt:2", label: "What else?", multiple: true }),
+  ]);
 
+const answerAll = () => {
+  let draft: Record<string, { optionIds: readonly string[]; response: string }> = {};
+  for (const id of ["prompt:0", "prompt:1", "prompt:2"])
+    draft = selectOption(draft, prompt({ id }), "question:0:bWFpbg");
+  return draft;
+};
+
+describe("one press of the control that moves the flow on", () => {
   it("has nothing to press on a request that declares no questions", () => {
     expect(interactionAdvance(question([]), {}, 0)).toBeNull();
   });
 
   it("blocks on the question in view and names what it owes", () => {
-    expect(interactionAdvance(walk(), {}, 1)).toEqual({
+    expect(interactionAdvance(questionToAdvance(), {}, 1)).toEqual({
       kind: "blocked",
       at: 1,
       requirement: "Choose an option",
@@ -1544,17 +1545,17 @@ describe("one press of the control that moves the flow on", () => {
 
   it("steps forward once the question in view has something", () => {
     const draft = selectOption({}, prompt({ id: "prompt:0" }), "question:0:bWFpbg");
-    expect(interactionAdvance(walk(), draft, 0)).toEqual({ kind: "step", at: 1 });
+    expect(interactionAdvance(questionToAdvance(), draft, 0)).toEqual({ kind: "step", at: 1 });
   });
 
   it("sends the whole walk from its last question", () => {
-    const sent = interactionAdvance(walk(), answerAll(), 2);
+    const sent = interactionAdvance(questionToAdvance(), answerAll(), 2);
     expect(sent?.kind).toBe("send");
     // Every question's answer in one resolution: the walk is a way of asking,
     // never a way of sending three of them.
     expect(sent?.kind === "send" ? sent.submission : null).toEqual({
       message: null,
-      resolution: interactionResolution(walk(), answerAll()),
+      resolution: interactionResolution(questionToAdvance(), answerAll()),
     });
     expect(
       sent?.kind === "send" ? sent.submission.resolution.answers?.map((a) => a.promptId) : null,
@@ -1565,10 +1566,10 @@ describe("one press of the control that moves the flow on", () => {
     // The redirection refuses the request, so it outranks both the question in
     // view and the two questions the walk had left.
     const draft = setPromptResponse({}, "prompt:1", "neither — cut a branch off the tag");
-    expect(interactionAdvance(walk(), draft, 1)).toEqual({
+    expect(interactionAdvance(questionToAdvance(), draft, 1)).toEqual({
       kind: "send",
       submission: {
-        resolution: refusalResolution(walk()),
+        resolution: refusalResolution(questionToAdvance()),
         message: "neither — cut a branch off the tag",
       },
     });
@@ -1580,7 +1581,7 @@ describe("one press of the control that moves the flow on", () => {
     // control on a question that is perfectly answered.
     let draft = selectOption({}, prompt({ id: "prompt:1" }), "question:0:bWFpbg");
     draft = selectOption(draft, prompt({ id: "prompt:2" }), "question:0:bWFpbg");
-    expect(interactionAdvance(walk(), draft, 2)).toEqual({
+    expect(interactionAdvance(questionToAdvance(), draft, 2)).toEqual({
       kind: "blocked",
       at: 0,
       requirement: "Choose an option",

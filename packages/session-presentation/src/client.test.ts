@@ -1931,6 +1931,29 @@ describe("scheduled resume", () => {
   });
 });
 
+// VC-141: the four compaction refusals as the host actually sends them —
+// its own sentence, and its own judgement of what that sentence weighs.
+// Nothing below names a rejection code, and that is the point: the client
+// reads the weight the host set, so a second runtime with a vocabulary of
+// its own needs no change on this side.
+const compactionRefusal = (
+  code: string,
+  detail: string,
+  refusal: "benign" | "failure",
+): CommandAnswer => ({
+  sessionId: SESSION.id,
+  refusal,
+  receipt: {
+    id: `receipt-${code}`,
+    commandId: `command-${code}`,
+    status: "rejected",
+    code,
+    detail,
+    recordedAt: 0,
+    sequence: 1,
+  },
+});
+
 describe("compactContext", () => {
   it("sends an explicit compaction, carrying instructions only when there are any", async () => {
     const { client, rpc, sessionId } = await adopted((fake) => {
@@ -2040,29 +2063,6 @@ describe("compactContext", () => {
     expect(notifications.at(-1)).toBe("Compact: Pi is unavailable");
     expect(notificationTones.at(-1)).toBe("error");
     expect(slice()!.sessionError).toBeNull();
-  });
-
-  // VC-141: the four compaction refusals as the host actually sends them —
-  // its own sentence, and its own judgement of what that sentence weighs.
-  // Nothing below names a rejection code, and that is the point: the client
-  // reads the weight the host set, so a second runtime with a vocabulary of
-  // its own needs no change on this side.
-  const compactionRefusal = (
-    code: string,
-    detail: string,
-    refusal: "benign" | "failure",
-  ): CommandAnswer => ({
-    sessionId: SESSION.id,
-    refusal,
-    receipt: {
-      id: `receipt-${code}`,
-      commandId: `command-${code}`,
-      status: "rejected",
-      code,
-      detail,
-      recordedAt: 0,
-      sequence: 1,
-    },
   });
 
   it("toasts the host's own words, neutrally, when there is nothing left to summarize", async () => {
@@ -2264,16 +2264,16 @@ describe("selectModel", () => {
   });
 });
 
+async function ready(prepare: (rpc: FakeRpc) => void = () => undefined) {
+  return adopted((fake) => {
+    fake.snapshotProjection = projectionFor("attach-1");
+    prepare(fake);
+  });
+}
+
 /* -------------------------------------------------------------- the message */
 
 describe("submit", () => {
-  async function ready(prepare: (rpc: FakeRpc) => void = () => undefined) {
-    return adopted((fake) => {
-      fake.snapshotProjection = projectionFor("attach-1");
-      prepare(fake);
-    });
-  }
-
   it.each([undefined, "steer", "replace"] as const)(
     "asks for opening acceptance for immediate delivery=%s",
     async (delivery) => {
@@ -2595,19 +2595,19 @@ describe("submit", () => {
   });
 });
 
+function projectionWithTitle(title: string | null): SessionPresentationProjection {
+  return { ...projectionFor("attach-1"), session: { ...SESSION, title } };
+}
+
+async function readyWithTitle(title: string | null) {
+  return adopted((fake) => {
+    fake.snapshotProjection = projectionWithTitle(title);
+  });
+}
+
 /* ---------------------------------------------------------- auto-titling */
 
 describe("auto-title on delivery", () => {
-  function projectionWithTitle(title: string | null): SessionPresentationProjection {
-    return { ...projectionFor("attach-1"), session: { ...SESSION, title } };
-  }
-
-  async function readyWithTitle(title: string | null) {
-    return adopted((fake) => {
-      fake.snapshotProjection = projectionWithTitle(title);
-    });
-  }
-
   it("names an untitled Session once its first message delivers", async () => {
     const { client, sessionId, renames } = await readyWithTitle(null);
 
