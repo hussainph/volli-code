@@ -172,6 +172,19 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
+/** Transcript geometry and the island's announcement have separate owners. */
+function turnClearance() {
+  return container!.querySelector("[data-turn-bead-clearance]");
+}
+function activityStatus() {
+  return container!.querySelector('[data-slot="chat-composer-dock"] [role="status"].sr-only');
+}
+function expectNoActivity() {
+  expect(activityStatus()?.textContent).toBe("");
+  expect(container!.querySelector("[data-island-verb]")).toBeNull();
+  expect(container!.querySelector(".liquid-island-shimmer")).toBeNull();
+}
+
 function provisionalChatStore(promote: () => Promise<boolean> = async () => true) {
   const store = createChatSessionsStore(
     () => ({ connect: async () => {}, dispose: () => {} }) as unknown as ChatSessionTransport,
@@ -1016,11 +1029,8 @@ describe("host-owned rows with cloud off", () => {
       await vi.waitFor(() => expect(store.getState().idleSends[SESSION]).toBeUndefined());
       await act(async () => store.getState().settle(SESSION, null));
       expect(container!.querySelector(".is-user")).toBeNull();
-      expect(
-        [...container!.querySelectorAll('[role="status"]')].some((node) =>
-          node.textContent?.includes("Working"),
-        ),
-      ).toBe(false);
+      expectNoActivity();
+      expect(turnClearance()).toBeNull();
       expect(composer()?.value).toBe(action === "edit" ? "host follow-up" : "");
     },
   );
@@ -1203,7 +1213,7 @@ describe("host-owned rows with cloud off", () => {
 });
 
 describe("a chat plane holding a long transcript", () => {
-  it("retires Working and live markdown after the runtime writes fatal Attention then closes", async () => {
+  it("retires island activity and live markdown after the runtime writes fatal Attention then closes", async () => {
     const provider = gatedProvider("```ts\nexport const answer = 42;\n```");
     // Keep Node/SQLite composition outside the browser type graph. Host-core
     // typechecks this test-only helper; the real module is loaded at test time.
@@ -1242,11 +1252,9 @@ describe("a chat plane holding a long transcript", () => {
       await vi.waitFor(() => {
         expect(store.getState().sessions[fixture.sessionId]?.transcript.turnActive).toBe(true);
         expect(container?.textContent).toContain("export const answer = 42;");
-        expect(
-          [...container!.querySelectorAll('[role="status"]')].some((element) =>
-            element.textContent?.includes("Working"),
-          ),
-        ).toBe(true);
+        expect(activityStatus()?.textContent).toBe("Writing a reply");
+        expect(container?.querySelector("[data-island-verb]")).not.toBeNull();
+        expect(turnClearance()).not.toBeNull();
       });
       expect(container?.querySelector(TOKEN_SELECTOR)).toBeNull();
       const epoch = store.getState().sessions[fixture.sessionId]!.transcript.turnEpoch;
@@ -1269,11 +1277,8 @@ describe("a chat plane holding a long transcript", () => {
         expect(slice.transcript.turnActive).toBe(false);
         expect(slice.transcript.turnEpoch).toBe(epoch + 1);
         expect(slice.lifecycle).not.toBe("working");
-        expect(
-          [...container!.querySelectorAll('[role="status"]')].some((element) =>
-            element.textContent?.includes("Working"),
-          ),
-        ).toBe(false);
+        expectNoActivity();
+        expect(turnClearance()).toBeNull();
         expect(container?.textContent).toContain("The runtime stopped unexpectedly");
         expect(
           [...container!.querySelectorAll("button")].filter(
@@ -1825,7 +1830,7 @@ describe("/copy on a Session holding only its newest window (VC-315)", () => {
 describe("VC-758 visible timeline regressions", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => disposeChatClient(SESSION));
-  it("shows the first message as sent with Working while promotion is pending", async () => {
+  it("shows the first message as sent with island activity while promotion is pending", async () => {
     const { store } = provisionalChatStore(() => new Promise<boolean>(() => {}));
     await mountPlane(store, modelClient(DEFAULT_SELECTION));
     await act(async () => {
@@ -1841,10 +1846,11 @@ describe("VC-758 visible timeline regressions", () => {
     expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
     await advanceProgressTime(600);
     expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
-    expect(container?.querySelector('[role="status"]')?.textContent).toContain("Working");
+    expect(activityStatus()?.textContent).toBe("Reasoning");
+    expect(container?.querySelector("[data-island-verb]")?.textContent).toBe("Mulling");
   });
 
-  it("keeps the opening bubble and Working in place through host queue and turn ownership", async () => {
+  it("keeps the opening bubble, clearance and island status in place through host queue and turn ownership", async () => {
     const store = chatStore([]);
     store.setState(({ sessions }) => ({
       sessions: {
@@ -1863,22 +1869,22 @@ describe("VC-758 visible timeline regressions", () => {
     drafts.holdMessage(SESSION, { id: "opening", text: "First words", delivery: "send" });
     await mountPlane(store, modelClient(DEFAULT_SELECTION));
     const bubble = container!.querySelector(".is-user");
-    const workingMark = () =>
-      [...container!.querySelectorAll('[role="status"]')].find((node) =>
-        node.textContent?.includes("Working"),
-      );
-    const working = workingMark();
+    const clearance = turnClearance();
+    const status = activityStatus();
+    expect(clearance).not.toBeNull();
+    expect(status).not.toBeNull();
     const assertOpening = () => {
       expect(container!.querySelectorAll(".is-user")).toHaveLength(1);
       expect(container!.querySelector(".is-user")).toBe(bubble);
-      expect(workingMark()).toBe(working);
-      expect(working?.textContent).toContain("Working");
+      expect(turnClearance()).toBe(clearance);
+      expect(activityStatus()).toBe(status);
+      expect(status?.textContent).toBe("Reasoning");
       expect(container!.querySelector('[data-slot="message-delivery"]')).toBeNull();
       expect(
         container!.querySelector('[aria-label="Remove queued message: First words"]'),
       ).toBeNull();
       expect(
-        bubble!.compareDocumentPosition(working!) & Node.DOCUMENT_POSITION_FOLLOWING,
+        bubble!.compareDocumentPosition(clearance!) & Node.DOCUMENT_POSITION_FOLLOWING,
       ).toBeTruthy();
     };
     assertOpening();
@@ -2053,17 +2059,17 @@ describe("VC-758 visible timeline regressions", () => {
       [...container!.querySelectorAll(".is-user")].find((node) =>
         node.textContent?.includes(message.text),
       );
-    const workingMark = () =>
-      [...container!.querySelectorAll('[role="status"]')].find((node) =>
-        node.textContent?.includes("Working"),
-      );
     let bubble = currentBubble();
-    let working = workingMark();
+    let clearance = turnClearance();
+    let status = activityStatus();
     expect(bubble).toBeDefined();
-    expect(working).toBeDefined();
+    expect(clearance).not.toBeNull();
+    expect(status).not.toBeNull();
     const assertSent = () => {
       expect(currentBubble()).toBe(bubble);
-      expect(workingMark()).toBe(working);
+      expect(turnClearance()).toBe(clearance);
+      expect(activityStatus()).toBe(status);
+      expect(status?.textContent).toBe("Reasoning");
       expect(container!.querySelectorAll(".is-user")).toHaveLength(2);
       expect(container!.textContent).toContain("Earlier reply");
       expect(container!.querySelector('[data-slot="message-delivery"]')).toBeNull();
@@ -2071,7 +2077,7 @@ describe("VC-758 visible timeline regressions", () => {
         container!.querySelector('[aria-label="Remove queued message: Continue after relaunch"]'),
       ).toBeNull();
       expect(
-        bubble!.compareDocumentPosition(working!) & Node.DOCUMENT_POSITION_FOLLOWING,
+        bubble!.compareDocumentPosition(clearance!) & Node.DOCUMENT_POSITION_FOLLOWING,
       ).toBeTruthy();
     };
     await advanceProgressTime(1000);
@@ -2093,7 +2099,7 @@ describe("VC-758 visible timeline regressions", () => {
     );
     assertSent();
     // Queue updates are synchronous; durable transcript frames may still be
-    // buffered by the stream scheduler. Neither the words nor Working leave.
+    // buffered by the stream scheduler. Neither the words nor activity leave.
     await act(async () =>
       store.setState(({ sessions }) => ({
         sessions: {
@@ -2108,9 +2114,11 @@ describe("VC-758 visible timeline regressions", () => {
     await act(async () => root?.render(null));
     await mountPlane(store, modelClient(DEFAULT_SELECTION));
     bubble = currentBubble();
-    working = workingMark();
+    clearance = turnClearance();
+    status = activityStatus();
     expect(bubble?.outerHTML).toBe(markup);
-    expect(working).toBeDefined();
+    expect(clearance).not.toBeNull();
+    expect(status).not.toBeNull();
     assertSent();
     await act(async () =>
       store.setState(({ sessions }) => {
@@ -2161,7 +2169,7 @@ describe("VC-758 visible timeline regressions", () => {
     }));
     await mountPlane(store, modelClient(DEFAULT_SELECTION));
     expect(container!.querySelector(".is-user")?.textContent).toContain("Blocked words");
-    expect(container!.textContent).toContain("Working");
+    expect(activityStatus()?.textContent).toBe("Reasoning");
     await act(async () =>
       store.setState(({ sessions }) => ({
         sessions: {
@@ -2181,11 +2189,8 @@ describe("VC-758 visible timeline regressions", () => {
       container!.querySelector('[aria-label="Remove queued message: Blocked words"]'),
     ).not.toBeNull();
     expect(container!.querySelector(".is-user")).toBeNull();
-    expect(
-      [...container!.querySelectorAll('[role="status"]')].some((node) =>
-        node.textContent?.includes("Working"),
-      ),
-    ).toBe(false);
+    expectNoActivity();
+    expect(turnClearance()).toBeNull();
   });
 
   it("removes delayed sending state on acceptance and keeps the same quiet bubble through durable handoff", async () => {
@@ -2201,12 +2206,13 @@ describe("VC-758 visible timeline regressions", () => {
     expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
     await advanceProgressTime(600);
     expect(container?.querySelector('[data-slot="message-delivery"]')?.textContent).toBe("Sending");
-    const working = () =>
-      [...(container?.querySelectorAll('[role="status"]') ?? [])].find((node) =>
-        node.textContent?.includes("Working"),
-      )!;
+    const clearance = turnClearance()!;
+    const status = activityStatus();
+    expect(clearance).not.toBeNull();
+    expect(status?.textContent).toBe("Reasoning");
+
     expect(
-      working().compareDocumentPosition(container!.querySelector(".is-user")!) &
+      clearance.compareDocumentPosition(container!.querySelector(".is-user")!) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     await act(async () =>
@@ -2217,7 +2223,7 @@ describe("VC-758 visible timeline regressions", () => {
     const bubble = accepted?.firstElementChild?.outerHTML;
     const rowClass = accepted?.className;
     expect(
-      accepted!.compareDocumentPosition(working()) & Node.DOCUMENT_POSITION_FOLLOWING,
+      accepted!.compareDocumentPosition(clearance) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     const frame: ChatSessionFrame = {
       sessionId: SESSION,
@@ -2259,13 +2265,16 @@ describe("VC-758 visible timeline regressions", () => {
     expect(container?.querySelector(".is-user")?.className).toBe(rowClass);
     expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
     expect(
-      container!.querySelector(".is-user")!.compareDocumentPosition(working()) &
+      container!.querySelector(".is-user")!.compareDocumentPosition(clearance) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(
       messageDeliveryLabels(store.getState().sessions[SESSION]!.transcript.frames).get(message.id),
     ).toBe("Delivered");
     expect(container?.textContent).toContain("keep these words");
+    expect(turnClearance()).toBe(clearance);
+    expect(activityStatus()).toBe(status);
+    expect(status?.textContent).toBe("Reasoning");
   });
 
   it("retains accepted steering from the recovery strip until host ownership is visible", async () => {
@@ -2325,10 +2334,11 @@ describe("VC-758 visible timeline regressions", () => {
     ).toBeNull();
   });
 
-  it("keeps Working when a turn starts before any transcript message", async () => {
+  it("announces Reasoning in the island when a turn starts before any transcript message", async () => {
     const store = chatStore([], { lifecycle: "working", turnActive: true });
     await mountPlane(store);
-    expect(container?.querySelector('[role="status"]')?.textContent).toContain("Working");
+    expect(activityStatus()?.textContent).toBe("Reasoning");
+    expect(container?.querySelector("[data-island-verb]")?.textContent).toBe("Mulling");
   });
 
   it("shows the failure in the timeline with one recovery", async () => {
@@ -2344,7 +2354,7 @@ describe("VC-758 visible timeline regressions", () => {
   });
 });
 
-it("VC-758 keeps Working above undelivered steering even while the stream reports an error", async () => {
+it("VC-758 keeps clearance above undelivered steering without announcing activity while the stream reports an error", async () => {
   vi.useFakeTimers();
   const store = chatStore(transcript(1), {
     lifecycle: "error",
@@ -2355,17 +2365,19 @@ it("VC-758 keeps Working above undelivered steering even while the stream report
     .getState()
     .holdMessage(SESSION, { id: "steer", text: "focus here", delivery: "steer" });
   await mountPlane(store);
-  const status = container?.querySelector('[role="status"]');
-  expect(status?.textContent).toContain("Working");
+  const clearance = turnClearance();
+  expect(clearance).not.toBeNull();
+  expectNoActivity();
   expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
   await advanceProgressTime(600);
   expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
-  // Steering still follows Working; only its redundant delivery tab is gone.
+  expectNoActivity();
+  // Steering still follows the turn clearance; its redundant delivery tab is gone.
   const pending = [...(container?.querySelectorAll(".is-user") ?? [])].find((node) =>
     node.textContent?.includes("focus here"),
   );
   expect(pending).toBeDefined();
-  expect(status!.compareDocumentPosition(pending!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  expect(clearance!.compareDocumentPosition(pending!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
 });
 
@@ -2450,16 +2462,24 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
       }),
     );
   }
-  const mark = () =>
-    [...container!.querySelectorAll('[role="status"]')].find(
-      (node) => node.querySelector(".sr-only")?.textContent === "Working",
-    );
-  function expectMark(status: Element, invisible: boolean) {
-    expect(mark()).toBe(status);
-    expect(status.querySelector(".sr-only")?.textContent).toBe("Working");
-    expect(status.querySelector(":scope > [aria-hidden]")?.classList.contains("invisible")).toBe(
-      invisible,
-    );
+  function expectActivity(status: Element, announcement: string) {
+    expect(activityStatus()).toBe(status);
+    expect(status.textContent).toBe(announcement);
+    // InteractionStack has a separate live region; count only the island's siblings.
+    expect(status.parentElement?.querySelectorAll(':scope > [role="status"]')).toHaveLength(1);
+    const transcriptStatuses = container!.querySelectorAll('[role="log"] [role="status"]');
+    if (announcement === "Compacting context") {
+      expect(transcriptStatuses).toHaveLength(1);
+      expect(transcriptStatuses[0]?.textContent).toBe("Compacting context");
+    } else {
+      expect(transcriptStatuses).toHaveLength(0);
+    }
+    expect(container!.querySelectorAll("[data-island-verb]")).toHaveLength(1);
+    const clearance = turnClearance();
+    expect(clearance).not.toBeNull();
+    expect(clearance?.hasAttribute("aria-hidden")).toBe(true);
+    expect(clearance?.hasAttribute("role")).toBe(false);
+    expect(clearance?.textContent).toBe("");
   }
 
   it("walks thinking → tool → gap → text → end without losing the accessible turn or doubling progress", async () => {
@@ -2467,11 +2487,14 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
     try {
       const store = chatStore([]);
       await mountPlane(store);
-      expect(mark()).toBeUndefined();
+      expectNoActivity();
+      expect(turnClearance()).toBeNull();
+      const status = activityStatus()!;
+      expect(status).not.toBeNull();
       await ingest(store, [boundary(1, "turn.started")]);
-      const status = mark()!;
-      expect(status).toBeDefined();
-      expectMark(status, false); // Before the first token is never a 300ms wait.
+      const clearance = turnClearance();
+      expectActivity(status, "Reasoning"); // No first-token wait before the bead appears.
+      expect(container?.querySelector("[data-island-verb]")?.textContent).toBe("Mulling");
 
       const thought: UIMessage["parts"][number] = {
         type: "reasoning",
@@ -2488,7 +2511,7 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
       await ingest(store, [], [overlay(1, liveAssistantMessage([thought]))]);
       expect(store.getState().sessions[SESSION]!.transcript.overlay.size).toBe(1);
       expect(container?.querySelector(".is-assistant")).not.toBeNull();
-      expectMark(status, true);
+      expectActivity(status, "Reasoning");
       await ingest(store, [], [overlay(1, liveAssistantMessage([thought, running]))]);
       // The bundle is collapsed: its summary, not a hidden command payload,
       // is the progress the reader actually sees.
@@ -2499,7 +2522,7 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
       expect(summary?.textContent).not.toContain("…");
       // The approved receipt uses a static clock, not a second live spinner.
       expect(summary?.querySelector("svg")).not.toBeNull();
-      expectMark(status, true);
+      expectActivity(status, "Running pnpm check");
 
       // The provider leaves the old thought marked streaming. Segmentation,
       // not that stale bit, decides whether the reader sees current progress.
@@ -2509,11 +2532,12 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
       ]);
       await ingest(store, [committed(2, settledTool)]);
       expect(store.getState().sessions[SESSION]!.transcript.overlay.size).toBe(0);
-      expectMark(status, true);
+      expectActivity(status, "Reasoning");
       await advanceProgressTime(299);
-      expectMark(status, true);
+      expectActivity(status, "Reasoning");
       await advanceProgressTime(1);
-      expectMark(status, false); // Still-open turn cannot look finished past the gap.
+      expectActivity(status, "Reasoning"); // An open gap still has activity.
+      expect(turnClearance()).toBe(clearance);
 
       const text = liveAssistantMessage([
         ...settledTool.parts,
@@ -2521,7 +2545,8 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
       ]);
       await ingest(store, [], [overlay(2, text)]);
       expect(container?.textContent).toContain("The checks passed");
-      expectMark(status, true); // Hide in the same update, not on a hide timer.
+      expectActivity(status, "Writing a reply"); // Semantic handoff in the same update.
+      expect(turnClearance()).toBe(clearance);
       await ingest(store, [
         committed(
           3,
@@ -2532,10 +2557,14 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
         ),
         boundary(4, "turn.completed"),
       ]);
-      expect(mark()).toBeUndefined();
+      expect(activityStatus()).toBe(status);
+      expectNoActivity();
+      expect(turnClearance()).toBeNull();
       expect(container?.textContent).toContain("The checks passed");
       await advanceProgressTime(1_000);
-      expect(mark()).toBeUndefined();
+      expect(activityStatus()).toBe(status);
+      expectNoActivity();
+      expect(turnClearance()).toBeNull();
     } finally {
       vi.useRealTimers();
     }
@@ -2584,7 +2613,7 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
       },
     });
 
-  it("keeps an agent-started durable kickoff above the streaming reply and Working, regardless of receipt timing", async () => {
+  it("keeps an agent-started durable kickoff above the streaming reply and clearance, regardless of receipt timing", async () => {
     vi.useFakeTimers();
     const store = chatStore([]);
     await mountPlane(store);
@@ -2605,7 +2634,10 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
     const user = container!.querySelector(".is-user")!;
     const reply = container!.querySelector(".is-assistant")!;
     expect(user.compareDocumentPosition(reply) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(user.compareDocumentPosition(mark()!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      user.compareDocumentPosition(turnClearance()!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expectActivity(activityStatus()!, "Writing a reply");
     await advanceProgressTime(1_000);
     expect(container?.textContent).not.toContain("Sending");
     await ingest(store, [
@@ -2631,7 +2663,8 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
     const footers = container!.querySelectorAll('[data-slot="message-delivery"]');
     expect(footers).toHaveLength(1);
     expect(footers[0]?.textContent).toBe("Not delivered");
-    expect(mark()).toBeUndefined();
+    expectNoActivity();
+    expect(turnClearance()).toBeNull();
   });
 
   it.each(["rejected", "unreconciled"] as const)(
@@ -2699,7 +2732,9 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
       expect(container?.querySelector('[aria-label*=" · Scroll to latest"]')).toBeNull();
       expect(container?.querySelectorAll('[data-slot="session-blocker"]')).toHaveLength(1);
       await ingest(store, [boundary(3, "turn.started")]);
-      expect(mark()).toBeDefined();
+      expect(turnClearance()).not.toBeNull();
+      if (source === "sessionError") expectNoActivity();
+      else expectActivity(activityStatus()!, "Reasoning");
       expect(container?.querySelector('[data-slot="session-blocker"]')).toBeNull();
     },
   );
@@ -2845,7 +2880,7 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
   });
 
   it.each(["reasoning", "text", "tool"] as const)(
-    "restores Working during a transport retry with stale %s output",
+    "pauses island activity during a transport retry with stale %s output and restores it on recovery",
     async (kind) => {
       vi.useFakeTimers();
       const store = chatStore([]);
@@ -2862,8 +2897,11 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
             }
           : { type: kind, text: "Partial output", state: "streaming" };
       await ingest(store, [], [overlay(1, liveAssistantMessage([part]))]);
-      const status = mark()!;
-      expectMark(status, true);
+      const status = activityStatus()!;
+      const clearance = turnClearance();
+      const announcement =
+        kind === "tool" ? "Reading" : kind === "text" ? "Writing a reply" : "Reasoning";
+      expectActivity(status, announcement);
       const setRetry = async (retrying: boolean) => {
         await act(async () =>
           store.setState((state) => {
@@ -2895,23 +2933,31 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
       };
       await setRetry(true);
       expect(container?.textContent).not.toContain("Reconnecting");
+      expect(activityStatus()).toBe(status);
+      expectNoActivity(); // Stale output is not live activity, even before the old gap delay.
+      expect(turnClearance()).toBe(clearance);
+      expect(store.getState().sessions[SESSION]!.transcript.overlay.size).toBe(1);
+      expect(container?.querySelector(".is-assistant")).not.toBeNull();
       await advanceProgressTime(299);
-      expectMark(status, true);
+      expectNoActivity();
       await advanceProgressTime(1);
-      expectMark(status, false);
+      expectNoActivity();
       expect(container?.querySelectorAll(".is-assistant .animate-spin")).toHaveLength(0);
       await setRetry(false);
-      expectMark(status, true);
+      expectActivity(status, announcement);
+      expect(turnClearance()).toBe(clearance);
     },
   );
 
-  it("treats compaction as the visible progress and restores Working only after its continuous gap", async () => {
+  it("announces compaction as its own island activity and returns to Reasoning through the open gap", async () => {
     vi.useFakeTimers();
     try {
       const store = chatStore([]);
       await mountPlane(store);
       await ingest(store, [boundary(1, "turn.started")]);
-      const status = mark()!;
+      const status = activityStatus()!;
+      const clearance = turnClearance();
+      expectActivity(status, "Reasoning");
       const progress: SessionStreamCompactionProgress = {
         kind: "compaction",
         sessionId: SESSION,
@@ -2920,16 +2966,24 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
         reason: "manual",
       };
       await ingest(store, [], [], [progress]);
-      expect(container?.textContent).toContain("Compacting");
-      expectMark(status, true);
+      expectActivity(status, "Compacting context");
+      expect(container?.querySelector("[data-island-verb]")?.textContent).toBe("Distilling");
+      const compaction = container!.querySelector('[role="log"] [role="status"]')!;
+      expect(
+        compaction.compareDocumentPosition(clearance!) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
       await ingest(store, [], [], [{ ...progress, state: "finished" }]);
-      expectMark(status, true);
+      expectActivity(status, "Reasoning");
+      expect(container?.querySelector("[data-island-verb]")?.textContent).toBe("Mulling");
       await advanceProgressTime(299);
-      expectMark(status, true);
+      expectActivity(status, "Reasoning");
       await advanceProgressTime(1);
-      expectMark(status, false);
+      expectActivity(status, "Reasoning");
+      expect(turnClearance()).toBe(clearance);
       await ingest(store, [boundary(2, "turn.completed")]);
-      expect(mark()).toBeUndefined();
+      expect(activityStatus()).toBe(status);
+      expectNoActivity();
+      expect(turnClearance()).toBeNull();
     } finally {
       vi.useRealTimers();
     }

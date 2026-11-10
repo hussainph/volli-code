@@ -71,7 +71,6 @@ import {
   useMaterializedAttachments,
 } from "@renderer/hooks/use-materialized-attachments";
 import { Message, MessageContent } from "@renderer/components/ui/ai-elements/message";
-import { ReasoningLine } from "@renderer/components/ui/ai-elements/reasoning";
 import {
   groupTurns,
   currentTurnReply,
@@ -104,6 +103,8 @@ import {
   type ChatSessionsStore,
 } from "@renderer/chat/use-session-controller";
 import { useActivityIsland } from "@renderer/chat/use-activity-island";
+import { useTurnActivity } from "@renderer/chat/use-turn-activity";
+import { selectTurnExitKind } from "@renderer/chat/turn-activity";
 import { useChatBrowserTabs } from "@renderer/chat/use-island-tabs";
 import { ActivityIsland } from "@renderer/components/chat/activity-island-ui";
 import { ActivityBundle } from "@renderer/components/chat/activity-ui";
@@ -137,7 +138,6 @@ import {
   resolvingWith,
   restoreStripAttachments,
   sameInteractionId,
-  liveTurnHasProgress,
   sameMessages,
   sameQueuedMessage,
   sessionBlocker,
@@ -420,6 +420,16 @@ function ChatPlaneContent({
     [island.model.agents, peekedAgentId],
   );
   const sessionsStore = store ?? useChatSessionsStore;
+  const committedFrames = useStore(
+    sessionsStore,
+    (state) => state.sessions[sessionId]?.transcript.frames,
+  );
+  // Streamed text does not change the committed frame array. Do not rescan a
+  // long open turn on every token or on another Session's store update.
+  const committedExitKind = React.useMemo(
+    () => selectTurnExitKind(committedFrames ?? []),
+    [committedFrames],
+  );
   const {
     cancelQueued,
     steerQueued,
@@ -436,6 +446,15 @@ function ChatPlaneContent({
     cancelScheduledResume,
   } = controller;
   const session = controller.session;
+  // The local intent covers a stop before a stream turn has even opened.
+  // Committed renderer frames below also carry interruptions from another client.
+  const [turnExitKind, setTurnExitKind] = React.useState<"done" | "abort">("done");
+  const requestInterrupt = React.useCallback(async () => {
+    setTurnExitKind("abort");
+    const accepted = await interrupt();
+    if (!accepted) setTurnExitKind("done");
+    return accepted;
+  }, [interrupt]);
 
   // The half-typed message is part of the Session, not this view: it has to
   // survive both a tab switch (this component unmounts) and a relaunch, so it
@@ -1858,14 +1877,14 @@ function ChatPlaneContent({
   const withdraw = React.useCallback(
     (interactionId: string): Promise<boolean> =>
       withdrawInteraction(interactionId, {
-        interrupt,
+        interrupt: requestInterrupt,
         cancel: cancelInteraction,
         resolving: (id, active) => setResolving((current) => resolvingWith(current, id, active)),
       }).then(
         (landed) => landed,
         () => false,
       ),
-    [cancelInteraction, interrupt],
+    [cancelInteraction, requestInterrupt],
   );
 
   /**
@@ -2058,13 +2077,23 @@ function ChatPlaneContent({
   // lifecycle, keeps a transient error from treating incomplete content as
   // settled and an optimistic submit from reopening the previous Turn.
   const liveTurn = turnActive ? (turns.at(-1) ?? null) : null;
-  const turnHasProgress = React.useMemo(() => liveTurnHasProgress(liveTurn), [liveTurn]);
 
-  const stopTurn = React.useCallback(() => void interrupt(), [interrupt]);
+  const stopTurn = React.useCallback(() => void requestInterrupt(), [requestInterrupt]);
   const turnRunning = working || turnActive || openingSendIds.size > 0;
+  React.useEffect(() => {
+    if (turnRunning) setTurnExitKind("done");
+  }, [turnRunning]);
+  const turnActivity = useTurnActivity(sessionId, {
+    messages: liveTurn ?? [],
+    working: turnRunning && !progressPaused,
+    turnActive: turnActive && !progressPaused,
+    projection: progressPaused ? null : projection,
+    liveCompaction: progressPaused ? null : liveCompaction,
+  });
   // A turn running in view: its frames are the stream's unless a person's own
   // interaction claims them (VC-1091).
   React.useEffect(() => (turnRunning ? holdInteraction("stream") : undefined), [turnRunning]);
+
   // Runtime failures need recovery only once work has stopped. A new turn
   // removes the old failure surface, even before Attention catches up — all
   // but a row about that turn itself (a restart resume's).
@@ -2193,13 +2222,7 @@ function ChatPlaneContent({
                             />
                           ))}
                         {liveCompaction ? <CompactionProgress compaction={liveCompaction} /> : null}
-                        {turnRunning ? (
-                          <TurnRunningMark
-                            progressVisible={
-                              liveCompaction !== null || (!progressPaused && turnHasProgress)
-                            }
-                          />
-                        ) : null}
+                        {turnRunning ? <TurnRunningMark /> : null}
                         {pendingMessages
                           .filter(
                             (message) => !message.deliveryAccepted || message.delivery === "queue",
@@ -2259,6 +2282,8 @@ function ChatPlaneContent({
           <ActivityIsland
             model={island.model}
             actions={island.actions}
+            activity={turnActivity}
+            exitKind={turnExitKind === "abort" ? "abort" : committedExitKind}
             className="pointer-events-auto mb-2"
           />
           {/* Overlay on the composer, never in its place. Ask-user cards
@@ -2525,23 +2550,10 @@ function useModelAccess(active: boolean): {
 
 /* ---------------------------------------------------------------- running */
 
-/** The status region lasts the whole turn. Its visual is only a fallback:
- * reserve its row, hide immediately behind live content, and wait out short
- * inter-step gaps before showing it again. No crossfade means no overlap. */
-export const TurnRunningMark = React.memo(function TurnRunningMark({
-  progressVisible = false,
-}: {
-  progressVisible?: boolean;
-}) {
-  const visible = useDelayedPresence(!progressVisible, 300, !progressVisible);
-  return (
-    <div role="status" className="flex min-w-0 flex-col">
-      <span className="sr-only">Working</span>
-      <div aria-hidden className={cn("flex min-w-0", !visible && "invisible")}>
-        <ReasoningLine verb="Working" meta={null} streaming />
-      </div>
-    </div>
-  );
+/** The island owns the turn's status now. Keep its former transcript row
+ * as bottom clearance so the always-attached bead cannot cover the last line. */
+export const TurnRunningMark = React.memo(function TurnRunningMark() {
+  return <div aria-hidden data-turn-bead-clearance="" className="h-10 shrink-0" />;
 });
 
 /** The copy that left the composer, before any host frame or queue owns it. */

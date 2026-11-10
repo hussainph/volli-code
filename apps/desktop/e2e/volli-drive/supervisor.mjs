@@ -397,6 +397,19 @@ async function liveGuard() {
   );
 }
 
+/** Emulate only the browser media preference, never app stores or macOS settings. */
+async function configureMotionPreference(page) {
+  if (spec.reducedMotion === true) await page.emulateMedia({ reducedMotion: "reduce" });
+}
+
+/** Read the live renderer preference rather than trusting the requested option. */
+async function motionPreference() {
+  return {
+    forced: spec.reducedMotion === true,
+    matches: await mainPage.evaluate(() => matchMedia("(prefers-reduced-motion: reduce)").matches),
+  };
+}
+
 async function readGuardRecord() {
   try {
     return JSON.parse(await fs.readFile(join(L.harnessDir, "harness-guard.json"), "utf8"));
@@ -481,6 +494,13 @@ async function doctor() {
       problems.push(`${key.replace("Inside", "")} is outside the scratch tree`);
   }
   if (alive && !isolation.appSocketOwned) problems.push("the app socket is missing or not ours");
+  const reducedMotion = await motionPreference().catch((error) => ({
+    forced: spec.reducedMotion === true,
+    matches: null,
+    error: error.message,
+  }));
+  if (alive && reducedMotion.forced && reducedMotion.matches !== true)
+    problems.push("forced reduced motion is not active in the live renderer");
   return {
     id: spec.id,
     ok: problems.length === 0,
@@ -502,6 +522,7 @@ async function doctor() {
       violations: violated,
     },
     isolation,
+    reducedMotion,
     model: seeded?.model ?? null,
     windows: await windowsList(),
     memory: alive ? await memory().catch(() => null) : null,
@@ -743,6 +764,7 @@ async function boot() {
     seeded,
     cloud: spec.cloud ?? null,
     deployment: spec.deployment ?? null,
+    reducedMotion: await motionPreference(),
     guard: { trapped: Object.keys(live.trapped), switches: record.chromiumSwitches },
   };
   await recordMembers();
@@ -816,6 +838,9 @@ async function startElectron(extraEnv) {
       `harness guard NOT proven active in the live process: ${JSON.stringify({ trapped: live.trapped, recorded: live.recorded, containment: record?.containment ?? null, recordPid: record?.pid, electronPid })}`,
     );
   }
+  await configureMotionPreference(page);
+  if (spec.reducedMotion === true && !(await motionPreference()).matches)
+    throw new Error("forced reduced motion is not active in the live renderer");
   return { page, live, record };
 }
 

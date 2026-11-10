@@ -290,6 +290,7 @@ Do not add entrances to them because a pointer path happens to animate.
 | Pane peek entrance / exit | `GLASS_MOTION.peekIn` / `peekOut` | 170 / 110ms; short translation and opacity |
 | Pointer ticket-group disclosure | `GLASS_MOTION.disclosureIn` / `disclosureOut` | 200 / 160ms; sole disclosure-height exception |
 | Pointer press | `--duration-press`, `--press-scale` | 120ms, .97 |
+| Activity verb life-sign | `--duration-activity-shimmer`, `--ease-linear` | 1800ms, linear; static with motion off |
 
 The spring tokens are sampled CSS `linear()` curves, not instructions to invent another JS
 spring. Segmented's pointer thumb uses snappy; keyboard changes are immediate. Anchored
@@ -345,6 +346,34 @@ or energy. Missing presentation/layer coverage is unavailable, never measured ze
 frame capture from timing runs and report instrument overhead and unverified cases. The
 [design verification reference](../.agents/skills/volli-design/VERIFICATION.md#performance-measurement)
 defines the measurement and evidence checklist.
+
+## Activity island · turn bead
+
+The current turn lives on the island, not in a transcript “Working” line. With no
+clusters it is one plain pill. Clusters grow beneath it before concave fillets
+form a sessile bead on the rim; emptying reverses the same path. A wide bead may
+overhang a narrow island. The former transcript row reserves 40px of clearance.
+With neither clusters nor a turn, there is no island.
+
+The shell is a drawn union in `--card`, outlined in `--border`, with a shadow
+from the generated shadow hue. No blur/threshold material or blurred text.
+Binary white/black fills on direct `rect`/`path` children of an explicitly
+luminance-typed SVG mask encode coverage, not theme paint. Never replace those
+0/1 values with canvas ink; other raw fills remain disallowed.
+The lively spring is stiffness 130, damping ratio .66. Done drains the bead with
+a small gulp; abort draws a .55s syrup thread, snaps, then pops. Alone, done
+fades to .85 scale; abort fades faster with a 4px drop. Reduced motion resizes
+instantly and crossfades the pill/island pictures instead of morphing.
+
+One life-sign per tier includes the turn: shimmer only on the muted verb, never
+on the shape or bold payload. A tool-call id stably chooses one activity-specific
+word; repeated picks advance within that pool. Idless events use its first word.
+A flash swells the same bead and returns to the verb, with one `mode="wait"`
+text channel. Words wait until their resized bead fits. Payloads truncate in the
+middle within 250px; typography stays on `text-ui`. Waiting for the person uses
+still foreground ink. Only a command's Run activity or reasoning escalates once,
+after 20 seconds of observed dwell. A persistent status region announces the
+semantic activity and full payload, not synonym changes, shimmer or layout ticks.
 
 ## Copy and feedback
 

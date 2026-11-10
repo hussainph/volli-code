@@ -54,6 +54,7 @@ const execFileAsync = promisify(execFile);
 const HELP = `volli-drive — drive an isolated, keychain-free live Volli build
 
   launch [--fixture basic|empty|move|empty-pane-left|empty-pane-right] [--model fake|env] [--idle-min 20]
+         [--reduced-motion]       emulate browser prefers-reduced-motion: reduce
          [--fake-script file.json] deterministic fake-provider reply sequence
          [--fake-tool-free-text t] tool-free requests (auto-title) answer t while
                                    a script runs, instead of the echo; needs --fake-script
@@ -196,6 +197,8 @@ async function ensureBuilt(flags) {
 }
 
 async function launch(flags) {
+  if (flags.reducedMotion !== undefined && flags.reducedMotion !== true)
+    fail("--reduced-motion is a boolean flag; omit it to use the system preference");
   const deployment = await readDeployment(flags, REPO);
   const fixture = flags.fixture ?? "basic";
   const model = flags.model ?? "fake";
@@ -285,6 +288,7 @@ async function launch(flags) {
     model,
     build,
     appBinary: null,
+    reducedMotion: flags.reducedMotion === true,
     remoteAcceptance,
     ...(fakeScript === undefined ? {} : { fakeScript }),
     ...(fakeToolFreeText === undefined ? {} : { fakeToolFreeText }),
@@ -372,6 +376,7 @@ async function launch(flags) {
   out(
     `keychain guard: ACTIVE — ${ready.guard.trapped.length} safeStorage methods trapped; ${ready.guard.switches.join(" ")}`,
   );
+  out(`reduced motion: ${ready.reducedMotion.matches} (forced: ${ready.reducedMotion.forced})`);
   const s = ready.seeded;
   if (s?.project)
     out(
@@ -618,6 +623,9 @@ async function main() {
         );
         out(
           `  app socket ${iso.appSocket} (ours: ${iso.appSocketOwned}); fake provider ${iso.providerUrl ?? "-"}`,
+        );
+        out(
+          `  reduced motion: ${report.reducedMotion?.matches ?? "unknown"} (forced: ${report.reducedMotion?.forced ?? "unknown"})`,
         );
         if (report.model) out(`  model: ${report.model.providerId}/${report.model.modelId}`);
         out(`  windows: ${report.windows.map((w) => `${w.name} "${w.title}"`).join(", ")}`);
