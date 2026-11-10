@@ -1,9 +1,10 @@
 ---
-import { AGENT_ERROR_CODES, ERROR_RECOVERY } from "@volli/shared";
+import { ERROR_RECOVERY } from "@volli/shared";
+import { DOCUMENTED_AGENT_ERROR_CODES } from "../lib/cli-errors";
 ---
 
 {
-  AGENT_ERROR_CODES.map((code) => {
+  DOCUMENTED_AGENT_ERROR_CODES.map((code) => {
     const guidance = ERROR_RECOVERY[code];
     return (
       <section>

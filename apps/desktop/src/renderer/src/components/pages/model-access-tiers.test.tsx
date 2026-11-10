@@ -13,6 +13,7 @@ import {
 import { ModelAccessSettings } from "./model-access-settings";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { ModelAccessProvider, type ModelAccessClient } from "@renderer/lib/model-access-client";
+import { Dialog, DialogContent, DialogTitle } from "@renderer/components/ui/dialog";
 
 vi.mock("sonner", () => ({
   toast: Object.assign(vi.fn(), {
@@ -73,11 +74,20 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-async function renderSettings(defaults: ModelAccessDefaults): Promise<void> {
+async function renderSettings(
+  defaults: ModelAccessDefaults,
+  inDialog = false,
+  saveGate?: Promise<void>,
+): Promise<void> {
+  let savedDefaults = defaults;
   const client: ModelAccessClient = {
     inspect: async () => SNAPSHOT,
-    defaults: async () => defaults,
-    setDefault: async () => defaults,
+    defaults: async () => savedDefaults,
+    setDefault: async (purpose, selection) => {
+      if (saveGate) await saveGate;
+      savedDefaults = { ...savedDefaults, [purpose]: selection };
+      return savedDefaults;
+    },
     hiddenModels: async () => [],
     setHiddenModels: async (hidden) => hidden,
     compactionPolicy: async () => DEFAULT_COMPACTION_POLICY,
@@ -98,7 +108,16 @@ async function renderSettings(defaults: ModelAccessDefaults): Promise<void> {
     root?.render(
       <ModelAccessProvider client={client}>
         <TooltipProvider>
-          <ModelAccessSettings />
+          {inDialog ? (
+            <Dialog defaultOpen>
+              <DialogContent aria-describedby={undefined}>
+                <DialogTitle>Models</DialogTitle>
+                <ModelAccessSettings />
+              </DialogContent>
+            </Dialog>
+          ) : (
+            <ModelAccessSettings />
+          )}
         </TooltipProvider>
       </ModelAccessProvider>,
     );
@@ -109,7 +128,108 @@ function rowText(tier: string): string {
   return document.querySelector(`[data-testid="default-model-${tier}"]`)?.textContent ?? "";
 }
 
-describe("the model tiers in Model Access", () => {
+// This component remains the remote-host model sheet, not app Settings' pane.
+describe("the model tiers in the remote-host Model Access sheet", () => {
+  it.each([false, true])(
+    "handles pointer restoration with a deferred save=%s",
+    async (deferred) => {
+      vi.useFakeTimers();
+      let finishSave!: () => void;
+      const saveGate = deferred
+        ? new Promise<void>((resolve) => {
+            finishSave = resolve;
+          })
+        : undefined;
+      const scroll = HTMLElement.prototype.scrollIntoView;
+      HTMLElement.prototype.scrollIntoView = vi.fn();
+      try {
+        await renderSettings(EMPTY_MODEL_ACCESS_DEFAULTS, true, saveGate);
+        await act(async () => vi.advanceTimersByTime(0));
+        const trigger = document.querySelector<HTMLButtonElement>(
+          '[data-testid="default-model-global"] [data-slot="select-trigger"]',
+        )!;
+        // jsdom lacks pointer capture; the trigger does not hold one in this gesture.
+        trigger.hasPointerCapture = () => false;
+        expect(trigger.textContent).toBe("Choose a model");
+        expect(trigger.querySelector('[data-slot="help-tag"]')).toBeNull();
+        await act(async () => {
+          trigger.dispatchEvent(
+            new PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse", button: 0 }),
+          );
+        });
+        await act(async () =>
+          trigger.dispatchEvent(
+            new PointerEvent("pointerup", { bubbles: true, pointerType: "mouse", button: 0 }),
+          ),
+        );
+        await act(async () => vi.advanceTimersByTime(0));
+        expect(document.querySelector('[role="listbox"]')).not.toBeNull();
+        const option = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(
+          (node) => node.querySelector('[data-slot="model-name"]')?.textContent === "Sonnet",
+        )!;
+        expect(option).toBeDefined();
+        await act(async () => {
+          option.dispatchEvent(
+            new PointerEvent("pointermove", {
+              bubbles: true,
+              pointerType: "mouse",
+              clientY: 100,
+            }),
+          );
+          option.dispatchEvent(
+            new PointerEvent("pointerdown", {
+              bubbles: true,
+              pointerType: "mouse",
+              button: 0,
+              clientY: 100,
+            }),
+          );
+          option.dispatchEvent(
+            new PointerEvent("pointerup", {
+              bubbles: true,
+              pointerType: "mouse",
+              button: 0,
+              clientY: 100,
+            }),
+          );
+        });
+        await act(async () => vi.advanceTimersByTime(0));
+        expect(document.querySelector('[role="listbox"]')).toBeNull();
+        if (deferred) {
+          expect(trigger.disabled).toBe(true);
+          expect(trigger.querySelector('[data-slot="help-tag"]')).toBeNull();
+          // Radix already attempted restoration, but disabled buttons cannot focus.
+          expect(document.activeElement).not.toBe(trigger);
+          await act(async () => finishSave());
+          expect(trigger.disabled).toBe(false);
+          expect(trigger.querySelector('[data-slot="help-tag"]')).not.toBeNull();
+          await act(async () => {
+            document.activeElement?.dispatchEvent(
+              new KeyboardEvent("keydown", { key: "Tab", bubbles: true }),
+            );
+            // jsdom has no native Tab traversal; deliver its resulting focus.
+            trigger.focus();
+          });
+          expect(document.querySelector('[data-slot="tooltip-content"]')?.textContent).toContain(
+            "Sonnet · Acme",
+          );
+          return;
+        }
+        expect(trigger.querySelector('[data-slot="help-tag"]')).not.toBeNull();
+        expect(trigger.querySelector('[data-slot="model-name"]')?.textContent).toBe("Sonnet");
+        // Radix's close autofocus, not a test-issued trigger.focus().
+        expect(document.activeElement).toBe(trigger);
+        expect(document.querySelector('[data-slot="tooltip-content"]')).toBeNull();
+        await act(async () =>
+          trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })),
+        );
+        expect(document.querySelector('[role="dialog"]')).toBeNull();
+      } finally {
+        HTMLElement.prototype.scrollIntoView = scroll;
+        vi.useRealTimers();
+      }
+    },
+  );
   it("draws all six tiers as one tree, the kind-of-work rows under Ticket Sessions", async () => {
     await renderSettings(EMPTY_MODEL_ACCESS_DEFAULTS);
     for (const tier of ["global", "ticket", "utility", "fast", "deep", "visual"]) {
@@ -126,9 +246,10 @@ describe("the model tiers in Model Access", () => {
     for (const tier of ["global", "ticket", "utility"]) {
       expect(nested?.querySelector(`[data-testid="default-model-${tier}"]`)).toBeNull();
     }
-    // Project precedence is the section's `(i)`, not a subtitle under its title.
-    expect(document.querySelector('[data-slot="pref-section-description"]')).toBeNull();
-    expect(document.querySelector('[aria-label="About Default models"]')).not.toBeNull();
+    // No caption under the section title, and no info button either.
+    const section = document.querySelector('[data-slot="pref-section-title"]')!.closest("section")!;
+    expect(section.textContent).not.toContain("A project with a pinned model");
+    expect(section.querySelector('[aria-label^="About"]')).toBeNull();
   });
 
   it("names the row an unset row follows, as that row is labelled", async () => {
@@ -151,19 +272,14 @@ describe("the model tiers in Model Access", () => {
     ).toBeNull();
   });
 
-  it("carries the job as the row's (i) only where the label does not name it", async () => {
-    // CLAUDE.md's copy rule: the label is the tier name, the `(i)` carries the
-    // one-line job, and nothing becomes a paragraph under a control. The hint
-    // lives in the glyph's tooltip, so what the row's own text holds is the
-    // label and the control — never the job line.
+  it("draws every tier as its label and control, with no purpose line under it", async () => {
     await renderSettings(EMPTY_MODEL_ACCESS_DEFAULTS);
 
-    for (const tier of ["fast", "deep", "visual", "utility"]) {
-      expect(
-        document.querySelector(`[data-testid="default-model-${tier}"] [aria-label^="About"]`),
-      ).not.toBeNull();
+    for (const tier of ["global", "ticket", "utility", "fast", "deep", "visual"]) {
+      const row = document.querySelector(`[data-testid="default-model-${tier}"]`)!;
+      expect(row.querySelector("p")).toBeNull();
+      expect(row.querySelector('[aria-label^="About"]')).toBeNull();
     }
-    expect(rowText("fast")).not.toContain("Quick, low-cost tasks.");
     expect(rowText("global")).toBe("Board chatsChoose a model");
     expect(rowText("ticket")).toBe("Ticket SessionsSame as Board chats");
   });
@@ -177,7 +293,7 @@ describe("the model tiers in Model Access", () => {
 
     expect(
       document.querySelector('[data-testid="default-model-visual-blocked"]')?.textContent,
-    ).toBe("The Ticket model can’t read images — choose one here.");
+    ).toBe("Ticket model can’t read images");
     expect(document.querySelector('[data-testid="default-model-deep-blocked"]')).toBeNull();
   });
 });

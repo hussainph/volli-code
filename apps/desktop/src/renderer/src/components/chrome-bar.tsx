@@ -1,10 +1,14 @@
 import * as React from "react";
-import { CaretLeftIcon } from "@phosphor-icons/react/dist/csr/CaretLeft";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
-import { CornersInIcon } from "@phosphor-icons/react/dist/csr/CornersIn";
-import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
-import { SidebarIcon } from "@phosphor-icons/react/dist/csr/Sidebar";
+import { GlassSurface } from "./ui/surface";
+import { ControlShapeProvider } from "./ui/control-shape";
+import {
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  RestoreWindowIcon,
+  SearchIcon,
+  WorkspaceIcon,
+  SidebarIcon,
+} from "@renderer/components/ui/icon";
 
 import { CommandPalette } from "@renderer/components/command-palette";
 import { HostChip } from "@renderer/components/hosts/host-chip";
@@ -13,6 +17,9 @@ import { QuickOpen } from "@renderer/components/files/quick-open";
 import { UsageLimitsPopover } from "@renderer/components/usage-limits/usage-limits-popover";
 import { Button } from "@renderer/components/ui/button";
 import { SidebarTrigger } from "@renderer/components/ui/sidebar";
+import { SidebarLayoutMenu } from "./sidebar/sidebar-layout-menu";
+import { ProjectRail } from "./rail/project-rail";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { useCommandPaletteShortcut } from "@renderer/hooks/use-command-palette-shortcut";
 import { useFullScreen } from "@renderer/hooks/use-fullscreen";
 import { navBack, navForward } from "@renderer/hooks/use-nav-history";
@@ -27,14 +34,9 @@ import { useUiStore } from "@renderer/stores/ui";
 import { useProjectUiStore } from "@renderer/stores/project-ui";
 import { displayTicketId } from "@volli/shared";
 
-/**
- * Full-width window chrome band — the ONLY drag-region owner for window
- * chrome (traffic lights, drag-to-move, the sidebar toggle). Everything
- * below it is ordinary layout. Its height (h-9, 36px) must stay in sync
- * with trafficLightPosition in main/index.ts, which centers the lights
- * inside it. 36 over the original 40 was a judged call (2026-08-15, the
- * lab's chrome rig): the lights re-seat at y:12 and nothing else moves.
- */
+/** The 46px canvas band owns dragging and clears main's native traffic lights.
+ * Navigation controls group at the left; search stays window-centred and the
+ * inspector control stays at the far right, independent of workspace tabs. */
 export function ChromeBar() {
   const fullScreen = useFullScreen();
   const terminalFocusTarget = useUiStore((state) => state.terminalFocusTarget);
@@ -53,52 +55,51 @@ export function ChromeBar() {
   }, [terminalFocusTarget, setCommandPaletteOpen, setQuickOpenOpen]);
 
   return (
-    <>
-      {/* relative: the command trigger centers itself against the band, not the
-          flex row, so it stays put when the traffic-light spacer collapses. */}
+    <ControlShapeProvider context="toolbar">
       {/* No fill (#74): the band was already painted in the backdrop's own
           token, so it has nothing of its own to give up — it now sits on the
           canvas layer like the rail does. The ⌘K pill keeps its own material
           (`bg-foreground/10`), which was already written as a material over a
           fill rather than as a fill of its own. */}
-      <div className="app-region-drag relative flex h-9 shrink-0 items-center">
-        {/* Clears the traffic lights (start x:10, group renders ≈60px wide,
-          ending ≈70px) plus breathing room so the trigger doesn't crowd them.
-          Fullscreen hides the lights, so the spacer collapses and the trigger
-          slides to the left edge — same animation the old rail-top-strip used. */}
-        <div
-          className={cn(
-            "shrink-0 transition-[width] duration-300 ease-swift",
-            fullScreen ? "w-2" : "w-[78px]",
-          )}
-        />
+      <div
+        data-slot="chrome-bar"
+        className="app-region-drag relative grid h-(--spacing-titlebar) shrink-0 grid-cols-[minmax(max-content,1fr)_minmax(0,416px)_minmax(max-content,1fr)] items-center gap-2"
+      >
+        {/* Equal flexible sides centre search when there is room. Their intrinsic
+            floors protect navigation; the middle track yields instead of painting
+            over the host. 416px is the 380px capsule + 8px gap + 28px usage key. */}
+        <div data-slot="chrome-leading" className="flex items-center">
+          {/* Fullscreen hides the native lights but keeps a small drag inset. */}
+          <div className={cn("shrink-0", fullScreen ? "w-2" : "w-[100px]")} />
+          {terminalFocusTarget === null ? (
+            <>
+              <NavHistoryButtons />
+              <div className="app-region-no-drag ml-px flex items-center gap-px">
+                <SidebarLayoutMenu>
+                  <SidebarTrigger
+                    variant="toolbar"
+                    size="icon"
+                    aria-label="Toggle navigation sidebar"
+                    title="Toggle navigation sidebar (⌘B)"
+                  />
+                </SidebarLayoutMenu>
+                <HiddenProjectsMenu />
+              </div>
+              <HostChip />
+            </>
+          ) : null}
+        </div>
         {terminalFocusTarget !== null ? (
-          <TerminalFocusBreadcrumb />
+          <div>
+            <TerminalFocusBreadcrumb />
+          </div>
         ) : (
-          <>
-            {/* translate-y-px: the lights' optical center lands at ~18.5px (y:12 +
-          half their ~13px diameter), just below the band's 18px flex center —
-          nudge the trigger down to meet them. */}
-            <div className="app-region-no-drag flex translate-y-px items-center">
-              <ProjectRailToggle />
-              <SidebarTrigger
-                aria-label="Toggle navigation sidebar"
-                title="Toggle navigation sidebar (⌘B)"
-              />
-            </div>
-            <NavHistoryButtons />
-            {/* Which machine the project in front runs on (VC-576). Nothing
-                with the `cloud` flag off. */}
-            <HostChip />
-            <CommandCluster onCommandPalette={() => setCommandPaletteOpen(true)} />
-            {/* The content-area tab strip (if any) lives below in MainContent, not here. */}
-          </>
+          <CommandCluster onCommandPalette={() => setCommandPaletteOpen(true)} />
         )}
-        {/* Outside the ternary so the spacer keeps its slot in this element's
-            children across the focus transition rather than being reconciled
-            against the breadcrumb. */}
-        <div className="flex-1" />
-        <TerminalFocusExit />
+        <div className="flex items-center justify-end">
+          {terminalFocusTarget === null ? <InspectorToolbarToggle /> : null}
+          <TerminalFocusExit />
+        </div>
       </div>
       <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} />
       {/* "Add a host…" and "Manage hosts…" (VC-700): the Add-a-host sheet and
@@ -109,7 +110,7 @@ export function ChromeBar() {
           window-level surface summoned from anywhere (VC-126) — which is a
           second authoring surface by another name. VC-112 rules that only the
           Automations page authors, so the page mounts its own form. */}
-    </>
+    </ControlShapeProvider>
   );
 }
 
@@ -163,9 +164,7 @@ function TerminalFocusBreadcrumb() {
   return (
     <div
       aria-live="polite"
-      // top-[19px], not top-1/2: same 1px correction as the ⌘K pill — the
-      // trailing focus toggle carries translate-y-px to meet the traffic lights.
-      className="pointer-events-none absolute left-1/2 top-[19px] flex max-w-[45vw] -translate-x-1/2 -translate-y-1/2 items-center gap-2 text-ui text-muted-foreground"
+      className="pointer-events-none absolute left-1/2 top-1/2 flex max-w-[45vw] -translate-x-1/2 -translate-y-1/2 items-center gap-2 text-ui text-muted-foreground"
     >
       <span className="max-w-[40%] shrink-0 truncate font-medium text-foreground">
         {ownerLabel}
@@ -176,31 +175,21 @@ function TerminalFocusBreadcrumb() {
   );
 }
 
-/**
- * Visibility control for the outer Slack-style project switcher ("project" is
- * the one user-facing word for a rail entry — CONTEXT.md's ruling). It sits
- * immediately before the primary nav's existing SidebarTrigger so the
- * controls follow the same outside-to-inside order as the panes they affect.
- */
-function ProjectRailToggle() {
-  const projectRailHidden = useUiStore((state) => state.projectRailHidden);
-  const toggleProjectRailHidden = useUiStore((state) => state.toggleProjectRailHidden);
-
+/** Hidden rail content remains reachable with its own actions and reorder. */
+function HiddenProjectsMenu() {
+  const hidden = useUiStore((state) => state.projectRailHidden);
+  if (!hidden) return null;
   return (
-    <Button
-      variant="ghost"
-      size="icon-sm"
-      // No `aria-pressed`: the label below already carries the state, and the
-      // button has no pressed appearance for it to describe. Both together
-      // announce "Show project switcher, pressed" while the switcher is
-      // hidden, which reads as its own opposite.
-      onClick={() => toggleProjectRailHidden()}
-      aria-label={projectRailHidden ? "Show project switcher" : "Hide project switcher"}
-      title={`${projectRailHidden ? "Show" : "Hide"} project switcher`}
-    >
-      <SidebarIcon />
-      <span className="sr-only">Toggle project switcher</span>
-    </Button>
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button variant="toolbar" size="icon" aria-label="Projects" title="Projects">
+          <WorkspaceIcon />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="h-80 w-64 p-1">
+        <ProjectRail presentation="menu" />
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -215,27 +204,27 @@ function NavHistoryButtons() {
   const forwardEnabled = useProjectUiStore((state) => canGoForward(state.navHistory));
 
   return (
-    <div className="app-region-no-drag flex translate-y-px items-center">
+    <div className="glass-control app-region-no-drag flex translate-y-px items-center rounded-full [&_button]:border-0 [&_button]:bg-transparent [&_button]:shadow-none">
       <Button
-        variant="ghost"
-        size="icon-sm"
+        variant="toolbar"
+        size="icon"
         disabled={!backEnabled}
         onClick={() => navBack()}
         aria-label="Back"
         title="Back (⌘[)"
       >
-        <CaretLeftIcon weight="bold" />
+        <ChevronLeftIcon strokeWidth={2.25} />
         <span className="sr-only">Back</span>
       </Button>
       <Button
-        variant="ghost"
-        size="icon-sm"
+        variant="toolbar"
+        size="icon"
         disabled={!forwardEnabled}
         onClick={() => navForward()}
         aria-label="Forward"
         title="Forward (⌘])"
       >
-        <CaretRightIcon weight="bold" />
+        <ChevronRightIcon strokeWidth={2.25} />
         <span className="sr-only">Forward</span>
       </Button>
     </div>
@@ -271,8 +260,8 @@ function TerminalFocusExit() {
 
   return (
     <Button
-      variant="ghost"
-      size="icon-sm"
+      variant="toolbar"
+      size="icon"
       // mr-1 keeps it off the window's right edge; translate-y-px meets the
       // traffic lights, like every other icon button on this band.
       className="app-region-no-drag mr-1 translate-y-px"
@@ -283,36 +272,38 @@ function TerminalFocusExit() {
       aria-label="Exit terminal focus"
       title="Exit terminal focus (⌥⌘⏎)"
     >
-      <CornersInIcon weight="bold" />
+      <RestoreWindowIcon strokeWidth={2.25} />
       <span className="sr-only">Exit terminal focus</span>
     </Button>
   );
 }
 
-/**
- * The band's center: the ⌘K pill, and the usage-limits meter beside it
- * (VC-350).
- *
- * Absolutely centered so the pair anchors to the WINDOW's midline regardless of
- * the traffic-light spacer / fullscreen collapse. Overlap math at minWidth
- * 940px (main/index.ts): left chrome occupies ≈110px (78px spacer + trigger);
- * the cluster is 380 + 4 + 24 = 408px wide (pill, gap-1, an `icon-sm` at
- * size-6), so its left edge sits at (940 − 408) / 2 = 266px — still
- * comfortably clear of it.
- *
- * The two are one absolutely-positioned GROUP rather than two independently
- * placed controls. The pill is elastic (`max-w-[40vw]`), so anything pinned to
- * where its right edge "is" would drift off it the moment the window narrowed;
- * inside a flex row the meter simply stays beside it at every width.
- *
- * top-[19px] (not top-1/2): the band's center is 18px, but the sibling
- * icon-buttons carry translate-y-px to meet the traffic lights at ~19px. The
- * group's -translate-y-1/2 center is anchored to 19px so it lines up with them,
- * and the pill inside no longer carries a correction of its own.
- */
+/** The inspector's standing toolbar door; both workspace scopes share its pin. */
+function InspectorToolbarToggle() {
+  const collapsed = useUiStore((state) => state.railCollapsed);
+  const toggle = useUiStore((state) => state.toggleRailCollapsed);
+  return (
+    <Button
+      variant="toolbar"
+      size="icon"
+      className="app-region-no-drag mr-2"
+      data-inspector-trigger="shell"
+      onClick={toggle}
+      aria-label={collapsed ? "Show details rail" : "Hide details rail"}
+      title={`${collapsed ? "Show" : "Hide"} details (⌥⌘B)`}
+    >
+      <SidebarIcon className="size-4 scale-x-[-1]" />
+    </Button>
+  );
+}
+
+/** Search and usage form one elastic, window-centred toolbar group. */
 function CommandCluster({ onCommandPalette }: { onCommandPalette(): void }) {
   return (
-    <div className="absolute left-1/2 top-[19px] flex -translate-x-1/2 -translate-y-1/2 items-center gap-1">
+    <div
+      data-slot="chrome-command-cluster"
+      className="@container/chrome-search flex min-w-0 items-center gap-2"
+    >
       <CommandPaletteTrigger onClick={onCommandPalette} />
       <UsageLimitsPopover />
     </div>
@@ -326,36 +317,25 @@ function CommandCluster({ onCommandPalette }: { onCommandPalette(): void }) {
  */
 function CommandPaletteTrigger({ onClick }: { onClick(): void }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-haspopup="dialog"
-      aria-label="Search tickets, sessions, and commands"
-      title="Search tickets, sessions, and commands (⌘K)"
-      //
-      // The fill is a MATERIAL over the canvas rather than a rung of the ladder,
-      // so it is a wash of the ink: `--foreground` runs toward white in dark and
-      // toward black in light, which is the direction a material has to move in
-      // each mode. A literal white lightens a light canvas and disappears.
-      //
-      // THE HOVER IS THE EDGE, not the fill. The wash used to step 6% → 8% on
-      // hover, two rungs of a twenty-step alpha ladder that has since collapsed
-      // to four — and on this ladder the next rung up from the wash (30%) is a
-      // grey patch on the band, not a hover. The border was already doing the
-      // work (`border-border/50` → `border-border`); the fill now holds still at
-      // the one wash rung and lets it.
-      className="app-region-no-drag flex h-[22px] w-[380px] max-w-[40vw] items-center gap-1 rounded-md border border-border/50 bg-foreground/10 px-2 text-left text-ui text-muted-foreground transition-colors hover:border-border focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-    >
-      <MagnifyingGlassIcon className="size-3.5 shrink-0 text-muted-foreground" />
-      <span className="min-w-0 flex-1 truncate">Search tickets, sessions, and commands</span>
-      {/* The keycap reads as cut out of the pill, so it goes the other way:
+    <GlassSurface asChild tier="full" size="control">
+      <button
+        type="button"
+        onClick={onClick}
+        aria-haspopup="dialog"
+        aria-label="Search tickets, sessions, and commands"
+        title="Search tickets, sessions, and commands (⌘K)"
+        className="search-capsule glass-control app-region-no-drag flex h-(--spacing-chrome-control) min-w-0 flex-1 items-center justify-between gap-2 px-3 text-left text-ui text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <SearchIcon className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate @max-[14rem]/chrome-search:hidden">
+          Search tickets, sessions, and commands
+        </span>
+        {/* The keycap reads as cut out of the pill, so it goes the other way:
           toward the canvas floor. `--background` is near-black in dark (what
           the literal used to be) and near-white in light, which is what a key
           cap looks like on a light chrome. */}
-      <kbd className="shrink-0 rounded-sm border border-border/70 bg-background/10 px-1 py-px font-sans text-label leading-none text-muted-foreground">
-        ⌘K
-      </kbd>
-      <CaretDownIcon aria-hidden className="size-3 shrink-0" weight="bold" />
-    </button>
+        <kbd className="shrink-0 font-sans text-label text-muted-foreground">⌘K</kbd>
+      </button>
+    </GlassSurface>
   );
 }

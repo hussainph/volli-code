@@ -109,6 +109,7 @@ function stallFields(window: number, stall: RendererStall): Record<string, unkno
   }
   return {
     ...base,
+    ...(stall.scriptTotalMs === undefined ? {} : { scriptTotalMs: stall.scriptTotalMs }),
     ...(stall.blockingMs === undefined ? {} : { blockingMs: stall.blockingMs }),
     ...(stall.renderMs === undefined ? {} : { renderMs: stall.renderMs }),
     ...(stall.styleLayoutMs === undefined ? {} : { styleLayoutMs: stall.styleLayoutMs }),

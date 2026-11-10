@@ -1,3 +1,4 @@
+import { observePaneLayout, paneResizeActive } from "@renderer/lib/pane-resize";
 import * as React from "react";
 import { useBlobReader } from "@renderer/components/attachments/blob-read";
 import type { editor } from "monaco-editor";
@@ -10,7 +11,12 @@ import {
   type DocumentModeAttachment,
 } from "@renderer/editor/document-mode-contribution";
 import { documentModeOptions } from "@renderer/editor/document-mode";
-import type { DocumentLease, DocumentRevision } from "@renderer/editor/document-registry";
+import { createDocumentLayout } from "@renderer/editor/document-height";
+import type {
+  DocumentLease,
+  DocumentRevision,
+  DocumentSavePolicy,
+} from "@renderer/editor/document-registry";
 import { activeMonacoEditorThemeId } from "@renderer/editor/monaco-theme";
 import { type FileRefsConfig, refInsertion } from "@renderer/editor/file-refs";
 import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
@@ -51,6 +57,17 @@ export interface MonacoDocumentEditorHandle {
   markSaved(revision: DocumentRevision): void;
 }
 
+export interface DocumentEditorHandover {
+  /** Adopt a still-editable stand-in's latest text and selection atomically. */
+  adopt(
+    value: string,
+    start: number,
+    end: number,
+    focus: boolean,
+    direction?: "forward" | "backward" | "none",
+  ): void;
+}
+
 export interface MonacoDocumentEditorProps {
   /**
    * Which logical document this is. One identity owns one Monaco model no matter
@@ -70,12 +87,23 @@ export interface MonacoDocumentEditorProps {
   revision?: DocumentRevision;
   /** Fired on every document edit with the full markdown string. */
   onChange(value: string): void;
+  onReady?(handover: DocumentEditorHandover): void;
   /**
    * Every dirty transition of the shared registry model. Artifact tabs feed
    * this into the workbench close-guard; the ticket body leaves it unset.
    */
   onDirtyChange?(dirty: boolean): void;
+  /**
+   * `autosave` (the default) when the host writes the text some time after an
+   * edit, so the edit counts as unsaved until then. `draft` when the host caches
+   * every change as it lands (the New-ticket composer), so the document never
+   * counts as unsaved. See {@link DocumentSavePolicy}. Read when the document
+   * mounts and fixed for the life of that mount.
+   */
+  savePolicy?: Extract<DocumentSavePolicy, "autosave" | "draft">;
   placeholder?: string;
+  /** 28px empty document target; focus height remains the host's decision. */
+  compact?: boolean;
   autoFocus?: boolean;
   /**
    * Classes for the editor host. Min/max height belong here and are honoured
@@ -171,10 +199,10 @@ export function applyDocumentExternalValue({
  * A document grows with its text. Monaco does not do that on its own — it fills
  * whatever box it is given and scrolls inside it, which is right for a file tab
  * and wrong for a ticket body sitting in a scrolling column. So the host's
- * height tracks `getContentHeight()`, and the editor is then laid out into the
- * host's `clientHeight` rather than into that number directly: `clientHeight` is
- * the CSS-CLAMPED box, so a caller's `min-h-*` / `max-h-*` classes — or an
- * inline `maxHeight` via `style` — keep working (the composer bounds its body
+ * height tracks `getContentHeight()` on mount, then in animation frames. One
+ * layout driver fits the editor to the CSS-CLAMPED host box (automaticLayout
+ * stays disabled), so a caller's `min-h-*` / `max-h-*` classes — or an inline
+ * `maxHeight` via `style` — keep working (the composer bounds its body
  * at 40vh and scrolls inside; the ticket body clamps over a policy cap and
  * expands on demand, VC-99) without this component knowing anything about them.
  */
@@ -187,11 +215,14 @@ export const MonacoDocumentEditor = React.forwardRef<
     viewId,
     value,
     revision = null,
+    savePolicy = "autosave",
     onChange,
+    onReady,
     onDirtyChange,
     onBlur,
     onContentHeightChange,
     placeholder,
+    compact = false,
     autoFocus,
     className,
     style,
@@ -201,6 +232,8 @@ export const MonacoDocumentEditor = React.forwardRef<
   },
   ref,
 ) {
+  const readyRef = React.useRef(onReady);
+  readyRef.current = onReady;
   const hostRef = React.useRef<HTMLDivElement>(null);
   const editorRef = React.useRef<editor.IStandaloneCodeEditor | null>(null);
   const leaseRef = React.useRef<DocumentMonacoLease | null>(null);
@@ -213,22 +246,26 @@ export const MonacoDocumentEditor = React.forwardRef<
   const liveRef = React.useRef({
     identity,
     revision,
+    savePolicy,
     onChange,
     onDirtyChange,
     onBlur,
     onContentHeightChange,
     placeholder,
+    compact,
     ariaLabel,
     autoFocus,
   });
   liveRef.current = {
     identity,
     revision,
+    savePolicy,
     onChange,
     onDirtyChange,
     onBlur,
     onContentHeightChange,
     placeholder,
+    compact,
     ariaLabel,
     autoFocus,
   };
@@ -325,14 +362,14 @@ export const MonacoDocumentEditor = React.forwardRef<
 
     void loadMonacoRuntime()
       .then((runtime) => {
-        if (cancelled) return;
+        if (cancelled || runtime === null) return;
         const seed = seedRef.current;
         const seedRevision = liveRef.current.revision ?? null;
         lease = runtime.registry.acquire({
           identity: liveRef.current.identity,
           viewId,
           seed: { value: seed, revision: seedRevision },
-          savePolicy: "autosave",
+          savePolicy: liveRef.current.savePolicy,
         });
         if (cancelled) {
           lease.release();
@@ -357,9 +394,12 @@ export const MonacoDocumentEditor = React.forwardRef<
 
         view = runtime.monaco.editor.create(host, {
           ...documentModeOptions({ placeholder: liveRef.current.placeholder }),
+          ...(liveRef.current.compact ? { padding: { top: 2, bottom: 2 } } : {}),
           theme: activeMonacoEditorThemeId(),
           ariaLabel: liveRef.current.ariaLabel,
           model: lease.model,
+          automaticLayout: false,
+          dimension: { width: host.clientWidth, height: host.clientHeight },
         });
         editorRef.current = view;
 
@@ -385,14 +425,28 @@ export const MonacoDocumentEditor = React.forwardRef<
         // number the host cannot recover later — the CSS clamp erases it from
         // every measurable box.
         const editorView = view;
-        const fitToContent = (): void => {
-          const contentHeight = editorView.getContentHeight();
-          host.style.height = `${contentHeight}px`;
-          editorView.layout({ width: host.clientWidth, height: host.clientHeight });
-          liveRef.current.onContentHeightChange?.(contentHeight);
-        };
-        subscriptions.push(editorView.onDidContentSizeChange(fitToContent));
-        fitToContent();
+        const documentLayout = createDocumentLayout({
+          getContentHeight: () => editorView.getContentHeight(),
+          setHeight: (px) => {
+            host.style.height = `${px}px`;
+          },
+          getHostSize: () => ({ width: host.clientWidth, height: host.clientHeight }),
+          layout: (size) => editorView.layout(size),
+          isResizeActive: paneResizeActive,
+          onContentHeightChange: (px) => liveRef.current.onContentHeightChange?.(px),
+          requestFrame: (callback) => requestAnimationFrame(callback),
+          cancelFrame: (id) => cancelAnimationFrame(id),
+        });
+        // Content-size dispatch and ResizeObserver only enqueue work: neither
+        // may re-enter a wrapping rebuild with partially updated projections.
+        subscriptions.push(
+          documentLayout,
+          editorView.onDidContentSizeChange(documentLayout.schedule),
+          { dispose: observePaneLayout(host, documentLayout.schedule) },
+        );
+        // This initial fit is outside Monaco dispatch. Subsequent notifications
+        // (including any from this fit) always take the deferred schedule path.
+        documentLayout.initialize();
 
         const model = lease.model;
         subscriptions.push(
@@ -418,12 +472,29 @@ export const MonacoDocumentEditor = React.forwardRef<
 
         host.dataset.monacoStatus = "ready";
         host.dataset.monacoLanguage = lease.snapshot().language;
-        // A document surface is never read-only (CONCEPT #49 gives it autosave,
-        // not a policy flag), but the attribute is the shared contract the e2e
+        // A document surface is never read-only (CONCEPT #49: its host autosaves
+        // or caches every edit), but the attribute is the shared contract the e2e
         // kit's `isMonacoEditable` reads, and a MISSING attribute reads as "not
         // editable" there rather than "not applicable".
         host.dataset.monacoReadOnly = "false";
         if (liveRef.current.autoFocus) view.focus();
+        const mountedView = view;
+        readyRef.current?.({
+          adopt(nextValue, start, end, focus, direction = "none") {
+            applyExternal(nextValue, liveRef.current.revision ?? null);
+            // A native selection's endpoints are ordered, but its caret can
+            // be at either end. ISelection preserves that backward anchor.
+            const anchor = model.getPositionAt(direction === "backward" ? end : start);
+            const caret = model.getPositionAt(direction === "backward" ? start : end);
+            mountedView.setSelection({
+              selectionStartLineNumber: anchor.lineNumber,
+              selectionStartColumn: anchor.column,
+              positionLineNumber: caret.lineNumber,
+              positionColumn: caret.column,
+            });
+            if (focus) mountedView.focus();
+          },
+        });
         // The ticket description is the surface the switch benchmark waits on
         // — the harness's readiness predicate looks for Monaco's own textarea,
         // so creating and laying out this editor is inside the measured window
@@ -517,10 +588,9 @@ export const MonacoDocumentEditor = React.forwardRef<
   }
 
   // `style` lands on the host because the host IS the editor's layout box: a
-  // caller's `maxHeight` has to clamp THIS element for `clientHeight` (what
-  // `fitToContent` lays the editor into) to read as the clamped box. React only
-  // ever writes the keys it sees here, so the imperative `height` that
-  // `fitToContent` sets is left alone across re-renders.
+  // caller's `maxHeight` has to clamp THIS element for documentLayout to
+  // measure the clamped box. React only ever writes the keys it sees here, so
+  // the imperative `height` it sets is left alone across re-renders.
   //
   // `data-monaco-status="loading"` from the FIRST frame, not only from the
   // mount effect that re-stamps it: the effect runs after paint, and the

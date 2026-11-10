@@ -8,6 +8,7 @@ import type { CredentialsResult, SecretsResult } from "../../../../../ipc/secret
 import { toastError } from "@renderer/lib/toast";
 import { configureGroups } from "../configure-groups";
 import { SecretsPane } from "./secrets-pane";
+import { TooltipProvider } from "@renderer/components/ui/tooltip";
 
 vi.mock("@renderer/lib/toast", () => ({ toastError: vi.fn() }));
 const project: Project = {
@@ -64,15 +65,23 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 async function render() {
-  await act(async () => root.render(<SecretsPane project={project} />));
+  await act(async () =>
+    root.render(
+      <TooltipProvider>
+        <SecretsPane project={project} />
+      </TooltipProvider>,
+    ),
+  );
 }
 function button(label: string, scope: ParentNode = host): HTMLButtonElement {
-  const found = [...scope.querySelectorAll("button")].find((item) => item.textContent === label);
+  const found = [...scope.querySelectorAll("button")].find(
+    (item) => (item.getAttribute("aria-label") ?? item.textContent) === label,
+  );
   if (found === undefined) throw new Error(`missing ${label}`);
   return found;
 }
 function password(): HTMLInputElement {
-  const found = host.querySelector<HTMLInputElement>("input[type=password]");
+  const found = document.body.querySelector<HTMLInputElement>("input[type=password]");
   if (found === null) throw new Error("missing password field");
   return found;
 }
@@ -87,12 +96,14 @@ describe("Configure Secrets", () => {
     await render();
     expect(api.secrets.list).toHaveBeenCalledWith("p1");
     expect(host.textContent).toContain("DEPLOY_TOKEN");
-    expect(host.textContent).toContain("Scope: Project · Last used: Never");
-    expect(host.textContent).toContain("Scope: Always · Last used:");
-    expect(host.querySelectorAll("input[type=password]")).toHaveLength(2);
+    expect(host.textContent).toContain("Project");
+    expect(host.textContent).toContain("Always");
+    expect(host.textContent).toContain("Never");
+    expect(host.querySelectorAll("input[type=password]")).toHaveLength(0);
+    expect(host.querySelectorAll("th")).toHaveLength(5);
     for (const input of host.querySelectorAll<HTMLInputElement>("input")) {
       expect(input.value).toBe("");
-      expect(input.getAttribute("value")).toBeNull();
+      expect([null, ""]).toContain(input.getAttribute("value"));
       expect(input.defaultValue).toBe("");
     }
   });
@@ -101,12 +112,13 @@ describe("Configure Secrets", () => {
     const pending = Promise.withResolvers<Result>();
     api.secrets.replace.mockReturnValue(pending.promise);
     await render();
+    await act(async () => button("Replace DEPLOY_TOKEN").click());
     const field = password();
     field.value = "write-only-secret";
     act(() => {
-      button("Replace").click();
+      button("Replace", document.body).click();
       expect(field.value).toBe("");
-      button("Replace").click();
+      button("Replace", document.body).click();
     });
     expect(api.secrets.replace.mock.calls).toEqual([
       [{ id: "secret-1", value: "write-only-secret" }],
@@ -114,15 +126,28 @@ describe("Configure Secrets", () => {
     expect(host.innerHTML).not.toContain("write-only-secret");
     await act(async () => pending.resolve({ ok: true }));
     expect(api.secrets.list).toHaveBeenCalledTimes(2);
-    expect(password().value).toBe("");
+    expect(document.body.querySelector("input[type=password]")).toBeNull();
     expect(api.appState.set).not.toHaveBeenCalled();
   });
 
   it("revokes by identity without sending any typed replacement", async () => {
     await render();
+    await act(async () => button("Replace DEPLOY_TOKEN").click());
     const field = password();
     field.value = "unsent-replacement";
-    await act(async () => button("Revoke").click());
+    await act(async () => button("Close", document.body).click());
+    await act(async () =>
+      button("More actions for DEPLOY_TOKEN").dispatchEvent(
+        new MouseEvent("pointerdown", { bubbles: true, button: 0, ctrlKey: false }),
+      ),
+    );
+    await act(async () =>
+      Array.from(document.body.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+        .find((e) => e.textContent === "Revoke…")!
+        .click(),
+    );
+    expect(api.secrets.revoke).not.toHaveBeenCalled();
+    await act(async () => button("Revoke", document.body).click());
     expect(field.value).toBe("");
     expect(api.secrets.revoke).toHaveBeenCalledWith("secret-1");
     expect(api.secrets.replace).not.toHaveBeenCalled();
@@ -132,8 +157,9 @@ describe("Configure Secrets", () => {
   it("reports rejected mutations without echoing error or credential bytes", async () => {
     api.secrets.replace.mockResolvedValue({ ok: false, error: "write-only-secret" });
     await render();
+    await act(async () => button("Replace DEPLOY_TOKEN").click());
     password().value = "write-only-secret";
-    await act(async () => button("Replace").click());
+    await act(async () => button("Replace", document.body).click());
     expect(password().value).toBe("");
     expect(toastError).toHaveBeenCalledWith("Couldn't replace the credential.");
     expect(JSON.stringify(vi.mocked(toastError).mock.calls)).not.toContain("write-only-secret");
@@ -142,11 +168,22 @@ describe("Configure Secrets", () => {
   it("surfaces list errors and allows a metadata-only refresh", async () => {
     api.secrets.list.mockRejectedValueOnce(new Error("unsafe error"));
     await render();
-    expect(host.textContent).toContain("Couldn't load credentials. Refresh to try again.");
+    expect(host.textContent).toContain("Couldn't load credentials.");
     expect(host.textContent).not.toContain("unsafe error");
-    expect(toastError).toHaveBeenCalledWith("Couldn't load credentials.");
-    await act(async () => button("Refresh").click());
+    expect(toastError).not.toHaveBeenCalled();
+    await act(async () => button("Try again").click());
     expect(host.textContent).toContain("DEPLOY_TOKEN");
+  });
+
+  it("keeps repeated metadata failures inline without duplicate toasts", async () => {
+    api.secrets.list.mockResolvedValue({ ok: false, error: "unsafe error" });
+    await render();
+    await act(async () => button("Try again").click());
+    expect(api.secrets.list).toHaveBeenCalledTimes(2);
+    expect(host.textContent).toContain("Couldn't load credentials.");
+    expect(host.textContent).not.toContain("unsafe error");
+    expect(toastError).not.toHaveBeenCalled();
+    expect(host.querySelectorAll('[role="alert"]')).toHaveLength(1);
   });
 
   it("shows nothing about the store while it is ready or empty", async () => {
@@ -156,7 +193,7 @@ describe("Configure Secrets", () => {
 
   it.each([
     ["locked", "Saved secrets are locked."],
-    ["refused", "Saved secrets are refused: their key file is not private."],
+    ["refused", "Saved secrets can't be used until their key file is private."],
     ["corrupt", "Saved secrets can't be read."],
   ] as const)("says when stored secrets are %s, in one line", async (state, line) => {
     api.secrets.list.mockResolvedValue({
@@ -168,12 +205,12 @@ describe("Configure Secrets", () => {
     expect(status?.textContent).toContain(line);
     // A refused key configuration is fixed, never reset.
     expect(status?.textContent?.includes("Reset…")).toBe(state !== "refused");
-    expect(host.textContent).toContain("No saved credentials");
+    expect(host.textContent).not.toContain("No secrets");
   });
 
   it.each([
     ["busy", "Saved secrets are busy in another Volli process."],
-    ["lock-unusable", "Saved secrets can't be used: their lock file needs fixing."],
+    ["lock-unusable", "Saved secrets can't be used until their lock file is repaired."],
   ] as const)(
     "says when stored secrets are unavailable for a %s lock, offering Try again but never Reset (VC-642)",
     async (reason, line) => {

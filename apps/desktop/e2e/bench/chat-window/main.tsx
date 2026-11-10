@@ -504,6 +504,7 @@ async function streamAndScroll(
     priorTop = actualTop;
   };
 
+  performance.mark("chat-bench:start");
   const started = performance.now();
   for (let step = 0; step < steps; step += 1) {
     const tokenCount = Math.max(1, Math.floor(((performance.now() - started) * tokenRate) / 1_000));
@@ -534,6 +535,7 @@ async function streamAndScroll(
   const streamedWhileWorking = streamedSlice?.lifecycle === "working";
   const streamedWhileTurnActive = streamedSlice?.transcript.turnActive === true;
   const latencyMs = performance.now() - started;
+  performance.mark("chat-bench:end");
   for (const entry of observer?.takeRecords() ?? []) longTasks.push(entry.duration);
   observer?.disconnect();
   const observedResizeCallbacks = resizeObserverCallbacks - resizeObserverCallbacksBefore;
@@ -611,6 +613,7 @@ async function streamAndScroll(
 
 let setMounted: ((ids: readonly string[]) => void) | null = null;
 let setBallastCount: ((count: number) => void) | null = null;
+let setRevealed: ((ids: readonly string[]) => void) | null = null;
 
 /** The Draft the typing arm writes into: an empty provisional Board chat. */
 const DRAFT_SESSION = "bench-draft";
@@ -635,13 +638,60 @@ function Ballast({ count }: { count: number }) {
   );
 }
 
+/**
+ * One pane cell holding several chats, the front one shown and the rest kept
+ * mounted behind `<Activity mode="hidden">` — the shape VC-1080 gave Home and
+ * the Ticket view (`kept-chat-views.ts`). The switch is a real button so the
+ * runner can press it through Chromium's trusted input path (VC-1100).
+ */
+function RevealCell({ ids }: { ids: readonly string[] }) {
+  const [front, setFront] = React.useState(0);
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <button
+        type="button"
+        data-bench-switch
+        className="h-8 shrink-0 border-b border-border text-ui"
+        onClick={() => setFront((index) => (index + 1) % ids.length)}
+      >
+        Next chat
+      </button>
+      {ids.map((id, index) => (
+        <React.Activity key={id} mode={index === front ? "visible" : "hidden"}>
+          <div data-bench-plane={id} className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <ChatPlane
+              sessionId={id}
+              projectId={PROJECT}
+              ticketId={null}
+              onOpenFile={() => {}}
+              store={store}
+            />
+          </div>
+        </React.Activity>
+      ))}
+    </div>
+  );
+}
+
 function BenchSurface() {
   const [ids, setIds] = React.useState<readonly string[]>([]);
   const [ballast, setBallast] = React.useState(0);
+  const [revealed, setRevealedIds] = React.useState<readonly string[]>([]);
   React.useEffect(() => {
     setMounted = setIds;
     setBallastCount = setBallast;
+    setRevealed = setRevealedIds;
   }, []);
+  if (revealed.length > 0) {
+    return (
+      <TooltipProvider delayDuration={0}>
+        <div className="flex h-svh w-full bg-background text-foreground">
+          <Ballast count={ballast} />
+          <RevealCell ids={revealed} />
+        </div>
+      </TooltipProvider>
+    );
+  }
   return (
     <TooltipProvider delayDuration={0}>
       {/* Panes side by side, each a full-height column, because a plane that is
@@ -875,6 +925,109 @@ async function stopTypingProbe(): Promise<unknown> {
   };
 }
 
+/**
+ * Pressing a pane's next chat with the others kept hidden (VC-1100). Listens
+ * only, like the typing probe: the guarded driver sends trusted synthetic input.
+ *
+ *  - `handlerMs`: window-capture `click` to window-bubble `click` — React's
+ *    synchronous commit of the reveal (a discrete event), including the layout
+ *    effects it runs and any style/layout they force.
+ *  - `latencyMs`: the click's own `timeStamp` to the frame after it painted.
+ */
+let revealProbe: {
+  handlerMs: number[];
+  latencyMs: number[];
+  longTasksMs: number[];
+  observer: PerformanceObserver | null;
+  detach: () => void;
+} | null = null;
+
+function startRevealProbe(): boolean {
+  if (document.querySelector("[data-bench-switch]") === null) return false;
+  const handlerMs: number[] = [];
+  const latencyMs: number[] = [];
+  const longTasksMs: number[] = [];
+  let started = 0;
+  const onCapture = (): void => {
+    started = performance.now();
+  };
+  const onBubble = (event: MouseEvent): void => {
+    handlerMs.push(performance.now() - started);
+    const pressed = event.timeStamp;
+    requestAnimationFrame(() => {
+      const channel = new MessageChannel();
+      channel.port1.addEventListener("message", () => latencyMs.push(performance.now() - pressed));
+      channel.port1.start();
+      channel.port2.postMessage(null);
+    });
+  };
+  window.addEventListener("click", onCapture, true);
+  window.addEventListener("click", onBubble, false);
+  let observer: PerformanceObserver | null = null;
+  try {
+    observer = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) longTasksMs.push(entry.duration);
+    });
+    observer.observe({ type: "longtask", buffered: false });
+  } catch {
+    observer = null;
+  }
+  revealProbe = {
+    handlerMs,
+    latencyMs,
+    longTasksMs,
+    observer,
+    detach: () => {
+      window.removeEventListener("click", onCapture, true);
+      window.removeEventListener("click", onBubble, false);
+    },
+  };
+  return true;
+}
+
+async function stopRevealProbe(): Promise<unknown> {
+  await settle();
+  const probe = revealProbe;
+  if (probe === null) return { ok: false, why: "no probe" };
+  for (const entry of probe.observer?.takeRecords() ?? []) probe.longTasksMs.push(entry.duration);
+  probe.observer?.disconnect();
+  probe.detach();
+  revealProbe = null;
+  return {
+    ok: true,
+    nodes: nodes(),
+    handlerMs: probe.handlerMs,
+    latencyMs: probe.latencyMs,
+    longTasksMs: probe.longTasksMs,
+  };
+}
+
+/** The scroller of one Session's plane, shown or hidden. */
+function sessionScroller(sessionId: string): HTMLElement | null {
+  const plane = document.querySelector<HTMLElement>(`[data-bench-plane="${sessionId}"]`);
+  const log = plane?.querySelector<HTMLElement>('[role="log"]');
+  return log?.querySelector<HTMLElement>(":scope > div") ?? null;
+}
+
+/** Which kept plane is in front, and where its reader stands. */
+function revealState(): unknown {
+  for (const plane of document.querySelectorAll<HTMLElement>("[data-bench-plane]")) {
+    if (plane.offsetParent === null) continue;
+    const id = plane.dataset["benchPlane"] ?? "";
+    const scroller = sessionScroller(id);
+    if (scroller === null) return { id, scroller: false };
+    return {
+      id,
+      top: Math.round(scroller.scrollTop),
+      fromBottom: Math.round(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight),
+      height: Math.round(scroller.scrollHeight),
+      rows: plane.querySelectorAll(".is-user, .is-assistant").length,
+      elements: plane.getElementsByTagName("*").length,
+    };
+  }
+  return { id: null };
+}
+
 interface ChatBench {
   seed(sessions: number, turns: number): Promise<{ ids: string[]; nodes: number }>;
   show(count: number): Promise<{ mounted: number; nodes: number }>;
@@ -886,6 +1039,10 @@ interface ChatBench {
   showDraft(backgroundPlanes: number, ballast: number): Promise<{ nodes: number }>;
   startTyping(): boolean;
   stopTyping(): Promise<unknown>;
+  showReveal(planes: number, ballast: number): Promise<{ nodes: number }>;
+  revealState(): unknown;
+  startReveal(): boolean;
+  stopReveal(): Promise<unknown>;
   collect(): void;
   uncaught(): { message: string; stack: string | null }[];
 }
@@ -937,10 +1094,19 @@ const bench: ChatBench = {
   },
   startTyping: startTypingProbe,
   stopTyping: stopTypingProbe,
+  async showReveal(planes, ballast) {
+    setBallastCount?.(ballast);
+    setRevealed?.(sessionIds.slice(0, planes));
+    await settle();
+    await settle();
+    return { nodes: nodes() };
+  },
+  revealState,
+  startReveal: startRevealProbe,
+  stopReveal: stopRevealProbe,
   collect() {
-    // Present because the bench runner launches Electron with --expose-gc: a
-    // number sampled before the garbage of the previous step is collected is a
-    // number about the garbage.
+    // The guarded driver awaits HeapProfiler.collectGarbage before this
+    // compatibility hook; no extra process-wide Chromium switch is needed.
     (globalThis as { gc?: () => void }).gc?.();
   },
   uncaught() {

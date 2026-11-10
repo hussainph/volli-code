@@ -3,6 +3,7 @@ import { LOCAL_RUNNER, shortSessionId } from "@volli/shared";
 import type {
   CommandReceipt,
   SessionEventProvenance,
+  SessionListingProjection,
   SessionProjection,
   SessionStopActor,
   SessionAttachmentProjection,
@@ -122,8 +123,8 @@ export async function stopResolvedSession(
   ports: Pick<StopSessionByIdPorts, "runtime"> & {
     sessionEngine: Pick<SessionEngine, "submit">;
   },
-  resolved: SessionProjection,
-  reread: () => Promise<SessionProjection>,
+  resolved: SessionListingProjection,
+  reread: () => Promise<SessionListingProjection>,
   acts: StopActs,
 ): Promise<StopSessionOutcome> {
   // Before the durable stop, never after: a start that opened after the stop

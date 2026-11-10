@@ -16,6 +16,7 @@
  * must not also silence the app's only voice.
  */
 import { app, BrowserWindow, Notification } from "electron";
+import { mainWindows } from "../window-roles";
 import type Database from "better-sqlite3";
 import type { AttentionDeliveryPort } from "@volli/host-core/ports";
 import {
@@ -188,7 +189,7 @@ export function createNotificationRuntime(options: {
   let openWindow: (() => void) | null = null;
   const activation = createNotificationActivation({
     windows: () =>
-      BrowserWindow.getAllWindows().map((window) => ({
+      mainWindows().map((window) => ({
         id: window.id,
         isDestroyed: () => window.isDestroyed() || window.webContents.isDestroyed(),
         isMinimized: () => window.isMinimized(),

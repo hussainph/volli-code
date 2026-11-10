@@ -1,15 +1,17 @@
 /** Account scoping over the one host writer; cursors and durable birth ownership must agree. */
 import type Database from "better-sqlite3";
-import type { CreateSessionRequest, SessionEngine } from "@volli/session-engine";
 import {
-  reportSessionUsage,
-  type SessionLedger,
-  type Session,
-  type SessionProjection,
-} from "@volli/shared";
+  SESSION_LISTING_FOLD_CHUNK,
+  type CreateSessionRequest,
+  type SessionEngine,
+} from "@volli/session-engine";
+import { type Session, type SessionListingProjection } from "@volli/shared";
 import { setImmediate } from "node:timers/promises";
 import { prepared } from "../db/prepared";
-import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
+import {
+  createSqliteSessionLedger,
+  type SqliteSessionLedger,
+} from "../session-control/sqlite-ledger";
 import { localSessionRow, sessionBirthOwnerCompatible } from "../db/local-product";
 
 /** Defense in depth for runner jobs as well as in-process Session commands. */
@@ -169,6 +171,8 @@ function scopedEngine(
       (await visible(query.sessionId)) ? reader.getSession(query) : null,
     getBaseSession: async (query) =>
       (await visible(query.sessionId)) ? reader.getBaseSession(query) : null,
+    getSessionListing: async (query) =>
+      (await visible(query.sessionId)) ? reader.getSessionListing(query) : null,
     listSessions: (query) => reader.listSessions(query),
     countSessions: (query) => reader.countSessions(query),
     listAttachedSessions: () => reader.listAttachedSessions(),
@@ -192,6 +196,7 @@ type SessionReader = Pick<
   SessionEngine,
   | "getBaseSession"
   | "getSession"
+  | "getSessionListing"
   | "listSessions"
   | "countSessions"
   | "listAttachedSessions"
@@ -203,80 +208,44 @@ type SessionReader = Pick<
   | "reportUsage"
 >;
 
-/**
- * The scope's listings, folded through the engine's own listing cache (VC-1072).
- *
- * Membership is the scoped ledger's answer; the folds are the engine's. The
- * engine keeps a per-Session listing fold that a repeat read reuses whenever
- * the Session has not moved, and its listings are the only door to it. Folding
- * each scoped row with `getSession` instead goes around that cache: every
- * listing and every concurrency-budget read re-folded every Session in scope
- * from its checkpoint, synchronously on the host's event loop. On a profile with
- * thousands of Sessions holding an open attachment that was seconds per read,
- * paid by the first Session start in every five-second window, and it is what
- * took a fresh attach from a third of a second to five (VC-1072).
- *
- * So the engine lists the same query unscoped, from its cache, and the scope
- * keeps only its own rows, in its own order. The two reads are two
- * transactions, which the engine's listings already are among themselves
- * (`listSessions` documents the skew): a row the scope sees that the listing
- * did not — a Session born between the two reads — is folded on its own, and a
- * row only the listing saw is outside the scope and dropped.
- */
-async function projectThroughListing(
-  engine: Pick<SessionEngine, "getSession">,
-  rows: readonly Session[],
-  listing: () => Promise<readonly SessionProjection[]>,
-): Promise<SessionProjection[]> {
-  // Nothing in scope needs no fold, and the listing is not started: a scope with
-  // no Sessions must not pay for the rest of the machine's.
-  if (rows.length === 0) return [];
-  const folded = new Map<string, SessionProjection>();
-  for (const projection of await listing()) folded.set(projection.session.id, projection);
-  const projections: SessionProjection[] = [];
-  let missed = 0;
-  for (const row of rows) {
-    // A listing's fold is deep-frozen and shared; a fold made here on its own
-    // is not. Callers treat both as readonly, as `SessionProjection` says.
-    const cached = folded.get(row.id);
-    if (cached !== undefined) {
-      projections.push(cached);
-      continue;
+function sessionReader(engine: SessionEngine, ledger: SqliteSessionLedger): SessionReader {
+  const project = async (sessions: readonly Session[]): Promise<SessionListingProjection[]> => {
+    // Size the sole engine's listing cache from metadata, including other
+    // scopes sharing that cache. No foreign history is folded or returned.
+    // Point reads alone otherwise retain only the cache floor and thrash on
+    // a roster larger than it, even though the membership was selected here.
+    for (const projectId of new Set(sessions.map((session) => session.projectId))) {
+      await engine.countSessions({ projectId, scope: "all" });
     }
-    if (missed > 0 && missed % 32 === 0) await setImmediate();
-    missed += 1;
-    const projection = await engine.getSession({ sessionId: row.id });
-    if (projection !== null) projections.push(projection);
-  }
-  return projections;
-}
-
-function sessionReader(engine: SessionEngine, ledger: SessionLedger): SessionReader {
+    const projections: SessionListingProjection[] = [];
+    for (let index = 0; index < sessions.length; index += 1) {
+      if (index > 0 && index % SESSION_LISTING_FOLD_CHUNK === 0) await setImmediate();
+      // The old scoped listing was read-only. Building its in-memory cache
+      // must not add one checkpoint write/commit per cold Session to main.
+      const projection = await engine.getSessionListing({
+        sessionId: sessions[index]!.id,
+        persistCheckpoint: false,
+      });
+      if (projection !== null) projections.push(projection);
+    }
+    return projections;
+  };
   return {
     getBaseSession: (query) => ledger.transaction((tx) => tx.getSession(query.sessionId)),
     getSession: (query) => engine.getSession(query),
-    listSessions: async (query) => {
-      const rows = await ledger.transaction((tx) => tx.listSessions(query));
-      return projectThroughListing(engine, rows, () => engine.listSessions(query));
-    },
+    getSessionListing: (query) => engine.getSessionListing(query),
+    listSessions: async (query) =>
+      project(await ledger.transaction((tx) => tx.listSessions(query))),
     countSessions: (query) => ledger.transaction((tx) => tx.countSessions(query)),
-    listAttachedSessions: async () => {
-      const rows = await ledger.transaction((tx) => tx.listAttachedSessions());
-      return projectThroughListing(engine, rows, () => engine.listAttachedSessions());
-    },
+    listAttachedSessions: async () =>
+      project(await ledger.transaction((tx) => tx.listAttachedSessions())),
     listSessionStarts: (query) => ledger.transaction((tx) => tx.listSessionStarts(query)),
     listLatestTicketSignals: (query) =>
       ledger.transaction((tx) => tx.listLatestTicketSignals(query)),
     listEvents: (query) => engine.listEvents(query),
     latestEventSequence: (query) => engine.latestEventSequence(query),
     getProjectionCheckpoint: (query) => engine.getProjectionCheckpoint(query),
-    reportUsage: (query) =>
-      ledger.transaction((tx) =>
-        reportSessionUsage(tx.listUsage(query), {
-          ...query,
-          meteredFrom: tx.usageMeteredFrom(),
-        }),
-      ),
+    reportUsage: (query) => ledger.reportUsage(query),
   };
 }
 

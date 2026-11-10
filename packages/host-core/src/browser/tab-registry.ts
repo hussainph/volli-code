@@ -11,6 +11,8 @@
  * through the abstract members below, at exactly the points the desktop host
  * read its `webContents` before this was split out of it.
  */
+import { BrowserRefusal } from "@volli/agent-runtime";
+
 import {
   pickSessionColor,
   shortSessionId,
@@ -638,14 +640,20 @@ export abstract class BrowserTabRegistry<
    * model asked for is also the person's to look at later. The engine already
    * rendered these bytes for the model; storing them costs no second capture.
    */
-  keepScreenshot(tabId: string, base64Png: string): string {
+  keepScreenshot(tabId: string, base64Png: string, generation: number): string {
     const entry = this.requireTab(tabId);
+    if (generation !== entry.state.generation) {
+      throw new BrowserRefusal(
+        "browser.stale-ref",
+        "The tab changed before its screenshot could be kept: take a new screenshot.",
+      );
+    }
     // The controller already rejects an empty answer from the engine; this is
     // the same rule at the store's door, so no path mints an id for no pixels.
     if (base64Png.length === 0) throw new Error("Refusing to keep an empty Browser Tab screenshot");
     return this.deps.pictures.put({
       tabId,
-      generation: entry.state.generation,
+      generation,
       mime: "image/png",
       bytes: Buffer.from(base64Png, "base64"),
       // A picture that outlives this launch is attributable: whose Session

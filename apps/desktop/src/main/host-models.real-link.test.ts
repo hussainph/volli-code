@@ -65,8 +65,8 @@ const cases = [
   {
     method: "setCodeModePolicy",
     kind: "mutate",
-    input: { enabled: false, models: {} },
-    value: { enabled: false, models: {} },
+    input: { enabled: true, defaultMode: "only", models: {} },
+    value: { enabled: true, defaultMode: "only", models: {} },
   },
   { method: "pickerView", kind: "query", value: "all" },
   { method: "setPickerView", kind: "mutate", input: "all", value: "all" },

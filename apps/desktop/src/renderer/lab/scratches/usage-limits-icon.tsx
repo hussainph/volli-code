@@ -66,13 +66,16 @@
  * per bar of the chosen glyph — where this view still holds one.
  */
 
-import { GaugeIcon } from "@phosphor-icons/react/dist/csr/Gauge";
-import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { PushPinIcon } from "@phosphor-icons/react/dist/csr/PushPin";
-import { PushPinSlashIcon } from "@phosphor-icons/react/dist/csr/PushPinSlash";
-import { PlayIcon } from "@phosphor-icons/react/dist/csr/Play";
-import { PauseIcon } from "@phosphor-icons/react/dist/csr/Pause";
+import {
+  GaugeIcon,
+  SearchIcon,
+  ChevronDownIcon,
+  PinIcon,
+  UnpinIcon,
+  PlayIcon,
+  PauseIcon,
+} from "@renderer/components/ui/icon";
+
 import * as React from "react";
 
 import { Button } from "@renderer/components/ui/button";
@@ -373,12 +376,12 @@ function Stage({ shape, state, glyph }: { shape: Candidate; state: IconState; gl
 function MockCommandPill() {
   return (
     <span className="flex h-[22px] w-[280px] items-center gap-1 rounded-md border border-border/50 bg-foreground/10 px-2 text-ui text-muted-foreground">
-      <MagnifyingGlassIcon className="size-3.5 shrink-0" />
+      <SearchIcon className="size-3.5 shrink-0" />
       <span className="min-w-0 flex-1 truncate">Search tickets and sessions</span>
       <kbd className="shrink-0 rounded-sm border border-border/70 bg-background/10 px-1 py-px font-sans text-label leading-none">
         ⌘K
       </kbd>
-      <CaretDownIcon aria-hidden className="size-3 shrink-0" weight="bold" />
+      <ChevronDownIcon aria-hidden className="size-3 shrink-0" strokeWidth={2.25} />
     </span>
   );
 }
@@ -983,7 +986,7 @@ function PinningView({ shape, glyph }: { shape: Candidate; glyph: GlyphArgs }) {
           </p>
           {pin === null ? null : (
             <Button variant="ghost" size="sm" onClick={() => setPin(null)}>
-              <PushPinSlashIcon />
+              <UnpinIcon />
               Unpin
             </Button>
           )}
@@ -1024,10 +1027,7 @@ function PinningView({ shape, glyph }: { shape: Candidate; glyph: GlyphArgs }) {
                           )
                         }
                       >
-                        <PushPinIcon
-                          weight={pinned ? "fill" : "regular"}
-                          className={pinned ? "text-foreground" : "text-muted-foreground"}
-                        />
+                        <PinIcon className={pinned ? "text-foreground" : "text-muted-foreground"} />
                       </Button>
                     </li>
                   );

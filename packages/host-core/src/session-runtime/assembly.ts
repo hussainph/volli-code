@@ -45,6 +45,7 @@ import type { HostCodeMode } from "../codemode/dev-config";
 import type { HostDecisions } from "../decision/host-decisions";
 import type { WebAccessSettings } from "../web/settings";
 import { webPortsFor } from "../web/ports";
+import type { SourceIconRefiner } from "../source-icons/refiner";
 import type { SecretService } from "../secrets/service";
 import type { BackgroundShellHost } from "../shell/background-shell-host";
 import { createAgentShellPort } from "../shell/agent-port";
@@ -100,6 +101,7 @@ export interface RuntimeAssemblyOptions {
   webAccess: WebAccessSettings | null;
   /** Where `web_fetch` parses HTML; absent, on this thread. */
   webExtract?: WebExtractor;
+  sourceIconRefiner?: SourceIconRefiner;
   mcpSettings: McpSettingsService | null;
   mcpDispatch: HostMcpDispatch;
   codeMode: HostCodeMode;
@@ -424,7 +426,7 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
                     // Retained names survive missing configuration; calls return
                     // a named unavailable result for removed servers.
                     servers: serversForFrozenMcpTools(
-                      mcpSettings.list(scope.projectId),
+                      mcpSettings.list(scope.projectId, scope.mcpTools),
                       scope.mcpTools,
                     ),
                     // Read at every call, so a server a person disables or
@@ -543,7 +545,14 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
           resolveWebPorts:
             webAccess === null
               ? undefined
-              : () => webPortsFor(webAccess.resolve(), options.webExtract),
+              : (scope) =>
+                  webPortsFor(
+                    webAccess.resolve(),
+                    options.webExtract,
+                    options.sourceIconRefiner === undefined
+                      ? undefined
+                      : () => options.sourceIconRefiner!.beginRead(scope.sessionId, scope.signal),
+                  ),
           // The Session's Browser capability, composed at attach over the one
           // host: the registry decides which tabs the scope may see, and the
           // CDP wire is each tab's app-private debugger — never a debug port.

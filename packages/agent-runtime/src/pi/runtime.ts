@@ -32,6 +32,7 @@ import {
 } from "./harness-session";
 import { type JsonValue } from "@earendil-works/chord";
 import { Agent } from "@earendil-works/pi-agent-core";
+import { subscribeTimed, timedTools, type PiMainSpan } from "./main-span";
 import { JsonlSessionRepo } from "./harness-session";
 import { NodeExecutionEnv, type ExecutionEnv } from "./harness-env";
 import {
@@ -366,6 +367,14 @@ export interface PiRuntimeHostOptions {
    * Session's frozen record, and every runtime can bind it.
    */
   codeModeSandbox?: CodeModeSandboxAssets;
+  /**
+   * Times the synchronous part of a Session's work on the host's main thread
+   * (VC-1090): each Pi agent event's handler (`pi:<event type>`) and each tool
+   * call's start (`tool:<name>`), so the host's stall log can name the
+   * Session that held it. Must run `fn` unchanged and return its result.
+   * Absent, nothing is timed.
+   */
+  mainSpan?: PiMainSpan;
 }
 
 /** Everything {@link attachSession} needs, with the default already chosen. */
@@ -376,6 +385,7 @@ interface PiRuntimeHost {
   toolOutputLedger: ToolOutputLedger;
   parallelMcpReads: boolean;
   codeModeSandbox: CodeModeSandboxAssets | undefined;
+  mainSpan: PiMainSpan | undefined;
   models: Models;
   credentials: CredentialStore | null;
   catalogReady: Promise<void>;
@@ -436,6 +446,7 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
     toolOutputLedger: new ToolOutputLedger({ dataDirectory: options.sessionDataDir }),
     parallelMcpReads: options.parallelMcpReads === true,
     codeModeSandbox: options.codeModeSandbox,
+    mainSpan: options.mainSpan,
     models: access.models,
     credentials: access.credentials,
     catalogReady: access.catalogReady ?? Promise.resolve(),
@@ -2277,7 +2288,11 @@ async function attachSession(
           input.declarationTools,
         );
       }
-      const rebuilt = applyToolDispatch(declared, input.tools.mcp ?? [], host.parallelMcpReads);
+      const rebuilt = applyToolDispatch(
+        timedTools(host.mainSpan, input.identity.sessionId, declared),
+        input.tools.mcp ?? [],
+        host.parallelMcpReads,
+      );
       return { rebuilt, stagedCallable, stagedSurface, stagedCodeMode };
     };
     const initialTools = rebuildTools(spec, false);
@@ -3537,7 +3552,8 @@ async function attachSession(
       }
     };
 
-    unsubscribe = agent.subscribe(async (event, runSignal) => {
+    const subscribe = subscribeTimed(agent, host.mainSpan, spec.identity.sessionId);
+    unsubscribe = subscribe(async (event, runSignal) => {
       if (event.type === "agent_start") {
         acceptingSteer = true;
         // A resumed attempt is the same turn continuing, so it neither starts one

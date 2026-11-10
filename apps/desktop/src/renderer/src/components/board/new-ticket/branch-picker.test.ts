@@ -140,7 +140,7 @@ describe("baseChipLabel", () => {
 
   it("draws an in-flight read as pending, and says so in words", () => {
     // `…` is a glyph: it draws the wait, and reads aloud as nothing at all.
-    expect(baseChipLabel(null, LOADING)).toEqual({ text: "…", spoken: "reading branches" });
+    expect(baseChipLabel(null, LOADING)).toEqual({ text: "Reading", spoken: "Reading branches" });
   });
 
   it("says a repo it cannot read is unknown rather than pending", () => {

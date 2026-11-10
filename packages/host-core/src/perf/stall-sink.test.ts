@@ -63,13 +63,22 @@ describe("the perf store's stall hook", () => {
   });
 
   it("records the real monitor's unattributed stall under unattributed, with its hint", () => {
-    const monitor = startMainStallMonitor({ tickMs: 50, thresholdMs: 200 });
+    // On the CPU throughout, and no GC: the block stays unattributed (VC-1090).
+    const monitor = startMainStallMonitor({
+      tickMs: 50,
+      thresholdMs: 200,
+      threadCpuMs: () => clock,
+      observeGc: () => () => {},
+    });
     monitors.push(monitor);
     withTrace(null, { door: "socket", operation: "ticket.list" }, () => {
       clock += 1;
     });
     // The door call above ran 1 ms inside this tick, so the lag reads 401.
     clock += 50 + 400;
+    vi.advanceTimersByTime(50);
+    // Held one tick, for the GC pauses inside it to arrive.
+    clock += 50;
     vi.advanceTimersByTime(50);
     expect(rows).toEqual([
       expect.objectContaining({
@@ -103,6 +112,101 @@ describe("the perf store's stall hook", () => {
         durationMs: 240,
       }),
     ]);
+  });
+
+  it("retains flattened renderer-frame timings and top attribution from the log", () => {
+    const fields = {
+      scriptTotalMs: 140,
+      blockingMs: 100,
+      renderMs: 90,
+      styleLayoutMs: 70,
+      scriptFile: "chat-plane.tsx",
+      scriptFunction: "ChatPlaneContent",
+      scriptInvoker: "user-callback",
+      scriptMs: 80,
+    };
+    hostLogger("renderer-stall").warn("renderer stall", {
+      kind: "frame",
+      operation: "long-animation-frame",
+      label: "pane-switch",
+      durationMs: 250,
+      ...fields,
+    });
+    expect(rows).toEqual([expect.objectContaining(fields)]);
+  });
+
+  it("does not invent breakdowns on old frame logs or frame fields on inputs or main stalls", () => {
+    const fields = {
+      scriptTotalMs: 140,
+      blockingMs: 100,
+      renderMs: 90,
+      styleLayoutMs: 70,
+      scriptFile: "chat-plane.tsx",
+      scriptFunction: "ChatPlaneContent",
+      scriptInvoker: "user-callback",
+      scriptMs: 80,
+    };
+    hostLogger("renderer-stall").warn("renderer stall", { kind: "frame", durationMs: 250 });
+    hostLogger("renderer-stall").warn("renderer stall", {
+      kind: "input",
+      durationMs: 250,
+      ...fields,
+    });
+    hostLogger("renderer-stall").warn("renderer stall", {
+      kind: "unknown",
+      durationMs: 250,
+      ...fields,
+    });
+    hostLogger("main-stall").warn("main stall", { durationMs: 250, ...fields });
+    expect(rows).toHaveLength(4);
+    for (const row of rows) {
+      for (const field of Object.keys(fields)) expect(row).not.toHaveProperty(field);
+    }
+  });
+
+  it("sanitizes frame attribution and drops invalid optional durations, preserving zero", () => {
+    const row = rendererStallRow(
+      record({
+        kind: "frame",
+        durationMs: 250,
+        scriptTotalMs: 140.6,
+        blockingMs: 0,
+        renderMs: Number.POSITIVE_INFINITY,
+        styleLayoutMs: "70",
+        scriptMs: Number.NaN,
+        scriptFile: "file:///Users/private/renderer.js?token=secret#fragment",
+        scriptFunction: "private user content",
+        scriptInvoker: "private user content",
+      }),
+    );
+    expect(row).toMatchObject({
+      scriptTotalMs: 141,
+      blockingMs: 0,
+      scriptFile: "renderer.js",
+      scriptInvoker: "other",
+    });
+    for (const field of ["renderMs", "styleLayoutMs", "scriptMs", "scriptFunction"]) {
+      expect(row).not.toHaveProperty(field);
+    }
+    expect(
+      rendererStallRow(
+        record({
+          kind: "frame",
+          durationMs: 250,
+          scriptFile: "unsafe name",
+          scriptFunction: "Object.flush",
+          scriptInvoker: "event-listener",
+          scriptMs: -2,
+          renderMs: 1_000_000,
+        }),
+      ),
+    ).toMatchObject({
+      scriptFile: "unknown",
+      scriptFunction: "Object.flush",
+      scriptInvoker: "event-listener",
+      scriptMs: 0,
+      renderMs: 600_000,
+    });
   });
 
   it("lets every other line pass by, roll-ups included", () => {

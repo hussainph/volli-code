@@ -32,6 +32,7 @@
  */
 
 import { resolveAutomationByName } from "./automations/by-name";
+import { withTrace } from "./log/context";
 import type Database from "better-sqlite3";
 import {
   AGENT_MODEL_TIERS,
@@ -1081,7 +1082,7 @@ export function createAgentToolDoor(options: AgentToolDoorOptions): AgentToolDoo
     throw new Error("The host's handler map is required.");
   }
   serveHostHandlers(options.handlers, toolVerbEntries(options));
-  return async (session, request, signal, budgetAsk) => {
+  const door: AgentToolDoor = async (session, request, signal, budgetAsk) => {
     if (!TOOL_VERBS.has(request.verb)) {
       // Unreachable through a resolved surface, and refused rather than
       // asserted: a tool array is built from the same registry the map is
@@ -1110,4 +1111,14 @@ export function createAgentToolDoor(options: AgentToolDoorOptions): AgentToolDoo
       throw error;
     }
   };
+  // Each call is its own operation (VC-1099). A tool call runs on its turn's
+  // chain, and that turn's context is whatever door opened it — a watch
+  // notice another Session's `session.done` delivered, say — so without its
+  // own span every line a `session_start` wrote, the new Session's attach
+  // included, was filed under that other verb. The trace stays the turn's:
+  // the call is part of the work that turn is doing.
+  return (session, request, signal, budgetAsk) =>
+    withTrace(null, { door: "agent-tool", operation: request.verb }, () =>
+      door(session, request, signal, budgetAsk),
+    );
 }

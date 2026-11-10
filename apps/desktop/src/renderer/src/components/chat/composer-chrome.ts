@@ -8,14 +8,15 @@ export const PROMPT_SURFACE =
   "prompt-surface rounded-container border border-transparent shadow-card";
 
 /** A bounded, softly raised setting rather than another floating word. */
-export const COMPOSER_CONFIG_CHIP = "prompt-config border border-border/70 bg-card shadow-raised";
+export const COMPOSER_CONFIG_CHIP =
+  "prompt-config border border-border/70 bg-(--card-face) shadow-raised";
 
 /** The rung every secondary control in a composer's footer wears: 24px. */
 export const COMPOSER_CONTROL_SIZE = "sm" as const;
 export const COMPOSER_CONTROL_ICON_SIZE = "icon-sm" as const;
 
-/** A 32px send key, distinct from the 24px settings and their pill shape. */
-export const COMPOSER_PRIMARY_SIZE = "icon-lg" as const;
+/** A 28px send key, distinct from the 24px settings and their pill shape. */
+export const COMPOSER_PRIMARY_SIZE = "icon" as const;
 
 /** Small glyphs need the weight step to stand beside the 13px labels. */
-export const COMPOSER_GLYPH_WEIGHT = "bold" as const;
+export const COMPOSER_GLYPH_STROKE = 2.25 as const;

@@ -15,6 +15,9 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { Tab, TabStrip } from "./tab-strip";
+import { TabActionScope } from "./tab-actions";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "./hover-card";
+import { MinusIcon } from "./icon";
 
 const TAB_WIDTH = 100;
 
@@ -164,9 +167,11 @@ describe("TabStrip arrangement", () => {
 
     press(chat!, "Space", " ");
     await settle();
+    expect(chat?.style.transition).toBe("none");
     press(chat!, "ArrowRight", "ArrowRight");
     await settle();
     press(chat!, "Space", " ");
+    expect(chat?.style.transition).toBe("none");
 
     expect(onReorder).toHaveBeenCalledWith("chat:c1", ["file:app.ts", "chat:c1"]);
   });
@@ -225,7 +230,7 @@ describe("TabStrip arrangement", () => {
     ).not.toBeNull();
   });
 
-  it("takes transform out of a tab's transition under reduced motion", () => {
+  it("keeps high-frequency tab selection immediate, including reduced motion", () => {
     // The sortable asks dnd-kit for no transition under the flag, but that only
     // clears the INLINE one: whatever the tab's own class list transitions is
     // what would animate the sibling shift instead. jsdom applies no
@@ -242,8 +247,7 @@ describe("TabStrip arrangement", () => {
       .split(" ")
       .filter((name) => name.includes("transition-["));
 
-    expect(transitions.at(-1)).toBe("motion-reduce:transition-[color,background-color,box-shadow]");
-    expect(transitions.at(-1)).not.toContain("transform");
+    expect(transitions).toEqual([]);
   });
 
   it("leaves Enter as the activation on a tab that drags", () => {
@@ -290,7 +294,7 @@ function scrollArea(): HTMLElement {
 }
 
 /** How much width one mounted chevron takes out of the scroller. */
-const AFFORDANCE_WIDTH = 28;
+const AFFORDANCE_WIDTH = 24;
 
 /**
  * The strip's geometry, INCLUDING the part that made the first attempt wrong:
@@ -307,8 +311,7 @@ function layoutStrip(options: { area?: number; content: number; scrollLeft?: num
   let content = options.content;
   let left = options.scrollLeft ?? 0;
   const affordances = (): number =>
-    (container?.querySelectorAll('[data-slot="tab-scroll-affordance"]').length ?? 0) *
-    AFFORDANCE_WIDTH;
+    (container?.querySelectorAll('[aria-label="All tabs"]').length ?? 0) * AFFORDANCE_WIDTH;
   const port = scroller();
   Object.defineProperty(scrollArea(), "clientWidth", { configurable: true, get: () => area });
   Object.defineProperty(port, "clientWidth", {
@@ -430,6 +433,7 @@ describe("TabStrip overflow", () => {
   it("follows the keyboard onto a tab the arrows walked out of view", () => {
     renderTabs(9, 0);
     const port = measureScroller(9);
+    const glide = vi.spyOn(port, "scrollTo");
     const tabs = tabsInStrip();
     tabs[0]?.focus();
 
@@ -439,6 +443,92 @@ describe("TabStrip overflow", () => {
 
     expect(document.activeElement).toBe(tabs[8]);
     expect(port.scrollLeft).toBe(600);
+    expect(glide).not.toHaveBeenCalled();
+  });
+
+  it("does not scroll a partly clipped tab when its close receives focus", () => {
+    const onClose = vi.fn();
+    act(() => {
+      root?.render(
+        <TabStrip label="Home tabs">
+          {Array.from({ length: 9 }, (_, index) => (
+            <Tab
+              key={index}
+              label={`Tab ${index}`}
+              active={index === 3}
+              tabStop={index === 3}
+              onActivate={() => {}}
+              onClose={onClose}
+            />
+          ))}
+        </TabStrip>,
+      );
+    });
+    const port = measureScroller(9, 320);
+    const close = tabsInStrip()[3]!.querySelector<HTMLButtonElement>('[data-slot="tab-close"]')!;
+    // Pointer focus lands between down/up. The close is already in view;
+    // revealing its parent now would move it out from under the pending click.
+    act(() => close.focus());
+    expect(port.scrollLeft).toBe(320);
+    // A title/width-cascade resize can arrive before pointer-up too.
+    contentResized();
+    expect(port.scrollLeft).toBe(320);
+    act(() => close.click());
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(document.activeElement).toBe(tabsInStrip()[4]);
+  });
+
+  it("does not reveal a capsule over a focused control when pane selection changes", () => {
+    const draw = (selected: number) =>
+      act(() =>
+        root?.render(
+          <TabStrip label="Home tabs">
+            {Array.from({ length: 9 }, (_, index) => (
+              <Tab
+                key={index}
+                label={`Tab ${index}`}
+                active={index === selected}
+                tabStop={index === selected}
+                onActivate={() => {}}
+                onClose={() => {}}
+              />
+            ))}
+          </TabStrip>,
+        ),
+      );
+    draw(0);
+    const port = measureScroller(9, 320);
+    const close = tabsInStrip()[3]!.querySelector<HTMLButtonElement>('[data-slot="tab-close"]')!;
+    act(() => close.focus());
+    draw(3);
+    expect(document.activeElement).toBe(close);
+    expect(port.scrollLeft).toBe(320);
+  });
+
+  it("captures a minimise press independently of dragging and focuses the Close neighbour", () => {
+    const hide = vi.fn();
+    const activate = vi.fn();
+    act(() =>
+      root?.render(
+        <TabStrip label="Home tabs">
+          <TabActionScope actions={[{ label: "Hide to Island", icon: MinusIcon, run: hide }]}>
+            <Tab label="Browser" active tabStop onActivate={activate} />
+          </TabActionScope>
+          <Tab label="Neighbour" active={false} tabStop={false} onActivate={() => {}} />
+        </TabStrip>,
+      ),
+    );
+    const button = container!.querySelector<HTMLButtonElement>('[data-slot="tab-minimise"]')!;
+    const capture = vi.fn();
+    button.setPointerCapture = capture;
+    const down = new MouseEvent("pointerdown", { bubbles: true, button: 0 });
+    Object.defineProperty(down, "pointerId", { value: 7 });
+    act(() => button.dispatchEvent(down));
+    expect(capture).toHaveBeenCalledWith(7);
+    act(() => button.click());
+    expect(hide).toHaveBeenCalledOnce();
+    expect(activate).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(tabsInStrip()[1]);
   });
 
   it("leaves the strip where it is when the tab is already whole in view", () => {
@@ -452,33 +542,62 @@ describe("TabStrip overflow", () => {
     expect(port.scrollLeft).toBe(120);
   });
 
-  it("offers a pointer a way to the tabs it cannot see, and only while there are some", () => {
+  it("offers one in-track inventory, never arrow/divider controls", async () => {
     renderTabs(9, 0);
-    // 356px of area, so that once the two chevrons have taken 28px each the
-    // scroller is the round 300px window the travel below is reckoned in.
-    const { port } = layoutStrip({ area: 356, content: 900 });
+    layoutStrip({ area: 356, content: 900 });
     resized();
+    const all = container!.querySelector<HTMLButtonElement>('[aria-label="All tabs"]')!;
+    expect(all).not.toBeNull();
+    expect(scrollArea().contains(all)).toBe(true);
+    expect(affordance("Earlier")).toBeNull();
+    expect(affordance("Later")).toBeNull();
+    await act(async () =>
+      all.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })),
+    );
+    const menu = document.querySelector('[data-slot="dropdown-menu-content"]')!;
+    expect(menu.textContent).toContain("Tab 8");
+    const target = [...menu.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Tab 8"),
+    )!;
+    act(() => target.click());
+    expect(scroller().scrollLeft).toBeGreaterThan(0);
+  });
 
-    const later = affordance("Later");
-    expect(later).not.toBeNull();
-    expect(later?.className).toContain("self-stretch");
-    expect(later?.className).toContain("rounded-none");
-    expect(later?.className).toContain("text-foreground");
-    expect(later?.className).toContain("-mt-2");
-    expect(later?.querySelector("svg")?.classList.contains("size-4")).toBe(true);
-    // Nothing to the left yet, so that end says so rather than pretending.
-    expect(affordance("Earlier")?.disabled).toBe(true);
-    expect(later?.disabled).toBe(false);
-
-    act(() => later?.click());
-    // Four fifths of a window, so one tab of the last view stays in this one.
-    expect(port.scrollLeft).toBe(240);
+  it("keeps basename-only inventory names with a distinct directory on the secondary line", async () => {
+    act(() =>
+      root?.render(
+        <TabStrip label="Files">
+          <Tab label="app.ts" hint="src" active tabStop closable={false} onActivate={() => {}} />
+          <Tab
+            label="app.ts"
+            hint="docs"
+            active={false}
+            tabStop={false}
+            closable={false}
+            onActivate={() => {}}
+          />
+        </TabStrip>,
+      ),
+    );
+    layoutStrip({ area: 156, content: 320 });
+    resized();
+    const all = container!.querySelector<HTMLButtonElement>('[aria-label="All tabs"]')!;
+    await act(async () =>
+      all.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })),
+    );
+    const menu = document.querySelector('[data-slot="dropdown-menu-content"]')!;
+    expect(
+      [...menu.querySelectorAll(".list-row-secondary")].map((node) => node.textContent),
+    ).toEqual(["src", "docs"]);
+    expect([...menu.querySelectorAll(".truncate.text-ui")].map((node) => node.textContent)).toEqual(
+      ["app.ts", "app.ts"],
+    );
   });
 
   it("draws no affordance at all for a strip that fits", () => {
     renderTabs(2, 0);
     measureScroller(2);
-    act(() => observers[0]?.notify());
+    resized();
 
     expect(affordance("Earlier")).toBeNull();
     expect(affordance("Later")).toBeNull();
@@ -495,7 +614,7 @@ describe("TabStrip overflow", () => {
     renderTabs(9, 0);
     const strip = layoutStrip({ content: 900 });
     resized();
-    expect(affordance("Later")).not.toBeNull();
+    expect(container?.querySelector('[aria-label="All tabs"]')).not.toBeNull();
 
     // Six tabs closed: 250px of tabs in a 300px area. They fit — but they do
     // NOT fit the 244px the two mounted chevrons had left of the scroller, so a
@@ -516,7 +635,7 @@ describe("TabStrip overflow", () => {
     renderTabs(9, 0);
     const strip = layoutStrip({ content: 900 });
     resized();
-    expect(affordance("Later")).not.toBeNull();
+    expect(container?.querySelector('[aria-label="All tabs"]')).not.toBeNull();
 
     // A divider dragged, a rail closed: the window never changed, and only the
     // pane's own observer hears it.
@@ -541,8 +660,8 @@ describe("TabStrip overflow", () => {
     // furthest this scroller travels, and the tab's right edge asks for all of
     // it — without the second look, the tab a person just selected sits behind
     // the control that appeared to help them reach it.
-    expect(affordance("Later")).not.toBeNull();
-    expect(strip.port.scrollLeft).toBe(656);
+    expect(container?.querySelector('[aria-label="All tabs"]')).not.toBeNull();
+    expect(strip.port.scrollLeft).toBe(624);
   });
 
   it("re-reveals the focused tab when content before it grows", () => {
@@ -566,7 +685,7 @@ describe("TabStrip overflow", () => {
     expect(document.activeElement).toBe(tabs[2]);
     // The two 28px affordances leave a 344px scroller. The moved tab's right
     // edge plus the 8px reveal inset therefore lands at 264.
-    expect(strip.port.scrollLeft).toBe(500 + 100 + 8 - (400 - 56));
+    expect(strip.port.scrollLeft).toBe(500 + 100 + 8 - (400 - 24));
   });
 
   it("follows the keyboard's tab through a resize, not just the selected one", () => {
@@ -585,9 +704,9 @@ describe("TabStrip overflow", () => {
     resized();
 
     expect(document.activeElement).toBe(tabs[8]);
-    // 900 - (400 - 56) is the end of this scroller's travel, which is where the
+    // 900 - (400 - 24) is the end of this scroller's travel, which is where the
     // last tab's right edge and its inset land.
-    expect(strip.port.scrollLeft).toBe(556);
+    expect(strip.port.scrollLeft).toBe(524);
   });
 
   it("keeps the affordances out of the tablist they scroll", () => {
@@ -595,11 +714,12 @@ describe("TabStrip overflow", () => {
     // would join the roving tabindex and be counted by every arrow key.
     renderTabs(9, 0);
     measureScroller(9);
-    act(() => observers[0]?.notify());
+    resized();
 
     const tablist = container?.querySelector('[role="tablist"]');
-    expect(tablist?.contains(affordance("Later"))).toBe(false);
-    expect(affordance("Later")?.tabIndex).toBe(0);
+    const all = container?.querySelector<HTMLButtonElement>('[aria-label="All tabs"]');
+    expect(tablist?.contains(all!)).toBe(false);
+    expect(all?.tabIndex).toBe(0);
   });
 
   it("still claims Shift+wheel, the gesture the affordances stand beside", () => {
@@ -675,6 +795,61 @@ describe("TabStrip overflow", () => {
     expect(revealText()).toBe(label);
   });
 
+  it("lets a group member card and dropdown own the reveal for a clipped title", async () => {
+    const label = "Hi! I have the following design follow up questions";
+    const rows = (
+      <div>
+        {label}
+        <button type="button">Second member</button>
+      </div>
+    );
+    act(() => {
+      root?.render(
+        <TabStrip label="Home tabs">
+          <HoverCard openDelay={250}>
+            <HoverCardTrigger asChild>
+              <div data-slot="grouped-tab-chip">
+                <Tab
+                  label={label}
+                  active
+                  tabStop
+                  closable={false}
+                  onActivate={() => {}}
+                  actionsContent={rows}
+                />
+              </div>
+            </HoverCardTrigger>
+            <HoverCardContent>{rows}</HoverCardContent>
+          </HoverCard>
+        </TabStrip>,
+      );
+    });
+    const [tab] = tabsInStrip();
+    clipLabel(tab!);
+    act(() => tab?.focus());
+    expect(tab?.getAttribute("aria-label")).toBe(label);
+    expect(revealText()).toBeNull();
+
+    await act(async () => {
+      tab?.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
+      tab?.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerType: "mouse" }));
+      await new Promise((resolve) => setTimeout(resolve, 550));
+    });
+    expect(document.querySelector('[data-slot="hover-card-content"]')?.textContent).toContain(
+      label,
+    );
+    expect(revealText()).toBeNull();
+
+    const trigger = tab!.querySelector<HTMLButtonElement>('[data-slot="tab-menu"]')!;
+    await act(async () =>
+      trigger.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })),
+    );
+    expect(document.querySelector('[data-slot="dropdown-menu-content"]')?.textContent).toContain(
+      "Second member",
+    );
+    expect(revealText()).toBeNull();
+  });
+
   it("stays quiet for a label the tab draws whole", () => {
     // A tooltip over every tab in a strip is noise a person learns to ignore,
     // which is how the one that matters gets missed. The measurement is what
@@ -712,20 +887,64 @@ describe("TabStrip overflow", () => {
     expect(tab?.querySelector("span")?.className).toContain("truncate");
   });
 
-  it("keeps a hint that a narrow strip stops drawing in the tab's own name", () => {
-    // The hint is what tells `src/app.ts` from `docs/app.ts`. It gives way by
-    // the STRIP's width rather than the window's (`@container/tab-strip`), so
-    // the word it collapses has to survive somewhere: the accessible name.
+  it("distinguishes unclipped basename twins by name and keyboard reveal", () => {
     act(() => {
       root?.render(
         <TabStrip label="Home tabs">
+          <Tab label="app.ts" hint="src" active tabStop onActivate={() => {}} onClose={() => {}} />
+          <Tab
+            label="app.ts"
+            hint="lib"
+            active={false}
+            tabStop={false}
+            onActivate={() => {}}
+            onClose={() => {}}
+          />
+        </TabStrip>,
+      );
+    });
+    const [src, lib] = tabsInStrip();
+    expect(src?.getAttribute("aria-label")).toBe("app.ts · src");
+    expect(lib?.getAttribute("aria-label")).toBe("app.ts · lib");
+    expect(src?.querySelector('[aria-label="Close app.ts · src"]')).not.toBeNull();
+    expect(lib?.querySelector('[aria-label="Actions for app.ts · lib"]')).not.toBeNull();
+    expect(src?.querySelector('[data-slot="tab-label"]')?.textContent).toBe("app.ts");
+    act(() => src?.focus());
+    expect(revealText()).toBe("app.ts · src");
+    act(() => lib?.focus());
+    expect(revealText()).toBe("app.ts · lib");
+  });
+
+  it("reveals an unclipped file location on hover", async () => {
+    act(() =>
+      root?.render(
+        <TabStrip label="Files">
           <Tab label="app.ts" hint="src" active tabStop closable={false} onActivate={() => {}} />
+        </TabStrip>,
+      ),
+    );
+    const [tab] = tabsInStrip();
+    await act(async () => {
+      tab?.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerType: "mouse" }));
+      await new Promise((resolve) => setTimeout(resolve, 550));
+    });
+    expect(revealText()).toBe("app.ts · src");
+  });
+
+  it("keeps the permanent icon-only Board tab named and keyboard reachable", () => {
+    act(() => {
+      root?.render(
+        <TabStrip label="Home tabs">
+          <Tab label="Board" iconOnly active tabStop closable={false} onActivate={() => {}} />
         </TabStrip>,
       );
     });
     const [tab] = tabsInStrip();
-    expect(tab?.getAttribute("aria-label")).toBe("app.ts · src");
-    expect(container?.querySelector('[data-testid="tab-hint"]')?.className).toContain("@min-[");
+    expect(tab?.getAttribute("aria-label")).toBe("Board");
+    expect(tab?.tabIndex).toBe(0);
+    expect(tab?.dataset.iconOnly).toBe("true");
+    expect(tab?.querySelector("span")?.className).toContain("sr-only");
+    expect(tab?.querySelector('[data-slot="tab-close"]')).toBeNull();
   });
 });
 

@@ -1,10 +1,8 @@
 /** Owner/audience marks and one Share confirm, hosted outside ephemeral menus. */
 import * as React from "react";
 import { create } from "zustand";
-import { LockSimpleIcon } from "@phosphor-icons/react/dist/csr/LockSimple";
-import { UsersIcon } from "@phosphor-icons/react/dist/csr/Users";
-import { ShareNetworkIcon } from "@phosphor-icons/react/dist/csr/ShareNetwork";
-import { DotsThreeIcon } from "@phosphor-icons/react/dist/csr/DotsThree";
+import { LockIcon, TeamIcon, ShareIcon, MoreIcon } from "@renderer/components/ui/icon";
+
 import {
   useSessionTeam,
   shareWithWorkspace,
@@ -40,7 +38,7 @@ const useShareRequest = create<{
 export function SessionTeamMark({ sessionId }: { sessionId: string | null }) {
   const team = useSessionTeam(sessionId);
   if (team === null) return null;
-  const Icon = team.private ? LockSimpleIcon : UsersIcon;
+  const Icon = team.private ? LockIcon : TeamIcon;
   return (
     <span className="inline-flex shrink-0 items-center gap-1 text-label text-muted-foreground">
       {!team.canAct && team.ownerName !== "Unknown" ? (
@@ -48,7 +46,7 @@ export function SessionTeamMark({ sessionId }: { sessionId: string | null }) {
           {team.initials}
         </span>
       ) : null}
-      <Icon weight="bold" className="size-3" aria-label={team.visibilityLabel} />
+      <Icon strokeWidth={2.25} className="size-3" aria-label={team.visibilityLabel} />
     </span>
   );
 }
@@ -70,19 +68,19 @@ export function SessionShare({
   const open = () =>
     useShareRequest.setState({ request: { sessionId, projectId, workspaceId: workspace.id } });
   return menu === "context" ? (
-    <ContextMenuItem icon={ShareNetworkIcon} disabled={!writable} onSelect={open}>
+    <ContextMenuItem icon={ShareIcon} disabled={!writable} onSelect={open}>
       Share with workspace…
     </ContextMenuItem>
   ) : (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="ghost" size="icon-xs" aria-label="Session sharing">
-          <DotsThreeIcon />
+          <MoreIcon />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
         <DropdownMenuItem disabled={!writable} onSelect={open}>
-          <ShareNetworkIcon />
+          <ShareIcon />
           Share with workspace…
         </DropdownMenuItem>
       </DropdownMenuContent>

@@ -6,7 +6,7 @@
  * menu — never a new strip of chrome above every file. So the file tab's own
  * menu is where it lives, and it is the same app-wide switch the band flips.
  */
-import { ArrowElbowDownLeftIcon } from "@phosphor-icons/react/dist/csr/ArrowElbowDownLeft";
+import { ReturnIcon } from "@renderer/components/ui/icon";
 
 import { ContextMenuCheckboxItem } from "@renderer/components/ui/context-menu";
 import { useUiStore } from "@renderer/stores/ui";
@@ -16,7 +16,7 @@ export function WordWrapContextMenuItem() {
   const setWordWrap = useUiStore((state) => state.setWordWrap);
   return (
     <ContextMenuCheckboxItem checked={wordWrap} onCheckedChange={setWordWrap}>
-      <ArrowElbowDownLeftIcon aria-hidden />
+      <ReturnIcon aria-hidden />
       Word Wrap
     </ContextMenuCheckboxItem>
   );

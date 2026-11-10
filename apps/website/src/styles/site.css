@@ -938,7 +938,7 @@ main > section,
   width: 100%;
   height: 100%;
   border-radius: 0;
-  object-position: 0% 0%;
+  object-position: var(--still-position);
 }
 
 /* Anchored top-left with a margin, so every app window starts inside its card
@@ -950,7 +950,7 @@ main > section,
   width: calc(100% - clamp(20px, 2.6vw, 40px));
   height: calc(100% - clamp(20px, 2.2vw, 32px));
   border-top-left-radius: 14px;
-  object-fit: cover;
+  object-fit: var(--still-fit, cover);
   object-position: var(--still-position);
 }
 

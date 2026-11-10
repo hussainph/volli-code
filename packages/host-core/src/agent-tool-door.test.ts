@@ -41,6 +41,7 @@ import type {
 import type { SessionStartedNotice } from "@volli/shared";
 
 import { createAgentToolDoor } from "./agent-tool-door";
+import { logContext, withLogContext, type LogContextFields } from "./log/context";
 import { testHostHandlers } from "./testing/host-handlers";
 import type { AdmissionObserver } from "./handlers/handler-map";
 import type { AgentToolDoorOptions, VerbBudgetAsk } from "./agent-tool-door";
@@ -200,6 +201,8 @@ function harness(
     testTicket("project-two", { id: "ticket-two", ticketNumber: 7, title: "Elsewhere" }),
   );
   const startInputs: SessionStartInput[] = [];
+  /** The log context each facade start ran under (VC-1099). */
+  const startContexts: LogContextFields[] = [];
   const kickoffs: { sessionId: string; text: string; commandId: string; messageId: string }[] = [];
   const notices: SessionStartedNotice[] = [];
   const db = ctx.db;
@@ -215,6 +218,7 @@ function harness(
       sessions: {
         start: async (input: SessionStartInput) => {
           startInputs.push(input);
+          startContexts.push(logContext());
           if (overrides.startError !== undefined) throw overrides.startError;
           return {
             sessionId: STARTED_SESSION,
@@ -268,7 +272,7 @@ function harness(
     );
   // `door` is returned raw as well: the supervision suite drives this harness
   // as its no-runtime case, where the verb under test is not `session.start`.
-  return { call, door, startInputs, kickoffs, notices };
+  return { call, door, startInputs, startContexts, kickoffs, notices };
 }
 
 // Verb parity at the map (VC-923): every tool verb a bundle can hold reaches
@@ -325,6 +329,32 @@ describe("every tool verb is a projection of the host's map", () => {
 });
 
 describe("session_start through the Agent Tool Surface", () => {
+  it("runs as its own operation inside the calling turn's trace (VC-1099)", async () => {
+    const h = harness();
+    const turnTrace = "4bf92f3577b34da6a3ce929d0e0e4736";
+
+    // The turn a watch notice opened runs under the door that delivered it.
+    await withLogContext(
+      {
+        traceId: turnTrace,
+        spanId: "00f067aa0ba902b7",
+        door: "agent-socket",
+        operation: "session.done",
+      },
+      () => h.call({ ticket: "VC-1" }),
+    );
+
+    expect(h.startContexts).toHaveLength(1);
+    const [context] = h.startContexts;
+    expect(context).toMatchObject({
+      traceId: turnTrace,
+      door: "agent-tool",
+      operation: "session.start",
+    });
+    expect(context!["spanId"]).toMatch(/^[0-9a-f]{16}$/);
+    expect(context!["spanId"]).not.toBe("00f067aa0ba902b7");
+  });
+
   it("refuses in words on a launch with no Session runtime, and releases a Ticket caller's claim", async () => {
     const released: unknown[] = [];
     const h = harness({

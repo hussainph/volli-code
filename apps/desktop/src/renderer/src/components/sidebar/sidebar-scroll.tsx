@@ -1,3 +1,4 @@
+import { scrollEdgeMask } from "@renderer/components/ui/scroll-edge-mask";
 /**
  * The sidebar's scrollport, with its scrollbar taken out of the layout.
  *
@@ -69,8 +70,6 @@ const THUMB_MIN_HEIGHT = 20;
 const THUMB_CHANNEL = 8;
 /** How long the thumb stays up after the last scroll event. */
 const FADE_MS = 700;
-/** How far a row dissolves where it passes under the nav above or the footer below. */
-const EDGE_FADE = 12;
 
 /** Where the thumb sits, in the scrollport's own pixels. */
 interface ThumbGeometry {
@@ -82,22 +81,6 @@ interface ThumbGeometry {
 interface ScrollEdges {
   atTop: boolean;
   atBottom: boolean;
-}
-
-/**
- * The scrollport clips, and a clip is a straight cut: a row sliding past the nav
- * lost its top half to a hard horizontal line, mid-glyph, with nothing to say it
- * was scrolling rather than broken.
- *
- * Only the cut ends fade. Softening an edge the list is already flush against
- * would dim the first row for no reason — the fade means "this continues", so an
- * edge where nothing continues must not have one.
- */
-function edgeMask({ atTop, atBottom }: ScrollEdges): string | undefined {
-  if (atTop && atBottom) return undefined;
-  const head = atTop ? "#000 0" : `transparent 0, #000 ${EDGE_FADE}px`;
-  const tail = atBottom ? "#000 100%" : `#000 calc(100% - ${EDGE_FADE}px), transparent 100%`;
-  return `linear-gradient(to bottom, ${head}, ${tail})`;
 }
 
 /** The proportional thumb, floored so a very long list still leaves something to grab. */
@@ -331,7 +314,7 @@ export function SidebarScrollArea({
       <SidebarContent
         ref={scrollRef}
         onScroll={handleScroll}
-        style={{ maskImage: edgeMask(edges) }}
+        style={{ maskImage: scrollEdgeMask(edges) }}
         className={cn("overflow-x-hidden [&::-webkit-scrollbar]:hidden", className)}
       >
         {children}
@@ -354,7 +337,7 @@ export function SidebarScrollArea({
           className={cn(
             // z-10 clears the rows, and that is all a z-index can do here — the
             // grip is out of reach at any value (see the note at the top).
-            "absolute z-10 cursor-default rounded-full bg-border-strong transition-opacity duration-200 ease-out motion-reduce:transition-none",
+            "absolute z-10 cursor-default rounded-full bg-border-strong transition-opacity duration-(--duration-sheet) ease-out motion-reduce:transition-none",
             // Pointer-events rides with the opacity, never apart from it.
             scrolling || dragging
               ? "opacity-100"

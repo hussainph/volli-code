@@ -1,3 +1,4 @@
+import { GLASS_MOTION } from "@renderer/lib/glass-motion";
 /**
  * The generic interaction card, above the composer.
  *
@@ -60,21 +61,23 @@
 import * as React from "react";
 import {
   ArrowRightIcon,
-  CaretDownIcon,
-  CaretLeftIcon,
+  ChevronDownIcon,
+  ChevronLeftIcon,
   CheckIcon,
-  CaretRightIcon,
-  CaretUpIcon,
-  HandPalmIcon,
+  ChevronRightIcon,
+  ChevronUpIcon,
+  HandIcon,
   WarningIcon,
-  XCircleIcon,
-} from "@phosphor-icons/react";
+  ErrorIcon,
+} from "@renderer/components/ui/icon";
+
 import {
   type RendererSessionInteraction,
   type SessionInteractionOption,
   type SessionInteractionResolution,
 } from "@volli/shared";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { AnimatePresence, motion } from "motion/react";
+import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 
 import {
   askFieldOpen,
@@ -113,7 +116,10 @@ import {
   type InteractionSubmission,
 } from "@volli/session-presentation";
 import { Button } from "@renderer/components/ui/button";
+import { ListRow } from "@renderer/components/ui/list-row";
 import { Textarea } from "@renderer/components/ui/textarea";
+import { TooltipProvider } from "@renderer/components/ui/tooltip";
+import { ValueReveal } from "@renderer/components/ui/value-reveal";
 import { cn } from "@renderer/lib/utils";
 
 /* ------------------------------------------------------------------- card */
@@ -138,13 +144,9 @@ const FIELD_LABEL: Record<InteractionFieldRole, string> = {
 };
 
 /**
- * One answer row, on either card.
- *
- * Shared as a string rather than as a component, because the two rows are not
- * the same element and must not be: a question's row is a button this card
- * drives itself, a verdict's is a label over a native input whose group
- * semantics the browser owns. They share a target and rhythm; the questionnaire
- * adds full-width frames without changing the permission rows.
+ * One verdict row: a label over a native input whose group semantics the
+ * browser owns. A question's rows are not this string — they are the shared
+ * `ListRow` (see {@link QuestionStep}), a target the card drives itself.
  */
 const OPTION_ROW =
   "group flex min-w-0 cursor-default items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors outline-none";
@@ -198,11 +200,11 @@ function AnswerArrow({ focus }: { focus: string }) {
     <span
       aria-hidden
       className={cn(
-        "ml-auto flex size-5 shrink-0 items-center justify-center rounded-full bg-foreground text-background opacity-0 transition-opacity duration-150 group-hover:opacity-100 motion-reduce:transition-none",
+        "ml-auto flex size-5 shrink-0 items-center justify-center rounded-full bg-foreground text-background opacity-0 transition-opacity duration-(--duration-menu-in) group-hover:opacity-100 motion-reduce:transition-none",
         focus,
       )}
     >
-      <ArrowRightIcon className="size-3" weight="bold" />
+      <ArrowRightIcon className="size-3" strokeWidth={2.25} />
     </span>
   );
 }
@@ -380,7 +382,6 @@ function DecisionCard({
   );
   const [step, setStep] = React.useState(0);
   const { failed, send, commit } = useDelivery(interaction.id, onResolve);
-  const reducedMotion = useReducedMotion() ?? false;
   const questions = interactionQuestions(interaction);
   const carousel = interactionCarousel(interaction, draft, step);
   // Through the same latch the verdict takes, so a withdrawal and a decision
@@ -418,10 +419,9 @@ function DecisionCard({
       )}
     >
       <div className="flex items-start gap-2 px-4 pt-4">
-        {/* The card's palm and the footer's Warning are the
-            only filled glyphs the chat surface has left: an interaction is the
-            exception in a transcript that is otherwise outline throughout. */}
-        <HandPalmIcon aria-hidden className="mt-1 size-4 shrink-0 text-primary" weight="fill" />
+        {/* Accent ink marks the interaction among ordinary transcript rows;
+            the palm keeps the same outline family. */}
+        <HandIcon aria-hidden className="mt-1 size-4 shrink-0 text-primary" />
         <div className="min-w-0 flex-1">
           {/* The ask, at the size the ask-user card asks at. What is being
               authorized leads the card in both places — the two are one family
@@ -447,9 +447,7 @@ function DecisionCard({
         ) : null}
       </div>
 
-      {/* The same cross-fade the ask-user card steps with. A permission that
-          asked one thing never sees it; one that asked several is walked
-          through the same way, by the carousel it already had. */}
+      {/* Page navigation is immediate, including the keyboard carousel. */}
       <div className="px-4 pt-2">
         <AnimatePresence initial={false} mode="popLayout">
           {asked ? (
@@ -458,7 +456,7 @@ function DecisionCard({
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              transition={{ duration: reducedMotion ? 0.1 : 0.18, ease: [0.32, 0.72, 0, 1] }}
+              transition={{ duration: 0 }}
             >
               <InteractionQuestionFields
                 interaction={interaction}
@@ -513,7 +511,7 @@ function DecisionCard({
             disabled={resolving}
             onClick={withdraw}
           >
-            <XCircleIcon className="size-3.5" />
+            <ErrorIcon className="size-3.5" />
             {withdrawLabel(interaction)}
           </Button>
         ) : null}
@@ -524,7 +522,7 @@ function DecisionCard({
             nothing else on screen that would. */}
         {failed ? (
           <span role="alert" className="flex min-w-0 items-center gap-1 text-ui text-destructive">
-            <WarningIcon aria-hidden className="size-3.5 shrink-0" weight="fill" />
+            <WarningIcon aria-hidden className="size-3.5 shrink-0" />
             <span className="min-w-0 truncate">Not delivered</span>
           </span>
         ) : null}
@@ -641,7 +639,6 @@ function QuestionCard({
   const [collapsed, setCollapsed] = React.useState(false);
   const stageId = React.useId();
   const { failed, sent, commit, send } = useDelivery(interaction.id, onResolve);
-  const reducedMotion = useReducedMotion() ?? false;
   const stageRef = React.useRef<HTMLDivElement>(null);
   // Set by the reader's own navigation, so an arriving step takes focus and a
   // mounting card never does.
@@ -762,11 +759,9 @@ function QuestionCard({
     setBlocked(null);
   };
 
-  const transition = {
-    duration: reducedMotion ? 0.12 : 0.22,
-    ease: [0.32, 0.72, 0, 1] as const,
-  } as const;
-  const offset = reducedMotion ? 0 : 10;
+  // Question navigation and minimisation are immediate, including keyboard use.
+  const transition = { duration: 0 } as const;
+  const offset = 0;
 
   // The card, once it has done something. It keeps the shell and the question's
   // own sentence and drops every control, because there is nothing left to
@@ -809,19 +804,7 @@ function QuestionCard({
       )}
     >
       {step ? (
-        // `layout` on the frame and `popLayout` inside it: the leaving step is
-        // taken out of flow the moment it starts, so the arriving one alone sets
-        // the height and the frame tweens to it instead of the card jumping a
-        // question's worth of rows.
-        //
-        // Minimising is that same swap at the card's own scale — the strip is
-        // simply what arrives — so it needs no second frame, no height to
-        // measure and no motion contract of its own. It is also the one place
-        // that frame earns its keep twice over: the height it tweens here is
-        // the transcript's clearance (`--composer-height`), so the feed the
-        // reader minimised the card to read opens at the speed the card closes
-        // rather than appearing under a jump cut.
-        <motion.div ref={stageRef} id={stageId} layout={!reducedMotion} transition={transition}>
+        <motion.div ref={stageRef} id={stageId}>
           <AnimatePresence initial={false} mode="popLayout">
             {collapsed ? (
               // No `translateX`: the horizontal slide is what a walk between two
@@ -904,7 +887,7 @@ function QuestionCard({
             aria-label={collapsed ? "Expand question" : "Minimize question"}
             onClick={() => setCollapsed((standing) => !standing)}
           >
-            {collapsed ? <CaretUpIcon /> : <CaretDownIcon />}
+            {collapsed ? <ChevronUpIcon /> : <ChevronDownIcon />}
           </Button>
         ) : null}
         {/* One notice slot, left-aligned, for the two things that stop a press
@@ -916,7 +899,7 @@ function QuestionCard({
             rejected silently to anyone not looking at the footer. */}
         {failed || blocked ? (
           <span role="alert" className="flex min-w-0 items-center gap-1 text-ui text-destructive">
-            <WarningIcon aria-hidden className="size-3.5 shrink-0" weight="fill" />
+            <WarningIcon aria-hidden className="size-3.5 shrink-0" />
             <span className="min-w-0 truncate">{failed ? "Not delivered" : blocked}</span>
           </span>
         ) : null}
@@ -1003,19 +986,22 @@ export function QuestionSentReceipt({
       {/* The same rung the open card's ask stood at, so a question that has been
           answered reads as the same card saying one more thing rather than as a
           new surface arriving. Truncated: the ask has been dealt with, and the
-          sentence that matters now is the one under it. */}
-      <p className="min-w-0 truncate text-sm font-medium text-foreground" title={heading}>
-        {heading}
-      </p>
+          sentence that matters now is the one under it — the whole of it one
+          hover or one focus away. */}
+      <QuestionHeadingReveal heading={heading} />
       <p role="status" className="flex min-w-0 items-start gap-1 text-ui text-muted-foreground">
         {/* Answered is the only one of the three that got what it asked for, and
             ink is what says so — the same accent the card's palm wears while it
             is asking. Declining and stopping the turn are ordinary outcomes,
             not failures, so neither one is destructive. */}
         {receipt.kind === "answered" ? (
-          <CheckIcon aria-hidden className="mt-0.5 size-3.5 shrink-0 text-primary" weight="bold" />
+          <CheckIcon
+            aria-hidden
+            className="mt-0.5 size-3.5 shrink-0 text-primary"
+            strokeWidth={2.25}
+          />
         ) : (
-          <XCircleIcon aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+          <ErrorIcon aria-hidden className="mt-0.5 size-3.5 shrink-0" />
         )}
         <span className="min-w-0 break-words">{receipt.line}</span>
       </p>
@@ -1040,9 +1026,9 @@ export function QuestionSentReceipt({
  * The heading truncates rather than wrapping because a predictable, one-line
  * floor is the whole of what was asked for: a reader who minimised a three-line
  * question to see the turn above it did not ask for a three-line strip. The
- * full sentence stays one hover away, and one press.
+ * full sentence stays one hover or one focus away, and one press.
  *
- * Nothing here is a control. The draft, the step, the notice and every act in
+ * Nothing here answers. The draft, the step, the notice and every act in
  * the footer survive untouched — minimising is the card taking up less room,
  * never the question becoming less answerable. Expand it to edit the answer;
  * the composer below remains a separate message field.
@@ -1053,12 +1039,7 @@ function MinimizedQuestion({ step }: { step: InteractionStep }) {
       {/* The same rung the open card's ask stands at, so expanding and
           minimising read as one sentence changing length rather than two
           different things being said. */}
-      <p
-        className="min-w-0 flex-1 truncate text-sm font-medium text-foreground"
-        title={step.heading}
-      >
-        {step.heading}
-      </p>
+      <QuestionHeadingReveal heading={step.heading} className="flex-1" />
       {/* Where the walk is, in the counter's own type — a card put away mid-walk
           must not lose the one number that says how much is left. */}
       {step.count > 1 ? (
@@ -1067,6 +1048,33 @@ function MinimizedQuestion({ step }: { step: InteractionStep }) {
         </span>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * A question's sentence held to one line, and the shared reveal that gives the
+ * whole of it back to a pointer and a keyboard alike — a native `title` reached
+ * neither the keyboard nor a reader who did not know to hover.
+ *
+ * Its own tooltip provider, because the card mounts in places (a transcript
+ * row, the composer's foot) that do not promise one.
+ */
+function QuestionHeadingReveal({ heading, className }: { heading: string; className?: string }) {
+  return (
+    <TooltipProvider>
+      <ValueReveal
+        term="Question"
+        full={heading}
+        reveal={heading}
+        side="top"
+        className={cn(
+          "block min-w-0 truncate rounded-sm text-left text-sm font-medium text-foreground",
+          className,
+        )}
+      >
+        {heading}
+      </ValueReveal>
+    </TooltipProvider>
   );
 }
 
@@ -1100,7 +1108,7 @@ function QuestionStep({
   const { prompt } = step.question;
   const headingId = React.useId();
   const fieldRef = React.useRef<HTMLTextAreaElement>(null);
-  const rows = React.useRef<(HTMLButtonElement | null)[]>([]);
+  const rows = React.useRef<(HTMLElement | null)[]>([]);
   // Words that only a following message can carry contradict every option on
   // the card — not only the ones beside them — because the refusal they send is
   // one empty resolution for the whole request. Dimming says so, instead of
@@ -1163,10 +1171,12 @@ function QuestionStep({
       ) : null}
 
       {alone ? null : (
+        // Bled into the card's inset so the rows' words start on the question's
+        // own left edge, the way the verdict card's marks do.
         <div
           role={prompt.multiple ? "group" : "radiogroup"}
           aria-labelledby={headingId}
-          className="mt-4 flex flex-col gap-2"
+          className="-mx-2 mt-2 flex flex-col"
           onKeyDown={(event) => {
             if (event.nativeEvent.isComposing) return;
             const forward = event.key === "ArrowDown" || event.key === "ArrowRight";
@@ -1204,44 +1214,58 @@ function QuestionStep({
           {prompt.options.map((option, position) => {
             const checked = chosen.includes(option.id);
             return (
-              <button
+              // The shared row, carrying the group's own semantics on its
+              // target: a radio or a checkbox, roving where it is a radio.
+              //
+              // Superseded rows take the row's inert branch rather than a
+              // disabled button: words that refuse the whole request have
+              // already made every option moot, and a row nothing happens to
+              // must not hover as if something would.
+              <ListRow
                 key={option.id}
-                ref={(node) => {
+                ref={(node: HTMLElement | null) => {
                   rows.current[position] = node;
                 }}
-                type="button"
                 role={prompt.multiple ? "checkbox" : "radio"}
                 aria-checked={checked}
-                tabIndex={prompt.multiple || position === tabbable ? 0 : -1}
+                aria-disabled={superseded || undefined}
+                tabIndex={
+                  superseded ? undefined : prompt.multiple || position === tabbable ? 0 : -1
+                }
                 data-step-entry={position === 0 ? prompt.id : undefined}
-                disabled={superseded}
-                onClick={() => onChoose(option)}
-                className={cn(
-                  OPTION_ROW,
-                  "w-full items-start rounded-xl border border-input bg-input/20 px-4 hover:bg-input/40 focus-visible:ring-1 focus-visible:ring-ring",
-                  checked && "border-primary/40 bg-primary/10",
-                  superseded && "cursor-default opacity-50",
-                )}
-              >
-                <span className="flex min-w-0 flex-1 flex-col gap-1">
+                onActivate={superseded ? null : () => onChoose(option)}
+                selected={checked}
+                // The one-line density whatever the content: these rows wrap,
+                // so their height is their words', and `two-line`'s fixed 52px
+                // floor would centre a short option away from its numeral.
+                density="row"
+                className={cn("select-none", superseded && "opacity-50")}
+                // Nodes, not strings: a row's own strings truncate, and an
+                // option is the answer being given — it wraps, whole.
+                primary={
                   <span className="min-w-0 break-words text-ui font-medium text-foreground">
                     {option.label}
                   </span>
-                  {option.description ? (
-                    <span className="min-w-0 break-words text-ui text-muted-foreground">
+                }
+                secondary={
+                  option.description ? (
+                    <span className="block min-w-0 break-words text-ui text-muted-foreground">
                       {option.description}
                     </span>
-                  ) : null}
-                </span>
-                <OptionChip position={position + 1} checked={checked} outlined={prompt.multiple} />
-                {/* No arrow on a question's rows any more, and its absence is
-                    the point. The glyph means "this press is the act", which
-                    was true while a single choice sent on the click and became
-                    a lie the moment choosing stopped sending (VC-289). What
-                    sends is the named control in the footer; a row that offered
-                    the same promise would be inviting the reader to answer with
-                    the gesture that no longer does. */}
-              </button>
+                  ) : undefined
+                }
+                // Top-aligned, so a wrapped option keeps its numeral on its
+                // first line. No arrow on a question's rows: choosing selects,
+                // and the named control in the footer is what sends (VC-289).
+                trailing={
+                  <OptionChip
+                    position={position + 1}
+                    checked={checked}
+                    outlined={prompt.multiple}
+                    className="self-start"
+                  />
+                }
+              />
             );
           })}
         </div>
@@ -1258,7 +1282,9 @@ function QuestionStep({
             // itself is the name — there is nothing else the box could be.
             aria-label={alone ? undefined : "Another answer"}
             aria-labelledby={alone ? headingId : undefined}
-            placeholder="Type another answer…"
+            // Alone, the box is the whole answer and names nothing it is an
+            // alternative to.
+            placeholder={alone ? FIELD_PLACEHOLDER.answer : "Type another answer…"}
             onChange={(event) => onWrite(event.currentTarget.value)}
             onKeyDown={(event) => {
               if (event.nativeEvent.isComposing) return;
@@ -1276,10 +1302,9 @@ function QuestionStep({
               event.preventDefault();
               onAdvance();
             }}
-            className={cn(
-              "min-h-9 w-full resize-none rounded-xl border-input bg-input/20 px-4 text-ui shadow-none md:text-ui dark:bg-input/20",
-              wordsDropped && "opacity-50",
-            )}
+            // The field owns its corners, floor and material; this only says
+            // it does not resize by hand and that its words are being dropped.
+            className={cn("resize-none", wordsDropped && "opacity-50")}
           />
         </div>
       ) : null}
@@ -1313,7 +1338,7 @@ function OptionChip({
       className={cn(
         OPTION_MARK,
         outlined && !checked && "border border-muted-foreground/30",
-        checked ? "bg-primary font-medium text-primary-foreground" : "text-muted-foreground",
+        checked ? "bg-(--accent-selected) font-medium text-primary-text" : "text-muted-foreground",
         className,
       )}
     >
@@ -1371,8 +1396,8 @@ export function ComposerInteractionStack({
   const originRef = React.useRef<HTMLDivElement>(null);
   const restoreComposerFocus = React.useRef(false);
   const transition = {
-    duration: reducedMotion ? 0.125 : 0.25,
-    ease: [0.32, 0.72, 0, 1] as const,
+    duration: reducedMotion ? 0 : GLASS_MOTION.menuInSeconds,
+    ease: GLASS_MOTION.easeOut,
   };
   const hidden = {
     opacity: 0,
@@ -1413,7 +1438,7 @@ export function ComposerInteractionStack({
             data-slot="composer-interaction-drawer"
             initial={hidden}
             animate={{ opacity: 1, transform: "translateY(0)" }}
-            exit={hidden}
+            exit={{ ...hidden, transition: { ...transition, duration: reducedMotion ? 0 : 0.11 } }}
             transition={transition}
           >
             <InteractionCard
@@ -1502,8 +1527,8 @@ function InteractionQuestionFields({
               key={option.id}
               className={cn(
                 OPTION_ROW,
-                "hover:bg-muted/30 has-[:focus-visible]:bg-muted/30 has-[:focus-visible]:ring-1 has-[:focus-visible]:ring-ring",
-                checked && "bg-muted/70",
+                "hover:bg-(--accent-tint) has-[:focus-visible]:bg-(--accent-tint) has-[:focus-visible]:ring-1 has-[:focus-visible]:ring-ring",
+                checked && "bg-(--accent-selected)",
                 superseded && "cursor-default opacity-50",
               )}
             >
@@ -1532,14 +1557,14 @@ function InteractionQuestionFields({
                 className={cn(
                   OPTION_MARK,
                   checked
-                    ? "bg-primary text-primary-foreground"
+                    ? "bg-(--accent-selected) text-primary-text"
                     : "border border-muted-foreground/30",
                   // The same 70% the native input wore, on the mark that
                   // replaced it: ink, and only ink.
                   polarity === "standing" && "opacity-70",
                 )}
               >
-                {checked ? <CheckIcon className="size-3" weight="bold" /> : null}
+                {checked ? <CheckIcon className="size-3" strokeWidth={2.25} /> : null}
               </span>
               <span
                 className={cn(
@@ -1643,7 +1668,7 @@ function InteractionSteps({
         disabled={disabled || !carousel.hasPrevious}
         onClick={() => onStep(carousel.index - 1)}
       >
-        <CaretLeftIcon className="size-3" />
+        <ChevronLeftIcon className="size-3" />
       </Button>
       <span
         className={cn(
@@ -1661,7 +1686,7 @@ function InteractionSteps({
         disabled={disabled || !carousel.hasNext}
         onClick={() => onStep(carousel.index + 1)}
       >
-        <CaretRightIcon className="size-3" />
+        <ChevronRightIcon className="size-3" />
       </Button>
     </div>
   );
@@ -1688,7 +1713,7 @@ export function InteractionReceiptLine({
       {/* Outline: the card that asked wore the filled palm, and this is the
           line it leaves behind once the decision is made. Ink still separates
           the two verdicts; weight is not asked to say it a second time. */}
-      <HandPalmIcon
+      <HandIcon
         aria-hidden
         className={cn(
           "size-3.5 shrink-0",

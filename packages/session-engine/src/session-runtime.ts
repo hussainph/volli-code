@@ -246,6 +246,39 @@ export interface SessionRuntimePorts {
    * costs the report and nothing else. Absent reports nothing.
    */
   onAttachTiming?: (report: AttachTimingReport) => void;
+  /**
+   * Why an attach failed, for the host's log (VC-1099). Called once per
+   * failed attach, synchronously, on the attach's own call chain and just
+   * before its `attachment.failed` is committed, so the host can file the
+   * cause with that fact's log line. The durable fact keeps its shape: this
+   * is diagnosis, never history. A sink that throws costs the diagnosis and
+   * nothing else.
+   */
+  onAttachFailure?: (cause: SessionAttachFailureCause) => void;
+}
+
+/**
+ * Which part of an attach failed, how long it had run, and what was thrown
+ * (VC-1099). Identifiers, codes, a class name and durations only: never an
+ * error message, which may quote a path or a provider's answer.
+ */
+export interface SessionAttachFailureCause {
+  sessionId: string;
+  commandId: string;
+  /** The id the `attachment.failed` fact carries. */
+  attachmentId: string;
+  /** `workspace-preparation`: the worktree. `executor-attach`: the runtime binding itself. */
+  phase: "workspace-preparation" | "executor-attach";
+  /** The failure code the durable fact and the rejected receipt carry. */
+  code: string;
+  /** The thrown value's class (`NativeAttachmentError`, `TypeError`, …), or its type when not an Error. */
+  errorName: string;
+  /** Whether the phase outlasted a bound, rather than failing on its own. */
+  timedOut: boolean;
+  /** How long the failing phase had run. */
+  phaseMs: number;
+  /** How long the whole attach had run, preparation included. */
+  elapsedMs: number;
 }
 
 export type SessionClientCommand =
@@ -411,14 +444,7 @@ function isQueueAttach(request: { commandId: string }): boolean {
   return isQueueCommand(request.commandId);
 }
 
-interface FailAttachInput {
-  /**
-   * The Session was stopped while this attach was starting (VC-1072). The
-   * attach is recorded as failed, so the start is no longer pending, but no
-   * Attention is raised: a person chose this, and the durable stop already
-   * says so.
-   */
-  cancelled?: true;
+type FailAttachInput = {
   request: AttachCommandRequest;
   submitted: SubmitSessionCommandResult;
   adapter: NativeHarnessAdapter;
@@ -443,7 +469,22 @@ interface FailAttachInput {
    * what does a person see when the attach fails this way?
    */
   attentionKind: AttachFailureAttentionKind;
-}
+} &
+  /** A person's cancelled start is not an operational failure (VC-1072). */
+  (
+    | { cancelled: true; cause?: never }
+    | {
+        cancelled?: never;
+        /** What the host's log is told about this failure (VC-1099). */
+        cause: {
+          phase: SessionAttachFailureCause["phase"];
+          error: unknown;
+          timedOut: boolean;
+          attachStartedAt: number;
+          phaseStartedAt: number;
+        };
+      }
+  );
 type ResolveInteractionCommandRequest = ExistingSessionCommandRequest & {
   command: Extract<SessionClientCommand, { kind: "interaction.resolve" }>;
 };
@@ -1982,6 +2023,8 @@ class DefaultSessionRuntime implements SessionRuntime {
     const stopped = queueAttach
       ? undefined
       : this.#registerDirectStart(request.sessionId, timing.done);
+    const attachStartedAt = this.ports.clock.now();
+
     let site: SessionLocation;
     try {
       const preparing = this.ports.locations.prepare(projection.session);
@@ -2008,6 +2051,13 @@ class DefaultSessionRuntime implements SessionRuntime {
         location,
         code: "location_unavailable",
         detail: errorMessage(error),
+        cause: {
+          phase: "workspace-preparation",
+          error,
+          timedOut: isAttachWaitTimeout(error) || error instanceof PreparationCeilingError,
+          attachStartedAt,
+          phaseStartedAt: attachStartedAt,
+        },
         // Where a Session runs is part of how it is configured, and a worktree
         // that cannot be prepared is that configuration failing — the same
         // Attention an unavailable pinned model raises, and cleared by the same
@@ -2047,6 +2097,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     };
     const { translator, sink } = this.#pipeline(adapter, spec, location.venue);
     let handle: BindingHandle;
+    const executorStartedAt = this.ports.clock.now();
     try {
       const attaching = adapter.attach({ ...spec, markStage: clock.mark }, sink);
       const abandon = () => {
@@ -2090,6 +2141,13 @@ class DefaultSessionRuntime implements SessionRuntime {
         code: nativeFailure?.code ?? "attach_failed",
         detail: errorMessage(error),
         attachmentId,
+        cause: {
+          phase: "executor-attach",
+          error,
+          timedOut: isAttachWaitTimeout(error),
+          attachStartedAt,
+          phaseStartedAt: executorStartedAt,
+        },
         // An adapter that threw without naming a kind still failed to bind, and
         // nothing but a fresh attach can disprove it. `adapter_unrecoverable`
         // is what that is, and reading it as "no Attention" was how a broken
@@ -2293,6 +2351,7 @@ class DefaultSessionRuntime implements SessionRuntime {
 
   async #failAttach(input: FailAttachInput): Promise<SessionRuntimeCommandResult> {
     const attachmentId = input.attachmentId ?? this.#id("attachment");
+    this.#reportAttachFailure(input, attachmentId);
     const failed = await this.ports.engine.observe({
       id: this.#id("event"),
       sessionId: input.request.sessionId,
@@ -2445,6 +2504,29 @@ class DefaultSessionRuntime implements SessionRuntime {
     });
   }
 
+  /** Tells the host's log why an attach failed (VC-1099); never fails the attach. */
+  #reportAttachFailure(input: FailAttachInput, attachmentId: string): void {
+    const report = this.ports.onAttachFailure;
+    if (report === undefined || input.cancelled === true) return;
+    try {
+      const now = this.ports.clock.now();
+      const { error } = input.cause;
+      report({
+        sessionId: input.request.sessionId,
+        commandId: input.request.commandId,
+        attachmentId,
+        phase: input.cause.phase,
+        code: input.code,
+        errorName: error instanceof Error ? error.name : typeof error,
+        timedOut: input.cause.timedOut,
+        phaseMs: Math.max(0, now - input.cause.phaseStartedAt),
+        elapsedMs: Math.max(0, now - input.cause.attachStartedAt),
+      });
+    } catch {
+      // A lost diagnosis, never a lost failure record.
+    }
+  }
+
   /**
    * A first attach's workspace preparation, under its own ceiling rather than
    * the admission bound. The ceiling rejects with a plain error, which the
@@ -2459,7 +2541,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     const ms = this.ports.firstAttachPreparationTimeoutMs ?? FIRST_ATTACH_PREPARATION_TIMEOUT_MS;
     return withCeiling(preparing, {
       ms,
-      timeout: () => new Error(`Workspace preparation did not finish within ${ms / 1000} s.`),
+      timeout: () => new PreparationCeilingError(ms),
       signal: stopped,
     });
   }
@@ -5049,6 +5131,13 @@ const FIRST_ATTACH_PREPARATION_TIMEOUT_MS = 10 * 60_000;
  * preparation is a different wait and keeps its own ten minutes (VC-799).
  */
 const DIRECT_ATTACH_TIMEOUT_MS = 3 * 60_000;
+/** A first attach's workspace preparation outlasting its ceiling; the message is unchanged. */
+class PreparationCeilingError extends Error {
+  constructor(ceilingMs: number) {
+    super(`Workspace preparation did not finish within ${ceilingMs / 1000} s.`);
+    this.name = "PreparationCeilingError";
+  }
+}
 
 export function createSessionRuntime(ports: SessionRuntimePorts): HostedSessionRuntime {
   return new DefaultSessionRuntime(ports);

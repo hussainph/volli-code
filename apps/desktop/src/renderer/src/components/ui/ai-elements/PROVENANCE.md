@@ -152,7 +152,7 @@ Recorded because Apache-2.0 §4(b) requires the copies to say they changed, and
 a bare "modified" tells a reader nothing.
 
 - **Import paths and icons.** `@repo/shadcn-ui/*` → `@renderer/*`, and
-  `lucide-react` → `@phosphor-icons/react` (`fbd3b1ee` retired lucide entirely).
+  `lucide-react` → the shared semantic icon seam (`ui/icon.tsx`); its UI symbols use the MIT Hugeicons free Stroke Rounded set.
 - **The unused half was deleted** (`a7a79cdb`, 874 lines across the directory).
   `prompt-input.tsx` lost `PromptInputProvider` and its controller hooks,
   `PromptInputAttachment`/`PromptInputAttachments`, the add-attachments and
@@ -166,6 +166,9 @@ a bare "modified" tells a reader nothing.
 - **`conversation.tsx` does not animate scroll.** Both `StickToBottom` props are
   `instant` rather than upstream's smooth default, on measured evidence; the
   file's own comment carries the reasoning.
+- **`ConversationEmptyState` carries no copy.** Its default title, description
+  and icon slots were removed; the caller draws the empty state inside the
+  shell.
 
 ## License
 

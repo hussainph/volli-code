@@ -241,11 +241,11 @@ describe("the footer at the acceptance widths", () => {
       expect(actions?.className).toContain("flex-wrap");
       expect(actions?.className).not.toContain("shrink-0");
 
-      // And the break stays BETWEEN controls: `ui/button.tsx`'s global
-      // `whitespace-nowrap` keeps the answer controls from hyphenating, and
-      // this footer's fix was deliberately local so that rule could stand.
+      // The shared action lets long labels grow rather than clipping them.
+      // Footer and cluster wrapping still keep every control reachable.
       for (const button of buttons) {
-        expect(button.className).toContain("whitespace-nowrap");
+        expect(button.className).toContain("whitespace-normal");
+        expect(button.className).toContain("max-w-full");
       }
     });
   }

@@ -34,7 +34,7 @@ import type {
   Project,
   PromptResource,
   SessionActivityState,
-  SessionProjection,
+  SessionListingProjection,
   SessionRecord,
   SessionRole,
   SessionEnvRepair,
@@ -418,7 +418,7 @@ export interface AgentVerbContext {
    * verb whose table entry did not opt out — that policy is gone; laziness now
    * makes the opt-out automatic for any verb that never calls this.
    */
-  loadProjections(): Promise<readonly SessionProjection[]>;
+  loadProjections(): Promise<readonly SessionListingProjection[]>;
   /**
    * The terminal half of {@link loadProjections}'s answer: the verbs that need
    * a PTY have nothing a structured-only Session can answer, and dropping it

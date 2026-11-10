@@ -33,7 +33,7 @@ export function useTicketDialogs(): TicketDialogRequests {
 
 /**
  * How long a closed dialog stays mounted before it is dropped: the exit
- * animation `AlertDialogContent` runs (`duration-200` there). An upper bound,
+ * animation `AlertDialogContent` runs (`duration-(--duration-sheet)` there). An upper bound,
  * not a sync — nothing is visible past it, so ending early is free and ending
  * late only delays an unmount by a frame.
  */
@@ -138,7 +138,7 @@ function TicketDialogs({
           cancel();
         }}
         title="Archive ticket?"
-        confirmLabel="Archive Anyway"
+        confirmLabel="Archive anyway"
         verb="Archiving"
       />
       {removeWorktree === null ? null : (

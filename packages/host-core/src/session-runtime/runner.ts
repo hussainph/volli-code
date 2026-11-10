@@ -16,7 +16,8 @@
  * The one fork is the product store: where projects, the board and Session
  * history live: frozen local SQLite, or the owner's cloud store over the runner ledger.
  */
-import type { CodeModeSandboxAssets } from "@volli/agent-runtime";
+import { join } from "node:path";
+import { createSourceIconFetch, type CodeModeSandboxAssets } from "@volli/agent-runtime";
 import type { HostedSessionRuntime } from "@volli/session-engine";
 import {
   DEFAULT_CODE_MODE_POLICY,
@@ -43,6 +44,9 @@ import { BackgroundShellHost, type BackgroundShellHostPorts } from "../shell/bac
 import type { BrowserPictureStore } from "../browser/picture-store";
 import type { HostHandlerMap } from "../handlers/handler-map";
 import { createHostHandlers, type HostHandlerOptions } from "../handlers/host-handlers";
+import { SourceIconCache } from "../source-icons/cache";
+import { SourceIconRefiner } from "../source-icons/refiner";
+import { SourceIconDisk } from "../source-icons/storage";
 import { createAttachmentIdentities } from "./attachment-identity";
 import { createRuntimeAssembly, type RuntimeAssemblyOptions } from "./assembly";
 import {
@@ -90,6 +94,7 @@ type RunnerHandlerServices =
   | "db"
   | "dataDir"
   | "pictures"
+  | "sourceIcons"
   | "runtime"
   | "sessions"
   | "submitSessionMessage"
@@ -140,6 +145,15 @@ export interface RunnerCompositionInput {
     browser?: RuntimeAssemblyOptions["browser"];
     /** The screenshot store, when the host shows pictures outside the runtime. */
     pictures?: BrowserPictureStore;
+    /** Desktop's live account epoch, without restoring tokens or acquiring credentials. */
+    sourceIconEpoch?(): string | null;
+    /** Stable known sign-in binding for disk, separate from its live revocation epoch. */
+    sourceIconOwner?(): string | null;
+    /** Saved identity still unresolved; keep persisted icons inert, not deleted. */
+    sourceIconRestoring?(): boolean;
+    /** Decoration revocations remain observable while grants/identity are absent. */
+    sourceIconRevocation?(): string;
+    watchSourceIconAuthority?(listener: () => void): () => void;
   };
   /** Before a Session command runs: desktop's login-PATH adoption. */
   beforeExecution(): Promise<unknown>;
@@ -186,6 +200,8 @@ export interface RunnerComposition {
   readonly concurrency: SessionConcurrencyEnvReader | null;
   readonly observability: AgentObservability | null;
   readonly automations: RuntimeAutomations;
+  /** Desktop joins this inside its existing accepted-quit deadline. */
+  settleSourceIcons(): Promise<void>;
   /** The host's one handler map over the recovered services, built on first ask. */
   handlers(ready: RunnerReady): HostHandlerMap;
   /** The owner `host.start` adopts: recovery, Automations, the tool door, then `edge.bind`. */
@@ -258,6 +274,36 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
           bindEnvironment: undefined,
           dispose: undefined,
         };
+  const sourceIconDisk =
+    store.kind === "local" &&
+    !input.cloudLaunch?.() &&
+    input.capabilities.sourceIconEpoch !== undefined
+      ? new SourceIconDisk(join(host.dataDir, "source-icons"), (message) => ports.log.warn(message))
+      : undefined;
+  const sourceIcons = new SourceIconCache({
+    ...(sourceIconDisk === undefined ? {} : { persistence: sourceIconDisk }),
+    ...(input.capabilities.sourceIconRevocation === undefined
+      ? {}
+      : {
+          revocationGeneration: () => input.capabilities.sourceIconRevocation!(),
+        }),
+    authorityForSession: (sessionId) =>
+      store.kind === "local" && !input.cloudLaunch?.() && product.ownsSession?.(sessionId) === true
+        ? (input.capabilities.sourceIconEpoch?.() ?? null)
+        : null,
+    restorationPendingForSession: (sessionId) =>
+      store.kind === "local" &&
+      !input.cloudLaunch?.() &&
+      product.ownsSession?.(sessionId) === true &&
+      input.capabilities.sourceIconRestoring?.() === true,
+    persistentAuthorityForSession: (sessionId) =>
+      store.kind === "local" && !input.cloudLaunch?.() && product.ownsSession?.(sessionId) === true
+        ? (input.capabilities.sourceIconOwner?.() ?? null)
+        : null,
+  });
+  const stopSourceIconAuthorityWatch = input.capabilities.watchSourceIconAuthority?.(() =>
+    sourceIcons.invalidate(),
+  );
   const sessionEngine = product.engine;
   // The local Automation service (its SQLite engine, scheduler and armed
   // timers) runs only over a local store. A cloud store's Automations live in
@@ -267,6 +313,15 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
   // One runtime per host's Session services, claimed before anything is built.
   const bindSessionRuntime = live?.[SESSION_RUNTIME].claim();
   const runtimeServices = live?.runtimeServices;
+  const sourceIconRefiner =
+    runtimeServices?.sourceIconDecoder === undefined
+      ? undefined
+      : new SourceIconRefiner({
+          cache: sourceIcons,
+          acquire: createSourceIconFetch(),
+          decode: runtimeServices.sourceIconDecoder,
+          log: (message) => ports.log.warn(message),
+        });
 
   const delegation = db === null ? null : createTicketSessionDelegationStore(db);
   const tokens = createSessionTokenRegistry();
@@ -368,6 +423,7 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
     ...(runtimeServices?.webExtract === undefined
       ? {}
       : { webExtract: runtimeServices.webExtract }),
+    ...(sourceIconRefiner === undefined ? {} : { sourceIconRefiner }),
     mcpSettings: runtimeServices?.mcp ?? null,
     mcpDispatch,
     codeMode,
@@ -466,6 +522,7 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
         ? {}
         : { refineAutoTitle: (request) => void autoTitler.refine(request) }),
       pictures: assembly.pictures,
+      sourceIcons,
       modelAccess: assembly.piRuntimeHost,
       environmentRecipes: () => input.cloudEnabled(),
       automations,
@@ -492,10 +549,21 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
     });
     return handlerMap;
   };
+  const settleSourceIcons = async (): Promise<void> => {
+    await Promise.all([
+      sourceIconRefiner?.settled(),
+      runtimeServices?.sourceIconDecoder?.settled?.(),
+      sourceIconDisk?.settled(),
+    ]);
+  };
   const stopProducers = (): void => {
     try {
       input.stopProducers?.();
     } finally {
+      stopSourceIconAuthorityWatch?.();
+      sourceIconRefiner?.close();
+      sourceIcons.close();
+      live?.detachedWork.track(settleSourceIcons());
       automations.stop();
       agents.stop();
     }
@@ -586,6 +654,10 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
       await lifecycle.close();
       if (fullDrain) await automations.settled();
     } finally {
+      stopSourceIconAuthorityWatch?.();
+      sourceIconRefiner?.close();
+      sourceIcons.close();
+      await settleSourceIcons();
       product.dispose?.();
     }
   };
@@ -600,6 +672,7 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
     concurrency,
     observability,
     automations,
+    settleSourceIcons,
     handlers: handlersFor,
     owner: (edge = {}) => ({
       start: async () => {

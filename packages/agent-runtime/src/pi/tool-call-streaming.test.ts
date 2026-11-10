@@ -1,17 +1,18 @@
 import { stream as anthropicStream } from "@earendil-works/pi-ai/api/anthropic-messages";
+import { parseStreamingJson } from "@earendil-works/pi-ai/utils/json-parse";
 import {
-  parseStreamingJson,
-  parseStreamingToolArguments,
-} from "@earendil-works/pi-ai/utils/json-parse";
+  StreamingJsonParser,
+  ToolCallArgumentsStream,
+} from "@earendil-works/pi-ai/utils/streaming-json";
 import { normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
 import type { AssistantMessageEvent, Model, ToolCall } from "@earendil-works/pi-ai";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 /**
  * VC-1074: pi-ai re-parsed a tool call's whole accumulated argument JSON on
  * every streamed delta, so a large `write` cost seconds of synchronous CPU on
- * Electron main. The patch (patches/@earendil-works__pi-ai@1.0.0.patch) keeps
- * small calls parsing on every delta and refreshes large ones geometrically.
+ * Electron main. Pi 1.5's upstream incremental parser replaces our geometric
+ * re-parse patch: each delta is read once, with one full parse at block end.
  * These cases drive the real Anthropic adapter through the real SDK and SSE
  * codec, with only `fetch` replaced.
  */
@@ -41,29 +42,57 @@ function fileText(chars: number): string {
   return lines.join("\n").slice(0, chars);
 }
 
+function pieces(json: string, step = 30): string[] {
+  const deltas: string[] = [];
+  for (let offset = 0; offset < json.length; offset += step) {
+    deltas.push(json.slice(offset, offset + step));
+  }
+  return deltas;
+}
+
+/** Independent prefix oracle for these compact `{path, content}` fixtures. */
+function expectedWritePrefix(prefix: string): ToolCall["arguments"] {
+  const expected = parseStreamingJson<ToolCall["arguments"]>(prefix);
+  // Unlike the old partial-json fallback, Pi 1.5 correctly keeps trailing
+  // spaces inside an open string. Compact fixture JSON has no other raw spaces.
+  if (typeof expected.content === "string") {
+    expected.content += / +$/.exec(prefix)?.[0] ?? "";
+  }
+  return expected;
+}
+
 function sse(type: string, data: unknown): string {
   return `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
-/** One Anthropic response that streams `json` as `write` arguments, `step` chars per delta. */
-function toolCallResponse(json: string, step: number): Response {
+/** Interleaved tool blocks; Anthropic indices deliberately differ from content indices. */
+function toolCallResponse(calls: string[][]): Response {
   let body = sse("message_start", {
     type: "message_start",
     message: { id: "msg_1", model: model.id, usage: { input_tokens: 1, output_tokens: 1 } },
   });
-  body += sse("content_block_start", {
-    type: "content_block_start",
-    index: 0,
-    content_block: { type: "tool_use", id: "toolu_1", name: "write", input: {} },
-  });
-  for (let offset = 0; offset < json.length; offset += step) {
-    body += sse("content_block_delta", {
-      type: "content_block_delta",
-      index: 0,
-      delta: { type: "input_json_delta", partial_json: json.slice(offset, offset + step) },
+  for (let index = 0; index < calls.length; index += 1) {
+    body += sse("content_block_start", {
+      type: "content_block_start",
+      index: index * 2 + 1,
+      content_block: { type: "tool_use", id: `toolu_${index + 1}`, name: "write", input: {} },
     });
   }
-  body += sse("content_block_stop", { type: "content_block_stop", index: 0 });
+  const rounds = Math.max(...calls.map((deltas) => deltas.length));
+  for (let round = 0; round < rounds; round += 1) {
+    for (let index = 0; index < calls.length; index += 1) {
+      const delta = calls[index][round];
+      if (delta === undefined) continue;
+      body += sse("content_block_delta", {
+        type: "content_block_delta",
+        index: index * 2 + 1,
+        delta: { type: "input_json_delta", partial_json: delta },
+      });
+    }
+  }
+  for (let index = 0; index < calls.length; index += 1) {
+    body += sse("content_block_stop", { type: "content_block_stop", index: index * 2 + 1 });
+  }
   body += sse("message_delta", {
     type: "message_delta",
     delta: { stop_reason: "tool_use" },
@@ -86,14 +115,14 @@ function toolCallResponse(json: string, step: number): Response {
   );
 }
 
-interface StreamedCall {
-  /** Each `toolcall_delta`'s delta and the partial arguments it carried. */
-  deltas: Array<{ delta: string; arguments: ToolCall["arguments"] }>;
-  final: ToolCall;
+interface StreamedCalls {
+  /** References, not copies: post-stream assertions also catch mutated partial views. */
+  deltas: Array<{ contentIndex: number; delta: string; arguments: ToolCall["arguments"] }>;
+  finals: ToolCall[];
   eventTypes: string[];
 }
 
-async function streamToolCall(json: string, step = 30): Promise<StreamedCall> {
+async function streamToolCalls(calls: string[][]): Promise<StreamedCalls> {
   const events = anthropicStream(
     model,
     normalizeContext({
@@ -101,117 +130,166 @@ async function streamToolCall(json: string, step = 30): Promise<StreamedCall> {
       messages: [{ role: "user", content: "write it", timestamp: 0 }],
       tools: [],
     }),
-    { apiKey: "sk-ant-test", fetch: (async () => toolCallResponse(json, step)) as typeof fetch },
+    { apiKey: "sk-ant-test", fetch: (async () => toolCallResponse(calls)) as typeof fetch },
   );
-  const deltas: StreamedCall["deltas"] = [];
+  const deltas: StreamedCalls["deltas"] = [];
+  const finals: ToolCall[] = [];
   const eventTypes: string[] = [];
-  let final: ToolCall | undefined;
   for await (const event of events as AsyncIterable<AssistantMessageEvent>) {
     eventTypes.push(event.type);
     if (event.type === "error") throw new Error(event.error.errorMessage);
     if (event.type === "toolcall_delta") {
       const block = event.partial.content[event.contentIndex] as ToolCall;
-      deltas.push({ delta: event.delta, arguments: block.arguments });
+      deltas.push({
+        contentIndex: event.contentIndex,
+        delta: event.delta,
+        arguments: block.arguments,
+      });
     }
-    if (event.type === "toolcall_end") final = event.toolCall;
+    if (event.type === "toolcall_end") finals.push(event.toolCall);
   }
-  if (final === undefined) throw new Error("the stream ended without a tool call");
-  return { deltas, final, eventTypes };
+  expect(finals).toHaveLength(calls.length);
+  return { deltas, finals, eventTypes };
+}
+
+function singleCallEventTypes(deltaCount: number): string[] {
+  return [
+    "start",
+    "toolcall_start",
+    ...Array(deltaCount).fill("toolcall_delta"),
+    "toolcall_end",
+    "done",
+  ];
 }
 
 describe("streamed tool-call arguments (VC-1074)", () => {
-  it("parses every delta of a normal-sized call exactly as upstream did", async () => {
+  it("shows the exact prefix at every delta of a normal-sized call", async () => {
     const args = { path: "small.txt", content: fileText(6 * 1024) };
     const json = JSON.stringify(args);
-    const streamed = await streamToolCall(json);
+    const streamed = await streamToolCalls([pieces(json)]);
 
     let prefix = "";
     for (const { delta, arguments: partial } of streamed.deltas) {
       prefix += delta;
-      expect(JSON.stringify(partial)).toBe(JSON.stringify(parseStreamingJson(prefix)));
+      expect(partial).toEqual(expectedWritePrefix(prefix));
     }
     expect(prefix).toBe(json);
-    expect(JSON.stringify(streamed.final.arguments)).toBe(json);
-    expect(streamed.final).not.toHaveProperty("partialJson");
+    expect(streamed.eventTypes).toEqual(singleCallEventTypes(pieces(json).length));
+    expect(JSON.stringify(streamed.finals[0].arguments)).toBe(json);
+    expect(streamed.finals[0]).not.toHaveProperty("partialJson");
+    expect(streamed.finals[0]).not.toHaveProperty("argumentsError");
   });
 
-  it("streams a 100 KB write with identical events and final arguments, re-parsing linearly", async () => {
+  it("streams a 100 KB write with identical events and final arguments, reading each delta once", async () => {
     const args = { path: "big.txt", content: fileText(100 * 1024) };
     const json = JSON.stringify(args);
-    const streamed = await streamToolCall(json);
+    const wireDeltas = pieces(json);
+    const append = vi.spyOn(StreamingJsonParser.prototype, "append");
+    const finish = vi.spyOn(ToolCallArgumentsStream.prototype, "finish");
+    try {
+      const streamed = await streamToolCalls([wireDeltas]);
 
-    // The event sequence is the one upstream emits: one delta per wire delta.
-    const wireDeltas = Math.ceil(json.length / 30);
-    expect(streamed.deltas).toHaveLength(wireDeltas);
-    expect(streamed.eventTypes.filter((type) => type === "toolcall_delta")).toHaveLength(
-      wireDeltas,
-    );
-    expect(streamed.deltas.map(({ delta }) => delta).join("")).toBe(json);
-    expect(streamed.final.arguments).toEqual(args);
-    expect(JSON.stringify(streamed.final.arguments)).toBe(json);
+      expect(streamed.deltas.map(({ delta }) => delta)).toEqual(wireDeltas);
+      expect(streamed.eventTypes).toEqual(singleCallEventTypes(wireDeltas.length));
+      expect(streamed.finals[0].arguments).toEqual(args);
+      expect(JSON.stringify(streamed.finals[0].arguments)).toBe(json);
+      expect(streamed.finals[0]).not.toHaveProperty("partialJson");
+      expect(streamed.finals[0]).not.toHaveProperty("argumentsError");
 
-    // Each re-parse produces a fresh object. Upstream re-parsed on every delta
-    // (3,000+ whole-buffer parses here); now past 8 KiB the buffer must grow
-    // by an eighth before the next one, so the count is logarithmic in size.
-    const parses = new Set(streamed.deltas.map((entry) => entry.arguments)).size;
-    const eagerDeltas = Math.ceil((8 * 1024) / 30);
-    expect(parses).toBeLessThan(eagerDeltas + 40);
+      // Observe the installed parser through the real provider, not a test-only
+      // feeder. Old accumulated prefixes would process O(n²) characters here.
+      // Incremental parsing must receive precisely the wire deltas, once each,
+      // on one parser, followed by one full final parse. No timing thresholds.
+      expect(append.mock.calls.map(([delta]) => delta)).toEqual(wireDeltas);
+      expect(append.mock.calls.reduce((sum, [delta]) => sum + delta.length, 0)).toBe(json.length);
+      expect(new Set(append.mock.contexts).size).toBe(1);
+      expect(finish).toHaveBeenCalledTimes(1);
 
-    // Every partial view is exactly upstream's parse of the prefix it was
-    // taken at: stale at most, never different. The last is at most an
-    // eighth behind the stream.
-    let prefix = "";
-    let parsedAt = 0;
-    let previous: unknown;
-    for (const { delta, arguments: partial } of streamed.deltas) {
-      prefix += delta;
-      if (partial === previous) continue;
-      previous = partial;
-      parsedAt = prefix.length;
-      expect(JSON.stringify(partial)).toBe(JSON.stringify(parseStreamingJson(prefix)));
-    }
-    expect(parsedAt).toBeGreaterThan((json.length * 7) / 8);
-  });
-});
-
-describe("parseStreamingToolArguments", () => {
-  it("parses on every call up to the eager bound", () => {
-    const block = { arguments: {} as Record<string, unknown> };
-    const json = JSON.stringify({ content: "a".repeat(8 * 1024 - 20) });
-    for (let end = 1; end <= json.length; end += 500) {
-      const partial = json.slice(0, end);
-      block.arguments = parseStreamingToolArguments(block, partial);
-      expect(block.arguments).toEqual(parseStreamingJson(partial));
+      // A large string now stays fresh rather than coalescing geometrically.
+      // Sample exact, immutable views beyond the old 8 KiB eager bound without
+      // making this regression test itself re-parse O(n²) characters.
+      for (const index of [300, Math.floor(wireDeltas.length / 2), wireDeltas.length - 1]) {
+        const prefix = json.slice(0, Math.min((index + 1) * 30, json.length));
+        expect(streamed.deltas[index].arguments).toEqual(expectedWritePrefix(prefix));
+      }
+    } finally {
+      append.mockRestore();
+      finish.mockRestore();
     }
   });
 
-  it("past the bound, re-parses only after the buffer grows by an eighth", () => {
-    const block = { arguments: {} as Record<string, unknown> };
-    const json = JSON.stringify({ content: "b".repeat(64 * 1024) });
-
-    const first = json.slice(0, 16 * 1024);
-    block.arguments = parseStreamingToolArguments(block, first);
-    expect(block.arguments).toEqual(parseStreamingJson(first));
-
-    const held = block.arguments;
-    const tooSoon = json.slice(0, 16 * 1024 + 2 * 1024 - 1);
-    expect(parseStreamingToolArguments(block, tooSoon)).toBe(held);
-
-    const due = json.slice(0, 16 * 1024 + 2 * 1024);
-    block.arguments = parseStreamingToolArguments(block, due);
-    expect(block.arguments).not.toBe(held);
-    expect(block.arguments).toEqual(parseStreamingJson(due));
+  it("keeps nested partial views immutable across split escapes and scalar tokens", async () => {
+    const deltas = [
+      '{"edits":[{"text":"first ',
+      "\\",
+      "u00",
+      "e9\\n",
+      'line"},{"text":"second',
+      '"}],"meta":{"ok":t',
+      'rue,"count":1',
+      "2}}",
+    ];
+    const streamed = await streamToolCalls([deltas]);
+    const first = { text: "first é\nline" };
+    const edits = [first, { text: "second" }];
+    expect(streamed.deltas.map((entry) => entry.arguments)).toEqual([
+      { edits: [{ text: "first " }] },
+      { edits: [{ text: "first " }] },
+      { edits: [{ text: "first " }] },
+      { edits: [{ text: "first é\n" }] },
+      { edits },
+      { edits, meta: { ok: true } },
+      { edits, meta: { ok: true, count: 1 } },
+      { edits, meta: { ok: true, count: 12 } },
+    ]);
+    expect(streamed.finals[0].arguments).toEqual(JSON.parse(deltas.join("")));
   });
 
-  it("tracks each block on its own and treats empty input as upstream does", () => {
-    const json = JSON.stringify({ content: "c".repeat(20 * 1024) });
-    const one = { arguments: {} as Record<string, unknown> };
-    const two = { arguments: {} as Record<string, unknown> };
-    one.arguments = parseStreamingToolArguments(one, json);
-    // A fresh block parses its first large buffer even though another block
-    // already parsed one of the same length.
-    expect(parseStreamingToolArguments(two, json)).toEqual(JSON.parse(json));
-    expect(parseStreamingToolArguments({ arguments: {} }, "")).toEqual({});
-    expect(parseStreamingToolArguments({ arguments: {} }, undefined)).toEqual({});
+  it("tracks interleaved tool blocks independently", async () => {
+    const one = { path: "one.txt", content: "a".repeat(20 * 1024) };
+    const two = { path: "two.txt", content: "b".repeat(20 * 1024) };
+    const calls = [pieces(JSON.stringify(one), 1024), pieces(JSON.stringify(two), 1024)];
+    const streamed = await streamToolCalls(calls);
+
+    expect(streamed.finals.map((call) => call.arguments)).toEqual([one, two]);
+    expect(streamed.finals.map((call) => call.id)).toEqual(["toolu_1", "toolu_2"]);
+    for (let contentIndex = 0; contentIndex < calls.length; contentIndex += 1) {
+      const deltas = streamed.deltas.filter((entry) => entry.contentIndex === contentIndex);
+      expect(deltas.map((entry) => entry.delta)).toEqual(calls[contentIndex]);
+      let prefix = "";
+      for (const { delta, arguments: partial } of deltas) {
+        prefix += delta;
+        expect(partial).toEqual(expectedWritePrefix(prefix));
+      }
+    }
   });
+
+  it.each([
+    { name: "no deltas", deltas: [] },
+    { name: "an empty delta", deltas: [""] },
+    { name: "whitespace", deltas: [" \t\r\n "] },
+    { name: "an empty object", deltas: ["{}"] },
+  ])("accepts $name as empty arguments", async ({ deltas }) => {
+    const streamed = await streamToolCalls([deltas]);
+    expect(streamed.eventTypes).toEqual(singleCallEventTypes(deltas.length));
+    expect(streamed.deltas.map((entry) => entry.arguments)).toEqual(deltas.map(() => ({})));
+    expect(streamed.finals[0].arguments).toEqual({});
+    expect(streamed.finals[0]).not.toHaveProperty("argumentsError");
+  });
+
+  it.each(['{"path":"unfinished.txt","content":"partial', "[]", "null", "42"])(
+    "reports malformed final arguments instead of executing a partial prefix: %s",
+    async (json) => {
+      const streamed = await streamToolCalls([pieces(json)]);
+      expect(streamed.eventTypes).toEqual(singleCallEventTypes(pieces(json).length));
+      expect(streamed.finals[0].arguments).toEqual({});
+      expect(streamed.finals[0].argumentsError).toContain(`Received arguments:\n${json}`);
+      if (json.startsWith("{")) {
+        expect(streamed.deltas.at(-1)?.arguments).toEqual({
+          path: "unfinished.txt",
+          content: "partial",
+        });
+      }
+    },
+  );
 });

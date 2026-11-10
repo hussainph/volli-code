@@ -1,0 +1,9 @@
+/* 1.5 on the 24-unit drawing is the outline baseline; small symbols need the
+   1.5× step. CSS-sized controls participate without measuring layout in React. */
+.ui-icon > * {
+  stroke-width: var(--icon-stroke, 1.5);
+}
+.ui-icon:is(.size-2, .size-2\.5, .size-3),
+:where([data-size="xs"], [data-size="icon-xs"]) .ui-icon:not([class*="size-"]) {
+  --icon-stroke: 2.25;
+}

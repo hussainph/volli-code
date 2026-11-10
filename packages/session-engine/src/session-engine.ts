@@ -42,6 +42,7 @@ import type {
   SessionLedgerIds,
   SessionLedgerTransaction,
   SessionObservation,
+  SessionListingProjection,
   SessionProjection,
   SessionProjectionCheckpoint,
   SessionUsageReport,
@@ -148,7 +149,27 @@ export interface SessionEngine {
    */
   getBaseSession(query: GetSessionQuery): Promise<Session | null>;
   /**
-   * Every Session in scope, projected.
+   * One Session's listing projection — the row {@link listSessions} would
+   * fold for it, from the same per-Session fold cache (VC-1101).
+   *
+   * For a caller that re-publishes ONE listing row while nothing in the
+   * Session's log moved (a read receipt): an unmoved Session answers from the
+   * cache with a base-row read and a head read, where `getSession` decodes the
+   * checkpoint and copies the whole projection, command history included.
+   * What comes back is deep-frozen and shared, exactly as a listing's rows,
+   * and like a listing (unlike `getSession`) a fold it had to do is written
+   * back to the durable checkpoint (VC-1076), so the next read is a hit.
+   * Bulk scoped readers may set `persistCheckpoint: false` to build the same
+   * in-memory listing cache without adding cold-path writes; the normal fact
+   * cadence still persists checkpoints. This keeps their first listing as
+   * read-only as the full-projection reads they replace.
+   */
+  getSessionListing(
+    query: GetSessionQuery & { readonly persistCheckpoint?: boolean },
+  ): Promise<SessionListingProjection | null>;
+  /**
+   * Every Session in scope, projected — each row without its command and
+   * receipt history (VC-848), which `getSession` keeps.
    *
    * Each row is folded atomically, but the listing as a whole is not one
    * snapshot across Sessions: rows are members as of one instant, and their
@@ -156,7 +177,7 @@ export interface SessionEngine {
    * why that is sound; callers only need to know not to read a cross-Session
    * invariant out of two rows of one listing.
    */
-  listSessions(query: ListSessionsQuery): Promise<readonly SessionProjection[]>;
+  listSessions(query: ListSessionsQuery): Promise<readonly SessionListingProjection[]>;
   countSessions(query: ListSessionsQuery): Promise<number>;
   /**
    * Every Session holding an open attachment, across every project, folded.
@@ -166,11 +187,11 @@ export interface SessionEngine {
    * with a long history is thousands of folds for a number bounded by how many
    * things are actually attached. This folds the narrowed set the ledger
    * selects — see {@link SessionLedgerTransaction.listAttachedSessions} for why
-   * the Sessions it drops provably cannot be working — and returns ordinary
-   * projections, so the caller counts them with exactly the code that counts a
+   * the Sessions it drops provably cannot be working — and returns listing
+   * rows, so the caller counts them with exactly the code that counts a
    * listing rather than a parallel rule that can drift from it.
    */
-  listAttachedSessions(): Promise<readonly SessionProjection[]>;
+  listAttachedSessions(): Promise<readonly SessionListingProjection[]>;
   /**
    * When Sessions were started, across every project — the practice chart's
    * whole input. Stamps rather than Sessions, so a 26-week window costs one
@@ -295,17 +316,17 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
   /** Insertion-ordered, so the first key is the least recently listed Session. */
   const listingFolds = new Map<string, ListingFold>();
   /**
-   * Each project's whole roster as its latest `all` listing counted it
-   * (VC-800): the working set {@link evictListingFolds} sizes the cache to.
+   * Each project's whole roster as its latest `all` listing or metadata
+   * count saw it: the working set {@link evictListingFolds} sizes the cache to.
+   * Scoped host listings count it before reading the selected rows.
    */
   const rosterSizes = new Map<string, number>();
   /**
    * How many Sessions the latest {@link SessionEngine.listAttachedSessions}
-   * folded (VC-1072): the other working set the cache serves. The budget read
-   * walks every Session holding an open attachment, across every project, and
-   * a cache sized only to the project rosters someone happened to list evicts
-   * part of it on every read — refolding thousands of Sessions on the host's
-   * event loop at each Session start on a profile that has them.
+   * folded (VC-1072): the other working set the cache serves. A raw attached
+   * listing need not first count any project's roster, so retain that set even
+   * when nobody has listed its projects. Scoped host readers already size the
+   * same cache through metadata counts before their point reads.
    */
   let attachedRoster = 0;
 
@@ -332,12 +353,14 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
   const loadStored = (
     transaction: SessionLedgerTransaction,
     session: Session,
+    knownHead?: number,
   ): { stored: StoredSessionProjection; shared: boolean } => {
     const hot = hotCheckpoints.get(session.id);
     if (
       hot !== undefined &&
       sameSession(hot.session, session) &&
-      hot.stored.checkpoint.throughSequence === transaction.latestEventSequence(session.id)
+      hot.stored.checkpoint.throughSequence ===
+        (knownHead ?? transaction.latestEventSequence(session.id))
     ) {
       hotCheckpoints.delete(session.id);
       hotCheckpoints.set(session.id, hot);
@@ -419,18 +442,17 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
    * cache does nothing. Trimming afterwards means a listing over the limit
    * re-folds only its overflow on the next visit, not the whole roster.
    *
-   * The limit is the sum of every project's latest `all` count and the
-   * latest attached-Session count, so it is never below the roster that
-   * listings walk or the set the budget read walks, and nothing live is
-   * evicted once every project has been listed whole. A Session counted in
-   * both is counted twice, which only loosens the bound. The cache stays resident
+   * The limit is the sum of every project's latest `all` count (from a
+   * listing or a metadata-only count before scoped point reads) and the
+   * latest attached-Session count, so it is never below either working set.
+   * A Session counted in both only loosens the bound. The cache stays resident
    * between listings with one frozen row per listed Session, so its memory
    * grows with the roster and not with how often the roster is listed.
    *
    * Sessions are never deleted one by one. They go only with their project,
    * and nothing lists a deleted project again, so that project's count and
    * rows stay until the host restarts. The cache therefore holds at most one
-   * row for each Session that belonged to a listed project at some point
+   * row for each Session that belonged to a counted project or attached set
    * since the host started, or the floor, whichever is larger.
    */
   const evictListingFolds = (): void => {
@@ -465,7 +487,8 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
   const listingProjection = (
     transaction: SessionLedgerTransaction,
     session: Session,
-  ): SessionProjection => {
+    persistCheckpoint = true,
+  ): SessionListingProjection => {
     // Metadata only: no payload decoded, no provenance joined, no checkpoint
     // JSON parsed. That is what makes asking cheaper than answering.
     const head = transaction.latestEventSequence(session.id);
@@ -475,9 +498,14 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
       listingFolds.set(session.id, cached);
       return cached.projection;
     }
-    const { stored, shared } = loadStored(transaction, session);
-    if (!shared) persistReadFold(transaction, stored, reportCheckpointFailure);
-    const projection = frozenProjectionCopy(stored.checkpoint.projection);
+    // The head above was read in this transaction; reuse it for the hot
+    // checkpoint check instead of seeking the same metadata twice on a miss.
+    const { stored, shared } = loadStored(transaction, session, head);
+    if (!shared && persistCheckpoint) persistReadFold(transaction, stored, reportCheckpointFailure);
+    const projection = frozenListingCopy(stored.checkpoint.projection);
+    // Same rule as the hot checkpoints: a fold read inside a caller's outer
+    // transaction may include that transaction's uncommitted appends.
+    if (transaction.enclosed === true) return projection;
     listingFolds.delete(session.id);
     listingFolds.set(session.id, { session, throughSequence: head, projection });
     return projection;
@@ -663,7 +691,9 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
 
     async observe(observation) {
       let hot: HotCheckpoint | null = null;
+      let enclosed = false;
       const recorded = await ports.ledger.transaction((transaction) => {
+        enclosed = transaction.enclosed === true;
         const session = transaction.getSession(observation.sessionId);
         if (!session) throw new SessionEngineNotFoundError(observation.sessionId);
         // No whole-log read here (VC-356). Recording one fact used to list every
@@ -834,7 +864,11 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
         return event;
       });
       // Committed: only now may the advanced checkpoint answer a later read.
-      if (hot !== null) rememberHotCheckpoint(hot);
+      // An enclosed transaction has not committed when it settles: the
+      // caller's outer transaction can still roll the fact back, and a hot
+      // entry at its cursor would then answer for whatever fact reaches that
+      // sequence next (VC-1098). Skipping it costs one durable-row read.
+      if (hot !== null && !enclosed) rememberHotCheckpoint(hot);
       return recorded;
     },
 
@@ -1090,6 +1124,16 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
       return ports.ledger.transaction((transaction) => transaction.getSession(query.sessionId));
     },
 
+    async getSessionListing(query) {
+      const projection = await ports.ledger.transaction((transaction) => {
+        const session = transaction.getSession(query.sessionId);
+        return session ? listingProjection(transaction, session, query.persistCheckpoint) : null;
+      });
+      // One row, not a scan: trimming now cannot evict a row this read needs.
+      evictListingFolds();
+      return projection;
+    },
+
     /**
      * Every Session in scope, folded — in chunks, releasing the ledger and the
      * host's event loop between them (VC-388).
@@ -1126,7 +1170,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
       // Only the whole roster sizes the cache. A Ticket's scope is a subset of
       // its project's, so counting it as well would count Sessions twice.
       if (query.scope === "all") rosterSizes.set(query.projectId, rows.length);
-      const projections: SessionProjection[] = [];
+      const projections: SessionListingProjection[] = [];
       for (let from = 0; from < rows.length; from += SESSION_LISTING_FOLD_CHUNK) {
         // Between chunks, never after the last one: a turn nobody needs is
         // still a turn the caller waits for.
@@ -1143,7 +1187,14 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
     },
 
     async countSessions(query) {
-      return ports.ledger.transaction((transaction) => transaction.countSessions(query));
+      const count = await ports.ledger.transaction((transaction) =>
+        transaction.countSessions(query),
+      );
+      // A scoped host reader selects membership before asking this engine for
+      // listing rows one at a time. Its metadata count sizes the same cache a
+      // whole-project listing would, without folding any out-of-scope history.
+      if (query.scope === "all") rosterSizes.set(query.projectId, count);
+      return count;
     },
 
     async listAttachedSessions() {
@@ -1163,7 +1214,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
         transaction.listAttachedSessions(),
       );
       attachedRoster = rows.length;
-      const projections: SessionProjection[] = [];
+      const projections: SessionListingProjection[] = [];
       for (let from = 0; from < rows.length; from += SESSION_LISTING_FOLD_CHUNK) {
         if (from > 0) await yieldToHost();
         const chunk = rows.slice(from, from + SESSION_LISTING_FOLD_CHUNK);
@@ -1211,6 +1262,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
     },
 
     async reportUsage(query) {
+      if (ports.ledger.reportUsage !== undefined) return ports.ledger.reportUsage(query);
       return ports.ledger.transaction((transaction) =>
         // The floor is read in the SAME transaction as the rows. Two reads
         // would let an upgrade land between them and produce a report that
@@ -1294,7 +1346,8 @@ const defaultYieldToHost = (): Promise<void> =>
  *
  * A held row measured 5.6 KB for an ordinary Session and 79.8 KB for a
  * deliberately extreme one — 450 events carrying 150 commands and their
- * receipts (VC-388).
+ * receipts (VC-388). Rows no longer hold commands or receipts (VC-848), so
+ * neither grows with a Session's history any more.
  */
 export const SESSION_LISTING_CACHE_LIMIT = 256;
 
@@ -1317,9 +1370,30 @@ interface ListingFold {
   /**
    * The cache's own deep-frozen copy, shared by every caller that lists this
    * Session while the entry survives. See {@link frozenProjectionCopy} for why
-   * it is a copy and not the folded object itself.
+   * it is a copy and not the folded object itself, and
+   * {@link frozenListingCopy} for what it leaves out.
    */
-  projection: SessionProjection;
+  projection: SessionListingProjection;
+}
+
+/**
+ * The listing row the cache keeps (VC-848): a {@link frozenProjectionCopy} of
+ * the folded projection without its `commands` and `receipts`.
+ *
+ * The cache is resident for as long as the host runs, one row per listed
+ * Session, and those two arrays hold every command the Session ever received
+ * and its receipt. Measured on a real 5,087-Session profile
+ * (`e2e/bench/listing-row-weight-vc848.mjs`), they were 9.3 KB of a 14.4 KB
+ * row — 46 of 72 MB for the whole roster; without them the cache held 20 MB
+ * for the same roster. Of the listing's readers, only two ever looked at
+ * them, each about one or a few Sessions, and both now read those through
+ * `getSession`: a watch's check on a start still pending, and a resume's
+ * superseded rule over its Ticket's siblings. Leaving them out of the copy
+ * also skips copying them.
+ */
+function frozenListingCopy(projection: SessionProjection): SessionListingProjection {
+  const { commands: _commands, receipts: _receipts, ...row } = projection;
+  return frozenProjectionCopy(row);
 }
 
 /**

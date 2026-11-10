@@ -1,7 +1,12 @@
+import { useListWindow } from "./use-list-window";
+import { TicketCardLabels } from "./ticket-card-labels";
+import { EmptyState } from "@renderer/components/ui/empty-state";
+import { useBoardStore } from "@renderer/stores/board";
 import * as React from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
+import { AddIcon } from "@renderer/components/ui/icon";
+
 import {
   cardTicketKey,
   displayTicketId,
@@ -16,46 +21,14 @@ import { BoardEmpty } from "@renderer/components/board/board-empty";
 import { columnDroppableId } from "@renderer/components/board/board-dnd";
 import type { TicketSelectionGesture } from "@renderer/components/board/board-selection";
 import { PriorityIndicator } from "@renderer/components/board/priority-indicator";
-import { TagChip } from "@renderer/components/board/tag-chip";
 import { SortableTicketShell } from "@renderer/components/board/ticket-card";
 import { readOnlyControl } from "@renderer/components/hosts/use-hosts";
 import { useTicketComposer } from "@renderer/components/board/use-ticket-composer";
 import { Badge } from "@renderer/components/ui/badge";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
-import { StatusDot } from "@renderer/components/ui/status-dot";
-import { ThinkingOrbs } from "@renderer/components/ui/thinking-orbs";
 import type { TicketSessionActivity } from "@renderer/components/board/board-session-activity";
 import { useBoardSessionActivityMap } from "@renderer/components/board/session-activity-context";
-import { resolveLabelColor } from "@renderer/lib/labels";
 import { cn } from "@renderer/lib/utils";
-
-/**
- * What a list row wears while an agent is running on its ticket (VC-100).
- *
- * The board's cards get a travelling ring; a row deliberately does not. A 36px
- * full-width strip has ~1500px of perimeter for a highlight to crawl around,
- * and a dozen of them would be a page of moving outlines — the ring works on a
- * card because a card is a small closed shape, which is exactly what a row is
- * not.
- *
- * TWO MARKS, because the two states are two different claims and each already
- * has its drawing in this app. `working` is the transcript's own running mark
- * (`ui/thinking-orbs.tsx`): three orbs on a wave, the idiom for "still going",
- * carrying no urgency for something that may be on screen for ten minutes.
- * `waiting` is the one state asking for a person, and that is `StatusDot`'s
- * amber — orbs there would say the agent is thinking when it is in fact
- * stopped, waiting on you.
- *
- * The orbs take `--positive` rather than the transcript's ember: on this
- * surface the accent already means "selected" (`bg-primary/10` on the row it
- * sits in), and the card's ring beside it reads the same green for the same
- * state. One colour for `working` across the whole board.
- */
-function RunningMark({ activity }: { activity: TicketSessionActivity | null }) {
-  if (activity === null) return null;
-  if (activity === "waiting") return <StatusDot state="waiting" />;
-  return <ThinkingOrbs className="text-positive" />;
-}
 
 /**
  * Pure presentational row — also rendered inside the drag overlay (unselected
@@ -83,23 +56,26 @@ export function TicketRowContent({
     <div
       className={cn(
         "flex h-9 cursor-default select-none items-center gap-4 border-b border-border/30 px-gutter",
-        selected ? "bg-primary/10" : "hover:bg-muted/30",
+        selected ? "bg-(--accent-selected)" : "hover:bg-(--accent-tint)",
       )}
     >
       <PriorityIndicator priority={ticket.priority} />
-      <span className="w-14 shrink-0 font-mono text-label text-muted-foreground">{displayId}</span>
-      {/* The title and its running mark travel together, inside the row's own
-          `gap-4` rather than beside it: the mark is about the ticket the title
-          names, and 16px of air would read as a third column. */}
+      {/* A compact ring around the key keeps live state in the same accent
+          grammar as cards without rastering a full-width animated row. */}
+      <span className="relative w-14 shrink-0 rounded-control-mini px-1 font-mono text-label text-muted-foreground">
+        <span
+          aria-hidden
+          className="session-ring board-session-ring"
+          data-activity={sessionActivity ?? undefined}
+        />
+        {displayId}
+      </span>
       <span className="flex min-w-0 items-center gap-2">
         <span className="truncate text-sm text-foreground">{ticket.title}</span>
-        <RunningMark activity={sessionActivity} />
       </span>
       {ticket.labels.length > 0 ? (
         <div className="ml-auto hidden shrink-0 items-center gap-1 sm:flex">
-          {ticket.labels.map((label) => (
-            <TagChip key={label} tag={label} color={resolveLabelColor(projectLabels, label)} />
-          ))}
+          <TicketCardLabels labels={ticket.labels} projectLabels={projectLabels} />
         </div>
       ) : null}
     </div>
@@ -118,6 +94,7 @@ const SortableTicketRow = React.memo(function SortableTicketRow({
   projectLabels,
   selected,
   dragHidden,
+  instantSort = false,
   dragTicketIds,
   sessionActivity,
   onSelect,
@@ -129,6 +106,7 @@ const SortableTicketRow = React.memo(function SortableTicketRow({
   projectLabels: readonly Label[];
   selected: boolean;
   dragHidden: boolean;
+  instantSort?: boolean;
   dragTicketIds?: readonly string[];
   sessionActivity: TicketSessionActivity | null;
   onSelect(ticketId: string, gesture: TicketSelectionGesture): void;
@@ -146,6 +124,7 @@ const SortableTicketRow = React.memo(function SortableTicketRow({
       projectId={projectId}
       selected={selected}
       dragHidden={dragHidden}
+      instantSort={instantSort}
       dragTicketIds={dragTicketIds ?? ownDragIds}
       onSelect={onSelect}
       onOpen={onOpen}
@@ -181,8 +160,13 @@ function ListSection({
   onSelect,
   onOpen,
   dragActive,
+  instantSort = false,
   aimed,
+  scroller,
+  revealTicketId,
 }: {
+  scroller: React.RefObject<HTMLDivElement | null>;
+  revealTicketId: string | null;
   status: TicketStatus;
   tickets: Ticket[];
   projectId: string;
@@ -195,6 +179,7 @@ function ListSection({
   /** Double-click opens the ticket's full-page detail view (ticket-detail-mvp step 3). */
   onOpen(ticketId: string): void;
   dragActive: boolean;
+  instantSort?: boolean;
   aimed: boolean;
 }) {
   // ticketId → what is running on it; absent means nothing is (VC-100). Read
@@ -208,21 +193,37 @@ function ListSection({
   const sortableIds = React.useMemo(() => tickets.map((ticket) => ticket.id), [tickets]);
   const selectedSet = React.useMemo(() => new Set(selectedIds), [selectedIds]);
   const draggingSet = React.useMemo(() => new Set(draggingIds), [draggingIds]);
+  const list = React.useRef<HTMLDivElement>(null);
+  const range = useListWindow({
+    scroller,
+    list,
+    count: tickets.length,
+    revealIndex: tickets.findIndex((ticket) => ticket.id === revealTicketId),
+    dragActive,
+  });
 
   return (
     <section
       data-list-section
       data-status={status}
       data-drop-aimed={aimed || undefined}
-      className={cn(aimed && "bg-accent/30 ring-1 ring-inset ring-primary/50")}
+      className={cn(aimed && "bg-(--accent-tint) ring-1 ring-inset ring-primary-text")}
     >
-      <div className="sticky top-0 z-10 flex items-center gap-2 bg-muted/30 px-gutter py-1 backdrop-blur-sm">
+      <div className="sticky top-0 z-10 flex items-center gap-2 bg-muted px-gutter py-1">
         <span className="text-ui font-medium text-foreground">{TICKET_STATUS_LABELS[status]}</span>
         <Badge variant="count">{tickets.length}</Badge>
       </div>
       <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
-        <div ref={setNodeRef} className={cn(dragActive && "min-h-9")}>
-          {tickets.map((ticket) => (
+        <div
+          data-list-row-body=""
+          ref={(node) => {
+            setNodeRef(node);
+            list.current = node;
+          }}
+          className={cn(dragActive && "min-h-9")}
+        >
+          {range.first ? <div aria-hidden style={{ height: range.first * 36 }} /> : null}
+          {tickets.slice(range.first, range.last).map((ticket) => (
             <SortableTicketRow
               key={ticket.id}
               ticket={ticket}
@@ -231,12 +232,16 @@ function ListSection({
               projectLabels={projectLabels}
               selected={selectedSet.has(ticket.id)}
               dragHidden={draggingSet.has(ticket.id)}
+              instantSort={instantSort}
               dragTicketIds={selectedSet.has(ticket.id) ? groupDragIds : undefined}
               sessionActivity={sessionActivity[ticket.id] ?? null}
               onSelect={onSelect}
               onOpen={onOpen}
             />
           ))}
+          {range.last < tickets.length ? (
+            <div aria-hidden style={{ height: (tickets.length - range.last) * 36 }} />
+          ) : null}
         </div>
       </SortableContext>
       <SectionComposer projectId={projectId} status={status} />
@@ -260,9 +265,9 @@ function SectionComposer({ projectId, status }: { projectId: string; status: Tic
         type="button"
         {...readOnlyControl(composer.canWrite)}
         onClick={composer.openComposer}
-        className="flex h-8 w-full items-center gap-1 px-gutter text-ui text-muted-foreground transition-colors duration-150 ease-out hover:text-foreground"
+        className="flex h-8 w-full items-center gap-1 px-gutter text-ui text-muted-foreground transition-colors duration-(--duration-menu-in) ease-out hover:text-foreground"
       >
-        <PlusIcon className="size-3.5" />
+        <AddIcon className="size-3.5" />
         New
       </button>
     );
@@ -297,7 +302,7 @@ function EmptyDropRow({ status, aimed }: { status: TicketStatus; aimed: boolean 
     <div
       ref={setNodeRef}
       className={cn(
-        "flex h-9 items-center gap-2 border-b border-border/30 px-gutter transition-colors duration-150 ease-out",
+        "flex h-9 items-center gap-2 border-b border-border/30 px-gutter transition-colors duration-(--duration-menu-in) ease-out",
         isOver || aimed ? "bg-accent ring-1 ring-inset ring-primary/50" : "bg-muted/30",
       )}
     >
@@ -324,6 +329,7 @@ interface BoardListViewProps {
   /** The project has no tickets at all — a different nothing from "no tickets match". */
   boardEmpty: boolean;
   dragActive: boolean;
+  instantSort?: boolean;
   /** Status resolved from the board's frozen drag snapshot. */
   aimedStatus: TicketStatus | null;
   selectedIds: readonly string[];
@@ -332,6 +338,7 @@ interface BoardListViewProps {
   onSelect(ticketId: string, gesture: TicketSelectionGesture): void;
   /** Double-click opens the ticket's full-page detail view (ticket-detail-mvp step 3). */
   onOpen(ticketId: string): void;
+  revealTicketId?: string | null;
 }
 
 /**
@@ -350,13 +357,28 @@ export function BoardListView({
   emptyDropStatuses,
   boardEmpty,
   dragActive,
+  instantSort = false,
   aimedStatus,
   selectedIds,
   draggingIds,
   groupDragIds,
   onSelect,
   onOpen,
+  revealTicketId = null,
 }: BoardListViewProps) {
+  const scroller = React.useRef<HTMLDivElement>(null);
+  const [keyboardTarget, setKeyboardTarget] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    if (keyboardTarget === null) return;
+    const frame = requestAnimationFrame(() => {
+      const target = [
+        ...(scroller.current?.querySelectorAll<HTMLElement>("[data-ticket-focus-id]") ?? []),
+      ].find((node) => node.dataset.ticketFocusId === keyboardTarget);
+      target?.focus({ preventScroll: true });
+      if (target) setKeyboardTarget(null);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [keyboardTarget]);
   if (shownStatuses.length === 0 && emptyDropStatuses.length === 0) {
     // Two different nothings, and only one of them is the reader's fault: a
     // filter that matched nothing is a report, while a board with no tickets is
@@ -365,13 +387,47 @@ export function BoardListView({
       <BoardEmpty projectId={projectId} className="min-h-0 flex-1" />
     ) : (
       <div className={cn("min-h-0 flex-1", EMPTY_PAGE)}>
-        <p className="text-sm text-muted-foreground">No tickets match</p>
+        <EmptyState
+          tier="page"
+          illustration="search"
+          title="No matching tickets"
+          action={{
+            label: "Clear filters",
+            onAction: () => useBoardStore.getState().clearFilter(projectId),
+          }}
+        />
       </div>
     );
   }
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto">
+    <div
+      ref={scroller}
+      className="min-h-0 flex-1 overflow-y-auto"
+      data-list-ticket-count={TICKET_STATUSES.reduce(
+        (sum, status) => sum + groups[status].length,
+        0,
+      )}
+      onKeyDownCapture={(event) => {
+        if (dragActive || !["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+        const node = (event.target as HTMLElement).closest<HTMLElement>("[data-ticket-focus-id]");
+        if (!node) return;
+        const ids = TICKET_STATUSES.flatMap((status) =>
+          shownStatuses.includes(status) ? groups[status].map((ticket) => ticket.id) : [],
+        );
+        const at = ids.indexOf(node.dataset.ticketFocusId!);
+        if (at < 0) return;
+        const index =
+          event.key === "Home"
+            ? 0
+            : event.key === "End"
+              ? ids.length - 1
+              : Math.max(0, Math.min(ids.length - 1, at + (event.key === "ArrowDown" ? 1 : -1)));
+        event.preventDefault();
+        event.stopPropagation();
+        setKeyboardTarget(ids[index]!);
+      }}
+    >
       {TICKET_STATUSES.map((status) => {
         if (shownStatuses.includes(status)) {
           return (
@@ -388,7 +444,10 @@ export function BoardListView({
               onSelect={onSelect}
               onOpen={onOpen}
               dragActive={dragActive}
+              instantSort={instantSort}
               aimed={aimedStatus === status}
+              scroller={scroller}
+              revealTicketId={keyboardTarget ?? revealTicketId}
             />
           );
         }

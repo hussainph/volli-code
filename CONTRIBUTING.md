@@ -15,7 +15,7 @@ Validation uses the repository's `vite-plus` CLI (`vp`). Use `pnpm exec vp` if
 
 ## Workflow
 
-Start from an up-to-date `main` branch and make your change on a branch. Ticket worktree branches use `volli/<DISPLAY-ID>-<slug>`, such as `volli/VC-12-mcp-server`.
+Start from an up-to-date `main` branch and make your change on a branch with a short, descriptive name. (Branches that Volli creates for its own ticket worktrees look like `volli/VC-12-mcp-server`; you do not need to follow that pattern.)
 
 Keep each change focused. Do not include unrelated formatting, generated files, or refactors in the same pull request. Add or update tests when behavior changes.
 

@@ -175,7 +175,7 @@ async function eventually(assertion: () => void) {
   });
 }
 
-it("never flashes pending for an ordinary accepted send, keeps accessible Working during the reply, then retires it", async () => {
+it("never flashes pending for an ordinary accepted send, keeps exactly one accessible island status during the reply, then retires it", async () => {
   provider = gatedProvider("Streaming reply");
   fixture = await realFixture(provider);
   await fixture.attach();
@@ -238,19 +238,23 @@ it("never flashes pending for an ordinary accepted send, keeps accessible Workin
   await eventually(() => {
     const prompt = container.querySelector(".is-user");
     const reply = container.querySelector(".is-assistant");
-    const working = [...container.querySelectorAll('[role="status"]')].find((element) =>
-      element.textContent?.includes("Working"),
+    const island = container.querySelector("[data-activity-island]");
+    const status = island?.parentElement?.querySelector(':scope > [role="status"]');
+    const announced = [...container.querySelectorAll('[role="status"]')].filter((element) =>
+      element.textContent?.trim(),
     );
     expect(prompt?.textContent).toContain("Ordinary prompt");
     expect(reply?.textContent).toContain("Streaming reply");
-    expect(working).toBeDefined();
-    expect(working?.querySelector(".sr-only")?.textContent).toBe("Working");
-    expect(working?.querySelector(":scope > [aria-hidden]")?.classList.contains("invisible")).toBe(
-      true,
-    );
+    expect(island).not.toBeNull();
+    expect(status?.textContent).toBe("Writing a reply");
+    expect(announced).toEqual([status]);
+    expect(status?.classList.contains("sr-only")).toBe(true);
+    expect(status?.closest('[aria-hidden="true"], [hidden], [inert]')).toBeNull();
+    expect(container.querySelector('[role="log"] [role="status"]')).toBeNull();
+    expect(container.querySelector("[data-island-verb]")?.textContent).toBe("Wording");
     expect(prompt!.compareDocumentPosition(reply!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(
-      prompt!.compareDocumentPosition(working!) & Node.DOCUMENT_POSITION_FOLLOWING,
+      prompt!.compareDocumentPosition(status!) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(prompt?.querySelector('[data-slot="message-delivery"]')).toBeNull();
     expect(prompt?.textContent).not.toContain("Delivered");
@@ -261,6 +265,9 @@ it("never flashes pending for an ordinary accepted send, keeps accessible Workin
       ),
     ).toBe("Delivered");
   });
+  const runningStatus = container
+    .querySelector("[data-activity-island]")!
+    .parentElement!.querySelector(':scope > [role="status"]')!;
   observer.disconnect();
   expect(flashedDelivery).toEqual([]);
   expect((await f.projection()).turnActive).toBe(true);
@@ -274,11 +281,17 @@ it("never flashes pending for an ordinary accepted send, keeps accessible Workin
   await eventually(() => {
     expect(chat.getState().sessions[f.sessionId]!.transcript.turnActive).toBe(false);
     expect(chat.getState().sessions[f.sessionId]!.lifecycle).toBe("ready");
+    // The region stays mounted for future turns, but this announcement must
+    // retire immediately at the durable boundary, not after the bead's exit.
+    expect(runningStatus?.isConnected).toBe(true);
+    expect(runningStatus?.textContent).toBe("");
     expect(
-      [...container.querySelectorAll('[role="status"]')].some((element) =>
-        element.textContent?.includes("Working"),
+      [...container.querySelectorAll('[role="status"]')].filter((element) =>
+        element.textContent?.trim(),
       ),
-    ).toBe(false);
+    ).toEqual([]);
+    expect(container.querySelector("[data-island-verb]")).toBeNull();
+    expect(container.querySelector("[data-turn-bead-clearance]")).toBeNull();
     expect(container.querySelector(".is-user")?.textContent).toContain("Ordinary prompt");
     expect(container.querySelector('.is-user [data-slot="message-delivery"]')).toBeNull();
     expect(container.querySelector(".is-assistant")?.textContent).toContain("Streaming reply");

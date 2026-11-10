@@ -5,21 +5,24 @@
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { runInNewContext } from "node:vm";
 
 const execFileAsync = promisify(execFile);
 const DRIVE = fileURLToPath(new URL("..", import.meta.url));
 const CLI = join(DRIVE, "cli.mjs");
 const read = (name) => readFileSync(join(DRIVE, name), "utf8");
 
-let root;
+// Resolve argument paths at module load, inside one private random directory.
+const root = mkdtempSync(join(os.tmpdir(), "volli-drive-gate-"));
+const validScript = join(root, "replies.json");
 before(() => {
-  root = mkdtempSync(join(os.tmpdir(), "volli-drive-gate-"));
+  writeFileSync(validScript, JSON.stringify([{ text: "scripted one" }]));
 });
 after(() => rmSync(root, { recursive: true, force: true }));
 
@@ -77,6 +80,9 @@ describe("scripted fake turns", () => {
   for (const [args, message] of [
     [["--model", "env", "--fake-script", "unused.json"], /requires --model fake/],
     [["--fake-script", join(DRIVE, "..", "..", "package.json")], /must contain a JSON array/],
+    [["--fake-tool-free-text", "A title"], /refines --fake-script and requires it/],
+    [["--fake-script", validScript, "--fake-tool-free-text"], /non-empty text/],
+    [["--fake-script", validScript, "--fake-tool-free-text", "   "], /non-empty text/],
   ]) {
     it(`rejects invalid script setup ${args.join(" ")} before reserving an instance`, async () => {
       const home = join(root, "script-home");
@@ -90,6 +96,76 @@ describe("scripted fake turns", () => {
       assert.equal(existsSync(evidence), false);
     });
   }
+});
+
+describe("reduced motion", () => {
+  it("is offered by help", async () => {
+    const { stdout } = await execFileAsync(process.execPath, [CLI, "help"]);
+    assert.match(stdout, /--reduced-motion/);
+  });
+
+  for (const value of ["false", "true"]) {
+    it(`refuses --reduced-motion=${value} before building or reserving`, async () => {
+      const home = join(root, "motion-home");
+      const evidence = join(root, "motion-evidence");
+      const result = await execFileAsync(
+        process.execPath,
+        [CLI, "launch", `--reduced-motion=${value}`],
+        { env: { ...process.env, VOLLI_DRIVE_HOME: home, VOLLI_DRIVE_EVIDENCE: evidence } },
+      ).catch((error) => error);
+      assert.equal(result.code, 1);
+      assert.match(result.stderr, /--reduced-motion is a boolean flag/);
+      assert.doesNotMatch(result.stderr, /building the app/);
+      assert.equal(existsSync(join(home, "instances")), false);
+      assert.equal(existsSync(evidence), false);
+    });
+  }
+
+  it("emulates browser media only for an explicit true, preserving both guard switches", async () => {
+    const source = read("supervisor.mjs");
+    const helper = source.slice(
+      source.indexOf("async function configureMotionPreference(page)"),
+      source.indexOf("async function motionPreference()"),
+    );
+    for (const reducedMotion of [undefined, false, "false", true]) {
+      const calls = [];
+      await runInNewContext(`(${helper.trim()})(page)`, {
+        spec: { reducedMotion },
+        page: { emulateMedia: async (options) => calls.push(JSON.parse(JSON.stringify(options))) },
+      });
+      assert.deepEqual(calls, reducedMotion === true ? [{ reducedMotion: "reduce" }] : []);
+    }
+    assert.match(source, /extraArgs: \["--use-mock-keychain", "--password-store=basic"\]/);
+    assert.doesNotMatch(source, /--force-prefers-reduced-motion/);
+    assert.match(source, /await configureMotionPreference\(page\);\s+if \(spec\.reducedMotion/);
+    assert.match(read("cli.mjs"), /reducedMotion: flags\.reducedMotion === true/);
+  });
+
+  it("reports the live media query independently of whether it was forced", async () => {
+    const source = read("supervisor.mjs");
+    const helper = source.slice(
+      source.indexOf("async function motionPreference()"),
+      source.indexOf("async function readGuardRecord()"),
+    );
+    for (const forced of [false, true]) {
+      for (const matches of [false, true]) {
+        let reads = 0;
+        const result = await runInNewContext(`(${helper.trim()})()`, {
+          spec: { reducedMotion: forced },
+          mainPage: { evaluate: (fn) => fn() },
+          matchMedia: (query) => {
+            assert.equal(query, "(prefers-reduced-motion: reduce)");
+            reads++;
+            return { matches };
+          },
+        });
+        assert.equal(result.forced, forced);
+        assert.equal(result.matches, matches);
+        assert.equal(reads, 1);
+      }
+    }
+    assert.match(source, /reducedMotion: await motionPreference\(\)/);
+  });
 });
 
 describe("every launch path goes through assertLaunchable", () => {
@@ -126,5 +202,22 @@ describe("every launch path goes through assertLaunchable", () => {
       assert.doesNotMatch(source, /VOLLI_SMOKE_APP_BINARY\s*=/, name);
       assert.doesNotMatch(source, /executablePath/, name);
     }
+  });
+});
+
+describe("--fake-tool-free-text wiring", () => {
+  it("the CLI requires --fake-script and non-empty text, and lands the value in the spec", () => {
+    const source = read("cli.mjs");
+    assert.match(source, /--fake-tool-free-text refines --fake-script and requires it/);
+    assert.match(source, /--fake-tool-free-text needs non-empty text/);
+    assert.match(source, /fakeToolFreeText === undefined \? \{\} : \{ fakeToolFreeText \}/);
+  });
+
+  it("the supervisor answers tool-free turns with spec.fakeToolFreeText; absent keeps the echo", () => {
+    const source = read("supervisor.mjs");
+    const replies = source.indexOf("const replies = spec.fakeScript?.slice();");
+    assert.ok(replies > 0, "the boot fake-script block is present");
+    const block = source.slice(replies, source.indexOf('mark("providerReady")', replies));
+    assert.match(block, /\?\s*replies\.shift\(\)\s*:\s*spec\.fakeToolFreeText\b/);
   });
 });

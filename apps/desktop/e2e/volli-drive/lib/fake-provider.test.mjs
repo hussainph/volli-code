@@ -29,6 +29,9 @@ const PROVIDER_CLI = join(HERE, "fake-provider.mjs");
 // node_modules link (pnpm), not whatever a sibling package happens to hoist.
 const PI_AI_DIR = realpathSync(join(AGENT_RUNTIME, "node_modules/@earendil-works/pi-ai"));
 const piAi = (distPath) => import(pathToFileURL(join(PI_AI_DIR, "dist", distPath)).href);
+// Pi 1.5's native provider id; the launch contract intentionally keeps Volli's
+// durable `azure-openai-responses` id, exercised through model access below.
+const NATIVE_AZURE_PROVIDER_ID = "azure";
 
 // ---- no non-loopback network in this process --------------------------------
 
@@ -78,6 +81,7 @@ describe("fake provider via pi-ai's real azure-openai-responses stream", () => {
   let provider;
   let models;
   let model;
+  let normalizeContext;
   const savedEnv = {};
   const logged = [];
 
@@ -90,9 +94,11 @@ describe("fake provider via pi-ai's real azure-openai-responses stream", () => {
       process.env[key] = value;
     }
     const { builtinModels } = await piAi("providers/all.js");
-    const { InMemoryCredentialStore } = await piAi("index.js");
-    models = builtinModels({ credentials: new InMemoryCredentialStore() });
-    model = models.getModel(provider.providerId, provider.modelId);
+    const pi = await piAi("index.js");
+    normalizeContext = pi.normalizeContext;
+    models = builtinModels({ credentials: new pi.InMemoryCredentialStore() });
+    model = models.getModel(NATIVE_AZURE_PROVIDER_ID, provider.modelId);
+    assert.ok(model, "Pi's native Azure catalog has the pinned Responses model");
   });
 
   after(async () => {
@@ -118,13 +124,14 @@ describe("fake provider via pi-ai's real azure-openai-responses stream", () => {
     });
     assert.ok(model, "pi-ai's builtin catalog has the pinned model");
     assert.equal(model.api, "azure-openai-responses");
+    assert.equal(model.provider, NATIVE_AZURE_PROVIDER_ID);
     assert.equal(model.reasoning, false);
   });
 
   test("(a) completes a streamed text turn with the echoed text", async () => {
-    const auth = await models.checkAuth(provider.providerId);
+    const auth = await models.checkAuth(NATIVE_AZURE_PROVIDER_ID);
     assert.deepEqual(auth, { source: "AZURE_OPENAI_API_KEY", type: "api_key" });
-    const available = await models.getAvailable(provider.providerId);
+    const available = await models.getAvailable(NATIVE_AZURE_PROVIDER_ID);
     assert.ok(
       available.some((m) => m.id === provider.modelId),
       "env-only key makes the model available",
@@ -133,10 +140,13 @@ describe("fake provider via pi-ai's real azure-openai-responses stream", () => {
     const seen = provider.requests.length;
     const started = Date.now();
     const result = await drain(
-      models.streamSimple(model, {
-        systemPrompt: "You are a test.",
-        messages: [{ role: "user", content: "hello from node", timestamp: Date.now() }],
-      }),
+      models.streamSimple(
+        model,
+        normalizeContext({
+          systemPrompt: "You are a test.",
+          messages: [{ role: "user", content: "hello from node", timestamp: Date.now() }],
+        }),
+      ),
       started,
     );
     assert.equal(result.message.stopReason, "stop", result.message.errorMessage);
@@ -334,6 +344,30 @@ const request = (provider, input, stream = false) =>
     body: JSON.stringify({ model: provider.modelId, input, stream }),
   });
 
+test("a scripted reply can pace both text and function-argument deltas", async () => {
+  const provider = await startFakeProvider({
+    chunkDelayMs: 0,
+    script: [
+      {
+        text: "abcdefgh",
+        toolCalls: [{ name: "read", arguments: { path: "file.ts" } }],
+        chunkDelayMs: 25,
+      },
+    ],
+  });
+  try {
+    const started = Date.now();
+    const res = await request(provider, "paced capture", true);
+    const body = await res.text();
+    assert.equal(res.status, 200);
+    assert.equal((body.match(/event: response.output_text.delta/g) ?? []).length, 4);
+    assert.equal((body.match(/event: response.function_call_arguments.delta/g) ?? []).length, 4);
+    assert.ok(Date.now() - started >= 190, "all eight deltas use the reply's 25ms delay");
+  } finally {
+    await provider.close();
+  }
+});
+
 describe("scripted Responses function calls", () => {
   const calls = [
     {
@@ -460,7 +494,8 @@ describe("scripted Responses function calls", () => {
       const { builtinModels } = await piAi("providers/all.js");
       const { InMemoryCredentialStore } = await piAi("index.js");
       const models = builtinModels({ credentials: new InMemoryCredentialStore() });
-      const model = models.getModel(provider.providerId, provider.modelId);
+      const model = models.getModel(NATIVE_AZURE_PROVIDER_ID, provider.modelId);
+      assert.ok(model, "Pi's native Azure catalog has the pinned Responses model");
       const stream = models.streamSimple(
         model,
         { messages: [{ role: "user", content: "multiple tools", timestamp: Date.now() }] },
@@ -594,6 +629,7 @@ globalThis.fetch = (input, init) => {
 const src = (p) => pathToFileURL(join(process.env.AGENT_RUNTIME_DIR, "src/pi", p)).href;
 const { piOwnedModelAccess, piAuthFilePath } = await import(src("models.ts"));
 const { inspectPiModelAccess } = await import(src("model-access.ts"));
+const { normalizeContext } = await import("@earendil-works/pi-ai");
 
 const access = piOwnedModelAccess();
 const snapshot = await inspectPiModelAccess(
@@ -616,6 +652,7 @@ if (process.env.RUN_TURN === "1") {
     messages: [{ role: "user", content: "through volli model access", timestamp: Date.now() }],
   });
   out.turn = {
+    provider: message.provider,
     stopReason: message.stopReason,
     errorMessage: message.errorMessage ?? null,
     text: message.content.filter((b) => b.type === "text").map((b) => b.text).join(""),
@@ -637,7 +674,7 @@ if (process.env.RUN_ASK_TOOL === "1") {
   const model = access.models.getModel(providerId, modelId);
   const messages = [{ role: "user", content: "ask, answer, then ask again", timestamp: Date.now() }];
   const turn = async () => {
-    const stream = access.models.streamSimple(model, { messages, tools: [tool] });
+    const stream = access.models.streamSimple(model, normalizeContext({ messages, tools: [tool] }));
     const events = [];
     for await (const event of stream) events.push(event.type);
     return { message: await stream.result(), events };
@@ -829,6 +866,7 @@ describe("(d) Volli's piOwnedModelAccess + inspectPiModelAccess, env-only creden
       `only the fake route is available: ${out.availableModels.join(", ")}`,
     );
     assert.deepEqual(out.turn, {
+      provider: "azure-openai-responses",
       stopReason: "stop",
       errorMessage: null,
       text: "fake-agent: through volli model access",

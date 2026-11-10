@@ -1,6 +1,19 @@
 import type { RendererLogEntry, RendererStallBatch } from "@volli/shared";
 import type { IpcRequest, IpcResponse } from "@volli/host-protocol/ipc";
 import type {
+  SettingsWindowOpenInput,
+  SettingsWindowPendingNavigationResult,
+  WorkspaceWindowNavigation,
+  WorkspaceWindowPendingNavigationResult,
+} from "./settings-window";
+export type {
+  SettingsWindowNavigation,
+  SettingsWindowOpenInput,
+  SettingsWindowPendingNavigationResult,
+  WorkspaceWindowNavigation,
+  WorkspaceWindowPendingNavigationResult,
+} from "./settings-window";
+import type {
   FileMutationResult,
   FileReadResult,
   FileWriteResult,
@@ -963,7 +976,10 @@ export interface VolliDataIpcContract {
     result: WorkingCopySnapshotResult;
   };
   "volli:label-set-color": { args: [input: LabelSetColorInput]; result: LabelResult };
-  "volli:app-state-set": { args: [key: string, value: string]; result: AppStateSetResult };
+  "volli:app-state-set": {
+    args: [key: string, value: string, baseValue?: string];
+    result: AppStateSetResult;
+  };
 
   // Ticket worktrees. `ensure` runs implicitly
   // inside terminal-create (§1) and on a Session boot; `worktree-recreate`
@@ -2738,6 +2754,31 @@ export interface VolliSecretIpcContract {
 
 export type SecretIpcChannel = keyof VolliSecretIpcContract;
 
+/** Native Settings presentation belongs only to this desktop, even without a DB. */
+export interface VolliSettingsWindowIpcContract {
+  // Preload normalizes an omitted input to {} so the trailing sender always
+  // occupies the same position in the shared registry's handler signature.
+  "volli:settings-window-open": { args: [input: SettingsWindowOpenInput]; result: Result };
+  "volli:settings-window-pending-navigation": {
+    args: [];
+    result: SettingsWindowPendingNavigationResult;
+  };
+  "volli:settings-window-ready": {
+    args: [appliedRevision: number];
+    result: SettingsWindowPendingNavigationResult;
+  };
+  "volli:settings-window-open-workspace": {
+    args: [input: WorkspaceWindowNavigation];
+    result: Result;
+  };
+  "volli:settings-window-pending-workspace-navigation": {
+    args: [];
+    result: WorkspaceWindowPendingNavigationResult;
+  };
+}
+
+export type SettingsWindowIpcChannel = keyof VolliSettingsWindowIpcContract;
+
 /** Every invoke channel with a contract entry — the full catalog. */
 export interface VolliInvokeContract
   extends
@@ -2760,6 +2801,7 @@ export interface VolliInvokeContract
     VolliSessionRpcIpcContract,
     VolliSupportIpcContract,
     VolliSystemIpcContract,
+    VolliSettingsWindowIpcContract,
     VolliNotificationIpcContract,
     VolliUpdateIpcContract {}
 
@@ -2778,6 +2820,8 @@ export type VolliIpcChannel = keyof VolliInvokeContract | keyof VolliSendContrac
 /** Channel names for main→renderer push events (`webContents.send`). */
 export type VolliIpcEvent =
   | "volli:fullscreen-changed"
+  | "volli:settings-window-navigate"
+  | "volli:workspace-window-navigate"
   // Main is about to destroy this window without an unload (VC-577: menu-bar
   // mode, after the quit's confirms already answered), so `beforeunload` will
   // not flush the debounced client-local writes. The renderer sends them now
@@ -2793,6 +2837,7 @@ export type VolliIpcEvent =
   | "volli:terminal-park-state"
   | "volli:ghostty-config-changed"
   | "volli:data-changed"
+  | "volli:app-state-changed"
   // Main owns one durable armed-column countdown projection. Every window
   // receives the same whole snapshot, and settlement is announced separately
   // so renderer surfaces can react without owning the timer that decided it.
@@ -2885,7 +2930,11 @@ export type VolliIpcEvent =
   // the browser callback wins the race, and a renderer that saw those two
   // swapped would leave a dead input box waiting for a code nothing consumes.
   // Sent to the window that began the attempt, never broadcast.
-  | "volli:model-access-sign-in";
+  | "volli:model-access-sign-in"
+  // A credential, default, visibility list or refreshed catalogue was accepted
+  // in another window. Payload-free: readers drop their held catalogue and
+  // query the authority again; sign-in frames remain addressed to their opener.
+  | "volli:model-access-changed";
 
 // ---- session-rpc wire agreement ---------------------------------------------
 // @volli/shared owns the three Session RPC channel NAMES (session-rpc-wire.ts)
@@ -3076,7 +3125,14 @@ export type ArchivedTicketsResult = Result<{ tickets: ArchivedTicket[] }>;
 
 export type LabelResult = Result<{ label: Label }>;
 
-export type AppStateSetResult = Result;
+/** A merged preference write may return its authoritative accepted snapshot. */
+export type AppStateSetResult = Result<{ value?: string }>;
+
+/** An accepted preference write forwarded to the other desktop windows. */
+export interface AppStateChangedEvent {
+  key: string;
+  value: string;
+}
 
 /** A ticket's full event history, chronological — returned by `ticket-events` (the Activity feed read). */
 export type TicketEventsResult = Result<{ events: TicketEvent[] }>;
@@ -3213,6 +3269,8 @@ export interface PromptTemplateIndexInput {
 export type PromptTemplateIndexResult = Result<{
   templates: PromptTemplate[];
   skills: SkillReference[];
+  /** Candidate directories skipped by the bounded scan, not a count of readable skills. */
+  omittedSkillDirectories?: number;
 }>;
 
 // ---- find across files (plan §4.7) ----------------------------------------

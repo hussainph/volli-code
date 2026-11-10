@@ -1,0 +1,562 @@
+diff --git a/dist/declarations.d.ts b/dist/declarations.d.ts
+index 1a60faa495a3fd8e81c850b3b1dd86cbbede317c..3cfe86beb6879ed9e1e4074e9b0a52e21961d27e 100644
+--- a/dist/declarations.d.ts
++++ b/dist/declarations.d.ts
+@@ -4,6 +4,8 @@ import type { CodemodeJsonSchema, CodemodeTool } from "./types.ts";
+ /** Largest rendered input type, in characters, before it becomes `unknown`. */
+ export declare const DEFAULT_INPUT_SCHEMA_MAX_CHARS = 16000;
+ export interface RenderDeclarationsOptions {
++    /** Volli: preserve Pi 1.0's frozen provider-visible declaration bytes. */
++    legacy?: boolean;
+     tools?: readonly CodemodeTool[];
+     globals?: readonly CodemodeTool[];
+ }
+@@ -18,6 +20,7 @@ export declare function renderDeclarations(options: RenderDeclarationsOptions):
+  * name as the identifier scripts use. Input types longer than `inputMaxChars` render as `unknown`.
+  */
+ export declare function renderToolSignature(tool: Pick<CodemodeTool, "name" | "inputSchema" | "outputSchema">, options?: {
++    legacy?: boolean;
+     inputMaxChars?: number;
+ }): string;
+ /**
+@@ -25,10 +28,13 @@ export declare function renderToolSignature(tool: Pick<CodemodeTool, "name" | "i
+  * listings and `ALL_TOOLS` entries.
+  */
+ export declare function renderToolSample(tool: Pick<CodemodeTool, "name" | "description" | "inputSchema" | "outputSchema">, options?: {
++    legacy?: boolean;
+     inputMaxChars?: number;
+ }): string;
+ /** The type a tool call resolves to: the output schema's type, and `unknown` without a schema. */
+-export declare function renderToolOutputType(schema: CodemodeJsonSchema | undefined): string;
++export declare function renderToolOutputType(schema: CodemodeJsonSchema | undefined, options?: {
++    legacy?: boolean;
++}): string;
+ /**
+  * Convert a JSON Schema to a TypeScript type expression: objects on one line (`{ a: string; b?: number; }`) with properties sorted by name,
+  * or one property per line with `//` comments when a property has a description or constraints the
+@@ -38,6 +44,7 @@ export declare function renderToolOutputType(schema: CodemodeJsonSchema | undefi
+  * and renders as `unknown` if it is still too long.
+  */
+ export declare function schemaToType(schema: CodemodeJsonSchema, options?: {
++    legacy?: boolean;
+     maxChars?: number;
+ }): string;
+ //# sourceMappingURL=declarations.d.ts.map
+\ No newline at end of file
+diff --git a/dist/declarations.js b/dist/declarations.js
+index f303b1e6d5f0dbd1498d86979d6ca1ea75e0e876..e5bf956d41b4e11a418d73dd821b3f4417cd4b16 100644
+--- a/dist/declarations.js
++++ b/dist/declarations.js
+@@ -36,21 +36,21 @@ export function renderDeclarations(options) {
+     const sections = [];
+     const tools = options.tools ?? [];
+     if (tools.length > 0) {
+-        const members = tools.map((tool) => `${docComment(tool.description, INDENT)}${INDENT}${renderToolSignature(tool)}`);
++        const members = tools.map((tool) => `${docComment(tool.description, INDENT)}${INDENT}${renderToolSignature(tool, options)}`);
+         sections.push(`declare const tools: {\n${members.join("\n")}\n};`);
+     }
+     const namespaces = new Map();
+     for (const global of options.globals ?? []) {
+         const dot = global.name.indexOf(".");
+         if (dot === -1) {
+-            sections.push(renderGlobal(`declare function ${global.name}`, global, ""));
++            sections.push(renderGlobal(`declare function ${global.name}`, global, "", options));
+             continue;
+         }
+         const namespace = global.name.slice(0, dot);
+         const members = namespaces.get(namespace) ?? [];
+         if (members.length === 0)
+             namespaces.set(namespace, members);
+-        members.push(renderGlobal(global.name.slice(dot + 1), global, INDENT));
++        members.push(renderGlobal(global.name.slice(dot + 1), global, INDENT, options));
+     }
+     for (const [namespace, members] of namespaces) {
+         sections.push(`declare const ${namespace}: {\n${members.join("\n")}\n};`);
+@@ -64,8 +64,8 @@ export function renderDeclarations(options) {
+ export function renderToolSignature(tool, options = {}) {
+     const input = tool.inputSchema === undefined
+         ? "unknown"
+-        : schemaToType(tool.inputSchema, { maxChars: options.inputMaxChars ?? DEFAULT_INPUT_SCHEMA_MAX_CHARS });
+-    return `${toCodemodeIdentifier(tool.name)}(args: ${input}): Promise<${renderToolOutputType(tool.outputSchema)}>;`;
++        : schemaToType(tool.inputSchema, { maxChars: options.inputMaxChars ?? DEFAULT_INPUT_SCHEMA_MAX_CHARS, legacy: options.legacy });
++    return `${toCodemodeIdentifier(tool.name)}(args: ${input}): Promise<${renderToolOutputType(tool.outputSchema, options)}>;`;
+ }
+ /**
+  * A tool's sample: the description followed by the tool's declaration. Used for tool
+@@ -76,15 +76,27 @@ export function renderToolSample(tool, options = {}) {
+     return `${tool.description?.trim() ?? ""}\n\ncodemode tool declaration:\n\`\`\`ts\n${declaration}\n\`\`\``;
+ }
+ /** The type a tool call resolves to: the output schema's type, and `unknown` without a schema. */
+-export function renderToolOutputType(schema) {
+-    return schema === undefined ? "unknown" : schemaToType(schema);
++export function renderToolOutputType(schema, options = {}) {
++    // Volli Sessions froze Pi 1.0's rendering, including its MCP result shorthand.
++    if (options.legacy && isObject(schema) && isObject(schema.properties)) {
++        const { content, isError, _meta, structuredContent } = schema.properties;
++        if (isObject(content) && content.type === "array" && isObject(content.items) && content.items.type === "object" &&
++            isObject(isError) && isError.type === "boolean" && isObject(_meta) && _meta.type === "object") {
++            const type = schemaToType(isObject(structuredContent) || typeof structuredContent === "boolean" ? structuredContent : true, options);
++            return type === "unknown" ? "CallToolResult" : `CallToolResult<${type}>`;
++        }
++    }
++    return schema === undefined ? "unknown" : schemaToType(schema, options);
+ }
+-function renderGlobal(head, global, indent) {
++function isObject(value) {
++    return typeof value === "object" && value !== null && !Array.isArray(value);
++}
++function renderGlobal(head, global, indent, options) {
+     if (global.signature !== undefined) {
+         return `${docComment(global.description, indent)}${indent}${head}${global.signature};`;
+     }
+-    const input = global.inputSchema === undefined ? "unknown" : schemaToType(global.inputSchema);
+-    const output = global.outputSchema === undefined ? "unknown" : schemaToType(global.outputSchema);
++    const input = global.inputSchema === undefined ? "unknown" : schemaToType(global.inputSchema, options);
++    const output = global.outputSchema === undefined ? "unknown" : schemaToType(global.outputSchema, options);
+     return `${docComment(global.description, indent)}${indent}${head}(args: ${input}): Promise<${output}>;`;
+ }
+ function docComment(description, indent) {
+@@ -114,10 +126,12 @@ function union(types) {
+  * and renders as `unknown` if it is still too long.
+  */
+ export function schemaToType(schema, options = {}) {
+-    const render = (tags) => toType(schema, { root: schema, resolving: new Set(), expansions: 0, tags });
+-    const type = render(true);
++    const render = (tags) => toType(schema, { root: schema, resolving: new Set(), expansions: 0, tags, legacy: options.legacy });
++    const type = render(!options.legacy);
+     if (options.maxChars === undefined || type.length <= options.maxChars)
+         return type;
++    if (options.legacy)
++        return "unknown";
+     const untagged = render(false);
+     return untagged.length <= options.maxChars ? untagged : "unknown";
+ }
+@@ -298,7 +312,7 @@ function objectType(schema, context) {
+         return "{}";
+     const comments = names.map((name) => {
+         const lines = descriptionOf(properties[name])
+-            .split(LINE_TERMINATORS)
++            .split(context.legacy ? /\r?\n/ : LINE_TERMINATORS)
+             .map((line) => line.trim())
+             .filter(Boolean);
+         const tags = context.tags ? constraintTags(properties[name]) : "";
+diff --git a/dist/runtime/execution.d.ts b/dist/runtime/execution.d.ts
+index 283bcd150dd4f40f1b0f49446e10702d331b933e..ee0be5ca150997f24c881fc6d57e1bb823205d4b 100644
+--- a/dist/runtime/execution.d.ts
++++ b/dist/runtime/execution.d.ts
+@@ -33,6 +33,9 @@ export declare class CodemodeSandboxBase {
+     private readonly globalsByName;
+     private readonly timeoutMs;
+     private readonly memoryLimitBytes;
++    private readonly maxOutputChars;
++    private readonly maxCallChars;
++    private readonly initializationCode;
+     private readonly launch;
+     private readonly running;
+     private closed;
+diff --git a/dist/runtime/execution.js b/dist/runtime/execution.js
+index 2702b1475bebb89bb6e5ec7d7382dac516cbdef9..5f7e4b1c8641225fb9d1637c69a2f603f2eb551c 100644
+--- a/dist/runtime/execution.js
++++ b/dist/runtime/execution.js
+@@ -128,11 +128,16 @@ class Execution {
+     signal;
+     timer;
+     output = [];
++    outputChars = 0;
++    maxOutputChars;
++    maxCallChars;
+     calls = [];
+     pending = new Map();
+     /** Whether the execution has its outcome. */
+     finished = false;
+     constructor(options) {
++        this.maxOutputChars = options.maxOutputChars;
++        this.maxCallChars = options.maxCallChars;
+         this.promise = new Promise((resolve) => {
+             this.resolveResult = resolve;
+         });
+@@ -163,6 +168,9 @@ class Execution {
+             })),
+             globals: options.globals.map((global) => ({ name: global.name, spread: global.spread === true })),
+             memoryLimitBytes: options.memoryLimitBytes,
++            maxOutputChars: options.maxOutputChars,
++            maxCallChars: options.maxCallChars,
++            initializationCode: options.initializationCode,
+             store: options.store,
+             ...(options.deterministic ? { deterministic: options.deterministic } : {}),
+         };
+@@ -258,9 +266,18 @@ class Execution {
+             throw new BridgeError("unknown message from the worker");
+         switch (message.type) {
+             case "output":
++                this.outputChars += message.item.type === "text" ? message.item.text.length : message.item.data.length;
++                if (this.maxOutputChars !== undefined && this.outputChars > this.maxOutputChars) {
++                    this.finish({ kind: "script", name: "RangeError", message: `The script's output passed its limit of ${this.maxOutputChars} characters` });
++                    break;
++                }
+                 this.output.push(message.item);
+                 break;
+             case "call":
++                if (this.maxCallChars !== undefined && message.args !== undefined && message.args.length > this.maxCallChars) {
++                    this.post({ type: "result", id: message.id, ok: false, payload: `The call's arguments passed their limit of ${this.maxCallChars} characters` });
++                    break;
++                }
+                 if (this.pending.has(message.id))
+                     throw new BridgeError(`duplicate call id ${message.id}`);
+                 if (this.control)
+@@ -283,11 +300,20 @@ class Execution {
+         }
+     }
+     handleDone(message) {
+-        // Decode everything before finish(), which must not throw once it starts.
++        const limit = this.maxOutputChars;
++        // Bounds are also checked before decoding, for a worker that did not enforce them.
+         if (!message.ok) {
++            if (limit !== undefined && message.error.length > limit) {
++                this.finish({ kind: "script", name: "RangeError", message: `The script's error passed its limit of ${limit} characters` });
++                return;
++            }
+             this.finish(parseScriptError(message.error), undefined, undefined, message.during);
+             return;
+         }
++        if (limit !== undefined && message.value !== undefined && this.outputChars + message.value.length > limit) {
++            this.finish({ kind: "script", name: "RangeError", message: `The script's return value passed its output limit of ${limit} characters` });
++            return;
++        }
+         const value = message.value === undefined ? undefined : parseBridgeJson(message.value, "return value");
+         this.finish(undefined, value, parseStoreWrites(message.writes), message.during);
+     }
+@@ -383,12 +409,18 @@ export class CodemodeSandboxBase {
+     globalsByName = new Map();
+     timeoutMs;
+     memoryLimitBytes;
++    maxOutputChars;
++    maxCallChars;
++    initializationCode;
+     launch;
+     running = new Set();
+     closed = false;
+     constructor(options, launch) {
+         this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+         this.memoryLimitBytes = options.memoryLimitBytes;
++        this.maxOutputChars = options.maxOutputChars;
++        this.maxCallChars = options.maxCallChars;
++        this.initializationCode = options.initializationCode;
+         this.launch = launch;
+         for (const tool of options.tools ?? [])
+             this.registerTool(tool);
+@@ -428,6 +460,9 @@ export class CodemodeSandboxBase {
+             timeoutMs: options.timeoutMs ?? this.timeoutMs,
+             signal: options.signal,
+             memoryLimitBytes: this.memoryLimitBytes,
++            maxOutputChars: this.maxOutputChars,
++            maxCallChars: this.maxCallChars,
++            initializationCode: this.initializationCode,
+             store: serializeStore(options.store),
+             launch: this.launch,
+         });
+@@ -470,6 +505,9 @@ export class CodemodeSandboxBase {
+             timeoutMs: options.timeoutMs ?? Number.POSITIVE_INFINITY,
+             signal: options.signal,
+             memoryLimitBytes: this.memoryLimitBytes,
++            maxOutputChars: this.maxOutputChars,
++            maxCallChars: this.maxCallChars,
++            initializationCode: this.initializationCode,
+             store: serializeStore(options.store),
+             deterministic: { startedAt: options.startedAt, seed: options.seed },
+             control: { onStarted: options.onStarted, onCall: options.onCall, onIdle: options.onIdle },
+diff --git a/dist/runtime/prelude-source.js b/dist/runtime/prelude-source.js
+index c244f03d7bdb3eca7b985a886895543e150cc4e9..79beb5c861973b7021e165b57ae5bfde6ef8b621 100644
+--- a/dist/runtime/prelude-source.js
++++ b/dist/runtime/prelude-source.js
+@@ -8,8 +8,8 @@
+  * as JSON strings and are parsed on this side.
+  *
+  * Output helpers: `text(value)` appends a text item (non-strings are
+- * JSON-stringified), `image(urlOrItem)` appends an image from a base64 `data:` URL, an
+- * `{ image_url }` object, or an image block `{ type: "image", data, mimeType }`, and `exit()` ends the script
++ * JSON-stringified), `image(handle)` appends a Volli opaque image handle (never image bytes
++ * or a URL), and `exit()` ends the script
+  * successfully. `console.*` appends text items marked as console output.
+  *
+  * `store(key, value)` and `load(key)` are synchronous: they work on a snapshot of
+@@ -203,7 +203,13 @@ export const PRELUDE_SOURCE = `(function (bridge, toolsJson, globalsJson, storeJ
+ 				}
+ 				const id = nextId++;
+ 				pending.set(id, { resolve, reject });
+-				bridge(kind, id, name, json);
++				try {
++					bridge(kind, id, name, json);
++				} catch (error) {
++					// A worker-side argument bound rejects without leaving a phantom pending call.
++					pending.delete(id);
++					reject(error);
++				}
+ 			});
+ 	}
+ 
+@@ -398,31 +404,13 @@ export const PRELUDE_SOURCE = `(function (bridge, toolsJson, globalsJson, storeJ
+ 	];
+ 
+ 	function image(value) {
+-		const url = imageUrl(value);
+-		if (url === "") throw new TypeErrorCtor(${JSON.stringify(IMAGE_HELPER_EXPECTS)});
+-		const colon = url.indexOf(":");
+-		const scheme = colon === -1 ? "" : url.slice(0, colon).toLowerCase();
+-		if (scheme === "http" || scheme === "https") {
+-			throw new TypeErrorCtor("remote image URLs are not supported in tool outputs. Pass a base64 data URI instead");
+-		}
+-		const comma = url.indexOf(",");
+-		const header = comma === -1 ? [] : url.slice(colon + 1, comma).split(";");
+-		if (scheme !== "data" || comma === -1 || header.slice(1).every((part) => part.toLowerCase() !== "base64")) {
+-			throw new TypeErrorCtor("invalid image output. Pass a base64 data URI instead");
+-		}
+-		// Providers reject the whole request on a bad image, and a persisted image block would be
+-		// resent on every later turn. Line breaks from wrapped base64 are dropped. The declared type
+-		// is ignored in favor of the detected one, as providers also reject mismatches.
+-		const data = url.slice(comma + 1).replace(/\\s+/g, "");
+-		if (data.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) {
+-			throw new TypeErrorCtor("invalid image output. The image data is not valid base64 (truncated or corrupted?)");
+-		}
+-		const head = data.slice(0, 16);
+-		const signature = IMAGE_SIGNATURES.find(([, pattern]) => pattern.test(head));
+-		if (!signature) {
+-			throw new TypeErrorCtor("invalid image output. The image data is not a PNG, JPEG, GIF, or WebP image");
++		// Volli: only an opaque reference crosses the VM; the current run owns its bytes.
++		const handle = typeof value === "string" ? value
++			: value && value.type === "image" && typeof value.handle === "string" ? value.handle : undefined;
++		if (handle === undefined || /^(?:data|https?):/i.test(handle)) {
++			throw new TypeErrorCtor("Volli image() expects an image handle. Use image(shot.images[0]) or return shot; image bytes and URLs are not supported.");
+ 		}
+-		output("image", data, signature[0]);
++		output("image", handle, "application/x-volli-image-handle");
+ 	}
+ 
+ 	function exit() {
+diff --git a/dist/runtime/protocol.d.ts b/dist/runtime/protocol.d.ts
+index beb194ea11ae9b51167dab05224df674b275e755..fccc5fc657f336f986058642397313dd1366baea 100644
+--- a/dist/runtime/protocol.d.ts
++++ b/dist/runtime/protocol.d.ts
+@@ -22,6 +22,11 @@ export interface VmStartData {
+         spread: boolean;
+     }[];
+     memoryLimitBytes: number | undefined;
++    /** Volli's host-configured bounds, enforced before posting from the VM's thread. */
++    maxOutputChars?: number;
++    maxCallChars?: number;
++    /** Host-authored clock/random initialization, evaluated before the prelude's lockdown. */
++    initializationCode?: string;
+     /** Snapshot for `load()`: key to JSON text. */
+     store: Record<string, string>;
+     /**
+diff --git a/dist/runtime/vm.js b/dist/runtime/vm.js
+index 929527b976f8dc2b344b595f0dd87ac4af1874e9..1522d70afdffed7f35024986e5756bd19fe0ef28 100644
+--- a/dist/runtime/vm.js
++++ b/dist/runtime/vm.js
+@@ -114,6 +114,75 @@ function describeException(error) {
+     const stack = error.stack?.trimEnd();
+     return JSON.stringify({ name: error.name, message: error.message, stack: stack ? `${head}\n${stack}` : head });
+ }
++/** Volli: keep error JSON bounded before it crosses the worker boundary. */
++function limitFailure(message) {
++    return JSON.stringify({ name: "RangeError", message, stack: `RangeError: ${message}` });
++}
++/** The longest prefix whose JSON string contents, including an ellipsis, fit. */
++function boundedJsonString(value, budget) {
++    let end = 0;
++    let length = 0;
++    while (end < value.length) {
++        const code = value.charCodeAt(end);
++        let width = 1;
++        let cost = 1;
++        if (code === 34 || code === 92 || code === 8 || code === 9 || code === 10 || code === 12 || code === 13) {
++            cost = 2;
++        }
++        else if (code < 32) {
++            cost = 6;
++        }
++        else if (code >= 0xd800 && code <= 0xdfff) {
++            const next = value.charCodeAt(end + 1);
++            if (code <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) {
++                width = 2;
++                cost = 2;
++            }
++            else {
++                cost = 6;
++            }
++        }
++        const next = end + width;
++        // A truncated string needs one more character for its ellipsis.
++        if (length + cost + (next < value.length ? 1 : 0) > budget)
++            break;
++        length += cost;
++        end = next;
++    }
++    if (end === value.length)
++        return { value, length };
++    return budget > 0
++        ? { value: `${value.slice(0, end)}…`, length: length + 1 }
++        : { value: "", length: 0 };
++}
++function boundedError(json, maxChars) {
++    if (maxChars === undefined || json.length <= maxChars)
++        return json;
++    let parsed;
++    try {
++        parsed = JSON.parse(json);
++    }
++    catch {
++        return limitFailure("The script's error could not be reported");
++    }
++    const error = { name: parsed.name, message: parsed.message, stack: parsed.stack };
++    const strings = Object.keys(error).filter((key) => typeof error[key] === "string");
++    const fixed = { ...error };
++    for (const key of strings)
++        fixed[key] = "";
++    let remaining = maxChars - JSON.stringify(fixed).length;
++    if (remaining < 0)
++        return limitFailure("The script's error passed its output limit");
++    // Count each prefix once and serialize once, rather than re-encoding a
++    // near-limit message/stack for every step of a binary search. Unused space
++    // from a short name is shared by the remaining fields.
++    for (const [index, key] of strings.entries()) {
++        const cut = boundedJsonString(error[key], Math.floor(remaining / (strings.length - index)));
++        error[key] = cut.value;
++        remaining -= cut.length;
++    }
++    return JSON.stringify(error);
++}
+ /** Promise jobs run between two `shouldInterrupt` polls while draining the job queue. */
+ const JOBS_PER_POLL = 50;
+ function crashMessage(error) {
+@@ -121,6 +190,14 @@ function crashMessage(error) {
+ }
+ export async function startVm(options) {
+     const { data, post } = options;
++    const maxOutputChars = data.maxOutputChars;
++    const maxCallChars = data.maxCallChars;
++    let heldChars = 0;
++    let limited = false;
++    const failOnLimit = (message) => {
++        limited = true;
++        post({ type: "done", ok: false, error: limitFailure(message) });
++    };
+     const maxStackSize = options.maxStackSize ?? MAX_STACK_SIZE;
+     const deterministic = data.deterministic;
+     const clock = deterministic && {
+@@ -212,48 +289,63 @@ export async function startVm(options) {
+     try {
+         // Called from the prelude with primitives only.
+         const bridge = vm.newFunction("bridge", (kind, a, b, c) => {
++            if (limited)
++                return vm.undefined;
+             switch (kind.toString()) {
+                 case "call":
+-                case "global":
++                case "global": {
++                    const args = c === undefined || c.isUndefined ? undefined : c.toString();
++                    if (maxCallChars !== undefined && args !== undefined && args.length > maxCallChars) {
++                        // quickjs-wasi turns a thrown host error into a guest rejection. No call is posted.
++                        throw new RangeError(`The call's arguments passed their limit of ${maxCallChars} characters`);
++                    }
+                     issued++;
+                     post({
+                         type: "call",
+                         id: a.toNumber(),
+                         target: kind.toString() === "call" ? "tool" : "global",
+                         name: b.toString(),
+-                        args: c === undefined || c.isUndefined ? undefined : c.toString(),
++                        args,
+                     });
+                     break;
+-                case "output":
+-                    post({
+-                        type: "output",
+-                        item: a.toString() === "image"
+-                            ? { type: "image", data: b.toString(), mimeType: c.toString() }
+-                            : a.toString() === "console"
+-                                ? { type: "text", text: b.toString(), console: true }
+-                                : { type: "text", text: b.toString() },
+-                    });
++                }
++                case "output": {
++                    const item = a.toString() === "image"
++                        ? { type: "image", data: b.toString(), mimeType: c.toString() }
++                        : a.toString() === "console"
++                            ? { type: "text", text: b.toString(), console: true }
++                            : { type: "text", text: b.toString() };
++                    heldChars += item.type === "text" ? item.text.length : item.data.length;
++                    if (maxOutputChars !== undefined && heldChars > maxOutputChars) {
++                        failOnLimit(`The script's output passed its limit of ${maxOutputChars} characters`);
++                        break;
++                    }
++                    post({ type: "output", item });
+                     break;
++                }
+                 case "done": {
+                     // The host stops the VM on `done`, so the `idle` of this drain never arrives: report its numbers here.
+                     const during = clock ? { during: { seq: current, issued } } : {};
+                     if (a.toBoolean()) {
+-                        post({
+-                            type: "done",
+-                            ok: true,
+-                            value: b === undefined || b.isUndefined ? undefined : b.toString(),
+-                            writes: c.toString(),
+-                            ...during,
+-                        });
++                        const value = b === undefined || b.isUndefined ? undefined : b.toString();
++                        if (maxOutputChars !== undefined && value !== undefined && heldChars + value.length > maxOutputChars) {
++                            failOnLimit(`The script's return value passed its output limit of ${maxOutputChars} characters`);
++                            break;
++                        }
++                        post({ type: "done", ok: true, value, writes: c.toString(), ...during });
+                     }
+                     else {
+-                        post({ type: "done", ok: false, error: b.toString(), ...during });
++                        post({ type: "done", ok: false, error: boundedError(b.toString(), maxOutputChars), ...during });
+                     }
+                     break;
+                 }
+             }
+             return vm.undefined;
+         });
++        // Volli's host-authored clock/random initialization must precede lockdown. The model's
++        // program still runs only after the built-ins have been frozen by PRELUDE_SOURCE.
++        if (data.initializationCode !== undefined)
++            vm.evalCode(data.initializationCode, "codemode-init.js").dispose();
+         // These handles live as long as the VM, which the caller disposes as a whole.
+         api = vm.withScope((scope) => scope.escape(vm.callFunction(vm.evalCode(PRELUDE_SOURCE, "codemode-prelude.js"), vm.undefined, bridge, vm.newString(JSON.stringify(data.tools)), vm.newString(JSON.stringify(data.globals)), vm.newString(JSON.stringify(data.store)))));
+         settle = api.getProp("settle");
+@@ -276,7 +368,7 @@ export async function startVm(options) {
+         catch (error) {
+             if (!(error instanceof JSException))
+                 throw error;
+-            post({ type: "done", ok: false, error: describeException(error) });
++            post({ type: "done", ok: false, error: boundedError(describeException(error), maxOutputChars) });
+             return session;
+         }
+         vm.callFunction(run, api, fn).dispose();
+diff --git a/dist/types.d.ts b/dist/types.d.ts
+index 76b5c5895fc63180193bcf7340b353a055554d82..35ebc1a4ceacaec88affd199b4f3191212e5ad28 100644
+--- a/dist/types.d.ts
++++ b/dist/types.d.ts
+@@ -124,6 +124,19 @@ export interface CodemodeSandboxBaseOptions {
+      * `InternalError: out of memory`. Default: no limit beyond wasm32's 4 GiB address space.
+      */
+     memoryLimitBytes?: number;
++    /**
++     * Volli: maximum characters of output, the return value, or an error sent to the host.
++     * Checked before posting from the VM's thread; output and return values share the budget.
++     * Default: only the prelude's fixed output/item limits.
++     */
++    maxOutputChars?: number;
++    /** Volli: maximum JSON characters of one call's arguments, refused before posting to the host. */
++    maxCallChars?: number;
++    /**
++     * Volli: host-authored initialization code, evaluated before the prelude freezes built-ins.
++     * Used to preserve the existing run clock and random sequence; never model-authored code.
++     */
++    initializationCode?: string;
+ }
+ /** Options of `CodemodeSandbox`, which runs each VM in a Node or Bun worker thread. */
+ export interface CodemodeSandboxOptions extends CodemodeSandboxBaseOptions {

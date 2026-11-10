@@ -1,8 +1,8 @@
+import { Type } from "typebox";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
   createInitialSystemMessage,
   toToolDeclaration,
-  Type,
   type Message,
   type SystemMessage,
   type Tool,

@@ -292,6 +292,16 @@ describe("buildCommandPaletteItems", () => {
     ]);
   });
 
+  it.each([null, "openai-codex"])("carries saved provider %s in palette rows", (providerId) => {
+    const alpha = project("p1", "Alpha", "ALP");
+    const record = chat({
+      ticketId: null,
+      model: providerId === null ? null : { providerId, modelId: "test", reasoningLevel: "off" },
+    });
+    const result = buildCommandPaletteItems([alpha], {}, {}, alpha.id, [record]);
+    expect(result.sessions[0]?.savedProviderId).toBe(providerId);
+  });
+
   it("adds durable chats and overlays a title that just changed in a resident client", () => {
     const alpha = project("p1", "Alpha", "ALP");
     const linked = ticket("t1", alpha.id, 1, "Fix auth", 10);
@@ -685,9 +695,9 @@ describe("buildNavigationCommandItems", () => {
       "Home",
       "Board view",
       "List view",
-      "Configure",
-      "Configure → Skills",
-      "Configure → MCP Servers",
+      "Project settings",
+      "Settings → Skills",
+      "Settings → MCP Servers",
       "Settings",
     ]);
     expect(items[0]).toMatchObject({ id: "home", hint: "Alpha" });
@@ -695,9 +705,12 @@ describe("buildNavigationCommandItems", () => {
       id: "configure-pane",
       paneKey: "skills",
       hint: "Alpha",
-      keywords: ["Skills", "skill"],
+      keywords: ["configure", "Configure → Skills", "Skills", "skill"],
     });
-    expect(items[5]).toMatchObject({ paneKey: "mcp", keywords: ["MCP Servers"] });
+    expect(items[5]).toMatchObject({
+      paneKey: "mcp",
+      keywords: ["configure", "Configure → MCP Servers", "MCP Servers"],
+    });
     expect(buildNavigationCommandItems({ name: "Alpha" }).map((item) => item.id)).toEqual([
       "home",
       "board",
@@ -715,7 +728,6 @@ describe("buildEditorCommandItems", () => {
         kind: "editor-command",
         id: "go-to-line",
         title: "Go to Line…",
-        hint: "In the editor you were last in",
       },
     ]);
   });

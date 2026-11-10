@@ -57,6 +57,7 @@ import {
 } from "@volli/shared/cloud";
 
 import type { BackendLink } from "./backend-link";
+import { withMainSpan } from "../log/context";
 
 /** The backend calls a chunker makes. */
 export interface StreamChunkBackend {
@@ -552,6 +553,10 @@ export function createStreamChunker(options: StreamChunkerOptions): StreamChunke
       );
   }
 
+  function timedTick(): void {
+    withMainSpan({ door: "timer", operation: "runner-stream-chunk" }, tick);
+  }
+
   function tick(): void {
     const at = now();
     for (const watch of watches.values()) {
@@ -577,7 +582,7 @@ export function createStreamChunker(options: StreamChunkerOptions): StreamChunke
   }
 
   function syncInterval(): void {
-    if (watches.size > 0 && interval === null) interval = timers.setInterval(tick, cadenceMs);
+    if (watches.size > 0 && interval === null) interval = timers.setInterval(timedTick, cadenceMs);
     if (watches.size === 0 && interval !== null) {
       timers.clearInterval(interval);
       interval = null;

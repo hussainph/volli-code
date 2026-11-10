@@ -40,9 +40,14 @@ const SUBAGENT = {
   reason: null,
 } as const;
 
-describe("readHostNotice — shared metadata", () => {
+describe("readHostNotice — recorded host producer and metadata", () => {
   it("projects a Subagent Session fact and derives its handle", () => {
-    expect(readHostNotice(message(sessionHostNoticeMetadata(SUBAGENT)))).toEqual({
+    expect(
+      readHostNotice(message(sessionHostNoticeMetadata(SUBAGENT)), {
+        kind: "volli",
+        reason: "subagent-notice",
+      }),
+    ).toEqual({
       ...SUBAGENT,
       sessionHandle: "ses-chil",
     });
@@ -51,7 +56,10 @@ describe("readHostNotice — shared metadata", () => {
   it("projects every known Subagent Session outcome and relaunch reason", () => {
     for (const state of ["completed", "interrupted", "stopped", "failed", "timed-out"] as const) {
       expect(
-        readHostNotice(message(sessionHostNoticeMetadata({ ...SUBAGENT, state }))),
+        readHostNotice(message(sessionHostNoticeMetadata({ ...SUBAGENT, state })), {
+          kind: "volli",
+          reason: "subagent-notice",
+        }),
       ).toMatchObject({ kind: "subagent", state });
     }
     expect(
@@ -63,6 +71,7 @@ describe("readHostNotice — shared metadata", () => {
             reason: "app-relaunched",
           }),
         ),
+        { kind: "volli", reason: "subagent-notice" },
       ),
     ).toMatchObject({ kind: "subagent", reason: "app-relaunched" });
   });
@@ -80,6 +89,7 @@ describe("readHostNotice — shared metadata", () => {
               action,
             }),
           ),
+          { kind: "volli", reason: "browser-notice" },
         ),
       ).toEqual({ kind: "browser-hold", tabId: "tab-7", label: "Example", action });
     }
@@ -97,6 +107,7 @@ describe("readHostNotice — shared metadata", () => {
             action: "person-took",
           }),
         ),
+        { kind: "volli", reason: "browser-notice" },
       ),
     ).toMatchObject({ kind: "browser-hold", label: "docs.example.com" });
   });
@@ -112,7 +123,12 @@ describe("readHostNotice — shared metadata", () => {
         action: "person-took",
       },
     ]) {
-      expect(readHostNotice(message({ kind: "session-host-notice", notice }))).toEqual({
+      expect(
+        readHostNotice(message({ kind: "session-host-notice", notice }), {
+          kind: "volli",
+          reason: "browser-notice",
+        }),
+      ).toEqual({
         kind: "browser-hold",
         tabId: "12345678-rest",
         label: "Browser Tab 12345678",
@@ -167,7 +183,10 @@ describe("readHostNotice — shared metadata", () => {
       },
     },
   ])("keeps $why in Volli's voice as an unknown host row", ({ metadata }) => {
-    expect(readHostNotice(message(metadata))).toEqual({ kind: "unknown", text: MODEL_NOTICE });
+    expect(readHostNotice(message(metadata), { kind: "volli", reason: "browser-notice" })).toEqual({
+      kind: "unknown",
+      text: MODEL_NOTICE,
+    });
   });
 
   it("uses a safe sentence when recognized metadata has no text", () => {
@@ -177,26 +196,36 @@ describe("readHostNotice — shared metadata", () => {
           { kind: "session-host-notice" },
           { parts: [{ type: "file", mediaType: "image/png", url: "volli-blob:x" }] },
         ),
+        { kind: "volli", reason: "subagent-notice" },
       ),
     ).toEqual({ kind: "unknown", text: "Volli recorded a notice this client cannot display." });
   });
 
   it("leaves assistant messages and foreign user metadata as ordinary Turns", () => {
     expect(
-      readHostNotice(message(sessionHostNoticeMetadata(SUBAGENT), { role: "assistant" })),
+      readHostNotice(message(sessionHostNoticeMetadata(SUBAGENT), { role: "assistant" }), {
+        kind: "volli",
+        reason: "subagent-notice",
+      }),
     ).toBeNull();
-    expect(readHostNotice(message({ kind: "something-else" }))).toBeNull();
-    expect(readHostNotice(message([]))).toBeNull();
+    expect(
+      readHostNotice(message({ kind: "something-else" }), {
+        kind: "volli",
+        reason: "subagent-notice",
+      }),
+    ).toBeNull();
+    expect(readHostNotice(message([]), { kind: "volli", reason: "subagent-notice" })).toBeNull();
   });
 });
 
 describe("readHostNotice — compatibility", () => {
-  it("projects historical Browser hold notices that predate metadata", () => {
+  it("projects historical Browser hold notices only with recorded host provenance", () => {
     expect(
       readHostNotice(
         message(undefined, {
           text: "[Volli: the person took Browser Tab tab-old] Writes are refused.",
         }),
+        { kind: "volli", reason: "browser-notice" },
       ),
     ).toEqual({
       kind: "browser-hold",
@@ -209,6 +238,7 @@ describe("readHostNotice — compatibility", () => {
         message(undefined, {
           text: "[Volli: the person asks you to leave Browser Tab tab-old] Release it.",
         }),
+        { kind: "volli", reason: "browser-notice" },
       ),
     ).toEqual({
       kind: "browser-hold",
@@ -219,7 +249,12 @@ describe("readHostNotice — compatibility", () => {
   });
 
   it("projects the exact historical notice in the Ticket attachment", () => {
-    expect(readHostNotice(message(undefined, { id: "parent:call:answer-message" }))).toEqual({
+    expect(
+      readHostNotice(message(undefined, { id: "parent:call:answer-message" }), {
+        kind: "volli",
+        reason: "subagent-notice",
+      }),
+    ).toEqual({
       kind: "subagent",
       childSessionId: null,
       sessionHandle: "97e5c1dc",
@@ -242,14 +277,20 @@ describe("readHostNotice — compatibility", () => {
   ] as const)("projects the historical outcome: %s", (outcome, state, reason) => {
     const text = `[Subagent Session child123 ("A title") ${outcome} Whatever followed.]`;
     expect(
-      readHostNotice(message(undefined, { id: "parent:call:answer-message", text })),
+      readHostNotice(message(undefined, { id: "parent:call:answer-message", text }), {
+        kind: "volli",
+        reason: "subagent-notice",
+      }),
     ).toMatchObject({ kind: "subagent", state, reason });
   });
 
   it("decodes escaped historical titles", () => {
     const text = '[Subagent Session child123 ("Quoted \\"title\\"") completed its task. Read it.]';
     expect(
-      readHostNotice(message(undefined, { id: "parent:call:answer-message", text })),
+      readHostNotice(message(undefined, { id: "parent:call:answer-message", text }), {
+        kind: "volli",
+        reason: "subagent-notice",
+      }),
     ).toMatchObject({ kind: "subagent", title: 'Quoted "title"' });
   });
 
@@ -260,16 +301,25 @@ describe("readHostNotice — compatibility", () => {
       "[Subagent Session malformed]",
     ]) {
       expect(
-        readHostNotice(message(undefined, { id: "parent:call:answer-message", text })),
+        readHostNotice(message(undefined, { id: "parent:call:answer-message", text }), {
+          kind: "volli",
+          reason: "subagent-notice",
+        }),
       ).toEqual({ kind: "unknown", text });
     }
   });
 
   it("does not reinterpret ordinary prose or a message owned by another marker", () => {
-    expect(readHostNotice(message(undefined, { id: "person-message" }))).toBeNull();
+    expect(
+      readHostNotice(message(undefined, { id: "person-message" }), {
+        kind: "volli",
+        reason: "subagent-notice",
+      }),
+    ).toBeNull();
     expect(
       readHostNotice(
         message(undefined, { id: "parent:call:answer-message", text: "ordinary words" }),
+        { kind: "volli", reason: "subagent-notice" },
       ),
     ).toBeNull();
     expect(
@@ -278,7 +328,28 @@ describe("readHostNotice — compatibility", () => {
           { kind: "something-else" },
           { id: "parent:call:answer-message", text: MODEL_NOTICE },
         ),
+        { kind: "volli", reason: "subagent-notice" },
       ),
+    ).toBeNull();
+  });
+});
+
+describe("producer evidence mismatches", () => {
+  it("does not promote unrelated host work, mismatched kinds or unsupported legacy text", () => {
+    const marked = message(sessionHostNoticeMetadata(SUBAGENT));
+    expect(readHostNotice(marked, { kind: "volli", reason: "auto-title" })).toBeNull();
+    expect(readHostNotice(marked, { kind: "volli", reason: "browser-notice" })).toEqual({
+      kind: "unknown",
+      text: MODEL_NOTICE,
+    });
+    expect(
+      readHostNotice(message(undefined, { text: "Unsupported browser notice" }), {
+        kind: "volli",
+        reason: "browser-notice",
+      }),
+    ).toEqual({ kind: "unknown", text: "Unsupported browser notice" });
+    expect(
+      readHostNotice(message(undefined), { kind: "volli", reason: "watch-notice" }),
     ).toBeNull();
   });
 });
@@ -293,20 +364,21 @@ describe("host-notice copy", () => {
     expect(subagentNoticeCopy(projected)).toEqual({
       headline: "Find artifact conventions",
       state: "done",
-      note: "",
+      cause: null,
     });
-    expect(subagentNoticeCopy({ ...projected, state: "interrupted" }).note).toBe(
-      "Its turn ended before it answered.",
-    );
+    expect(subagentNoticeCopy({ ...projected, state: "interrupted" })).toMatchObject({
+      state: "interrupted",
+      cause: null,
+    });
     expect(subagentNoticeCopy({ ...projected, state: "stopped" }).state).toBe("stopped");
     expect(subagentNoticeCopy({ ...projected, state: "failed" }).state).toBe("failed");
     expect(subagentNoticeCopy({ ...projected, state: "timed-out" })).toMatchObject({
       state: "timed out",
-      note: "It did not finish within its time bound and was stopped.",
+      cause: null,
     });
     expect(
-      subagentNoticeCopy({ ...projected, state: "interrupted", reason: "app-relaunched" }).note,
-    ).toContain("Volli relaunched");
+      subagentNoticeCopy({ ...projected, state: "interrupted", reason: "app-relaunched" }).cause,
+    ).toBe("Volli relaunched");
   });
 
   it("uses the established fallback for an untitled child", () => {
@@ -323,7 +395,7 @@ describe("host-notice copy", () => {
       }),
     ).toEqual({
       headline: "GitHub",
-      note: "You took control; Session writes are refused until you hand it back.",
+      state: "You took control",
     });
     expect(
       browserHoldNoticeCopy({
@@ -334,7 +406,7 @@ describe("host-notice copy", () => {
       }),
     ).toEqual({
       headline: "Documentation",
-      note: "You asked the Session to leave; it will release the tab when it is safe.",
+      state: "Asked to leave",
     });
   });
 });
@@ -357,7 +429,10 @@ describe("watch notices (VC-457)", () => {
 
   it("projects the facts a watch notice carries", () => {
     expect(
-      readHostNotice(message(sessionHostNoticeMetadata({ kind: "watch", events: [MOVED, TURN] }))),
+      readHostNotice(message(sessionHostNoticeMetadata({ kind: "watch", events: [MOVED, TURN] })), {
+        kind: "volli",
+        reason: "watch-notice",
+      }),
     ).toEqual({ kind: "watch", events: [MOVED, TURN] });
   });
 
@@ -375,7 +450,10 @@ describe("watch notices (VC-457)", () => {
     ];
     for (const notice of malformed) {
       expect(
-        readHostNotice(message({ kind: "session-host-notice", notice }, { text: "Volli text" })),
+        readHostNotice(message({ kind: "session-host-notice", notice }, { text: "Volli text" }), {
+          kind: "volli",
+          reason: "watch-notice",
+        }),
       ).toEqual({ kind: "unknown", text: "Volli text" });
     }
   });
@@ -442,13 +520,24 @@ describe("background shell notices (VC-495)", () => {
   } as const;
 
   it("projects an exit and a match from the shared metadata, as Volli's rows rather than a person's turns", () => {
-    expect(readHostNotice(message(sessionHostNoticeMetadata(EXITED)))).toEqual(EXITED);
-    expect(readHostNotice(message(sessionHostNoticeMetadata(MATCHED)))).toEqual(MATCHED);
+    expect(
+      readHostNotice(message(sessionHostNoticeMetadata(EXITED)), {
+        kind: "volli",
+        reason: "shell-notice",
+      }),
+    ).toEqual(EXITED);
+    expect(
+      readHostNotice(message(sessionHostNoticeMetadata(MATCHED)), {
+        kind: "volli",
+        reason: "shell-notice",
+      }),
+    ).toEqual(MATCHED);
     expect(
       readHostNotice(
         message(
           sessionHostNoticeMetadata({ ...EXITED, code: null, signal: "SIGTERM", byPerson: true }),
         ),
+        { kind: "volli", reason: "shell-notice" },
       ),
     ).toMatchObject({ code: null, signal: "SIGTERM", byPerson: true });
   });
@@ -469,14 +558,17 @@ describe("background shell notices (VC-495)", () => {
     ];
     for (const notice of malformed) {
       expect(
-        readHostNotice(message({ kind: "session-host-notice", notice }, { text: "Volli text" })),
+        readHostNotice(message({ kind: "session-host-notice", notice }, { text: "Volli text" }), {
+          kind: "volli",
+          reason: "shell-notice",
+        }),
       ).toEqual({ kind: "unknown", text: "Volli text" });
     }
   });
 
-  it("replays a frozen transcript from before shell notices exactly as it was, and guesses nothing from prose", () => {
-    // Sessions are durable: every message below was written by a build that
-    // had never heard of a shell notice, and must still project as it did.
+  it("degrades legacy messages without producer evidence to full neutral content", () => {
+    // Durable content survives, but metadata/id/prose alone cannot prove an
+    // author when the command provenance is absent from the loaded history.
     const frozen = [
       message(sessionHostNoticeMetadata(SUBAGENT)),
       message(undefined, {
@@ -491,12 +583,7 @@ describe("background shell notices (VC-495)", () => {
       }),
     ];
 
-    expect(frozen.map((m) => readHostNotice(m)?.kind ?? null)).toEqual([
-      "subagent",
-      "browser-hold",
-      null,
-      null,
-    ]);
+    expect(frozen.map((m) => readHostNotice(m)?.kind ?? null)).toEqual([null, null, null, null]);
   });
 
   it("words every way a shell can end, and what its pattern was", () => {
@@ -551,6 +638,7 @@ describe("retired host notices", () => {
             summary: "Write",
           },
         }),
+        { kind: "volli", reason: "subagent-notice" },
       ),
     ).toMatchObject({ kind: "unknown" });
   });

@@ -338,9 +338,12 @@ async function main() {
     await waitUntil("Board tab", async () => (await boardTab.count()) === 1);
     await boardTab.click();
     await sleep(400);
-    const card = page.locator("article").filter({
-      has: page.locator("span.font-mono", { hasText: new RegExp(`^${displayId}$`) }),
-    });
+    const card = page
+      .locator("article")
+      .filter({ visible: true })
+      .filter({
+        has: page.locator("span.font-mono", { hasText: new RegExp(`^${displayId}$`) }),
+      });
     await waitUntil("ticket card", async () => (await card.count()) === 1);
     await card.dblclick();
     await waitUntil("ticket detail", async () => (await page.getByRole("tablist").count()) >= 1);

@@ -1,4 +1,6 @@
-import { readSessionOrigin } from "@volli/shared";
+import { readSessionOrigin, reportSessionUsage } from "@volli/shared";
+import type { ReportSessionUsageQuery } from "@volli/session-engine";
+import { sqliteUsageReporter } from "./usage-reports";
 import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
 import type {
@@ -57,41 +59,73 @@ export interface SqliteSessionLedgerScope {
   bindings?: Readonly<Record<`scope${string}`, string | number | null>>;
 }
 
-/** The base row's own columns; its birth payload is joined in JS ({@link birthPayloads}). */
+/** The base row's own columns; its birth owner is joined by {@link birthOwnerColumn}. */
 const SESSION_COLUMNS = "id, project_id, ticket_id, role, parent_session_id, title, created_at";
 
 /**
- * A Session's birth payload — its first `session.created` event, the one fact
- * a base row is decoded from that `sessions` does not hold — memoized per
- * database connection (VC-1076).
+ * A base row's cached birth owner (migration 069, VC-1097), as one column:
+ * `NULL` when `session_birth_owners` has no row — consult the birth fact —
+ * `''` when it vouches for a birth with no owner, else the owner. The cache
+ * never holds an empty owner, so `''` is unambiguous.
  *
- * It used to be a correlated subquery in every base-row read. That is an index
- * seek per Session, but the row it lands on is the Session's second event,
- * scattered across the whole events table, so a roster read touched one cold
- * page per Session: measured on a 1.9 GB profile, a 4,542-Session roster took
- * 3.3 s cold against 82 ms for the same statement without it — and it was paid
- * again whenever folding evicted those pages, which a first listing does.
+ * A database below 069 (a restore's staged file, a test pinned to an older
+ * schema) has no cache: every row then reads `NULL` and is answered from its
+ * birth fact, as before the cache existed.
+ */
+function birthOwnerColumn(db: Database.Database, idColumn: string): string {
+  return hasBirthOwnerCache(db)
+    ? `(SELECT ifnull(birth_owner.owner_user_id, '') FROM session_birth_owners birth_owner
+     WHERE birth_owner.session_id = ${idColumn}) AS birth_owner`
+    : "NULL AS birth_owner";
+}
+
+/** Connections known to have the cache; a later migration can add it, never remove it. */
+const birthOwnerCaches = new WeakSet<Database.Database>();
+
+function hasBirthOwnerCache(db: Database.Database): boolean {
+  if (birthOwnerCaches.has(db)) return true;
+  const found =
+    prepared(
+      db,
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_birth_owners'",
+    ).get() !== undefined;
+  if (found) birthOwnerCaches.add(db);
+  return found;
+}
+
+/** A Session's birth owner; `null` when its birth names none. */
+type BirthOwner = string | null;
+
+/**
+ * A Session's birth owner — the one fact a base row is decoded from that
+ * `sessions` does not hold, frozen into its first `session.created` event —
+ * memoized per database connection (VC-1076).
+ *
+ * A row normally carries it from `session_birth_owners` (VC-1097). This memo
+ * answers for the rows that cache does not hold, which would otherwise read
+ * their birth event, one scattered `session_events` page per Session, on
+ * every read: a legacy row, or one whose birth event was rewritten.
  *
  * Memoizing is sound because the answer is an immutable fact: events are
  * insert-only and a Session's first `session.created` is appended in the same
- * transaction that creates the row. Only a FOUND payload is kept, so a legacy
+ * transaction that creates the row. Only a FOUND birth is kept, so a legacy
  * Session with no birth event is asked again rather than pinned absent, and an
  * entry is only kept once the transaction that read it has COMMITTED at the
  * top level (see {@link SqliteSessionLedger.transaction}), so a rolled-back
- * create can never leave a payload behind for an id that may be reused.
+ * create can never leave an owner behind for an id that may be reused.
  *
  * Keyed by connection so a host that reopens its database (a restore) starts
- * empty. Entries are a few hundred bytes and are never evicted: Sessions are
- * deleted only with their project, so this holds at most one payload per
+ * empty. Entries are an id and an owner and are never evicted: Sessions are
+ * deleted only with their project, so this holds at most one entry per
  * Session read since the connection opened.
  */
-const birthPayloads = new WeakMap<Database.Database, Map<string, string>>();
+const birthOwners = new WeakMap<Database.Database, Map<string, BirthOwner>>();
 
-function birthPayloadMemo(db: Database.Database): Map<string, string> {
-  let memo = birthPayloads.get(db);
+function birthOwnerMemo(db: Database.Database): Map<string, BirthOwner> {
+  let memo = birthOwners.get(db);
   if (memo === undefined) {
     memo = new Map();
-    birthPayloads.set(db, memo);
+    birthOwners.set(db, memo);
   }
   return memo;
 }
@@ -106,11 +140,22 @@ export class SqliteSessionLedger implements SessionLedger {
     private readonly scope?: SqliteSessionLedgerScope,
   ) {}
 
+  reportUsage(query: ReportSessionUsageQuery) {
+    const report = sqliteUsageReporter(this.db);
+    if (report !== undefined && !this.db.inTransaction) return report(query, this.scope);
+    return this.transaction((tx) =>
+      reportSessionUsage(tx.listUsage(query), { ...query, meteredFrom: tx.usageMeteredFrom() }),
+    );
+  }
+
   transaction<T>(work: (transaction: SessionLedgerTransaction) => Synchronous<T>): Promise<T> {
     let appended: readonly SessionEvent[] = [];
     // Only a top-level transaction's reads may be memoized: a nested one's
-    // commit is a savepoint release that its caller can still roll back.
-    const births = this.db.inTransaction ? null : new Map<string, string>();
+    // commit is a savepoint release that its caller can still roll back. The
+    // transaction says so (`enclosed`), so the engine's hot checkpoints keep
+    // the same rule (VC-1098).
+    const enclosed = this.db.inTransaction;
+    const births = enclosed ? null : new Map<string, BirthOwner>();
     const settled = settleTransaction(this.db, () => {
       let open = true;
       const transaction = new SqliteSessionLedgerTransaction(
@@ -118,6 +163,7 @@ export class SqliteSessionLedger implements SessionLedger {
         () => open,
         this.scope,
         births,
+        enclosed,
       );
       try {
         const value = work(transaction);
@@ -132,8 +178,8 @@ export class SqliteSessionLedger implements SessionLedger {
     return settled.then((value) => {
       if (appended.length > 0) logSessionEvents(appended);
       if (births !== null && births.size > 0) {
-        const memo = birthPayloadMemo(this.db);
-        for (const [sessionId, payload] of births) memo.set(sessionId, payload);
+        const memo = birthOwnerMemo(this.db);
+        for (const [sessionId, owner] of births) memo.set(sessionId, owner);
       }
       return value;
     });
@@ -143,7 +189,7 @@ export class SqliteSessionLedger implements SessionLedger {
 export function createSqliteSessionLedger(
   db: Database.Database,
   scope?: SqliteSessionLedgerScope,
-): SessionLedger {
+): SqliteSessionLedger {
   return new SqliteSessionLedger(db, scope);
 }
 
@@ -198,29 +244,44 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     private readonly db: Database.Database,
     private readonly isOpen: () => boolean,
     private readonly scope?: SqliteSessionLedgerScope,
-    /** Birth payloads read here, kept by the ledger once this commits; null keeps none. */
-    private readonly births: Map<string, string> | null = null,
+    /** Birth owners read here, kept by the ledger once this commits; null keeps none. */
+    private readonly births: Map<string, BirthOwner> | null = null,
+    /** Runs inside a transaction the ledger does not own; see `SessionLedgerTransaction.enclosed`. */
+    readonly enclosed: boolean = false,
   ) {
     this.scopeBindings = { ...scope?.bindings };
   }
 
-  /** A base row decoded with its birth payload, from the memo when it has one. */
+  /**
+   * A base row decoded with its birth owner: from the row's cached column,
+   * else the memo, else the birth event itself.
+   */
   private decodeSessionRow(row: unknown): Session {
     const value = asRecord(row, "sessions row");
     const sessionId = readString(value.id, "sessions row.id");
-    let birth: string | null = birthPayloadMemo(this.db).get(sessionId) ?? null;
-    if (birth === null) {
+    let owner: BirthOwner | undefined;
+    if (value.birth_owner !== null && value.birth_owner !== undefined) {
+      const cached = readString(value.birth_owner, "sessions row.birth_owner");
+      owner = cached === "" ? null : cached;
+      this.births?.set(sessionId, owner);
+    } else {
+      owner = birthOwnerMemo(this.db).get(sessionId);
+    }
+    if (owner === undefined) {
       const found = prepared(
         this.db,
         `SELECT e.payload FROM session_events e WHERE e.session_id = ?
            AND json_extract(e.payload, '$.kind') = 'session.created' ORDER BY e.sequence LIMIT 1`,
       ).get(sessionId) as unknown;
       if (found !== undefined) {
-        birth = readString(rowValue(found, "payload", "birth payload"), "birth payload");
-        this.births?.set(sessionId, birth);
+        owner = decodeBirthOwner(
+          readString(rowValue(found, "payload", "birth payload"), "birth payload"),
+          "sessions row.birth_payload",
+        );
+        this.births?.set(sessionId, owner);
       }
     }
-    return decodeSession({ ...value, birth_payload: birth }, "sessions row");
+    return decodeSession(value, owner ?? null, "sessions row");
   }
 
   private readonly scopeBindings: Readonly<Record<`scope${string}`, string | number | null>>;
@@ -233,7 +294,8 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     this.assertOpen();
     const row = prepared(
       this.db,
-      `SELECT ${SESSION_COLUMNS} FROM sessions WHERE id = @sessionId${this.scopeSql("sessions.id")}`,
+      `SELECT ${SESSION_COLUMNS}, ${birthOwnerColumn(this.db, "sessions.id")}
+         FROM sessions WHERE id = @sessionId${this.scopeSql("sessions.id")}`,
     ).get({ sessionId, ...this.scopeBindings }) as unknown;
     return row === undefined ? null : this.decodeSessionRow(row);
   }
@@ -248,7 +310,7 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
           : "";
     const rows = prepared(
       this.db,
-      `SELECT ${SESSION_COLUMNS}
+      `SELECT ${SESSION_COLUMNS}, ${birthOwnerColumn(this.db, "sessions.id")}
            FROM sessions
           WHERE project_id = @projectId${scope}${this.scopeSql("sessions.id")}
           ORDER BY created_at DESC, id COLLATE BINARY DESC`,
@@ -317,47 +379,58 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
    * supersede the one it replaces; this read then orders by that instead of by
    * `session_event_sequence`.
    *
-   * The same sidecar is how the read finds the rows (VC-1075): its derived
-   * `kind` (kept equal to the payload's by migration 057's trigger) seeks
-   * `session_event_sequence_match (session_id, kind, sequence)` per Session,
-   * so only signal events are read and parsed rather than every event of
-   * every ticketed Session. The payload's own kind is still tested, so the
-   * index narrows the rows and never decides them.
+   * Migration 070's partial index seeks the latest VALID signal id per
+   * Session, in Session sequence order, without opening historical payloads
+   * (VC-1146). Only those winners join the acceptance-order sidecar and enter
+   * the ticket window; only ticket winners decode the signal and reason.
+   * The predicate is the same as the old full-history read, including its
+   * fallback past an unsupported signal value. SQLite maintains it on any
+   * insert, repair or deletion, with no application cache to invalidate.
+   * Below 070 the same query remains correct, just without the fast seek.
    */
   listLatestTicketSignals(query: ListLatestTicketSignalsQuery): readonly LatestSessionSignal[] {
     this.assertOpen();
+    // Without a hint SQLite can prefer the general (session_id, sequence)
+    // index before ANALYZE, walking unrelated history when no signal exists.
+    // The head schema always has it; the unhinted fallback is for restores
+    // staged below 070. Re-probe this connection each read, caching only the
+    // statement (per handle), never a presence result across restores/reopens.
+    const signalIndex =
+      prepared(
+        this.db,
+        "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'session_events_latest_signal'",
+      ).get() === undefined
+        ? ""
+        : " INDEXED BY session_events_latest_signal";
     const rows = prepared(
       this.db,
-      `WITH latest_session_signals AS (
+      `WITH latest_ticket_signals AS (
            SELECT s.ticket_id AS ticket_id,
                   s.id AS session_id,
-                  json_extract(e.payload, '$.signal') AS signal,
-                  json_extract(e.payload, '$.reason') AS reason,
+                  e.payload AS payload,
                   e.occurred_at AS occurred_at,
-                  es.sequence AS accepted_sequence,
-                  ROW_NUMBER() OVER (PARTITION BY s.id ORDER BY e.sequence DESC) AS session_rank
+                  ROW_NUMBER() OVER (
+                    PARTITION BY s.ticket_id
+                    ORDER BY es.sequence DESC
+                  ) AS ticket_rank
              FROM sessions s
-             JOIN session_event_sequence es
-               ON es.session_id = s.id AND es.kind = 'session.signaled'
-             JOIN session_events e ON e.id = es.event_id
+             JOIN session_events e ON e.id = (
+               SELECT candidate.id
+                 FROM session_events candidate${signalIndex}
+                WHERE candidate.session_id = s.id
+                  AND json_extract(candidate.payload, '$.kind') = 'session.signaled'
+                  AND json_extract(candidate.payload, '$.signal') IN ('done', 'blocked')
+                ORDER BY candidate.sequence DESC
+                LIMIT 1
+             )
+             JOIN session_event_sequence es ON es.event_id = e.id
             WHERE s.project_id = @projectId${this.scopeSql("s.id")}
               AND s.ticket_id IS NOT NULL
-              AND json_extract(e.payload, '$.kind') = 'session.signaled'
-              AND json_extract(e.payload, '$.signal') IN ('done', 'blocked')
-         ), latest_ticket_signals AS (
-           SELECT ticket_id,
-                  session_id,
-                  signal,
-                  reason,
-                  occurred_at,
-                  ROW_NUMBER() OVER (
-                    PARTITION BY ticket_id
-                    ORDER BY accepted_sequence DESC
-                  ) AS ticket_rank
-             FROM latest_session_signals
-            WHERE session_rank = 1
          )
-         SELECT ticket_id, session_id, signal, reason, occurred_at
+         SELECT ticket_id, session_id,
+                json_extract(payload, '$.signal') AS signal,
+                json_extract(payload, '$.reason') AS reason,
+                occurred_at
            FROM latest_ticket_signals
           WHERE ticket_rank = 1
           ORDER BY ticket_id COLLATE BINARY ASC`,
@@ -805,6 +878,17 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
       invalidMessage: "Session projection checkpoint is invalid",
     });
     const encoded = encodeSessionJson(checkpoint);
+    // `updated_at` is the Session's latest `recorded_at` (or its creation time
+    // when it has no events), and every build has written it that way. The
+    // maximum over the whole log reads every event row of the Session — on a
+    // 14.8k-event Session, ~700 ms cold and ~4 ms warm, paid by the first
+    // checkpoint refresh after launch and then every refresh, on Electron
+    // main (VC-1098). An existing row already holds that maximum as of its
+    // own write, which covered every event through its cursor, so only the
+    // events after its cursor can raise it: the same value, read from the
+    // tail through the `(session_id, sequence)` index. A row at cursor 0 may
+    // hold the creation-time fallback rather than a `recorded_at`, so it
+    // takes the whole-log answer, which for it is the same short read.
     prepared(
       this.db,
       `INSERT INTO session_projection_checkpoints
@@ -812,6 +896,12 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
        VALUES (
          @sessionId, @schemaVersion, @throughSequence, @checkpoint, @digest,
          COALESCE(
+           (SELECT MAX(c.updated_at, COALESCE(
+                     (SELECT MAX(e.recorded_at) FROM session_events e
+                       WHERE e.session_id = @sessionId AND e.sequence > c.through_sequence),
+                     c.updated_at))
+              FROM session_projection_checkpoints c
+             WHERE c.session_id = @sessionId AND c.through_sequence > 0),
            (SELECT MAX(recorded_at) FROM session_events WHERE session_id = @sessionId),
            (SELECT created_at FROM sessions WHERE id = @sessionId)
          )
@@ -1042,7 +1132,8 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     this.assertOpen();
     const rows = prepared(
       this.db,
-      `SELECT s.id, s.project_id, s.ticket_id, s.role, s.parent_session_id, s.title, s.created_at
+      `SELECT s.id, s.project_id, s.ticket_id, s.role, s.parent_session_id, s.title, s.created_at,
+              ${birthOwnerColumn(this.db, "s.id")}
            FROM sessions s
           WHERE 1 = 1${this.scopeSql("s.id")} AND EXISTS (
                 SELECT 1
@@ -1125,18 +1216,16 @@ function decodeUsageEntry(row: unknown, context: string): SessionUsageEntry {
   };
 }
 
-function decodeSession(row: unknown, context: string): Session {
+/** The owner a `session.created` payload names; strict, as the codec is. */
+function decodeBirthOwner(payload: string, context: string): BirthOwner {
+  const birth = decodeSessionEventPayload(parseJson(payload, context), context);
+  return birth.kind === "session.created" ? (birth.session.ownerUserId ?? null) : null;
+}
+
+function decodeSession(row: unknown, ownerUserId: BirthOwner, context: string): Session {
   const value = asRecord(row, context);
-  const birth =
-    value.birth_payload === null || value.birth_payload === undefined
-      ? null
-      : decodeSessionEventPayload(
-          parseJson(value.birth_payload, `${context}.birth_payload`),
-          `${context}.birth_payload`,
-        );
-  const ownerUserId = birth?.kind === "session.created" ? birth.session.ownerUserId : undefined;
   const session: Session = {
-    ...(ownerUserId === undefined ? {} : { ownerUserId }),
+    ...(ownerUserId === null ? {} : { ownerUserId }),
     id: readString(value.id, `${context}.id`),
     projectId: readString(value.project_id, `${context}.project_id`),
     ticketId: readNullableString(value.ticket_id, `${context}.ticket_id`),

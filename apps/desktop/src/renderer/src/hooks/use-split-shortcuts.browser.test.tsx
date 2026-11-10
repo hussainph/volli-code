@@ -8,6 +8,7 @@
  * in the app. The chord replayed from the page has to move from the pane that
  * draws the page instead.
  */
+import * as React from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -173,5 +174,73 @@ describe("⌘\\ splits the pane the surface draws in focus (VC-614)", () => {
     pressSplit();
     expect(split().pairs).toHaveLength(2);
     expect(splitViewPanes(split()).map((pane) => pane.tabIds)).toEqual([["board"], []]);
+  });
+});
+
+/** A focused empty pane's cell, with its menu row named `label`. */
+function FocusedEmptyCell({ label }: { label: string }): React.ReactElement {
+  return (
+    <div data-slot="split-view-pane" data-pane-id="pane-new" data-focused="true">
+      <button type="button" data-slot="pane-empty-row" aria-label={label} />
+    </div>
+  );
+}
+
+/**
+ * Two planes' cells, the way the app holds them while a Ticket view has taken
+ * Home over: Home's first in document order, kept mounted behind
+ * `<Activity mode="hidden">` (VC-1080), then the one in front.
+ */
+function Planes(): React.ReactElement {
+  return (
+    <>
+      <React.Activity mode="hidden">
+        <FocusedEmptyCell label="hidden plane" />
+      </React.Activity>
+      <FocusedEmptyCell label="plane in front" />
+    </>
+  );
+}
+
+/**
+ * jsdom has neither layout nor `checkVisibility`; this models what Chromium
+ * answers — hidden under any `display: none` ancestor, which is how
+ * `<Activity mode="hidden">` hides its host nodes.
+ */
+function modelCheckVisibility(this: Element): boolean {
+  for (
+    let node: Element | null = this as Element | null;
+    node !== null;
+    node = node.parentElement
+  ) {
+    if (node instanceof HTMLElement && node.style.display === "none") return false;
+  }
+  return true;
+}
+
+describe("⌘\\ focuses the new pane's menu in the plane in front (VC-1102)", () => {
+  it("skips the hidden plane's focused empty pane", () => {
+    vi.stubGlobal("requestAnimationFrame", (run: FrameRequestCallback) => {
+      run(0);
+      return 0;
+    });
+    const original = Object.getOwnPropertyDescriptor(Element.prototype, "checkVisibility");
+    Element.prototype.checkVisibility = modelCheckVisibility;
+    const planes = document.createElement("div");
+    document.body.append(planes);
+    const planesRoot = createRoot(planes);
+    try {
+      act(() => planesRoot.render(<Planes />));
+      pressSplit();
+      expect(document.activeElement?.getAttribute("aria-label")).toBe("plane in front");
+    } finally {
+      act(() => planesRoot.unmount());
+      planes.remove();
+      if (original === undefined) {
+        delete (Element.prototype as { checkVisibility?: unknown }).checkVisibility;
+      } else {
+        Object.defineProperty(Element.prototype, "checkVisibility", original);
+      }
+    }
   });
 });

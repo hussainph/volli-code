@@ -7,6 +7,7 @@ import type { BrowserTabCaptureResult, BrowserTabState } from "../../../../ipc/c
 import type { BrowserApi } from "./browser-api";
 import { BrowserPane } from "./browser-pane";
 import { PLANE_CAPTURE_DEADLINE_MS, PLANE_OVERLAY_RELEASE_MS } from "./browser-plane-freeze";
+import { beginPaneResize } from "@renderer/lib/pane-resize";
 
 class TestResizeObserver {
   observe(): void {}
@@ -122,6 +123,29 @@ function shownPixels(): string | null {
 }
 
 describe("BrowserPane renderer overlays", () => {
+  it("warms a settled-page still and performs no capture during a pane push", async () => {
+    const capture = vi.fn(async () => captureResult("cached"));
+    const { api, hide } = makeApi(capture as unknown as BrowserApi["capture"]);
+    await act(async () => {
+      root?.render(<BrowserPane tab={tab} visible api={api} onTabState={() => undefined} />);
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, PLANE_CAPTURE_DEADLINE_MS + 30));
+    });
+    expect(shownPixels()).toBe("data:image/jpeg;base64,cached");
+    capture.mockClear();
+    let finish!: () => void;
+    await act(async () => {
+      finish = beginPaneResize({});
+    });
+    await settle();
+    expect(hide).toHaveBeenCalled();
+    expect(shownPixels()).toBe("data:image/jpeg;base64,cached");
+    expect(capture).not.toHaveBeenCalled();
+    await act(async () => finish());
+    await settle();
+    expect(capture).not.toHaveBeenCalled();
+  });
   it("captures WHEN the overlay opens, and holds the plane until the pixels land", async () => {
     const gate: { answer: ((r: BrowserTabCaptureResult) => void) | null } = { answer: null };
     const capture = vi.fn(
@@ -376,6 +400,13 @@ describe("BrowserPane renderer overlays", () => {
     });
     await settle();
     await settle();
+    // One warm still per page is setup, not a response to streamed tokens.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, PLANE_CAPTURE_DEADLINE_MS + 30));
+    });
+    await settle();
+    expect(capture).toHaveBeenCalledTimes(2);
+    capture.mockClear();
     const scans = vi.spyOn(document, "querySelectorAll");
     const bounds = vi.mocked(Element.prototype.getBoundingClientRect);
     const rects = vi.mocked(Element.prototype.getClientRects);

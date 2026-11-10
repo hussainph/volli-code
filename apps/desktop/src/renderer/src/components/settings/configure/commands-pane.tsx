@@ -10,12 +10,14 @@
  * appears once. Which tier won it is what Source says.
  */
 import * as React from "react";
-import { CommandIcon } from "@phosphor-icons/react/dist/csr/Command";
+import { CommandIcon } from "@renderer/components/ui/icon";
+
 import type { Project, PromptTemplate } from "@volli/shared";
 
-import { AsyncSection, Cell, DataTable } from "@renderer/components/settings/kit";
+import { AsyncSection, Cell, DataTable, DescriptionCell } from "@renderer/components/settings/kit";
 import { useAgentIndex } from "@renderer/components/settings/use-agent-index";
 
+import { MarkdownCommandDialog } from "./markdown-command-dialog";
 import { NewCommandDialog } from "./new-command-dialog";
 
 export function CommandsPane({ project }: { project: Project }) {
@@ -26,12 +28,17 @@ export function CommandsPane({ project }: { project: Project }) {
     <AsyncSection
       title="Commands"
       icon={CommandIcon}
-      hint={<>Type the name in any composer. Project commands override personal ones.</>}
-      action={<NewCommandDialog projectId={project.id} onCreated={reload} />}
+      action={
+        <div className="flex flex-wrap gap-2">
+          <MarkdownCommandDialog projectId={project.id} onCreated={reload} />
+          <NewCommandDialog projectId={project.id} onCreated={reload} />
+        </div>
+      }
       fill
       state={state}
       isEmpty={(data) => data.templates.length === 0}
-      empty="No commands yet."
+      empty="No commands"
+      emptyAction={{ label: "Reload", onAction: reload }}
     >
       {(data) => <CommandsTable templates={data.templates} filter={filter} onFilter={setFilter} />}
     </AsyncSection>
@@ -71,8 +78,8 @@ function CommandsTable({
           { value: "personal", label: "Personal" },
         ],
       }}
-      empty="No commands yet."
-      noResults="No commands match."
+      empty="No commands"
+      noResults="No matching commands"
       columns={[
         {
           key: "name",
@@ -83,7 +90,9 @@ function CommandsTable({
         {
           key: "description",
           header: "Description",
-          cell: (command) => <Cell muted>{command.description || "No description"}</Cell>,
+          cell: (command) => (
+            <DescriptionCell>{command.description || "No description"}</DescriptionCell>
+          ),
         },
         {
           key: "source",

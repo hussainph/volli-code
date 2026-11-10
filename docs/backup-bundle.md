@@ -90,8 +90,11 @@ decision in `backup/decisions.ts`, with a reason:
 
 - **include** — the bundle carries the rows; a restore puts them back.
 - **rebuild** — the bundle carries no rows because a restore derives them from
-  something it does carry, and does. `session_usage` and
-  `session_usage_coverage` are the two.
+  something it does carry, and does: `session_usage` and
+  `session_usage_coverage` (rebuilt by the restore), `migration_history` (written
+  by the migrations it runs), `session_birth_owners` (refilled by triggers as the
+  Session events and their order load) and `session_projection_checkpoints`
+  (left empty; reads rebuild it).
 - **exclude** — must not travel: `secrets`, `legacy_safe_storage_secrets`,
   `web_access_settings`, `registered_harnesses`, `harness_channel`.
 

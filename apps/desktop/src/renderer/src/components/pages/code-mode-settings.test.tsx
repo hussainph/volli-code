@@ -3,7 +3,6 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import {
-  CODE_MODE_MODEL_DEFAULTS,
   DEFAULT_CODE_MODE_POLICY,
   DEFAULT_COMPACTION_POLICY,
   EMPTY_MODEL_ACCESS_DEFAULTS,
@@ -12,7 +11,6 @@ import {
 } from "@volli/shared";
 import { toast } from "sonner";
 
-import { builtInDefaultsSentence } from "./code-mode-settings";
 import { ModelAccessSettings } from "./model-access-settings";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { ModelAccessProvider, type ModelAccessClient } from "@renderer/lib/model-access-client";
@@ -351,12 +349,36 @@ describe("Code Mode in the Models pane", () => {
   });
 });
 
-describe("the built-in defaults hint", () => {
-  it("names every family the shared table gives a mode, and the rest as Off", () => {
-    const sentence = builtInDefaultsSentence();
-    for (const row of CODE_MODE_MODEL_DEFAULTS.filter((candidate) => candidate.mode !== "off")) {
-      expect(sentence).toContain(row.family);
-    }
-    expect(sentence).toMatch(/Off for every other model\.$/u);
+it("offers all three modes and preserves model defaults until a choice in the production Agents pane", async () => {
+  const { CodeModeSettings } = await import("../settings/panes/code-mode-pane");
+  const { client } = clientWith(DEFAULT_CODE_MODE_POLICY);
+  container = document.body.appendChild(document.createElement("div"));
+  root = createRoot(container);
+  await act(async () =>
+    root?.render(
+      <ModelAccessProvider client={client}>
+        <TooltipProvider>
+          <CodeModeSettings models={SNAPSHOT.models} providers={SNAPSHOT.providers} pickable={[]} />
+        </TooltipProvider>
+      </ModelAccessProvider>,
+    ),
+  );
+  expect(document.body.textContent).not.toContain("Smallest prompt");
+  expect(document.querySelector('[aria-label="Code Mode meanings and defaults"]')).toBeNull();
+  expect(the('[data-testid="code-mode-default"]').textContent).toBe("Model defaults");
+  expect(await client.codeModePolicy()).toEqual(DEFAULT_CODE_MODE_POLICY);
+  const options = await openSelect(the('[data-testid="code-mode-default"]'));
+  expect(options.map((option) => option.textContent)).toEqual([
+    "Direct tools",
+    "Code and direct tools",
+    "Code only",
+  ]);
+  await act(async () => options[1]!.focus());
+  await act(async () =>
+    options[1]!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+  );
+  expect(await client.codeModePolicy()).toEqual({
+    ...DEFAULT_CODE_MODE_POLICY,
+    defaultMode: "both",
   });
 });

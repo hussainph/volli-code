@@ -1,6 +1,6 @@
 /** Composition contract over the real scoped Session reader; runtime collaborators are mocked. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import type { SessionProjection } from "@volli/shared";
+import type { SessionListingProjection } from "@volli/shared";
 import type { HostCorePorts, LiveHostCore } from "@volli/host-core";
 import { insertProject, insertTicket } from "@volli/host-core/db";
 import {
@@ -15,6 +15,7 @@ import { busyRefusal } from "@volli/host-core/worktree";
 import type { BackgroundShellHostPorts } from "@volli/host-core/session-runtime";
 // The runner's private staging, recorded here at its module seam.
 import { SESSION_RUNTIME } from "../../../packages/host-core/src/session-services";
+import { createDetachedWorkTracker } from "../../../packages/host-core/src/detached-work";
 import type { RuntimeAssemblyOptions } from "../../../packages/host-core/src/session-runtime/assembly";
 
 const seam = vi.hoisted(() => ({
@@ -198,6 +199,7 @@ function fixture() {
     sessionEngine: engine,
     sessionWakeBus: { subscribe: vi.fn(() => () => {}) },
     liveWork: { observeShell: vi.fn(), forgetShell: vi.fn() },
+    detachedWork: createDetachedWorkTracker(),
     [SESSION_RUNTIME]: { claim: () => () => {} },
     dataDir: "/data",
     runtimeServices,
@@ -415,9 +417,18 @@ describe("headless runtime ownership", () => {
     expect(f.agents.toolDoor).toHaveBeenCalledWith(f.proof);
     const drain = seam.lifecycle.mock.lastCall![0];
     expect(drain.services()).toBe(f.facade);
+    const track = vi.spyOn(f.host.detachedWork, "track");
     drain.stopProducers();
+    expect(track).toHaveBeenCalledOnce();
+    expect(track.mock.calls[0]![0]).toBeInstanceOf(Promise);
+    expect(f.host.detachedWork.pending).toBe(1);
+    await f.host.detachedWork.drain();
+    expect(f.host.detachedWork.pending).toBe(0);
     expect(f.automations.stop).toHaveBeenCalledOnce();
     owner.stopProducers();
+    expect(track).toHaveBeenCalledTimes(2);
+    await f.host.detachedWork.drain();
+    expect(f.host.detachedWork.pending).toBe(0);
     expect(f.automations.stop).toHaveBeenCalledTimes(2);
     drain.installQuitHold(vi.fn());
     // The runtime's drain JOINS shell termination: it settles only after the
@@ -519,13 +530,14 @@ describe("headless runtime ownership", () => {
       }
     }
     const getSession = vi.spyOn(f.engine, "getSession");
+    const getListing = vi.spyOn(f.engine, "getSessionListing");
     const listSessions = vi.spyOn(f.engine, "listSessions");
     const listSignals = vi.spyOn(f.engine, "listLatestTicketSignals");
     await f.launch().ready();
     const { sessionListing } = seam.handlers.mock.lastCall![1] as {
       sessionListing: {
         db: unknown;
-        listSessions(query: unknown): Promise<readonly SessionProjection[]>;
+        listSessions(query: unknown): Promise<readonly SessionListingProjection[]>;
         liveAttachmentIds(): ReadonlySet<string>;
       };
     };
@@ -535,13 +547,14 @@ describe("headless runtime ownership", () => {
         ({ session }) => session.id,
       ),
     ).toEqual(["s-1"]);
-    // The scoped SQLite reader selects membership first; only local rows are
-    // answered, including when a cloud birth's runner cursor is absent (for
-    // example, a restore). The folds come from the host engine's own cached
-    // listing of the same query (VC-1072), and `getSession` only for a scoped
-    // row that listing has not seen.
-    expect(listSessions).toHaveBeenCalledExactlyOnceWith({ projectId: "p", scope: "all" });
+    // The scoped SQLite reader selects first; only local rows reach the host's fold,
+    // including when a cloud birth's runner cursor is absent (for example, a restore).
     expect(getSession).not.toHaveBeenCalled();
+    expect(getListing).toHaveBeenCalledExactlyOnceWith({
+      sessionId: "s-1",
+      persistCheckpoint: false,
+    });
+    expect(listSessions).not.toHaveBeenCalled();
     expect(
       (await sessionListing.listSessions({ projectId: "p", scope: "ticket", ticketId: "t" })).map(
         ({ session }) => session.id,
