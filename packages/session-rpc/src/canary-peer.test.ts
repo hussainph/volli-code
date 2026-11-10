@@ -377,6 +377,7 @@ describe("recording normalization and fresh response checks", () => {
           retryOutput: 2,
         },
         { procedure: "read", input: null, error },
+        { procedure: "legacy-read", input: null, output: error },
         {
           start: { procedure: "signIns.start", input: {}, output: { flowId: "flow" } },
           frames: [1],
@@ -392,6 +393,7 @@ describe("recording normalization and fresh response checks", () => {
       { procedure: "write", input: [1, { a: true }], output: 1 },
       { procedure: "write", input: [1, { a: true }], output: 2 },
       { procedure: "read", input: null, error },
+      { procedure: "legacy-read", input: null, error },
       { procedure: "signIns.start", input: {}, output: { flowId: "flow" } },
       { procedure: "signIns.subscribe", input: { flowId: "flow" }, frames: [1] },
       { procedure: "stream", input: {}, frames: [2] },
@@ -503,6 +505,9 @@ describe("bundle persistence and frozen request selection", () => {
         },
         (b) => {
           b.provenance.commit = "bad";
+        },
+        (b) => {
+          b.provenance.commit = undefined as unknown as string;
         },
         (b) => {
           b.provenance.distributed = null as unknown as boolean;

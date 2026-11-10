@@ -202,19 +202,23 @@ describe.skipIf(chromium === null)("ChromiumBrowserBackend's engine facts", () =
       const driver = port("blob-no-cdp-stop", null);
       const send = CdpPipeConnection.prototype.send;
       const fellBack = vi.fn();
-      const stopped = vi
-        .spyOn(CdpPipeConnection.prototype, "send")
-        .mockImplementation(function (this: CdpPipeConnection, method, params, sessionId, options) {
-          // Model a stop that cannot win: never send it to Chromium. The guard
-          // must cancel in the renderer, not depend on the Node/pipe round trip.
-          if (method === "Page.stopLoading") return Promise.resolve({});
-          if (
-            method === "Page.navigate" &&
-            (params as { url?: unknown } | undefined)?.url === "about:blank"
-          )
-            fellBack();
-          return send.call(this, method, params, sessionId, options);
-        });
+      const stopped = vi.spyOn(CdpPipeConnection.prototype, "send").mockImplementation(function (
+        this: CdpPipeConnection,
+        method,
+        params,
+        sessionId,
+        options,
+      ) {
+        // Model a stop that cannot win: never send it to Chromium. The guard
+        // must cancel in the renderer, not depend on the Node/pipe round trip.
+        if (method === "Page.stopLoading") return Promise.resolve({});
+        if (
+          method === "Page.navigate" &&
+          (params as { url?: unknown } | undefined)?.url === "about:blank"
+        )
+          fellBack();
+        return send.call(this, method, params, sessionId, options);
+      });
       try {
         // A cross-site navigation moves the renderer, not the installed policy.
         const previous = swap

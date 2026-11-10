@@ -365,25 +365,26 @@
 
     "@yuku-codegen/binding-*": {
       "license": "MIT",
-      "versions": ["0.5.48"],
+      "versions": ["0.9.5"],
       "disposition": "build-only",
-      "licenseSource": "parent-package",
       "summary": [
-        "A generated napi platform package with no `license` field and no license file — the shape most",
-        "native-binding sub-packages ship in. Its parent `yuku-codegen@0.5.48` declares MIT, and the",
-        "binding is published from the same repository (yuku-toolchain/yuku) in the same release."
+        "The generated napi platform package and its parent yuku-codegen@0.9.5 declare MIT.",
+        "Reviewed https://github.com/yuku-toolchain/yuku/blob/v0.9.5/LICENSE: the MIT grant and",
+        "2026 Yuku copyright match v0.5.48. The binding is published from that repository/release."
       ],
-      "obligations": ["MIT attribution, inherited from the parent package."],
+      "obligations": ["MIT attribution."],
       "blocked": null
     },
 
     "@yuku-parser/binding-*": {
       "license": "MIT",
-      "versions": ["0.5.48"],
+      "versions": ["0.9.5"],
       "disposition": "build-only",
-      "licenseSource": "parent-package",
-      "summary": ["As @yuku-codegen/binding-*; parent `yuku-parser@0.5.48` declares MIT."],
-      "obligations": ["MIT attribution, inherited from the parent package."],
+      "summary": [
+        "As @yuku-codegen/binding-*; the platform manifest and parent yuku-parser@0.9.5 declare MIT,",
+        "confirmed against the same upstream v0.9.5 LICENSE."
+      ],
+      "obligations": ["MIT attribution."],
       "blocked": null
     }
   }
