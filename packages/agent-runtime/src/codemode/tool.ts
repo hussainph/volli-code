@@ -34,12 +34,12 @@ import {
   type CodemodeTool,
 } from "@earendil-works/pi-codemode";
 import {
-  Type,
   type AssistantMessage,
   type JsonObject,
   type NestedToolCallRecord,
   type NestedToolCalls,
 } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import {
   CODE_MODE_TOOL_ID,
   isCodeCallable,
@@ -759,7 +759,24 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
       },
     },
   ];
+  // Pi 1.3 settles execution/close before worker exit. Hold this tool call's
+  // scheduler capacity until the actual exit, as Pi 1.0 did; admission happens
+  // after wasm loads, so a cancelled run must also reject a late worker start.
+  let workerExited: Promise<void> | undefined;
+  let workerAdmissionClosed = false;
   const sandbox = new CodemodeSandbox({
+    acquireWorker: () => {
+      if (workerAdmissionClosed) throw new Error("The program has already finished.");
+      run.signal.throwIfAborted();
+      let release!: () => void;
+      workerExited = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return release;
+    },
+    // Pi 1.5 freezes built-ins before the model program. Install the existing
+    // clock/random sequence first, then let lockdown protect those bindings too.
+    initializationCode: determinismPrelude(seedOf(outerId), journal.epoch),
     tools: sandboxTools,
     globals,
     // The run's own clock decides the deadline, because it stops while a
@@ -775,18 +792,17 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
   });
   let result: CodemodeResult;
   try {
-    result = await sandbox.execute(
-      determinismPrelude(seedOf(outerId), journal.epoch) + check.code,
-      { signal: run.signal },
-    );
+    result = await sandbox.execute(check.code, { signal: run.signal });
     // No nested call outlives the run that issued it: the sandbox has aborted
     // the unawaited ones, and their activity settles before the run answers.
     await Promise.allSettled(inflight);
   } finally {
+    workerAdmissionClosed = true;
     clock.dispose();
     clearTimeout(ceiling);
     for (const one of outerSignals) one.removeEventListener("abort", onOuterAbort);
     await sandbox.close();
+    await workerExited;
   }
   const reason: unknown = run.signal.reason;
   const stopped = reason instanceof RunStop ? reason : undefined;

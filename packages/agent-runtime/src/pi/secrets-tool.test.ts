@@ -9,7 +9,7 @@ import {
   withAbortSignal,
   type ExecutionEnv,
 } from "./harness-env";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import {
   codeModeSurfaceFor,
   ExactValueByteRedactor,

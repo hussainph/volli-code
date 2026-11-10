@@ -30,7 +30,7 @@ import {
   type Model,
   type ToolCall,
 } from "@earendil-works/pi-ai";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 
 /** Wall-clock, monotonic, in whole milliseconds since the run began. */

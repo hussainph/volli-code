@@ -64,7 +64,7 @@ they are listed so the index accounts for every module in the bundle.
   @ai-sdk/provider-utils@5.0.61  Apache-2.0  [bundled into a chunk]
   @antfu/install-pkg@2.1.0  MIT  [bundled into a chunk]
   @anthropic-ai/sandbox-runtime@0.0.79  Apache-2.0  [bundled into a chunk]
-  @anthropic-ai/sdk@0.124.0  MIT  [bundled into a chunk]
+  @anthropic-ai/sdk@0.129.0  MIT  [bundled into a chunk]
   @asamuzakjp/css-color@7.1.6  MIT  [node_modules tree]
   @asamuzakjp/dom-selector@10.0.3  MIT  [node_modules tree]
   @aws-sdk/client-bedrock-runtime@3.1127.0  Apache-2.0  [bundled into a chunk]
@@ -102,12 +102,13 @@ they are listed so the index accounts for every module in the bundle.
   @dnd-kit/modifiers@9.0.0  MIT  [bundled into a chunk]
   @dnd-kit/sortable@10.0.0  MIT  [bundled into a chunk]
   @dnd-kit/utilities@3.2.2  MIT  [bundled into a chunk]
-  @earendil-works/chord@1.0.0  MIT  [bundled into a chunk]
-  @earendil-works/pi-agent-core@1.0.0  MIT  [bundled into a chunk]
-  @earendil-works/pi-ai@1.0.0  MIT  [bundled into a chunk]
-  @earendil-works/pi-codemode@1.0.0  MIT  [bundled into a chunk and node_modules tree, unpacked from the asar]
-  @earendil-works/pi-mcp@0.99.2  MIT  [bundled into a chunk]
-  @earendil-works/pi-telemetry@1.0.0  MIT  [bundled into a chunk]
+  @earendil-works/chord@1.5.0  MIT  [bundled into a chunk]
+  @earendil-works/pi-agent-core@1.5.0  MIT  [bundled into a chunk]
+  @earendil-works/pi-ai@1.5.0  MIT  [bundled into a chunk]
+  @earendil-works/pi-codemode@1.5.0  MIT  [bundled into a chunk and node_modules tree, unpacked from the asar]
+  @earendil-works/pi-mcp@1.5.0  MIT  [bundled into a chunk]
+  @earendil-works/pi-schema@1.5.0  MIT  [bundled into a chunk]
+  @earendil-works/pi-telemetry@1.5.0  MIT  [bundled into a chunk]
   @exodus/bytes@1.16.0  MIT  [node_modules tree]
   @floating-ui/core@1.8.0  MIT  [bundled into a chunk]
   @floating-ui/dom@1.8.0  MIT  [bundled into a chunk]
@@ -380,7 +381,6 @@ they are listed so the index accounts for every module in the bundle.
   entities@8.0.0  BSD-2-Clause  [node_modules tree]
   es-toolkit@1.52.0  MIT  [bundled into a chunk]
   esbuild@0.27.0  MIT  [bundled into a chunk]
-  esbuild@0.28.2  MIT  [bundled into a chunk]
   escape-string-regexp@5.0.0  MIT  [bundled into a chunk]
   estree-util-is-identifier-name@3.0.0  MIT  [bundled into a chunk]
   eventsource-parser@3.1.1  MIT  [bundled into a chunk]
@@ -899,7 +899,7 @@ File: LICENSE
 
 
 =========================================================================================================
-Packages: @anthropic-ai/sdk@0.124.0
+Packages: @anthropic-ai/sdk@0.129.0
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -2769,7 +2769,7 @@ SOFTWARE.
 
 
 =========================================================================================================
-Packages: @earendil-works/pi-mcp@0.99.2
+Packages: @earendil-works/pi-mcp@1.5.0
 SPDX: MIT
 File: LICENSES/modelcontextprotocol-typescript-sdk.txt
 ---------------------------------------------------------------------------------------------------------
@@ -7530,7 +7530,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
 =========================================================================================================
-Packages: esbuild@0.27.0, esbuild@0.28.2
+Packages: esbuild@0.27.0
 SPDX: MIT
 File: LICENSE.md
 ---------------------------------------------------------------------------------------------------------
@@ -12712,7 +12712,7 @@ SOFTWARE.
 
 
 =========================================================================================================
-4. PACKAGES THAT PUBLISH NO LICENCE FILE (17)
+4. PACKAGES THAT PUBLISH NO LICENCE FILE (18)
 =========================================================================================================
 
 These packages declare a licence in their manifest but ship no licence file in the
@@ -12731,19 +12731,22 @@ no licence text is substituted for them here.
   @aws-sdk/nested-clients@3.997.48
     declared: Apache-2.0
     source:   https://github.com/aws/aws-sdk-js-v3
-  @earendil-works/chord@1.0.0
+  @earendil-works/chord@1.5.0
     declared: MIT
     source:   https://github.com/earendil-works/pi
-  @earendil-works/pi-agent-core@1.0.0
+  @earendil-works/pi-agent-core@1.5.0
     declared: MIT
     source:   https://github.com/earendil-works/pi
-  @earendil-works/pi-ai@1.0.0
+  @earendil-works/pi-ai@1.5.0
     declared: MIT
     source:   https://github.com/earendil-works/pi
-  @earendil-works/pi-codemode@1.0.0
+  @earendil-works/pi-codemode@1.5.0
     declared: MIT
     source:   https://github.com/earendil-works/pi
-  @earendil-works/pi-telemetry@1.0.0
+  @earendil-works/pi-schema@1.5.0
+    declared: MIT
+    source:   https://github.com/earendil-works/pi
+  @earendil-works/pi-telemetry@1.5.0
     declared: MIT
     source:   https://github.com/earendil-works/pi
   data-uri-to-buffer@4.0.1
@@ -13398,8 +13401,8 @@ These packages are modified before they are bundled, by the pnpm patches recorde
 in pnpm-workspace.yaml. The patch files are in the repository and state the change.
 
   @dnd-kit/core@6.3.1 — patches/@dnd-kit__core@6.3.1.patch
-  @earendil-works/pi-ai@1.0.0 — patches/@earendil-works__pi-ai@1.0.0.patch
-  @earendil-works/pi-codemode@1.0.0 — patches/@earendil-works__pi-codemode@1.0.0.patch
+  @earendil-works/pi-ai@1.5.0 — patches/@earendil-works__pi-ai@1.5.0.patch
+  @earendil-works/pi-codemode@1.5.0 — patches/@earendil-works__pi-codemode@1.5.0.patch
 
 =========================================================================================================
 9. ADDITIONAL NOTICES (2)

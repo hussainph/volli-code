@@ -3,16 +3,16 @@
 // A live Volli dev build runs its chat turns on `@earendil-works/pi-ai`, and
 // pi-ai has no in-app fake. This server is the seam instead: it speaks enough
 // of the OpenAI **Responses** API (streaming SSE, plus the non-streaming JSON
-// shape) for pi-ai's built-in `azure-openai-responses` provider to complete a
-// text or function-tool turn, and it binds 127.0.0.1 only.
+// shape) for pi-ai's built-in `azure` provider's `azure-openai-responses` API
+// to complete a text or function-tool turn, and it binds 127.0.0.1 only.
 //
 // Why the Azure route (and not `openai`, `openrouter`, ...):
 //   • it is the one built-in chat provider whose endpoint is configured purely
 //     from the environment — `AZURE_OPENAI_BASE_URL` (pi-ai
-//     `dist/api/azure-openai-responses.js` `resolveAzureConfig`) — and every
+//     `dist/api/azure-openai-config.js` `resolveAzureConfig`) — and every
 //     catalog model ships `baseUrl: ""` for exactly that reason;
 //   • its auth is `envApiKeyAuth("Azure OpenAI API key", ["AZURE_OPENAI_API_KEY"])`
-//     (pi-ai `dist/providers/azure-openai-responses.js`), so an env var alone
+//     (pi-ai `dist/providers/azure.js`), so an env var alone
 //     makes `Models.checkAuth`/`getAvailable` succeed — no `auth.json`, no
 //     keychain, no OAuth;
 //   • a non-Azure host (127.0.0.1) skips `normalizeAzureBaseUrl`'s path
@@ -24,6 +24,7 @@
 //
 // The pin a launcher hands `modelAccess.setDefault`:
 //   { providerId: "azure-openai-responses", modelId: "gpt-4.1-mini", reasoningLevel: "off" }
+// Volli preserves this durable provider id; direct Pi 1.5 callers use `azure`.
 // gpt-4.1-mini is a non-reasoning model, so Pi reports exactly ["off"].
 //
 // Reply behaviour, per turn, from the LAST user message's text:
