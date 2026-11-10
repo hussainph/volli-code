@@ -534,12 +534,13 @@ const ToolRowContent = React.memo(function ToolRowContent({
         {/* A refused call and a page that would not load are both successes to
             the harness; `describeActivity` is what makes the glyph disagree. */}
         <RowGlyph kind={row.kind} status={row.status} />
-        <span className="shrink-0">
-          {row.kind === "run-command" && row.status === "running" ? "Running" : row.verb}
-        </span>
+        {/* The verb already carries the status in words (`Running`, `Failed
+            to read`), so the row's text alone is its accessible state. */}
+        {row.verb ? <span className="shrink-0">{row.verb}</span> : null}
         {row.object ? (
           <RowObject row={row} onOpenFile={onOpenFile} onOpenSession={onOpenSession} />
         ) : null}
+        {row.after ? <span className="shrink-0">{row.after}</span> : null}
         <RowDisclosure open={open} expandable={expandable} onToggle={toggle} />
         <RowActions row={row} />
         {movedBashReceipt(part) ? (

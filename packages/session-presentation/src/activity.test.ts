@@ -266,8 +266,10 @@ describe("segmentMessageParts", () => {
     expect(segmentMessageParts([part], "m5").map((segment) => segment.kind)).toEqual(["bundle"]);
     const row = describeActivity(part);
     expect(row.kind).toBe("other");
-    expect(row.verb).toBe("linear_create_issue");
+    // The raw id is never the verb; it is spelled out, and kept in the detail.
+    expect(row.verb).toBe("Used linear create issue");
     expect(row.object).toBe("VC-12 chat seam");
+    expect(detailText(row.detail)).toBe('linear_create_issue({"query":"VC-12 chat seam"})');
   });
 
   it("ignores a part that is neither prose, thought, nor tool", () => {
@@ -407,9 +409,8 @@ describe("bundleSummary", () => {
         "s5",
       ),
     );
-    // Settled kinds stay in the past; only the kind still working moves. This
-    // line is the whole report while a turn streams, so it has to say which.
-    expect(summaryText(rows)).toEqual(["Read 2 files, running 1 command"]);
+    // One tense throughout; progress is a glyph, never an ellipsis.
+    expect(summaryText(rows)).toEqual(["Reading 2 files, running 1 command"]);
   });
 
   it("says nothing for a bundle that only thought", () => {
@@ -682,7 +683,7 @@ describe("presenters", () => {
     expect(row.command).toBe("pnpm test");
   });
 
-  it("run-command reports a non-zero exit in the danger tone", () => {
+  it("run-command says a non-zero exit in its sentence, not beside it", () => {
     const row = describeActivity(
       tool("run-command", {
         descriptor: {
@@ -701,8 +702,12 @@ describe("presenters", () => {
         },
       }),
     );
-    expect(row.meta).toBe("exit 1");
-    expect(row.metaTone).toBe("danger");
+    expect(row).toMatchObject({
+      verb: "",
+      object: "pnpm test",
+      after: "exited with code 1",
+      meta: null,
+    });
   });
 
   it("carries the harness's error text on a failed row", () => {
@@ -1040,12 +1045,13 @@ describe("presenters", () => {
         },
       }),
     );
-    expect(row.verb).toBe("explore");
+    // The harness's subagent name is the agent; the task is the object.
+    expect(row.verb).toBe("Delegated to explore");
     expect(row.object).toBe("Find the streaming seam");
     expect(row.meta).toBe("4 tools · 1m12s");
   });
 
-  it("a Volli delegate row reads 'Delegated <helper>' and opens the child Session (VC-9)", () => {
+  it("a Volli delegate row reads 'Delegated to <helper>' and opens the child Session (VC-9)", () => {
     const row = describeActivity(
       tool("delegate", {
         toolName: "session_delegate",
@@ -1076,7 +1082,7 @@ describe("presenters", () => {
       }),
     );
     // A person reads a verb, not the wire name of the tool.
-    expect(row.verb).toBe("Delegated");
+    expect(row.verb).toBe("Delegated to");
     expect(row.object).toBe("Token hunt");
     // The object opens the child Session, the way a file row opens a file.
     expect(row.openSessionId).toBe("cccccccc-0000-0000-0000-000000000000");
@@ -1113,16 +1119,25 @@ describe("presenters", () => {
     const other = describeActivity(
       tool(null, { toolName: "linear_create_issue", input: { query: "seam", limit: 3 } }),
     );
-    expect(other.detail).toEqual({ view: "signature", text: '({"query":"seam","limit":3})' });
+    expect(other.detail).toEqual({
+      view: "signature",
+      text: 'linear_create_issue({"query":"seam","limit":3})',
+    });
     for (const kind of ["run-command", "read-file", "search", "list-directory"] as const) {
       const row = describeActivity(tool(kind, { output: { unknown: { shape: 1 } } }));
       expect(row.detail?.view === "signature").toBe(false);
     }
   });
 
-  it("shows nothing in the detail when 'other' has no input and no output", () => {
+  it("shows nothing in the detail when 'other' has no input, no output and a plain name", () => {
     const row = describeActivity(tool(null, { toolName: "noop" }));
+    expect(row.verb).toBe("Used noop");
     expect(row.detail).toBeNull();
+    // A name the verb respelled is still reachable, as the call it was.
+    expect(describeActivity(tool(null, { toolName: "web_search" })).detail).toEqual({
+      view: "signature",
+      text: "web_search()",
+    });
   });
 
   it("reads output text from any of the harness's common field names", () => {
@@ -1320,7 +1335,7 @@ describe("browse presenter", () => {
       browse("click", { target: "e5", refusal: "browser.stale-ref" }),
     );
     expect(refused).toMatchObject({
-      verb: "Clicked",
+      verb: "Failed to click",
       object: "e5",
       meta: "refused",
       metaTone: "danger",
@@ -1459,14 +1474,15 @@ describe("formatters", () => {
   });
 
   it("never thresholds a semantic meta — it says what happened, not how long", () => {
-    const failed = ACTIVITY_PRESENTERS["run-command"](
+    const missed = ACTIVITY_PRESENTERS["run-command"](
       activityContext(
         tool("run-command", {
+          input: { command: "rg seam" },
           descriptor: { startedAt: 0, endedAt: 3, outcome: { ...emptyOutcome, exitCode: 1 } },
         }),
       ),
     );
-    expect(failed.meta).toBe("exit 1");
+    expect(missed.meta).toBe("no matches");
   });
 
   it("formats bytes and diff stats", () => {
@@ -1688,5 +1704,417 @@ describe("reasoningStatus", () => {
       verb: "Thinking",
       meta: null,
     });
+  });
+});
+
+/** The sentence a row reads as, the way the UI lays its words out. */
+function rowTitle(part: DynamicToolUIPart): string {
+  const row = describeActivity(part);
+  return [row.verb, row.object, row.after].filter((word) => word).join(" ");
+}
+
+function subjectOf(
+  label: string,
+  extra: Partial<ActivityDescriptor["subject"]> = {},
+): Pick<ActivityDescriptor, "subject"> {
+  return { subject: { label, path: null, lineRange: null, ...extra } };
+}
+
+/**
+ * A row's title is its accessible name (shadcn Trace): status has to be
+ * readable from the words alone, so every kind is pinned in every status.
+ */
+describe("state-true titles", () => {
+  const STATES = {
+    pending: "input-streaming",
+    running: "input-available",
+    done: "output-available",
+    failed: "output-error",
+    denied: "output-denied",
+    "not-run": "approval-requested",
+  } as const satisfies Record<string, DynamicToolUIPart["state"]>;
+
+  const KINDS: Record<
+    Exclude<ActivityKind, "browse">,
+    { descriptor: Partial<ActivityDescriptor>; titles: Record<keyof typeof STATES, string> }
+  > = {
+    "run-command": {
+      descriptor: subjectOf("pnpm build"),
+      titles: {
+        pending: "Run pnpm build",
+        running: "Running pnpm build",
+        done: "Ran pnpm build",
+        failed: "Failed to run pnpm build",
+        denied: "Denied running pnpm build",
+        "not-run": "Not run pnpm build",
+      },
+    },
+    "read-file": {
+      descriptor: subjectOf("src/foo.ts"),
+      titles: {
+        pending: "Read src/foo.ts",
+        running: "Reading src/foo.ts",
+        done: "Read src/foo.ts",
+        failed: "Failed to read src/foo.ts",
+        denied: "Denied reading src/foo.ts",
+        "not-run": "Not run src/foo.ts",
+      },
+    },
+    "edit-file": {
+      descriptor: subjectOf("src/foo.ts"),
+      titles: {
+        pending: "Edit src/foo.ts",
+        running: "Editing src/foo.ts",
+        done: "Edited src/foo.ts",
+        failed: "Failed to edit src/foo.ts",
+        denied: "Denied editing src/foo.ts",
+        "not-run": "Not run src/foo.ts",
+      },
+    },
+    "write-file": {
+      descriptor: subjectOf("src/new.ts"),
+      titles: {
+        pending: "Create src/new.ts",
+        running: "Creating src/new.ts",
+        done: "Created src/new.ts",
+        failed: "Failed to create src/new.ts",
+        denied: "Denied creating src/new.ts",
+        "not-run": "Not run src/new.ts",
+      },
+    },
+    search: {
+      descriptor: subjectOf("useChat"),
+      titles: {
+        pending: "Grep useChat",
+        running: "Grepping useChat",
+        done: "Grepped useChat",
+        failed: "Failed to grep useChat",
+        denied: "Denied grepping useChat",
+        "not-run": "Not run useChat",
+      },
+    },
+    "list-directory": {
+      descriptor: subjectOf("src/"),
+      titles: {
+        pending: "List src/",
+        running: "Listing src/",
+        done: "Listed src/",
+        failed: "Failed to list src/",
+        denied: "Denied listing src/",
+        "not-run": "Not run src/",
+      },
+    },
+    "fetch-url": {
+      descriptor: subjectOf("example.com"),
+      titles: {
+        pending: "Fetch example.com",
+        running: "Fetching example.com",
+        done: "Fetched example.com",
+        failed: "Failed to fetch example.com",
+        denied: "Denied fetching example.com",
+        "not-run": "Not run example.com",
+      },
+    },
+    plan: {
+      descriptor: subjectOf("3 steps"),
+      titles: {
+        pending: "Plan 3 steps",
+        running: "Planning 3 steps",
+        done: "Planned 3 steps",
+        failed: "Failed to plan 3 steps",
+        denied: "Denied planning 3 steps",
+        "not-run": "Not run 3 steps",
+      },
+    },
+    delegate: {
+      descriptor: {
+        nativeToolName: "session_delegate",
+        ...subjectOf("Token hunt", { agentName: "Token hunt" }),
+      },
+      titles: {
+        pending: "Delegate to Token hunt",
+        running: "Delegating to Token hunt",
+        done: "Delegated to Token hunt",
+        failed: "Failed to delegate to Token hunt",
+        denied: "Denied delegating to Token hunt",
+        "not-run": "Not run Token hunt",
+      },
+    },
+    other: {
+      descriptor: {
+        nativeToolName: "mcp__linear__create_issue__1a2b3c4d",
+        ...subjectOf("VC-12 chat seam"),
+      },
+      titles: {
+        pending: "Use Linear · create issue VC-12 chat seam",
+        running: "Using Linear · create issue VC-12 chat seam",
+        done: "Used Linear · create issue VC-12 chat seam",
+        failed: "Failed to use Linear · create issue VC-12 chat seam",
+        denied: "Denied using Linear · create issue VC-12 chat seam",
+        "not-run": "Not run VC-12 chat seam",
+      },
+    },
+  };
+
+  for (const [kind, { descriptor: patch, titles }] of Object.entries(KINDS)) {
+    it(`${kind} says its status in its title`, () => {
+      for (const [status, state] of Object.entries(STATES)) {
+        const part = tool(kind as ActivityKind, { state, descriptor: patch });
+        expect({ status, title: rowTitle(part) }).toEqual({
+          status,
+          title: titles[status as keyof typeof STATES],
+        });
+        expect(describeActivity(part).status).toBe(status);
+      }
+    });
+  }
+
+  it("browse says its status in its title", () => {
+    const part = (state: DynamicToolUIPart["state"], action: ActivityBrowse["action"]) =>
+      tool("browse", {
+        state,
+        descriptor: {
+          ...subjectOf("example.com"),
+          browse: {
+            action,
+            tabId: "tab-1",
+            url: "https://example.com",
+            title: null,
+            target: "Sign in",
+            picture: null,
+            errorCount: null,
+            ownerSessionId: "s1",
+            error: null,
+            refusal: null,
+          },
+        },
+      });
+    expect(rowTitle(part("input-streaming", "click"))).toBe("Click “Sign in”");
+    expect(rowTitle(part("input-available", "click"))).toBe("Clicking “Sign in”");
+    expect(rowTitle(part("output-available", "click"))).toBe("Clicked “Sign in”");
+    expect(rowTitle(part("output-error", "click"))).toBe("Failed to click “Sign in”");
+    expect(rowTitle(part("output-denied", "click"))).toBe("Denied clicking “Sign in”");
+    expect(rowTitle(part("input-available", "open"))).toBe("Opening example.com");
+    expect(rowTitle(part("output-error", "open"))).toBe("Failed to open example.com");
+    expect(rowTitle(part("input-available", "screenshot"))).toBe("Taking a screenshot example.com");
+    expect(rowTitle(part("output-error", "back"))).toBe("Failed to go back example.com");
+    expect(rowTitle(part("input-available", "wait"))).toBe("Waiting");
+    expect(rowTitle(part("input-available", "tabs"))).toBe("Listing tabs");
+    expect(rowTitle(part("input-available", "console"))).toBe("Reading console example.com");
+    expect(rowTitle(part("input-available", "find"))).toBe("Searching for “Sign in”");
+    // The finished row keeps the replay's words (VC-453).
+    expect(describeActivity(part("output-available", "find")).verb).toBe(
+      browseCaption("find", "Sign in").verb,
+    );
+    // A browse descriptor with no facet still tenses.
+    expect(
+      rowTitle(
+        tool("browse", {
+          state: "input-available",
+          toolName: "browser_snapshot",
+          descriptor: subjectOf("example.com"),
+        }),
+      ),
+    ).toBe("Browsing example.com");
+  });
+
+  it("puts a known non-zero exit in the sentence, whichever way it was recorded", () => {
+    // Stamped on a call the harness calls a success: the glyph agrees with
+    // the title, not with the harness.
+    const stamped = describeActivity(
+      tool("run-command", {
+        input: { command: "pnpm dev" },
+        descriptor: { outcome: { ...emptyOutcome, exitCode: 143 } },
+      }),
+    );
+    expect(stamped).toMatchObject({ verb: "", object: "pnpm dev", status: "failed" });
+    expect(stamped.after).toBe("exited with code 143");
+    // Pi's bash records it only as its failure's last line.
+    const piPart = tool("run-command", {
+      state: "output-error",
+      input: { command: "pnpm lint" },
+      errorText: "src/a.ts: 3 problems\n\nCommand exited with code 1",
+    });
+    const pi = describeActivity(piPart);
+    expect(rowTitle(piPart)).toBe("pnpm lint exited with code 1");
+    expect(pi.status).toBe("failed");
+    // A zero exit is an ordinary success.
+    expect(
+      rowTitle(
+        tool("run-command", {
+          input: { command: "pnpm build" },
+          descriptor: { outcome: { ...emptyOutcome, exitCode: 0 } },
+        }),
+      ),
+    ).toBe("Ran pnpm build");
+    // No code anywhere: the failure is said plainly.
+    expect(
+      rowTitle(tool("run-command", { state: "output-error", input: { command: "pnpm lint" } })),
+    ).toBe("Failed to run pnpm lint");
+    // With no command to name, the exit is the whole sentence.
+    expect(
+      describeActivity(
+        tool("run-command", { descriptor: { outcome: { ...emptyOutcome, exitCode: 2 } } }),
+      ),
+    ).toMatchObject({ verb: "Exited with code 2", object: null, after: null, status: "failed" });
+    // A denial outranks whatever exit was recorded.
+    expect(
+      describeActivity(
+        tool("run-command", {
+          state: "output-denied",
+          descriptor: { outcome: { ...emptyOutcome, exitCode: 1 } },
+        }),
+      ).status,
+    ).toBe("denied");
+    // A live command has no exit to report yet, whatever the descriptor says.
+    expect(
+      rowTitle(
+        tool("run-command", {
+          state: "input-available",
+          input: { command: "pnpm build" },
+          descriptor: { outcome: { ...emptyOutcome, exitCode: 1 } },
+        }),
+      ),
+    ).toBe("Running pnpm build");
+  });
+
+  it("says a deliberate background stop stopped, whatever its signal's exit", () => {
+    const stop = (state: DynamicToolUIPart["state"], exitCode: number | null) =>
+      tool("run-command", {
+        state,
+        toolName: "shell_kill",
+        input: { shellId: "sh-1" },
+        descriptor: {
+          ...subjectOf("pnpm dev (background · killed)"),
+          outcome: { ...emptyOutcome, exitCode },
+        },
+      });
+    expect(describeActivity(stop("output-available", 143))).toMatchObject({
+      verb: "Stopped",
+      object: "pnpm dev (background · killed)",
+      after: null,
+      status: "done",
+    });
+    expect(rowTitle(stop("input-available", null))).toBe("Stopping pnpm dev (background · killed)");
+    expect(describeActivity(stop("output-error", null))).toMatchObject({
+      verb: "Failed to stop",
+      status: "failed",
+    });
+    // A read of a shell that exited on a signal carries no stop mark: nothing
+    // says the stop was asked for, so it is a non-zero exit like any other.
+    expect(
+      describeActivity(
+        tool("run-command", {
+          descriptor: {
+            ...subjectOf("pnpm dev (background · read)"),
+            outcome: { ...emptyOutcome, exitCode: 143 },
+          },
+        }),
+      ),
+    ).toMatchObject({ after: "exited with code 143", status: "failed" });
+  });
+
+  it("counts and opens a bundle by the status its rows show", () => {
+    const miss = tool("run-command", {
+      state: "output-error",
+      input: { command: "rg seam" },
+      errorText: "Command exited with code 1",
+    });
+    const exited = tool("run-command", {
+      input: { command: "pnpm lint" },
+      descriptor: { outcome: { ...emptyOutcome, exitCode: 1 } },
+    });
+    const missOnly = bundleOf(segmentMessageParts([miss], "miss"));
+    expect(bundleSummary(missOnly)).toEqual([{ text: "Ran 1 command", tone: "neutral" }]);
+    expect(bundleNeedsAttention(missOnly)).toBe(false);
+    const withExit = bundleOf(segmentMessageParts([miss, exited], "exit"));
+    expect(bundleSummary(withExit)).toEqual([
+      { text: "Ran 2 commands", tone: "neutral" },
+      { text: "1 failed", tone: "danger" },
+    ]);
+    expect(bundleNeedsAttention(withExit)).toBe(true);
+  });
+
+  it("reads a search that exits 1 as one that found nothing, not one that failed", () => {
+    for (const command of [
+      "rg seam",
+      "cd src && grep -rn seam .",
+      "FORCE_COLOR=0 /usr/bin/egrep seam",
+      "git grep seam",
+    ]) {
+      const part = tool("run-command", {
+        state: "output-error",
+        input: { command },
+        errorText: "Command exited with code 1",
+      });
+      const row = describeActivity(part);
+      expect({ command, title: rowTitle(part) }).toEqual({ command, title: `Ran ${command}` });
+      expect(row).toMatchObject({ status: "done", meta: "no matches", after: null });
+    }
+    // Exit 2 is grep's real error, a pipeline's status is its last command's,
+    // and `git` alone is not a search.
+    for (const command of ["rg seam --bad-flag", "rg seam | head", "git log"]) {
+      const exit = command.startsWith("rg seam --") ? 2 : 1;
+      const row = describeActivity(
+        tool("run-command", {
+          state: "output-error",
+          input: { command },
+          errorText: `Command exited with code ${exit}`,
+        }),
+      );
+      expect(row).toMatchObject({ status: "failed", after: `exited with code ${exit}` });
+    }
+    // A stamped exit 1 from a search reads the same way.
+    expect(
+      describeActivity(
+        tool("run-command", {
+          descriptor: { ...subjectOf("rg seam"), outcome: { ...emptyOutcome, exitCode: 1 } },
+        }),
+      ),
+    ).toMatchObject({ verb: "Ran", object: "rg seam", meta: "no matches" });
+  });
+
+  it("names tools it has no words for in readable ones, keeping the raw name in the detail", () => {
+    const mcp = describeActivity(
+      tool("other", {
+        input: { title: "seam" },
+        descriptor: {
+          nativeToolName: "mcp__github_enterprise__listPullRequests__0badc0de",
+          ...subjectOf("mcp__github_enterprise__listPullRequests__0badc0de"),
+        },
+      }),
+    );
+    // A harness that knew no better subject repeated the tool name; the verb
+    // already says it, so the object does not.
+    expect(mcp).toMatchObject({
+      verb: "Used Github enterprise · list pull requests",
+      object: null,
+    });
+    expect(detailText(mcp.detail)).toBe(
+      'mcp__github_enterprise__listPullRequests__0badc0de({"title":"seam"})',
+    );
+    expect(describeActivity(tool(null, { toolName: "webSearch-v2" })).verb).toBe(
+      "Used web search v2",
+    );
+    // A name with no words in it is kept as it came.
+    expect(describeActivity(tool(null, { toolName: "__" })).verb).toBe("Used __");
+  });
+
+  it("names an unnamed harness subagent through its tool, readably", () => {
+    expect(
+      rowTitle(
+        tool("delegate", {
+          state: "input-available",
+          descriptor: { nativeToolName: "code_reviewer", ...subjectOf("Review the diff") },
+        }),
+      ),
+    ).toBe("Delegating to code reviewer Review the diff");
+  });
+
+  it("settles the whole summary sentence into the past together", () => {
+    const rows = bundleOf(
+      segmentMessageParts([tool("read-file"), tool("run-command"), tool("read-file")], "tense"),
+    );
+    expect(summaryText(rows)).toEqual(["Read 2 files, ran 1 command"]);
   });
 });
