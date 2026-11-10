@@ -1,53 +1,70 @@
 ---
 title: Agent authority
-description: Session execution, secret handling, and actor permissions in Volli.
+description: Understand what Session tools can access, how Volli checks coordination requests, and where credentials and confirmations belong.
 sidebar:
   label: Agent authority
 ---
 
-Volli checks deterministic boundaries around a Session's tools and the host API.
-It does not review each tool call with a model or ask you to approve ordinary
-file and command calls.
+Volli checks deterministic boundaries around Session tools and its app API.
+It does not ask a model to judge each tool call or ask you to approve ordinary
+file reads, writes, and commands.
 
-## Workspace and execution
+## Working copy and execution
 
-A Session starts in its recorded worktree or main checkout. Ordinary desktop
-Sessions use host-native file and command tools: the working directory is not
-a filesystem sandbox.
+A Session starts in its recorded working copy: a ticket worktree or the main
+checkout. Desktop Sessions use host-native file and command tools. Their
+starting directory is not a filesystem sandbox.
 
-The runtime also retains an injectable `ScopedExecutionEnv`, whose file checks
-resolve paths and symlink targets against the workspace. Hosts can select that
-environment; desktop Sessions do not use it by default. Neither environment
-isolates arbitrary processes running as your macOS user.
+Commands run as your macOS user and can access files and the network with that
+user's permissions. A worktree separates source changes from other tickets;
+it does not isolate processes or protect the rest of your Mac. Review the
+repository, scripts, Skills, and MCP servers you make available to an agent.
+
+[Code Mode](/guides/code-mode/) has a program sandbox, but nested tool calls
+retain the Session's ordinary authority. It cannot turn an unrestricted shell
+into an isolated one.
 
 ## Secrets
 
-Credentials use a dedicated, person-only field rather than the chat composer.
-Secret values are kept out of prompts, transcripts, and Session events; tool
-output is redacted before it reaches the model or the transcript. Generic
-question answers cannot submit credentials.
+Enter credentials through a person-only secret field, not the chat composer.
+Secret requests keep values out of prompts, transcripts, and Session events.
+Volli redacts registered secret values from tool output before showing that
+output to the model or in the transcript. Redaction is best effort; encoded
+or transformed values can leak. Ordinary question answers cannot submit
+credentials.
 
-See [Local and cloud data and network access](/reference/data-and-privacy/) for storage
-and network boundaries.
+See [Session credentials](/guides/session-credentials/) for credential requests,
+scopes, and the project's **Secrets** controls. Provider sign-ins and
+[MCP credentials](/guides/mcp-servers/#credentials-and-sign-in) have their own
+Settings fields. [Local data and network access](/reference/data-and-privacy/)
+covers storage and outbound connections.
 
 ## Actor permissions
 
-The host derives who made a request from its authenticated connection, not an
-actor name supplied by a caller. Per-actor policy controls coordination verbs,
-which Sessions can be awaited, and how much another Session's transcript may
-be disclosed. Unauthenticated socket callers are read-only by default.
+Volli derives the caller from its authenticated connection, not from an actor
+name in a request. Per-actor policy controls coordination actions, which
+Ticket and Session events can wake a watch, and how much of another Session's
+transcript the caller may read. Unauthenticated socket callers are read-only
+by default and cannot read Session transcripts.
 
-A Session's frozen tool list is a separate boundary: instructions cannot grant
-a tool it does not hold. See the [agent operating
-model](/reference/agent-operating-model/).
+A Session's tool list is a separate boundary. Instructions cannot grant a
+tool it does not hold. Existing tools keep their names and routes; additions
+arrive only at supported refresh boundaries. Changing Settings does not
+revoke tools from a running Session. See the [agent operating
+model](/reference/agent-operating-model/) and [capability
+changes](/reference/agent-capability-changes/).
+
+Browser Tabs also have a hold: one Session or the person can drive a tab at a
+time. Reads do not require a hold. A refused hold does not authorize the
+agent to bypass the Browser tools.
 
 ## Questions and limits
 
-Agents can still ask ordinary questions and existing confirmations. The
-subagent allowance also remains: reaching its cap can refuse further
-delegation or ask through the existing permission card. An unattended Run
-never invents an answer.
+Agents can ask questions and present existing confirmations. When a Session
+reaches its delegation allowance, policy can refuse another helper or ask
+through a permission card. An unattended Run does not supply an answer for
+you.
 
-[Decision models](/guides/models/#decision-model) and the `classify` tool are
-independent helpers, not permission judges. Older Session history remains
-readable, but old review records and saved grants do not authorize new calls.
+[Decision models](/guides/models/#decision-model) and `classify` help with typed
+decisions. They do not approve calls. Old review records and saved grants in
+Session history do not authorize new tool calls.

@@ -140,7 +140,7 @@
  * catalogue; it says nothing about what arrives over a socket. So every field
  * is type-checked before use and the resulting `Model` is built field by field
  * from an allowlist rather than spread from response bytes; entries that fail
- * are skipped rather than fatal; `compat`, `headers` and `samplingParams` are
+ * are skipped rather than fatal; `compat`, `headers` and sampling overrides are
  * accepted only as bounded inert JSON with no prototype-shaped keys; the body
  * and the entry count are bounded; and no error message ever quotes a
  * response byte.
@@ -193,7 +193,7 @@ const MAX_PROVIDER_MODELS = 1_000;
 /**
  * Bounds on the opaque JSON this module will carry into a runtime model.
  *
- * `compat` and `samplingParams` are read without knowing their vocabulary (see
+ * `compat` and sampling overrides are read without knowing their vocabulary (see
  * {@link feedInertRecord}), so what stands in for a schema is a ceiling: deep
  * enough for pi's most nested real shape — `compat.openRouterRouting.order[]`
  * is three — with room to spare, and wide enough that no honest entry comes
@@ -881,8 +881,12 @@ function piDevModel(
   const headers = feedHeaders(raw.headers);
   const compat = feedCompat(raw.compat);
   const samplingParams = feedInertRecord(raw.samplingParams);
+  const samplingParamsByThinkingLevel = feedSamplingParamsByThinkingLevel(
+    raw.samplingParamsByThinkingLevel,
+  );
   if (thinkingLevelMap === null || headers === null) return undefined;
-  if (compat === null || samplingParams === null) return undefined;
+  if (compat === null || samplingParams === null || samplingParamsByThinkingLevel === null)
+    return undefined;
 
   return {
     id,
@@ -899,6 +903,7 @@ function piDevModel(
     ...(headers === undefined ? {} : { headers }),
     ...(compat === undefined ? {} : { compat }),
     ...(samplingParams === undefined ? {} : { samplingParams }),
+    ...(samplingParamsByThinkingLevel === undefined ? {} : { samplingParamsByThinkingLevel }),
   } as Model<Api>;
 }
 
@@ -942,7 +947,7 @@ function feedRecordOf(
 }
 
 /**
- * `compat` and `samplingParams`, as bounded inert JSON.
+ * `compat` and sampling overrides, as bounded inert JSON.
  *
  * Neither can be checked key by key from out here, and neither should be. Pi's
  * `compat` is a union of four API-specific shapes that gains keys on ordinary
@@ -957,6 +962,15 @@ function feedInertRecord(value: unknown): Record<string, unknown> | undefined | 
   if (value === undefined) return undefined;
   if (!isRecord(value)) return null;
   return isInertJson(value, 0, { nodes: 0 }) ? value : null;
+}
+
+/** Pi 1.0.2+: each thinking level overrides sampling with a JSON object. */
+function feedSamplingParamsByThinkingLevel(
+  value: unknown,
+): Record<string, unknown> | undefined | null {
+  const levels = feedInertRecord(value);
+  if (levels === undefined || levels === null) return levels;
+  return Object.values(levels).every(isRecord) ? levels : null;
 }
 
 /**
@@ -1066,6 +1080,7 @@ function safeStoredProtocol(model: PersistedCatalogModel, guard: RedirectionGuar
   }
   if (model.headers !== undefined && !headerRecord(model.headers)) return false;
   if (model.samplingParams !== undefined && !isRecord(model.samplingParams)) return false;
+  if (feedSamplingParamsByThinkingLevel(model.samplingParamsByThinkingLevel) === null) return false;
   if (model.thinkingLevelMap !== undefined) {
     if (!isRecord(model.thinkingLevelMap)) return false;
     for (const value of Object.values(model.thinkingLevelMap)) {

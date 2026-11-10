@@ -46,12 +46,14 @@ import {
   type SessionProjection,
 } from "@volli/shared";
 import type {
+  SessionEngine,
   SessionRuntimeCommandRequest,
   SessionRuntimeCommandResult,
 } from "@volli/session-engine";
 
 import type { NotificationRequest } from "@volli/shared";
 import { hostLogger } from "../log/root";
+import { withMainSpan } from "../log/context";
 
 const log = hostLogger("scheduled-resume");
 
@@ -141,7 +143,7 @@ export function createScheduledResumeHost(ports: ScheduledResumeHostPorts): Sche
         : Math.min(Math.max(nextAt - now(), 0), SCHEDULED_RESUME_TICK_MS);
     timer = setTimer(delay, () => {
       timer = null;
-      void pass();
+      void withMainSpan({ door: "timer", operation: "scheduled-resume" }, pass);
     });
   }
 
@@ -315,4 +317,24 @@ export function createScheduledResumeHost(ports: ScheduledResumeHostPorts): Sche
       while (work.size > 0) await Promise.allSettled(Array.from(work));
     },
   };
+}
+
+/**
+ * Every Session on one Ticket with its whole history: the superseded rule's
+ * input, which reads each sibling's commands and receipts.
+ *
+ * A listing row carries neither (VC-848), so the Ticket's roster comes from
+ * the listing and each sibling's history from `getSession`. Asked when a
+ * scheduled or restart resume is about to fire (both hosts' `ticketSessions`
+ * port), over the few Sessions one Ticket holds.
+ */
+export async function ticketSessionProjections(
+  engine: Pick<SessionEngine, "listSessions" | "getSession">,
+  query: { projectId: string; ticketId: string },
+): Promise<readonly SessionProjection[]> {
+  const listed = await engine.listSessions({ ...query, scope: "ticket" });
+  const projections = await Promise.all(
+    listed.map((row) => engine.getSession({ sessionId: row.session.id })),
+  );
+  return projections.filter((projection) => projection !== null);
 }

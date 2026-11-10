@@ -24,6 +24,7 @@ import { useSessionsStore } from "@renderer/stores/sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { useUiStore } from "@renderer/stores/ui";
 import { TicketSessionsPanel } from "./ticket-sessions-panel";
+import { withOpenTabChooser } from "@renderer/test-utils/open-tab-chooser";
 
 vi.mock("@renderer/lib/toast", () => ({ toastError: vi.fn(), toastSuccess: vi.fn() }));
 
@@ -76,29 +77,44 @@ describe("TicketSessionsPanel", () => {
   // present either way (the scratch draws it always) — these cases prove its
   // shape and its disabled state; `ticket-sessions-panel-rows.test.tsx` proves
   // it survives a populated roster.
-  it("starts a chat in one press and keeps the terminal behind the caret", () => {
+  it("offers Chat and Terminal through the one anchored chooser", () => {
     const html = panel(false);
-
-    expect(html).toContain('aria-label="New chat"');
-    expect(buttonTag(html, "New chat")).not.toContain('aria-haspopup="menu"');
-    expect(buttonTag(html, "Other things to open")).toContain('aria-haspopup="menu"');
+    expect(html).toContain('aria-label="Open a tab"');
+    expect(buttonTag(html, "Open a tab")).toContain('aria-haspopup="menu"');
+    expect(html).not.toContain('aria-label="New chat"');
     expect(html).not.toContain('aria-label="New session"');
   });
 
-  it("announces the chord, which now starts what this control starts", () => {
+  it("announces the creation chords beside their actual menu choices", async () => {
     // This rail only exists inside a ticket, and ⌘T / ⌥⌘T resolve against the
     // surface in front (lib/new-session-shortcut.ts) — so inside a ticket they
     // mint a Session on that ticket, exactly as this control does. The rule is
     // unchanged ("only advertise a key that does what the item does"); the chord
     // is what moved.
-    expect(buttonTag(panel(false), "New chat")).toContain('aria-keyshortcuts="Meta+T"');
+    const chat = vi.fn();
+    await withOpenTabChooser(
+      <TicketSessionsPanel
+        projectId="project-1"
+        ticketId="ticket-6"
+        creating={false}
+        onNewSession={noop}
+        onNewChat={chat}
+        onActivateSession={noop}
+        onActivateChat={noop}
+      />,
+      async (menu) => {
+        const choices = [...menu.querySelectorAll<HTMLElement>('[role="menuitem"]')];
+        expect(choices.map((choice) => choice.textContent)).toEqual(["Chat⌘T", "Terminal⌥⌘T"]);
+        await act(async () => choices[0]!.click());
+        expect(chat).toHaveBeenCalledTimes(1);
+      },
+    );
   });
 
-  it("disables both halves while the ticket worktree is booting", () => {
+  it("disables the whole chooser while the ticket worktree is booting", () => {
     const html = panel(true);
-
-    expect(buttonTag(html, "New chat")).toContain('disabled=""');
-    expect(buttonTag(html, "Other things to open")).toContain('disabled=""');
+    expect(buttonTag(html, "Open a tab")).toContain('disabled=""');
+    expect(html.match(/aria-label="Open a tab"/g)).toHaveLength(1);
   });
 
   it("holds the rows' box, with the offer once above it, before the listing has answered", () => {
@@ -106,9 +122,9 @@ describe("TicketSessionsPanel", () => {
     // pending box nor the empty frame carries a second copy of the same offer.
     const html = panel(false);
 
-    expect(html).toContain('data-testid="ticket-sessions-loading"');
-    expect(html).not.toContain("No active sessions");
-    expect(html.match(/aria-label="New chat"/g)?.length).toBe(1);
+    expect(html).not.toContain('data-testid="ticket-sessions-loading"');
+    expect(html).not.toContain("No sessions");
+    expect(html.match(/aria-label="Open a tab"/g)?.length).toBe(1);
   });
 });
 

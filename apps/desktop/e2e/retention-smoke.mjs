@@ -276,7 +276,7 @@ async function main() {
       const exact = new RegExp(`^${id}$`);
       return page
         .locator("article")
-        .filter({ has: page.locator("span.font-mono", { hasText: exact }) });
+        .filter({ visible: true, has: page.locator("span.font-mono", { hasText: exact }) });
     }
 
     function docTab(displayId) {
@@ -312,7 +312,9 @@ async function main() {
     // the check unfolds first, exactly as `ticket-rail-shots` does; what it
     // pins is that the button is one press away, not that it is absent.
     async function unfoldWorktreeBody() {
-      const fold = page.locator("aside").getByTestId("ticket-repository-fold");
+      const fold = page
+        .locator('[data-inspector-panel][data-shown="true"]')
+        .getByTestId("ticket-repository-fold");
       await waitUntil("worktree fold present", async () => (await fold.count()) === 1, {
         timeout: 10000,
       });

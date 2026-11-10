@@ -72,20 +72,14 @@ describe("lift", () => {
     }
   });
 
-  it("lands the sidebar above its canvas in BOTH modes, from opposite signs", () => {
-    // The invariant that survives the freeze, and the one the derived sink target
-    // exists for. `ARC_SETTLED.lift` is +0.25 in light and −0.25 in dark, and the
-    // picture is the same in both: a pane a little lighter than the gradient it
-    // sits on. It has to be the opposite sign in dark because `--background` is
-    // the LIGHTEST surface in light and one of the darkest in dark — a hardcoded
-    // "sink means darker" would put the dark sidebar UNDER its canvas and make
-    // the two appearances two different windows.
+  it("keeps the sidebar above its canvas in both modes with neutral reading paper", () => {
+    // Tint on surrounding objects must not make the reading paper reverse the lift.
     expect(Math.sign(ARC_SETTLED.lift.light)).toBe(-Math.sign(ARC_SETTLED.lift.dark));
     for (const mode of MODES) {
       for (const hex of HUES) {
         const canvas = canvasOf(hex);
         const step = tierL(canvas, 1, mode) - hexToOklch(baseFillHex(canvas, mode)).L;
-        expect({ mode, hex, above: step > 0.01 }).toEqual({ mode, hex, above: true });
+        expect({ mode, hex, above: step > 0 }).toEqual({ mode, hex, above: true });
       }
     }
   });

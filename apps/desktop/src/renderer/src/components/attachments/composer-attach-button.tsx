@@ -21,12 +21,11 @@
  * so the two routes cannot disagree about what a repository file is.
  */
 import * as React from "react";
-import { PaperclipIcon } from "@phosphor-icons/react/dist/csr/Paperclip";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
+import { AttachmentIcon, AddIcon } from "@renderer/components/ui/icon";
 
 import {
   COMPOSER_CONTROL_ICON_SIZE,
-  COMPOSER_GLYPH_WEIGHT,
+  COMPOSER_GLYPH_STROKE,
 } from "@renderer/components/chat/composer-chrome";
 import { Button } from "@renderer/components/ui/button";
 
@@ -89,7 +88,7 @@ export function ComposerAttachButton({
   className,
 }: ComposerAttachButtonProps): React.ReactElement {
   const picker = useFilePicker(onFiles);
-  const Glyph = glyph === "plus" ? PlusIcon : PaperclipIcon;
+  const Glyph = glyph === "plus" ? AddIcon : AttachmentIcon;
   return (
     <>
       <Button
@@ -101,7 +100,7 @@ export function ComposerAttachButton({
         className={className}
         onClick={picker.open}
       >
-        <Glyph weight={COMPOSER_GLYPH_WEIGHT} />
+        <Glyph strokeWidth={COMPOSER_GLYPH_STROKE} />
       </Button>
       {picker.input}
     </>

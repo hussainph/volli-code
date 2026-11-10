@@ -82,6 +82,7 @@ export function createCommittedSessionStream(base: SessionEngine): CommittedSess
       afterCommit(request.sessionId, () => base.completeModelSelection(request)),
     getSession: (query) => base.getSession(query),
     getBaseSession: (query) => base.getBaseSession(query),
+    getSessionListing: (query) => base.getSessionListing(query),
     listSessions: (query) => base.listSessions(query),
     countSessions: (query) => base.countSessions(query),
     listAttachedSessions: () => base.listAttachedSessions(),

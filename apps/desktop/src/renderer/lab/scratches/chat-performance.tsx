@@ -1311,7 +1311,7 @@ function TranscriptPane({
       <Conversation className="min-h-0 bg-background" resize={CONTROL_RESIZE}>
         <ConversationContent data-perf-transcript="" className="gap-6 px-0 pt-8 pb-24">
           {messages.length === 0 ? (
-            <ConversationEmptyState className="min-h-80" title="Empty" description="" />
+            <ConversationEmptyState className="min-h-80">Empty</ConversationEmptyState>
           ) : (
             <ContentColumn className={MESSAGE_GAP}>
               {turns.map((turn, index) => (

@@ -12,6 +12,7 @@ import { parse } from "yaml";
 import "./runner-install.test.mjs";
 import "./runner-release-manifest.test.mjs";
 import "./runner-native-build.test.mjs";
+import "./release-publication.test.mjs";
 
 const workflow = parse(
   readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8"),
@@ -312,7 +313,7 @@ test("peer capture is advisory, resolves the release commit, and exercises dry r
   const publish = workflow.jobs.release.steps.find(
     (step) => step.name === "Publish artifacts to the release",
   );
-  assert.match(publish.run, /\[ "\$name" != canary-peer\.json \] \|\| continue/);
+  assert.match(publish.run, /release-publication\.mjs upload/);
 });
 
 test("dry-run provenance resolution never uses a distributable tag", (t) => {
@@ -477,6 +478,45 @@ test("release guard requires a green ci.yml AND ci-extended.yml run on the exact
       env: { ...process.env, GITHUB_REPOSITORY: "owner/repo", CI: ci, EXTENDED: extended },
     });
     assert.equal(run.status === 0, green, `ci=${ci} extended=${extended}\n${run.stdout}`);
+  }
+});
+
+test("release guard accepts extended green on an ancestor only across inert changes", () => {
+  const greenGuard = workflow.jobs.prepare.steps.find(
+    (step) => step.name === "Guard: CI is green on this commit",
+  );
+  // HEAD (head1) has ci.yml green but no extended run; base0 has extended green.
+  const stub = `git() {
+    case "$1" in
+      rev-parse) echo head1 ;;
+      rev-list) printf 'head1\\nmid2\\nbase0\\n' ;;
+      diff) printf '%b' "$CHANGED" ;;
+    esac
+  }
+  gh() {
+    case "$2" in
+      */workflows/ci.yml/runs?head_sha=head1*) echo success ;;
+      */workflows/ci-extended.yml/runs?head_sha=base0*) echo success ;;
+      */workflows/ci-extended.yml/runs?head_sha=mid2*) echo failure ;;
+      *) return 0 ;;
+    esac
+  }\n`;
+  const cases = [
+    ["README.md\\napps/docs/src/content/x.md\\napps/website/src/pages/index.astro", true],
+    ["docs/development/ci.md", true],
+    ["README.md\\napps/desktop/src/main/index.ts", false],
+    ["apps/desktop/e2e/volli-drive/supervisor.mjs", false],
+    [".github/workflows/ci.yml", false],
+    ["packages/shared/src/index.ts", false],
+    ["convex/functions/board.ts", false],
+    ["apps/docs/package.json\\npnpm-lock.yaml", false],
+  ];
+  for (const [changed, green] of cases) {
+    const run = spawnSync("bash", ["-c", stub + greenGuard.run], {
+      encoding: "utf8",
+      env: { ...process.env, GITHUB_REPOSITORY: "owner/repo", CHANGED: changed },
+    });
+    assert.equal(run.status === 0, green, `changed=${changed}\n${run.stdout}${run.stderr}`);
   }
 });
 
@@ -692,5 +732,164 @@ exit "$TEST_CODE"
     }
     assert.equal(result.stdout.includes("skeleton artifact"), skeleton);
     assert.equal(result.stdout.includes("unlinked boot and SIGTERM passed"), success && !skeleton);
+  }
+});
+
+const prepareStep = (name) => workflow.jobs.prepare.steps.find((step) => step.name === name);
+const pushStep = prepareStep("Bump versions, commit, tag, push");
+
+// A PATH whose git refuses to run, so a step that escapes the shell stub can
+// never touch this worktree or its remote.
+function guardedEnv(root, extra) {
+  const bin = join(root, "no-git-bin");
+  mkdirSync(bin);
+  writeFileSync(join(bin, "git"), "#!/bin/sh\necho 'real git reached' >&2\nexit 97\n", {
+    mode: 0o755,
+  });
+  return {
+    ...process.env,
+    PATH: `${bin}:${process.env.PATH}`,
+    GIT_CEILING_DIRECTORIES: root,
+    ...extra,
+  };
+}
+
+test("button bump goes to main over SSH with the deploy key; the tag stays on GITHUB_TOKEN", (t) => {
+  const prepare = workflow.jobs.prepare;
+  // Only main may deploy the environment that holds the key.
+  assert.equal(prepare.environment, "release");
+  // The key guard runs first, before checkout and every other guard.
+  assert.equal(prepare.steps[0].name, "Guard: release deploy key present");
+  assert.deepEqual(prepare.steps[0].env, {
+    RELEASE_DEPLOY_KEY: "${{ secrets.RELEASE_DEPLOY_KEY }}",
+  });
+  for (const [key, status] of [
+    ["", 1],
+    ["-----BEGIN OPENSSH PRIVATE KEY-----", 0],
+  ]) {
+    const run = spawnSync("bash", ["-c", prepare.steps[0].run], {
+      encoding: "utf8",
+      env: { ...process.env, RELEASE_DEPLOY_KEY: key },
+    });
+    assert.equal(run.status, status, run.stdout + run.stderr);
+    if (status) assert.match(run.stdout, /::error::Missing secret RELEASE_DEPLOY_KEY/);
+  }
+  // Only prepare (never a dry-run or tag-path job) reads the key.
+  for (const [name, job] of Object.entries(workflow.jobs)) {
+    if (name !== "prepare") assert.doesNotMatch(JSON.stringify(job), /RELEASE_DEPLOY_KEY/, name);
+  }
+
+  // Run the real step with git stubbed: record each push in full, its SSH
+  // command and the key file as git would see it.
+  const root = versionFixture(t);
+  const temp = join(root, "runner-temp");
+  mkdirSync(temp);
+  const log = join(root, "git.log");
+  const stub = `git() {
+    if [ "$1" = push ]; then
+      { echo "push \${*:2}"; echo "ssh \${GIT_SSH_COMMAND:-none}"
+        echo "key $(cat "$RUNNER_TEMP/release_deploy_key" 2>/dev/null || echo absent) $(stat -c %a "$RUNNER_TEMP/release_deploy_key" 2>/dev/null || stat -f %Lp "$RUNNER_TEMP/release_deploy_key" 2>/dev/null)"
+      } >> "$GIT_LOG"
+    fi
+  }\n`;
+  assert.equal(pushStep.env.RELEASE_DEPLOY_KEY, "${{ secrets.RELEASE_DEPLOY_KEY }}");
+  const run = spawnSync("bash", ["-c", stub + pushStep.run], {
+    cwd: root,
+    encoding: "utf8",
+    env: guardedEnv(root, {
+      VERSION: "1.2.4",
+      TAG: "v1.2.4",
+      RELEASE_DEPLOY_KEY: "test-key",
+      RUNNER_TEMP: temp,
+      GITHUB_REPOSITORY: "owner/repo",
+      GIT_LOG: log,
+    }),
+  });
+  assert.equal(run.status, 0, run.stdout + run.stderr);
+  const lines = readFileSync(log, "utf8").trim().split("\n");
+  const sshCommand =
+    `ssh -i '${temp}/release_deploy_key' -o IdentitiesOnly=yes -o BatchMode=yes ` +
+    `-o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null ` +
+    `-o UserKnownHostsFile='${temp}/github_known_hosts'`;
+  assert.deepEqual(lines, [
+    // Branch first and unforced, so a moved main fails before any tag exists.
+    "push git@github.com:owner/repo.git HEAD:refs/heads/main",
+    `ssh ${sshCommand}`,
+    "key test-key 600",
+    // The key is gone before the GITHUB_TOKEN tag push.
+    "push origin refs/tags/v1.2.4",
+    "ssh none",
+    "key absent",
+  ]);
+  // GitHub's published ed25519 host key (api.github.com/meta), nothing else.
+  assert.equal(
+    readFileSync(join(temp, "github_known_hosts"), "utf8"),
+    "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl\n",
+  );
+});
+
+function realGit(cwd, ...args) {
+  const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+  assert.equal(result.status, 0, `git ${args.join(" ")}\n${result.stderr}`);
+  return result.stdout.trim();
+}
+
+test("button push over real git: lands bump and tag, or tags nothing when main moved", (t) => {
+  for (const moved of [false, true]) {
+    const scratch = versionFixture(t);
+    const remote = join(scratch, "remote.git");
+    const seed = join(scratch, "seed");
+    const work = join(scratch, "work");
+    const temp = join(scratch, "runner-temp");
+    mkdirSync(temp);
+    realGit(scratch, "init", "-q", "--bare", "-b", "main", remote);
+    realGit(scratch, "init", "-q", "-b", "main", seed);
+    mkdirSync(join(seed, "apps/desktop"), { recursive: true });
+    for (const file of ["package.json", "apps/desktop/package.json"]) {
+      writeFileSync(join(seed, file), JSON.stringify({ version: "1.2.3" }, null, 2) + "\n");
+    }
+    realGit(seed, "add", "-A");
+    realGit(seed, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base");
+    realGit(seed, "push", "-q", remote, "main");
+    realGit(scratch, "clone", "-q", remote, work);
+    if (moved) {
+      writeFileSync(join(seed, "other"), "x");
+      realGit(seed, "add", "-A");
+      realGit(seed, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "moved");
+      realGit(seed, "push", "-q", remote, "main");
+    }
+    const before = realGit(remote, "rev-parse", "main");
+    // The SSH URL is rewritten to the local bare remote; origin is the same.
+    const run = spawnSync("bash", ["-c", pushStep.run], {
+      cwd: work,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GIT_CEILING_DIRECTORIES: scratch,
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: `url.file://${remote}.insteadOf`,
+        GIT_CONFIG_VALUE_0: "git@github.com:owner/repo.git",
+        VERSION: "1.2.4",
+        TAG: "v1.2.4",
+        RELEASE_DEPLOY_KEY: "test-key",
+        RUNNER_TEMP: temp,
+        GITHUB_REPOSITORY: "owner/repo",
+      },
+    });
+    const tags = realGit(remote, "tag", "--list");
+    assert.equal(spawnSync("test", ["-e", join(temp, "release_deploy_key")]).status, 1);
+    if (moved) {
+      assert.notEqual(run.status, 0, "a moved main must fail the push");
+      assert.equal(realGit(remote, "rev-parse", "main"), before);
+      assert.equal(tags, "");
+    } else {
+      assert.equal(run.status, 0, run.stdout + run.stderr);
+      assert.equal(realGit(remote, "log", "-1", "--format=%s", "main"), "chore(release): 1.2.4");
+      assert.equal(tags, "v1.2.4");
+      assert.equal(
+        realGit(remote, "rev-parse", "v1.2.4^{commit}"),
+        realGit(remote, "rev-parse", "main"),
+      );
+    }
   }
 });

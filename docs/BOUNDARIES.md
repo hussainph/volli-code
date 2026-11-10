@@ -49,8 +49,9 @@ These rules apply to every durable domain surface and transport.
    as an implicit position. Code that quietly assumed local order was final is
    the code that breaks.
    The superseded host protocol's Workspace change-feed cursor is not such a
-   sequence and sits outside this rule (VC-630; `docs/host-protocol.md`,
-   "Workspace change feed"): it is delivery order, used only to resume a
+   sequence and sits outside this rule
+   ([Workspace change feed](host-protocol.md#workspace-change-feed-f1)):
+   it is delivery order, used only to resume a
    subscription, and its changes name state, never a delta.
 
 3. **RPC payloads stay JSON-safe.** The Electron transport carries `Date`,
@@ -60,7 +61,8 @@ These rules apply to every durable domain surface and transport.
    the latter is `never` at every router seam, including subscription yields.
    `SessionRouterJsonSafety` in `packages/session-rpc/src/index.ts` is the
    existing example, and session-rpc re-exports the types for compatibility.
-   See `docs/host-protocol.md` for the opaque-type/runtime-validation limit.
+   The [JSON checker](../packages/host-protocol/src/json-safe.ts) treats opaque
+   types structurally; runtime validators must still check their actual values.
 
 4. **A receipt is acceptance by its issuer, not eternal finality.** UI code
    may render "accepted" from a receipt; it may not be written so that the
@@ -74,14 +76,14 @@ These rules apply to every durable domain surface and transport.
    already work. From VC-564 on, a new domain command is one entry in the
    command catalog: a Verb Registry entry with a `catalog` declaration, bound
    to one router procedure built by its area's `createCatalogBuilders`
-   family (VC-630; `docs/host-protocol.md`, "Command catalog"), whose
+   family ([Command catalog](host-protocol.md#command-catalog-f3)), whose
    handler calls a context port the composition root wires to host-core. IPC, the agent
    socket, tools and the WebSocket project it and carry no behavior of their
    own. A command only the desktop's own window calls is a desktop-only
    entry instead (`DESKTOP_ENTRIES`, VC-608): no public ceremony, policy from
    its channel's VC-574 placement, host commands additive-only and client-local entries bundle-scoped, served over the generic IPC
-   bridge from the same handler map (`docs/host-protocol.md`, "Both
-   tiers"; the template is `packages/session-rpc/src/desktop-router.ts`). The
+   bridge from the same [handler map](../packages/host-core/src/handlers/host-handlers.ts);
+   the template is `packages/session-rpc/src/desktop-router.ts`. The
    existing raw channels migrate
    opportunistically when a surface is touched — never as a big-bang rewrite;
    under the `cloud` flag, an area's channels are deleted when that area moves.
@@ -89,18 +91,21 @@ These rules apply to every durable domain surface and transport.
    still carry no behaviour of their own.
 
 6. **Host and runner code never imports `electron`.** This applies to
-   `packages/host-core`, `packages/host-protocol` and `apps/hostd` today, and
-   to `apps/runner` and everything it composes when it lands. They run the
-   same core without depending on Electron.
+   `packages/host-core`, `packages/host-protocol`, `apps/hostd`, `apps/runner`
+   and everything the runner composes. They run the same core without
+   depending on Electron. For the remaining host transport, `ws` is a production
+   dependency of `@volli/session-rpc`, imported only by its `/websocket` entry;
+   host-protocol uses it only in dev/test code. The renderer never loads `ws`,
+   and host-core takes no `@trpc/server` dependency.
 
 7. **No new shared/business state in `app_state`.** Every new key must be
    classified as client-local, host, or workspace state (mixed keys name both
    halves as `split`). Host is host-level state shared by every workspace on
-   that host, in the host-level file defined by `host-identity.md`.
+   that host; its placement is defined by `packages/shared/src/app-state-keys.ts`.
    Workspace state belongs behind the Workspace authority (the backend, once
    that area is ported), not in the client-local catch-all; host state becomes
    runner-local state. (These classes are code names from VC-574; `workspace`
-   there predates the team-container meaning in `CONTEXT.md`.) The typed inventory is
+   there predates the team-container meaning in [the glossary](../CONTEXT.md#workspace).) The typed inventory is
    `packages/shared/src/app-state-keys.ts`, enforced by
    `packages/shared/src/app-state-keys.test.ts` and the typed repo writers;
    channel placements live in `apps/desktop/src/ipc/placement.ts`, enforced by

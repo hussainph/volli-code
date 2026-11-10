@@ -105,6 +105,11 @@ export class FakeGithub {
   refreshCalls = 0;
   /** Seconds a new access token lives (8 h by default). */
   accessTtl = 8 * 3600;
+  /**
+   * Repositories by `owner/name` (lowercase) as `GET /repos/:owner/:name`
+   * answers any signed-in user; an old name maps to the moved repository.
+   */
+  reposByName = new Map<string, FakeRepo>();
   /** Paths answered 503 (GitHub down) when matched. */
   down: RegExp | null = null;
   publicKey: CryptoKey | null = null;
@@ -312,6 +317,15 @@ export class FakeGithub {
         this.redelivered.push(Number(match[1]));
         return json({}, 202);
       }
+    }
+
+    const byName = /^\/repos\/([^/]+)\/([^/]+)$/u.exec(path);
+    if (byName !== null) {
+      if (this.userOf(auth) === null) return json({ message: "Bad credentials" }, 401);
+      const repo = this.reposByName.get(
+        `${decodeURIComponent(byName[1]!)}/${decodeURIComponent(byName[2]!)}`.toLowerCase(),
+      );
+      return repo === undefined ? json({ message: "Not Found" }, 404) : json(repo);
     }
 
     if (path === "/installation/repositories" || path.startsWith("/repositories/")) {

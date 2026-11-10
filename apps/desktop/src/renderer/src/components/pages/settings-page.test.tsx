@@ -16,7 +16,8 @@ describe("SettingsPage (app-wide)", () => {
     const html = renderToStaticMarkup(<SettingsPage />);
 
     // The group labels carry the relationship — see settings-groups.tsx.
-    expect(html).toContain("Preferences");
+    expect(html).toContain("All projects");
+    expect(html).toContain("Your project");
     expect(html).toContain("Services");
     expect(html).toContain("System");
   });
@@ -32,7 +33,8 @@ describe("SettingsPage (app-wide)", () => {
       "Web Search",
       "Integrations",
       "Storage",
-      "Telemetry",
+      "Privacy &amp; data",
+      "Agents",
       "Updates",
       "About",
     ]) {
@@ -68,7 +70,7 @@ describe("SettingsPage (app-wide)", () => {
     // exception to the copy rule and must not become a hint. VC-284 added the
     // pull-request link and the Keep exemption for the same reason: a policy
     // whose opt-out is invisible here reads as unconditional.
-    expect(html).toContain("keeps the branch, its commits, the pull-request link, and the ticket");
+    expect(html).toContain("keeps the branch, commits, PR link and ticket");
     expect(html).toContain("Keep on a ticket holds its folder");
   });
 
@@ -76,7 +78,7 @@ describe("SettingsPage (app-wide)", () => {
     const html = renderToStaticMarkup(<SettingsPage initialCategoryKey="telemetry" />);
 
     expect(html).toContain("Agent telemetry");
-    expect(html).toContain("Loading…");
+    expect(html).toContain("Loading");
     // A pane that has read nothing must not draw a position: an export switch
     // rendered before the bridge answered would be showing somebody a state
     // that is not their setting.
@@ -87,8 +89,8 @@ describe("SettingsPage (app-wide)", () => {
   it("opens Web Search in its loading state, offering no key it has not read", () => {
     const html = renderToStaticMarkup(<SettingsPage initialCategoryKey="web" />);
 
-    expect(html).toContain("Web search");
-    expect(html).toContain("Loading…");
+    expect(html).toContain("Search providers");
+    expect(html).toContain("Loading");
     expect(html).not.toContain("API key");
   });
 
@@ -100,7 +102,33 @@ describe("SettingsPage (app-wide)", () => {
     expect(html).toContain("Open files in");
     expect(html).toContain("Ask every time");
     expect(html).toContain('id="open-files-in"');
-    expect(html).toContain("Loading…");
+    expect(html).toContain("Loading");
+  });
+
+  it("orders Appearance before its compact canvas and accent rows, style and motion", () => {
+    const html = renderToStaticMarkup(<SettingsPage initialCategoryKey="appearance" />);
+    const content = html.slice(html.indexOf('data-slot="pref-content"'));
+    expect(content.indexOf('data-slot="canvas-instrument"')).toBeGreaterThan(
+      content.indexOf('data-testid="appearance-mode"'),
+    );
+    expect(content).toContain('aria-label="Custom accent colour"');
+    expect(content.indexOf('aria-label="Style"')).toBeGreaterThan(
+      content.indexOf('data-testid="appearance-mode"'),
+    );
+    expect(content.indexOf('id="appearance-motion"')).toBeGreaterThan(
+      content.indexOf('aria-label="Style"'),
+    );
+    for (const label of [
+      "Light",
+      "Dark",
+      "Auto",
+      "macOS",
+      "Modern",
+      "Motion",
+      "Ghostty config",
+      "Volli overlay",
+    ])
+      expect(content).toContain(label);
   });
 
   it("marks the opened category in the rail", () => {

@@ -29,6 +29,7 @@ import {
   NOTIFICATION_IPC,
   ORPHAN_PROCESS_IPC,
   PI_SESSION_ORPHAN_IPC,
+  SETTINGS_WINDOW_IPC,
   SHELL_IPC,
   SUPPORT_IPC,
   THEME_IPC,
@@ -177,6 +178,7 @@ describe("CHANNEL_PLACEMENT covers every channel", () => {
       AUTOMATION_IPC,
       BROWSER_IPC,
       SHELL_IPC,
+      SETTINGS_WINDOW_IPC,
       HARNESS_IPC,
       CLI_IPC,
       SUPPORT_IPC,
@@ -280,6 +282,21 @@ describe("CHANNEL_PLACEMENT invariants", () => {
       expect(entry.split.host.trim(), `${channel} host half`).not.toBe("");
       expect(entry.split.client.trim(), `${channel} client half`).not.toBe("");
       expect(entry.split.host, channel).not.toBe(entry.split.client);
+    }
+  });
+
+  it("keeps native Settings, workspace reveals and preference delivery on this desktop", () => {
+    const channels = [
+      ...Object.keys(SETTINGS_WINDOW_IPC),
+      "volli:settings-window-navigate",
+      "volli:workspace-window-navigate",
+      "volli:app-state-changed",
+    ] as const;
+    for (const channel of channels) {
+      expect(CHANNEL_PLACEMENT[channel as keyof typeof CHANNEL_PLACEMENT], channel).toMatchObject({
+        placement: "client-local",
+        owner: "stays",
+      });
     }
   });
 

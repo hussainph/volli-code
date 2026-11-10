@@ -79,6 +79,25 @@ describe("mcpProviderToolName", () => {
     expect(isMcpToolId(long)).toBe(true);
   });
 
+  it("trims separator runs in linear time without changing durable provider identities", () => {
+    expect(mcpProviderToolName("one", "_-Sérver-_", "__-Tool-_")).toBe(
+      "mcp__se_rver__tool__2a203b64",
+    );
+    expect(mcpProviderToolName("one", "", "")).toBe("mcp__server__tool__fa8dd33d");
+    const separators = "_-".repeat(100_000);
+    expect(mcpProviderToolName("one", `S${separators}`, `T${separators}`)).toMatch(
+      /^mcp__s__t__[a-f0-9]{8}$/,
+    );
+    expect(mcpProviderToolName("one", separators, separators)).toMatch(
+      /^mcp__server__tool__[a-f0-9]{8}$/,
+    );
+    // A non-separator after the run made the old unanchored suffix search
+    // retry from every position, instead of matching on its first attempt.
+    const interior = mcpProviderToolName("one", `S${separators}T`, `T${separators}U`);
+    expect(isMcpToolId(interior)).toBe(true);
+    expect(interior).toContain(`mcp__${`s${separators}`.slice(0, 18)}__`);
+  });
+
   it("uses safe fallback segments and rejects every malformed dynamic id shape", () => {
     expect(mcpProviderToolName("one", "!!!", "???")).toMatch(/^mcp__server__tool__/);
     expect(isMcpToolId(undefined)).toBe(false);

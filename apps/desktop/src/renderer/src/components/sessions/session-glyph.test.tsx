@@ -13,6 +13,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { parseHarnessId } from "@volli/shared";
 
 import type { StatusDotState } from "@renderer/components/ui/status-dot";
+import { providerMark } from "@renderer/components/models/model-identity";
 
 import { HARNESS_VENDOR, harnessVendorId, SessionGlyph } from "./session-glyph";
 
@@ -59,9 +60,11 @@ describe("the badge", () => {
     }
   });
 
-  it("draws the logo alone, muted, for a row that carries no state", () => {
+  it("keeps the vendor colour at quiet opacity when there is no state to badge", () => {
     const html = markup({ state: null });
-    expect(html).toContain("grayscale");
+    expect(html).toContain("opacity-70");
+    expect(html).not.toContain("grayscale");
+    expect(html).toContain(`fill="${providerMark("anthropic")!.tint}"`);
     expect(html).toContain('data-session-glyph="none"');
     // Nothing on the corner: there is no state to badge.
     expect(html).not.toContain("animate-spin");
@@ -76,7 +79,9 @@ describe("the badge", () => {
 
 describe("the box", () => {
   it("is a 24px tile in a card and a 20px slot in a one-line row", () => {
-    expect(markup({ state: "idle", size: "card" })).toContain("size-6 rounded-md");
+    const card = markup({ state: "idle", size: "card" });
+    expect(card).toContain("size-6 rounded-md bg-muted/50");
+    expect(card).not.toContain("shadow");
     const row = markup({ state: "idle", size: "row" });
     expect(row).toContain("size-5");
     expect(row).not.toContain("rounded-md");
@@ -100,15 +105,35 @@ describe("the name and the logo", () => {
       kind: "terminal",
       name: "Terminal",
     });
-    // Phosphor's own glyphs, by their viewBox — no logo, no lettermark.
+    // The shared set's glyphs — no logo, no lettermark.
     expect(chat).toContain("<svg");
     expect(terminal).toContain("<svg");
     expect(chat).not.toBe(terminal);
   });
 
-  it("draws a provider with no mark of its own as its lettermark", () => {
-    // `ModelMark`'s fallback, reached through us: the initial of the label.
-    expect(markup({ state: "idle", providerId: "xai", providerLabel: "xAI" })).toContain(">X<");
+  it.each(["anthropic", "openai", "google", "openai-codex", "opencode-go", "cursor"])(
+    "renders the published %s mark in every size and surface, never a generic Chat/Terminal mark",
+    (providerId) => {
+      const mark = providerMark(providerId)!;
+      expect(mark).not.toBeNull();
+      for (const size of ["row", "tab", "card"] as const) {
+        for (const surface of ["sidebar", "popover"] as const) {
+          const html = markup({ providerId, state: null, size, surface, kind: "terminal" });
+          expect(html).toContain(`viewBox="${mark.viewBox}"`);
+          expect(html).toContain(`fill="${mark.tint}"`);
+          for (const path of mark.paths) expect(html).toContain(`d="${path}"`);
+          expect(html.match(/<svg/g)).toHaveLength(1);
+          expect(html).toContain('aria-label="Anthropic · Working"');
+        }
+      }
+    },
+  );
+
+  it("uses a generic fallback only when the provider has no published mark", () => {
+    const unknown = markup({ state: null, providerId: "radius", providerLabel: "Radius" });
+    expect(providerMark("radius")).toBeNull();
+    expect(unknown).toContain("<svg");
+    expect(unknown).not.toContain(`fill="${providerMark("anthropic")!.tint}"`);
   });
 });
 
@@ -117,13 +142,13 @@ describe("harnessVendorId", () => {
     expect(harnessVendorId("claude-code")).toBe("anthropic");
     expect(harnessVendorId("codex")).toBe("openai-codex");
     expect(harnessVendorId("opencode")).toBe("opencode-go");
+    expect(harnessVendorId("cursor")).toBe("cursor");
   });
 
   it("has no vendor for a harness nobody publishes a mark for, or for no harness", () => {
-    expect(harnessVendorId("cursor")).toBeNull();
     expect(harnessVendorId(null)).toBeNull();
     // A custom slug keeps the glyph its row already drew.
     expect(harnessVendorId(parseHarnessId("home-grown-cli"))).toBeNull();
-    expect(Object.keys(HARNESS_VENDOR)).not.toContain("cursor");
+    expect(Object.keys(HARNESS_VENDOR)).toEqual(["claude-code", "codex", "cursor", "opencode"]);
   });
 });

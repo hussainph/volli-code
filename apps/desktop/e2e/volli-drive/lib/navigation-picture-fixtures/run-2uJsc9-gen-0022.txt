@@ -1,0 +1,9 @@
+                  - generic [ref=f2e920]:
+                    - generic [ref=f2e921]:
+                      - paragraph [ref=f2e925]: Run navigation picture discriminator
+                      - button "Copy" [ref=f2e927]
+                    - generic [ref=f2e1012]:
+                      - generic [ref=f2e1014]:
+                        - button "Browsed 127.0.0.1:58757, used 1 tool" [ref=f2e1087]
+                        - paragraph [ref=f2e1100]: Navigation picture commands complete
+                      - button "Copy" [ref=f2e1102]

@@ -257,6 +257,9 @@ export function parseRunnerGithubTokenGrant(value: unknown): RunnerGithubTokenGr
  * Why the route refused. `github_not_connected` means the runner's owner has
  * no GitHub connection: a box then uses its own git credentials, if any.
  * `github_needs_reconnect` asks the person to connect GitHub again.
+ * `github_not_installed` means none of the GitHub installations the owner can
+ * reach is on the repository's account (the refusal's `account`), so the
+ * token could not reach it either.
  */
 export const RUNNER_GITHUB_TOKEN_ERROR_CODES = [
   "invalid_request",
@@ -273,16 +276,22 @@ export const RUNNER_GITHUB_TOKEN_ERROR_CODES = [
   "github_needs_reconnect",
   "github_unavailable",
   "github_rate_limited",
+  "github_not_installed",
 ] as const;
 export type RunnerGithubTokenErrorCode = (typeof RUNNER_GITHUB_TOKEN_ERROR_CODES)[number];
 
-/** A refusal's body: `{ error: { code, message, resetAt } }`. */
+/** A refusal's body: `{ error: { code, message, resetAt, account? } }`. */
 export interface RunnerGithubTokenError {
   code: RunnerGithubTokenErrorCode;
   message: string;
   /** When a rate limit lifts, if GitHub said. */
   resetAt: number | null;
+  /** For `github_not_installed`: the GitHub account to install Volli on, when known. */
+  account: string | null;
 }
+
+/** A GitHub login (user or organization), as GitHub allows them. */
+const GITHUB_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/u;
 
 /**
  * The runner's read of a refusal. Tolerant: a code this build does not know
@@ -304,5 +313,78 @@ export function readRunnerGithubTokenError(value: unknown): RunnerGithubTokenErr
     typeof fields.message === "string" ? fields.message.slice(0, 1024) : "GitHub is unavailable.";
   const resetAt =
     typeof fields.resetAt === "number" && Number.isFinite(fields.resetAt) ? fields.resetAt : null;
-  return { code, message, resetAt };
+  // Printed to a terminal: only a plain GitHub login, never arbitrary text.
+  const account =
+    typeof fields.account === "string" && GITHUB_LOGIN.test(fields.account) ? fields.account : null;
+  return { code, message, resetAt, account };
+}
+
+/**
+ * The owner and name of a canonical GitHub remote on `host`
+ * (`https://<host>/<owner>/<name>.git`, as {@link normalizeGitRemoteUrl} and
+ * {@link githubRemoteUrl} write it), or `null` for any other remote.
+ */
+export function githubRepoOfRemote(
+  remoteUrl: string,
+  host: string,
+): { owner: string; name: string } | null {
+  let url: URL;
+  try {
+    url = new URL(remoteUrl);
+  } catch {
+    return null;
+  }
+  if ((url.protocol !== "https:" && url.protocol !== "http:") || url.host !== host.toLowerCase()) {
+    return null;
+  }
+  const match = /^\/([^/]+)\/([^/]+)\.git$/u.exec(url.pathname);
+  if (match === null || !GITHUB_LOGIN.test(match[1]!)) return null;
+  return { owner: match[1]!, name: match[2]! };
+}
+
+/**
+ * Whether one of the installations a person's GitHub token reaches is on
+ * `owner`'s account and not suspended: without one, the token reaches none of
+ * `owner`'s repositories. GitHub logins are case-insensitive.
+ */
+export function githubInstalledOn(
+  installations: readonly { accountLogin: string; suspended: boolean }[],
+  owner: string,
+): boolean {
+  const wanted = owner.toLowerCase();
+  return installations.some(
+    (installation) => !installation.suspended && installation.accountLogin.toLowerCase() === wanted,
+  );
+}
+
+/**
+ * The one line Volli's git credential helper writes to stderr when the
+ * runner's GitHub token request was refused for a reason the person can fix,
+ * or `null` (git then fails or moves on as it would, saying nothing more).
+ * Git shows a helper's stderr to whoever ran git: an agent or a person on the
+ * box. Never names a token or a URL.
+ */
+export function runnerGithubRefusalLine(
+  error: Pick<RunnerGithubTokenError, "code" | "resetAt" | "account">,
+  now: number,
+): string | null {
+  switch (error.code) {
+    case "github_not_connected":
+      return "volli: GitHub isn't connected. Connect it in Volli → Settings → Account.";
+    case "github_needs_reconnect":
+      return "volli: GitHub needs reconnecting. Reconnect it in Volli → Settings → Account.";
+    case "github_not_installed":
+      return error.account === null
+        ? "volli: Volli can't reach this repository. Install Volli on the repository's owner on GitHub."
+        : `volli: Volli can't reach this repository. Install Volli on ${error.account} on GitHub.`;
+    case "github_rate_limited": {
+      if (error.resetAt === null) {
+        return "volli: GitHub is rate limiting Volli. Try again in a few minutes.";
+      }
+      const minutes = Math.max(1, Math.ceil((error.resetAt - now) / 60_000));
+      return `volli: GitHub is rate limiting Volli. Try again in ${minutes} minute${minutes === 1 ? "" : "s"}.`;
+    }
+    default:
+      return null;
+  }
 }

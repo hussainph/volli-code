@@ -2,6 +2,7 @@ import * as React from "react";
 import type { SessionStartStatus } from "@volli/shared/cloud";
 import { followCloudSession } from "@renderer/lib/cloud-client";
 import { cloudFailure } from "@renderer/stores/cloud-board/source";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import { Button } from "@renderer/components/ui/button";
 
 export type RunnerStartStatus = SessionStartStatus;
@@ -68,24 +69,24 @@ export function RunnerStartStatusPanel({
     (failed
       ? (status.failure?.detail ?? "This Session could not start.")
       : status?.state === "starting" || status?.state === "started"
-        ? `Starting on ${name}…`
+        ? `Starting on ${name}`
         : accepted
           ? `Sent — waiting for ${name}`
-          : `Confirming start on ${name}…`);
+          : `Confirming start on ${name}`);
   return (
-    <div className="pointer-events-auto flex items-center gap-2 px-4 py-2 text-ui">
+    <div className="pointer-events-auto flex flex-wrap items-center gap-2 rounded-card border border-border bg-(--card-face) px-4 py-3 text-ui">
       <span
         role={failed || error ? "alert" : "status"}
         className={failed || error ? "text-destructive" : "text-muted-foreground"}
       >
-        {label}
+        {failed || error ? label : <LoadingLabel>{label}</LoadingLabel>}
       </span>
       {failed ? (
-        <Button type="button" size="sm" variant="ghost" onClick={onEdit}>
+        <Button type="button" size="sm" onClick={onEdit}>
           Edit and try again
         </Button>
       ) : !accepted ? (
-        <Button type="button" size="sm" variant="ghost" onClick={onRetry}>
+        <Button type="button" size="sm" onClick={onRetry}>
           Retry
         </Button>
       ) : null}

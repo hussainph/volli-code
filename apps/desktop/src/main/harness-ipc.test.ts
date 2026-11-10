@@ -119,11 +119,14 @@ function setup(
   );
 }
 
+/** The dispatch event the registry envelope reads: a renderer call from WebContents 0. */
+const fakeEvent = { sender: { id: 0 } };
+
 /** Invokes a captured handler the way `ipcMain.handle` dispatch would. */
 function invoke<T>(channel: VolliIpcChannel, ...args: unknown[]): T {
   const handler = handlers.get(channel);
   if (handler === undefined) throw new Error(`no handler registered for ${channel}`);
-  return (handler as (...callArgs: unknown[]) => T)({}, ...args);
+  return (handler as (...callArgs: unknown[]) => T)(fakeEvent, ...args);
 }
 
 const pending = (): Promise<HarnessPendingResult> =>

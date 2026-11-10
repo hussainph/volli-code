@@ -22,7 +22,7 @@ after main merges. `--tier boot` is a compatibility alias for `--tier core`.
 Other non-quarantined probes are the rest tier: `ci-extended.yml` runs it as one
 macOS job (`Smoke (rest tier)`) after every main merge, nightly, and on demand
 for any branch (`gh workflow run ci-extended.yml --ref <branch>`). It does not
-gate PRs, but the release guard requires it green on the released commit.
+gate PRs, but the release guard requires it green on the released commit, or on a first-parent ancestor when only inert prose/website paths changed since.
 Dispatch it before merging a PR that changes a journey's area. The runner's
 `SERIAL` set runs one probe at a time after its lane's concurrent work drains.
 Do not quarantine a sole core journey based on historical flakes or weaken

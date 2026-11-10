@@ -11,6 +11,7 @@ import {
 import {
   createFileTranscriptArtifactStore,
   closeStaleAttachments,
+  createBootRecoveryEngine,
   createPiNativeAdapter,
   createPiRuntimeHost,
   PI_ADAPTER_ID,
@@ -517,7 +518,7 @@ describe("legacy enforce attachment boot recovery", () => {
       const errors: unknown[] = [];
       expect(
         await closeStaleAttachments({
-          engine: restarted.engine,
+          engine: createBootRecoveryEngine({ db: db.db, engine: restarted.engine }),
           reconcile: (input) => restarted.host.reconcile(input),
           projectIds: ["project-1"],
           newId: () => `boot-${clock++}`,

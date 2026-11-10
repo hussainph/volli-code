@@ -13,6 +13,10 @@
       "types": "./src/native-observation-id.ts",
       "import": "./src/native-observation-id.ts"
     },
+    "./web-target-policy": {
+      "types": "./src/web-target-policy.ts",
+      "import": "./src/web-target-policy.ts"
+    },
     "./cloud": {
       "types": "./src/cloud/index.ts",
       "import": "./src/cloud/index.ts"

@@ -50,6 +50,7 @@ import type {
   SESSION_RPC_EVENT_CHANNEL,
   SESSION_RPC_IPC_CHANNEL,
   RendererLogEntry,
+  RendererStallBatch,
   TerminalBusyResult,
   TerminalCommandResult,
   TerminalDataEvent,
@@ -59,6 +60,7 @@ import type {
 } from "@volli/shared";
 import type {
   AppStateSetResult,
+  AppStateChangedEvent,
   ArchivedTicketsResult,
   ArtifactCreateInput,
   ArtifactCreateResult,
@@ -250,6 +252,11 @@ import type {
   UpdateStateResult,
   UpdateUiState,
   VolliInvokeContract,
+  SettingsWindowNavigation,
+  SettingsWindowOpenInput,
+  SettingsWindowPendingNavigationResult,
+  WorkspaceWindowNavigation,
+  WorkspaceWindowPendingNavigationResult,
   WebAccessProvider,
   KeyedWebAccessProvider,
   WebAccessResult,
@@ -293,7 +300,7 @@ const invoke = <C extends keyof VolliInvokeContract>(
   ...args: IpcArgs<C>
 ): Promise<IpcResult<C>> => ipcRenderer.invoke(channel, ...args);
 
-/** Typed `ipcRenderer.send` for the 2 fire-and-forget channels, bound the same way. */
+/** Typed `ipcRenderer.send` for the fire-and-forget channels, bound the same way. */
 const send = <C extends keyof VolliSendContract>(
   channel: C,
   ...args: VolliSendContract[C]["args"]
@@ -422,6 +429,41 @@ const api = {
     electron: process.versions.electron,
     chrome: process.versions.chrome,
     node: process.versions.node,
+  },
+  settingsWindow: {
+    open: (input: SettingsWindowOpenInput = {}): Promise<Result> =>
+      invoke("volli:settings-window-open", input),
+    /** Subscribe before the boot read; accept only a newer navigation.revision. */
+    onNavigate: (callback: (navigation: SettingsWindowNavigation) => void): (() => void) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        navigation: SettingsWindowNavigation,
+      ): void => callback(navigation);
+      const channel = "volli:settings-window-navigate" satisfies VolliIpcEvent;
+      ipcRenderer.on(channel, listener);
+      return () => ipcRenderer.removeListener(channel, listener);
+    },
+    /** Read the parked intent before mounting React, without revealing the window. */
+    pendingNavigation: (): Promise<SettingsWindowPendingNavigationResult> =>
+      invoke("volli:settings-window-pending-navigation"),
+    /** Acknowledge the painted revision; a newer returned intent must be applied and acknowledged. */
+    ready: (appliedRevision: number): Promise<SettingsWindowPendingNavigationResult> =>
+      invoke("volli:settings-window-ready", appliedRevision),
+    openWorkspace: (input: WorkspaceWindowNavigation): Promise<Result> =>
+      invoke("volli:settings-window-open-workspace", input),
+    onWorkspaceNavigate: (
+      callback: (navigation: WorkspaceWindowNavigation) => void,
+    ): (() => void) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        navigation: WorkspaceWindowNavigation,
+      ): void => callback(navigation);
+      const channel = "volli:workspace-window-navigate" satisfies VolliIpcEvent;
+      ipcRenderer.on(channel, listener);
+      return () => ipcRenderer.removeListener(channel, listener);
+    },
+    pendingWorkspaceNavigation: (): Promise<WorkspaceWindowPendingNavigationResult> =>
+      invoke("volli:settings-window-pending-workspace-navigation"),
   },
   databaseRecovery: {
     list: (): Promise<DatabaseRecoveryListResult> => invoke("volli:database-recovery-list"),
@@ -854,6 +896,14 @@ const api = {
     write: (entry: RendererLogEntry): void => {
       send("volli:renderer-log", entry);
     },
+    /**
+     * This window's long frames and slow inputs (VC-1091), batched and
+     * fire-and-forget. Main checks each against the closed stall vocabulary
+     * and bounds how many a window may send.
+     */
+    stalls: (batch: RendererStallBatch): void => {
+      send("volli:renderer-stalls", batch);
+    },
   },
   /**
    * In-app provider sign-in. Its own door rather than a Session RPC namespace,
@@ -883,6 +933,13 @@ const api = {
     /** Deletes this profile's stored credential. Ambient environment sources are untouched. */
     signOut: (providerId: string): Promise<Result> =>
       invoke("volli:model-access-sign-out", providerId),
+    /** Accepted changes in another window; no credential or sign-in frame crosses here. */
+    onChanged: (callback: () => void): (() => void) => {
+      const listener = () => callback();
+      const channel = "volli:model-access-changed" satisfies VolliIpcEvent;
+      ipcRenderer.on(channel, listener);
+      return () => ipcRenderer.removeListener(channel, listener);
+    },
     /**
      * Subscribes to the frames of EVERY live attempt; returns the unsubscribe
      * function. One listener rather than one per attempt, for the same reason
@@ -1221,8 +1278,18 @@ const api = {
   },
   appState: {
     /** Upserts one `app_state` key — the async write-through the ui/project-ui persist stores' storage adapter uses. */
-    set: (key: string, value: string): Promise<AppStateSetResult> =>
-      invoke("volli:app-state-set", key, value),
+    set: (key: string, value: string, baseValue?: string): Promise<AppStateSetResult> =>
+      baseValue === undefined
+        ? invoke("volli:app-state-set", key, value)
+        : invoke("volli:app-state-set", key, value, baseValue),
+    /** Accepted preference writes from other windows; the writer already applied its own. */
+    onChanged: (callback: (event: AppStateChangedEvent) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, changed: AppStateChangedEvent): void =>
+        callback(changed);
+      const channel = "volli:app-state-changed" satisfies VolliIpcEvent;
+      ipcRenderer.on(channel, listener);
+      return () => ipcRenderer.removeListener(channel, listener);
+    },
     /**
      * Answers main's `volli:client-state-flush` (VC-577): runs `flush` — which
      * resolves once main has acknowledged every pending write — then acks the

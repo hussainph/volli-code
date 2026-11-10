@@ -42,6 +42,7 @@ import type {
   OrphanProcessIpcChannel,
   PiSessionOrphanIpcChannel,
   ShellIpcChannel,
+  SettingsWindowIpcChannel,
   ThemeIpcChannel,
   WebAccessIpcChannel,
   UpdateIpcChannel,
@@ -202,6 +203,58 @@ function isCommitMessage(value: unknown): boolean {
 function isBrowserTabIdArgs(args: unknown[]): args is [{ tabId: string }] {
   return args.length === 1 && isRecord(args[0]) && typeof args[0]["tabId"] === "string";
 }
+
+// ---- native Settings window descriptor table ----------------------------
+
+function isOptionalWorkspaceId(value: unknown): boolean {
+  return value === undefined || (typeof value === "string" && value.length > 0);
+}
+
+export const SETTINGS_WINDOW_IPC: {
+  readonly [C in SettingsWindowIpcChannel]: IpcRequestDescriptor<C>;
+} = {
+  "volli:settings-window-open": {
+    guard: (args): args is IpcArgs<"volli:settings-window-open"> => {
+      if (args.length !== 1 || !isRecord(args[0]) || Array.isArray(args[0])) return false;
+      const input = args[0];
+      return (
+        isOptionalString(input, "category") &&
+        isOptionalString(input, "configureCategory") &&
+        isOptionalString(input, "signInProviderId") &&
+        isOptionalNullableString(input["projectId"]) &&
+        isOptionalWorkspaceId(input["workspaceId"])
+      );
+    },
+    invalidError: "Invalid Settings window request",
+  },
+  "volli:settings-window-pending-navigation": {
+    guard: (args): args is [] => args.length === 0,
+    invalidError: "Invalid Settings navigation request",
+  },
+  "volli:settings-window-ready": {
+    guard: (args): args is IpcArgs<"volli:settings-window-ready"> =>
+      args.length === 1 && typeof args[0] === "number" && Number.isInteger(args[0]) && args[0] >= 0,
+    invalidError: "Invalid Settings readiness request",
+  },
+  "volli:settings-window-open-workspace": {
+    guard: (args): args is IpcArgs<"volli:settings-window-open-workspace"> => {
+      if (args.length !== 1 || !isRecord(args[0]) || Array.isArray(args[0])) return false;
+      const input = args[0];
+      if (typeof input["projectId"] !== "string" || !isOptionalWorkspaceId(input["workspaceId"])) {
+        return false;
+      }
+      return (
+        (input["kind"] === "file" && typeof input["relPath"] === "string") ||
+        (input["kind"] === "ticket" && typeof input["ticketId"] === "string")
+      );
+    },
+    invalidError: "Invalid workspace navigation request",
+  },
+  "volli:settings-window-pending-workspace-navigation": {
+    guard: (args): args is [] => args.length === 0,
+    invalidError: "Invalid pending workspace navigation request",
+  },
+};
 
 // ---- Browser Tab descriptor table ----------------------------------------
 // The Browser workspace's one native-view command surface. URL admission is a
@@ -1027,7 +1080,10 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
   },
   "volli:app-state-set": {
     guard: (args): args is IpcArgs<"volli:app-state-set"> =>
-      args.length === 2 && args.every((entry) => typeof entry === "string"),
+      (args.length === 2 || args.length === 3) &&
+      typeof args[0] === "string" &&
+      typeof args[1] === "string" &&
+      (args[2] === undefined || typeof args[2] === "string"),
     invalidError: "Invalid app state",
   },
 

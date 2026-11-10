@@ -24,15 +24,18 @@
  * ──────────────────────────────────────────────────────────────────────────
  */
 import * as React from "react";
-import { ArrowsSplitIcon } from "@phosphor-icons/react/dist/csr/ArrowsSplit";
-import { DotsSixVerticalIcon } from "@phosphor-icons/react/dist/csr/DotsSixVertical";
-import { FileCodeIcon } from "@phosphor-icons/react/dist/csr/FileCode";
-import { KanbanIcon } from "@phosphor-icons/react/dist/csr/Kanban";
-import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
-import { ListBulletsIcon } from "@phosphor-icons/react/dist/csr/ListBullets";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
-import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
+import {
+  SplitLayoutIcon,
+  DragIcon,
+  CodeFileIcon,
+  BoardIcon,
+  AutomationIcon,
+  ListIcon,
+  AddIcon,
+  DeleteIcon,
+  WarningIcon,
+} from "@renderer/components/ui/icon";
+
 import { TICKET_STATUS_LABELS, TICKET_STATUSES, type TicketStatus } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
@@ -217,7 +220,7 @@ function IndexRail({
                 "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
               )}
             >
-              <PlusIcon weight="bold" className="size-3" />
+              <AddIcon strokeWidth={2.25} className="size-3" />
             </button>
           </div>
           {automations
@@ -290,7 +293,7 @@ function BoardCard({
           aria-hidden
           className="mt-0.5 cursor-grab text-muted-foreground/50 active:cursor-grabbing"
         >
-          <DotsSixVerticalIcon weight="bold" className="size-3.5" />
+          <DragIcon strokeWidth={2.25} className="size-3.5" />
         </span>
         {digit === null ? null : (
           <span
@@ -394,7 +397,7 @@ function BoardView({
                       "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
                     )}
                   >
-                    <PlusIcon weight="bold" className="size-3" />
+                    <AddIcon strokeWidth={2.25} className="size-3" />
                   </button>
                 </div>
                 {inLane.map((automation, index) => (
@@ -441,9 +444,9 @@ function AddAlongside({ onClick, empty }: { onClick: () => void; empty: boolean 
       )}
     >
       {empty ? (
-        <PlusIcon weight="bold" className="size-3.5 shrink-0" />
+        <AddIcon strokeWidth={2.25} className="size-3.5 shrink-0" />
       ) : (
-        <ArrowsSplitIcon weight="bold" className="size-3.5 shrink-0" />
+        <SplitLayoutIcon strokeWidth={2.25} className="size-3.5 shrink-0" />
       )}
       {empty ? "Add agent" : "Add alongside"}
     </button>
@@ -471,7 +474,7 @@ function Diagnostics({ diagnostics }: { diagnostics: FileDiagnostic[] }) {
             diagnostic.severity === "error" ? "text-destructive" : "text-muted-foreground",
           )}
         >
-          <WarningIcon weight="fill" aria-hidden className="mt-0.5 size-3 shrink-0" />
+          <WarningIcon aria-hidden className="mt-0.5 size-3 shrink-0" />
           <span className="font-mono tabular-nums opacity-70">
             {diagnostic.line === null ? "—" : diagnostic.line}
           </span>
@@ -546,12 +549,12 @@ function Editor({
             aria-pressed={sourceOpen}
             className="aria-pressed:bg-primary/15 aria-pressed:text-primary-text"
           >
-            <FileCodeIcon />
+            <CodeFileIcon />
             Source
             {errors > 0 ? <span className="text-destructive">{errors}</span> : null}
           </Button>
           <Button variant="ghost" size="icon-xs" aria-label="Delete automation" onClick={onDelete}>
-            <TrashIcon />
+            <DeleteIcon />
           </Button>
         </header>
 
@@ -630,9 +633,9 @@ function Editor({
 type View = "list" | "board";
 
 function ViewToggle({ view, onChange }: { view: View; onChange: (view: View) => void }) {
-  const options: Array<{ value: View; label: string; Icon: typeof ListBulletsIcon }> = [
-    { value: "list", label: "List", Icon: ListBulletsIcon },
-    { value: "board", label: "Board", Icon: KanbanIcon },
+  const options: Array<{ value: View; label: string; Icon: typeof ListIcon }> = [
+    { value: "list", label: "List", Icon: ListIcon },
+    { value: "board", label: "Board", Icon: BoardIcon },
   ];
 
   return (
@@ -651,7 +654,7 @@ function ViewToggle({ view, onChange }: { view: View; onChange: (view: View) => 
             "aria-pressed:bg-accent aria-pressed:text-foreground",
           )}
         >
-          <Icon weight="fill" aria-hidden className="size-3.5" />
+          <Icon aria-hidden className="size-3.5" />
           {label}
         </button>
       ))}
@@ -691,12 +694,12 @@ export default function AutomationStudioScratch() {
   return (
     <div className="flex h-svh flex-col bg-background text-foreground">
       <header className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-2.5">
-        <LightningIcon weight="fill" aria-hidden className="size-3.5 text-muted-foreground" />
+        <AutomationIcon aria-hidden className="size-3.5 text-muted-foreground" />
         <h1 className="text-ui text-foreground">Automations</h1>
         <div className="ml-auto flex items-center gap-2">
           <ViewToggle view={view} onChange={setView} />
           <Button variant="ghost" size="xs" onClick={() => create("project", null)}>
-            <PlusIcon />
+            <AddIcon />
             New
           </Button>
         </div>

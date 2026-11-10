@@ -2,113 +2,53 @@
  * The canvas as math: one to three authored color pools in, one CSS
  * `background` out.
  *
- * Freely placed color pools form a vivid canvas. Light and dark appearances
- * transform the colors rather than simply dimming them; `ink.ts` chooses a
+ * Freely placed authored color pools form a vivid canvas. Appearance changes
+ * the floor and alpha rather than muddying the hues; `ink.ts` chooses a
  * foreground against the worst pool on screen instead of the average one.
  *
  * Every number here comes from `ARC_TUNING`. Nothing in this module knows what
  * an appearance IS — it takes a resolved one and reads the table.
  */
 
-import { clamp, hexToOklch, lerp, oklchToHex, type Oklch } from "../color";
+import {
+  clamp,
+  compositeHex,
+  hexToOklch,
+  lerp,
+  oklabToOklch,
+  oklchToHex,
+  oklchToOklab,
+} from "../color";
 import { ARC_TUNING } from "./tuning";
-import type { Canvas, CanvasStop, ResolvedAppearance } from "./types";
+import type { Canvas, ResolvedAppearance } from "./types";
 
-/**
- * How much of an authored chroma survives into the painted canvas — the
- * vibrancy curve and the per-mode cap, on their own.
- *
- * Split out of {@link effectiveOklch} because the token derivation needs exactly
- * this number and nothing else around it: `derive.ts` seeds the app's generator
- * with `oklch(L Ceff h)` at an arbitrary L, so it wants the canvas's saturation
- * without the canvas's lightness band. Copying the expression there would put
- * the same tuning in two files, and the whole point of `ARC_TUNING` is that
- * there is one place to turn the dial.
- */
-export function effectiveChroma(
-  authoredChroma: number,
-  resolved: ResolvedAppearance,
-  vibrancy: number,
-): number {
-  const { chroma } = ARC_TUNING;
-  const light = resolved === "light";
-  const gain = lerp(
-    chroma.floor,
-    light ? chroma.lightGain : chroma.darkGain,
-    clamp(vibrancy, 0, 1) ** chroma.vibrancyExponent,
-  );
-  return Math.min(authoredChroma * gain, light ? chroma.lightCap : chroma.darkCap);
+/** CSS color-mix(in oklab), also used for the synchronous window fill hint. */
+function mixHex(over: string, alpha: number, under: string): string {
+  const a = oklchToOklab(hexToOklch(over));
+  const b = oklchToOklab(hexToOklch(under));
+  const mixed = oklabToOklch({
+    L: lerp(b.L, a.L, alpha),
+    a: lerp(b.a, a.a, alpha),
+    b: lerp(b.b, a.b, alpha),
+  });
+  return oklchToHex(mixed.L, mixed.C, mixed.h);
 }
 
-/**
- * The ACCENT's chroma — the same vibrancy curve as {@link effectiveChroma}, with
- * neither the per-mode gain nor the per-mode cap.
- *
- * It sits here rather than in `derive.ts` because the two are one decision
- * expressed twice, and the only way to keep them one decision is to be able to
- * read them together. Where they diverge is the whole point:
- *
- *  - **Vibrancy still governs.** A near-neutral wash must still yield
- *    near-neutral chrome, so the accent is coupled to the same slider on the same
- *    exponent — the shared low-half emphasis, unchanged.
- *  - **The ceiling is the AUTHORED chroma, not the background's.** `darkGain`
- *    0.62 and `darkCap` 0.09 exist so a saturated *backdrop* does not fight the
- *    ink standing on it. An accent is not a backdrop: it is a 32px button fill
- *    and an icon. Holding it to the background's ceiling made the brand color
- *    unreachable in dark at ANY setting (ember capped at 51% of its own chroma),
- *    which is a bug in the model rather than a taste.
- *
- * So vibrancy 1 lands on the authored color exactly — for the shipped canvas,
- * ember `#e8652a`, which is an exact fixed point of the accent math in
- * `generate.ts`. There is no mode in the signature because there is no mode in
- * the formula: one curve, both appearances, so a light↔dark flip moves every
- * surface in the window and leaves the accent where it was.
- */
-export function accentChroma(authoredChroma: number, vibrancy: number): number {
-  const { chroma } = ARC_TUNING;
-  return authoredChroma * lerp(chroma.floor, 1, clamp(vibrancy, 0, 1) ** chroma.vibrancyExponent);
+/** Vibrancy changes pool opacity, never bands or browns the authored hue. */
+function poolAlpha(canvas: Canvas, resolved: ResolvedAppearance): number {
+  return Math.min(1, clamp(canvas.vibrancy, 0, 1) * ARC_TUNING.mesh.alphaGain[resolved]);
 }
 
-/**
- * The authored color as the window will actually paint it.
- *
- * Lightness is banded rather than scaled, so "light" and "dark" are two
- * genuinely different canvases built from one authored intent — the same seed
- * cannot produce a light canvas that is merely a brightened dark one. Chroma is
- * scaled by vibrancy and then capped: the cap is what stops a neon seed from
- * out-shouting the app's own accent, and it is per-mode because a dark pool
- * turns muddy at a chroma a light one carries comfortably.
- */
-function effectiveOklch(hex: string, resolved: ResolvedAppearance, vibrancy: number): Oklch {
-  const { L, C, h } = hexToOklch(hex);
-  const { lightBand, darkBand } = ARC_TUNING;
-  const bandedL =
-    resolved === "light"
-      ? clamp(L, lightBand.min, lightBand.max)
-      : clamp(L + darkBand.shift, darkBand.min, darkBand.max);
-  return { L: bandedL, C: effectiveChroma(C, resolved, vibrancy), h };
-}
-
-function toHex({ L, C, h }: Oklch): string {
-  return oklchToHex(L, C, h);
-}
-
-/** Every stop's authored color as painted, in stop order. */
-export function effectiveStopHexes(canvas: Canvas, resolved: ResolvedAppearance): string[] {
-  return canvas.stops.map((stop) => toHex(effectiveOklch(stop.hex, resolved, canvas.vibrancy)));
-}
-
-/**
- * The flat fill under every pool — the primary, a touch darker.
- *
- * Derived from the primary rather than authored, because it is what the window
- * shows wherever no pool reaches, and a base that did not belong to the family
- * would put a seam around the whole canvas.
- */
+/** The authored primary over the appearance's neutral window floor. */
 export function baseFillHex(canvas: Canvas, resolved: ResolvedAppearance): string {
-  const primary = effectiveOklch(canvas.stops[canvas.primaryIndex].hex, resolved, canvas.vibrancy);
-  const drop = resolved === "light" ? ARC_TUNING.baseFill.lightDrop : ARC_TUNING.baseFill.darkDrop;
-  return toHex({ ...primary, L: primary.L - drop });
+  const { floor, baseAlpha } = ARC_TUNING.mesh;
+  return mixHex(canvas.stops[canvas.primaryIndex].hex, baseAlpha[resolved], floor[resolved]);
+}
+
+/** Peak pixels for the editor and on-canvas ink solve, in authored stop order. */
+export function effectiveStopHexes(canvas: Canvas, resolved: ResolvedAppearance): string[] {
+  const base = baseFillHex(canvas, resolved);
+  return canvas.stops.map((stop) => compositeHex(stop.hex, poolAlpha(canvas, resolved), base));
 }
 
 /**
@@ -147,47 +87,26 @@ function percent(fraction: number): string {
   return `${(fraction * 100).toFixed(1)}%`;
 }
 
-function pool(stop: CanvasStop, hex: string, width: number, height: number, fade: number): string {
-  return `radial-gradient(ellipse ${width}% ${height}% at ${percent(stop.x)} ${percent(stop.y)}, ${hex}, transparent ${fade.toFixed(1)}%)`;
-}
-
 /**
- * The whole canvas as one CSS `background` value, topmost layer first: grain,
- * then the non-primary pools, then the primary's pool beneath them, then the
- * base fill.
- *
- * The primary sits UNDER the others despite being the dominant color — its pool
- * is large enough to cover them, and painting it on top would make every other
- * stop invisible the moment its fade reached them.
+ * Window-coordinate mesh, in authored order. Appearance changes the neutral
+ * floor and pool opacity, not the stop colours. The three measured footprints
+ * keep the mesh airy instead of letting a single giant primary cover it.
  */
-export function canvasBackground(canvas: Canvas, resolved: ResolvedAppearance): string {
-  const { width, height, primaryWidth, primaryHeight, fadeMin, fadeMax, primaryFadeBonus } =
-    ARC_TUNING.pool;
-  const effective = effectiveStopHexes(canvas, resolved);
-  const fade = lerp(fadeMin, fadeMax, clamp(canvas.vibrancy, 0, 1));
+export function canvasBackground(
+  canvas: Canvas,
+  resolved: ResolvedAppearance,
+  includeBase = true,
+): string {
+  const { sizes, fade } = ARC_TUNING.mesh;
   const layers: string[] = [];
-
   const grain = grainLayer(canvas.grain);
-  if (grain !== null) layers.push(grain);
-
+  if (grain !== null && includeBase) layers.push(grain);
   canvas.stops.forEach((stop, index) => {
-    if (index === canvas.primaryIndex) return;
-    layers.push(pool(stop, effective[index], width, height, fade));
+    const [width, height] = sizes[index]!;
+    layers.push(
+      `radial-gradient(${width}% ${height}% at ${percent(stop.x)} ${percent(stop.y)}, color-mix(in oklab, ${stop.hex} ${(poolAlpha(canvas, resolved) * 100).toFixed(1)}%, transparent), transparent ${fade}%)`,
+    );
   });
-
-  const primary = canvas.stops[canvas.primaryIndex];
-  layers.push(
-    pool(
-      primary,
-      effective[canvas.primaryIndex],
-      primaryWidth,
-      primaryHeight,
-      fade + primaryFadeBonus,
-    ),
-  );
-  // Last, and a bare color: only the final layer of the shorthand may carry the
-  // background-color.
-  layers.push(baseFillHex(canvas, resolved));
-
+  if (includeBase) layers.push(baseFillHex(canvas, resolved));
   return layers.join(", ");
 }

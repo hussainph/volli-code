@@ -288,6 +288,58 @@ describe("the accepted-quit hold the runner installs", () => {
     expect(await h.exited).toBe(0);
   });
 
+  it("joins icon persistence and physical decoder exit beside the desktop host stop", async () => {
+    const persistence = Promise.withResolvers<void>();
+    const decoderExit = Promise.withResolvers<void>();
+    const h = harness({
+      settleBackgroundWork: async () => {
+        await Promise.all([persistence.promise, decoderExit.promise]);
+      },
+    });
+    h.boot();
+    h.quit();
+    let exited = false;
+    void h.exited.then(() => {
+      exited = true;
+    });
+    await nextImmediate();
+    expect(h.host.stop).toHaveBeenCalledExactlyOnceWith("quit");
+    expect(exited).toBe(false);
+    persistence.resolve();
+    await nextImmediate();
+    expect(exited).toBe(false);
+    decoderExit.resolve();
+    expect(await h.exited).toBe(0);
+  });
+
+  it("keeps the existing 15-second accepted-quit deadline when icon persistence never settles", async () => {
+    vi.useFakeTimers();
+    const captured = captureHostLog();
+    const persistence = Promise.withResolvers<void>();
+    try {
+      const h = harness({ settleBackgroundWork: () => persistence.promise });
+      h.boot();
+      h.quit();
+      let exited = false;
+      void h.exited.then(() => {
+        exited = true;
+      });
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(exited).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(h.host.warnIfFollowUpCleanCloseSkipped).toHaveBeenCalledExactlyOnceWith(
+        "quit: shutdown deadline expired after 15000ms",
+      );
+      // The real coordinator deliberately defers exit to an Immediate after
+      // the deadline checkpoint. Drain that callback, not a wider deadline.
+      await vi.runOnlyPendingTimersAsync();
+      expect(await h.exited).toBe(0);
+    } finally {
+      persistence.resolve();
+      captured.restore();
+    }
+  });
+
   it("an accepted quit runs all four gates in order, then stops the host and exits 0", async () => {
     const h = harness();
     h.boot();

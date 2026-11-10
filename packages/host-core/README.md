@@ -66,6 +66,7 @@ Everything else is an implementation detail.
 | `@volli/host-core/session-runtime` | `session-runtime/`, `shell/`, `model-access/`, `host-sign-ins/`, `decision/`, `session-env.ts`, `pi-session-orphans.ts`, `pi-tool-output.ts`, `verb-input.ts`                                                                                                                                                                                                                                       | The runner composition and the recovered services it issues; model access preferences; sign-ins on a host; background shells                                                                                                                                                                                                                                          |
 | `@volli/host-core/integrations`    | `mcp/`, `codemode/`, `web/`, `observability/`                                                                                                                                                                                                                                                                                                                                                       | MCP settings and dispatch, Code Mode config and sandbox assets, Web Access, the observability sink and exporters                                                                                                                                                                                                                                                      |
 | `@volli/host-core/log`             | `log/`                                                                                                                                                                                                                                                                                                                                                                                              | The structured log: `hostLogger`, `installHostLog`, the trace context (`withTrace`, `withLogContext`) and the sinks ([The log](#the-log))                                                                                                                                                                                                                             |
+| `@volli/host-core/perf`            | `perf/`                                                                                                                                                                                                                                                                                                                                                                                             | The machine-local perf store (`perf.db`): `openPerfStore`, the stall-line log sink that feeds it, and the support report's stall summary; `volli perf` reads it ([The perf store](#the-perf-store))                                                                                                                                                                   |
 | `@volli/host-core/files`           | `volli-fs.ts`, `file-search.ts`, `file-services.ts`, `blob-*.ts`, `turn-attachments.ts`, `prompt-templates.ts`, `skills.ts`                                                                                                                                                                                                                                                                         | File reads/writes/watches, search, blobs, templates, skills. Their result types are `@volli/shared` wire types                                                                                                                                                                                                                                                        |
 | `@volli/host-core/worktree`        | `worktree/`, `worktree-runtime.ts`, `worktree-reads.ts`, `credential-helper-diagnostics.ts`                                                                                                                                                                                                                                                                                                         | Git, ensure/trim/remove, snapshots, activity, the cleanup engine and leases                                                                                                                                                                                                                                                                                           |
 | `@volli/host-core/board`           | `board/`, `project-*.ts`, `ticket-*.ts`, `detached-work.ts`                                                                                                                                                                                                                                                                                                                                         | Project create/relink/roots, ticket commands, [ticket moves](#ticket-moves) and wakes, [the Board module](#the-board-module)'s feed and receipts                                                                                                                                                                                                                      |
@@ -149,7 +150,7 @@ One convention for what a module asks for and what it is (VC-632):
 - **No file named after another package.** The single-instance profile lock,
   runtime paths and CLI shim are `host-profile.ts`, not `agent-runtime.ts`
   beside `@volli/agent-runtime`.
-- **Door** keeps its glossary meaning (`CONTEXT.md`): one entrance a caller
+- **Door** keeps its glossary meaning ([glossary](../../CONTEXT.md#door)): one entrance a caller
   reaches host behavior through (an IPC handler, a socket verb, an agent
   tool), never the behavior itself.
 
@@ -178,9 +179,16 @@ One convention for what a module asks for and what it is (VC-632):
   minute to fifteen, a changed row or a running check reads at once or every
   minute, a committed ticket event that can move a retention answer (move,
   archive, worktree or PR change, signal) wakes it and reads that ticket,
-  focus refreshes anything read over a minute ago, a reclaim never rests on a
-  skipped discovery, and the trim backfill asks a finished worktree again only
-  when its ticket, Keep pin or trim settings change or the memo lapses. It
+  focus refreshes anything read over a minute ago (at most one focus cycle
+  per minute, VC-1077), a reclaim never rests on a skipped discovery, and the
+  trim backfill asks a finished worktree again only when its ticket, Keep pin
+  or trim settings change or the memo lapses. A project whose repository has
+  no git remote is left out of PR discovery for an hour after `gh` says so,
+  unless a committed change names one of its tickets. Each cycle that changes
+  anything publishes one `data-changed` per ticket it changed, scoped to that
+  ticket and project — never an untargeted one. The trim's tree walk and
+  removal run on a worker thread with synchronous `fs` (`worktree/trim-walk.ts`),
+  so a `node_modules` costs the host thread no file-system callbacks. It
   logs each cycle's `gh` reads, trim checks and wall time at debug, and an
   hourly `retention load` summary at info.
 - **Backup.** Formats, redactions, credential exclusions and the
@@ -358,11 +366,58 @@ log.info("branch pushed", { ticketId, branch }); // never a payload, a prompt or
 - **Cheap, and never fatal.** The level check runs before anything is built;
   the file sink only queues on the caller's stack, and a disk failure disables
   it with one warning.
+- **Main stalls are logged** (`startMainStallMonitor`, `log/stall`; VC-1073).
+  While it runs, every door's synchronous span is timed (two clock reads) and
+  one over the threshold (200 ms) writes a `main-stall` `main stall` line in
+  that call's own trace; event-loop lag no door explains is logged as
+  `attribution: "unattributed"` with the last door call as a hint, never its
+  trace. An hourly `main stall load` line rolls up the count, loop-delay
+  p95/max and the top operations. The desktop starts it with its log.
+  Work no door starts carries a span of its own (`withMainSpan`, VC-1090):
+  a Session's runtime (`door: "runtime"`: fact writes, the wake fan-out, Pi
+  events, tool calls), projections (`"projection"`), host timers (`"timer"`)
+  and fan-outs to windows (`"broadcast"`); the innermost span over the
+  threshold wins and names its parent. A block of many short spans is
+  logged as `"aggregate"`, one mostly spent in GC as `"gc"`, and one main
+  spent off the CPU as `"off-cpu"`. The roll-up adds `unattributedShare`,
+  `offCpuShare` and per-door totals; it is written once more when the
+  monitor stops (`VOLLI_MAIN_STALL_SUMMARY_MS` sets the interval).
+- **Renderer stalls land beside them** (VC-1091). Desktop main, not
+  host-core, writes them: each window's Long Animation Frames and Event Timing
+  entries over 100 ms arrive in batches on `volli:renderer-stalls`, are read
+  against `@volli/shared`'s closed vocabulary (`readRendererStallBatch`:
+  interaction `label`, `operation`, durations, the longest script as file +
+  function) and written as `renderer-stall` `renderer stall` lines with
+  `door: "renderer"` and the window id; an hourly `renderer stall load` line
+  rolls them up on the same cadence (`apps/desktop/src/main/log/renderer-stall.ts`).
 - **No bare console.** Production code in host-core and Electron main logs only
   through a host logger; `src/log/no-console.test.ts` (and its twin in
   `apps/desktop/src/main/log/`) fails on a `console.*` call outside tests and
   the log module itself. A seam that takes a log function takes the logger's
   `(msg, fields)` shape, never `Pick<Console, …>`.
+
+## The perf store
+
+Every stall line (`main stall`, and the renderer's `renderer stall`) also
+lands in a bounded, machine-local SQLite file, `<userData>/perf.db`
+(`perf/store.ts`, VC-1092), which `volli perf top | stalls | compare` read.
+
+- **Fed by a log sink, not a second call site** (`perfStallSink`). The
+  desktop tees it beside the log file; it keeps the stall lines and ignores
+  every other line, so whatever fields the monitors add reach the store by
+  name, and no log file is ever parsed back.
+- **Off the hot path.** `record` only pushes onto a bounded buffer; an
+  unref'd timer writes it in one transaction every 5 s, and a read flushes
+  first. Aggregations scan 1,000 rows per turn of the event loop
+  (`scanStalls`), so a query over the whole store never stalls main itself.
+- **Bounded** by count (100,000 rows, oldest first) and age (30 days).
+- **Its own file, not `volli.db`.** Stalls are machine state, never backed
+  up (`perf.db*` is excluded), never migrated with the profile, never read by
+  an older build; deleting the file starts it over. Expand-only schema.
+- **Runs** record each launch's version and build label and how long it ran,
+  so answers carry `observedMs` and compare builds per hour observed.
+
+How to use it to measure a fix: `docs/performance-signals.md`.
 
 ## Ports
 

@@ -394,22 +394,22 @@ describe("remote hosts in the one log viewer (VC-712)", () => {
   it("words the host's link for the dot while none of its links is ready", () => {
     expect(waitingStatus(host(BOX, "box", { status: "connecting" }))).toEqual({
       status: "connecting",
-      detail: "Reconnecting to box…",
+      detail: "Reconnecting to box",
     });
     expect(waitingStatus(host(BOX, "box", { status: "reconnecting" }))).toEqual({
       status: "connecting",
-      detail: "Reconnecting to box…",
+      detail: "Reconnecting to box",
     });
     expect(
       waitingStatus(host(BOX, "box", { status: "incompatible", reason: "host-too-old" })),
     ).toEqual({ status: "failed", detail: "box can’t serve this app." });
     expect(waitingStatus(host(BOX, "box"))).toEqual({
       status: "connecting",
-      detail: "Waiting for a link to box that carries its log…",
+      detail: "Waiting for a log connection to box",
     });
     expect(waitingStatus(undefined)).toEqual({
       status: "connecting",
-      detail: "Waiting for a link to This host that carries its log…",
+      detail: "Waiting for a log connection to This host",
     });
   });
 });

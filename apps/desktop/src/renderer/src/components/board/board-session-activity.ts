@@ -4,7 +4,7 @@
  *
  * "Board" here is the surface, not the Role: this is Ticket Session activity as
  * the Board draws it, and has nothing to do with the Board Session Role
- * (CONTEXT.md "Session Role") — a Board Session has no card and never lights one.
+ * (CONTEXT.md#session-role) — a Board Session has no card and never lights one.
  *
  * The board's answer to the question the sidebar's Active band answers one row
  * at a time: a card should be able to say "something is happening here" without

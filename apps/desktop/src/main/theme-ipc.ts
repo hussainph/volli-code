@@ -27,6 +27,9 @@
  */
 
 import type Database from "better-sqlite3";
+import type { WebContents } from "electron";
+import { broadcastAppStateChanged, broadcastDataChanged } from "./broadcast";
+import { getAppContentsRole, isSettingsContents } from "./window-roles";
 import { isHexColor } from "@volli/shared";
 import { THEME_CHANNELS, THEME_IPC } from "./ipc-descriptors";
 import type { GhosttyAppearancePayload, ResolvedAppearance } from "@volli/shared";
@@ -99,43 +102,47 @@ export interface ThemeIpcDeps {
  */
 export interface ThemeIpcHooks {
   /**
-   * The renderer finished a paint and recorded what it resolved. Main repaints
-   * every window's `backgroundColor` from it — Chromium paints that color during
-   * resizes and before first paint, so a stale one flashes the previous palette
-   * at exactly the moments the user notices. Taking the color the renderer
-   * actually painted beats re-deriving one in main and hoping the two agree.
+   * A renderer finished a paint. Only its own native edge follows that paint;
+   * Settings may be editing a different scope from the workbench.
    */
-  onFirstPaintChanged?(hint: FirstPaintHint): void;
+  onFirstPaintChanged?(hint: FirstPaintHint, sender: WebContents): void;
   /**
    * The renderer painted its `--background` plane rung, which Browser Tab views
    * paint while the app owns them (VC-302). Live only: called before, and
    * regardless of, the hint's persistent write.
    */
-  onPlaneBackgroundChanged?(color: string): void;
+  onPlaneBackgroundChanged?(color: string, sender: WebContents): void;
 }
 
 /** The desktop surfaces {@link desktopThemeHooks} repaints, as ports. */
 export interface DesktopThemeSurfaces {
-  /** Every app window open right now. */
-  windows: () => Iterable<{ setBackgroundColor(color: string): void }>;
+  /** App windows are matched to the reporting renderer, never repainted en masse. */
+  windows: () => Iterable<{
+    webContents: Pick<WebContents, "id">;
+    setBackgroundColor(color: string): void;
+  }>;
   /** The Browser Tab host, whose app-owned planes follow the theme (VC-302). */
   browserTabs: { setThemeBackground(color: string): void };
 }
 
 /**
- * The desktop's {@link ThemeIpcHooks}: each window's edge takes the hint's
- * `background` (the canvas base fill), and every Browser Tab plane takes the
- * `--background` plane rung. The two are different colors, and a plane painted
+ * The desktop's {@link ThemeIpcHooks}: only the sender's edge takes the hint's
+ * `background` (the canvas base fill), and the workbench's Browser Tab planes
+ * take only the main renderer's `--background` plane rung. The two are different colors, and a plane painted
  * the edge color shows as a slab of base fill inside the pane, so this pairing
  * is the one thing worth pinning here (VC-302). No try/catch: there is nothing
  * here to fail.
  */
 export function desktopThemeHooks(surfaces: DesktopThemeSurfaces): ThemeIpcHooks {
   return {
-    onFirstPaintChanged: (hint) => {
-      for (const window of surfaces.windows()) window.setBackgroundColor(hint.background);
+    onFirstPaintChanged: (hint, sender) => {
+      for (const window of surfaces.windows()) {
+        if (window.webContents.id === sender.id) window.setBackgroundColor(hint.background);
+      }
     },
-    onPlaneBackgroundChanged: (color) => surfaces.browserTabs.setThemeBackground(color),
+    onPlaneBackgroundChanged: (color, sender) => {
+      if (getAppContentsRole(sender) === "main") surfaces.browserTabs.setThemeBackground(color);
+    },
   };
 }
 
@@ -205,6 +212,7 @@ export function registerThemeIpcHandlers(
       if (project === undefined) return { ok: false, error: "Unknown project" };
       const state = buildThemeState(db, deps, input.projectId);
       if (!state.ok) return state;
+      broadcastDataChanged();
       return { ok: true, project, value: state.value };
     },
 
@@ -215,19 +223,23 @@ export function registerThemeIpcHandlers(
     // every one of them. The caller holds what it just sent; a re-read here
     // would only be a second place for "what is the theme?" to be answered.
 
-    "volli:theme-canvas-set-global": (input: CanvasSetGlobalInput): Result => {
+    "volli:theme-canvas-set-global": (input: CanvasSetGlobalInput, sender): Result => {
       setGlobalCanvas(db, input.canvas, deps.now());
+      broadcastAppStateChanged("theme", JSON.stringify(input.canvas), sender.id);
       return { ok: true };
     },
 
-    "volli:theme-appearance-set-global": (input: AppearanceSetGlobalInput): Result => {
+    "volli:theme-appearance-set-global": (input: AppearanceSetGlobalInput, sender): Result => {
       setGlobalAppearance(db, input.appearance, deps.now());
+      broadcastAppStateChanged("appearance", input.appearance, sender.id);
       return { ok: true };
     },
 
     "volli:theme-canvas-set-project": (input: CanvasSetProjectInput): ProjectCanvasWriteResult => {
       const project = updateProjectCanvas(db, input.projectId, input.canvas, deps.now());
       if (project === undefined) return { ok: false, error: "Unknown project" };
+      // Untargeted: a project roster carries tickets/labels, not its theme columns.
+      broadcastDataChanged();
       return { ok: true, project };
     },
 
@@ -236,19 +248,25 @@ export function registerThemeIpcHandlers(
     ): ProjectCanvasWriteResult => {
       const project = updateProjectAppearance(db, input.projectId, input.appearance, deps.now());
       if (project === undefined) return { ok: false, error: "Unknown project" };
+      broadcastDataChanged();
       return { ok: true, project };
     },
 
-    "volli:theme-first-paint-set": (input: FirstPaintReport): Result => {
-      // First and on its own: the plane color is what is on screen now, so a
-      // failed write must not leave open Browser Tabs on the old one.
-      const plane = input.planeBackground;
-      if (plane !== undefined && isHexColor(plane)) hooks.onPlaneBackgroundChanged?.(plane);
+    "volli:theme-first-paint-set": (input: FirstPaintReport, sender): Result => {
+      if (getAppContentsRole(sender) === null) return { ok: false, error: "Unknown app window" };
       const hint: FirstPaintHint = { appearance: input.appearance, background: input.background };
+      if (isSettingsContents(sender)) {
+        // Settings can preview App or any project without changing the next
+        // workbench's first paint or the workbench's Browser Tab planes.
+        hooks.onFirstPaintChanged?.(hint, sender);
+        return { ok: true };
+      }
+      // First and on its own: a failed hint write must not leave Browser Tabs
+      // on an old plane color. Settings never reaches this workbench-only path.
+      const plane = input.planeBackground;
+      if (plane !== undefined && isHexColor(plane)) hooks.onPlaneBackgroundChanged?.(plane, sender);
       setFirstPaintHint(db, hint, deps.now());
-      // After the write, so a window never repaints to a background that failed
-      // to persist.
-      hooks.onFirstPaintChanged?.(hint);
+      hooks.onFirstPaintChanged?.(hint, sender);
       return { ok: true };
     },
 

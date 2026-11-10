@@ -81,6 +81,7 @@ import { FileSaveGuardDialog } from "@renderer/components/files/save-guard-dialo
 import { useProjectFileWorkspace } from "@renderer/components/files/use-project-file-workspace";
 import { HOME_BOARD_TAB_ID, browserTabId, isHomeBoardTab, parseBrowserTabId } from "./home-tabs";
 import { openBrowserTab } from "@renderer/components/browser/open-browser-tab";
+import { hideBrowserTab, leaveHomeStrip } from "@renderer/components/browser/show-browser-tab";
 import { Board } from "@renderer/components/board/board";
 import { BoardBoundary } from "@renderer/components/board/board-boundary";
 import { ChatPlane } from "@renderer/components/chat/chat-plane";
@@ -115,10 +116,11 @@ import {
   topStripTabIds,
 } from "@renderer/components/split/split-tab-groups";
 import { TerminalPaneAnchor } from "@renderer/components/split/terminal-pane-anchor";
-import { RailResizeHandle } from "@renderer/components/ticket/rail-resize-handle";
+import { InspectorShell } from "@renderer/components/sidebar/inspector-shell";
 import { FileView } from "@renderer/components/ticket/file-view";
 import { TicketDetail } from "@renderer/components/ticket/ticket-detail";
 import { chatTabId, parseChatTabId } from "@renderer/components/ticket/ticket-chat-tab";
+import { usePaneChatViews } from "@renderer/components/chat/kept-chat-views";
 import { fileTabId, parseFileTabId } from "@renderer/components/ticket/ticket-file-tab";
 import { openQuickOpen } from "@renderer/hooks/use-quick-open-shortcut";
 import { useSplitShortcuts } from "@renderer/hooks/use-split-shortcuts";
@@ -446,6 +448,12 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   const visibleTabIds = split.panes.flatMap((pane) =>
     pane.activeTabId === null ? [] : [pane.activeTabId],
   );
+  // The chats each pane cell draws: its front one, and the last few it showed
+  // kept mounted behind it (VC-1080, `chat/kept-chat-views.ts`).
+  const paneChatViews = usePaneChatViews(
+    split.panes,
+    split.groupId === null ? orderedTabIds : null,
+  );
 
   // ⌘\ / ⇧⌘\ / ⌃⌘arrows, for Home. The chord resolves which surface is in
   // front for itself, so this instance stands down while a Ticket view has
@@ -487,10 +495,8 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   // has none: a repository navigator or Session facts over the board would be
   // about an object that is not in front.
   const railCollapsed = useUiStore((state) => state.railCollapsed);
-  const railWidth = useUiStore((state) => state.railWidth);
   const toggleRailCollapsed = useUiStore((state) => state.toggleRailCollapsed);
-  const railVisible =
-    stripVisible && !boardTabActive && activeBrowserTab === undefined && !railCollapsed;
+  const railVisible = stripVisible && !boardTabActive && activeBrowserTab === undefined;
 
   // ── Starting a Session ───────────────────────────────────────────────────
   const startingTerminal = useSessionsStore((state) =>
@@ -510,10 +516,14 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   // nothing at all, silently.
   const createBrowser = React.useCallback(async () => {
     if (selectedId === null) return;
+    const destination =
+      useProjectUiStore.getState().byProject[selectedId]?.homeSplitView?.focusedPaneId;
     await openBrowserTab(browserApi, { projectId: selectedId }, (tabId) => {
+      if (destination !== undefined)
+        useProjectUiStore.getState().focusHomePane(selectedId, destination);
       releaseActive();
       // A new Browser Tab OPENS into the shown group's focused pane.
-      useProjectUiStore.getState().openHomeTab(selectedId, tabId);
+      useProjectUiStore.getState().openHomeTab(selectedId, tabId, destination);
     });
   }, [browserApi, releaseActive, selectedId]);
 
@@ -535,7 +545,6 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   const setHomeSplitRatio = useProjectUiStore((state) => state.setHomeSplitRatio);
   const closeHomePane = useProjectUiStore((state) => state.closeHomePane);
   const removeHomeTabFromSplit = useProjectUiStore((state) => state.removeHomeTabFromSplit);
-  const closeHomeBrowserTab = useProjectUiStore((state) => state.closeHomeBrowserTab);
   const setActiveSession = useSessionsStore((state) => state.setActiveSession);
 
   const handleSelect = React.useCallback(
@@ -588,7 +597,6 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   const closeBrowser = React.useCallback(
     (tabId: string) => {
       if (selectedId === null) return;
-      const id = browserTabId(tabId);
       void browserApi
         .close({ tabId })
         .then((result) => {
@@ -597,33 +605,26 @@ export function HomeSurface({ visible }: { visible: boolean }) {
             return;
           }
           useBrowserTabsStore.getState().remove(tabId);
-          // The split-view half of a close this store does not own — the same
-          // statement the chat and terminal branches make below. While split
-          // it lands the surface on the pane's own successor, so the MRU
-          // return inside closeHomeBrowserTab only ever runs unsplit.
-          removeHomeTabFromSplit(selectedId, id);
-          const sessions = useSessionsStore.getState().byOwner[selectedId]?.tabs ?? [];
-          const chats = useChatSessionsStore.getState().openTabs[selectedId] ?? [];
-          const projectUi = useProjectUiStore.getState().byProject[selectedId];
-          const files = projectUi?.projectFiles.tabs ?? [];
-          const browsers = stripBrowserTabs(
-            Object.values(useBrowserTabsStore.getState().byId).filter(
-              (tab) => tab.projectId === selectedId && tab.ticketId === null,
-            ),
-          );
-          closeHomeBrowserTab(selectedId, id, [
-            HOME_BOARD_TAB_ID,
-            ...sessions.map((tab) => tab.sessionId),
-            ...chats.map(chatTabId),
-            ...files.map((tab) => fileTabId(tab.relPath)),
-            ...browsers.map((tab) => browserTabId(tab.tabId)),
-          ]);
+          leaveHomeStrip(selectedId, tabId, orderedTabIds);
         })
         .catch((reason: unknown) => {
           toastError(`Could not close Browser Tab: ${errorMessage(reason)}`);
         });
     },
-    [browserApi, closeHomeBrowserTab, removeHomeTabFromSplit, selectedId],
+    [browserApi, selectedId, orderedTabIds],
+  );
+
+  /** Send a Session's Browser Tab back to its Activity Island (VC-1118). */
+  const hideBrowser = React.useCallback(
+    (tabId: string) => {
+      if (selectedId === null) return;
+      void hideBrowserTab(browserApi, tabId, () =>
+        leaveHomeStrip(selectedId, tabId, orderedTabIds),
+      ).catch((reason: unknown) => {
+        toastError(`Could not hide Browser Tab: ${errorMessage(reason)}`);
+      });
+    },
+    [browserApi, selectedId, orderedTabIds],
   );
 
   const handleClose = React.useCallback(
@@ -911,33 +912,42 @@ export function HomeSurface({ visible }: { visible: boolean }) {
             onDirtyChange={fileWorkspace.handleDirtyChange}
           />
         ) : null}
-        {chatSessionId !== null && visible ? (
-          // Keyed by Session — the client, the fold and the queue are resident
-          // (@volli/session-presentation's registry), so a remount costs nothing
-          // and carries nothing over. Which is exactly why a chat may live in a
-          // pane cell while a terminal may not.
-          //
-          // AND WHY IT LEAVES WITH THE SURFACE (VC-338). Home's box is hidden,
-          // not unmounted, so that no live terminal is ever torn down — but a
-          // chat plane standing behind Settings or another nav page is a
-          // transcript's worth of DOM that nobody can see, for every Home chat
-          // in front of a pane. Nothing is lost by dropping it: the stream, the
-          // fold and the queue are in the registry, the half-typed message is in
-          // `chat-drafts.ts`, and the reading position is in
-          // `transcript-window.ts`. A terminal has none of that and keeps its
-          // box; a chat is a projection and can be redrawn.
-          <ChatPlane
-            key={chatSessionId}
-            sessionId={chatSessionId}
-            projectId={selected.id}
-            // Ticketless by construction: Home hosts the project's OWN
-            // Sessions, which is what makes their working copy the main checkout.
-            ticketId={null}
-            onOpenFile={openProjectFile}
-            visible={visible}
-            onOpenSession={openProjectSession}
-          />
-        ) : null}
+        {visible
+          ? // Keyed by Session — the client, the fold and the queue are
+            // resident (@volli/session-presentation's registry), so a view
+            // carries nothing a remount could lose. The front chat is shown;
+            // the last few this pane showed stay mounted behind `<Activity
+            // mode="hidden">` (VC-1080), so going back to one reveals the tree
+            // it already drew instead of re-parsing its transcript. Hidden,
+            // every effect of the view is torn down — it does not count as
+            // shown to the chat store, holds no subscription and answers no
+            // shortcut — and they all come back on reveal, as on a mount.
+            //
+            // AND WHY THEY LEAVE WITH THE SURFACE (VC-338). Home's box is
+            // hidden, not unmounted, so that no live terminal is ever torn
+            // down — but a chat plane standing behind Settings or another nav
+            // page is a transcript's worth of DOM that nobody can see. Nothing
+            // is lost by dropping it: the stream, the fold and the queue are in
+            // the registry, the half-typed message is in `chat-drafts.ts`, and
+            // the reading position is in `transcript-window.ts`. A terminal has
+            // none of that and keeps its box; a chat is a projection and can be
+            // redrawn.
+            paneChatViews(pane).map((view) => (
+              <React.Activity key={view.sessionId} mode={view.shown ? "visible" : "hidden"}>
+                <ChatPlane
+                  sessionId={view.sessionId}
+                  projectId={selected.id}
+                  // Ticketless by construction: Home hosts the project's OWN
+                  // Sessions, which is what makes their working copy the main
+                  // checkout.
+                  ticketId={null}
+                  onOpenFile={openProjectFile}
+                  visible={visible}
+                  onOpenSession={openProjectSession}
+                />
+              </React.Activity>
+            ))
+          : null}
         {paneBrowserTab !== undefined ? (
           // The native view is attached over this cell's own rectangle, and the
           // main-process host attaches any number of tabs at once (tab-host,
@@ -951,6 +961,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
             tabId={paneBrowserTab.tabId}
             visible={visible && !ticketTakesOver && visibleTabIds.includes(tabId)}
             onClose={() => closeBrowser(paneBrowserTab.tabId)}
+            onHide={() => hideBrowser(paneBrowserTab.tabId)}
           />
         ) : null}
         {relPath === null &&
@@ -964,14 +975,10 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   };
 
   const rail =
-    railVisible && selected !== null ? (
-      <aside
-        className="relative flex shrink-0 flex-col border-l border-sidebar-border bg-sidebar"
-        style={{ width: railWidth }}
-      >
-        <RailResizeHandle />
+    selected !== null ? (
+      <InspectorShell enabled={railVisible} owner="home">
         <HomeRail project={selected} activeTabId={activeTabId} />
-      </aside>
+      </InspectorShell>
     ) : null;
 
   return (
@@ -1017,6 +1024,8 @@ export function HomeSurface({ visible }: { visible: boolean }) {
               releaseActive();
               useProjectUiStore.getState().ungroupHome(selectedId, groupId);
             }}
+            onTakeOutTab={ungroupLocalTab}
+            onHideBrowser={hideBrowser}
             terminalTabs={terminalTabs}
             chatIds={openChatIds}
             fileTabs={fileTabs}
@@ -1059,54 +1068,66 @@ export function HomeSurface({ visible }: { visible: boolean }) {
         visibleTabIds={visibleTabIds}
         rail={rail}
         plane={
-          selected === null || ticketTakesOver ? null : zenSessionId !== null ? (
-            // Zen: the focused Session takes the whole plane, and the grid is
-            // not rendered at all — so every other pane's anchor is unpublished
-            // and its terminal stops being drawn, without unmounting.
-            <div className="relative flex min-h-0 flex-1 flex-col">
-              <TerminalPaneAnchor tabId={zenSessionId} ownerId={selected.id} />
-            </div>
-          ) : (
-            <SplitViewGrid
-              view={split}
-              renderStrip={(pane) =>
-                // Every pane of a shown group draws its own stack — a pane of
-                // one tab too, so that tab can be dragged out or closed. An
-                // empty pane needs no band of chrome over its menu.
-                pane.tabIds.length === 0 || selectedId === null ? null : (
-                  <HomeTabs
-                    label={paneStripLabel(pane)}
-                    projectId={selectedId}
-                    tabIds={pane.tabIds}
-                    activeTabId={pane.activeTabId ?? ""}
-                    terminalTabs={terminalTabs}
-                    chatIds={openChatIds}
-                    fileTabs={fileTabs}
-                    browserTabs={browserTabs}
-                    dirtyFilePaths={fileWorkspace.dirtyPaths}
-                    onSelect={handleSelect}
-                    onClose={handleClose}
-                    onRename={handleRename}
-                    onReorder={(movedId, ids) => reorderInPane(pane.id, movedId, ids)}
-                    onPinFile={(relPath) => pinHomeFile(selectedId, relPath)}
-                    onCloseOtherFiles={(relPath) => void requestCloseOtherFiles(relPath)}
-                    onTakeOut={
-                      pane.activeTabId === null
-                        ? undefined
-                        : () => ungroupLocalTab(pane.activeTabId!)
-                    }
-                  />
-                )
-              }
-              renderContent={paneContent}
-              renderOverlay={(pane) => <SplitDropZones paneId={pane.id} />}
-              onFocusPane={(paneId) => {
-                if (selectedId !== null) focusHomePane(selectedId, paneId);
-              }}
-              onResizeSplit={(splitId, ratio) => {
-                if (selectedId !== null) setHomeSplitRatio(selectedId, splitId, ratio);
-              }}
-            />
+          selected === null ? null : (
+            // Hidden, not unmounted, while a Ticket view has taken Home over
+            // (VC-1080): the Board, Home's chats and its editors keep the tree
+            // they drew, so returning from a ticket reveals them instead of
+            // re-deriving every column. `<Activity mode="hidden">` tears every
+            // effect inside down meanwhile — anchors unpublish, subscriptions
+            // and key handlers detach — exactly as the unmount it replaces did.
+            <React.Activity mode={ticketTakesOver ? "hidden" : "visible"}>
+              {zenSessionId !== null ? (
+                // Zen: the focused Session takes the whole plane, and the grid is
+                // not rendered at all — so every other pane's anchor is unpublished
+                // and its terminal stops being drawn, without unmounting.
+                <div className="relative flex min-h-0 flex-1 flex-col">
+                  <TerminalPaneAnchor tabId={zenSessionId} ownerId={selected.id} />
+                </div>
+              ) : (
+                <SplitViewGrid
+                  view={split}
+                  renderStrip={(pane) =>
+                    // Every pane of a shown group draws its own stack — a pane of
+                    // one tab too, so that tab can be dragged out or closed. An
+                    // empty pane needs no band of chrome over its menu.
+                    pane.tabIds.length === 0 || selectedId === null ? null : (
+                      <HomeTabs
+                        label={paneStripLabel(pane)}
+                        projectId={selectedId}
+                        tabIds={pane.tabIds}
+                        activeTabId={pane.activeTabId ?? ""}
+                        onTakeOutTab={ungroupLocalTab}
+                        onHideBrowser={hideBrowser}
+                        terminalTabs={terminalTabs}
+                        chatIds={openChatIds}
+                        fileTabs={fileTabs}
+                        browserTabs={browserTabs}
+                        dirtyFilePaths={fileWorkspace.dirtyPaths}
+                        onSelect={handleSelect}
+                        onClose={handleClose}
+                        onRename={handleRename}
+                        onReorder={(movedId, ids) => reorderInPane(pane.id, movedId, ids)}
+                        onPinFile={(relPath) => pinHomeFile(selectedId, relPath)}
+                        onCloseOtherFiles={(relPath) => void requestCloseOtherFiles(relPath)}
+                        onTakeOut={
+                          pane.activeTabId === null
+                            ? undefined
+                            : () => ungroupLocalTab(pane.activeTabId!)
+                        }
+                      />
+                    )
+                  }
+                  renderContent={paneContent}
+                  renderOverlay={(pane) => <SplitDropZones paneId={pane.id} />}
+                  onFocusPane={(paneId) => {
+                    if (selectedId !== null) focusHomePane(selectedId, paneId);
+                  }}
+                  onResizeSplit={(splitId, ratio) => {
+                    if (selectedId !== null) setHomeSplitRatio(selectedId, splitId, ratio);
+                  }}
+                />
+              )}
+            </React.Activity>
           )
         }
       />
@@ -1187,6 +1208,8 @@ interface HomeStripProps {
   groups?: readonly TabGroup[];
   shownGroupId?: string | null;
   onUngroup?(groupId: string): void;
+  onTakeOutTab?(tabId: string): void;
+  onHideBrowser?(tabId: string): void;
   terminalTabs: readonly SessionTab[];
   chatIds: readonly string[];
   fileTabs: readonly FileWorkspaceTab[];
@@ -1230,6 +1253,8 @@ function HomeTabs({
     groups: strip.groups,
     shownGroupId: strip.shownGroupId,
     onUngroup: strip.onUngroup,
+    onTakeOutTab: strip.onTakeOutTab,
+    onHideBrowser: strip.onHideBrowser,
     activeTabId: strip.activeTabId,
     onReorder: strip.onReorder,
     onSelect: strip.onSelect,

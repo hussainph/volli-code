@@ -13,20 +13,20 @@ rely on the command table now.
 
 ## Commands
 
-| Command                                                                  | What it does                                                                                                                            |
-| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `install --system\|--user`                                               | _not yet._ Put this release in place under systemd and link it.                                                                         |
-| `uninstall [--keep-data\|--purge] [--yes]`                               | _not yet._ Remove the runner from this box.                                                                                             |
-| `link [--token <vrt_…>] [--name <name>] [--server <url> [--site <url>]]` | Link this box to your Volli account (below).                                                                                            |
-| `unlink`                                                                 | Forget this box's link. Refuses while the runner runs.                                                                                  |
-| `run`                                                                    | Serve in the foreground until SIGTERM (systemd runs this). Exit 0 clean, 1 failed, 78 a boot to fix.                                    |
-| `status`                                                                 | One JSON report: the daemon's status file and liveness, and the link on disk. Exit 0 serving, 1 refusing, 3 not serving.                |
-| `doctor`                                                                 | _not yet._ Check git, disk, network and model sign-ins.                                                                                 |
-| `login [provider] [--api-key] [--status]` / `logout <provider>`          | Store, list or remove this runner's model sign-ins (below).                                                                             |
-| `update [--now] [--to <version>]` / `update apply`                       | Show the update state; ask the runner to update now; `apply` is the update unit's entry (below).                                        |
-| `logs [-f]`                                                              | _not yet._ The runner's log.                                                                                                            |
-| `git-credential [--data-dir <dir>] <get\|store\|erase>`                  | Volli's git credential helper, run by git: asks the running runner over `<dataDir>/git-credential.sock` for the Session's GitHub token. |
-| `version` (`--version`, `-v`)                                            | Print the version.                                                                                                                      |
+| Command                                                                  | What it does                                                                                                                                                                 |
+| ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `install --system\|--user`                                               | _not yet._ Put this release in place under systemd and link it.                                                                                                              |
+| `uninstall [--keep-data\|--purge] [--yes]`                               | _not yet._ Remove the runner from this box.                                                                                                                                  |
+| `link [--token <vrt_…>] [--name <name>] [--server <url> [--site <url>]]` | Link this box to your Volli account (below).                                                                                                                                 |
+| `unlink`                                                                 | Forget this box's link. Refuses while the runner runs.                                                                                                                       |
+| `run`                                                                    | Serve in the foreground until SIGTERM (systemd runs this). Exit 0 clean, 1 failed, 78 a boot to fix.                                                                         |
+| `status`                                                                 | One JSON report: the daemon's status file and liveness, and the link on disk. Exit 0 serving, 1 refusing, 3 not serving.                                                     |
+| `doctor`                                                                 | _not yet._ Check git, disk, network and model sign-ins.                                                                                                                      |
+| `login [provider] [--api-key] [--status]` / `logout <provider>`          | Store, list or remove this runner's model sign-ins (below).                                                                                                                  |
+| `update [--now] [--to <version>]` / `update apply`                       | Show the update state; ask the runner to update now; `apply` is the update unit's entry (below).                                                                             |
+| `logs [-f]`                                                              | _not yet._ The runner's log.                                                                                                                                                 |
+| `git-credential [--data-dir <dir>] <get\|store\|erase>`                  | Volli's git credential helper, run by git: asks the running runner over `<dataDir>/git-credential.sock` for the Session's GitHub token, or says why there is none on stderr. |
+| `version` (`--version`, `-v`)                                            | Print the version.                                                                                                                                                           |
 
 `volli-runner help <command>` (or `<command> --help`) prints one command's
 options. Every command that touches the box takes `--data-dir <dir>` and

@@ -1,17 +1,51 @@
 ---
 title: Agent capability changes
-description: How each CLI, tool, effect, and recovery change reaches agents, listed by the first build that serves it.
+description: Check which CLI commands and agent tools your installed Volli build provides, and how existing Sessions receive additions.
 sidebar:
   label: Agent capability changes
 ---
 
-import AgentCapabilityChanges from "../../../components/AgentCapabilityChanges.astro";
+Use the installed build's help to check its capabilities. A newer app can have
+commands and tools that an older Session has not received.
 
-This page records capability changes for agents and automation. It is not a
-commit log, and not the app's user-facing release changelog.
+## Inspect the installed build
 
-Run `volli help changes` to see the source revision and build ID of the CLI
-bundle answering now, plus the running app version when the optional local read
-succeeds. The release version is a separate promotion marker.
+```sh
+volli help changes
+volli help
+```
 
-<AgentCapabilityChanges />
+`volli help changes` prints the CLI bundle's source revision and capability
+record. When the app is reachable, it also reports the running app version.
+The CLI bundle and app version are separate facts.
+
+Inside a Session, `volli help` also lists its recorded tools. A tool described
+in the latest docs may be unavailable to that Session. Use the tools it holds,
+or start a new Session after configuring the capability you need.
+
+## Existing Sessions and new tools
+
+A Session keeps its original tool record. Reopening it does not replace that
+record with the current defaults.
+
+Volli can add eligible capabilities without removing or renaming the tools
+already recorded. Additions that change what the model sees wait for a new
+context-cache boundary, such as compaction or a model switch. Tools available
+only through Code Mode can be announced without changing that cached prefix.
+An app update or a settings change does not guarantee an immediate addition.
+
+See [Agent operating model](/reference/agent-operating-model/) for Session
+roles and [Code Mode](/guides/code-mode/) for tool routing.
+
+## Recent capabilities
+
+| Capability | Where to look |
+| --- | --- |
+| Background commands and exit notices | [Use a chat](/guides/sessions/#background-shells) |
+| Browser actions and replay | [Browser Tabs](/guides/browser-tabs/) |
+| Typed classification with an optional decision model | [Models and usage](/guides/models/) |
+| Secure credential requests | [Session credentials](/guides/session-credentials/) |
+| Tool calls combined in JavaScript | [Code Mode](/guides/code-mode/) |
+| Smaller ticket listings with `--no-body` | [CLI commands](/reference/cli-commands/#volli-ticket-list) |
+
+[What's new in 0.3](/releases/whats-new-0-3/) covers the desktop changes.

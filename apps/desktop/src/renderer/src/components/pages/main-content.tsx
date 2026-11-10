@@ -1,16 +1,13 @@
-import type { ReactNode } from "react";
-import { FolderPlusIcon } from "@phosphor-icons/react/dist/csr/FolderPlus";
+import { useEffect, type ReactNode } from "react";
+import { AddFolderIcon } from "@renderer/components/ui/icon";
 
 import { AutomationsPage } from "@renderer/components/automations/automations-page";
 import { HomeSurface } from "@renderer/components/home/home-surface";
 import { CloudMoveReadOnlyBanner } from "@renderer/components/cloud-moves/cloud-moves";
-import { ConfigurePage } from "@renderer/components/pages/configure-page";
-import { SettingsPage } from "@renderer/components/pages/settings-page";
 import { SessionEnvironmentAlert } from "@renderer/components/session-environment-alert";
-import { WorkspaceDependenciesOffer } from "@renderer/components/workspace-dependencies-offer";
 import { AutomationsOnly } from "@renderer/components/automations/automation-availability";
 import { LocalOnly } from "@renderer/components/hosts/local-only";
-import { Button } from "@renderer/components/ui/button";
+import { EmptyState } from "@renderer/components/ui/empty-state";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { useActiveNav } from "@renderer/hooks/use-active-nav";
 import { useAddProject } from "@renderer/hooks/use-add-project";
@@ -24,17 +21,19 @@ export function MainContent({ override }: { override?: ReactNode } = {}) {
   const selected = useSelectedProject();
   const pending = useProjectsStore((state) => state.pendingRemoteSelection);
   const projectCount = useProjectsStore((state) => state.projects.length);
-  const [activeNav] = useActiveNav();
-  const settingsOpen = useUiStore((state) => state.settingsOpen);
-  const settingsCategory = useUiStore((state) => state.settingsCategory);
-  const settingsSignInProviderId = useUiStore((state) => state.settingsSignInProviderId);
+  const [activeNav, setActiveNav] = useActiveNav();
+  // Old navigation-history entries redirect; Configure is no longer a page.
+  useEffect(() => {
+    if (activeNav !== "configure") return;
+    useUiStore.getState().requestConfigureCategory("overview");
+    setActiveNav("home");
+  }, [activeNav, setActiveNav]);
 
   // Keep-alive seam (CLAUDE.md: never unmount a live terminal incidentally).
   // Home hosts the layer that owns every live PTY terminal in the app, so it is
   // ALWAYS mounted and merely hidden via CSS — switching nav, switching
-  // projects, or opening Settings must not tear its terminals down. Configure
-  // and Settings are stateless, so they keep plain conditional rendering.
-  const homeVisible = !settingsOpen && selected !== null && activeNav === "home";
+  // projects, or opening the separate Settings window must not tear its terminals down.
+  const homeVisible = selected !== null && activeNav === "home";
 
   if (override !== undefined) {
     return <div className="relative flex min-h-0 flex-1 flex-col">{override}</div>;
@@ -43,16 +42,10 @@ export function MainContent({ override }: { override?: ReactNode } = {}) {
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
       <CloudMoveReadOnlyBanner />
-      {/* Both measure THIS Mac's tools in the project's folder: a remote
-          project's folder is on its host (VC-711), so neither runs for it. */}
+      {/* Readiness measures THIS Mac's git in the project's folder; a remote
+          project's folder is on its host, so it does not run here. */}
       <LocalOnly projectId={selected?.id ?? null} fallback={null}>
         <SessionEnvironmentAlert />
-      </LocalOnly>
-      {/* Under the fault surface, because it is not one: an uninstalled
-          workspace is a normal state with an action attached, and it must
-          never be the loudest thing on a freshly added project (VC-156). */}
-      <LocalOnly projectId={selected?.id ?? null} fallback={null}>
-        <WorkspaceDependenciesOffer />
       </LocalOnly>
       {/* Home renders its own strip, its board (or the ticket that has taken it
           over) and its Session planes, in that DOM order, so the strip is the
@@ -60,23 +53,16 @@ export function MainContent({ override }: { override?: ReactNode } = {}) {
           shares this flex column rather than nesting one inside it. */}
       <HomeSurface visible={homeVisible} />
       {
-        settingsOpen ? (
-          <SettingsPage
-            initialCategoryKey={settingsCategory ?? undefined}
-            initialSignInProviderId={settingsSignInProviderId ?? undefined}
-          />
-        ) : pending !== null ? (
+        pending !== null ? (
           <div className={cn("flex-1", EMPTY_PAGE)} />
         ) : selected === null && projectCount === 0 ? (
           <EmptyProjectsState />
         ) : selected === null ? (
           <div className={cn("flex-1", EMPTY_PAGE)}>
-            <p className="text-sm text-muted-foreground">Select a project</p>
+            <EmptyState tier="page" illustration="folder" title="Select a project" />
           </div>
-        ) : activeNav === "configure" ? (
-          <ConfigurePage />
         ) : activeNav === "automations" ? (
-          // Stateless like Configure, so plain conditional rendering: nothing
+          // Plain conditional rendering: nothing
           // on this page owns a live PTY, and it re-reads its record on mount.
           <AutomationsOnly projectId={selected.id}>
             <AutomationsPage />
@@ -100,20 +86,16 @@ function EmptyProjectsState() {
       data-empty-projects-state
       className={cn("empty-projects-canvas relative flex-1 overflow-hidden", EMPTY_PAGE)}
     >
-      <div className="relative z-10 flex max-w-sm flex-col items-center">
-        {/* The frame is the glyph plus its inset — 20 + 8 + 8 — so a bigger
-            or smaller icon moves the box instead of overflowing a fixed one. */}
-        <div className="mb-4 flex items-center justify-center rounded-xl border border-border bg-card/70 p-2 shadow-raised">
-          <FolderPlusIcon className="size-5 text-muted-foreground" />
-        </div>
-        <h1 className="text-title font-semibold">Add your first project</h1>
-        <p className="mt-2 text-sm leading-6 text-muted-foreground">
-          Pick a folder with a git repo.
-        </p>
-        <Button className="mt-6 app-region-no-drag" onClick={() => void pickAndAdd()}>
-          Add Project…
-        </Button>
-      </div>
+      <EmptyState
+        tier="page"
+        illustration="folder"
+        title="No projects"
+        action={{
+          label: "Add project",
+          icon: <AddFolderIcon />,
+          onAction: () => void pickAndAdd(),
+        }}
+      />
     </div>
   );
 }

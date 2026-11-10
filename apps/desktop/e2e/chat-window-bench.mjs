@@ -1,199 +1,164 @@
-/**
- * Chat-transcript memory bench (VC-338) — NOT wired into `vp test`.
- *
- * Question under test: what does one long Session's chat plane cost the
- * renderer, in document size and in resident memory, and what does a surface
- * that mounts ten of them cost?
- *
- * It is the real `ChatPlane` (see `bench/chat-window/main.tsx`) in a real
- * Electron renderer, with fixture transcripts in one real chat-sessions store.
- * The shape it reproduces is the app's: every open Session keeps its slice
- * whether or not it is in front, and what varies is how many planes are
- * MOUNTED.
- *
- * Run:
- *   node apps/desktop/e2e/chat-window-bench.mjs [--sessions 10] [--turns 2000]
- *
- * The before/after in the PR is this script run twice over the same fixtures,
- * with the transcript components checked out from `main` for the "before" arm:
- *
- *   git checkout origin/main -- apps/desktop/src/renderer/src/components/chat \
- *     apps/desktop/src/renderer/src/components/ui/ai-elements/conversation.tsx
- *   node apps/desktop/e2e/chat-window-bench.mjs --label before
- *   git checkout HEAD -- apps/desktop/src/renderer/src/components
- *   node apps/desktop/e2e/chat-window-bench.mjs --label after
- *
- * Numbers from one machine under one load are comparable to each other and to
- * nothing else; run both arms back to back.
+#!/usr/bin/env node
+/** Synthetic real-ChatPlane benchmark, not a real-app user journey.
+ * Every live run is launch → doctor → measure → doctor → stop through
+ * volli-drive. There is no direct Electron entry or credential/packed fallback.
+ * See bench/chat-window/README.md for matched source-revision comparisons.
  */
-import { spawn } from "node:child_process";
-import { readFile, readdir } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
-
-const HERE = dirname(fileURLToPath(import.meta.url));
-const BENCH = join(HERE, "bench", "chat-window");
-const APP = join(HERE, "..");
-
-const args = process.argv.slice(2);
-const flag = (name, fallback) => {
-  const index = args.indexOf(`--${name}`);
-  return index === -1 ? fallback : args[index + 1];
-};
-const SESSIONS = flag("sessions", "10");
-const TURNS = flag("turns", "2000");
-const LABEL = flag("label", "run");
-const STREAM_SAMPLES = flag("stream-samples", "8");
-const STREAM_STEPS = flag("stream-steps", "120");
-const STREAM_TOKEN_RATE = flag("stream-token-rate", "30");
-const SKIP_BUILD = args.includes("--skip-build");
-
-function run(command, commandArgs, options = {}) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, commandArgs, { stdio: ["ignore", "pipe", "inherit"], ...options });
-    let out = "";
-    child.stdout.on("data", (chunk) => {
-      out += String(chunk);
-      process.stdout.write(chunk);
-    });
-    child.on("error", reject);
-    child.on("exit", (code) =>
-      code === 0 ? resolve(out) : reject(new Error(`${command} exited ${code}`)),
-    );
-  });
-}
-
-const electron = (await import(join(APP, "node_modules", "electron", "index.js"))).default;
-
-/*
- * A measurement harness may not be built in development mode, and saying so out
- * loud is not paranoia here (VC-357).
- *
- * Vite's `createServer` sets `process.env.NODE_ENV = "development"` for the
- * WHOLE process, and `bench/performance/fixture.mjs` starts one to load the
- * production database modules as TypeScript. When `run.mjs` generates or
- * verifies a fixture and then spawns this bench, that value rides into the
- * child's environment and the build below resolves React's `development`
- * export condition instead of `production`.
- *
- * What that cost, measured: a 3.4 MB bundle instead of 3.1 MB, and a layout
- * different enough that the growing code fence fell outside the scroller the
- * reader was moving inside. Streamdown defers offscreen code with
- * `content-visibility`, so the probe then streamed into a transcript with no
- * mounted code block at all and reported ZERO dropped frames for it — a clean
- * bill of health for a measurement that measured nothing. `run.mjs`'s
- * per-sample live-fence contract is what refused it.
- *
- * Pinned unconditionally rather than inside the build branch: the `--skip-build`
- * path hands this same environment to Electron, and one answer for both is
- * easier to keep true than two.
- */
+import { promisify } from "node:util";
+import os from "node:os";
+import { assertProductionReact } from "./bench/chat-window/production.mjs";
+import { parseBenchArgs } from "./bench/chat-window/settings.mjs";
+import { overlayManifest, prepareSources, verifySource } from "./bench/chat-window/sources.mjs";
+import { runGuardedSide, serialComparison } from "./bench/chat-window/guarded-run.mjs";
+import { printReport } from "./bench/chat-window/report.mjs";
+const exec = promisify(execFile);
+const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+const options = parseBenchArgs(process.argv.slice(2));
+const output = resolve(options.output ?? join(REPO, ".scratch/chat-window-bench"));
+await mkdir(output, { recursive: true });
 process.env.NODE_ENV = "production";
-
-// Vite's Node API rather than its CLI: `vite` has no linked bin in this
-// workspace (the app builds through `vp`), and a bench that shells out to a
-// binary that may not be there fails for a reason that has nothing to do with
-// what it measures.
-if (!SKIP_BUILD) {
-  console.log(`building the bench page (${BENCH})`);
-  const { build } = await import("vite");
-  await build({ configFile: join(BENCH, "vite.config.ts"), mode: "production", logLevel: "warn" });
-}
-
-/**
- * A benchmark that measures a development React build measures nothing the
- * product ships. This happened: React's dual-build entry is a `require` behind
- * `process.env.NODE_ENV`, the bench bundled both halves and ran the debug one,
- * and its profiling instrumentation was inside every frame this bench times.
- * The build now pins production explicitly — and this refuses to measure
- * anything until the emitted bundle proves it, because the failure mode is a
- * plausible-looking number rather than a crash.
- */
-async function assertProductionReact(distDir) {
-  const assets = join(distDir, "assets");
-  const entries = await readdir(assets).catch(() => []);
-  const bundles = entries.filter((name) => name.startsWith("index-") && name.endsWith(".js"));
-  if (bundles.length === 0) throw new Error(`no bench bundle found in ${assets}`);
-  // String literals survive minification; identifiers do not. The first two
-  // exist only in react-dom's development build; `jsxDEV)(` is the minified
-  // shape of a development JSX call, which carries per-element source metadata
-  // and, against production React, does not even run.
-  const developmentOnly = [
-    "Consider memoization",
-    "Each child in a list should have a unique",
-    "jsxDEV)(",
-  ];
-  for (const bundle of bundles) {
-    const source = await readFile(join(assets, bundle), "utf8");
-    const found = developmentOnly.filter((marker) => source.includes(marker));
-    if (found.length > 0) {
-      throw new Error(
-        `${bundle} was built for development (${found.join(", ")}); the bench must measure the build the app ships`,
-      );
-    }
-  }
-}
-
-await assertProductionReact(join(BENCH, "dist"));
-
-console.log(`\nrunning: ${SESSIONS} sessions x ${TURNS} turns`);
-const output = await run(
-  electron,
-  [
-    join(BENCH, "electron-main.cjs"),
-    "--dist",
-    join(BENCH, "dist"),
-    "--sessions",
-    SESSIONS,
-    "--turns",
-    TURNS,
-    "--label",
-    LABEL,
-    "--stream-samples",
-    STREAM_SAMPLES,
-    "--stream-steps",
-    STREAM_STEPS,
-    "--stream-token-rate",
-    STREAM_TOKEN_RATE,
-  ],
-  { cwd: APP, env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: "1" } },
-);
-
-const match = /__BENCH__(?<json>.*)__BENCH__/s.exec(output);
-if (match?.groups?.json === undefined) {
-  console.error("the bench printed no report");
-  process.exitCode = 1;
-} else {
-  const report = JSON.parse(match.groups.json);
-  console.log(`\n=== ${report.label}: ${report.sessions} sessions x ${report.turns} turns ===`);
-  console.log(
-    ["step", "DOM nodes", "renderer RSS MB", "spread", "JS heap MB"].join("\t"),
-    "\n" +
-      report.steps
-        .map((step) =>
-          [step.step, step.nodes, step.rendererRssMb, step.rssSpreadMb, step.jsHeapMb].join("\t"),
-        )
-        .join("\n"),
+const command = (cwd, bin, args, timeout = 300_000) =>
+  exec(bin, args, {
+    cwd,
+    timeout,
+    maxBuffer: 32 * 1024 * 1024,
+    env: { ...process.env, NODE_ENV: "production" },
+  });
+const driver = (dir) => async (args) => {
+  const { stdout } = await command(
+    dir,
+    process.execPath,
+    [join(dir, "apps/desktop/e2e/volli-drive/cli.mjs"), ...args],
+    390_000,
   );
-  console.log("\nchecks:", JSON.stringify(report.checks, null, 2));
-  if (report.streamingSamples?.length > 0) {
-    const latencies = report.streamingSamples.map((sample) =>
-      sample.ok === true ? sample.latencyMs.toFixed(1) : "failed",
-    );
-    const dropped = report.streamingSamples.map((sample) =>
-      sample.ok === true ? sample.droppedFrames : "failed",
-    );
-    const longTasks = report.streamingSamples.map((sample) =>
-      sample.ok === true ? sample.longTasksMs.length : "failed",
-    );
-    console.log(
-      `stream+scroll (${STREAM_TOKEN_RATE} tokens/s): latency ms [${latencies.join(", ")}], ` +
-        `dropped [${dropped.join(", ")}], long tasks [${longTasks.join(", ")}]`,
-    );
+  return JSON.parse(stdout);
+};
+let sides;
+if (options.compare) {
+  sides = await prepareSources(REPO, options.compare, join(output, "sources"));
+} else {
+  const { stdout: commit } = await command(REPO, "git", ["rev-parse", "HEAD"]);
+  const { stdout: status } = await command(REPO, "git", ["status", "--porcelain"]);
+  const { stdout: diff } = await command(REPO, "git", [
+    "diff",
+    "HEAD",
+    "--",
+    ".",
+    ":(exclude)apps/desktop/e2e",
+  ]);
+  sides = [
+    {
+      dir: REPO,
+      metadata: {
+        commit: commit.trim(),
+        dirty: Boolean(status.trim()),
+        productDiffSha256: createHash("sha256").update(diff).digest("hex"),
+        overlay: { files: await overlayManifest(REPO) },
+      },
+    },
+  ];
+}
+await writeFile(join(output, "sources.json"), JSON.stringify(sides, null, 2) + "\n");
+if (options.prepareOnly) {
+  console.log("Prepared source-only snapshots; no install, build or launch performed:");
+  for (const side of sides) console.log(side.dir);
+} else {
+  // Do all dependency checks/builds BEFORE the first live measurement, not
+  // between comparison sides (which would change machine load/thermal state).
+  for (const side of sides) {
+    if (!existsSync(join(side.dir, "node_modules")))
+      throw new Error(
+        `dependencies absent in ${side.dir}; install its frozen lockfile only in an approved slot`,
+      );
+    if (options.compare) await verifySource(side.dir, side.metadata);
+    const bench = join(side.dir, "apps/desktop/e2e/bench/chat-window");
+    if (!options.skipBuild) {
+      await command(side.dir, "pnpm", ["run", "build"]);
+      // Resolve the snapshot's own Vite/dependencies, not the controller's.
+      await command(join(side.dir, "apps/desktop"), process.execPath, [
+        "--input-type=module",
+        "-e",
+        `const { build } = await import('vite'); await build({ configFile: ${JSON.stringify(join(bench, "vite.config.ts"))}, mode: 'production', logLevel: 'warn' });`,
+      ]);
+    }
+    if (options.compare) await verifySource(side.dir, side.metadata);
+    await assertProductionReact(join(bench, "dist"));
+    const sourceProof = JSON.stringify({
+      commit: side.metadata.commit,
+      product: side.metadata.product ?? side.metadata.productDiffSha256,
+      overlay: side.metadata.overlay,
+    });
+    const assets = await readdir(join(bench, "dist/assets"));
+    side.metadata.benchAssets = {};
+    for (const asset of assets.toSorted())
+      side.metadata.benchAssets[asset] = createHash("sha256")
+        .update(await readFile(join(bench, "dist/assets", asset)))
+        .digest("hex");
+    side.metadata.hostBundleSha256 = createHash("sha256")
+      .update(await readFile(join(side.dir, "apps/desktop/dist-electron/main.cjs")))
+      .digest("hex");
+    const proof = JSON.stringify({
+      sourceProof,
+      benchAssets: side.metadata.benchAssets,
+      hostBundleSha256: side.metadata.hostBundleSha256,
+    });
+    const proofPath = join(bench, "dist/.chat-window-build.json");
+    if (options.skipBuild) {
+      const prior = await readFile(proofPath, "utf8").catch(() => "");
+      if (prior !== proof)
+        throw new Error(
+          `--skip-build source/build proof missing or stale in ${side.dir}; rebuild through this entry`,
+        );
+    } else await writeFile(proofPath, proof);
   }
-  if (report.errors?.length > 0) console.log("console errors:", report.errors.slice(0, 5));
-  if (report.failure !== undefined) {
-    console.error("\nbench failed:", report.failure);
-    process.exitCode = 1;
-  }
+  const reports = await serialComparison(sides, async (side) => {
+    if (options.compare) await verifySource(side.dir, side.metadata);
+    const report = await runGuardedSide({
+      drive: driver(side.dir),
+      settings: options.settings,
+      source: side.metadata,
+    });
+    console.log(`\n__BENCH__${JSON.stringify(report)}__BENCH__`);
+    await printReport(report, options.settings.streamTokenRate);
+    // Legacy trace flags still copy the raw trace to the requested path. In a
+    // comparison each side gets its own suffix, never overwriting the first.
+    for (const arm of ["draft", "reveal", "stream"]) {
+      const target = options.settings[`${arm}Trace`];
+      const file = report[`${arm}Trace`];
+      if (target && file)
+        await writeFile(
+          options.compare ? `${target}.${side.metadata.commit}.json` : target,
+          await readFile(file),
+        );
+    }
+    await writeFile(
+      join(output, `${side.metadata.commit}.json`),
+      JSON.stringify(report, null, 2) + "\n",
+    );
+    return report;
+  });
+  await writeFile(
+    join(output, "comparison.json"),
+    JSON.stringify(
+      {
+        settings: options.settings,
+        machine: {
+          platform: os.platform(),
+          arch: os.arch(),
+          release: os.release(),
+          cpus: os.cpus()[0]?.model,
+        },
+        reports,
+      },
+      null,
+      2,
+    ) + "\n",
+  );
+  console.log(`results: ${join(output, "comparison.json")}`);
 }

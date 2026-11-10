@@ -1,0 +1,18 @@
+name: Feature request
+description: Suggest something Volli should do.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The work you're doing and where Volli gets in the way.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help?
+      description: How you'd like it to work. Rough ideas are welcome.
+    validations:
+      required: false

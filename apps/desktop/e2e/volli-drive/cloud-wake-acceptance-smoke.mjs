@@ -75,6 +75,7 @@ import {
 } from "./lib/cloud-transcript-acceptance.mjs";
 import { createRegistry, instanceLayout, REPO } from "./lib/core.mjs";
 import { request } from "./lib/protocol.mjs";
+import { windowTargeting } from "./lib/window-targeting.mjs";
 import { hasActionableControl, visibleControls as controls } from "./lib/remote-acceptance.mjs";
 
 const exec = promisify(execFile);
@@ -110,7 +111,10 @@ function record(number, status, assertion, detail = "") {
 
 /** One instance's drive: every action from a fresh tree; ambiguity is a failure. */
 function driver(label, socket) {
-  const call = (cmd, args = {}) => request(socket, cmd, args, { timeoutMs: 150_000 });
+  const windows = windowTargeting((cmd, args = {}) =>
+    request(socket, cmd, args, { timeoutMs: 150_000 }),
+  );
+  const call = windows.call;
   const snap = () => call("snapshot");
   const wait = async (text, timeout = 45_000) => (await call("wait", { text, timeout })).snapshot;
   const gone = async (text, timeout = 45_000) =>
@@ -132,6 +136,8 @@ function driver(label, socket) {
   return {
     label,
     call,
+    useMainWindow: windows.useMainWindow,
+    useSettingsWindow: windows.useSettingsWindow,
     snap,
     wait,
     gone,
@@ -147,6 +153,14 @@ function driver(label, socket) {
       );
       await click("button", "Runner:", { contains: true, first: true });
       await click("menuitemradio", name, { contains: true, first: true });
+      // The modal menu hides the app behind it (`hideOthers`) until its exit
+      // animation unmounts it, so the next control has no name until then.
+      await waitUntil(
+        `${label}: the runner menu has closed`,
+        async () =>
+          controls((await snap()).text, "menuitemradio", name, { contains: true }).length === 0,
+        { timeout: 10_000, interval: 100 },
+      );
     },
     async send(text) {
       await waitUntil(
@@ -218,7 +232,9 @@ async function step(number, body) {
 
 /** Settings → Account → the agreement → Continue with GitHub; the browser double completes it. */
 async function signIn(drive) {
+  drive.useMainWindow();
   await drive.click("button", "Settings", { first: true });
+  await drive.useSettingsWindow();
   await drive.wait("Settings categories");
   await drive.click("button", "Account", { first: true });
   await drive.wait("Accept Preview Agreement");
@@ -247,6 +263,7 @@ async function cloudState(drive) {
 
 /** The cloud project's Home on this Mac. */
 async function openProject(drive) {
+  drive.useMainWindow();
   await drive.wait(CLOUD_PROJECT.name, 60_000);
   if (await drive.has("button", CLOUD_PROJECT.name)) {
     await drive.click("button", CLOUD_PROJECT.name, { first: true });
@@ -314,7 +331,8 @@ async function journey(fixture, store) {
     // The always-on default can be either Mac. This existing journey explicitly
     // needs A's local folder and pins it through the same picker a person uses.
     await macA.chooseRunner(nameA);
-    await macA.click("button", "New chat", { first: true });
+    await macA.click("button", "Open a tab", { first: true });
+    await macA.click("menuitem", "Chat ⌘T");
     await macA.send(FIRST);
     await macA.wait(reply(FIRST), 60_000);
     await macA.gone("Stop turn", 60_000);
@@ -436,7 +454,8 @@ async function journey(fixture, store) {
 
   await step(8, async () => {
     await macB.chooseRunner(nameA);
-    await macB.click("button", "New chat", { first: true });
+    await macB.click("button", "Open a tab", { first: true });
+    await macB.click("menuitem", "Chat ⌘T");
     await macB.send(PICKED_RUNNER);
     await macB.wait(reply(PICKED_RUNNER), 90_000);
     await macB.wait(`Running on ${nameA}`, 30_000);

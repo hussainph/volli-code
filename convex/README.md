@@ -71,7 +71,7 @@ must expose trustworthy request metadata or its users share one quota.
 | `functions/lib/visibility.ts`                                                                    | The visibility writes and filters: `visibilityForNewSession` (every Session-creating write), `shareSession`, `visibleBoardEvents` (every read of board events that may name a Session). The decisions are the predicates in `@volli/shared/cloud`.                                                |
 | `functions/runners.ts`                                                                           | Runners: linking (desktop, install token, device code), a Mac's successor taking over its work, the rotated credential with reuse detection, heartbeat, sleep and capabilities, the offline sweep, the Settings list, and `places`: the runner a visible Session lives on ("Waiting for <Mac>").  |
 | `functions/runnerHttp.ts`, `functions/http.ts`                                                   | `/runner/link`, `/runner/link/start`, `/runner/link/poll`, `/runner/token` (HTTP actions; secrets are minted here, mutations see hashes) and the deployment's HTTP router.                                                                                                                        |
-| `functions/runnerGithub.ts`                                                                      | `POST /runner/github-token` (route in `runnerHttp.ts`, runner token as Bearer): the runner owner's GitHub user token and commit identity for a Session or leased job it holds. Never a refresh token.                                                                                             |
+| `functions/runnerGithub.ts`                                                                      | `POST /runner/github-token` (route in `runnerHttp.ts`, runner token as Bearer): the runner owner's GitHub user token and commit identity for a Session or leased job it holds. Never a refresh token. Refuses `github_not_installed` when Volli isn't on the repo's account.                      |
 | `functions/{,lib/}runnerLinkRateLimit.ts`                                                        | Transactional linking limits and the hourly cleanup of refilled buckets.                                                                                                                                                                                                                          |
 | `functions/lib/runnerAuth.ts`                                                                    | `requireRunner`: the check every runner-called function starts with. A runner token is never a person.                                                                                                                                                                                            |
 | `functions/streamChunks.ts`                                                                      | Streamed text: the chunk rows a runner appends while someone watches, the cursor read a viewer folds, and their cleanups (settle, turn end, sweep).                                                                                                                                               |
@@ -758,6 +758,9 @@ Registering an App (once per environment):
    account** for a dev App.
 8. Create it; note the App id, client id and slug; generate a client secret and a private key;
    set the variables above with `npx convex env set`, then delete the local key files.
+9. Check: `npx convex run health:deploymentChecks '{}'` reports none of the six as
+   `incomplete`, and an unsigned `POST https://<deployment>.convex.site/github/webhook`
+   answers `401` (`503` means the deployment still reads the App as unset).
 
 Rotation: add the new key or secret on GitHub, update the variable (for the
 webhook secret, `new,old` first, then `new` alone once GitHub sends with it),
@@ -816,7 +819,14 @@ at all (`forbidden`) or any of these is unset (`missing`):
 | `VOLLI_SECRETS_ROOT_KEYS`                                                                      | Sealed secrets ("Secrets root key")       |
 | `VOLLI_S3_ENDPOINT`, `VOLLI_S3_BUCKET`, `VOLLI_S3_ACCESS_KEY_ID`, `VOLLI_S3_SECRET_ACCESS_KEY` | Object storage                            |
 
-`{"mode":"test"}` allows both, for the throwaway local backend only: on a
+The GitHub App ("GitHub App") is optional, but its six variables go
+together: with none set GitHub stays off, which passes; with some set, each
+unset one is a problem (`incomplete`). A partial set would otherwise serve
+`configured: false` without saying why. `GITHUB_WEBHOOK_SECRETS` with no
+secret in it (`,`) counts as unset; `GITHUB_API_URL` and `GITHUB_WEB_URL` are
+not checked.
+
+`{"mode":"test"}` allows all of these, for the throwaway local backend only: on a
 deployment whose `CONVEX_CLOUD_URL` is not loopback it answers
 `test_mode_refused` and runs the cloud check anyway. Against the fixture:
 

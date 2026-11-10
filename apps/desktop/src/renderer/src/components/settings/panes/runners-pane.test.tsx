@@ -145,7 +145,9 @@ describe("Settings → Runners", () => {
   it("lists the person's runners, this Mac first and marked, each status in a short phrase", () => {
     const tier = standIn();
     act(() => root.render(<RunnersPane {...tier.props} />));
-    expect(container.textContent).toContain("Loading runners…");
+    expect(
+      container.querySelector('[aria-label="Loading Runners"]')?.getAttribute("aria-busy"),
+    ).toBe("true");
     tier.push(ONLINE);
     tier.list(ROWS);
 
@@ -321,17 +323,17 @@ describe("Settings → Runners", () => {
     const tier = standIn();
     act(() => root.render(<RunnersPane {...tier.props} />));
     tier.list([]);
-    expect(container.textContent).toContain("No runners yet.");
+    expect(container.textContent).toContain("No runners");
     tier.push({ ...THIS_MAC_RUNNER_OFF, state: "registering" });
     const pending = container.querySelector('[data-testid="runner-this-mac-pending"]')!;
     expect(pending.textContent).toContain("This Mac");
-    expect(pending.textContent).toContain("Adding…");
+    expect(pending.textContent).toContain("Adding");
 
     tier.push({ ...ONLINE, state: "connecting" });
-    expect(container.textContent).toContain("Connecting…");
+    expect(container.textContent).toContain("Connecting");
     tier.list(ROWS);
     expect(container.querySelector('[data-testid="runner-this-mac-pending"]')).toBeNull();
-    expect(runnerRow("runner-mac").textContent).toContain("Connecting…");
+    expect(runnerRow("runner-mac").textContent).toContain("Connecting");
 
     tier.push({ ...ONLINE, state: "offline", since: null });
     expect(runnerRow("runner-mac").textContent).toContain("Offline");
@@ -370,9 +372,11 @@ describe("Settings → Runners", () => {
       message: "This Mac's runner credential couldn't be read.",
     });
     const blocked = container.querySelector<HTMLElement>('[data-testid="this-mac-blocked"]')!;
-    expect(blocked.querySelector("[role=alert]")?.textContent).toBe(
+    expect(blocked.querySelector("[role=status]")?.textContent).toBe("This Mac couldn’t be added.");
+    expect(blocked.querySelector("details")?.textContent).toContain(
       "This Mac's runner credential couldn't be read.",
     );
+    expect(blocked.querySelector("details")?.open).toBe(false);
     await act(async () => button("Try again", blocked).click());
     expect(tier.rpc.runners.addThisMac.mutate).toHaveBeenCalledOnce();
     expect(error).toHaveBeenCalledWith(
@@ -464,17 +468,22 @@ describe("Settings → Runners", () => {
     act(() => root.render(<RunnersPane {...tier.props} />));
     tier.listFails(refusal("unauthenticated", "Sign in to Volli Cloud."));
     expect(container.textContent).toContain("Sign in to Volli Cloud.");
-    act(() => button("Retry").click());
+    act(() => button("Try again").click());
     expect(tier.props.follow).toHaveBeenCalledTimes(2);
     expect(tier.rpc.runners.subscribeThisMac.subscribe).toHaveBeenCalledTimes(2);
     expect(tier.unsubscribe).toHaveBeenCalledOnce();
 
     tier.list(ROWS);
     tier.fail(new Error("The subscription's source failed"));
-    expect(container.querySelector("[role=alert]")?.textContent).toBe(
+    expect(
+      [...container.querySelectorAll("[aria-live]")].map((node) => node.textContent),
+    ).toContain("Couldn't load this Mac");
+    expect(container.querySelector("details")?.textContent).toContain(
       "The subscription's source failed",
     );
     expect(runnerRow("runner-box")).not.toBeNull();
+    act(() => button("Try again").click());
+    expect(tier.rpc.runners.subscribeThisMac.subscribe).toHaveBeenCalledTimes(3);
   });
 
   it("waits again when the client closes, and stops watching on unmount", () => {

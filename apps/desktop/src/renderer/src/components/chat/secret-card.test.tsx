@@ -53,7 +53,9 @@ let root: Root;
 let host: HTMLElement;
 const originalPlaces = useCloudPlacesStore.getState();
 
+const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
 beforeEach(() => {
+  HTMLElement.prototype.scrollIntoView = vi.fn();
   adoptLaunch(LOCAL_LAUNCH);
   vi.useFakeTimers();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -71,6 +73,7 @@ beforeEach(() => {
   root = createRoot(host);
 });
 afterEach(async () => {
+  HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
   await act(async () => root.unmount());
   host.remove();
   adoptLaunch(LOCAL_LAUNCH);
@@ -168,7 +171,7 @@ describe("person-only credential cards", () => {
     expect(field.value).toBe("");
     expect(field.getAttribute("value")).toBeNull();
     expect(field.defaultValue).toBe("");
-    expect(host.querySelector("select")?.value).toBe("session");
+    expect(host.querySelector('[role="combobox"]')?.textContent).toBe("Session");
     field.value = "private-token";
     field.dispatchEvent(new Event("input", { bubbles: true }));
     await render();
@@ -293,11 +296,17 @@ describe("person-only credential cards", () => {
 
   it("sends the selected broader scope only when explicitly chosen", async () => {
     await render();
-    const scope = host.querySelector("select")!;
-    act(() => {
-      scope.value = "project";
-      scope.dispatchEvent(new Event("change", { bubbles: true }));
+    await act(async () => {
+      host
+        .querySelector('[role="combobox"]')!
+        .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     });
+    const project = [...document.querySelectorAll('[role="option"]')].find(
+      (item) => item.textContent === "Project",
+    )!;
+    await act(async () =>
+      project.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+    );
     password().value = "project-secret";
     await act(async () => button("Submit credential").click());
     expect(api.secrets.submit).toHaveBeenCalledWith({

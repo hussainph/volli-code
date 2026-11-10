@@ -78,7 +78,8 @@ it.each(["Add a runner", "Get an always-on runner"])(
     await click("Create install command");
     expect(action).toHaveBeenCalledOnce();
     expect(document.body.textContent).toContain("/v0.3.0-canary.1/volli-runner-install.sh");
-    expect(document.body.textContent).toContain("--server 'https://staging.convex.site'");
+    expect(document.body.textContent).toContain("--server 'https://staging.convex.cloud'");
+    expect(document.body.textContent).toContain("--site 'https://staging.convex.site'");
     act(() =>
       cloud.answer(
         "runners:installTokenStatus",
@@ -86,7 +87,7 @@ it.each(["Add a runner", "Get an always-on runner"])(
         { state: "used", expiresAt, runner: { id: "runner", name: "box", status: "online" } },
       ),
     );
-    expect(document.body.textContent).toContain("box is online. Pick it in the composer.");
+    expect(document.body.textContent).toContain("box is online");
     await click("Done");
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     await vi.waitFor(() => expect(document.activeElement?.textContent).toBe(entry));

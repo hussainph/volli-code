@@ -13,8 +13,11 @@ import type {
   RefreshModelsContext,
 } from "@earendil-works/pi-ai";
 import { createModels, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
-import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
-import { describe, expect, it } from "vite-plus/test";
+import {
+  builtinProviders,
+  getBuiltinModelDataGeneratedAt,
+} from "@earendil-works/pi-ai/providers/all";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   type CatalogFetchResult,
@@ -493,6 +496,8 @@ describe("withRefreshableCatalog", () => {
       { compat: { supportsStrictMode: "false" } },
       { headers: { bad: 1 } },
       { samplingParams: [] },
+      { samplingParamsByThinkingLevel: [] },
+      { samplingParamsByThinkingLevel: { high: null } },
       { thinkingLevelMap: [] },
       { thinkingLevelMap: { low: 1 } },
     ];
@@ -510,6 +515,7 @@ describe("withRefreshableCatalog", () => {
         compat: { supportsStrictMode: true, maxTokensField: "max_tokens", unknownFlag: 3 },
         headers: { "x-string": "yes", "x-null": null },
         samplingParams: {},
+        samplingParamsByThinkingLevel: { high: { temperature: 0.6 } },
         thinkingLevelMap: { off: null, low: "low" },
       }),
     ).resolves.toEqual([
@@ -954,7 +960,12 @@ describe("piDevCatalogSource", () => {
     // API's own default (low) applies. A ladder inherited from the GPT-5.6
     // siblings says `off: "none"` instead, and then every unset-level request
     // tells a model whose thinking cannot be turned off to turn it off.
-    const source = piDevSource({ "gpt-6-astra": ASTRA_OPENAI });
+    const source = piDevSource({
+      "gpt-6-astra": {
+        ...ASTRA_OPENAI,
+        samplingParamsByThinkingLevel: { xhigh: { temperature: 0.42 } },
+      },
+    });
     const result = await source.fetchCatalog("openai", [OPENAI_BASELINE], { signal: signal() });
     const astra = result.models.find((entry) => entry.id === "gpt-6-astra")!;
 
@@ -962,7 +973,10 @@ describe("piDevCatalogSource", () => {
     expect(getSupportedThinkingLevels(astra)).toEqual(["low", "medium", "high", "xhigh", "max"]);
 
     const openai = builtinProviders().find((entry) => entry.id === "openai")!;
-    const wire = async (candidate: Model<Api>, reasoning?: string): Promise<unknown> => {
+    const wire = async (
+      candidate: Model<Api>,
+      reasoning?: string,
+    ): Promise<Record<string, unknown> | undefined> => {
       let body: Record<string, unknown> | undefined;
       const stream = openai.streamSimple(
         candidate,
@@ -981,18 +995,23 @@ describe("piDevCatalogSource", () => {
       } catch {
         // The capture always fails the request; the payload is the assertion.
       }
-      return body?.reasoning;
+      return body;
     };
 
-    expect(await wire(astra, "xhigh")).toEqual({ effort: "xhigh", summary: "auto" });
-    expect(await wire(astra, "max")).toEqual({ effort: "max", summary: "auto" });
-    expect(await wire(astra)).toBeUndefined();
+    expect(await wire(astra, "xhigh")).toMatchObject({
+      reasoning: { effort: "xhigh", summary: "auto" },
+      temperature: 0.42,
+    });
+    const max = await wire(astra, "max");
+    expect(max?.reasoning).toEqual({ effort: "max", summary: "auto" });
+    expect(max?.temperature).toBeUndefined();
+    expect((await wire(astra))?.reasoning).toBeUndefined();
 
     const inherited = {
       ...astra,
       thinkingLevelMap: { ...astra.thinkingLevelMap, off: "none" },
     } as Model<Api>;
-    expect(await wire(inherited)).toEqual({ effort: "none" });
+    expect((await wire(inherited))?.reasoning).toEqual({ effort: "none" });
   });
 
   it("admits Astra on openai-codex too, with the ChatGPT backend's own shape", async () => {
@@ -1249,6 +1268,7 @@ describe("piDevCatalogSource", () => {
         name: "",
         headers: { "x-beta": "2026-09-03" },
         samplingParams: { top_p: 0.95, stop: ["\n\n"] },
+        samplingParamsByThinkingLevel: { off: { temperature: 0.8 }, high: { temperature: 0.6 } },
         compat: { supportsStrictMode: true, maxRetries: 3 },
       }),
     });
@@ -1257,9 +1277,24 @@ describe("piDevCatalogSource", () => {
     const added = result.models[1];
     expect(added?.headers).toEqual({ "x-beta": "2026-09-03" });
     expect(added?.samplingParams).toEqual({ top_p: 0.95, stop: ["\n\n"] });
+    expect(added?.samplingParamsByThinkingLevel).toEqual({
+      off: { temperature: 0.8 },
+      high: { temperature: 0.6 },
+    });
     expect(added?.compat).toEqual({ supportsStrictMode: true, maxRetries: 3 });
     // An entry that states no usable name is named by its id rather than dropped.
     expect(added?.name).toBe("acme-new");
+  });
+
+  it("withholds malformed per-level sampling overrides", async () => {
+    const source = piDevSource({
+      array: feedEntry({ samplingParamsByThinkingLevel: [] }),
+      scalar: feedEntry({ samplingParamsByThinkingLevel: { high: 0.6 } }),
+      null: feedEntry({ samplingParamsByThinkingLevel: { high: null } }),
+    });
+    const result = await source.fetchCatalog("acme", [acme], { signal: signal() });
+    expect(result.models).toEqual([acme]);
+    expect(result.rejected).toBe(3);
   });
 
   it("withholds an entry that claims a different provider or contradicts its id", async () => {
@@ -1517,6 +1552,28 @@ describe("piDevCatalogSource", () => {
       await expect(source.fetchCatalog("acme", [acme], { signal: signal() })).rejects.toThrow(
         CatalogSourceAbsent,
       );
+    }
+  });
+
+  it("uses the installed Pi catalog timestamp as the default staleness floor", async () => {
+    const generatedAt = getBuiltinModelDataGeneratedAt();
+    expect(generatedAt).toBeTypeOf("number");
+    const transport = vi.spyOn(globalThis, "fetch");
+    try {
+      const source = piDevCatalogSource();
+      for (const offset of [-60_000, 60_000]) {
+        transport.mockResolvedValueOnce(
+          new Response(JSON.stringify({ "acme-new": feedEntry() }), {
+            headers: { "last-modified": new Date(generatedAt! + offset).toUTCString() },
+          }),
+        );
+        const request = source.fetchCatalog("acme", [acme], { signal: signal() });
+        if (offset < 0) await expect(request).rejects.toThrow(CatalogSourceAbsent);
+        else expect((await request).models.map((entry) => entry.id)).toContain("acme-new");
+      }
+      expect(transport).toHaveBeenCalledTimes(2);
+    } finally {
+      transport.mockRestore();
     }
   });
 

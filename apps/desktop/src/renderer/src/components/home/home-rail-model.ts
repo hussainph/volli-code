@@ -103,6 +103,8 @@ export interface HomeSessionRow {
   id: string;
   kind: "chat" | "terminal";
   title: string;
+  /** Saved chat provider, carried with the row rather than looked up per icon. */
+  savedProviderId: string | null;
   /** Activity, in the app's one dot vocabulary. */
   state: StatusDotState;
   /**
@@ -295,6 +297,7 @@ export function homeSessionRows(
         id: row.sessionId,
         kind: "chat" as const,
         title: row.title,
+        savedProviderId: row.model?.providerId ?? null,
         state: chatState(row),
         stateLabel: SESSION_ACTIVITY_LABEL[row.activity],
         at: row.lastActivityAt,
@@ -316,6 +319,7 @@ export function homeSessionRows(
         id: row.id,
         kind: "terminal" as const,
         title: row.title,
+        savedProviderId: null,
         // The activity IS the dot vocabulary — `SessionActivityState` is a
         // subset of `StatusDotState`, and the Ticket rail's live rows spend it
         // the same way. Passing it through `sessionActivityDotState` here would

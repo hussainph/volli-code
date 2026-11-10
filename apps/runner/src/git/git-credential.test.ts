@@ -30,7 +30,7 @@ afterEach(async () => {
 });
 
 /** A running runner's helper socket: a real broker over a scripted backend answer. */
-async function runnerServing(dataDir: string) {
+async function runnerServing(dataDir: string, refusal?: { code: "github_not_installed" }) {
   const asked: unknown[] = [];
   const broker = createGitCredentialBroker({
     verifySession: (token) => (token === "session-token" ? SESSION : null),
@@ -39,6 +39,12 @@ async function runnerServing(dataDir: string) {
       github: () => ({ state: "unknown" }),
       get: async (request) => {
         asked.push(request);
+        if (refusal !== undefined) {
+          return {
+            ok: false,
+            error: { ...refusal, message: "m", resetAt: null, account: "acme" },
+          };
+        }
         return {
           ok: true,
           grant: {
@@ -84,6 +90,43 @@ describe("volli-runner git-credential", () => {
     expect(asked).toEqual([
       { claim: { kind: "session", sessionId: SESSION }, projectRepoId: REPO },
     ]);
+  });
+
+  it("says on stderr why there is no token when the person can fix it, and exits 0", async () => {
+    const dataDir = join(root, "data");
+    mkdirSync(dataDir);
+    await runnerServing(dataDir, { code: "github_not_installed" });
+    const context = testContext({
+      root,
+      env: { VOLLI_SESSION: SESSION, VOLLI_SESSION_TOKEN: "session-token" },
+      stdin: "protocol=https\nhost=github.com\n\n",
+    });
+    expect(
+      await runGitCredential({ values: { "data-dir": dataDir }, positionals: ["get"] }, context),
+    ).toBe(0);
+    expect(context.stdout()).toBe("");
+    expect(context.stderr()).toBe(
+      "volli: Volli can't reach this repository. Install Volli on acme on GitHub.\n",
+    );
+  });
+
+  it("with --explain-only, as host-core appends it after the box's helpers, never prints a token", async () => {
+    const dataDir = join(root, "data");
+    mkdirSync(dataDir);
+    await runnerServing(dataDir);
+    const context = testContext({
+      root,
+      env: { VOLLI_SESSION: SESSION, VOLLI_SESSION_TOKEN: "session-token" },
+      stdin: "protocol=https\nhost=github.com\n\n",
+    });
+    const routed = parseRunnerArgv(
+      ["git-credential", "--data-dir", dataDir, "--explain-only", "get"],
+      COMMANDS,
+    );
+    const { command, input } = routed as Extract<typeof routed, { kind: "command" }>;
+    expect(await command.run(input, context)).toBe(0);
+    expect(context.stdout()).toBe("");
+    expect(context.stderr()).toBe("volli: GitHub is connected now. Run the command again.\n");
   });
 
   it("is silent and exits 0 when the runner is down, the action is missing or paths fail", async () => {

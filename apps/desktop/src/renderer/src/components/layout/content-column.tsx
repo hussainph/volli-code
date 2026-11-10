@@ -7,8 +7,21 @@ import { cn } from "@renderer/lib/utils";
  * Workbench surfaces (board, list view, terminals) are Tier B and stay fluid;
  * they must not wrap in this.
  */
-export function ContentColumn({ className, ...props }: React.ComponentProps<"div">) {
-  return <div className={cn("mx-auto w-full max-w-content px-gutter", className)} {...props} />;
+export function ContentColumn({
+  className,
+  measure = "reading",
+  ...props
+}: React.ComponentProps<"div"> & { measure?: "reading" | "document" }) {
+  return (
+    <div
+      className={cn(
+        "mx-auto min-w-0 w-full px-gutter",
+        measure === "document" ? "max-w-document" : "max-w-content",
+        className,
+      )}
+      {...props}
+    />
+  );
 }
 
 /**
@@ -25,5 +38,7 @@ export function ContentColumn({ className, ...props }: React.ComponentProps<"div
  * wide window and compress to the gutter floor on a narrow one.
  */
 export function WorkbenchColumn({ className, ...props }: React.ComponentProps<"div">) {
-  return <div className={cn("mx-auto w-full max-w-workbench px-gutter", className)} {...props} />;
+  return (
+    <div className={cn("mx-auto min-w-0 w-full max-w-workbench px-gutter", className)} {...props} />
+  );
 }

@@ -24,9 +24,8 @@
  * arming row, a Trigger and a machine-local switch already answer between them.
  */
 import * as React from "react";
-import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
-import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
-import { SlidersIcon } from "@phosphor-icons/react/dist/csr/Sliders";
+import { ProcessorIcon, AutomationIcon, AdjustIcon } from "@renderer/components/ui/icon";
+
 import {
   displayTicketId,
   type Automation,
@@ -54,13 +53,16 @@ import {
   type RailReadState,
 } from "@renderer/components/ticket/rail-read-feedback";
 import {
+  ContextMenuGroup,
   ContextMenuItem,
   ContextMenuLabel,
+  ContextMenuSeparator,
   ContextMenuSub,
   ContextMenuSubContent,
   ContextMenuSubTrigger,
 } from "@renderer/components/ui/context-menu";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import { useProjectsStore } from "@renderer/stores/projects";
 import {
   selectArmings,
@@ -295,7 +297,11 @@ export function AutomationRunMenuItems({
   // An unread rail offers no record, because it knows of none: what it knows is
   // that it has not looked yet, and it says so instead of listing a guess.
   if (!rail.ready) {
-    return <div className={EMPTY_INLINE}>{RAIL_UNREAD_LABEL}</div>;
+    return (
+      <div className={EMPTY_INLINE}>
+        <LoadingLabel>{RAIL_UNREAD_LABEL}</LoadingLabel>
+      </div>
+    );
   }
   return (
     <>
@@ -305,28 +311,29 @@ export function AutomationRunMenuItems({
           hand, through the same `runAutomationOnTicket` the current column's
           rows always reached: no move, no arming, no different landing. */}
       {rail.groups.map((group) => (
-        <React.Fragment key={group.status}>
-          <ContextMenuLabel className="text-label text-muted-foreground">
-            {group.label}
-            {group.current ? " · this ticket" : ""}
+        <ContextMenuGroup key={group.status}>
+          <ContextMenuLabel className="flex items-center justify-between gap-2">
+            <span>{group.label}</span>
+            {group.current ? (
+              <span className="text-ui font-normal normal-case tracking-normal">This ticket</span>
+            ) : null}
           </ContextMenuLabel>
           {group.automations.map((automation) => (
             <ContextMenuItem
               key={automation.id}
-              icon={LightningIcon}
+              icon={AutomationIcon}
               disabled={!canWrite}
               onSelect={() => onRun({ kind: "automation", automation }, null)}
             >
-              <span className="min-w-0 flex-1 truncate">{automation.name}</span>
+              <span className="min-w-0 flex-1 break-words">{automation.name}</span>
               <OffNote automation={automation} enabledIds={enabledIds} />
             </ContextMenuItem>
           ))}
-        </React.Fragment>
+        </ContextMenuGroup>
       ))}
       {rail.offered.length === 0 ? (
-        // Nothing offered: say so rather than leaving an empty popover (the
-        // Labels submenu's own idiom).
-        <div className={EMPTY_INLINE}>No automations offered in this column</div>
+        // Empty inline pickers keep only their accessible result announcement.
+        <div className="sr-only">No automations offered in this column</div>
       ) : null}
       {/* The nested override item VC-112 names. It spends the pick on THIS
           menu's default press — the column's Armed automation.
@@ -337,41 +344,48 @@ export function AutomationRunMenuItems({
           model to be chosen FOR, and an item opening onto nothing would be
           worse than one that is not there. */}
       {overrides.length === 0 || !overridePressable(rail.primary) ? null : (
-        <ContextMenuSub>
-          <ContextMenuSubTrigger icon={CpuIcon} disabled={!canWrite}>
-            Run on model
-          </ContextMenuSubTrigger>
-          <ContextMenuSubContent>
-            {overrides.map(({ model, selections }) =>
-              selections.length === 1 ? (
-                <ContextMenuItem
-                  key={model.id}
-                  icon={CpuIcon}
-                  onSelect={() => onRun(rail.primary, selections[0] ?? null)}
-                >
-                  <ModelName model={model} models={models} providerLabel={model.providerLabel} />
-                </ContextMenuItem>
-              ) : (
-                <ContextMenuSub key={model.id}>
-                  <ContextMenuSubTrigger icon={CpuIcon}>
+        <>
+          <ContextMenuSeparator />
+          <ContextMenuSub>
+            <ContextMenuSubTrigger icon={ProcessorIcon} disabled={!canWrite}>
+              Run on model
+            </ContextMenuSubTrigger>
+            <ContextMenuSubContent>
+              {overrides.map(({ model, selections }) =>
+                selections.length === 1 ? (
+                  <ContextMenuItem
+                    key={model.id}
+                    icon={ProcessorIcon}
+                    onSelect={() => onRun(rail.primary, selections[0] ?? null)}
+                  >
                     <ModelName model={model} models={models} providerLabel={model.providerLabel} />
-                  </ContextMenuSubTrigger>
-                  <ContextMenuSubContent>
-                    {selections.map((selection) => (
-                      <ContextMenuItem
-                        key={selection.reasoningLevel}
-                        icon={SlidersIcon}
-                        onSelect={() => onRun(rail.primary, selection)}
-                      >
-                        {selection.reasoningLevel}
-                      </ContextMenuItem>
-                    ))}
-                  </ContextMenuSubContent>
-                </ContextMenuSub>
-              ),
-            )}
-          </ContextMenuSubContent>
-        </ContextMenuSub>
+                  </ContextMenuItem>
+                ) : (
+                  <ContextMenuSub key={model.id}>
+                    <ContextMenuSubTrigger icon={ProcessorIcon}>
+                      <ModelName
+                        model={model}
+                        models={models}
+                        providerLabel={model.providerLabel}
+                      />
+                    </ContextMenuSubTrigger>
+                    <ContextMenuSubContent>
+                      {selections.map((selection) => (
+                        <ContextMenuItem
+                          key={selection.reasoningLevel}
+                          icon={AdjustIcon}
+                          onSelect={() => onRun(rail.primary, selection)}
+                        >
+                          {selection.reasoningLevel}
+                        </ContextMenuItem>
+                      ))}
+                    </ContextMenuSubContent>
+                  </ContextMenuSub>
+                ),
+              )}
+            </ContextMenuSubContent>
+          </ContextMenuSub>
+        </>
       )}
     </>
   );
@@ -392,7 +406,9 @@ export function OffNote({
 }) {
   if (enabledIds.includes(automation.id)) return null;
   return (
-    <span className="ml-auto shrink-0 text-label text-muted-foreground">{SWITCHED_OFF_NOTE}</span>
+    <span className="ml-auto max-w-[30%] shrink-0 text-ui font-normal text-muted-foreground">
+      {SWITCHED_OFF_NOTE}
+    </span>
   );
 }
 

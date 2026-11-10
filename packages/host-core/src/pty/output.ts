@@ -3,6 +3,8 @@
 // paused, and it resumes only after acks drain the count below the low one.
 // Without this, `yes` or `cat bigfile` queues unbounded IPC in the main
 // process faster than the renderer can render.
+import { withMainSpan } from "../log/context";
+
 export const FLOW_CONTROL_HIGH_WATERMARK = 100_000;
 export const FLOW_CONTROL_LOW_WATERMARK = 5_000;
 
@@ -149,7 +151,7 @@ export function createOutputPipeline(sink: OutputSink): OutputPipeline {
       }
       if (flushTimer === null) {
         flushTimer = setTimeout(() => {
-          flush();
+          withMainSpan({ door: "timer", operation: "pty-output-flush" }, flush);
         }, BATCH_WINDOW_MS);
       }
     },

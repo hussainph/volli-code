@@ -384,7 +384,9 @@ async function otherPaneGrid(run, label, paneIndex) {
 let seedTabIndex = -1;
 
 async function seedRun(caseName, runNo) {
-  await startTerminalSession(SURFACE === "ticket" ? page.locator("aside") : page);
+  await startTerminalSession(
+    SURFACE === "ticket" ? page.locator('[data-inspector-panel][data-shown="true"]') : page,
+  );
   if (SURFACE === "ticket") {
     const strip = page.getByRole("tablist", { name: "Ticket tabs" }).getByRole("tab");
     await waitUntil("session tab to appear", async () => (await strip.count()) >= 2, {
@@ -657,7 +659,12 @@ async function caseHideshowTicket(run) {
     // the board card behind Escape can be off-screen on a crowded board.
     await page.getByRole("button", { name: "Home", exact: true }).click();
     await sleep(420);
-    await page.locator("article").filter({ hasText: "VC-1" }).first().dblclick({ timeout: 20000 });
+    await page
+      .locator("article")
+      .filter({ visible: true })
+      .filter({ hasText: "VC-1" })
+      .first()
+      .dblclick({ timeout: 20000 });
     await sleep(520);
     await selectSeededTab(run);
     await sleep(300);
@@ -668,7 +675,7 @@ async function caseHideshowTicket(run) {
   }
 
   const tabsBefore = await sessionTabs().count();
-  await startTerminalSession(page.locator("aside"));
+  await startTerminalSession(page.locator('[data-inspector-panel][data-shown="true"]'));
   await waitUntil("second session tab", async () => (await sessionTabs().count()) > tabsBefore, {
     timeout: 45000,
   });
@@ -726,7 +733,11 @@ try {
           // GPU-pressure row: keep the seeded pane open, add live terminals on
           // top of it, THEN run the case actions (the ticket's order).
           for (let i = 0; i < PANES_PER_RUN; i += 1) {
-            await startTerminalSession(SURFACE === "ticket" ? page.locator("aside") : page);
+            await startTerminalSession(
+              SURFACE === "ticket"
+                ? page.locator('[data-inspector-panel][data-shown="true"]')
+                : page,
+            );
             await sleep(1100);
           }
           // Come back to the seeded pane: creating 16 terminals moves the
