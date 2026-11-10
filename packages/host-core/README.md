@@ -30,7 +30,7 @@ await host.stop("shutdown");
 
 - **No `electron`, directly or through a relative import.**
   `node scripts/check-host-electron-imports.mjs` gates every `packages/*`.
-- **Node only, and it runs on Linux.** `Test (host-core i/3)` runs this package’s
+- **Node only, and it runs on Linux.** `Test (host-core i/2)` runs this package’s
   tests under plain Node in CI’s Linux host lane; `Coverage (host-core)` judges
   the unchanged protected thresholds once, over all shard blobs.
 - **Ports in, services out.** `createHostCore(ports, options)` returns
@@ -823,7 +823,7 @@ created. One build loads under both Electron and plain Node: on macOS the
 package's darwin prebuild, or the build desktop's `rebuild:native`
 (`electron-rebuild`) makes; Linux has no prebuild, so it compiles from source.
 Desktop keeps its own `node-pty` dependency for packaging, exactly like
-`better-sqlite3`. CI's `Test (host-core i/3)` lane rebuilds it for its Node and
+`better-sqlite3`. CI's `Test (host-core i/2)` lane rebuilds it for its Node and
 runs `scripts/probe-node-pty.mjs` before `manager.pty.test.ts` drives real
 shells (see `docs/development/host-linux.md`).
 
@@ -864,7 +864,7 @@ is the one thing that changes between hosts:
   port and the agent-runtime browser tools against a loopback fixture: every
   verb, its result shape, refusals, holds, caps, cancellation and dispose.
   A backend passes it unchanged. `chromium-backend.test.ts` runs it against
-  Chromium, in CI's Linux `Test (host-core i/3)` lane.
+  Chromium, in CI's Linux `Test (host-core i/2)` lane.
 
 ### Chromium
 

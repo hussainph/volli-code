@@ -8,6 +8,7 @@ import { defineConfig } from "vite-plus";
 import type { PackUserConfig } from "vite-plus/pack";
 
 import { RENDERER_DEV_PORT } from "./scripts/dev-constants.mjs";
+import DesktopTestSequencer from "./scripts/test-sequencer";
 import { SHARED_MACHINE_TEST_WORKERS } from "../../vitest.workers";
 import { rendererConnectSources, withConnectSources } from "./src/main/renderer-csp";
 import { packagedCloudConfig } from "./src/main/deployment-config";
@@ -187,6 +188,7 @@ export default defineConfig(({ mode, command }) => ({
     // once at the top level rather than per project: the worker pool is global
     // to the invocation, and both projects below draw from it.
     ...SHARED_MACHINE_TEST_WORKERS,
+    sequence: { sequencer: DesktopTestSequencer },
     projects: [
       // Inherits root src/renderer, plugins, @renderer alias — existing store
       // tests keep working under the default include.

@@ -19,12 +19,12 @@ would otherwise silently skip. This lane runs on **every PR**, including every
 host-path change, and `CI gate` requires success. There is no duplicate host
 suite and no path-based waiver of these unit tests.
 
-**Test (host-core i/3)** runs host-core separately in three shards, including
+**Test (host-core i/2)** runs host-core separately in two shards, including
 Node-native PTY and sandboxed Chromium setup. Each uploads a blob report with
 thresholds zeroed only on its command line. **Coverage (host-core)** first
 requires every shard’s nonempty blob against the actual matrix, then merges
 with `--coverage` and the unchanged 100% protected thresholds. Desktop uses the
-same gate with five shards. Merge jobs install only their dependency closure
+same gate with four duration-balanced shards. Merge jobs install only their dependency closure
 without lifecycle scripts; they execute no tests or native code. Deterministic
 workspace typechecks use a persisted vp task cache; live tests remain uncached.
 
@@ -142,7 +142,7 @@ On macOS the Electron rebuild's `build/Release/pty.node` also loads under
 plain Node, so host-core's PTY tests run on a desktop checkout as-is. On Linux
 the package compiles from source at install, and in a full workspace install
 desktop's postinstall then rebuilds it against Electron's headers. The host
-lane does not lean on that: **Test (host-core i/3)** rebuilds node-pty for its own
+lane does not lean on that: **Test (host-core i/2)** rebuilds node-pty for its own
 Node and probes it before the tests run:
 
 ```sh

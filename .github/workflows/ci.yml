@@ -385,7 +385,8 @@ jobs:
         run: |
           node scripts/check-host-electron-imports.mjs --self-test
           node scripts/check-host-electron-imports.mjs
-          node --test scripts/ci-host-lane.test.mjs scripts/setup-toolchain.test.mjs scripts/host-test-diagnostics.test.mjs scripts/worker-node-archive.test.mjs
+          node --test scripts/ci-host-lane.test.mjs
+          node --test apps/desktop/scripts/test-sequencer.test.mjs scripts/setup-toolchain.test.mjs scripts/host-test-diagnostics.test.mjs scripts/worker-node-archive.test.mjs
 
       # The encoded design system (the tokens ARE the spec, not a document).
       # `vp check` is fmt + lint. These source-specific guards run separately
@@ -529,9 +530,9 @@ jobs:
   # The shard count lives in the matrix list and nowhere else. The command
   # reads it back as `strategy.job-total`, the blob filename records it, and
   # the merge job checks every index up to it arrived — so changing the list
-  # is the whole edit. Vitest assigns files to shards by hashing their paths.
-  # Five shards reduce the long tail of the measured 259/416/506s three-way
-  # split, targeting a slowest shard near five minutes rather than eight.
+  # is the whole edit. Desktop's sequencer balances the measured expensive
+  # tail over four shards; five hash shards ranged from 3:42 to 7:05. More
+  # jobs consume queue capacity without shortening the other required lanes.
   #
   # `fail-fast: false`, deliberately: when a change breaks tests in two
   # shards, the person fixing it should see both failures from one push, not
@@ -543,7 +544,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5]
+        shard: [1, 2, 3, 4]
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -717,7 +718,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2]
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
