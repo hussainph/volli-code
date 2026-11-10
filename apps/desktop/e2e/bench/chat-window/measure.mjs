@@ -12,6 +12,7 @@ export async function measureChatWindow({ contents, rendererRssMb, settings, pau
     streamSamples: STREAM_SAMPLES,
     streamSteps: STREAM_STEPS,
     streamTokenRate: STREAM_TOKEN_RATE,
+    streamContent: STREAM_CONTENT,
     draftPlanes: DRAFT_PLANES,
     draftBallast: DRAFT_BALLAST,
     draftKeys: DRAFT_KEYS,
@@ -61,7 +62,7 @@ export async function measureChatWindow({ contents, rendererRssMb, settings, pau
   async function streamSamples() {
     for (let index = 0; index < STREAM_SAMPLES; index += 1) {
       const streamingSample = await run(
-        `window.chatBench.streamAndScroll(0, ${STREAM_STEPS}, ${STREAM_TOKEN_RATE})`,
+        `window.chatBench.streamAndScroll(0, ${STREAM_STEPS}, ${STREAM_TOKEN_RATE}, ${JSON.stringify(STREAM_CONTENT)})`,
       );
       report.streamingSamples.push({
         ...streamingSample,

@@ -25,3 +25,52 @@ export async function assertProductionReact(distDir) {
     }
   }
 }
+
+/** Read-only, bench-build-only instrumentation; product sources stay untouched.
+ * Receiving production wiring: pele-diagram.tsx must keep its local
+ * `const SAMPLE_MS = 100;` and be reached by ChatPlane. An absent or changed
+ * seam fails the build; never add a product runtime cadence setting for this.
+ */
+export function diagramCadencePlugin(diagramSampleMs) {
+  if (![null, 0, 100].includes(diagramSampleMs)) throw new Error("invalid diagram cadence");
+  let transformed = false;
+  return {
+    name: "bench-only-diagram-cadence",
+    enforce: "pre",
+    buildStart() {
+      transformed = false;
+    },
+    transform(source, id) {
+      if (diagramSampleMs === null || !id.endsWith("/components/ui/ai-elements/pele-diagram.tsx"))
+        return;
+      const constant = "const SAMPLE_MS = 100;";
+      if (source.split(constant).length !== 2)
+        throw new Error("diagram sampling constant changed; update the benchmark probe");
+      transformed = true;
+      return source.replace(constant, `const SAMPLE_MS = ${diagramSampleMs};`);
+    },
+    generateBundle() {
+      if (diagramSampleMs !== null && !transformed)
+        throw new Error("diagram cadence transform did not run; refusing a vacuous comparison");
+      this.emitFile({
+        type: "asset",
+        fileName: ".chat-window-cadence.json",
+        source: JSON.stringify({ version: 1, diagramSampleMs }) + "\n",
+      });
+    },
+  };
+}
+
+/** The driver must not measure a differently instrumented/stale bundle. */
+export async function readBenchCadence(distDir, diagramSampleMs) {
+  const artifact = JSON.parse(await readFile(join(distDir, ".chat-window-cadence.json"), "utf8"));
+  if (
+    artifact.version !== 1 ||
+    ![null, 0, 100].includes(artifact.diagramSampleMs) ||
+    artifact.diagramSampleMs !== diagramSampleMs
+  )
+    throw new Error(
+      "bench cadence artifact does not match settings; rebuild through the guarded entry",
+    );
+  return artifact;
+}

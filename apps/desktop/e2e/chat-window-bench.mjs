@@ -12,7 +12,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import os from "node:os";
-import { assertProductionReact } from "./bench/chat-window/production.mjs";
+import { assertProductionReact, readBenchCadence } from "./bench/chat-window/production.mjs";
 import { parseBenchArgs } from "./bench/chat-window/settings.mjs";
 import { overlayManifest, prepareSources, verifySource } from "./bench/chat-window/sources.mjs";
 import { runGuardedSide, serialComparison } from "./bench/chat-window/guarded-run.mjs";
@@ -84,11 +84,15 @@ if (options.prepareOnly) {
       await command(join(side.dir, "apps/desktop"), process.execPath, [
         "--input-type=module",
         "-e",
-        `const { build } = await import('vite'); await build({ configFile: ${JSON.stringify(join(bench, "vite.config.ts"))}, mode: 'production', logLevel: 'warn' });`,
+        `const { build } = await import('vite'); const { diagramCadencePlugin } = await import(${JSON.stringify(join(bench, "production.mjs"))}); await build({ configFile: ${JSON.stringify(join(bench, "vite.config.ts"))}, mode: 'production', logLevel: 'warn', plugins: [diagramCadencePlugin(${JSON.stringify(options.settings.diagramSampleMs)})] });`,
       ]);
     }
     if (options.compare) await verifySource(side.dir, side.metadata);
     await assertProductionReact(join(bench, "dist"));
+    side.metadata.benchCadence = await readBenchCadence(
+      join(bench, "dist"),
+      options.settings.diagramSampleMs,
+    );
     const sourceProof = JSON.stringify({
       commit: side.metadata.commit,
       product: side.metadata.product ?? side.metadata.productDiffSha256,
@@ -106,6 +110,7 @@ if (options.prepareOnly) {
     const proof = JSON.stringify({
       sourceProof,
       benchAssets: side.metadata.benchAssets,
+      benchCadence: side.metadata.benchCadence,
       hostBundleSha256: side.metadata.hostBundleSha256,
     });
     const proofPath = join(bench, "dist/.chat-window-build.json");
@@ -117,6 +122,9 @@ if (options.prepareOnly) {
         );
     } else await writeFile(proofPath, proof);
   }
+  // Keep the exact build/cadence identities even if a guarded probe later
+  // refuses its sample contract; failed evidence must not lose artifact proof.
+  await writeFile(join(output, "sources.json"), JSON.stringify(sides, null, 2) + "\n");
   const reports = await serialComparison(sides, async (side) => {
     if (options.compare) await verifySource(side.dir, side.metadata);
     const report = await runGuardedSide({

@@ -20,6 +20,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { MessageResponse } from "./message";
+import { ReasoningBody } from "./reasoning";
 
 /**
  * Streamdown defers offscreen code work behind an `IntersectionObserver`, which
@@ -40,6 +41,10 @@ class AlwaysVisibleIntersectionObserver {
   unobserve(): void {}
 
   disconnect(): void {}
+
+  takeRecords(): IntersectionObserverEntry[] {
+    return [];
+  }
 }
 
 /**
@@ -75,6 +80,9 @@ beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("IntersectionObserver", AlwaysVisibleIntersectionObserver);
   HTMLElement.prototype.scrollTo = function () {};
+  // Pele falls back to its built-in metrics without a canvas; jsdom has no
+  // canvas implementation. Real-browser visual checks cover font/layout.
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -91,6 +99,7 @@ afterEach(async () => {
   if (nativeClipboard) Object.defineProperty(navigator, "clipboard", nativeClipboard);
   else Reflect.deleteProperty(navigator, "clipboard");
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 async function draw(node: React.ReactNode): Promise<void> {
@@ -114,6 +123,20 @@ async function waitForTokens(timeoutMs = 8_000): Promise<void> {
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 25));
     });
+  }
+}
+
+async function pause(ms: number): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  });
+}
+
+async function waitForDiagram(): Promise<void> {
+  const deadline = Date.now() + 4_000;
+  while (!container?.querySelector("svg.pele")) {
+    if (Date.now() > deadline) throw new Error("timed out waiting for Pele SVG");
+    await pause(25);
   }
 }
 
@@ -183,10 +206,83 @@ describe("markdown while a Turn is open", () => {
     expect(query(TOKEN)?.getAttribute("style")).toContain("--sdm-c:");
   }, 12_000);
 
-  it("keeps Mermaid drawing mid-stream", async () => {
-    await draw(<MessageResponse isAnimating>{MERMAID_SOURCE}</MessageResponse>);
+  it("renders a closed diagram through Pele and preserves fullscreen controls", async () => {
+    await draw(<MessageResponse>{MERMAID_SOURCE}</MessageResponse>);
+    await waitForDiagram();
 
     expect(query(MERMAID)).not.toBeNull();
+    expect(query("svg.pele-flowchart")).not.toBeNull();
+    const fullscreen = container?.querySelector<HTMLButtonElement>(
+      'button[aria-label="View fullscreen"]',
+    );
+    expect(fullscreen).not.toBeNull();
+    await act(async () => fullscreen?.click());
+    expect(document.querySelector('[data-streamdown="mermaid-fullscreen"]')).not.toBeNull();
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('button[aria-label="Exit fullscreen"]')?.click();
+    });
+  });
+
+  it("keeps the last good drawing during an invalid open-fence update, then falls back on close", async () => {
+    const opening = "```mermaid\nflowchart LR\n A[Start]-->B[Finish]\n";
+    const partial = `${opening} C[unfinished`;
+    await draw(<MessageResponse isAnimating>{opening}</MessageResponse>);
+    await waitForDiagram();
+    const good = query("svg.pele")?.outerHTML;
+
+    await draw(<MessageResponse isAnimating>{partial}</MessageResponse>);
+    await pause(150);
+    expect(query("svg.pele")?.outerHTML).toBe(good);
+    expect(query(CODE_BLOCK)).toBeNull();
+    expect(text()).not.toContain("Error");
+
+    await draw(<MessageResponse isAnimating>{`${partial}\n\`\`\``}</MessageResponse>);
+    expect(query(CODE_BLOCK)).not.toBeNull();
+    expect(text()).toContain("C[unfinished");
+    expect(query("svg.pele")).toBeNull();
+  });
+
+  it("is quiet before the first valid frame and falls back when an unclosed Turn settles", async () => {
+    const partial = "```mermaid\nnot a diagram";
+    await draw(<MessageResponse isAnimating>{partial}</MessageResponse>);
+    await pause(150);
+    expect(query(CODE_BLOCK)).toBeNull();
+    expect(text()).not.toMatch(/Error|Loading diagram/);
+
+    await draw(<MessageResponse>{partial}</MessageResponse>);
+    expect(query(CODE_BLOCK)).not.toBeNull();
+    expect(text()).toContain("not a diagram");
+  });
+
+  it("validates immediately at settle instead of preserving a formerly valid prefix", async () => {
+    const opening = "```mermaid\nflowchart LR\n A[Good]\n";
+    await draw(<MessageResponse isAnimating>{opening}</MessageResponse>);
+    await waitForDiagram();
+    const partial = `${opening} B[unfinished`;
+    await draw(<MessageResponse isAnimating>{partial}</MessageResponse>);
+    await pause(150);
+    expect(query("svg.pele")).not.toBeNull();
+
+    await draw(<MessageResponse>{partial}</MessageResponse>);
+    expect(query("svg.pele")).toBeNull();
+    expect(text()).toContain("B[unfinished");
+  });
+
+  it("holds the last good frame in live reasoning and uses the final fallback too", async () => {
+    const opening = "```mermaid\nflowchart LR\n A[Good]\n";
+    await draw(<ReasoningBody isAnimating>{opening}</ReasoningBody>);
+    await waitForDiagram();
+    const good = query("svg.pele")?.outerHTML;
+    const partial = `${opening} B[unfinished`;
+    await draw(<ReasoningBody isAnimating>{partial}</ReasoningBody>);
+    await pause(150);
+    expect(query("svg.pele")?.outerHTML).toBe(good);
+    expect(query(CODE_BLOCK)).toBeNull();
+
+    await draw(<ReasoningBody>{partial}</ReasoningBody>);
+    expect(query("svg.pele")).toBeNull();
+    expect(text()).toContain("B[unfinished");
+    expect(query(CODE_BLOCK)).not.toBeNull();
   });
 
   it("keeps ordinary markdown drawing in the live pipeline", async () => {
