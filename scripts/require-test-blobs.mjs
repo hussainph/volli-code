@@ -14,8 +14,8 @@ const workflow = parse(
   readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"),
 );
 const shards = workflow.jobs[`test-${suite}`].strategy.matrix.shard;
-const expected = shards.map((shard) => `${suite}-${shard}-of-${shards.length}.json`).sort();
-const actual = readdirSync(directory).sort();
+const expected = shards.map((shard) => `${suite}-${shard}-of-${shards.length}.json`).toSorted();
+const actual = readdirSync(directory).toSorted();
 if (
   JSON.stringify(actual) !== JSON.stringify(expected) ||
   actual.some(

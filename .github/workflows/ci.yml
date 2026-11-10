@@ -901,7 +901,6 @@ jobs:
         working-directory: packages/host-core
         run: vp test run --merge-reports="$RUNNER_TEMP/host-core-blobs" --coverage
 
-
   # The Convex backend (VC-882), against the pinned local backend. Its own
   # Linux job so the ~64 MB fixture never lands in a desktop lane: it starts
   # with them and is usually done first. The binary is downloaded once per pin

@@ -359,8 +359,8 @@ test("cloud hostd is pinned and packaged before the Electron desktop install", (
   assert.match(guard, /package\.json.*version.*apps\/desktop\/package\.json.*version/);
 });
 
-test("package lane rebuilds node-pty with pinned pnpm for the host Node", () => {
-  const rebuild = jobs["test-packages"].steps.find(
+test("host-core shards rebuild node-pty with pinned pnpm for the host Node", () => {
+  const rebuild = jobs["test-host-core"].steps.find(
     (step) => step.name === "Build node-pty for Node",
   );
   assert.equal(rebuild["working-directory"], "packages/host-core");
@@ -475,6 +475,26 @@ test("existing and future host packages cannot silently omit the coverage script
   assert.ok(!jobs["test-packages"].steps.some((step) => /Chromium|node-pty/.test(step.name)));
 });
 
+test("vp task caching is persisted for deterministic typechecks, not live tests", () => {
+  const cache = jobs.check.steps.find((step) => step.name === "Restore typecheck task cache");
+  assert.equal(cache.with.path, "node_modules/.vite/task-cache");
+  assert.ok(cache.with.key.includes("pnpm-lock.yaml"));
+  assert.ok(cache.with.key.includes(".nvmrc"));
+  assert.match(
+    jobs.check.steps.find((step) => step.name === "Typecheck").run,
+    /vp run --cache -r typecheck/,
+  );
+  for (const job of [
+    "test-packages",
+    "test-desktop",
+    "test-host-core",
+    "coverage-desktop",
+    "coverage-host-core",
+  ]) {
+    for (const step of jobs[job].steps) assert.doesNotMatch(step.run ?? "", /vp run --cache/);
+  }
+});
+
 for (const suite of ["desktop", "host-core"]) {
   test(`${suite} shards defer thresholds to a complete, merged coverage gate`, () => {
     const shards = jobs[`test-${suite}`];
@@ -489,7 +509,7 @@ for (const suite of ["desktop", "host-core"]) {
     const command = shards.steps.find((step) => step.name.startsWith("Run shard")).run;
     assert.ok(command.includes("--shard=${{ matrix.shard }}/${{ strategy.job-total }}"));
     assert.ok(command.includes("--reporter=blob"));
-    assert.ok(command.includes("--coverage "));
+    assert.match(command, /--coverage(?: |\s)/);
     for (const metric of ["statements", "branches", "functions", "lines"]) {
       assert.ok(command.includes(`--coverage.thresholds.${metric}=0`));
     }
@@ -497,14 +517,16 @@ for (const suite of ["desktop", "host-core"]) {
     assert.equal(upload.with["if-no-files-found"], "error");
     assert.equal(upload.with.overwrite, true);
     assert.ok(
-      upload.with.path.endsWith(
-        `${suite}-` + "${{ matrix.shard }}-of-${{ strategy.job-total }}.json",
-      ),
+      upload.with.path.endsWith(`${suite}-\${{ matrix.shard }}-of-\${{ strategy.job-total }}.json`),
     );
     assert.ok(!merge.steps.some((step) => /Chromium|node-pty/.test(step.name)));
     const setup = merge.steps.find((step) => step.name === "Setup Vite+");
-    assert.ok(parse(setup.with["run-install"]).args.includes("--ignore-scripts"));
-    assert.ok(parse(setup.with["run-install"]).args.includes(`@volli/${suite}...`));
+    assert.equal(setup.with["run-install"], false);
+    const install = merge.steps.find(
+      (step) => step.name === "Install merge dependencies without lifecycle scripts",
+    );
+    assert.ok(install.run.includes("--ignore-scripts"));
+    assert.ok(install.run.includes(`@volli/${suite}...`));
     const mergeCommand = merge.steps.at(-1).run;
     assert.ok(mergeCommand.includes("--merge-reports="));
     assert.ok(mergeCommand.endsWith("--coverage"));
@@ -549,22 +571,23 @@ for (const suite of ["desktop", "host-core"]) {
 }
 
 test("only host-core shards carry native and sandboxed browser setup", () => {
-  const names = jobs["test-host-core"].steps.map((step) => step.name);
-  assert.ok(names.includes("Build node-pty for Node"));
-  assert.ok(names.includes("Install Chrome for Testing, sandboxed"));
-  assert.ok(names.includes("Probe Chromium's sandbox under the hostd unit"));
+  const names = new Set(jobs["test-host-core"].steps.map((step) => step.name));
+  assert.ok(names.has("Build node-pty for Node"));
+  assert.ok(names.has("Install Chrome for Testing, sandboxed"));
+  assert.ok(names.has("Probe Chromium's sandbox under the hostd unit"));
 });
 
 test("host coverage retains raw native output and worker diagnostics without hiding the gate", () => {
-  const steps = jobs["test-packages"].steps;
-  const coverage = steps.find((step) => step.name === "Test protected coverage surface");
+  const steps = jobs["test-host-core"].steps;
+  const coverage = steps.find((step) => step.name.startsWith("Run shard "));
   assert.match(coverage.env.NODE_OPTIONS, /--require=.*\/scripts\/host-test-diagnostics\.cjs/u);
   assert.match(coverage.env.VOLLI_TEST_DIAGNOSTICS, /\/\.tmp\/host-core-diagnostics$/u);
   assert.match(coverage.run, /set -o pipefail/u);
   assert.match(coverage.run, /2>&1/u);
-  assert.match(coverage.run, /node scripts\/capture-test-output\.cjs/u);
+  assert.match(coverage.run, /node \.\.\/\.\.\/scripts\/capture-test-output\.cjs/u);
   assert.doesNotMatch(coverage.run, /\| tee/u);
-  assert.match(coverage.run, /test:coverage --maxWorkers=\$\(nproc\)/u);
+  assert.match(coverage.run, /--maxWorkers=\$\(nproc\)/u);
+  assert.match(coverage.run, /vp test run/u);
   assert.equal(coverage["continue-on-error"], undefined);
   const upload = steps.find((step) => step.name === "Upload host-core worker diagnostics");
   assert.ok(steps.indexOf(upload) > steps.indexOf(coverage));
@@ -572,6 +595,7 @@ test("host coverage retains raw native output and worker diagnostics without hid
   assert.equal(upload.with.path, ".tmp/host-core-diagnostics/");
   assert.equal(upload.with["include-hidden-files"], true);
   assert.equal(upload.with["retention-days"], 30);
+  assert.ok(upload.with.name.includes("${{ matrix.shard }}"));
 });
 
 test("desktop shards use the same bounded worker diagnostics without altering coverage policy", () => {
@@ -598,9 +622,9 @@ test("desktop shards use the same bounded worker diagnostics without altering co
 });
 
 test("symbolization runs in the existing Linux job without consuming diagnostic or test failures", () => {
-  const steps = jobs["test-packages"].steps;
+  const steps = jobs["test-host-core"].steps;
   const symbols = steps.find((step) => step.id === "worker_symbols");
-  const coverage = steps.find((step) => step.name === "Test protected coverage surface");
+  const coverage = steps.find((step) => step.name.startsWith("Run shard "));
   assert.ok(steps.indexOf(symbols) > steps.findIndex((step) => step.name === "Setup Vite+"));
   assert.ok(steps.indexOf(symbols) < steps.indexOf(coverage));
   assert.match(symbols.run, /bash scripts\/symbolize-worker-stack\.sh/u);

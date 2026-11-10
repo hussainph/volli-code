@@ -11,8 +11,8 @@ vp run --parallel --concurrency-limit=$(nproc) --filter './packages/*' --filter 
 
 It covers `session-engine`, `session-rpc`, `agent-runtime`, `shared`,
 `host-protocol` (and the other non-desktop workspace suites) through those
-directory filters, and `apps/hostd`. Tests import workspace sources, not another
-package’s build artifacts; CLI/hostd packaging tests build their own bundles.
+directory filters, plus `apps/hostd` and `apps/runner`. Tests import workspace
+sources, not another package’s test outputs; packaging tests build their own bundles.
 One Vitest worker per task avoids oversubscribing the runner. They must
 provide `test:coverage`: the CI policy self-test refuses a host manifest that
 would otherwise silently skip. This lane runs on **every PR**, including every
