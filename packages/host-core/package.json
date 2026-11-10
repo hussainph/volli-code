@@ -21,6 +21,10 @@
       "types": "./src/entries/cloud-runner.ts",
       "import": "./src/entries/cloud-runner.ts"
     },
+    "./headless-runner": {
+      "types": "./src/entries/headless-runner.ts",
+      "import": "./src/entries/headless-runner.ts"
+    },
     "./cloud-move": {
       "types": "./src/entries/cloud-move.ts",
       "import": "./src/entries/cloud-move.ts"
@@ -61,6 +65,10 @@
       "types": "./src/entries/maintenance.ts",
       "import": "./src/entries/maintenance.ts"
     },
+    "./perf": {
+      "types": "./src/entries/perf.ts",
+      "import": "./src/entries/perf.ts"
+    },
     "./ports": {
       "types": "./src/entries/ports.ts",
       "import": "./src/entries/ports.ts"
@@ -98,7 +106,7 @@
     "migration:dry-run": "node --experimental-transform-types scripts/migration-dry-run.mjs"
   },
   "dependencies": {
-    "@earendil-works/pi-mcp": "0.99.2",
+    "@earendil-works/pi-mcp": "1.5.0",
     "@opentelemetry/api": "1.9.1",
     "@opentelemetry/otlp-exporter-base": "0.223.0",
     "@opentelemetry/otlp-transformer": "0.223.0",
@@ -111,10 +119,11 @@
     "@vscode/ripgrep": "^1.18.0",
     "better-sqlite3": "^13.0.3",
     "node-pty": "1.1.0",
+    "tldts": "7.4.10",
     "yaml": "2.9.1"
   },
   "devDependencies": {
-    "@earendil-works/pi-codemode": "1.0.0",
+    "@earendil-works/pi-codemode": "1.5.0",
     "@modelcontextprotocol/server": "2.3.1",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "catalog:",

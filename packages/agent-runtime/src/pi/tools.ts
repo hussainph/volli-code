@@ -45,7 +45,7 @@ import {
   type ExecutionToolContext,
   type JsonValue,
 } from "./harness-env";
-import { Type, type TSchema, type Static } from "@earendil-works/pi-ai";
+import { Type, type TSchema, type Static } from "typebox";
 import { Check, Errors } from "typebox/value";
 import { httpStatusLine, WebFetchRefusal } from "../web/safe-fetch";
 import { WebSearchRefusal } from "../web/search";
@@ -173,7 +173,9 @@ function bindContext<TParameters extends TSchema, TDetails>(
     execute: (toolCallId, params, signal, onUpdate) =>
       tool.execute(
         toolCallId,
-        params,
+        // The retained harness uses TypeBox's static type; Pi 1.5 infers the
+        // same JSON Schema through pi-schema. Keep the frozen schema unchanged.
+        params as Static<TParameters>,
         (partialResult) => onUpdate?.(partialResult),
         { env },
         callInvocation(toolCallId),

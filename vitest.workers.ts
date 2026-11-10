@@ -1,7 +1,8 @@
 /**
  * How many vitest workers ONE `vp test` invocation may take on a shared
- * machine (VC-339), spelled once and spread into every package's own test
- * config.
+ * machine (VC-339), spelled once and spread into each parallel test config.
+ * Exception: convex/vite.backend.config.ts enforces serial execution even over
+ * an explicit worker flag, because deployment env and quota resets are shared.
  *
  * Vitest defaults `maxWorkers` to the core count per invocation, and this
  * repository is developed by several agent Sessions at a time on one laptop:

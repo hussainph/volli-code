@@ -117,6 +117,22 @@
       "spdx": "Apache-2.0",
       "evidence": "apps/desktop/src/renderer/src/components/ui/ai-elements/PROVENANCE.md (VC-410) establishes the upstream project, the revision, and the Apache-2.0 grant, and records how the revision was recovered from content because it was never pinned. Each of the three files carries an Apache-2.0 §4(b) modification notice pointing at that document, held in place by vendor-provenance.test.ts. reasoning.tsx and shimmer.tsx are deliberately NOT attributed there: two import lines each is all that survives of upstream in them.",
       "text": "texts/ai-elements.LICENSE.txt"
+    },
+    {
+      "title": "Lobe Icons provider logomarks (Groq, xAI, Together, Cerebras, Fireworks, Amazon Bedrock, Baseten, Ant Group)",
+      "paths": ["apps/desktop/src/renderer/src/components/models/model-identity.tsx"],
+      "upstream": "https://github.com/lobehub/lobe-icons (packages/static-svg/icons)",
+      "spdx": "MIT",
+      "evidence": "The eight marks (Groq, xAI, Together, Cerebras, Fireworks, Amazon Bedrock, Baseten, Ant Group) in model-identity.tsx marked `lobe-icons (MIT)` preserve the upstream static SVG paths and viewBoxes verbatim (VC-617). The other marks there come from simple-icons, CC0-1.0, which needs no notice.",
+      "text": "texts/lobe-icons.LICENSE.txt"
+    },
+    {
+      "title": "Phosphor brand identity marks (Apple, Linux, GitHub, Google)",
+      "paths": ["apps/desktop/src/renderer/src/components/ui/brand-marks.tsx"],
+      "upstream": "@phosphor-icons/react@2.1.10, dist/defs/{AppleLogo,LinuxLogo,GithubLogo,GoogleLogo}.es.js",
+      "spdx": "MIT",
+      "evidence": "The identity paths in brand-marks.tsx are retained verbatim from the previously installed package, independently of the UI symbol set.",
+      "text": "texts/phosphor-icons.LICENSE.txt"
     }
   ],
   "nestedLicences": [

@@ -32,7 +32,8 @@ import { startTranscriptStore } from "./lib/cloud-transcript-acceptance.mjs";
 import { createRegistry, instanceLayout, REPO } from "./lib/core.mjs";
 import { MOVE_PROJECT } from "./lib/fixtures.mjs";
 import { request } from "./lib/protocol.mjs";
-import { visibleControls } from "./lib/remote-acceptance.mjs";
+import { windowTargeting } from "./lib/window-targeting.mjs";
+import { hasActionableControl, visibleControls } from "./lib/remote-acceptance.mjs";
 
 const exec = promisify(execFile);
 const cli = fileURLToPath(new URL("./cli.mjs", import.meta.url));
@@ -55,7 +56,7 @@ const proof = {
     "supervised restart",
   ],
 };
-let launched, drive, store;
+let launched, drive, driveWindows, store;
 let failed = false;
 const sql = async (query) =>
   JSON.parse(
@@ -118,6 +119,21 @@ async function openTicket(key) {
   await click("tab", key);
 }
 const press = (role, name, key, options) => action("press", role, name, { key }, options);
+/**
+ * Close the move sheet and wait out its exit. Until the modal unmounts, its
+ * `hideOthers` leaves the app behind it in the tree without accessible names,
+ * so the next control cannot be found by name yet.
+ */
+async function closeSheet(name) {
+  await click("button", name);
+  await waitUntil(
+    `the move sheet to close after ${name}`,
+    async () => !/heading "(?:Move|Moves) to Volli Cloud"/u.test((await drive("snapshot")).text),
+    { timeout: 10_000, interval: 100 },
+  );
+  // Only this modal sheet closes. Native Settings remains open, and the
+  // caller explicitly chooses Settings or the workbench for its next action.
+}
 async function assertPreflightCounts() {
   let prepared;
   await waitUntil(
@@ -186,6 +202,24 @@ async function assertNoAutomationWork(read) {
   return { at: new Date().toISOString(), runs: runs.page, arrivals, schedules };
 }
 const send = async (text) => {
+  // Selecting Chat can commit its tab before the closing modal menu unmounts.
+  // Radix's hideOthers still hides background names in that interval; a click's
+  // post-action snapshot is not a guarantee that the named composer is ready.
+  let latest;
+  try {
+    await waitUntil(
+      "the Message box is ready",
+      async () => {
+        latest = await drive("snapshot");
+        return hasActionableControl(latest.text, "textbox", "Message");
+      },
+      { timeout: 30_000, interval: 200 },
+    );
+  } catch (error) {
+    throw new Error(`${error.message}\n${latest?.text ?? "No composer snapshot captured"}`, {
+      cause: error,
+    });
+  }
   await action("type", "textbox", "Message", { text });
   await press("textbox", "Message", "Enter");
   await wait(`fake-agent: ${text}`);
@@ -226,12 +260,16 @@ try {
   launched = JSON.parse(output.stdout);
   const entry = await createRegistry().get(launched.id);
   const layout = instanceLayout(entry.scratch, entry.evidence);
-  drive = (cmd, args = {}) => request(layout.driveSocket, cmd, args, { timeoutMs: 150_000 });
+  driveWindows = windowTargeting((cmd, args = {}) =>
+    request(layout.driveSocket, cmd, args, { timeoutMs: 150_000 }),
+  );
+  drive = driveWindows.call;
   proof.instance = { id: launched.id, evidence: launched.evidence };
   await step("Local ticket Session and worktree", async () => {
     await wait(MOVE_PROJECT.name);
     await openTicket("MOV-1");
-    await click("button", "New chat", { first: true });
+    await click("button", "Open a tab", { first: true });
+    await click("menuitem", "Chat ⌘T");
     await send("Move proof before the move");
     const sessions = await sql("SELECT id, ticket_id FROM sessions WHERE role='ticket'");
     assert.equal(sessions.length, 1);
@@ -246,11 +284,14 @@ try {
     return { sessionId: sessions[0].id, hasWorktree: true };
   });
   await step("Quiet project-menu entry and single-project dry run", async () => {
-    await press("button", "MP", "Shift+F10", { first: true });
+    // The rail tile's accessible name is the project's name; its monogram is
+    // only painted text. dnd-kit's sortable wrapper snapshots unnamed, so the
+    // name matches the one tile button.
+    await press("button", MOVE_PROJECT.name, "Shift+F10");
     await click("menuitem", "Move to Volli Cloud…");
     await assertPreflightCounts();
     await drive("screenshot", { name: "project-menu-preflight" });
-    await click("button", "Cancel");
+    await closeSheet("Cancel");
     assert.deepEqual(
       await sql("SELECT move_id FROM cloud_moves"),
       [],
@@ -259,7 +300,9 @@ try {
     return { entry: "project menu", dryRunOnly: true };
   });
   await step("Sign in, without leaving the local launch", async () => {
+    driveWindows.useMainWindow();
     await click("button", "Settings", { first: true });
+    await driveWindows.useSettingsWindow();
     await wait("Settings categories");
     await click("button", "Account", { first: true });
     await click("checkbox", "Accept Preview Agreement");
@@ -337,14 +380,15 @@ try {
       (row) => row.state === "history" || row.state === "checked",
       deadline,
     );
-    await click("button", "Close");
-    await wait("Move Project is read-only while it moves to Volli Cloud.");
+    await closeSheet("Close");
+    driveWindows.useMainWindow();
+    await wait("Moving Move Project to Volli Cloud · Read-only");
     await click("button", "Home", { first: true });
     const navigation = await drive("snapshot");
     assert.ok(
       visibleControls(navigation.text, "button", "Move to Volli Cloud progress").length === 1,
     );
-    assert.ok(navigation.text.includes("Move Project is read-only while it moves to Volli Cloud."));
+    assert.ok(navigation.text.includes("Moving Move Project to Volli Cloud · Read-only"));
     await drive("screenshot", { name: "read-only-banner-and-durable-row" });
     await click("button", "Move to Volli Cloud progress");
     await wait("Moves to Volli Cloud");
@@ -501,7 +545,8 @@ try {
       );
       assert.ok(before, "the moved Session is visible before resume");
       await send("Move proof after the move");
-      await click("button", "New chat", { first: true });
+      await click("button", "Open a tab", { first: true });
+      await click("menuitem", "Chat ⌘T");
       await send("New cloud Session after move");
       const sessions = await read("sessions:list", listing);
       assert.ok(
@@ -547,7 +592,9 @@ try {
     await drive("screenshot", { name: "cloud-session-write-failed" });
   }
   await step("Re-arm moved Automations explicitly on this Mac", async () => {
+    driveWindows.useMainWindow();
     await click("button", "Settings", { first: true });
+    await driveWindows.useSettingsWindow();
     await wait("Settings categories");
     await click("button", "Volli Cloud", { first: true });
     await click("button", "Progress and local copies");
@@ -638,7 +685,7 @@ try {
     assert.equal(result.text.match(/Move personal proof · Not armed/gu)?.length, 1);
     assert.equal(visibleControls(result.text, "button", "Re-arm", { contains: true }).length, 0);
     await drive("screenshot", { name: "explicit-rearm-result-and-inert-personal-definition" });
-    await click("button", "Close");
+    await closeSheet("Close");
     return {
       runnerId: current.runnerId,
       columns,
@@ -649,7 +696,9 @@ try {
     };
   });
   await step("Go back to local keeps the cloud copy and saves a readable export", async () => {
-    await click("button", "Settings", { first: true });
+    // Recovery continues in the retained native window, not through another
+    // Settings-opening command that could reset or conceal the surviving view.
+    await driveWindows.useSettingsWindow();
     await wait("Settings categories");
     await click("button", "Volli Cloud", { first: true });
     await click("button", "Progress and local copies");

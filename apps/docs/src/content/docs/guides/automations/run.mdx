@@ -1,48 +1,67 @@
 ---
 title: Run an Automation and read Runs
-description: Start a saved Automation and open the Session it created.
+description: Start a saved Automation, open its new Session, and inspect past Runs and skipped schedule times.
 sidebar:
   label: Run
 ---
 
-A **Run** is one start of a saved Automation. Each Run opens a fresh Session
-with the Automation's **Instructions** as its first message. It does not resume
-an existing Session.
+A Run starts a fresh Session with an Automation's **Instructions** as its first
+message. It does not resume an existing Session.
 
 ## Run an Automation by hand
 
-1. Open the **Automations** page and select an Automation.
+1. In your project's navigation, open **Automations** and select an Automation.
 2. Select **Run**.
-3. If the Automation has no **On a schedule** Trigger, Volli opens a dialog
-   titled `Run "<name>" on`. Type in its **Find a ticket** field and select a
-   ticket.
+3. For an Automation without a **Schedule** Trigger, the **Run “name” on**
+   dialog opens. Use **Find a ticket** to search by title or ticket ID, then
+   select a ticket.
+4. Select the button labelled with your ticket, such as **Run on VLT-12**.
 
-A scheduled Automation runs at the project level and opens a Board Session.
+A scheduled Automation runs at the project level instead, so **Run** starts a
+Board Session without asking for a ticket.
 
-You can also start a Run from a ticket's **Automations** section or from
-**Automations** on its board card's context menu. In the Ticket view,
-choose a model under **Run on** to override the model and reasoning for one Run;
-the Automation armed for the ticket's column appears first. The command palette
-also lists Automations and runs the one you pick on the ticket you have open.
+The Run starts without navigating away. Select **Open session** in the success
+notification to open its Session.
 
-The **Automatic triggers** switch controls automatic starts only. You can run an
-Automation by hand while its switch is off. A Run uses the Automation's
+You can also run an Automation from a ticket's **Automations** section or from
+**Automations** in its board card's context menu. In the Ticket view, select an
+Automation to inspect its instructions, use **Run on** to override the model
+and reasoning for one Run, then select **Run**. The Automation armed for the
+ticket's column appears first. The command palette also lists Automations you
+can run on the open ticket.
+
+**Automatic triggers** controls automatic starts only. You can run an
+Automation by hand while it is off. A manual Run uses the Automation's
 **Runtime**, unless you select a one-time override in the Ticket view.
+
+## Avoid overlapping Runs
+
+Volli will not start another Automation Run on a ticket while an earlier Run
+is working or waiting for your answer. Answer or interrupt the earlier Run
+before starting another. For project-level Runs, this guard applies to earlier
+Runs of the same Automation in that project; different scheduled Automations
+can run together.
+
+If a saved model is no longer available, inspect the Run's Session for the
+failure and repair the model connection or Runtime. Volli does not silently
+replace a pinned model with another one.
 
 ## Read Runs and skipped occurrences
 
-Select an Automation to see its **Runs** list. Rows are newest first. Each row
-shows the Automation name, target, resolved model and reasoning, how the Run
-started, and when. Select a Run to open the Session it created. The row records
-the model that actually started that Session, even if the Automation's Runtime
-changes later.
+Select an Automation to see **Recent runs**, then **All runs** for its full
+history. Rows are newest first. Each Run shows its launch-time Automation
+name, ticket ID when available, model and reasoning, start type, and time.
+Select a row to open its Session.
 
-A missed scheduled time appears in history with its reason. Select **Run now**
-to start one Run at the same project scope; it does not replay every missed
-occurrence. See [Schedule an Automation](/guides/automations/schedules/) for how
-Volli handles missed schedule times.
+**By hand** includes manual Runs and deliberate column moves. **Automatic**
+includes scheduled Runs and Runs started by another agent. These labels record
+how the Run started, not the Automation's current Trigger.
 
-Select **Project activity** in the Automations page to read the combined Runs
-and skipped occurrences across the project. This history stays available if you
-later delete an Automation. Deleting the Automation does not delete its past
-Runs.
+A missed scheduled time appears with **Skipped** and a reason. Select **Run
+now** to start one project-level Run; this does not replay every missed
+occurrence. See [Schedule an Automation](/guides/automations/schedules/).
+
+On the Automations page, select **History** to read combined Runs and skipped
+occurrences across the project. Use its **All automations** filter to narrow
+the list. History remains available after you delete an Automation; deleting
+its definition does not delete its past Runs or Sessions.

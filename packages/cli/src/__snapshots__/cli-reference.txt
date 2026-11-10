@@ -41,6 +41,9 @@ App
   app launch [--timeout <n>]
   prompt baseline [--ticket <id>] [--project <p>]
   doctor [--fix] [--dry-run]
+  perf top [--since <when>] [--by <group>] [--process <process>] [--limit <n>]
+  perf stalls [--since <when>] [--process <process>] [--door <door>] [--operation <op>] [--label <label>] [--version <build>] [--limit <n>]
+  perf compare --version <build> [--since <when>] [--by <group>] [--process <process>] [--limit <n>]
   help [<command> | <topic>]
 
 Agent Tool Surface
@@ -1462,7 +1465,7 @@ Removed
 ============================================================================
 volli help exit-codes
 ============================================================================
-Exit codes: 0 ok; 1 failure; 2 usage; 3 app unreachable (retryable); 75 offline (retryable).
+Exit codes: 0 ok; 1 failure; 2 usage; 3 app unreachable (retryable); 75 temporary failure (retryable).
 
 Error codes:
   USAGE                2 usage
@@ -1552,12 +1555,15 @@ Error codes:
   TIMEOUT              1 failure
     Why: The app accepted the connection but did not produce an outcome within the command's bound.
     Next: Inspect the current Ticket or Session state before deciding whether one retry is safe.
-  OFFLINE              75 offline (retryable)
+  OFFLINE              75 temporary failure (retryable)
     Why: This runner cannot reach Volli Cloud, so board changes and reads are refused at once rather than queued. Session updates are kept and sent when the connection is back.
     Next: Wait for the connection to return, then retry the same command once; nothing was written.
-  NOT_YET_SYNCED       75 offline (retryable)
+  NOT_YET_SYNCED       75 temporary failure (retryable)
     Why: Volli Cloud has not received this Session's start yet, so it cannot act for it.
     Next: Wait a few seconds and retry the same command once.
+  BUSY                 75 temporary failure (retryable)
+    Why: Volli Cloud was busy with concurrent changes to the same board or Session, and this change applied nothing (after any retries the runner made).
+    Next: Retry the same command once; nothing was written.
   SIGN_IN_REQUIRED     1 failure
     Why: Board and Session verbs in Volli Cloud act for a Session's owner, and this caller is not a Volli Session; the CLI holds no sign-in of its own.
     Next: Run the command from inside a Volli Session, or use the app.
@@ -1605,17 +1611,17 @@ Run volli help session <subcommand> for detail.
 ============================================================================
 volli help hook
 ============================================================================
-USAGE Unknown help path "hook" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, conflicts, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, worktree sync, label merge, session start, session stop, session send, session delegate, session list, session show, session peek, session answer, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help, automation run, mcp list, mcp preview, mcp install, mcp refresh, mcp enable, mcp disable, mcp tools, mcp remove; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
+USAGE Unknown help path "hook" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, conflicts, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, worktree sync, label merge, session start, session stop, session send, session delegate, session list, session show, session peek, session answer, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, perf top, perf stalls, perf compare, help, automation run, mcp list, mcp preview, mcp install, mcp refresh, mcp enable, mcp disable, mcp tools, mcp remove; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
 
 ============================================================================
 volli help nonsense
 ============================================================================
-USAGE Unknown help path "nonsense" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, conflicts, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, worktree sync, label merge, session start, session stop, session send, session delegate, session list, session show, session peek, session answer, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help, automation run, mcp list, mcp preview, mcp install, mcp refresh, mcp enable, mcp disable, mcp tools, mcp remove; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
+USAGE Unknown help path "nonsense" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, conflicts, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, worktree sync, label merge, session start, session stop, session send, session delegate, session list, session show, session peek, session answer, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, perf top, perf stalls, perf compare, help, automation run, mcp list, mcp preview, mcp install, mcp refresh, mcp enable, mcp disable, mcp tools, mcp remove; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
 
 ============================================================================
 volli help exit-codes extra
 ============================================================================
-USAGE Unknown help path "exit-codes extra" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, conflicts, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, worktree sync, label merge, session start, session stop, session send, session delegate, session list, session show, session peek, session answer, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help, automation run, mcp list, mcp preview, mcp install, mcp refresh, mcp enable, mcp disable, mcp tools, mcp remove; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
+USAGE Unknown help path "exit-codes extra" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, conflicts, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, worktree sync, label merge, session start, session stop, session send, session delegate, session list, session show, session peek, session answer, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, perf top, perf stalls, perf compare, help, automation run, mcp list, mcp preview, mcp install, mcp refresh, mcp enable, mcp disable, mcp tools, mcp remove; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
 
 ============================================================================
 volli help ticket create VC-1
@@ -1690,7 +1696,7 @@ Notes:
 ============================================================================
 volli frobnicate
 ============================================================================
-UNSUPPORTED_COMMAND No Volli verb matches "frobnicate" (declared verbs: identify, board, ticket list, ticket show, ticket events, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, ticket brief, worktree status, worktree diff, worktree sync, conflicts, project list, label list, label merge, model list, cost, session list, session show, session peek, session answer, session start, session done, session blocked, session link, notify, doctor, prompt baseline, app launch, help, automation run, session stop, session send, session delegate, mcp list, mcp preview, mcp install, mcp refresh, mcp enable, mcp disable, mcp tools, mcp remove; topics: concepts, changes, exit-codes, addressing, json, orchestration)
+UNSUPPORTED_COMMAND No Volli verb matches "frobnicate" (declared verbs: identify, board, ticket list, ticket show, ticket events, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, ticket brief, worktree status, worktree diff, worktree sync, conflicts, project list, label list, label merge, model list, cost, session list, session show, session peek, session answer, session start, session done, session blocked, session link, notify, doctor, prompt baseline, perf top, perf stalls, perf compare, app launch, help, automation run, session stop, session send, session delegate, mcp list, mcp preview, mcp install, mcp refresh, mcp enable, mcp disable, mcp tools, mcp remove; topics: concepts, changes, exit-codes, addressing, json, orchestration)
 
 ============================================================================
 volli identify --not-an-option

@@ -1,43 +1,43 @@
+import { PanelEmptyState } from "@renderer/components/ui/empty-state";
 /**
- * Settings → Hosts (VC-700 PR 3; VC-615 flow 7, ported from the lab's
- * `#host-manage`): the hosts this Mac knows, and one host's page — its name
+ * Settings → Hosts: the hosts this Mac knows, and one host's page — its name
  * (this Mac's label for it), its facts, its projects, the devices paired to
  * it, and Forget.
  *
- * Built from the settings kit over `ui/list-row.tsx`, as the lab was. The
+ * Built from the settings kit over `ui/list-row.tsx`. The
  * host health comes from the engine-projected HostRecord link, even with no
  * projects open here; the registry's facts from the
  * remote-hosts store; the paired devices are read from the host over SSH
  * when its page opens, never cached. Forget is the one irreversible action,
- * so it is the one confirm. Revoking another device is VC-575's (pairing),
- * and the lab's "Pair a phone…" with it.
+ * so it is the one confirm. Device pairing and revocation live in their own flow.
  *
  * Shown only with `cloud` on: the category does not exist otherwise.
  */
 import * as React from "react";
-import { AnimatePresence, motion } from "motion/react";
-import { CaretLeftIcon } from "@phosphor-icons/react/dist/csr/CaretLeft";
-import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
-import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
-import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
-import { DevicesIcon } from "@phosphor-icons/react/dist/csr/Devices";
-import { KeyIcon } from "@phosphor-icons/react/dist/csr/Key";
-import { DotsThreeIcon } from "@phosphor-icons/react/dist/csr/DotsThree";
-import { FolderSimpleIcon } from "@phosphor-icons/react/dist/csr/FolderSimple";
-import { HardDrivesIcon } from "@phosphor-icons/react/dist/csr/HardDrives";
-import { LaptopIcon } from "@phosphor-icons/react/dist/csr/Laptop";
-import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
-import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
-import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
+import {
+  ChevronLeftIcon,
+  CheckIcon,
+  CopyIcon,
+  ChevronRightIcon,
+  DevicesIcon,
+  KeyIcon,
+  MoreIcon,
+  FolderIcon,
+  StorageIcon,
+  LaptopIcon,
+  EditIcon,
+  AddIcon,
+  DeleteIcon,
+  type IconComponent,
+} from "@renderer/components/ui/icon";
+
 import type { RemoteHost, RemoteHostDevice } from "@volli/shared";
 import { toast } from "sonner";
 
 import { openAddHostSheet } from "@renderer/components/hosts/host-entry";
 import { useHostSignInSheet } from "@renderer/components/hosts/sign-ins/remote-host-sign-in-source";
 import { useHostModelSheet } from "@renderer/stores/host-model-sheet";
-import { EASE_OUT, HostGlyph, SwapText } from "@renderer/components/hosts/host-parts";
-import { hostBadge } from "@renderer/components/hosts/host-surface-model";
+import { HostGlyph, SwapText } from "@renderer/components/hosts/host-parts";
 import {
   AsyncSection,
   CONTROL_W,
@@ -125,23 +125,17 @@ type View =
   | { readonly kind: "list" }
   | { readonly kind: "host"; readonly id: string; readonly rename: boolean };
 
-const SLIDE = 12;
-
 export function HostsPane() {
   const hosts = usePaneHosts();
   const [view, setView] = React.useState<View>({ kind: "list" });
-  // +1 drills in, -1 comes back: the incoming page arrives from its side.
-  const [direction, setDirection] = React.useState(1);
   const [forgetting, setForgetting] = React.useState<RemoteHost | null>(null);
   const forgettingShown = useLastPresent(forgetting);
 
   const writable = useHostsWritable();
   const open = (id: string, rename = false) => {
-    setDirection(1);
     setView({ kind: "host", id, rename: rename && writable });
   };
   const back = () => {
-    setDirection(-1);
     setView({ kind: "list" });
   };
 
@@ -162,38 +156,23 @@ export function HostsPane() {
 
   return (
     <div className="relative">
-      <AnimatePresence initial={false} mode="popLayout" custom={direction}>
-        <motion.div
-          key={pageKey}
-          custom={direction}
-          variants={{
-            enter: (dir: number) => ({ opacity: 0, x: dir * SLIDE }),
-            center: { opacity: 1, x: 0 },
-            exit: (dir: number) => ({ opacity: 0, x: dir * -SLIDE }),
-          }}
-          initial="enter"
-          animate="center"
-          exit="exit"
-          transition={{ duration: 0.22, ease: EASE_OUT }}
-          className="flex flex-col gap-6"
-        >
-          {current !== undefined && view.kind === "host" ? (
-            <HostPage
-              host={current}
-              startRename={view.rename}
-              onBack={back}
-              onForget={() => setForgetting(current.remote)}
-            />
-          ) : (
-            <HostList
-              hosts={hosts}
-              onOpen={(host) => open(host.id)}
-              onRename={(host) => open(host.id, true)}
-              onForget={setForgetting}
-            />
-          )}
-        </motion.div>
-      </AnimatePresence>
+      <div key={pageKey} className="flex flex-col gap-6">
+        {current !== undefined && view.kind === "host" ? (
+          <HostPage
+            host={current}
+            startRename={view.rename}
+            onBack={back}
+            onForget={() => setForgetting(current.remote)}
+          />
+        ) : (
+          <HostList
+            hosts={hosts}
+            onOpen={(host) => open(host.id)}
+            onRename={(host) => open(host.id, true)}
+            onForget={setForgetting}
+          />
+        )}
+      </div>
 
       <AlertDialog
         open={forgetting !== null && writable}
@@ -243,17 +222,17 @@ function HostList({
   return (
     <PrefSection
       title="Hosts"
-      icon={HardDrivesIcon}
+      icon={StorageIcon}
       // With only This Mac, the empty row below is the one way in.
       action={
         hosts.length === 0 || readOnly !== null ? undefined : (
-          <SectionAction label="Add a host…" icon={PlusIcon} onAct={openAddHostSheet} />
+          <SectionAction label="Add a host…" icon={AddIcon} onAct={openAddHostSheet} />
         )
       }
     >
       {readOnly === null ? null : (
         <p role="status" className="text-ui text-muted-foreground">
-          {readOnly} Its hosts can’t be added or changed here.
+          {readOnly}
         </p>
       )}
       <div className="flex flex-col">
@@ -262,55 +241,30 @@ function HostList({
           density="two-line"
           leading={<HostGlyph os="macos" local />}
           primary="This Mac"
-          secondary={<span className="block truncate text-ui text-muted-foreground/70">Local</span>}
+          secondary={<span className="block truncate text-ui text-muted-foreground">Local</span>}
           onActivate={null}
         />
-        <AnimatePresence initial={false}>
-          {hosts.map((host) => (
-            <Collapse key={host.remote.id}>
-              <HostRow
-                host={host}
-                onOpen={() => onOpen(host.remote)}
-                onRename={() => onRename(host.remote)}
-                onForget={() => onForget(host.remote)}
-              />
-            </Collapse>
-          ))}
-          {hosts.length === 0 && readOnly === null ? (
-            <Collapse key="empty">
-              <ListRow
-                data-host-row=""
-                density="two-line"
-                leading={
-                  <span className="grid size-6 shrink-0 place-items-center rounded-sm border border-dashed border-border text-muted-foreground">
-                    <PlusIcon aria-hidden className="size-3.5" />
-                  </span>
-                }
-                primary={
-                  <span className="truncate text-ui text-muted-foreground">Add a host…</span>
-                }
-                onActivate={openAddHostSheet}
-              />
-            </Collapse>
-          ) : null}
-        </AnimatePresence>
+        {hosts.map((host) => (
+          <div key={host.remote.id}>
+            <HostRow
+              host={host}
+              onOpen={() => onOpen(host.remote)}
+              onRename={() => onRename(host.remote)}
+              onForget={() => onForget(host.remote)}
+            />
+          </div>
+        ))}
+        {hosts.length === 0 && readOnly === null ? (
+          <div key="empty">
+            <PanelEmptyState
+              illustration="mcp"
+              title="No hosts"
+              action={{ label: "Add a host…", onAction: openAddHostSheet }}
+            />
+          </div>
+        ) : null}
       </div>
     </PrefSection>
-  );
-}
-
-/** A row that leaves by closing up, so the rows below slide into the gap. */
-function Collapse({ children }: { children: React.ReactNode }) {
-  return (
-    <motion.div
-      className="overflow-hidden"
-      initial={{ opacity: 0, height: 0 }}
-      animate={{ opacity: 1, height: "auto" }}
-      exit={{ opacity: 0, height: 0 }}
-      transition={{ duration: 0.22, ease: EASE_OUT }}
-    >
-      {children}
-    </motion.div>
   );
 }
 
@@ -334,14 +288,16 @@ function HostRow({
     <ListRow
       data-host-row=""
       density="two-line"
-      leading={<HostGlyph os={remote.os} badge={record === undefined ? null : hostBadge(record)} />}
+      leading={<HostGlyph os={remote.os} />}
       primary={remote.name}
       secondary={
-        <span className="block truncate text-ui text-muted-foreground/70">
-          <SwapText>{hostRowMeta(remote, projects)}</SwapText>
+        <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-ui text-muted-foreground">
+          <span className="min-w-0 truncate">
+            <SwapText>{hostRowMeta(remote, projects)}</SwapText>
+          </span>
+          {health === null ? null : <Health state={health.state}>{health.label}</Health>}
         </span>
       }
-      trailing={health === null ? undefined : <Health state={health.state}>{health.label}</Health>}
       actions={
         <>
           {record?.link.status === "offline" ? (
@@ -363,26 +319,26 @@ function HostRow({
                   aria-label={`More for ${remote.name}`}
                   className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
                 >
-                  <DotsThreeIcon weight="bold" />
+                  <MoreIcon strokeWidth={2.25} />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 <DropdownMenuItem onSelect={onRename}>
-                  <PencilSimpleIcon />
+                  <EditIcon />
                   Rename
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem variant="destructive" onSelect={onForget}>
-                  <TrashIcon />
+                  <DeleteIcon />
                   Forget…
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           ) : null}
-          <CaretRightIcon
+          <ChevronRightIcon
             aria-hidden
             onClick={onOpen}
-            className="size-3.5 shrink-0 text-muted-foreground/70"
+            className="size-3.5 shrink-0 text-muted-foreground"
           />
         </>
       }
@@ -414,25 +370,23 @@ function HostPage({
         <Tooltip>
           <TooltipTrigger asChild>
             <Button size="icon-sm" variant="ghost" aria-label="All hosts" onClick={onBack}>
-              <CaretLeftIcon />
+              <ChevronLeftIcon />
             </Button>
           </TooltipTrigger>
           <TooltipContent side="top">All hosts</TooltipContent>
         </Tooltip>
-        <HostGlyph
-          os={remote.os}
-          size="md"
-          badge={record === undefined ? null : hostBadge(record)}
-        />
+        <HostGlyph os={remote.os} size="md" />
         <div className="min-w-0 flex-1">
           <h2 className="text-sm font-semibold">
             <SwapText>{remote.name}</SwapText>
           </h2>
-          <p className="truncate text-ui text-muted-foreground">
-            <SwapText>{hostRowMeta(remote, projects)}</SwapText>
-          </p>
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-ui text-muted-foreground">
+            <span className="min-w-0 truncate">
+              <SwapText>{hostRowMeta(remote, projects)}</SwapText>
+            </span>
+            {health === null ? null : <Health state={health.state}>{health.label}</Health>}
+          </div>
         </div>
-        {health === null ? null : <Health state={health.state}>{health.label}</Health>}
         {record?.link.status === "offline" ? (
           <Button
             size="xs"
@@ -445,12 +399,14 @@ function HostPage({
         ) : null}
       </div>
 
-      <PrefSection title="Host" icon={HardDrivesIcon}>
+      <PrefSection title="Host" icon={StorageIcon}>
         <NameRow host={remote} startEditing={startRename} readOnly={readOnly !== null} />
         {hostFacts(remote).map((fact) => (
-          <PrefRow key={fact.label} label={fact.label} hint={fact.hint}>
+          <PrefRow key={fact.label} label={fact.label} description={fact.hint}>
             {fact.full === undefined ? (
-              <span className="truncate text-ui text-muted-foreground">{fact.value}</span>
+              <span className="max-w-40 wrap-anywhere text-right text-ui text-muted-foreground">
+                {fact.value}
+              </span>
             ) : (
               <FullValue short={fact.value} full={fact.full} label={fact.label} />
             )}
@@ -459,10 +415,7 @@ function HostPage({
       </PrefSection>
 
       <PrefSection title="Sign-ins" icon={KeyIcon}>
-        <PrefRow
-          label="Models and git"
-          hint={`What agents on ${remote.name} sign in with: provider keys, subscriptions and push tokens.`}
-        >
+        <PrefRow label="Models and git">
           <Button
             size="sm"
             variant="outline"
@@ -491,10 +444,7 @@ function HostPage({
       <DevicesSection host={remote} />
 
       <div className="rounded-lg bg-card px-4 py-4">
-        <PrefRow
-          label="Forget host"
-          hint={readOnly ?? "Removes this Mac’s pairing and its key. Nothing on the host changes."}
-        >
+        <PrefRow label="Forget host" description={readOnly ?? undefined}>
           <Button
             size="sm"
             variant="outline"
@@ -526,15 +476,17 @@ function NameRow({
 }) {
   const [editing, setEditing] = React.useState(startEditing && !readOnly);
   return (
-    <PrefRow label="Name" hint="What this Mac calls it. The host’s own name doesn’t change.">
+    <PrefRow label="Name">
       {readOnly ? (
-        <span className="truncate text-ui text-muted-foreground">{host.name}</span>
+        <span className="max-w-40 wrap-anywhere text-right text-ui text-muted-foreground">
+          {host.name}
+        </span>
       ) : editing ? (
         <InlineRename
           size="field"
           value={host.name}
           ariaLabel="Host name"
-          className={cn(CONTROL_W.md, "h-7 text-ui")}
+          className={cn(CONTROL_W.md, "h-7 max-w-40 text-ui")}
           onCommit={(next) => {
             setEditing(false);
             remoteHosts()
@@ -549,13 +501,13 @@ function NameRow({
         <button
           type="button"
           onClick={() => setEditing(true)}
-          className="group/name -mr-2 flex h-7 items-center gap-2 rounded-full px-2 text-ui text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+          className="group/name -mr-2 flex min-h-7 max-w-40 items-center gap-2 rounded-full px-2 text-ui text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <PencilSimpleIcon
+          <EditIcon
             aria-hidden
             className="size-3.5 opacity-0 transition-opacity group-hover/name:opacity-100 group-focus-visible/name:opacity-100"
           />
-          {host.name}
+          <span className="min-w-0 wrap-anywhere text-right">{host.name}</span>
           <span className="sr-only">Rename</span>
         </button>
       )}
@@ -587,30 +539,26 @@ function ProjectsSection({ hostId }: { hostId: string }) {
   return (
     <PrefSection
       title="Projects"
-      icon={FolderSimpleIcon}
+      icon={FolderIcon}
       action={
         <span className="flex items-center gap-1">
-          <SectionAction label="Open…" icon={FolderSimpleIcon} onAct={sheet("list")} />
-          <SectionAction label="New project…" icon={PlusIcon} onAct={sheet("new")} />
+          <SectionAction label="Open…" icon={FolderIcon} onAct={sheet("list")} />
+          <SectionAction label="New project…" icon={AddIcon} onAct={sheet("new")} />
         </span>
       }
     >
       {mine.length === 0 && refused.length === 0 ? (
-        <Empty>{openHere(claims, hostId)}</Empty>
+        <Empty illustration="folder">{openHere(claims, hostId)}</Empty>
       ) : (
         <>
           {mine.map((project) => (
-            <ItemRow
-              key={project.id}
-              name={project.name}
-              leading={<Mark icon={FolderSimpleIcon} />}
-            />
+            <ItemRow key={project.id} name={project.name} leading={<Mark icon={FolderIcon} />} />
           ))}
           {refused.map(([projectId, reason]) => (
             <ItemRow
               key={projectId}
               name={reason}
-              leading={<Mark icon={FolderSimpleIcon} />}
+              leading={<Mark icon={FolderIcon} />}
               testId="host-board-unavailable"
             >
               {retry === null ? null : (
@@ -633,7 +581,7 @@ function ProjectsSection({ hostId }: { hostId: string }) {
 function openHere(claims: Readonly<Record<string, { readonly hostId: string }>>, hostId: string) {
   const count = Object.values(claims).filter((claim) => claim.hostId === hostId).length;
   return count === 0
-    ? "No projects open on this Mac yet"
+    ? "No projects open on this Mac"
     : `${count} ${count === 1 ? "project" : "projects"} open on this Mac`;
 }
 
@@ -683,7 +631,11 @@ function DevicesSection({ host }: { host: RemoteHost }) {
             key={device.deviceId}
             name={
               <span
-                className={cn(device.revokedAt !== null && "text-muted-foreground line-through")}
+                title={device.name}
+                className={cn(
+                  "min-w-0 truncate text-ui font-medium",
+                  device.revokedAt !== null && "text-muted-foreground line-through",
+                )}
               >
                 {device.name}
               </span>
@@ -721,14 +673,14 @@ function FullValue({ short, full, label }: { short: string; full: string; label:
           setCopied(true);
         }}
       >
-        {copied ? <CheckIcon weight="bold" className="text-positive" /> : <CopyIcon />}
+        {copied ? <CheckIcon strokeWidth={2.25} className="text-positive" /> : <CopyIcon />}
       </Button>
     </span>
   );
 }
 
 /** A quiet tile for a thing in a list — the host glyph's shape, without its light. */
-function Mark({ icon: Icon }: { icon: PhosphorIcon }) {
+function Mark({ icon: Icon }: { icon: IconComponent }) {
   return (
     <span className="grid size-6 shrink-0 place-items-center rounded-sm bg-muted text-muted-foreground">
       <Icon aria-hidden className="size-3.5" />

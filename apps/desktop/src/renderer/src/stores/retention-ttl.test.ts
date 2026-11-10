@@ -66,6 +66,21 @@ describe("ensure", () => {
 });
 
 describe("adopt", () => {
+  it("does not let an older read overwrite an accepted peer write", async () => {
+    let release!: (value: unknown) => void;
+    stubGetTtlDays(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    const store = createRetentionTtlStore();
+    const pending = store.getState().ensure();
+    store.getState().adopt(3);
+    release({ ok: true, days: 30 });
+    await expect(pending).resolves.toEqual({ ok: true, days: 3 });
+    expect(store.getState().ttlDays).toBe(3);
+  });
   it("records the value a settings write answered with, without a second read", async () => {
     const read = stubGetTtlDays(() => Promise.resolve({ ok: true, days: 14 }));
     const store = createRetentionTtlStore();

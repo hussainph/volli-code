@@ -297,6 +297,50 @@ export function githubClient(
       return items.flatMap((item) => readGithubInstallation(item) ?? []);
     },
 
+    /**
+     * The installations the person can reach, and whether the list is whole
+     * (`false` when the page limit cut it short).
+     */
+    async userInstallationList(
+      token: string,
+    ): Promise<{ installations: GithubInstallationFacts[]; complete: boolean }> {
+      const { items, complete } = await pages(
+        { kind: "user", token },
+        "/user/installations",
+        (json) => {
+          const list = record(json)["installations"];
+          return Array.isArray(list) ? list : [];
+        },
+      );
+      return {
+        installations: items.flatMap((item) => readGithubInstallation(item) ?? []),
+        complete,
+      };
+    },
+
+    /**
+     * One repository by owner and name as the person's token sees it (GitHub
+     * follows a rename or transfer to the repository's current owner), or
+     * `null` when the token cannot see it.
+     */
+    async userRepository(
+      token: string,
+      owner: string,
+      name: string,
+    ): Promise<GithubRepository | null> {
+      try {
+        const { json } = await api(
+          { kind: "user", token },
+          "GET",
+          `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
+        );
+        return readRepository(json);
+      } catch (error) {
+        if (error instanceof GithubApiError && error.kind === "not_found") return null;
+        throw error;
+      }
+    },
+
     /** One installation as the App sees it, or `null` once it is gone. */
     async installation(
       jwt: string,

@@ -75,11 +75,11 @@ describe("HomeSessionCard", () => {
     expect(text(markup)).toContain("Claude Haiku 4.5");
     expect(text(markup)).not.toContain("haiku-4.5");
     // The mark is the vendor's own inline `<svg>`, before the name, not a
-    // Phosphor kind glyph — which is what a chat with no model falls back to.
+    // shared kind glyph — which is what a chat with no model falls back to.
     expect(markup.slice(0, markup.indexOf("Claude Haiku 4.5"))).toContain("<svg");
     expect(markup).not.toContain('aria-label="Chat"');
     // And the whole identity is one focus stop away where the row clips.
-    expect(markup).toContain('aria-label="Model · Claude Haiku 4.5 · Anthropic"');
+    expect(markup).toContain('aria-label="Model · Claude Haiku 4.5"');
   });
 
   it("never spends the row's width on the account — the mark is what says whose it is", () => {

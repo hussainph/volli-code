@@ -138,13 +138,20 @@ export function useSplitShortcuts({
  * On the next frame, because the pane does not exist until the store write has
  * rendered. A frame later the surface may have gone (Escape, a project switch),
  * so a missing row is a no-op rather than a retry.
+ *
+ * The first VISIBLE row, not the first in the document: while a Ticket view has
+ * taken Home over, Home's plane stays mounted behind `<Activity mode="hidden">`
+ * (VC-1080) and comes first in document order, so a Home split whose focused
+ * pane is an empty menu would otherwise win the query — and `.focus()` on a
+ * hidden row is a no-op, stranding the ticket's new pane (VC-1102).
  */
 function focusNewPaneMenu(): void {
   window.requestAnimationFrame(() => {
-    document
-      .querySelector<HTMLElement>(
-        '[data-slot="split-view-pane"][data-focused="true"] [data-slot="pane-empty-row"]',
-      )
+    const rows = document.querySelectorAll<HTMLElement>(
+      '[data-slot="split-view-pane"][data-focused="true"] [data-slot="pane-empty-row"]',
+    );
+    Array.from(rows)
+      .find((row) => row.checkVisibility())
       ?.focus();
   });
 }

@@ -57,6 +57,7 @@ export const DOC_SECTIONS: DocSection[] = [
       { label: "Skills and commands", slug: "guides/skills-and-commands" },
       { label: "MCP servers", slug: "guides/mcp-servers" },
       { label: "Agent authority", slug: "guides/authority" },
+      { label: "Session credentials", slug: "guides/session-credentials" },
       { label: "Settings", slug: "guides/settings" },
       { label: "Theming", slug: "guides/theming" },
       { label: "Storage and backups", slug: "guides/storage" },
@@ -80,6 +81,9 @@ export const DOC_SECTIONS: DocSection[] = [
   },
   {
     label: "Releases",
-    items: [{ label: "What's new in 0.2", slug: "releases/whats-new-0-2" }],
+    items: [
+      { label: "What's new in 0.3", slug: "releases/whats-new-0-3" },
+      { label: "What's new in 0.2", slug: "releases/whats-new-0-2" },
+    ],
   },
 ];

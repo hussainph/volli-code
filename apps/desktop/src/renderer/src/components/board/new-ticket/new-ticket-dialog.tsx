@@ -1,6 +1,7 @@
+import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
+import { warmDocumentEditorFonts } from "@renderer/editor/warm-document-editor";
 import * as React from "react";
 
-import { PROMPT_SURFACE } from "@renderer/components/chat/composer-chrome";
 import { ComposerForm } from "@renderer/components/board/new-ticket/composer-form";
 import { Dialog, DialogContent, DialogTitle } from "@renderer/components/ui/dialog";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
@@ -16,8 +17,8 @@ import { useUiStore } from "@renderer/stores/ui";
  * Escape and overlay-click close come free from Radix via `onOpenChange`.
  *
  * The chrome (breadcrumb project chip, title/description, chips, footer) lives
- * in {@link ComposerForm}, which Radix mounts fresh on each open — so every open
- * starts blank. The dialog owns only the Expand state (a wider centered sheet).
+ * in {@link ComposerForm}, which Radix mounts fresh on each open and restores
+ * from its durable draft. The dialog owns Expand (a wider centered sheet).
  */
 function closeComposer() {
   useUiStore.getState().setNewTicketOpen(false);
@@ -28,6 +29,27 @@ export function NewTicketDialog() {
   const newTicketOpen = useUiStore((state) => state.newTicketOpen);
   const open = newTicketOpen && project !== null;
   const [expanded, setExpanded] = React.useState(false);
+  const hasProject = project !== null;
+  React.useEffect(() => {
+    if (!hasProject || open || typeof requestIdleCallback !== "function") return;
+    let cancelled = false;
+    let idle = requestIdleCallback(() => {
+      void loadMonacoRuntime()
+        .then((runtime) => {
+          if (cancelled) return;
+          // Imports can settle during an interaction. Re-enter idle before the
+          // font measurement rather than moving a forced DOM read after chrome.
+          idle = requestIdleCallback(() => {
+            if (!cancelled) warmDocumentEditorFonts(runtime.monaco.editor, document);
+          });
+        })
+        .catch((error: unknown) => console.warn("Editor prefetch unavailable", error));
+    });
+    return () => {
+      cancelled = true;
+      cancelIdleCallback(idle);
+    };
+  }, [hasProject, open]);
 
   return (
     <Dialog
@@ -40,11 +62,11 @@ export function NewTicketDialog() {
       }}
     >
       <DialogContent
+        material="none"
         data-testid="new-ticket-composer"
         showCloseButton={false}
         className={cn(
-          PROMPT_SURFACE,
-          "gap-0 overflow-hidden p-0 shadow-overlay",
+          "new-ticket-sheet material-solid gap-0 overflow-hidden rounded-sheet p-0 shadow-overlay",
           expanded ? "sm:max-w-3xl" : "sm:max-w-xl",
         )}
       >

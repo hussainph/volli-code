@@ -90,6 +90,8 @@ export type PeekEvent =
   | { readonly type: "focus-field" }
   | { readonly type: "blur-field" }
   | { readonly type: "escape"; readonly now: number }
+  /** Explicit close or navigation away bypasses the Escape ladder and the pin. */
+  | { readonly type: "close"; readonly now: number }
   /**
    * The row the peek stands for is no longer in the listing — it ended, its
    * ticket moved, the folder emptied. Not a dismissal: nobody chose it, so the
@@ -229,6 +231,9 @@ export function peekReducer(state: PeekState, event: PeekEvent): PeekState {
       return state;
     }
 
+    case "close":
+      return dismissed(state, event.now + PEEK_SUPPRESSION_MS);
+
     case "subject-gone": {
       if (state.shown === null && state.pinned === null) return state;
       // `suppressedUntil` is deliberately untouched: this was not a decision.
@@ -238,7 +243,7 @@ export function peekReducer(state: PeekState, event: PeekEvent): PeekState {
     case "dismiss": {
       // Click-away and list scroll are ignored while pinned: a person answering
       // a question must not lose the form by clicking the thing they are
-      // reading. Escape is the way out, and it has its own ladder.
+      // reading. Explicit close bypasses the pin; Escape has its own ladder.
       if (state.pinned !== null) return state;
       if (state.shown === null) return state;
       return dismissed(

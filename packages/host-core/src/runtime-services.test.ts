@@ -13,10 +13,16 @@ import { existsSync } from "node:fs";
 import { CredentialLock } from "./secrets/credential-lock";
 import { fileCredentialKeyring } from "./secrets/file-key";
 
-const { ownedModelAccess } = vi.hoisted(() => ({ ownedModelAccess: vi.fn() }));
+const { ownedModelAccess, workerExtractor, iconDecoder } = vi.hoisted(() => ({
+  ownedModelAccess: vi.fn(),
+  workerExtractor: vi.fn(() => async () => ({ text: "", extracted: false, truncated: false })),
+  iconDecoder: vi.fn(() => async () => null),
+}));
 vi.mock("@volli/agent-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@volli/agent-runtime")>()),
   piOwnedModelAccess: ownedModelAccess,
+  createWorkerWebExtractor: workerExtractor,
+  createWorkerSourceIconDecoder: iconDecoder,
 }));
 const { brokerOptions } = vi.hoisted(() => ({
   brokerOptions: [] as { store: unknown; openExternal: (url: string) => Promise<void> }[],
@@ -96,8 +102,41 @@ describe("live host runtime services", () => {
       "decisions",
       "mcp",
       "modelAccess",
+      "sourceIconDecoder",
       "webAccess",
+      "webExtract",
     ]);
+    // No worker named: `web_fetch` parses HTML on the host's own thread.
+    expect(services.webExtract).toBeUndefined();
+    expect(workerExtractor).not.toHaveBeenCalled();
+    expect(services.sourceIconDecoder).toBeUndefined();
+    expect(iconDecoder).not.toHaveBeenCalled();
+  });
+
+  it("builds one worker-backed HTML extractor from the host's bundled worker entry", () => {
+    const { db, dbPath } = open();
+    ownedModelAccess.mockReturnValue(modelAccess);
+    const entry = new URL("file:///web-extract-worker.cjs");
+    const services = createHostRuntimeServices(db, engine(), ports, {
+      dbPath,
+      webExtractWorker: entry,
+    });
+    // One extractor for the host, so every Session shares its warm worker.
+    expect(workerExtractor).toHaveBeenCalledTimes(1);
+    expect(workerExtractor).toHaveBeenCalledWith(entry);
+    expect(services.webExtract).toBe(workerExtractor.mock.results[0]!.value);
+  });
+
+  it("builds the optional icon decoder only from the host's actual worker entry", () => {
+    const { db, dbPath } = open();
+    ownedModelAccess.mockReturnValue(modelAccess);
+    const entry = new URL("file:///source-icon-worker.cjs");
+    const services = createHostRuntimeServices(db, engine(), ports, {
+      dbPath,
+      sourceIconWorker: entry,
+    });
+    expect(iconDecoder).toHaveBeenCalledExactlyOnceWith(entry);
+    expect(services.sourceIconDecoder).toBe(iconDecoder.mock.results[0]!.value);
   });
 
   it("uses the host's model access instead of constructing Pi's own", () => {

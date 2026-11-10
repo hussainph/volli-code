@@ -207,6 +207,33 @@ describe("durable effective tool refresh", () => {
     });
     expect(await record(refresh(versioned))).toBeNull();
   });
+  it.each(["cold-turn", "compaction", "model-switch"] as const)(
+    "persists an MCP result marker-only upgrade on %s and preserves the birth bytes",
+    async (trigger) => {
+      const { record, engine, session } = await fixture(code);
+      const before = JSON.stringify(code);
+      const upgraded: Surface = {
+        ...code,
+        codeMode: { ...code.codeMode!, mcpResultVersion: 1 },
+      };
+      const event = await record(refresh(upgraded, [], ["codemode"], trigger));
+      expect(event?.payload).toEqual({
+        kind: "session.tools.refreshed",
+        trigger,
+        added: [],
+        changed: ["codemode"],
+        delta: { mcpResultVersion: 1 },
+      });
+      expect(
+        decodeSessionEventPayload(JSON.parse(JSON.stringify(event!.payload)), "payload"),
+      ).toEqual(event!.payload);
+      expect(await record(refresh(upgraded))).toBeNull();
+      const events = await engine.listEvents({ sessionId: session.id });
+      const birthEvent = events.find((row) => row.payload.kind === "session.input.recorded");
+      expect(birthEvent?.payload).toEqual({ kind: "session.input.recorded", input: code });
+      expect(JSON.stringify(code)).toBe(before);
+    },
+  );
   it("rejects noncanonical full surfaces or unrepresented extras instead of silently dropping edits", async () => {
     const { record } = await fixture(birth);
     await expect(
@@ -349,6 +376,24 @@ describe("durable effective tool refresh", () => {
       ),
     ],
     [{ ...code, codeMode: { ...code.codeMode!, descriptionVersion: 2 } }, refresh(code)],
+    ...(["warm-turn", "code-mode"] as const).map((trigger): [Surface, Refresh] => [
+      code,
+      refresh(
+        { ...code, codeMode: { ...code.codeMode!, mcpResultVersion: 1 } },
+        [],
+        ["codemode"],
+        trigger,
+      ),
+    ]),
+    [{ ...code, codeMode: { ...code.codeMode!, mcpResultVersion: 1 } }, refresh(code)],
+    [
+      code,
+      refresh(
+        { ...code, codeMode: { ...code.codeMode!, mcpResultVersion: 2 as 1 } },
+        [],
+        ["codemode"],
+      ),
+    ],
     [
       code,
       refresh(

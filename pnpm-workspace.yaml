@@ -8,7 +8,7 @@ packages:
 # Node (a machine's /usr/local/bin/node beside Homebrew's current, say)
 # succeeds and quietly builds native modules against the wrong ABI — the
 # desktop app then boots into a dead database with sign-in greyed out (VC-76).
-# CI installs under the pinned Node (node-version-file: package.json), so this
+# CI installs under the pinned Node (node-version-file: .nvmrc), so this
 # only ever bites the machine it is protecting.
 engineStrict: true
 
@@ -83,12 +83,10 @@ minimumReleaseAgeExclude:
 
 overrides:
   vite: "catalog:"
-  # Pi 1.3 renames durable provider ids (including azure-openai-responses).
-  # Keep the reviewed 1.0 runtime family until a compatibility migration lands;
-  # its internal ^1.0.0 ranges must not silently select the newer family.
-  "@earendil-works/pi-ai@^1.0.0": "1.0.0"
-  "@earendil-works/pi-telemetry@^1.0.0": "1.0.0"
-  "@earendil-works/chord@^1.0.0": "1.0.0"
+  # Keep the reviewed Pi family aligned despite upstream's caret ranges.
+  "@earendil-works/pi-ai@^1": "1.5.0"
+  "@earendil-works/pi-telemetry@^1": "1.5.0"
+  "@earendil-works/chord@^1": "1.5.0"
   # VC-963: Monaco pins DOMPurify exactly; 3.4.17 fixes GHSA-cg2g-xh64-v4q7,
   # GHSA-mrv2-3pqr-j5jr and GHSA-c6gr-qvv4-5v3f. Remove when Monaco's
   # dependency is patched. Its embedded sanitizer is separate (VC-600).
@@ -129,11 +127,21 @@ overrides:
   # desktop app already declare 0.35.5 themselves. Remove when a wrangler
   # bump brings a miniflare that declares >=0.35.5.
   "miniflare@5.20260926.1-alpha>sharp": "0.35.5"
+  # One Radix dismissable layer in the renderer. cmdk (the ⌘K and ⌘P overlays)
+  # declares @radix-ui/react-dialog ^1.1.6 and resolved its own older copy
+  # beside radix-ui's. Each copy keeps its own layer stack and saves the body's
+  # pointer-events before disabling it, so ⌘P opened from a still-open menu
+  # ("Open file…" in an empty pane) saved the menu's `none` and restored it on
+  # close: the window stopped taking clicks. Keep this equal to the
+  # react-dialog radix-ui resolves; desktop's overlay-stack test fails on a
+  # second copy.
+  "cmdk@1.1.1>@radix-ui/react-dialog": "1.3.1"
   # One shiki 4 in the tree, ever. streamdown's dist types import bare "shiki"
   # and resolve whatever pnpm's hidden hoist holds — when a transitive range
   # (docs-site expressive-code) re-resolved to 4.4.3 beside the app's then-4.3.1,
   # incrementally-updated checkouts hoisted 4.4.3 and typecheck broke against
-  # @streamdown/code's shiki-3 types while fresh CI installs stayed green.
+  # @streamdown/code's then-shiki-3 types while fresh CI installs stayed green.
+  # The plugin moved to shiki 4 in 2.0; the deduplication rationale still applies.
   #
   # 4.4.3 was the deliberate retake (VC-211, taking over Dependabot #418).
   # The desktop app's shiki/@shikijs/{langs,monaco,themes} pins now move to
@@ -150,12 +158,13 @@ packageExtensions:
 
 patchedDependencies:
   "@dnd-kit/core@6.3.1": patches/@dnd-kit__core@6.3.1.patch
-  # Adds `maxOutputChars` to the Code Mode sandbox (VC-471): the host stops
-  # keeping a program's `text()`/`console.*`/`image()` output past a bound and
-  # fails the run, so a program that prints in a loop cannot grow Electron
-  # main's memory for the length of its deadline. Upstream bounds the VM heap
-  # but not what the host accumulates from it. Absent, upstream behavior.
-  "@earendil-works/pi-codemode@1.0.0": patches/@earendil-works__pi-codemode@1.0.0.patch
+  # Anthropic OAuth requires a recent Claude Code identity (pi#11969).
+  # Remove once the pinned release advertises 2.1.321 or newer.
+  "@earendil-works/pi-ai@1.5.0": patches/@earendil-works__pi-ai@1.5.0.patch
+  # Configurable output/call/return/error bounds (VC-471), Pi 1.0 declaration
+  # rendering for frozen Sessions, and host initialization before VM lockdown.
+  # Upstream's fixed output caps do not replace these per-run limits.
+  "@earendil-works/pi-codemode@1.5.0": patches/@earendil-works__pi-codemode@1.5.0.patch
 
 peerDependencyRules:
   allowAny:

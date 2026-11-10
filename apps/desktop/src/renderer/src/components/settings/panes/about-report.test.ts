@@ -106,6 +106,14 @@ describe("buildAboutReport — support metadata", () => {
     expect(lines[9]).toBe("Runner: online · 0 updates waiting");
   });
 
+  it("adds the stall summary line only when main sent one (VC-1092)", () => {
+    expect(report()).not.toContain("Stalls:");
+    const lines = report({
+      support: support({ perfStalls: "last 24h, 2h observed: main none" }),
+    }).split("\n");
+    expect(lines[9]).toBe("Stalls: last 24h, 2h observed: main none");
+  });
+
   it("puts the metadata ahead of the measurements it describes", () => {
     const text = report({
       rows: cliStatusRows(status()),
@@ -154,6 +162,7 @@ describe("buildAboutReport — support metadata", () => {
       "cloudRunner",
       "lastUpdateCheck",
       "migrationHistory",
+      "perfStalls",
       "platform",
       "schemaVersion",
     ]);

@@ -1,7 +1,14 @@
 /** Shared scope checks for runner briefs and path-free checkout reports. */
 import { ConvexError } from "convex/values";
 
-import { parseId, TICKET_STATUSES } from "@volli/shared/cloud";
+import {
+  DEFAULT_GITHUB_HOST,
+  githubHostOf,
+  githubRemoteUrl,
+  normalizeGitRemoteUrl,
+  parseId,
+  TICKET_STATUSES,
+} from "@volli/shared/cloud";
 
 import type { Doc } from "../_generated/dataModel.js";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
@@ -165,6 +172,74 @@ export async function reportedRepo(
     throw contextError("invalid_repo", "That repository does not exist.");
   }
   await ctx.db.insert("projectRepos", primary);
+  return primary;
+}
+
+/**
+ * The deployment's GitHub web URL, as `lib/github/config.ts` reads it. Read
+ * here without the App's configuration: a remote derives even where no App
+ * is set up.
+ */
+function githubWebUrl(): string {
+  let configured = (process.env.GITHUB_WEB_URL ?? "").trim();
+  while (configured.endsWith("/")) configured = configured.slice(0, -1);
+  return configured === "" ? "https://github.com" : configured;
+}
+
+/** The host whose remotes take GitHub's canonical https form on this deployment. */
+export function githubRemoteHost(): string {
+  return githubHostOf(githubWebUrl()) ?? DEFAULT_GITHUB_HOST;
+}
+
+/** A reported `origin` as the backend records it, or `null` when a box could not clone it. */
+export function recordableRemoteUrl(raw: string): string | null {
+  return normalizeGitRemoteUrl(raw, [githubRemoteHost()]);
+}
+
+/**
+ * The remote a runner without the person's folder clones: a GitHub
+ * repository's derived from its owner and name, a folder repository's the
+ * last one a main checkout reported. `null` when none is known.
+ */
+export function repoRemoteUrl(
+  repo: Pick<ProjectRepo, "provider" | "owner" | "name" | "remoteUrl">,
+): string | null {
+  if (repo.provider === "github" && repo.owner !== null) {
+    return githubRemoteUrl(githubWebUrl(), repo.owner, repo.name);
+  }
+  return repo.remoteUrl ?? null;
+}
+
+/** A repository row as runners read it: with its {@link repoRemoteUrl}. */
+export function withRemoteUrl(repo: ProjectRepo): ProjectRepo & { remoteUrl: string | null } {
+  return { ...repo, remoteUrl: repoRemoteUrl(repo) };
+}
+
+/**
+ * A repository of this project, or `invalid_repo`. Read-only: the default
+ * folder repository (id = the project's id) is accepted before its first
+ * report has written its row.
+ */
+export async function projectRepoOf(
+  ctx: ReadCtx,
+  project: Doc<"projects">,
+  projectRepoId: string,
+): Promise<ProjectRepo> {
+  parseId("projectRepo", projectRepoId);
+  const repo = await ctx.db
+    .query("projectRepos")
+    .withIndex("by_uuid", (q) => q.eq("id", projectRepoId))
+    .unique();
+  if (repo !== null) {
+    if (repo.projectId !== project.id) {
+      throw contextError("invalid_repo", "That repository is not in this project.");
+    }
+    return publicRow(repo);
+  }
+  const primary = await primaryRepo(ctx, project);
+  if (primary.id !== projectRepoId) {
+    throw contextError("invalid_repo", "That repository does not exist.");
+  }
   return primary;
 }
 

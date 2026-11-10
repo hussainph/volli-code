@@ -237,10 +237,13 @@ try {
   // Seeding the envelope puts the project in the rail but does not always land
   // as the SELECTED one, and the sidebar's bands are per-project. Click its
   // avatar the way a person would.
-  // The switcher labels a project by its two-letter monogram ("VO"), not by
-  // its name, and selection is not in localStorage — so the click is the seam.
-  const monogram = PROJECT.name.slice(0, 2).toUpperCase();
-  const projectButton = page.getByRole("button", { name: monogram, exact: true }).first();
+  // A rail tile's accessible name is its project's name (the monogram is only
+  // painted text); dnd-kit's sortable wrapper inherits that name as
+  // role="button", so keep only the real <button>. Selection is not in
+  // localStorage — so the click is the seam.
+  const projectButton = page
+    .getByRole("button", { name: PROJECT.name, exact: true })
+    .and(page.locator("button"));
   if ((await projectButton.count()) > 0) await projectButton.click().catch(() => {});
   await sleep(1200);
 
@@ -575,7 +578,11 @@ async function expandPreviousBand() {
 
 /** Open VLT-14 from the board, which is where the right rail lives. */
 async function openHeroTicket() {
-  const card = page.locator("article").filter({ hasText: "VLT-14" }).first();
+  const card = page
+    .locator("article")
+    .filter({ visible: true })
+    .filter({ hasText: "VLT-14" })
+    .first();
   if ((await card.count()) === 0) {
     const row = page.getByText(TICKETS[0].title, { exact: false }).first();
     if ((await row.count()) === 0) return { ok: false, detail: "VLT-14 is not on the board" };

@@ -15,9 +15,8 @@
  * clamps what it stores (`setRetentionTtlDays`), and adopting its answer keeps
  * every reader on the clamped truth without a second round trip.
  *
- * The value is not pushed: retention broadcasts (`{ kind: "retention" }`)
- * re-hydrate the board and move per-ticket retention STATE, but the days
- * setting itself changes only through the one settings write, which adopts.
+ * The accepted settings write is also pushed to peer windows through device
+ * preference synchronization. Board retention invalidations alone carry no TTL.
  */
 import { create } from "zustand";
 import { errorMessage } from "@volli/shared";
@@ -48,6 +47,7 @@ export function createRetentionTtlStore() {
    * factory that made it.
    */
   let inFlight: Promise<RetentionTtlResult> | null = null;
+  let generation = 0;
 
   return create<RetentionTtlState>()((set, get) => ({
     ttlDays: null,
@@ -56,9 +56,12 @@ export function createRetentionTtlStore() {
       const landed = get().ttlDays;
       if (landed !== null) return Promise.resolve({ ok: true, days: landed });
       if (inFlight !== null) return inFlight;
+      const readingGeneration = generation;
       inFlight = (async (): Promise<RetentionTtlResult> => {
         try {
           const result = await window.api.retention.getTtlDays();
+          // An accepted write can overtake this older read in another window.
+          if (readingGeneration !== generation) return { ok: true, days: get().ttlDays! };
           if (result.ok) set({ ttlDays: result.days });
           return result;
         } catch (error) {
@@ -71,6 +74,7 @@ export function createRetentionTtlStore() {
     },
 
     adopt(days) {
+      generation += 1;
       set({ ttlDays: days });
     },
   }));

@@ -17,10 +17,10 @@
  * how matching works, only that a word someone can see leads back to the page
  * it is on.
  *
- * MANUALLY RUN (needs a display + the built app); CI does not run it:
+ * Runs in CI's extended smoke tier. To run locally with a display + built app:
  *
- *   pnpm -w run build
- *   node apps/desktop/e2e/settings-search-smoke.mjs
+ *   vp run --filter @volli/desktop build
+ *   VOLLI_QUIET_WINDOWS=1 vp exec node apps/desktop/e2e/settings-search-smoke.mjs
  */
 import {
   assertBuiltRendererLoaded,
@@ -32,6 +32,11 @@ import {
   makeScratch,
   seedProjects,
 } from "./lib/smoke-kit.mjs";
+import {
+  assertSettingsWindow,
+  closeSettingsWindow,
+  openSettingsWindow,
+} from "./lib/settings-window.mjs";
 
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("volli-settings-search-");
 const { attempt, must, summarize } = createRunner();
@@ -75,34 +80,47 @@ async function visibleRowLabels(page) {
   });
 }
 
-const railNames = async (page, surface) =>
-  (
-    await page
-      .getByRole("navigation", { name: `${surface} categories` })
-      .getByRole("button")
-      .allInnerTexts()
-  )
-    .map((text) => text.trim())
-    .filter(Boolean);
+/**
+ * App settings and project overrides share one shell: one rail, named "Settings
+ * categories", whose header is the scope switch ("All projects" or the
+ * project). `scope` is the word a search result prints for that half —
+ * "All projects" or "Project" — so a label found only in the other scope's
+ * page of the same name does not count.
+ */
+const settingsRail = (page) => page.getByRole("navigation", { name: "Settings categories" });
+
+/**
+ * The inner text of every rail button below the scope switch: category rows
+ * with the search empty, result rows while it holds a query.
+ */
+const railNames = (page) =>
+  settingsRail(page).evaluate((nav) =>
+    [...nav.querySelectorAll("button")]
+      .filter((button) => button.closest('[aria-label="Settings scope"]') === null)
+      .map((button) => (button.innerText ?? "").trim())
+      .filter(Boolean),
+  );
 
 /** Opens one category and returns every label it shows. */
-async function labelsFor(page, surface, category) {
-  const nav = page.getByRole("navigation", { name: `${surface} categories` });
+async function labelsFor(page, category) {
+  const nav = settingsRail(page);
   await nav.getByRole("searchbox").fill("");
   await nav.getByRole("button", { name: category, exact: true }).click();
   return visibleRowLabels(page);
 }
 
-/** Types `label` into rail search and reports whether `category` survives it. */
-async function reachable(page, surface, category, label) {
-  const nav = page.getByRole("navigation", { name: `${surface} categories` });
-  await nav.getByRole("searchbox").fill(label);
-  const found = await railNames(page, surface);
-  return found.includes(category);
+/**
+ * Types `label` into rail search and reports whether `category` survives it.
+ * A result row reads "<match>\n<scope> · <category>".
+ */
+async function reachable(page, scope, category, label) {
+  await settingsRail(page).getByRole("searchbox").fill(label);
+  const found = (await railNames(page)).map((row) => row.split("\n").at(-1)?.trim());
+  return found.includes(`${scope} · ${category}`);
 }
 
-async function auditSurface(page, surface, startAt) {
-  const categories = await railNames(page, surface);
+async function auditSurface(page, surface, scope, startAt) {
+  const categories = await railNames(page);
   await attempt(startAt, `${surface}: the rail offers its categories`, async () => ({
     ok: categories.length > 0,
     detail: categories.join(" · "),
@@ -111,15 +129,12 @@ async function auditSurface(page, surface, startAt) {
   let n = startAt;
   for (const category of categories) {
     n += 1;
-    const labels = await labelsFor(page, surface, category);
+    const labels = await labelsFor(page, category);
     const unreachable = [];
     for (const label of labels) {
-      if (!(await reachable(page, surface, category, label))) unreachable.push(label);
+      if (!(await reachable(page, scope, category, label))) unreachable.push(label);
     }
-    await page
-      .getByRole("navigation", { name: `${surface} categories` })
-      .getByRole("searchbox")
-      .fill("");
+    await settingsRail(page).getByRole("searchbox").fill("");
 
     await attempt(n, `${surface} → ${category}: every visible label finds this page`, async () => ({
       ok: unreachable.length === 0,
@@ -141,30 +156,95 @@ try {
   await assertProfileIsolated(app, userDataDir);
   assertBuiltRendererLoaded(page);
 
-  // Configure has no rail without a project, so one is seeded before anything
-  // else — auditing only Settings would leave the surface this ticket changed
-  // most entirely unchecked.
+  // Seed a real project so both file-backed inventories and overrides are audited.
   const repo = await makeGitRepo(scratch, "search-project-");
   await seedProjects(page, [{ id: "search-p1", name: "Search Fixture", path: repo, prefix: "SF" }]);
 
-  await must(1, "Settings opens on its category rail", async () => {
-    await page.getByRole("button", { name: "Settings", exact: true }).first().click();
-    await page.getByRole("navigation", { name: "Settings categories" }).waitFor();
-    return { ok: true };
+  let settingsPage = null;
+  await must(1, "Settings opens in its own native window on its category rail", async () => {
+    settingsPage = await openSettingsWindow(app, page);
+    const evidence = await assertSettingsWindow(app, page, settingsPage);
+    const nav = settingsRail(settingsPage);
+    await nav.waitFor();
+    // The app-wide scope, explicitly: Settings reopens on its last page.
+    await nav.getByRole("button", { name: "All projects", exact: true }).click();
+    await nav.getByRole("button", { name: "All projects", pressed: true }).waitFor();
+    return {
+      ok: evidence.nativeSettingsCount === 1 && !evidence.mainHasSettingsDialog,
+      detail: `nativeWindow=${evidence.nativeWindowId} windows=${evidence.nativeWindowCount} mainDialog=${evidence.mainHasSettingsDialog}`,
+    };
+  });
+  if (settingsPage === null) throw new Error("Settings never opened");
+
+  const last = await auditSurface(settingsPage, "Settings", "All projects", 2);
+
+  // Audit project overrides as well: moving their entry point must not remove
+  // the searchability assertions previously exercised through Configure.
+  await settingsRail(settingsPage)
+    .getByRole("button", { name: "Search Fixture", exact: true })
+    .click();
+  await settingsRail(settingsPage)
+    .getByRole("button", { name: "All projects", pressed: false })
+    .waitFor();
+  const lastProject = await auditSurface(settingsPage, "Project settings", "Project", last + 1);
+
+  // ---- the native window's own contract -----------------------------------
+  const opened = await assertSettingsWindow(app, page, settingsPage);
+  await attempt(
+    lastProject + 1,
+    "a second Settings entry reuses the one native window (nonmodal)",
+    async () => {
+      const before = opened;
+      settingsPage = await openSettingsWindow(app, page);
+      const after = await assertSettingsWindow(app, page, settingsPage);
+      return {
+        ok:
+          after.nativeWindowId === before.nativeWindowId &&
+          after.nativeSettingsCount === 1 &&
+          after.nativeWindowCount === before.nativeWindowCount &&
+          !after.mainHasSettingsDialog &&
+          !page.isClosed(),
+        detail: `before=${before.nativeWindowId} after=${after.nativeWindowId} windows=${after.nativeWindowCount} mainAlive=${!page.isClosed()}`,
+      };
+    },
+  );
+
+  await attempt(lastProject + 2, "Escape does not close the nonmodal Settings window", async () => {
+    await settingsPage.keyboard.press("Escape");
+    // One frame is enough for a close handler to tear the page down.
+    await settingsPage.evaluate(
+      () => new Promise((resolve) => requestAnimationFrame(() => resolve(true))),
+    );
+    const evidence = await assertSettingsWindow(app, page, settingsPage);
+    return {
+      ok: !settingsPage.isClosed() && evidence.nativeSettingsCount === 1,
+      detail: `closed=${settingsPage.isClosed()} nativeWindow=${evidence.nativeWindowId}`,
+    };
   });
 
-  const last = await auditSurface(page, "Settings", 2);
+  await must(
+    lastProject + 3,
+    "closing Settings leaves the workbench; reopening creates one new window",
+    async () => {
+      const before = await assertSettingsWindow(app, page, settingsPage);
+      await closeSettingsWindow(app, settingsPage);
+      const workbenchAlive = !page.isClosed();
+      const mainDialog = (await page.locator("[data-settings-panel]").count()) > 0;
 
-  // Configure needs a project. With none selected the page is an empty state
-  // and there is no rail to audit — correct behaviour, not a failure, so the
-  // surface is audited only when it is actually there.
-  const configure = page.getByRole("button", { name: "Configure", exact: true });
-  if ((await configure.count()) > 0) {
-    await configure.click();
-    const nav = page.getByRole("navigation", { name: "Configure categories" });
-    await nav.waitFor();
-    await auditSurface(page, "Configure", last + 1);
-  }
+      settingsPage = await openSettingsWindow(app, page);
+      const after = await assertSettingsWindow(app, page, settingsPage);
+      return {
+        ok:
+          workbenchAlive &&
+          !mainDialog &&
+          after.nativeSettingsCount === 1 &&
+          after.nativeWindowCount === before.nativeWindowCount &&
+          after.nativeWindowId !== before.nativeWindowId &&
+          !after.mainHasSettingsDialog,
+        detail: `old=${before.nativeWindowId} new=${after.nativeWindowId} windows=${after.nativeWindowCount} workbenchAlive=${workbenchAlive}`,
+      };
+    },
+  );
 
   exitCode = summarize();
 } finally {

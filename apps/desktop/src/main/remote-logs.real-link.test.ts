@@ -554,7 +554,7 @@ describe("a remote host's log in the one viewer, over the relay and real links (
     await vi.waitFor(() =>
       expect(viewer.statuses.at(-1)).toEqual({
         status: "connecting",
-        detail: "Reconnecting to box…",
+        detail: "Reconnecting to box",
       }),
     );
     // Registered still: the host dropped, it did not lose its link.

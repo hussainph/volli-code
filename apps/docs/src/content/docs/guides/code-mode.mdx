@@ -1,133 +1,108 @@
 ---
 title: Code Mode
-description: What Code Mode lets a Session do, what its programs can and cannot do, and how to turn it off.
+description: Choose how Sessions combine tool calls with JavaScript, set per-model exceptions, and understand the program sandbox and large MCP servers.
 sidebar:
   label: Code Mode
 ---
 
 import { Aside } from "@astrojs/starlight/components";
 
-**Code Mode** lets a Session write a short JavaScript program that calls its
-own tools, instead of calling them one at a time. The program loops, filters
-and combines what the tools return, and only the result reaches the model.
-A step like "read these forty files and tell me which ones still use the old
-API" becomes one program that returns a short list, rather than forty file
-reads the model has to read through.
+Code Mode lets a Session write a short JavaScript program that calls its own
+tools. The program can loop, filter, and combine results before returning them
+to the model. For example, it can read forty files and return only the paths
+that still use an old API.
 
-Code Mode is on by default. Turn it off, or choose how a particular model uses
-it, in **Settings → Models → Code Mode**.
+Configure new Sessions in **Settings → All projects → Agents**, using Code
+Mode's **Default** and **Exceptions** sections.
 
 ## When a Session uses it
 
-A Session with Code Mode has one extra tool, `codemode`. The model decides when
-to use it. It pays off when one step needs many calls whose raw results are
-mostly thrown away:
+A Session with Code Mode has a `codemode` tool. The model chooses when to use
+it, such as for a loop of file reads, repeated page checks, or several
+Sessions handled alike. One call can still use the tool directly when that
+route is available.
 
-- a loop of file reads, keeping only what matches;
-- the same check across many files;
-- several Browser Tabs or pages handled the same way;
-- starting several Sessions and watching them.
-
-For a single call, the model calls the tool directly, as it would without Code
-Mode. In chat, a program appears as one tool call, and each call it made
-appears beneath it as its own activity row.
+In chat, a program appears as one tool call. Its nested calls appear beneath
+it as activity rows.
 
 ## What a program can and cannot do
 
-A program runs in a sandbox that starts fresh for every run. It can only call
-the tools its Session already has, and nothing else:
+Each program runs in a fresh sandbox and can call only tools its Session
+already holds.
 
-- It has no file system, network, process, environment, timers or modules.
-  To read a file it calls `read`; commands use a direct `bash` call, outside
-  the program.
-- Every call it makes is checked exactly as if the model had made it directly,
-  as the same Session. [Workspace and host-API boundaries](/guides/authority/)
-  and budgets still apply. A budget question or existing confirmation pauses
-  the program until you answer, and only one question is open at a time.
-- It can call every tool its Session holds except `bash`, `ask_user`,
-  `request_secret`, `todo_write`, and the background shells (`shell_start`,
-  `shell_output`, `shell_kill`). It cannot call `codemode` itself. Browser
-  screenshots and tab holds, Session controls, Automations and MCP management
-  are callable when the Session holds them.
-- Images from nested calls reach the program as handles, and their bytes stay
-  outside the sandbox. Images from a program, below, shows how to attach one.
-  Images appear after the text, with their source and trust notice, in both the
-  model's tool result and the chat card. One run keeps at most 8 images and 16 MiB
-  of base64 image data; the result names anything left out. Saved pictures use the
-  screenshot store's existing 400-picture, 30-day retention limit; an expired
-  picture is named as unavailable.
-- Each run is limited to 200 calls, 5 minutes of running time (time spent
-  waiting for your answer does not count), and about 20 KB of output. Longer
-  output is shortened, and the full text is saved where the Session can read
-  it.
-- Output from a program that used web, Browser or MCP tools, or read another
-  Session's words, is marked as untrusted content, exactly as those tools'
-  direct results are.
+- It has no filesystem, network, process, environment, timers, or modules.
+  It reads files through `read`. Shell commands use a direct `bash` call
+  outside the program.
+- Every nested call uses the same Session's [authority](/guides/authority/)
+  and limits as a direct call. An existing confirmation can pause the program
+  for your answer.
+- Questions, secret requests, todos, and background shells are direct-only.
+  A program cannot call `codemode` itself. Browser tools, Session controls,
+  Automations, and MCP management are callable when the Session holds them.
+- A run allows up to 200 nested calls, five minutes of active time, and 20 KiB
+  of text output. Waiting for your answer does not count toward active time.
+  Longer output is shortened and saved for the Session to read separately.
+- Images stay outside the sandbox as handles. A run can attach up to eight
+  images and 16 MiB of base64 image data. The result names omitted or
+  unavailable pictures.
+- Results that include web, Browser, MCP, or another Session's content carry
+  an untrusted-content notice, as direct calls do.
 
-Stopping the turn stops the program and every call it has in flight.
+Stopping the turn cancels the program and its in-flight calls. A failed program
+does not undo completed calls, including writes.
 
 ## Images from a program
 
-A nested call that returns an image, such as `browser_screenshot` or an MCP tool
-that returns a picture, gives the program a list of image handles in `images`,
-not the image itself. Attach one with `image()`, or return the result and every
-image in it is attached:
+A nested image result contains handles in `images`. Attach one with `image()`,
+or return the result to attach all its images:
 
 ```js
-const shot = await tools.browser_screenshot({ tabId: "tab-1" }); // a tab id from browser_tabs
-image(shot.images[0]);        // attaches the first image
-image(shot.images[0].handle); // attaches the same image, given its handle string
-return shot;                  // attaches every image in the result
+// Use a tab id returned by browser_tabs.
+const shot = await tools.browser_screenshot({ tabId: "tab-1" });
+image(shot.images[0]);
 ```
 
-`text(shot)` prints the result as text and attaches no image. A Session started
-before Volli 0.2.2 cannot attach images from a program at all; start a new
-Session to use them.
+`text(shot)` prints the result as text without attaching its images.
 
 ## Modes
 
-Each model gets a mode chosen from Volli's measurements of that model:
+In **Default → Code Mode**, choose how new Sessions receive their tools:
 
 | Mode | What the model gets |
 | --- | --- |
-| **Off** | No `codemode` tool, except to reach a very large MCP server (see below). |
-| **Both** | `codemode` beside every normal tool. The model chooses per step. |
-| **Only** | Whole callable tool groups, such as web and small MCP servers, are reached through `codemode`. Groups containing a direct-only tool stay available directly too; the coding group includes `bash`. Browser and newly callable control groups also stay declared for older-build compatibility. |
+| **Direct tools** | Normal tools directly. A large MCP server can still add `codemode`, as described below. |
+| **Code and direct tools** | `codemode` alongside normal tools. The model chooses per step. |
+| **Code only** | Fully callable tool groups, such as web tools and small MCP servers, through `codemode`. Groups with a direct-only tool remain direct too. Browser and control groups also retain direct routes for older-build compatibility. |
 
-Claude Haiku and Claude Sonnet use **Both** by default. Every other model,
-including Claude Opus, GPT and GLM models, uses **Off**: in Volli's
-measurements those models either rarely chose to write a program or did not
-save anything when they did, so Code Mode would only have added to every
-request. To choose a different mode for one model, open
-**Advanced** in the Code Mode section, choose the model under **Pin a model**,
-and set its **Mode**. The **Default** column shows the mode the model would
-otherwise get.
+If you have not set a global choice, the control shows **Model defaults**.
+Claude Haiku and Claude Sonnet default to **Code and direct tools**; other
+models default to **Direct tools**.
+
+Use **Exceptions → Add model exception** to choose a model and override its
+mode. Remove an exception to return that model to the global choice or its
+built-in default.
 
 ## Large MCP servers
 
-A project MCP server with more than 20 tools, or whose tool definitions are
-very long, would otherwise add thousands of tokens to every request a Session
-sends. When Code Mode is on, such a server's tools are not sent to the model
-directly, whatever the model's mode. The model sees the server's name and how
-many tools it has, and a program searches for the tools it needs and calls
-them. This applies even to models whose mode is **Off**. When such a Session has
-`codemode`, its other callable tools are available from programs too, without
-removing their direct tools.
+An MCP server with more than 20 enabled tools, or more than about 3,000 tokens
+of tool definitions, uses Code Mode discovery. The model sees the server's
+name and tool count, then uses `searchTools()` and `describeTool()` inside a
+program to find the tools it needs.
 
-## Turn Code Mode off
+This also applies to **Direct tools** mode. When a large server gives that
+Session `codemode`, the Session's other callable tools are available from
+programs too. Selecting fewer MCP tools can keep a server below the threshold.
 
-1. Open **Settings → Models**.
-2. In **Code Mode**, turn the **Code Mode** switch off.
+## Prefer direct tools
 
-New Sessions then get no `codemode` tool, and every tool, including every MCP
-tool, is sent to the model directly, as before Code Mode existed. Your pinned
-modes are kept for when you turn it back on.
+Choose **Default → Code Mode → Direct tools** and remove any exceptions that
+choose another mode. This changes the defaults for new Sessions; it does not
+remove Code Mode discovery for large MCP servers.
 
 <Aside type="note">
-  Existing Sessions never lose or rename tools. They can gain additions at a
-  cold prompt cache, compaction or model switch; Code-Mode-only additions can
-  arrive before the next program without changing the warm prefix. Existing
-  routes stay unchanged, so older Sessions can still call `bash` from programs
-  if their recorded routes allowed it; new Sessions cannot. A cold refresh also
-  gives older Code Mode Sessions image handles.
+  Existing Sessions keep their recorded tool names and routes. They can gain
+  additions at a cold prompt cache, compaction, or model switch. Tools routed
+  only through Code Mode can become callable before the next program without
+  changing the warm prompt prefix. A settings change does not revoke tools an
+  existing Session already holds.
 </Aside>

@@ -51,5 +51,7 @@ export function headlessRuntimePaths(
     binDir: source ? resolve(bundleDir, "../dev-bin") : resolve(bundleDir, "../../bin"),
     venue: { id: socketPath, kind: "remote" },
     codeModeSandbox: assets,
+    // Its own pack entry, beside hostd.cjs in both layouts.
+    webExtractWorker: resolve(bundleDir, "web-extract-worker.cjs"),
   };
 }

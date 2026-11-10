@@ -240,10 +240,11 @@ describe("the sandbox the packaged app ships", () => {
     expect(shipped).toBe(bundled);
     // The `maxOutputChars` / `maxCallChars` patch (patches/), on both sides of
     // the worker boundary.
-    expect(readFileSync(join(shipped, "dist", "runtime", "host.js"), "utf8")).toContain(
+    // Pi 1.5 shares execution and VM code across its worker/inline hosts.
+    expect(readFileSync(join(shipped, "dist", "runtime", "execution.js"), "utf8")).toContain(
       "maxOutputChars",
     );
-    expect(readFileSync(join(shipped, "dist", "runtime", "worker.js"), "utf8")).toContain(
+    expect(readFileSync(join(shipped, "dist", "runtime", "vm.js"), "utf8")).toContain(
       "maxCallChars",
     );
   });
@@ -277,6 +278,14 @@ describe("the sandbox the packaged app ships", () => {
         ok: true,
         value: 2,
         output: [expect.objectContaining({ text: expect.stringContaining("from the copy") })],
+      });
+      expect(await sandbox.execute('return "x".repeat(1100);')).toMatchObject({
+        ok: false,
+        error: {
+          kind: "script",
+          name: "RangeError",
+          message: "The script's return value passed its output limit of 1000 characters",
+        },
       });
     } finally {
       await sandbox.close();

@@ -94,6 +94,9 @@ export type HostBroadcastEventTopic = Exclude<HostEventTopic, HostClientEventTop
  */
 export interface HostEventBus {
   publish<T extends HostBroadcastEventTopic>(topic: T, payload: HostEventMap[T]): void;
+  /** The requester already receives the committed result; other clients still need the fact.
+   * A single-client host may omit this. Transport identity never comes from command input. */
+  publishToPeers?(topic: "data-changed", payload: HostEventMap["data-changed"]): void;
 }
 
 /**

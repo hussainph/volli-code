@@ -1,3 +1,4 @@
+import { LoadingLabel } from "@renderer/components/ui/loading-label";
 /**
  * New command — one of the things this redesign *adds*, so it owes a real
  * design rather than a button that goes nowhere.
@@ -12,7 +13,8 @@
  * column reports back afterwards.
  */
 import * as React from "react";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
+import { AddIcon } from "@renderer/components/ui/icon";
+
 import { errorMessage, isWritablePromptTemplateName } from "@volli/shared";
 
 import { PROMPT_SURFACE } from "@renderer/components/chat/composer-chrome";
@@ -23,13 +25,13 @@ import {
   Dialog,
   DialogClose,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
 } from "@renderer/components/ui/dialog";
 import { Input } from "@renderer/components/ui/input";
+import { Notice } from "@renderer/components/ui/notice";
 import {
   Select,
   SelectContent,
@@ -107,16 +109,13 @@ export function NewCommandDialog({
     >
       <DialogTrigger asChild>
         <Button size="xs" variant="ghost">
-          <PlusIcon />
+          <AddIcon />
           New command
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-lg" aria-describedby={undefined}>
         <DialogHeader>
           <DialogTitle>New command</DialogTitle>
-          <DialogDescription>
-            Commands are markdown files. Typing the name in a composer runs the prompt below.
-          </DialogDescription>
         </DialogHeader>
 
         <div className="flex flex-col gap-4">
@@ -141,14 +140,14 @@ export function NewCommandDialog({
             </div>
             {malformed ? (
               <p id="cmd-name-error" role="alert" className="text-ui text-destructive">
-                Letters, numbers, dashes and underscores only — it becomes the filename.
+                Letters, numbers, dashes and underscores only
               </p>
             ) : null}
           </div>
 
           <div className="flex flex-col gap-1">
             <label htmlFor="cmd-desc" className="text-ui">
-              Description
+              Description <span className="text-muted-foreground">(optional)</span>
             </label>
             <Input
               id="cmd-desc"
@@ -186,17 +185,13 @@ export function NewCommandDialog({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="project">This project — .volli/commands</SelectItem>
-                <SelectItem value="personal">Personal — available everywhere</SelectItem>
+                <SelectItem value="project">This project</SelectItem>
+                <SelectItem value="personal">Personal</SelectItem>
               </SelectContent>
             </Select>
           </div>
 
-          {refusal ? (
-            <p role="alert" className="text-ui text-destructive">
-              {refusal}
-            </p>
-          ) : null}
+          {refusal ? <Notice tone="error" announce title={refusal} /> : null}
         </div>
 
         <DialogFooter>
@@ -206,7 +201,7 @@ export function NewCommandDialog({
             </Button>
           </DialogClose>
           <Button size="sm" disabled={!canSave} onClick={() => void create()}>
-            {saving ? "Creating…" : "Create"}
+            {saving ? <LoadingLabel>Creating</LoadingLabel> : "Create"}
           </Button>
         </DialogFooter>
       </DialogContent>

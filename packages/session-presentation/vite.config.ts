@@ -30,6 +30,9 @@ export default defineConfig({
         // person's voice, including for historical data and version skew.
         "src/host-notice.ts",
         "src/interaction.ts",
+        // Receipt content moved out of interaction.ts; keep its existing gate
+        // and the new recorded-producer guard protected after that split.
+        "src/interaction-receipt.ts",
         "src/markdown-source.ts",
         "src/message-projection.ts",
         "src/message-delivery.ts",
@@ -46,6 +49,8 @@ export default defineConfig({
         // confident sentence about a Session nothing actually observed.
         "src/terminal-history.ts",
         "src/transcript.ts",
+        // Live work-position folding is extracted from the protected transcript.
+        "src/work-position.ts",
         // The complete portable row union, including the host-notice decision.
         "src/transcript-rows.ts",
         "src/wire.ts",

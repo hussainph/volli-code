@@ -8,8 +8,10 @@
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Worker } from "node:worker_threads";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import { Type } from "@earendil-works/pi-ai";
+import { CodemodeSandbox, loadQuickJSWasm } from "@earendil-works/pi-codemode";
+import { Type } from "typebox";
 import {
   MCP_RESULT_IMAGE_MAX_BYTES,
   MCP_RESULT_MAX_IMAGES,
@@ -166,7 +168,203 @@ async function run(
 }
 
 describe("the sandbox", () => {
-  it("uses Pi 1.0's safe membership check and diagnoses missing computed members without making a call", async () => {
+  it("keeps the provider's Code Mode schema identical with the direct TypeBox import", () => {
+    expect(JSON.parse(JSON.stringify(fixture({ tools: [] }).tool.parameters))).toEqual({
+      type: "object",
+      properties: {
+        code: {
+          type: "string",
+          description:
+            "The program: the body of an async function. Optionally starts with a `// @options: {...}` line.",
+        },
+      },
+      required: ["code"],
+    });
+  });
+
+  it("holds the scheduler slot until the actual worker releases capacity, not merely close()", async () => {
+    const exited = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const once = Worker.prototype.once;
+    // Real worker and codec; delay only delivery of its exit/release notification.
+    const observeExit = vi
+      .spyOn(Worker.prototype, "once")
+      .mockImplementation(function (this: Worker, event, listener) {
+        if (event !== "exit") return once.call(this, event, listener);
+        return once.call(this, event, (...args: unknown[]) => {
+          exited.resolve();
+          void release.promise.then(() => listener(...args));
+        });
+      });
+    let settled = false;
+    const pending = run(fixture({ tools: [] }), "return 1;").then((result) => {
+      settled = true;
+      return result;
+    });
+    try {
+      await exited.promise;
+      expect(settled).toBe(false);
+      release.resolve();
+      expect((await pending).text).toContain("Returned: 1");
+    } finally {
+      release.resolve();
+      await pending;
+      observeExit.mockRestore();
+    }
+  });
+
+  it("does not start a late worker when wasm finishes loading after cancellation", async () => {
+    const { createRequire } = await import("node:module");
+    const { fileURLToPath } = await import("node:url");
+    const worker = fileURLToPath(import.meta.resolve("@earendil-works/pi-codemode/worker"));
+    // A distinct cache key for the same real file keeps compilation controllable.
+    const wasmPath = createRequire(worker)
+      .resolve("quickjs-wasi/quickjs.wasm")
+      .replace(/quickjs\.wasm$/u, "./quickjs.wasm");
+    const loading = Promise.withResolvers<void>();
+    const allowLoad = Promise.withResolvers<void>();
+    const compile = WebAssembly.compile;
+    const delayedCompile = vi.spyOn(WebAssembly, "compile").mockImplementation(async (bytes) => {
+      loading.resolve();
+      await allowLoad.promise;
+      return compile(bytes);
+    });
+    const workerEvents = vi.spyOn(Worker.prototype, "on");
+    const controller = new AbortController();
+    const pending = run(
+      fixture({ tools: [], sandbox: { wasmPath } }),
+      "return 1;",
+      "late-worker",
+      controller.signal,
+    );
+    try {
+      await loading.promise;
+      controller.abort();
+      expect((await pending).details.error).toBe("aborted");
+      allowLoad.resolve();
+      await loadQuickJSWasm(wasmPath);
+      // Flush the launcher's continuations after compilation, including its admission check.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(workerEvents).not.toHaveBeenCalled();
+    } finally {
+      controller.abort();
+      allowLoad.resolve();
+      await pending;
+      delayedCompile.mockRestore();
+      workerEvents.mockRestore();
+    }
+  });
+
+  it("protects the pinned clock and randomness with Pi's builtin lockdown", async () => {
+    const f = fixture({ tools: [], now: () => 1_000_000 });
+    const result = await run(
+      f,
+      `const before = Date.now();
+       try { Object.defineProperty(Date.prototype, "constructor", { value: function() {} }); } catch {}
+       try { globalThis.Date = function() {}; } catch {}
+       try { Math.random = () => 0; } catch {}
+       return [before, Date.now(), new Date().getTime(), performance.now(), Object.isFrozen(Math), Object.isFrozen(Date.prototype), Math.random() !== 0];`,
+    );
+    expect(result.isError).toBe(false);
+    expect(result.text).toContain("Returned: [1000000,1000000,1000000,0,true,true,true]");
+  });
+
+  it("keeps successful mutations visible when later parsing fails, beyond the nested record cap", async () => {
+    let changes = 0;
+    const f = fixture({
+      tools: [
+        textTool("write", () => {
+          changes += 1;
+          return "created\nNot JSON";
+        }),
+      ],
+    });
+    const result = await run(
+      f,
+      "let last; for (let i = 0; i < 60; i++) last = await tools.write({}); JSON.parse(last);",
+    );
+    expect(changes).toBe(60);
+    expect(result.isError).toBe(true);
+    expect(result.details.error).toBe("script");
+    expect(result.details.errorCause).toBeTruthy();
+    expect(result.details.callCounts).toEqual({
+      succeeded: 60,
+      failed: 0,
+      unfinished: 0,
+      replayed: 0,
+    });
+    expect(result.details.nestedCalls.calls).toHaveLength(50);
+    expect(result.details.nestedCalls.complete).toBe(false);
+    expect(result.text).toContain("Program failed after 60 successful calls");
+    expect(result.text).toContain("Completed calls are not rolled back");
+  });
+
+  it("counts caught failures, MCP server errors and bash nonzero exits without making the program fail", async () => {
+    const mcpName = mcpProviderToolName("srv", "Server", "fail");
+    const f = fixture({
+      tools: [
+        textTool("write", () => "created"),
+        textTool("broken", () => {
+          throw new Error("nested failure");
+        }),
+        resultTool(mcpName, {
+          content: [
+            { type: "text", text: MCP_UNTRUSTED_DATA_WARNING },
+            { type: "text", text: "server failure" },
+          ],
+          details: {},
+          isError: true,
+        }),
+        bash(() => {
+          throw new Error("Command exited with code 2");
+        }),
+      ],
+    });
+    const result = await run(
+      f,
+      `await tools.write({}); try { await tools.broken({}); } catch {} const mcp = await tools.${mcpName}({}); const bash = await tools.bash({command:'x'}); return { isError: mcp.isError, exitCode: bash.exitCode };`,
+    );
+    expect(result.isError).toBe(false);
+    expect(result.details.errorCause).toBeUndefined();
+    expect(result.details.callCounts).toEqual({
+      succeeded: 1,
+      failed: 3,
+      unfinished: 0,
+      replayed: 0,
+    });
+    expect(result.details.nestedCalls.calls.map((call) => call.status)).toEqual([
+      "ok",
+      "error",
+      "error",
+      "error",
+    ]);
+    expect(result.text).toContain('Returned: {"isError":true,"exitCode":2}');
+  });
+
+  it("reports partial completion when a ninth captured image is absent and dereferenced", async () => {
+    const f = fixture({
+      tools: [
+        resultTool("browser_screenshot", {
+          content: [{ type: "image", data: PNG, mimeType: "image/png" }],
+          details: {},
+        }),
+      ],
+    });
+    const result = await f.tool.execute("ninth-image", {
+      code: "for (let i = 0; i < 9; i++) { const shot = await tools.browser_screenshot({}); const handle = shot.images[0].handle; image(handle); }",
+    });
+    expect(result.isError).toBe(true);
+    expect(result.details.callCounts).toEqual({
+      succeeded: 9,
+      failed: 0,
+      unfinished: 0,
+      replayed: 0,
+    });
+    expect(result.details.errorCause).toContain("undefined");
+    expect(result.content.filter((block) => block.type === "image")).toHaveLength(8);
+  });
+
+  it("uses Pi's safe membership check and diagnoses missing computed members without making a call", async () => {
     const execute = vi.fn(() => "hi");
     const f = fixture({ tools: [textTool("echo", execute)] });
     const membership = await run(
@@ -258,11 +456,16 @@ describe("the sandbox", () => {
 });
 
 describe("limits", () => {
-  it("stops a program that spins past its running time", async () => {
-    const f = fixture({ tools: [textTool("echo", () => "hi")], limits: { timeoutMs: 1_000 } });
-    const { details, text, isError } = await run(f, "while (true) {}");
+  it("stops a program that spins past its running time after a completed mutation", async () => {
+    const effect = vi.fn(() => "created");
+    const f = fixture({ tools: [textTool("write", effect)], limits: { timeoutMs: 1_000 } });
+    const { details, text, isError } = await run(f, "await tools.write({}); while (true) {}");
     expect(isError).toBe(true);
+    expect(effect).toHaveBeenCalledOnce();
     expect(details.error).toBe("timeout");
+    expect(details.callCounts).toEqual({ succeeded: 1, failed: 0, unfinished: 0, replayed: 0 });
+    expect(text).toContain("Program failed after 1 successful call");
+    expect(text).toContain("Completed calls are not rolled back");
     expect(text).toContain("ran past its 1 s limit");
   });
 
@@ -273,6 +476,9 @@ describe("limits", () => {
     const raised = await run(f, '// @options: {"timeout_ms": 100000000}\nwhile (true) {}');
     expect(raised.text).toContain("ran past its 1 s limit");
     expect((await run(f, '// @options: {"bogus": 1}\nreturn 1;')).details.error).toBe("check");
+    const misplaced = await run(f, '\n// @options: {"timeout_ms": 1}\nreturn 1;');
+    expect(misplaced.details.error).toBe("check");
+    expect(misplaced.text).toContain("must be the first line");
   });
 
   it("holds the VM to its memory limit", async () => {
@@ -321,6 +527,8 @@ describe("limits", () => {
     const { details, text } = await run(f, "tools.write({}); while (true) {}");
     expect(Date.now() - started).toBeLessThan(4_000);
     expect(details.error).toBe("timeout");
+    expect(details.callCounts).toEqual({ succeeded: 1, failed: 0, unfinished: 0, replayed: 0 });
+    expect(details.errorCause).toContain("limit plus 0.5 s paused");
     expect(text).toContain("limit plus 0.5 s paused");
   });
 
@@ -334,6 +542,15 @@ describe("limits", () => {
     expect(calls).toBe(0);
     expect(text).toContain("arguments passed their limit of 1048576 characters");
     expect(details.nestedCalls.calls).toEqual([]);
+    // A refused call must not leave a phantom pending call in the prelude.
+    const stalled = await run(
+      f,
+      'try { await tools.write({ content: "q".repeat(2 * 1024 * 1024) }); } catch {} await new Promise(() => {});',
+      "stalled-after-refusal",
+    );
+    expect(stalled.details.error).toBe("script");
+    expect(stalled.text).toContain("no tool call is pending");
+    expect(calls).toBe(0);
   });
 
   it("holds a huge return value or error text to the output limit, refused before it reaches the host", async () => {
@@ -346,6 +563,68 @@ describe("limits", () => {
     expect(thrown.details.error).toBe("script");
     expect(thrown.text.length).toBeLessThan(MAX_HELD_OUTPUT_CHARS);
     expect(thrown.text).toContain("…");
+  });
+
+  it("shares the output budget between printed text and the returned value", async () => {
+    const result = await run(
+      fixture({ tools: [] }),
+      'text("x".repeat(3 * 1024 * 1024)); return "y".repeat(2 * 1024 * 1024);',
+    );
+    expect(result.details.error).toBe("script");
+    expect(result.text).toContain("return value passed its output limit");
+  });
+
+  it("bounds errors by their encoded JSON size, including escaped characters", async () => {
+    const result = await run(
+      fixture({ tools: [] }),
+      'throw new Error("\\u0000".repeat(2 * 1024 * 1024));',
+    );
+    expect(result.details.error).toBe("script");
+    expect(result.text).toContain("…");
+    expect(result.text).not.toContain("error passed its limit");
+  });
+
+  it.each([
+    ["JSON escapes", '"\\\b\t\n\f\r\u0000\u0001', false, false],
+    ["Unicode pairs and lone surrogates", "😀\ud800x\udc00", false, false],
+    ["a long name", "x", true, false],
+    ["a thrown string without name or stack", "\u0000", false, true],
+  ] as const)(
+    "keeps %s inside the encoded worker error budget",
+    async (_label, sample, longName, plain) => {
+      const limit = 1_024;
+      let exited: Promise<void> | undefined;
+      const sandbox = new CodemodeSandbox({
+        maxOutputChars: limit,
+        onWorkerStarted: (exit) => {
+          exited = exit;
+        },
+      });
+      try {
+        const result = await sandbox.execute(
+          plain
+            ? `throw ${JSON.stringify(sample)}.repeat(4096);`
+            : `const error = new Error(${JSON.stringify(sample)}.repeat(4096));
+               ${longName ? 'error.name = "x".repeat(4096);' : ""}
+               throw error;`,
+        );
+        expect(result.ok).toBe(false);
+        if (result.ok || result.error.kind !== "script") throw new Error("Expected a script error");
+        const { kind: _kind, ...error } = result.error;
+        expect(JSON.stringify(error).length).toBeLessThanOrEqual(limit);
+        expect(error.message).toContain("…");
+        expect(error.message).not.toContain("error passed its limit");
+      } finally {
+        await sandbox.close();
+        await exited;
+      }
+    },
+  );
+
+  it("retains upstream's item bound even when every printed string is empty", async () => {
+    const result = await run(fixture({ tools: [] }), 'while (true) text("");');
+    expect(result.details.error).toBe("script");
+    expect(result.text).toContain("100000 text(), image(), and console calls");
   });
 
   it("stops a program that keeps calling past its limit", async () => {
@@ -568,6 +847,40 @@ function markedRead(toolName: string): McpToolDefinition {
 }
 
 describe("questions asked while a call runs", () => {
+  it("does not count journaled MCP errors as successful calls on replay", async () => {
+    const halt = halter();
+    const name = mcpProviderToolName("srv", "Server", "fail");
+    let calls = 0;
+    const tool = resultTool(name, {
+      content: [
+        { type: "text", text: MCP_UNTRUSTED_DATA_WARNING },
+        { type: "text", text: "server failure" },
+      ],
+      details: {},
+      isError: true,
+    });
+    const execute = tool.execute;
+    tool.execute = async (...args) => {
+      calls += 1;
+      return execute(...args);
+    };
+    const f = fixture({ tools: [tool, halt.tool] });
+    const code = `await tools.${name}({}); await tools.halt({}); throw new Error('later');`;
+    await run(f, code, "failed-replay", halt.state.controller.signal);
+    halt.state.halting = false;
+    const replay = await run(f, code, "failed-replay");
+    expect(calls).toBe(1);
+    expect(replay.isError).toBe(true);
+    expect(replay.details.callCounts).toEqual({
+      succeeded: 1,
+      failed: 1,
+      unfinished: 0,
+      replayed: 1,
+    });
+    expect(replay.text).toContain("1 failed (replayed)");
+    expect(replay.text).toContain("Program failed after 1 successful call");
+  });
+
   it("holds MCP sign-in questions to one at a time, keeps reads overlapping until they ask, and stops the clock", async () => {
     let asking = 0;
     let peakAsking = 0;
@@ -903,7 +1216,40 @@ describe("replay", () => {
     const replay = await run(f, code, "outer-5");
     expect(calls).toBe(2);
     expect(replay.details.error).toBe("replay");
+    expect(replay.details.callCounts).toEqual({
+      succeeded: 2,
+      failed: 0,
+      unfinished: 0,
+      replayed: 1,
+    });
+    expect(replay.text).toContain("Program failed after 2 successful calls");
+    expect(replay.text).toContain("Completed calls are not rolled back");
     expect(replay.text).toContain("Replay cannot answer call 2 (big)");
+  });
+
+  it("preserves failure classification when an inspectable error result is too large to replay", async () => {
+    const journal = new CodeModeJournal();
+    const code = "await tools.write({});";
+    const entry = journal.open(runKey("unkept-error", code), 0);
+    entry.bytes = 4 * 1024 * 1024;
+    remember(entry, 1, {
+      name: "write",
+      argumentsDigest: digest(canonicalJson({})),
+      outcome: { ok: true, value: "inspectable error" },
+      isError: true,
+    });
+    const execute = vi.fn(() => "must not repeat");
+    const f = fixture({ tools: [textTool("write", execute)], journal });
+    const replay = await run(f, code, "unkept-error");
+    expect(execute).not.toHaveBeenCalled();
+    expect(replay.isError).toBe(true);
+    expect(replay.details.callCounts).toEqual({
+      succeeded: 0,
+      failed: 1,
+      unfinished: 0,
+      replayed: 0,
+    });
+    expect(replay.text).toContain("1 call: 0 ok, 1 failed");
   });
 
   it("forgets the oldest unfinished run once the journal is full", async () => {
@@ -1159,7 +1505,7 @@ describe("results", () => {
       ],
     });
     expect((await run(empty, `return await tools.${definition.providerName}({});`)).text).toContain(
-      '{"text":"","isError":false,"images":[],"omittedImages":0}',
+      '{"text":"","isError":false,"images":[],"omittedImages":0,"result":{"version":1,"truncated":false}}',
     );
     const textOnly = fixture({
       tools: [
@@ -1179,9 +1525,11 @@ describe("results", () => {
     });
     expect(
       (await run(textOnly, `return await tools.${definition.providerName}({});`)).text,
-    ).toContain('{"text":"just text","isError":false,"images":[],"omittedImages":0}');
+    ).toContain(
+      '{"text":"just text","isError":false,"images":[],"omittedImages":0,"result":{"version":1,"truncated":false}}',
+    );
     expect((await run(plain, `return await tools.${definition.providerName}({});`)).text).toContain(
-      '{"text":"bare","isError":false,"images":[],"omittedImages":0}',
+      '{"text":"bare","isError":false,"images":[],"omittedImages":0,"result":{"version":1,"truncated":false}}',
     );
   });
 
@@ -1547,6 +1895,15 @@ describe("results", () => {
         ]);
       } else {
         expect(replay.details.error).toBe("replay");
+        expect(replay.details.callCounts).toEqual({
+          succeeded: 1,
+          failed: 0,
+          unfinished: 0,
+          replayed: 0,
+        });
+        expect(replay.content[0]).toMatchObject({
+          text: expect.stringContaining("Completed calls are not rolled back"),
+        });
         expect(replay.content[0]).toMatchObject({
           type: "text",
           text: expect.stringContaining("its result was too large to keep"),

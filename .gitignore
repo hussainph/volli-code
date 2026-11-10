@@ -26,6 +26,9 @@ apps/desktop/e2e/bench/**/dist/
 # VC-353 benchmark outputs and generated fixture profiles are local evidence.
 /performance-results/
 /apps/desktop/.performance-fixtures/
+# Machine-specific benchmark captures are local evidence, not public source.
+/apps/desktop/e2e/bench/sidebar-store/*.json
+/packages/agent-runtime/bench/parallel-tools/profile.measured.json
 # Local benchmark databases, generated probes, and result captures (VC-355).
 /.bench-tmp/
 # Workspace-local verification, temporary test data, and PR evidence or drafts.

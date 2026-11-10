@@ -1,3 +1,4 @@
+import { Spinner } from "@renderer/components/ui/spinner";
 /**
  * A headline, the faults actually present, and the detail behind a disclosure.
  *
@@ -8,7 +9,7 @@
  * fault with a remedy next to it.
  */
 import * as React from "react";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
+import { ChevronDownIcon } from "@renderer/components/ui/icon";
 
 import { Button } from "@renderer/components/ui/button";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
@@ -67,9 +68,13 @@ export function HealthPanel({
   const detailsId = React.useId();
 
   return (
-    <section className="rounded-lg bg-card px-4 py-4" data-health-state={state}>
+    <section
+      hidden={state === "healthy"}
+      className="rounded-container bg-card px-4 py-4"
+      data-health-state={state}
+    >
       <header className="flex items-center gap-2 py-1">
-        <StatusDot state={HEALTH_DOT[state]} size="md" />
+        {state === "checking" ? <Spinner /> : <StatusDot state={HEALTH_DOT[state]} size="md" />}
         <h2 className="min-w-0 flex-1 text-ui font-medium">{headline}</h2>
         {actions}
       </header>
@@ -80,7 +85,9 @@ export function HealthPanel({
             <div key={fault.id} className="flex items-start gap-4 border-t border-border/50 py-2">
               <div className="min-w-0 flex-1">
                 <p className="text-ui">{fault.headline}</p>
-                <p className="text-ui text-muted-foreground">{fault.detail}</p>
+                {fault.detail ? (
+                  <p className="text-ui text-muted-foreground">{fault.detail}</p>
+                ) : null}
               </div>
               {fault.remedy ? (
                 <Button size="xs" variant="outline" onClick={fault.remedy.onAct}>
@@ -101,7 +108,7 @@ export function HealthPanel({
             onClick={() => setOpen((current) => !current)}
             className="flex w-full items-center gap-1 py-2 text-ui text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
           >
-            <CaretDownIcon
+            <ChevronDownIcon
               aria-hidden
               className={cn("size-3.5 transition-transform", open && "rotate-180")}
             />

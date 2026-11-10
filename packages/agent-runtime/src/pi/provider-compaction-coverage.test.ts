@@ -1380,8 +1380,9 @@ describe("toAnthropicMessages — visible-message conversion", () => {
           {
             type: "tool_result",
             tool_use_id: "call_1_x",
-            is_error: true,
+            is_error: false,
             content: [
+              { type: "text", text: "The tool call failed." },
               { type: "text", text: "out" },
               {
                 type: "image",

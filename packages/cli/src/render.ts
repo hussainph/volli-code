@@ -1386,11 +1386,177 @@ function renderPromptBaseline(data: Record<string, unknown>): string | null {
     (section) =>
       `  ${terminalSafeInline(section["id"])}  ~${terminalSafeInline(section["tokens"])} tokens  ${terminalSafeInline(section["chars"])} chars${cacheClassCell(section)}`,
   );
+  // Project-sized, not Volli's (VC-1054): already inside the total, said once
+  // so a reader can tell the repository's file from what Volli composes.
+  const repo = data["repoInstructions"];
+  const repoLine =
+    isRecord(repo) && typeof repo["chars"] === "number" && repo["chars"] > 0
+      ? [
+          `of which repository instructions  ~${terminalSafeInline(repo["tokens"])} tokens  ${terminalSafeInline(repo["chars"])} chars`,
+        ]
+      : [];
   const excluded =
     typeof data["excluded"] === "string"
       ? [`excluded  ${terminalSafeInline(data["excluded"])}`]
       : [];
-  return [header, ...rows, ...excluded].join("\n");
+  return [header, ...repoLine, ...rows, ...excluded].join("\n");
+}
+
+/** A count or duration as a cell: the number, or `-` when the answer had none. */
+function perfNumber(value: unknown, unit = ""): string {
+  return typeof value === "number" && Number.isFinite(value)
+    ? `${value.toLocaleString("en-US")}${unit}`
+    : "-";
+}
+
+/** How long the app was watched, as hours and minutes. */
+function perfObserved(value: unknown): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "-";
+  if (value < 60_000) return `${Math.round(value / 1000)}s`;
+  const minutes = Math.round(value / 60_000);
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+function perfInstant(value: unknown): string {
+  return typeof value === "number" && Number.isFinite(value)
+    ? new Date(value).toISOString()
+    : "all time";
+}
+
+function perfKey(value: unknown): string {
+  return value === null || value === undefined ? "-" : terminalSafeInline(value);
+}
+
+/** The `N more` line under a limited list, or nothing. */
+function perfMore(data: Record<string, unknown>, shown: number, noun: string): string[] {
+  const total = data["groupCount"];
+  return typeof total === "number" && total > shown
+    ? [`  ${total - shown} more ${noun} (--limit)`]
+    : [];
+}
+
+/** LoAF signals overlap; coverage is per metric, never inferred from the stall count. */
+function perfLoaf(value: unknown, prefix = "  LoAF"): string[] {
+  if (!isRecord(value)) return [];
+  const labels = [
+    ["script", "script (attributed)"],
+    ["blocking", "blocking"],
+    ["render", "render (inclusive)"],
+    ["styleLayout", "style/layout (render subset)"],
+  ] as const;
+  return labels.map(([key, label]) => {
+    const metric = value[key];
+    if (!isRecord(metric)) return `${prefix} ${label}  unknown`;
+    const total = metric["measuredFrames"] === 0 ? "unknown" : perfNumber(metric["totalMs"], " ms");
+    return `${prefix} ${label}  ${total}  ${perfNumber(metric["msPerHour"], " ms/h")}  measured ${perfNumber(metric["measuredFrames"])} frames`;
+  });
+}
+
+/**
+ * `volli perf top` (VC-1092): the window and how long the app was watched in
+ * it, the totals with their per-hour rates, then one row per group.
+ */
+function renderPerfTop(data: Record<string, unknown>): string | null {
+  const groups = recordsAt(data, "groups");
+  if (groups === null) return null;
+  const header = [
+    `since ${perfInstant(data["since"])}`,
+    `observed ${perfObserved(data["observedMs"])}`,
+    `${perfNumber(data["stalls"])} stalls, ${perfNumber(data["stallMs"], " ms")}`,
+    `${perfNumber(data["stallMsPerHour"], " ms/h")}`,
+    ...(typeof data["process"] === "string" ? [terminalSafeInline(data["process"])] : []),
+  ].join("  ");
+  const rows = groups.map(
+    (group) =>
+      `  ${perfKey(group["key"])}  ×${perfNumber(group["count"])}  total ${perfNumber(group["totalMs"], " ms")}  p50 ${perfNumber(group["p50Ms"])}  p95 ${perfNumber(group["p95Ms"])}  max ${perfNumber(group["maxMs"])}  ${perfNumber(group["stallMsPerHour"], " ms/h")}`,
+  );
+  return [
+    header,
+    ...perfLoaf(data["loaf"]),
+    ...rows,
+    ...perfMore(data, groups.length, "groups"),
+  ].join("\n");
+}
+
+/** `volli perf stalls`: one stall per line, newest first. */
+function renderPerfStalls(data: Record<string, unknown>): string | null {
+  const stalls = recordsAt(data, "stalls");
+  if (stalls === null) return null;
+  if (stalls.length === 0) return "no stalls recorded";
+  return stalls
+    .map((stall) =>
+      [
+        perfInstant(stall["at"]),
+        terminalSafeInline(stall["process"]),
+        `${terminalSafeInline(stall["door"])}/${terminalSafeInline(stall["operation"])}`,
+        perfNumber(stall["durationMs"], " ms"),
+        terminalSafeInline(stall["kind"]),
+        ...(
+          [
+            ["scriptTotalMs", "script (attributed)"],
+            ["blockingMs", "blocking"],
+            ["renderMs", "render (inclusive)"],
+            ["styleLayoutMs", "style/layout (render subset)"],
+            ["scriptMs", "top script"],
+          ] as const
+        ).flatMap(([key, label]) =>
+          typeof stall[key] === "number" ? [`${label} ${perfNumber(stall[key], " ms")}`] : [],
+        ),
+        ...(
+          [
+            ["scriptFile", "file"],
+            ["scriptFunction", "function"],
+            ["scriptInvoker", "invoker"],
+          ] as const
+        ).flatMap(([key, label]) =>
+          typeof stall[key] === "string" ? [`${label} ${terminalSafeInline(stall[key])}`] : [],
+        ),
+        ...(typeof stall["label"] === "string"
+          ? [`label ${terminalSafeInline(stall["label"])}`]
+          : []),
+        ...(typeof stall["session"] === "string"
+          ? [`session ${terminalSafeInline(stall["session"])}`]
+          : []),
+        ...(typeof stall["hint"] === "string"
+          ? [`after ${terminalSafeInline(stall["hint"])}`]
+          : []),
+        terminalSafeInline(stall["version"]),
+      ].join("  "),
+    )
+    .join("\n");
+}
+
+function perfSide(name: string, side: unknown): string {
+  if (!isRecord(side)) return `${name}  -`;
+  return `${name}  ${terminalSafeInline(side["version"])}  observed ${perfObserved(side["observedMs"])}  ${perfNumber(side["stalls"])} stalls  ${perfNumber(side["stallMsPerHour"], " ms/h")}`;
+}
+
+function perfCell(cell: unknown): string {
+  return isRecord(cell)
+    ? `${perfNumber(cell["stallMsPerHour"], " ms/h")} (×${perfNumber(cell["count"])}, p95 ${perfNumber(cell["p95Ms"])})`
+    : "-";
+}
+
+/** `volli perf compare`: each side's totals, then each group a → b with the move. */
+function renderPerfCompare(data: Record<string, unknown>): string | null {
+  const groups = recordsAt(data, "groups");
+  if (groups === null) return null;
+  const rows = groups.map((group) => {
+    const delta = group["deltaStallMsPerHour"];
+    const move =
+      typeof delta === "number"
+        ? `Δ ${delta > 0 ? "+" : ""}${perfNumber(delta, " ms/h")}`
+        : `Δ ${perfNumber(group["deltaTotalMs"], " ms total")}`;
+    return `  ${perfKey(group["key"])}  a ${perfCell(group["a"])}  b ${perfCell(group["b"])}  ${move}`;
+  });
+  return [
+    perfSide("a", data["a"]),
+    ...perfLoaf(isRecord(data["a"]) ? data["a"]["loaf"] : undefined, "  a LoAF"),
+    perfSide("b", data["b"]),
+    ...perfLoaf(isRecord(data["b"]) ? data["b"]["loaf"] : undefined, "  b LoAF"),
+    ...rows,
+    ...perfMore(data, groups.length, "groups"),
+  ].join("\n");
 }
 
 function renderStableLines(command: string, data: unknown, full: boolean): string | null {
@@ -1432,6 +1598,9 @@ function renderStableLines(command: string, data: unknown, full: boolean): strin
   }
   if (command === "model.list") return renderModelList(data);
   if (command === "cost") return renderCostReport(data);
+  if (command === "perf.top") return renderPerfTop(data);
+  if (command === "perf.stalls") return renderPerfStalls(data);
+  if (command === "perf.compare") return renderPerfCompare(data);
   if (command === "label.list") {
     const labels = recordsAt(data, "labels");
     return (
@@ -1810,9 +1979,9 @@ export function renderCliError(error: AgentError, options: RenderErrorOptions = 
 
 export function exitCodeForError(code: AgentErrorCode): 1 | 2 | 3 | 75 {
   if (code === "APP_UNREACHABLE") return 3;
-  // EX_TEMPFAIL: Volli Cloud was unreachable (or not caught up) and nothing
-  // was written, so the same command is safe to retry.
-  if (code === "OFFLINE" || code === "NOT_YET_SYNCED") return 75;
+  // EX_TEMPFAIL: Volli Cloud was unreachable, not caught up or busy, and
+  // nothing was written, so the same command is safe to retry.
+  if (code === "OFFLINE" || code === "NOT_YET_SYNCED" || code === "BUSY") return 75;
   if (
     code === "USAGE" ||
     code === "INVALID_REQUEST" ||

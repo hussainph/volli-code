@@ -35,7 +35,7 @@ export function offersReap(candidate: OrphanProcessCandidate): boolean {
  * terminals of the person's own has a person working.
  */
 export function processSummary(loading: boolean, inventory: OrphanProcessInventory | null): string {
-  if (loading) return "Looking…";
+  if (loading) return "Looking";
   if (inventory === null) return "Not scanned";
   const total = inventory.candidates.length;
   if (total === 0) return "None";

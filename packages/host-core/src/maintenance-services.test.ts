@@ -14,6 +14,7 @@ import { DatabaseRecovery } from "./database-recovery";
 import { OrphanProcessService } from "./process/orphan-processes";
 import { SpawnLedger } from "./process/spawn-ledger";
 import {
+  CHECKPOINT_BACKFILL_DELAY_MS,
   checkpointAndCloseDatabase,
   createDatabaseRecovery,
   createHostMaintenance,
@@ -349,6 +350,82 @@ describe("createHostMaintenance", () => {
     expect(signal.mock.calls).toEqual([[-4100, "SIGCONT"]]);
     expect(maintenance.spawnLedger.listParkedTerminals(Date.now())).toEqual([]);
     info.mockRestore();
+  });
+
+  it("backfills projection checkpoints once, after its delay, and joins it before close (VC-1076)", async () => {
+    recordingLoops();
+    seedWorktree(testDb.db, "session-backfill");
+    const checkpoints = () =>
+      testDb.db.prepare("SELECT session_id FROM session_projection_checkpoints").all();
+    const maintenance = createHostMaintenance({
+      db: testDb.db,
+      ports: { events, attention },
+      worktrees,
+      processReaders: readers(),
+      checkpointBackfill: true,
+      checkpointBackfillDelayMs: 0,
+    });
+    expect(checkpoints()).toEqual([]);
+    maintenance.start();
+    maintenance.start();
+    await vi.waitFor(() => expect(checkpoints()).toEqual([{ session_id: "session-backfill" }]));
+    maintenance.stop();
+    await maintenance.settled();
+  });
+
+  it("waits out its default delay, then logs a backfill that failed", async () => {
+    recordingLoops();
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const failure = new Error("database closed");
+    const original = testDb.db.prepare.bind(testDb.db);
+    const backfillReads: string[] = [];
+    const prepare = vi.spyOn(testDb.db, "prepare").mockImplementation((sql: string) => {
+      if (!sql.includes("session_projection_checkpoints")) return original(sql);
+      backfillReads.push(sql);
+      throw failure;
+    });
+    try {
+      const maintenance = createHostMaintenance({
+        db: testDb.db,
+        ports: { events, attention },
+        worktrees,
+        processReaders: readers(),
+        checkpointBackfill: true,
+      });
+      maintenance.start();
+      vi.advanceTimersByTime(CHECKPOINT_BACKFILL_DELAY_MS - 1);
+      expect(backfillReads).toEqual([]);
+      vi.advanceTimersByTime(1);
+      expect(backfillReads).toHaveLength(1);
+      maintenance.stop();
+      await maintenance.settled();
+      expect(JSON.stringify(warn.mock.calls)).toContain("projection checkpoint backfill failed");
+    } finally {
+      prepare.mockRestore();
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("never starts a backfill a stop beat to its delay", async () => {
+    recordingLoops();
+    seedWorktree(testDb.db, "session-unfolded");
+    const maintenance = createHostMaintenance({
+      db: testDb.db,
+      ports: { events, attention },
+      worktrees,
+      processReaders: readers(),
+      checkpointBackfill: true,
+      checkpointBackfillDelayMs: 5,
+    });
+    maintenance.start();
+    maintenance.stop();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await maintenance.settled();
+    expect(
+      testDb.db.prepare("SELECT session_id FROM session_projection_checkpoints").all(),
+    ).toEqual([]);
   });
 
   it("stops without building a retention watch nobody started", () => {

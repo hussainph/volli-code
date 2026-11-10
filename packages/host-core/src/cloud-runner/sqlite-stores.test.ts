@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import { openTestDb, type TestDb } from "../db/test-helpers";
 import {
   MovedSessionCursorConflictError,
-  releaseMovedSessionCursors,
   seedMovedSessionCursors,
   sqliteDrainCursorStore,
   sqliteJobJournalStore,
@@ -69,6 +68,47 @@ describe("the runner-local stores (migration 65)", () => {
       ["s1", null],
     ]);
     expect(store.get("s0")?.blocked).toEqual({ code: "fenced", message: "moved", at: 9 });
+  });
+
+  it("updates a cursor only as it was last read: never creates, never revives, never goes back", () => {
+    const store = sqliteDrainCursorStore(db(), () => 42);
+    const cursor = {
+      sessionId: "s",
+      ownerUserId: "u",
+      generation: 1,
+      acceptedThrough: 5,
+      blocked: null,
+    };
+    // Gone (taken back): nothing is written, and no row appears.
+    expect(store.update(cursor, { generation: 1, acceptedThrough: 5 })).toBe(false);
+    expect(store.get("s")).toBeNull();
+    store.save(cursor);
+    expect(
+      store.update({ ...cursor, acceptedThrough: 7 }, { generation: 1, acceptedThrough: 5 }),
+    ).toBe(true);
+    // A writer that last read 5 (a reply from a copy since re-seeded at 7) moves nothing.
+    expect(
+      store.update({ ...cursor, acceptedThrough: 6 }, { generation: 1, acceptedThrough: 5 }),
+    ).toBe(false);
+    // Another generation's writer, or another owner's.
+    expect(
+      store.update({ ...cursor, acceptedThrough: 9 }, { generation: 2, acceptedThrough: 7 }),
+    ).toBe(false);
+    expect(
+      store.update(
+        { ...cursor, ownerUserId: "v", acceptedThrough: 9 },
+        { generation: 1, acceptedThrough: 7 },
+      ),
+    ).toBe(false);
+    expect(store.get("s")).toMatchObject({ ownerUserId: "u", generation: 1, acceptedThrough: 7 });
+    // A claim's generation bump, from what it read.
+    expect(
+      store.update(
+        { ...cursor, generation: 2, acceptedThrough: 7 },
+        { generation: 1, acceptedThrough: 7 },
+      ),
+    ).toBe(true);
+    expect(store.get("s")).toMatchObject({ generation: 2, acceptedThrough: 7 });
   });
 
   it("refuses a negative cursor", () => {
@@ -215,7 +255,7 @@ describe("a moved project's Sessions handed to this runner", () => {
     { sessionId: "m2", acceptedThrough: 0 },
   ];
 
-  it("seeds a cursor at the imported head, once, and takes it back while unchanged", () => {
+  it("seeds a cursor at the imported head, once", () => {
     const handle = db();
     const store = sqliteDrainCursorStore(handle);
     expect(seedMovedSessionCursors(handle, "u", moved, () => 5)).toEqual({
@@ -231,20 +271,6 @@ describe("a moved project's Sessions handed to this runner", () => {
     });
     // Idempotent: a resumed handover changes nothing.
     expect(seedMovedSessionCursors(handle, "u", moved)).toEqual({ seeded: 0, unchanged: 2 });
-
-    // m1 took new facts in Volli Cloud: a roll back keeps its cursor and says so.
-    store.save({ ...store.get("m1")!, acceptedThrough: 13 });
-    expect(
-      releaseMovedSessionCursors(handle, "u", [
-        ...moved,
-        { sessionId: "gone", acceptedThrough: 1 },
-      ]),
-    ).toEqual({
-      released: 1,
-      kept: ["m1"],
-    });
-    expect(store.get("m2")).toBeNull();
-    expect(store.get("m1")?.acceptedThrough).toBe(13);
   });
 
   it("refuses the lot when one Session already drains under another claim", () => {

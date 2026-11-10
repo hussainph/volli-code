@@ -85,7 +85,7 @@ export function railReadFeedback(state: RailReadState, noun: string): RailReadFe
       return { place: "body", kind: "failed", face: sentence, detail: sentence };
     }
     if (state.pending)
-      return { place: "body", kind: "reading", face: "Reading…", detail: "Reading…" };
+      return { place: "body", kind: "reading", face: "Reading", detail: "Reading" };
     return null;
   }
   if (state.failed) {
@@ -100,7 +100,7 @@ export function railReadFeedback(state: RailReadState, noun: string): RailReadFe
     return {
       place: "heading",
       kind: "refreshing",
-      face: "Refreshing…",
+      face: "Refreshing",
       detail: "Refreshing · last read shown",
     };
   }

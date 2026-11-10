@@ -5,7 +5,7 @@ It is a classifier: it reads a JSON **state** and answers named, typed
 **questions** — `choice` (one option key of several), `score` (a level on a
 scale, lowest first) or `bool` (yes or no) — with probabilities and a
 confidence. It writes no text, which is why it answers in milliseconds for a
-fraction of a chat turn's cost. pi-ai 0.99 provides the models; this document
+fraction of a chat turn's cost. pi-ai provides the models; this document
 is how Volli uses them.
 
 ## What a person configures

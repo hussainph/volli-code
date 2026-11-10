@@ -1,44 +1,14 @@
 /**
- * One shared cache of usage rollups — what a Session, Ticket or project has
- * cost (VC-87).
+ * Shared usage-report cache for the project, Session and Ticket rails.
+ * Concurrent callers share a read; a remount under the same lifecycle signal
+ * reuses its report. This signal is deliberately broad: it moves on lifecycle
+ * transitions, resident Session additions/removals and other Sessions' work,
+ * not just usage appends. Refresh bursts coalesce for 250 ms, keeping the old
+ * figure visible. An invalidation arriving during a read is drained afterward
+ * rather than lost with the old snapshot. Nothing polls.
  *
- * THREE SURFACES ask this question and none owns the others: Home's Session
- * block asks about the Session in front, Home's Project block asks about the
- * project, and the Ticket rail's card asks about a Ticket. A fetch per surface
- * would mean several indexed reads of the same projection on one frame, and
- * answers that can disagree — the same argument `stores/working-copy.ts` already
- * settled for working copy readings.
- *
- * PULLED, NOT PUSHED, and the push channel is deliberately absent rather than
- * missing. Usage only changes when a turn settles, which the renderer already
- * learns through the Session stream; the rails re-ask on that signal via
- * {@link UsageState.refresh}. A second push channel carrying the same news
- * would be a second clock to keep in step, and a poll loop would spend a
- * database read every few seconds to be told nothing happened. **Nothing in
- * this module polls.**
- *
- * A usage read must also never move a Session's `lastActivityAt`: telemetry
- * arriving is not new agent work, and a roster that re-sorted itself when a
- * cost landed would say otherwise. That is enforced where the fact is written,
- * not here — this module only reads.
- *
- * The error is kept rather than toasted, like the working copy's. A rollup that
- * cannot be read is a block that does not appear; a toast about SQLite over
- * the rail someone is working in would be the loudest thing on screen for the
- * least useful reason.
- *
- * The rails asked for `refresh` over an `ensure` because a rail unmounts on
- * every page and Session change while work goes on settling behind it: an
- * entry that answered from cache would show a figure from some earlier minute
- * and look entirely settled about it. What answers that (VC-373) is the
- * settle SIGNAL — the lifecycle string the rail already computes
- * (`usage-rail.tsx` `useSettleSignal`) — carried on each entry as the value
- * it was read under. Usage only changes when a turn settles, and a settle
- * moves that signal, so `refresh` re-reads exactly when the answer could have
- * moved: a ticket switch, a rail page flip or a remount with nothing settled
- * in between is a no-op that repaints the same figure, never a second indexed
- * read. `refresh` still keeps the cached entry visible while it re-reads,
- * which buys the same absence of flicker without the lie.
+ * Reads never move Session activity (enforced by the writer). Failures remain
+ * on the entry as before, and are retried by the next explicit refresh.
  */
 import { create } from "zustand";
 import {
@@ -119,7 +89,7 @@ export function createUsageStore() {
    * nothing renders from it, and putting it in state would re-render every
    * consumer twice per read for a fact none of them show.
    */
-  const inFlight = new Map<string, Promise<void>>();
+  const inFlight = new Map<string, { signal: string; promise: Promise<void> }>();
 
   return create<UsageState>()((set, get) => ({
     byQuery: {},
@@ -127,11 +97,14 @@ export function createUsageStore() {
     refresh(query, signal) {
       const key = usageKey(query.scope, query.windowMs, query.groupBy);
       const existing = inFlight.get(key);
-      if (existing !== undefined) return existing;
+      if (existing !== undefined) {
+        // A settle during the read is not covered by that read's snapshot.
+        // Keep the latest signal and drain it before resolving shared callers.
+        existing.signal = signal;
+        return existing.promise;
+      }
       const cached = get().byQuery[key];
-      // Read under this same signal: nothing has settled since, and usage is
-      // written by settles alone, so the figure is current. Repainting it is
-      // the whole answer — and the read a rail flip used to spend is not.
+      // No invalidation since this report: a rail flip reuses the figure.
       if (cached?.status === "ready" && cached.signal === signal) return Promise.resolve();
       // Only the FIRST read announces itself as loading; a later one keeps the
       // figure already on screen until it is replaced, so a cost never blinks
@@ -139,20 +112,35 @@ export function createUsageStore() {
       if (cached === undefined) {
         set((state) => ({ byQuery: { ...state.byQuery, [key]: { status: "loading" } } }));
       }
-      const pending = read(query)
-        .then((entry) => {
+      const job = { signal, promise: Promise.resolve() };
+      const run = async () => {
+        // The global lifecycle signal also moves on attach/start/close and for
+        // other Sessions. Coalesce a burst, without polling or postponing the
+        // first figure. The previous report stays visible during the wait.
+        if (cached?.status === "ready") await coalesce();
+        for (;;) {
+          const readingSignal = job.signal;
+          const entry = await read(query);
           set((state) => ({
             byQuery: {
               ...state.byQuery,
-              [key]: entry.status === "ready" ? { ...entry, signal } : entry,
+              [key]: entry.status === "ready" ? { ...entry, signal: readingSignal } : entry,
             },
           }));
-        })
-        .finally(() => inFlight.delete(key));
-      inFlight.set(key, pending);
-      return pending;
+          if (job.signal === readingSignal) return;
+          await coalesce();
+        }
+      };
+      job.promise = run().finally(() => inFlight.delete(key));
+      inFlight.set(key, job);
+      return job.promise;
     },
   }));
+}
+
+/** A bounded refresh delay, not a poll: only an explicit invalidation schedules it. */
+function coalesce(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 250));
 }
 
 /** One read, with both failure shapes folded onto the same entry. */

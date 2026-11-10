@@ -1,11 +1,10 @@
 ---
 title: Local data and network access
-description: Find Volli's local storage and understand which model, browser, search, MCP, GitHub, update, and telemetry requests leave your Mac.
+description: Find Volli's local storage and see which model, browser, search, MCP, GitHub, update, and telemetry requests leave your Mac.
 ---
 
-Volli stores projects, tickets, and Session history locally. You do not need
-a Volli account or a hosted project database. Local storage does not mean
-every feature runs offline.
+Volli stores your projects, tickets, and Session history on your Mac. Model
+requests and connected tools can send data to other services.
 
 ## Local storage
 
@@ -15,7 +14,8 @@ every feature runs offline.
 | Ticket worktrees | `~/.volli/worktrees/` |
 | Main checkout | The repository folder you added as a project |
 
-Removing a project from Volli does not delete its repository folder. Closing a
+Removing a project from Volli keeps its repository folder, tickets, and
+Sessions. Add the same folder again to restore it. Closing a
 chat tab does not delete its Session history. Archiving a ticket keeps its
 history and branch; worktree cleanup follows separate rules.
 
@@ -27,7 +27,7 @@ restored. See [Manage local storage](/guides/storage/) before removing data.
 | Feature | What goes to another service |
 | --- | --- |
 | Model requests | Conversation context and tool results sent to the provider you select |
-| Web search | Query terms sent to the search provider configured in **Settings → Web Search** |
+| Web search | Query terms sent to the search provider configured in **Settings → All projects → Web Search** |
 | Web reads and Browser Tabs | Requests to the websites you or a Session open; browser actions can submit information to those sites |
 | Remote MCP servers | Tool arguments, which can include paths or file contents, sent to the configured server |
 | Git and pull requests | Repository operations and pull-request checks against your configured remotes and GitHub |
@@ -44,20 +44,22 @@ A worktree separates Git changes. It does not sandbox processes. Shell
 commands and local MCP servers run on your Mac. A local MCP server runs as
 your macOS user and can access the files and network that user can access.
 
-Project authority settings control supported agent operations. The default
-**Observe** posture saves the attachment's policy without enforcing a gate. See
-[Agent authority](/guides/authority/) before relying on it as a restriction.
+Project authority settings control supported agent operations; they are not an
+operating-system sandbox. See [Agent authority](/guides/authority/) for the
+coordination permissions and execution boundaries.
 
 ## Optional network features
 
-Set **Settings → Web Search → Provider** to **Off** if you do not want the
-search tool to use a provider. This does not disable Browser Tabs, web reads,
-model requests, or network access from shell commands.
+In **Settings → All projects → Web Search**, select **Turn off** to leave web
+search and web-read tools out of new Sessions. This does not disable Browser Tabs, model
+requests, or network access from shell commands.
 
-**Settings → Telemetry** is off until you enable it. You supply the collector.
+**Settings → All projects → Privacy & data → Export agent telemetry** is off
+until you enable it. You supply the collector.
 It is separate from the model requests a chat needs to run.
 
-In **Configure → MCP Servers**, select only the tools you intend to use.
-Changes apply to new Sessions. A Session keeps the tool list it started with,
-so disabling a server does not revoke that list. See
+In **Settings → All projects → MCP Servers**, select only the tools you intend
+to use.
+Disabling a server blocks calls until you re-enable it, but does not remove
+the tool names already recorded for an existing Session. See
 [MCP servers](/guides/mcp-servers/) for transport and deletion limits.

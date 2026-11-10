@@ -247,7 +247,8 @@ describe("identity", () => {
       }),
     });
     const line = container.querySelector("[data-peek-identity]")?.textContent ?? "";
-    expect(line).toContain("Anthropic");
+    expect(line).not.toContain("Anthropic");
+    expect(container.querySelector('[data-peek-identity] [aria-label="Anthropic"]')).not.toBeNull();
     expect(line).toContain("claude-opus-5");
     expect(line).toContain("Automation · Nightly triage");
   });
@@ -272,9 +273,7 @@ describe("identity", () => {
       }),
     });
     const identity = container.querySelector("[data-peek-identity]");
-    expect(identity?.textContent).toContain(
-      "Claude Opus 5 · Anthropic · Automation · Nightly triage",
-    );
+    expect(identity?.textContent).toContain("Claude Opus 5 · Automation · Nightly triage");
     expect(identity?.textContent).not.toContain("claude-opus-5");
     expect(identity?.querySelector("svg[aria-hidden] path")).not.toBeNull();
   });
@@ -353,12 +352,12 @@ describe("the summary", () => {
     );
   });
 
-  it("holds the box with a skeleton while the fold is in flight", () => {
+  it("keeps an accessible pending region without invented prose", () => {
     render({ content: null, loading: true });
     const block = container.querySelector("[data-summary-state]");
     expect(block?.getAttribute("data-summary-state")).toBe("loading");
     expect(block?.getAttribute("aria-busy")).toBe("true");
-    expect(container.querySelector("[data-slot='skeleton']")).not.toBeNull();
+    expect(container.querySelector("[data-slot='skeleton']")).toBeNull();
   });
 
   it("says so when the fold gave nothing readable", () => {

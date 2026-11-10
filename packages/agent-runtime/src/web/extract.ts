@@ -24,6 +24,7 @@
 import { Readability } from "@mozilla/readability";
 import { JSDOM, VirtualConsole } from "jsdom";
 import TurndownService from "turndown";
+import { sameOriginIconUrl } from "./source-icon-target";
 
 /**
  * The bounds extraction runs inside, beside the transport's own.
@@ -35,11 +36,12 @@ import TurndownService from "turndown";
  * the thread for 34 seconds, and 256 KiB of the same shape for over 90. That
  * page passes a 2 MiB byte bound without noticing it.
  *
- * This matters more than it would in a worker. `webPortsFor` builds the fetcher
- * in Electron's main process, which also owns SQLite, the IPC bridge, the
- * `volli` CLI socket and every terminal — and extraction is synchronous, so no
- * deadline, timer or abort signal can interrupt it once it starts. A bound that
- * is not enforced before the work begins is not enforced at all.
+ * Extraction is synchronous, so no timer or abort signal on the thread running
+ * it can interrupt it once it starts. A host runs it in a worker thread
+ * (`extract-worker.ts`), where a deadline terminates the worker instead; these
+ * bounds still decide how much work a page may ask for before that deadline is
+ * reached, and on a host that names no worker they are the only bound there is.
+ * A bound that is not enforced before the work begins is not enforced at all.
  */
 export const WEB_EXTRACT_LIMITS = {
   /**
@@ -319,8 +321,8 @@ function endOfSubtree(folded: string, name: string, from: number): number {
  * tag, and both used to fold the entire document to get one — inside the scan
  * loop, once per element. That made the scan quadratic in the size of the
  * document while bounding nothing: measured, 2 MiB of `<script></script>` pairs
- * held this thread for 59 seconds. Extraction is synchronous and runs in
- * Electron's main process, so neither the fetch deadline nor an abort signal
+ * held this thread for 59 seconds. Extraction is synchronous and then ran on
+ * Electron's main thread, so neither the fetch deadline nor an abort signal
  * could interrupt it — the whole app was frozen for the duration.
  *
  * Folded over `[A-Z]` rather than with `toLowerCase()`, because every offset
@@ -725,6 +727,8 @@ function readMetadata(doc: Document): PageMetadata {
 
 /** What extraction produced, and how much of the page it stands for. */
 export interface ExtractedDocument {
+  /** Ephemeral metadata for the host, never copied into RuntimeWebDocument/tool output. */
+  sourceIconUrl?: string;
   /** The article as Markdown, unbounded — the caller owns the character bound. */
   text: string;
   /**
@@ -801,6 +805,17 @@ export function extractReadableMarkdown(
     const doc = dom.window.document;
     // Before sanitising, which removes the `<meta>` elements it reads.
     const metadata = readMetadata(doc);
+    // Parse already-admitted HTML once; no subresource loads are enabled.
+    // Retain one bounded URL, never the DOM/body, across the worker boundary.
+    let sourceIconUrl: string | null = null;
+    let links = 0;
+    for (const link of doc.head.querySelectorAll("link[rel][href]")) {
+      if (++links > 32) break;
+      if (!(link.getAttribute("rel") ?? "").toLowerCase().split(/\s+/u).includes("icon")) continue;
+      sourceIconUrl = sameOriginIconUrl(link.getAttribute("href") ?? "", url);
+      if (sourceIconUrl !== null) break;
+    }
+    const decoration = sourceIconUrl === null ? {} : { sourceIconUrl };
     sanitize(doc);
     // Before anything walks the tree for meaning. Readability's cost is a
     // function of the shape it is handed, so the shape is bounded first.
@@ -825,7 +840,7 @@ export function extractReadableMarkdown(
       const heading = title === "" ? "" : `# ${title}\n\n`;
       const text = `${heading}${turndown.turndown(content)}`.trim();
       /* v8 ignore next -- unreachable today and kept anyway: Readability only returns an article once it has found several hundred characters of text, so the conversion of one cannot come back empty. That is a fact about the version of a third-party library this happens to be pinned to, not a property of the contract, and the cost of being wrong about it is the empty result the fallbacks below exist to prevent. */
-      if (text !== "") return { text, extracted: true, truncated: cut };
+      if (text !== "") return { text, extracted: true, truncated: cut, ...decoration };
     }
 
     // The two fallbacks below exist because the honest answer to "what does
@@ -837,7 +852,7 @@ export function extractReadableMarkdown(
     // The whole body as Markdown: no article, but a page that is genuinely a
     // list of links, an index or a search result still has text on it.
     const whole = turndown.turndown(body).trim();
-    if (whole !== "") return { text: whole, extracted: false, truncated: cut };
+    if (whole !== "") return { text: whole, extracted: false, truncated: cut, ...decoration };
 
     // Nothing in the body at all, which is a client-rendered shell: the server
     // sent an empty mounting point and everything a reader wants arrives later
@@ -851,7 +866,7 @@ export function extractReadableMarkdown(
     const described = [metadata.title === "" ? "" : `# ${metadata.title}`, metadata.description]
       .filter((part) => part !== "")
       .join("\n\n");
-    return { text: described, extracted: false, truncated: cut };
+    return { text: described, extracted: false, truncated: cut, ...decoration };
   } finally {
     // The window holds timers and a document; without this it stays alive until
     // the collector notices, once per fetch.

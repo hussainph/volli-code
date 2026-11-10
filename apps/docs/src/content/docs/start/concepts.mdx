@@ -38,9 +38,11 @@ of the ticket record, not a repository file.
 
 **Ticket view.** Where you work on one ticket. Its main tabs hold the
 Ticket Body, chats, files, and diffs. Its rail groups repository state,
-properties, and chats under Now, with separate Diffs, Files, and Search views.
+chats and offered Automations under **Now**, with separate **Diffs**, **Files**,
+and **Search** views. Edit status, priority, and labels beside the title in the
+**Ticket Body** tab.
 
-**Display ID.** The project-local handle shown to people, such as `VC-12`.
+**Display ID.** The project-local handle shown to people, such as `VLT-12`.
 
 ## Chats
 
@@ -62,14 +64,13 @@ your main checkout and can create and edit tickets. Use it to turn a rough idea
 into tasks.
 
 **Model Access.** The accounts, subscriptions, credentials, and models that
-Volli can use. In the app, you manage it under **Settings → Models**. Choose a
+Volli can use. Manage it under **Settings → All projects → Models**. Choose a
 default model there before you start a chat. Credentials never enter chat
 history.
 
 **Terminal companion.** A shell you open yourself in a project or worktree.
 Use it to run your own commands, or start an external terminal UI, such as
-Claude Code, Codex, or OpenCode, from that shell. Open it from the caret
-beside **Chat**. Volli never opens one as a fallback when a chat fails.
+Claude Code, Codex, or OpenCode, from that shell. Open it from **Open a tab → Terminal**. Volli never opens one as a fallback when a chat fails.
 
 ## Git work
 
@@ -104,8 +105,8 @@ command does.
 Trigger describes what else may start it.
 
 **Trigger.** What starts an Automation besides running it yourself. A new
-Automation uses **Only when I run it**, which means nothing else starts it; the
-other values are **Ticket enters** and **On a schedule**. A column Trigger makes
+Automation uses **None**, which means nothing else starts it; the other
+choices are **Columns** and **Schedule**. A column Trigger makes
 an Automation available in selected columns; a schedule uses one of Volli's
 hourly, daily, weekdays, or weekly presets.
 

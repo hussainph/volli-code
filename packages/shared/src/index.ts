@@ -26,6 +26,7 @@ export * from "./handler-keys";
 export * from "./desktop-entries";
 export * from "./environment-recipe";
 export * from "./account";
+export * from "./preview-legal";
 export * from "./this-mac-runner";
 export * from "./cloud-checkout";
 export * from "./runner-preferences";
@@ -53,6 +54,7 @@ export * from "./credential-stream-redaction";
 export * from "./json-redaction";
 export * from "./secret-name";
 export * from "./structured-log";
+export * from "./renderer-stall";
 export * from "./model-auto-select";
 export * from "./model-mark-color";
 export * from "./model-access-sign-in";
@@ -69,6 +71,7 @@ export * from "./authority-config";
 export * from "./authority-policy";
 export * from "./web-address-policy";
 export * from "./web-target-policy";
+export * from "./source-icons";
 export * from "./session-activity";
 export * from "./browser-trace";
 export * from "./session-host-notice";
@@ -97,6 +100,7 @@ export * from "./project-identity";
 export * from "./project-relink";
 export * from "./prompt-template";
 export * from "./prompt-resource";
+export * from "./repo-instructions";
 export * from "./composer-verb";
 export * from "./skill";
 export * from "./slash-name";
@@ -138,6 +142,7 @@ export * from "./scheduled-resume";
 export * from "./performance-observer";
 export * from "./session-usage";
 export * from "./session-usage-report";
+export * from "./perf-stalls";
 export * from "./session-streak";
 export * from "./working-copy";
 export * from "./session-event-codec";
@@ -206,7 +211,12 @@ export type {
   ProfileRestoreBundle,
   ProfileRestoreProject,
 } from "./profile-restore";
-export { CLOUD_MOVE_ACTIONS, CLOUD_MOVE_STEPS, CLOUD_MOVE_VIEW_STATES } from "./cloud-moves";
+export {
+  CLOUD_MOVE_ACTIONS,
+  CLOUD_MOVE_PREFLIGHT_PHASES,
+  CLOUD_MOVE_STEPS,
+  CLOUD_MOVE_VIEW_STATES,
+} from "./cloud-moves";
 export type {
   CloudMoveCounts,
   CloudMoveExclusion,
@@ -214,6 +224,8 @@ export type {
   CloudMoveProject,
   CloudMovePreflightInput,
   CloudMovePreflight,
+  CloudMovePreflightPhase,
+  CloudMovePreflightProgress,
   CloudMoveStartInput,
   CloudMoveAction,
   CloudMoveCommand,
@@ -224,3 +236,5 @@ export type {
   CloudMoveStatus,
   CloudMoveSnapshot,
 } from "./cloud-moves";
+
+export * from "./settings-icon-colors";

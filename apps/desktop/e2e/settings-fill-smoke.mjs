@@ -34,6 +34,7 @@ import {
   makeScratch,
   seedProjects,
 } from "./lib/smoke-kit.mjs";
+import { openSettingsWindow } from "./lib/settings-window.mjs";
 
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("volli-settings-fill-");
 const { must, summarize } = createRunner();
@@ -55,11 +56,17 @@ async function measure(page) {
   });
 }
 
-const openConfigure = async (page, category) => {
-  await page.getByRole("button", { name: "Configure", exact: true }).first().click();
-  await page.getByRole("navigation", { name: "Configure categories" }).waitFor();
-  await page.getByRole("button", { name: category, exact: true }).click();
-  await page.locator("table").first().waitFor();
+// One Settings rail; Skills is a shared inventory in the app scope.
+const settingsRail = (page) => page.getByRole("navigation", { name: "Settings categories" });
+
+const openAgentSettings = async (mainPage, category) => {
+  const settings = await openSettingsWindow(app, mainPage);
+  const nav = settingsRail(settings);
+  await nav.getByRole("button", { name: "All projects", exact: true }).click();
+  await nav.getByRole("button", { name: "All projects", pressed: true }).waitFor();
+  await nav.getByRole("button", { name: category, exact: true }).click();
+  await settings.locator("table").first().waitFor();
+  return settings;
 };
 
 const app = await launch({ userDataDir, dbPath });
@@ -84,9 +91,10 @@ try {
   }
   await seedProjects(page, [{ id: "fill-p1", name: "Fill Fixture", path: repo, prefix: "FF" }]);
 
-  await must(1, "Configure → Skills: the table fills more than the old 8-row cap", async () => {
-    await openConfigure(page, "Skills");
-    const m = await measure(page);
+  let settingsPage = null;
+  await must(1, "Settings → Skills: the table fills more than the old 8-row cap", async () => {
+    settingsPage = await openAgentSettings(page, "Skills");
+    const m = await measure(settingsPage);
     if (!m) return { ok: false, detail: "no table found" };
     // The old cap was 8 rows * 36px + 32px header = 320px.
     return {
@@ -96,7 +104,7 @@ try {
   });
 
   await must(2, "...and does not exceed the viewport", async () => {
-    const m = await measure(page);
+    const m = await measure(settingsPage);
     return {
       ok: m.boxHeight <= m.viewport,
       detail: `box=${m.boxHeight}px vs viewport=${m.viewport}px`,
@@ -104,7 +112,7 @@ try {
   });
 
   await must(3, "the whole page fits too, so nothing hands back an unbounded scroll", async () => {
-    const overflow = await page.evaluate(() => {
+    const overflow = await settingsPage.evaluate(() => {
       const el = document.scrollingElement ?? document.documentElement;
       return el.scrollHeight - el.clientHeight;
     });
@@ -112,10 +120,10 @@ try {
   });
 
   await must(4, "a much shorter window still keeps the table inside it", async () => {
-    const before = await measure(page);
-    await page.setViewportSize({ width: 1280, height: 520 });
-    await page.waitForTimeout(400);
-    const after = await measure(page);
+    const before = await measure(settingsPage);
+    await settingsPage.setViewportSize({ width: 1280, height: 520 });
+    await settingsPage.waitForTimeout(400);
+    const after = await measure(settingsPage);
 
     return {
       ok: after.boxHeight <= after.viewport && after.boxHeight < before.boxHeight,
@@ -124,46 +132,52 @@ try {
   });
 
   await must(5, "Settings → Models keeps its cap, because sections follow it", async () => {
-    await page.setViewportSize({ width: 1440, height: 900 });
-    await page.waitForTimeout(300);
-    await page.getByRole("button", { name: "Settings", exact: true }).first().click();
-    await page.getByRole("navigation", { name: "Settings categories" }).waitFor();
-    await page.getByRole("button", { name: "Models", exact: true }).click();
+    await settingsPage.setViewportSize({ width: 1440, height: 900 });
+    await settingsPage.waitForTimeout(300);
+    await openSettingsWindow(app, page);
+    const nav = settingsRail(settingsPage);
+    await nav.waitFor();
+    // Settings reopens on the last page shown, which after check 1 is the
+    // project's Skills; Models lives in the app-wide scope.
+    await nav.getByRole("button", { name: "All projects", exact: true }).click();
+    await nav.getByRole("button", { name: "All projects", pressed: true }).waitFor();
+    await nav.getByRole("button", { name: "Models", exact: true }).click();
     // Attached, not `waitFor()`'s default visibility: check 4 leaves the window
     // 520px tall and this asks for 1440x900 back, which a smaller runner
     // display clamps — the table is then laid out but scrolled out of view and
     // never becomes "visible". This measures a box height, not whether the
     // table is on screen.
     //
-    // The Models catalog can also be legitimately EMPTY. DataTable renders
-    // `<Empty>` and NO `<table>` when it has no items (kit/data-table.tsx), and
-    // the catalog comes from the Pi runtime — a CI runner has none, so the pane
-    // correctly shows "No models. Sign in to a provider below." and this waited
-    // 30s for a table that was never going to exist.
+    // The Models catalog can also be legitimately EMPTY. Its models come from
+    // the Pi runtime — a CI runner has none — and with nothing to offer the
+    // pane omits its Catalog section entirely (panes/models-pane.tsx): no
+    // `<table>`, and no empty-state text to wait for either.
     //
-    // Both outcomes are asserted rather than skipped. With rows, the cap is
-    // measured as before. Without rows there is no cap to measure, so the
-    // assertion becomes the documented empty state — which still proves the
-    // pane mounted and still fails if it renders neither.
-    const modelsTable = page.locator("table").first();
-    const modelsEmpty = page.getByText("No models. Sign in to a provider below.");
+    // Both outcomes are asserted rather than skipped. The Default models rows
+    // render in the same commit as the catalog, once the pane's one read has
+    // settled without an error — so once the first row is attached, a missing
+    // catalog table is the empty catalog, not a pane still loading. With rows,
+    // the cap is measured as before. Without them there is no cap to measure,
+    // and the assertion still fails if the pane rendered neither.
+    const modelsTable = settingsPage.getByRole("table", { name: "Model catalog", exact: true });
+    const defaultsLoaded = settingsPage.getByTestId("default-model-global");
     await Promise.race([
       modelsTable.waitFor({ state: "attached", timeout: 30_000 }).catch(() => {}),
-      modelsEmpty.waitFor({ state: "attached", timeout: 30_000 }).catch(() => {}),
+      defaultsLoaded.waitFor({ state: "attached", timeout: 30_000 }).catch(() => {}),
     ]);
 
     if ((await modelsTable.count()) === 0) {
-      const empty = (await modelsEmpty.count()) === 1;
+      const loaded = (await defaultsLoaded.count()) === 1;
       return {
-        ok: empty,
-        detail: empty
-          ? "catalog empty (no Pi runtime) — empty state rendered; cap not measurable here"
-          : "Models pane rendered neither a table nor its empty state",
+        ok: loaded,
+        detail: loaded
+          ? "catalog empty (no Pi runtime) — pane loaded without a catalog; cap not measurable here"
+          : "Models pane rendered neither its catalog nor its default models",
       };
     }
 
     await modelsTable.scrollIntoViewIfNeeded().catch(() => {});
-    const m = await measure(page);
+    const m = await measure(settingsPage);
     // 8 rows * 36 + 32 = 320. A little slack for sub-pixel layout.
     return { ok: m.boxHeight <= 340, detail: `box=${m.boxHeight}px (capped, not filling)` };
   });

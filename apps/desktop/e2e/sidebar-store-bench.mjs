@@ -9,7 +9,10 @@
  *     --output /tmp/vc354-before.json
  *
  * The page is the shipped `ActiveSessions` component over the deterministic
- * `real` fixture (1,198 Sessions / 392 tickets / 50 worktrees). React Profiler
+ * `real` fixture (1,198 Sessions / 392 tickets / 50 worktrees), or with
+ * `--scale owner` the VC-1078 owner profile (5,034 Sessions / 1,218 tickets).
+ * `--storm N` sets how many running Sessions push activity rows during the
+ * storm phase (default 16, each every 60 ms for four seconds). React Profiler
  * callbacks, commit wall time and Scheduler long tasks are emitted together.
  * The busy arm starts the named number of CPU workers; run before and after
  * back-to-back on one machine because absolute development-build timings are
@@ -33,7 +36,9 @@ const flag = (name, fallback) => {
 };
 
 const PORT = process.env.VOLLI_LAB_PORT ?? "5174";
-const LAB = `http://localhost:${PORT}/lab/#sidebar-performance`;
+const SCALE = flag("scale", "real");
+const STORM_STREAMS = flag("storm", "16");
+const LAB = `http://localhost:${PORT}/lab/?scale=${encodeURIComponent(SCALE)}&storm=${encodeURIComponent(STORM_STREAMS)}#sidebar-performance`;
 const LABEL = flag("label", "run");
 const SAMPLES = Number.parseInt(flag("samples", "24"), 10);
 const BUSY_CORES = Number.parseInt(flag("busy-cores", "1"), 10);
@@ -112,6 +117,7 @@ function measuredSourceHash() {
   for (const path of [
     "apps/desktop/src/renderer/src/components/sidebar/active-sessions.tsx",
     "apps/desktop/src/renderer/src/components/sidebar/active-session-listing.ts",
+    "apps/desktop/src/renderer/src/stores/project-sessions.ts",
     "apps/desktop/src/renderer/lab/scratches/sidebar-performance.tsx",
   ]) {
     hash.update(path);
@@ -185,7 +191,7 @@ const report = {
   buildSha: git("rev-parse", "HEAD"),
   dirty: git("status", "--short") !== "",
   measuredSourceSha256: measuredSourceHash(),
-  fixture: "real",
+  fixture: SCALE,
   samples: SAMPLES,
   concurrentVolliSessions: CONCURRENT_SESSIONS,
   machine: {
@@ -205,6 +211,15 @@ console.log(`\nVC-354 sidebar store benchmark — ${LABEL}`);
 console.log(`${report.machine.cpu} · ${report.machine.memoryGb} GB · SHA ${report.buildSha}`);
 for (const arm of arms) {
   console.log(`\n${arm.arm.toUpperCase()} (${arm.busyCores} synthetic busy cores)`);
+  const storm = arm.storm;
+  const stormReact = storm.profilers.ActiveSessions;
+  console.log(
+    `storm: ${storm.streams} streams · ${storm.pushes} pushes (last one ${storm.lagMs} ms late) → ${storm.storeWrites} store writes · ` +
+      `${stormReact?.commits ?? 0} sidebar commits (${stormReact?.totalActualMs ?? 0} React ms) · ` +
+      `frames p50 ${storm.frames.median} / p95 ${storm.frames.p95} / max ${storm.frames.max} ms, ` +
+      `${storm.frames.over50} over 50 ms · long tasks ${storm.longTasks.count} ` +
+      `(${storm.longTasks.totalMs} ms, max ${storm.longTasks.maxMs} ms)`,
+  );
   console.log("trigger\twrites\trenders\tReact ms\tp95 ms\tlong tasks\tmax long ms");
   for (const row of arm.ranked) {
     console.log(

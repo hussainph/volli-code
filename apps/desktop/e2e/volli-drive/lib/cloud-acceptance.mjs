@@ -163,9 +163,9 @@ export function cloudElectronEnv(fixture, subject, email) {
     // Honoured only by an unpackaged build in a Volli Cloud launch (smoke-power.ts).
     VOLLI_SMOKE_CLOUD_RUNNER_POWER: "1",
     // The menu-bar controller on `globalThis.volliMenuBarHost` (unpackaged
-    // only): a cloud launch stays resident on an ordinary quit ("Keep this
-    // Mac available"), so the driver quits for real the way a person does,
-    // through the Tray's Quit Volli (`quitFromTray`). It adds no settle
+    // only): a cloud launch stays resident on an ordinary quit ("Keep this Mac
+    // working as a runner"), so the driver quits for real the way a person
+    // does, through the Tray's Quit Volli (`quitFromTray`). It adds no settle
     // override (that needs VOLLI_SMOKE_MENU_BAR_SETTLE_MS, never set here).
     VOLLI_SMOKE_MENU_BAR_HOST: "1",
   };
@@ -173,7 +173,7 @@ export function cloudElectronEnv(fixture, subject, email) {
 
 /**
  * Tray → Quit Volli in a Volli Cloud launch, which stays resident on an
- * ordinary quit ("Keep this Mac available"). It goes through main's own
+ * ordinary quit ("Keep this Mac working as a runner"). It goes through main's own
  * menu-bar controller, `globalThis.volliMenuBarHost`, which only an
  * unpackaged build with `VOLLI_SMOKE_MENU_BAR_HOST=1` exposes. Both
  * {@link cloudElectronEnv} and the real-deployment setup set that seam.

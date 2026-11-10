@@ -7,20 +7,20 @@
  * progressively: a glance at the pill, a hover for the card, a click to pin it
  * and work it, a row to promote its subject to a full surface. It consumes an
  * `ActivityIslandModel` and an `ActivityIslandActions` (`activity-island-
- * model.ts`) and nothing else; it is not mounted anywhere yet, and it knows no
- * store or bridge.
+ * model.ts`), plus the ephemeral turn activity. `ChatPlane` mounts it; it
+ * knows no store or bridge.
  *
  * What is settled, and why (decided live with the dev over several rounds;
  * the records are on VC-248 and VC-249 — do not re-litigate here):
  *
  *  • CLUSTERS + NOW. One cluster per element kind in the pill, in a fixed
- *    reading order, and a now channel — a drop that buds out of the pill
- *    upward on the island's spring, hangs while the announcement reads, and is
- *    reabsorbed. `mode="wait"` IS the metaphor: a new event waits for the old
- *    drop to return first.
- *  • ONE SPRING. Lively (0.55s / 0.25) drives pill layout, cluster presence
- *    and the drop, so a width morph, an entrance and a rise read as one
- *    material. Reduced motion collapses it to a fast fade.
+ *    reading order, and one sessile bead for the turn and now channel. A flash
+ *    swells that same bead, then returns to the verb. `mode="wait"` keeps
+ *    word changes to one drop. Alone, the turn is a plain pill; clusters
+ *    grow beneath it before fillets attach it to the rim.
+ *  • ONE SPRING. Lively (stiffness 130 / damping ratio .66) drives geometry
+ *    and cluster presence. Abort draws a slow .55s syrup thread before the
+ *    snap. Reduced motion uses instant sizes and a picture crossfade.
  *  • PAYLOAD VOICE. Every flash is `event · payload`; the event stays quiet
  *    and the payload — the thing that actually changed — carries the weight.
  *  • POPOVER HOVER, CLICK PINS. Hover is the glance channel (140ms leave-grace
@@ -38,45 +38,47 @@
  * Decided OUT, each tried and liked: a pill-level heartbeat (rented width that
  * read as blank when idle), orbs as the subagent group glyph (a second
  * working-state tier), a shimmer rim (every element already signs its own
- * status). ONE LIFE-SIGN PER TIER.
+ * status). ONE LIFE-SIGN PER TIER: clusters sign their subjects; the turn
+ * signs itself with shimmer on the verb only. The shell never pulses.
  *
  * FIVE LAWS, each learned from a bug seen in the running app:
  *  1. One life-sign per tier.
  *  2. Load-bearing geometry is INLINE STYLE, never a first-use utility — a
  *     stale Tailwind scan dropped one and served a silent lie.
- *  3. The now-drop's travel never crosses the pill's rim; stacking is never
- *     load-bearing.
+ *  3. The bead is an always-attached drawn union with the rim, not a floating
+ *     overlapping shell. Stacking never hides a seam; text never blurs.
  *  4. Only entering/leaving elements change pill width; drawings may change
  *     at will.
- *  5. No island when nothing to model.
+ *  5. No island when nothing to model — a running turn is itself a subject.
  *
- * TRAPS (inherited; each is marked at the line that avoids it): `mode="wait"`
- * on the ticker · no `layout` + string transforms (zombie exits) · clusters
- * under `popLayout` · `PopoverAnchor`, not `PopoverTrigger`, and
+ * TRAPS: `PopoverAnchor`, not `PopoverTrigger`, and
  * `onInteractOutside` exempts the anchor · cap card heights or Radix flips
  * them below the island · tooltips over stacked rows are pointer-transparent
  * (now `ui/tooltip.tsx`'s default).
  *
- * Material: `COMPOSER_STACK_SHELL` with the pill's own radius — the island is
- * a sibling of `ComposerInteractionStack`, sharing its chrome, never absorbing
- * it. Reduced motion via the app's `use-reduced-motion`.
+ * Material: `LiquidIslandShell` draws a single union in generated `--card`
+ * and `--border`, with the generated shadow hue. The island is a sibling of
+ * `ComposerInteractionStack`, never absorbing it. Disclosure cards retain the
+ * shared popover's glass. Reduced motion via the app's `use-reduced-motion`.
  */
 import * as React from "react";
+import { AnimatePresence, motion, MotionConfig } from "motion/react";
 import {
-  ArrowSquareOutIcon,
-  CheckCircleIcon,
+  ExternalIcon,
+  SuccessIcon,
   CircleIcon,
-  ProhibitIcon,
-  EyeIcon,
-  GlobeSimpleIcon,
-  type Icon as PhosphorIcon,
-  ListChecksIcon,
-  PushPinSimpleIcon,
+  BlockedIcon,
+  PreviewIcon,
+  GlobeIcon,
+  type IconComponent,
+  ChecklistIcon,
+  PinIcon,
   StopIcon,
-  TerminalWindowIcon,
-  UsersIcon,
-  XIcon,
-} from "@phosphor-icons/react";
+  TerminalIcon,
+  TeamIcon,
+  CloseIcon,
+} from "@renderer/components/ui/icon";
+
 import {
   type ActivityIslandActions,
   type ActivityIslandFeel,
@@ -85,7 +87,6 @@ import {
   agentsHeading,
   agentsLine,
   agentStateWord,
-  COMPOSER_STACK_SHELL,
   flashLine,
   type IslandAgent,
   ISLAND_AGENT_CHIP_CAP,
@@ -115,7 +116,6 @@ import {
   tabsLoading,
   tabStateWord,
 } from "@volli/session-presentation";
-import { AnimatePresence, motion, MotionConfig } from "motion/react";
 
 import { AgentModelLine } from "@renderer/components/chat/agent-model-ui";
 import { Button } from "@renderer/components/ui/button";
@@ -125,23 +125,13 @@ import { StatusDot } from "@renderer/components/ui/status-dot";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 import { cn } from "@renderer/lib/utils";
+import { GLASS_MOTION } from "@renderer/lib/glass-motion";
+import type { TurnActivity } from "@renderer/chat/turn-activity";
+import { LiquidIslandShell, LIQUID_SPRING, useLingeringTurn } from "./liquid-island-shell";
 
 /* ------------------------------------------------------------------ motion */
 
-const EASE_OUT = [0.23, 1, 0.32, 1] as const;
-
-/**
- * The gap the now-drop lives in, between the pill's top edge and the drop's
- * resting place.
- *
- * It is ONE constant because the drop's travel is measured against it. Law 3
- * says the travel never crosses the pill's rim, and the drop starts its rise
- * `y` px below its rest: with the gap at 8 and the rise hard-coded at 10, the
- * drop began 2px INSIDE the pill and only `zIndex: -1` hid the overlap — which
- * made stacking load-bearing, the very thing the same law forbids. Tying both
- * to this constant is what keeps the rule true when either number moves.
- */
-const DROP_GAP_PX = 8;
+const EASE_OUT = GLASS_MOTION.easeOut;
 
 /* ------------------------------------------------------------------- tone */
 
@@ -171,10 +161,10 @@ function islandTone(id: string): string {
 }
 
 /** The pill's one spring — reduced motion collapses it to a fast fade-scale. */
-function islandSpring(feel: ActivityIslandFeel, reduce: boolean) {
+function islandSpring(reduce: boolean) {
   return reduce
-    ? ({ duration: 0.15, ease: EASE_OUT } as const)
-    : ({ type: "spring", duration: feel.springDuration, bounce: feel.springBounce } as const);
+    ? ({ duration: GLASS_MOTION.menuInSeconds, ease: EASE_OUT } as const)
+    : LIQUID_SPRING;
 }
 
 /**
@@ -204,11 +194,22 @@ function clusterPresence(reduce: boolean) {
  * the model's flash until a timer says that id has expired, so a new id shows
  * on the render that brings it and no effect ever sets state synchronously.
  */
-function useHeldFlash(flash: IslandFlash | null, holdSeconds: number): IslandFlash | null {
+function useHeldFlash(
+  flash: IslandFlash | null,
+  holdSeconds: number,
+  turnActive: boolean,
+): IslandFlash | null {
   const [expiredId, setExpiredId] = React.useState<string | null>(null);
   // Keyed on the id, not the object: a re-projection that hands the same
   // announcement in a new object must not restart its hold.
   const flashId = flash?.id ?? null;
+  const previousTurnActive = React.useRef(turnActive);
+  React.useLayoutEffect(() => {
+    // A flash borrows the turn's bead; it may never keep that turn alive or
+    // postpone its drain/pinch. Idle flashes still have their normal hold.
+    if (previousTurnActive.current && !turnActive && flashId !== null) setExpiredId(flashId);
+    previousTurnActive.current = turnActive;
+  }, [flashId, turnActive]);
   React.useEffect(() => {
     // No flash means nothing is expired. Without this the last expired id sat
     // in state for the life of the island, so a runtime that reused an id
@@ -289,9 +290,17 @@ interface CardFrame {
   reveal: IslandRevealMode;
   arm: boolean;
   togglePin(): void;
+  /** A card action deliberately navigated away from its owning pane. */
+  leaveFocus(): void;
 }
 
-const CARD_UNFRAMED: CardFrame = { pinned: false, reveal: "always", arm: false, togglePin() {} };
+const CARD_UNFRAMED: CardFrame = {
+  pinned: false,
+  reveal: "always",
+  arm: false,
+  togglePin() {},
+  leaveFocus() {},
+};
 const CardContext = React.createContext<CardFrame>(CARD_UNFRAMED);
 
 /** Cards act through the verbs directly — the clusters never learn them. */
@@ -461,6 +470,9 @@ function ClusterShell({
       reveal: feel.reveal,
       arm: feel.armDestructive,
       togglePin: () => coordination?.togglePin(id),
+      leaveFocus: () => {
+        interactedOutside.current = true;
+      },
     }),
     [pinned, feel.reveal, feel.armDestructive, coordination, id],
   );
@@ -539,7 +551,8 @@ function ClusterShell({
           sideOffset={10}
           collisionPadding={8}
           data-island-card={cluster}
-          className={cn("p-1 data-[state=closed]:duration-75", cardClassName ?? ISLAND_CARD_WIDTH)}
+          className={cn("flex flex-col p-1", cardClassName ?? ISLAND_CARD_WIDTH)}
+          bodyClassName="flex max-h-[calc(var(--radix-popover-content-available-height)-0.5rem)] flex-col overflow-hidden"
           style={
             measuredWidth === null
               ? undefined
@@ -588,7 +601,16 @@ function ClusterShell({
             interactedOutside.current = false;
             if (!restore) return;
             event.preventDefault();
-            anchorRef.current?.focus();
+            const anchor = anchorRef.current;
+            // Revealing a tab can hide the owning chat before this card's
+            // close autofocus runs. Focusing that resident-but-hidden anchor
+            // would focus its old pane and undo the destination just selected.
+            if (
+              anchor?.isConnected &&
+              anchor.checkVisibility?.({ checkVisibilityCSS: true }) !== false
+            ) {
+              anchor.focus();
+            }
           }}
           onMouseEnter={() => coordination.enter(id)}
           onMouseLeave={() => coordination.leave(id)}
@@ -633,15 +655,13 @@ function Card({
   glyph: Glyph,
   heading,
   children,
-}: React.PropsWithChildren<{ glyph: PhosphorIcon; heading: string }>) {
+}: React.PropsWithChildren<{ glyph: IconComponent; heading: string }>) {
   const frame = React.useContext(CardContext);
   return (
-    <div className="flex cursor-default flex-col select-none">
-      <div className="flex h-6 items-center gap-1.5 px-2">
+    <div className="flex min-h-0 cursor-default flex-col select-none">
+      <div className="flex h-6 shrink-0 items-center gap-1.5 px-2">
         <Glyph className="size-3.5 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 flex-1 truncate text-label font-medium text-muted-foreground uppercase">
-          {heading}
-        </span>
+        <h3 className="min-w-0 flex-1 truncate text-ui font-semibold text-foreground">{heading}</h3>
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
@@ -653,7 +673,7 @@ function Card({
               className={cn(frame.pinned && "text-primary hover:text-primary")}
               onClick={frame.togglePin}
             >
-              <PushPinSimpleIcon weight={frame.pinned ? "fill" : "regular"} />
+              <PinIcon />
             </Button>
           </TooltipTrigger>
           <TooltipContent side="top">{frame.pinned ? "Unpin · Esc" : "Pin open"}</TooltipContent>
@@ -678,27 +698,21 @@ function Card({
  */
 function CardRows({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
-    <div className={cn("flex max-h-72 flex-col overflow-y-auto", className)}>
-      <AnimatePresence mode="popLayout" initial={false}>
-        {children}
-      </AnimatePresence>
+    <div
+      data-island-rows=""
+      className={cn("flex min-h-0 max-h-72 flex-col overflow-y-auto overscroll-contain", className)}
+    >
+      {children}
     </div>
   );
 }
 
-/** A `ListRow` that enters, leaves and reflows as its subject does. */
-function CardRow({ reduce, ...row }: { reduce: boolean } & React.ComponentProps<typeof ListRow>) {
-  return (
-    <motion.div
-      layout
-      initial={reduce ? { opacity: 0 } : { opacity: 0, scale: 0.97 }}
-      animate={{ opacity: 1, scale: 1 }}
-      exit={reduce ? { opacity: 0 } : { opacity: 0, scale: 0.97 }}
-      transition={{ duration: 0.16, ease: EASE_OUT }}
-    >
-      <ListRow data-card-row="" {...row} />
-    </motion.div>
-  );
+/** Data rows update immediately, preserving their actions and focus targets. */
+function CardRow({
+  reduce: _reduce,
+  ...row
+}: { reduce: boolean } & React.ComponentProps<typeof ListRow>) {
+  return <ListRow data-card-row="" {...row} />;
 }
 
 /** The state word riding the name's line — `· loading`, `· 72%`, `· exit 137`. Nothing when there is nothing to say. */
@@ -726,8 +740,7 @@ function RowActions({ children }: React.PropsWithChildren) {
     <span
       className={cn(
         "flex shrink-0 items-center",
-        reveal === "hover" &&
-          "opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100",
+        reveal === "hover" && "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
       )}
     >
       {children}
@@ -830,8 +843,16 @@ function TabChip({ tab }: { tab: IslandTab }) {
 
 function TabsCard({ tabs, reduce }: { tabs: readonly IslandTab[]; reduce: boolean }) {
   const actions = useActions();
+  const frame = React.useContext(CardContext);
+  const promote = (id: string) => {
+    // The owning chat can remain visible beside the destination. Returning
+    // focus there when this card closes would nevertheless select that pane
+    // again, undoing Show tab's choice of the Browser pane.
+    frame.leaveFocus();
+    actions.promoteTab(id);
+  };
   return (
-    <Card glyph={GlobeSimpleIcon} heading={tabsHeading(tabs)}>
+    <Card glyph={GlobeIcon} heading={tabsHeading(tabs)}>
       <CardRows>
         {tabs
           .toSorted((a, b) => Number(Boolean(b.needsAttention)) - Number(Boolean(a.needsAttention)))
@@ -854,11 +875,11 @@ function TabsCard({ tabs, reduce }: { tabs: readonly IslandTab[]; reduce: boolea
                 }
                 title={`${showLabel}: ${tab.title ?? tab.host}\n${tab.detail ?? tab.host}`}
                 aria-label={`${showLabel}: ${tab.title ?? tab.host}`}
-                onActivate={() => actions.promoteTab(tab.id)}
+                onActivate={() => promote(tab.id)}
                 actions={
                   <span className="flex shrink-0 items-center">
-                    <ActionButton label={showLabel} onPress={() => actions.promoteTab(tab.id)}>
-                      <ArrowSquareOutIcon />
+                    <ActionButton label={showLabel} onPress={() => promote(tab.id)}>
+                      <ExternalIcon />
                     </ActionButton>
                     <ActionButton
                       label="Close tab"
@@ -866,7 +887,7 @@ function TabsCard({ tabs, reduce }: { tabs: readonly IslandTab[]; reduce: boolea
                       reversible
                       onPress={() => actions.closeTab(tab.id)}
                     >
-                      <XIcon />
+                      <CloseIcon />
                     </ActionButton>
                   </span>
                 }
@@ -881,7 +902,7 @@ function TabsCard({ tabs, reduce }: { tabs: readonly IslandTab[]; reduce: boolea
 function AgentsCard({ agents, reduce }: { agents: readonly IslandAgent[]; reduce: boolean }) {
   const actions = useActions();
   return (
-    <Card glyph={UsersIcon} heading={agentsHeading(agents)}>
+    <Card glyph={TeamIcon} heading={agentsHeading(agents)}>
       <CardRows>
         {agents.map((agent) => (
           <CardRow
@@ -905,18 +926,20 @@ function AgentsCard({ agents, reduce }: { agents: readonly IslandAgent[]; reduce
             // A row with no recorded policy draws no second line at all (the
             // component answers null), so the height is spent only by rows that
             // have something to say with it.
+            // Provider names belong to the mark's long-hover/focus tag, not
+            // this panel's policy line. Keep the shared caller for the peek too.
             secondary={<AgentModelLine agent={agent} />}
             onActivate={() => actions.peekAgent(agent.id)}
             actions={
               <RowActions>
                 <ActionButton label="Peek in overlay" onPress={() => actions.peekAgent(agent.id)}>
-                  <EyeIcon />
+                  <PreviewIcon />
                 </ActionButton>
                 <ActionButton
                   label={agent.promoted ? "Focus tab" : "Open as tab"}
                   onPress={() => actions.promoteAgent(agent.id)}
                 >
-                  <ArrowSquareOutIcon />
+                  <ExternalIcon />
                 </ActionButton>
                 {agent.state === "working" ? (
                   <ActionButton
@@ -925,7 +948,7 @@ function AgentsCard({ agents, reduce }: { agents: readonly IslandAgent[]; reduce
                     destructive
                     onPress={() => actions.stopAgent(agent.id)}
                   >
-                    <StopIcon weight="fill" />
+                    <StopIcon />
                   </ActionButton>
                 ) : null}
               </RowActions>
@@ -948,15 +971,14 @@ function AgentsCard({ agents, reduce }: { agents: readonly IslandAgent[]; reduce
  */
 function PlanCard({ plan, reduce }: { plan: IslandPlan; reduce: boolean }) {
   return (
-    <Card glyph={ListChecksIcon} heading={planHeading(plan)}>
+    <Card glyph={ChecklistIcon} heading={planHeading(plan)}>
       {/* Progress as a hairline under the header — the header's number says
           it, the bar lets a glance read it without parsing. */}
-      <div className="mx-2 mb-1 h-0.5 overflow-hidden rounded-full bg-border">
-        <motion.div
+      <div className="mx-2 mb-1 h-0.5 shrink-0 overflow-hidden rounded-full bg-border">
+        <div
+          data-island-progress=""
           className="h-full rounded-full bg-primary"
-          initial={false}
-          animate={{ width: `${planPercent(plan)}%` }}
-          transition={reduce ? { duration: 0.1 } : { type: "spring", duration: 0.55, bounce: 0 }}
+          style={{ transform: `scaleX(${planPercent(plan) / 100})`, transformOrigin: "left" }}
         />
       </div>
       {/* Compact rows and a scroll cap: a plan is the one list that can run
@@ -974,19 +996,16 @@ function PlanCard({ plan, reduce }: { plan: IslandPlan; reduce: boolean }) {
               className="py-1"
               leading={
                 state === "done" ? (
-                  <CheckCircleIcon weight="fill" className="size-3.5 shrink-0 text-primary" />
+                  <SuccessIcon className="size-3.5 shrink-0 text-primary" />
                 ) : state === "cancelled" ? (
                   // A step the model decided against (VC-6). Its own glyph,
                   // because the two it could have borrowed both lie: an empty
                   // circle reads as work still to come, and a tick reads as
                   // work that happened.
-                  <ProhibitIcon
-                    weight="regular"
-                    className="size-3.5 shrink-0 text-muted-foreground/50"
-                  />
+                  <BlockedIcon className="size-3.5 shrink-0 text-muted-foreground/50" />
                 ) : (
                   <CircleIcon
-                    weight={state === "current" ? "bold" : "regular"}
+                    strokeWidth={state === "current" ? 2.25 : 1.5}
                     className={cn(
                       "size-3.5 shrink-0",
                       state === "current" ? "text-primary" : "text-muted-foreground/50",
@@ -1026,7 +1045,7 @@ function PlanCard({ plan, reduce }: { plan: IslandPlan; reduce: boolean }) {
 function ShellsCard({ shells, reduce }: { shells: readonly IslandShell[]; reduce: boolean }) {
   const actions = useActions();
   return (
-    <Card glyph={TerminalWindowIcon} heading={shellsHeading(shells)}>
+    <Card glyph={TerminalIcon} heading={shellsHeading(shells)}>
       <CardRows>
         {shells.map((shell) => (
           <CardRow
@@ -1048,7 +1067,7 @@ function ShellsCard({ shells, reduce }: { shells: readonly IslandShell[]; reduce
             actions={
               <RowActions>
                 <ActionButton label="Open output" onPress={() => actions.openShell(shell.id)}>
-                  <ArrowSquareOutIcon />
+                  <ExternalIcon />
                 </ActionButton>
                 {shell.state === "running" ? (
                   <ActionButton
@@ -1057,7 +1076,7 @@ function ShellsCard({ shells, reduce }: { shells: readonly IslandShell[]; reduce
                     destructive
                     onPress={() => actions.killShell(shell.id)}
                   >
-                    <StopIcon weight="fill" />
+                    <StopIcon />
                   </ActionButton>
                 ) : null}
               </RowActions>
@@ -1102,7 +1121,7 @@ function TabsCluster({
             was loading. The arc overhangs via negative inset instead, which
             costs nothing while absent. */}
         <span className="relative flex shrink-0 items-center justify-center">
-          <GlobeSimpleIcon className="block size-3.5 text-muted-foreground" />
+          <GlobeIcon className="block size-3.5 text-muted-foreground" />
           {tabsLoading(tabs) ? <WorkingArc reduce={reduce} inset={3} /> : null}
         </span>
         {/* The count as an attribute too: the headless smoke asserts it, and
@@ -1142,9 +1161,7 @@ function AgentDot({
   className?: string;
 }) {
   return (
-    <motion.span
-      layout
-      {...clusterPresence(reduce)}
+    <span
       data-agent-state={agent.state}
       className={cn(
         "relative flex size-4 shrink-0 items-center justify-center rounded-full",
@@ -1163,7 +1180,7 @@ function AgentDot({
       {agent.state === "failed" ? (
         <span className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-destructive ring-2 ring-card" />
       ) : null}
-    </motion.span>
+    </span>
   );
 }
 
@@ -1215,12 +1232,12 @@ function PlanCluster({ plan, feel, reduce, columnWidth }: ClusterProps & { plan:
       columnWidth={columnWidth}
       detail={<PlanCard plan={plan} reduce={reduce} />}
     >
-      <motion.span layout {...clusterPresence(reduce)} className="flex items-center gap-1">
-        <ListChecksIcon className="size-3.5 text-muted-foreground" />
+      <span className="flex items-center gap-1">
+        <ChecklistIcon className="size-3.5 text-muted-foreground" />
         <span className="text-label font-medium tabular-nums text-foreground">
           {plan.done}/{plan.steps.length}
         </span>
-      </motion.span>
+      </span>
     </ClusterShell>
   );
 }
@@ -1240,13 +1257,10 @@ function ShellsCluster({
       columnWidth={columnWidth}
       detail={<ShellsCard shells={shells} reduce={reduce} />}
     >
-      {/* State lives IN the glyph — fill + primary while running, outline +
-          muted at rest. The corner badge died of geometry: a dot needs a
-          filled shape to sit on, and a line icon's corner gives it nothing.
-          The agent chips keep their badges — they are filled disks. */}
-      <motion.span layout {...clusterPresence(reduce)} className="flex items-center">
-        <TerminalWindowIcon
-          weight={running ? "fill" : "regular"}
+      {/* State lives in the ink: accent while running, muted at rest.
+          Both keep the same outline drawing, without a corner badge. */}
+      <span className="flex items-center">
+        <TerminalIcon
           data-running={running ? "" : undefined}
           className={cn(
             "size-3.5",
@@ -1254,7 +1268,7 @@ function ShellsCluster({
             running && !reduce && "animate-pulse",
           )}
         />
-      </motion.span>
+      </span>
     </ClusterShell>
   );
 }
@@ -1295,6 +1309,8 @@ function FlashText({ flash, voice }: { flash: IslandFlash; voice: IslandNowVoice
 export interface ActivityIslandProps {
   model: ActivityIslandModel;
   actions: ActivityIslandActions;
+  activity?: TurnActivity | null;
+  exitKind?: "done" | "abort";
   /** Overrides on the baked verdicts — for the lab harness's dials. */
   feel?: Partial<ActivityIslandFeel>;
   /**
@@ -1311,13 +1327,17 @@ export function ActivityIsland({
   actions,
   feel: feelOverride,
   className,
+  activity = null,
+  exitKind = "done",
 }: ActivityIslandProps) {
   const feel = resolveFeel(feelOverride);
   const osReduce = useReducedMotion();
   const reduce = osReduce || feel.forceReducedMotion;
-  const populated = !islandEmpty(model);
-  const flash = useHeldFlash(model.flash, feel.flashHoldSeconds);
-  const spring = islandSpring(feel, reduce);
+  const hasClusters = !islandEmpty(model);
+  const lingeringTurn = useLingeringTurn(activity !== null);
+  const populated = hasClusters || lingeringTurn;
+  const flash = useHeldFlash(model.flash, feel.flashHoldSeconds, activity !== null);
+  const spring = islandSpring(reduce);
 
   const clustersVisible = feel.grammar !== "now-only";
   /** clusters-now sends the channel to the drop; now-only keeps it inline. */
@@ -1367,6 +1387,11 @@ export function ActivityIsland({
               and "no island when nothing to model" has to mean no band of
               nothing either. The spacing rides the pill instead. */}
           <div className="flex justify-center" ref={centerRef}>
+            {/* Semantic activity, not synonym churn or percent ticks. This region
+                survives the whole turn, including word-fit and flash transitions. */}
+            <span role="status" className="sr-only">
+              {activity?.announcement ?? (hasClusters && drop ? flashLine(drop) : "")}
+            </span>
             <AnimatePresence initial={false}>
               {populated ? (
                 <motion.div
@@ -1382,7 +1407,9 @@ export function ActivityIsland({
                       ? { opacity: 0 }
                       : { opacity: 0, transform: "translateY(8px) scale(0.97)" }
                   }
-                  transition={reduce ? { duration: 0.15, ease: EASE_OUT } : spring}
+                  transition={
+                    reduce ? { duration: GLASS_MOTION.menuInSeconds, ease: EASE_OUT } : spring
+                  }
                   // A GROUP, not a live region. `role="status"` here made the
                   // whole pill an assertive-ish announcement, so every tab
                   // count, every percent tick and every plan step re-read the
@@ -1391,90 +1418,16 @@ export function ActivityIsland({
                   role="group"
                   aria-label="Agent activity"
                   data-activity-island=""
-                  className={cn("relative will-change-transform", className)}
+                  className={cn("relative isolate will-change-transform", className)}
                 >
-                  {/* The now channel: a drop that buds off the pill upward, hangs
-                    while the message reads, and merges back. `mode="wait"` IS
-                    the metaphor: a new event waits for the old drop to return
-                    first. TWO hard rules, learned the hard way (a drop once sat
-                    at full opacity across the pill's face for its whole hold):
-                    • geometry is INLINE STYLE — `bottom-full`/`-z-10` are used
-                      nowhere else in the app, and a first-use utility a stale
-                      Tailwind scan drops is a silent lie; inline `bottom`/
-                      `zIndex` cannot be dropped.
-                    • the travel NEVER crosses the pill's top edge — the drop
-                      rises and fades entirely inside the gap, so no stacking
-                      rule in any browser decides what the reader sees. That is
-                      why the rise is `DROP_GAP_PX` and not a number of its own:
-                      the two must move together or the drop re-enters the pill.
-                      The wrapper carries no transform of its own
-                      (flex-centering, not translate), because Motion owns
-                      `transform` on the drop. */}
-                  {feel.grammar === "clusters-now" ? (
-                    <span
-                      // The one announcement channel, and the only live region on
-                      // this surface.
-                      role="status"
-                      className="pointer-events-none absolute inset-x-0 flex justify-center"
-                      style={{ bottom: "100%", paddingBottom: DROP_GAP_PX, zIndex: -1 }}
-                    >
-                      <AnimatePresence initial={false} mode="wait">
-                        {drop ? (
-                          <motion.span
-                            key={drop.id}
-                            data-island-flash=""
-                            initial={
-                              reduce
-                                ? { opacity: 0 }
-                                : { opacity: 0, y: DROP_GAP_PX, scale: 0.6, filter: "blur(2px)" }
-                            }
-                            animate={{ opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }}
-                            exit={
-                              reduce
-                                ? { opacity: 0, transition: { duration: 0.1 } }
-                                : {
-                                    opacity: 0,
-                                    y: DROP_GAP_PX,
-                                    scale: 0.55,
-                                    filter: "blur(2px)",
-                                    transition: { duration: 0.18, ease: EASE_OUT },
-                                  }
-                            }
-                            transition={
-                              reduce
-                                ? { duration: 0.15 }
-                                : {
-                                    y: spring,
-                                    scale: spring,
-                                    opacity: { duration: 0.15, ease: EASE_OUT },
-                                    filter: { duration: 0.18, ease: EASE_OUT },
-                                  }
-                            }
-                            style={{ originY: 1 }}
-                            className={cn(
-                              "flex h-7 max-w-72 items-center rounded-full px-2 text-ui",
-                              COMPOSER_STACK_SHELL,
-                            )}
-                          >
-                            <FlashText flash={drop} voice={feel.nowVoice} />
-                          </motion.span>
-                        ) : null}
-                      </AnimatePresence>
-                    </span>
-                  ) : null}
-                  {/* `rounded-full` over the stack shell's container radius (the
-                    `rounded` group is registered with tailwind-merge, so the
-                    later class wins); the inline `borderRadius` is what Motion
-                    corrects during the layout spring so the corners do not
-                    stretch mid-morph. */}
-                  <motion.div
-                    layout
-                    transition={spring}
-                    style={{ borderRadius: 999 }}
-                    className={cn(
-                      "flex h-8 items-center gap-2 rounded-full px-2",
-                      COMPOSER_STACK_SHELL,
-                    )}
+                  {/* The verb and transient flash share ONE bead. Its drawn union
+                      owns the shell; real cluster controls stay in a normal layer. */}
+                  <LiquidIslandShell
+                    activity={activity}
+                    flash={drop}
+                    populated={clusters.length > 0 || inlineVisible}
+                    exitKind={exitKind}
+                    reduce={reduce}
                   >
                     {/* Dividers travel WITH their cluster — each keyed wrapper
                       carries its own leading rule, so membership changes stay
@@ -1519,7 +1472,9 @@ export function ActivityIsland({
                             reduce ? { opacity: 0 } : { opacity: 0, y: -7, filter: "blur(4px)" }
                           }
                           transition={
-                            reduce ? { duration: 0.1 } : { duration: 0.18, ease: EASE_OUT }
+                            reduce
+                              ? { duration: GLASS_MOTION.menuOutSeconds }
+                              : { duration: GLASS_MOTION.menuInSeconds, ease: EASE_OUT }
                           }
                           className="flex max-w-56 items-center text-ui"
                         >
@@ -1533,7 +1488,7 @@ export function ActivityIsland({
                         </motion.span>
                       ) : null}
                     </AnimatePresence>
-                  </motion.div>
+                  </LiquidIslandShell>
                 </motion.div>
               ) : null}
             </AnimatePresence>

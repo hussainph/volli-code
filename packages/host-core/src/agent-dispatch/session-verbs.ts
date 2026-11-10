@@ -32,7 +32,7 @@ import type {
   AgentRequest,
   AgentResponse,
   HostHandlerKey,
-  SessionProjection,
+  SessionListingProjection,
   SessionProvenance,
   SessionRecord,
   SessionTodoList,
@@ -119,9 +119,9 @@ function isSessionNotFound(response: AgentResponse): boolean {
  * than answered twice in two vocabularies.
  */
 function chatProjectionForPublicId(
-  projections: readonly SessionProjection[],
+  projections: readonly SessionListingProjection[],
   selector: unknown,
-): { ok: true; projection: SessionProjection } | { ok: false; response: AgentResponse } {
+): { ok: true; projection: SessionListingProjection } | { ok: false; response: AgentResponse } {
   if (typeof selector !== "string") {
     return { ok: false, response: failure("INVALID_REQUEST", "A session id is required.") };
   }
@@ -333,7 +333,7 @@ export async function sessionListVerb(
  * never the user — and `resumedAfterStop` says the turn followed a stop.
  */
 function sessionOrchestrationCells(
-  projection: SessionProjection,
+  projection: SessionListingProjection,
   records: readonly ReturnType<typeof chatSessionRecord>[],
 ): Record<string, unknown> {
   const latest = projection.attachments.findLast((attachment) => attachment.openedAt !== null);
@@ -384,7 +384,7 @@ function publicStartedBy(
 }
 
 /** Latest durable signal, not a turn outcome or the current attention state. */
-function publicSessionSignal(projection: SessionProjection | undefined, observedAt: number) {
+function publicSessionSignal(projection: SessionListingProjection | undefined, observedAt: number) {
   const signal = projection?.signal;
   return signal == null
     ? null
@@ -530,7 +530,9 @@ export async function sessionShowVerb(
 }
 
 /** Successful reattachments, oldest first; independent of whether a turn began. */
-function resumptionCells(projection: SessionProjection | undefined): Record<string, unknown> {
+function resumptionCells(
+  projection: SessionListingProjection | undefined,
+): Record<string, unknown> {
   return {
     resumptions:
       projection?.resumptions.map(({ attachmentId, origin }) => ({
@@ -550,7 +552,7 @@ function resumptionCells(projection: SessionProjection | undefined): Record<stri
  * the same model that a person pinned, which is the whole reason the tier is
  * recorded. Null model means the Session has not recorded a policy yet.
  */
-function modelCells(projection: SessionProjection): Record<string, unknown> {
+function modelCells(projection: SessionListingProjection): Record<string, unknown> {
   const selection = projection.modelSelection;
   return {
     model: selection === null ? null : `${selection.providerId}/${selection.modelId}`,
@@ -575,7 +577,7 @@ function modelCells(projection: SessionProjection): Record<string, unknown> {
  */
 function interruptedReason(
   record: ReturnType<typeof chatSessionRecord>,
-  projection: SessionProjection,
+  projection: SessionListingProjection,
 ): ReturnType<typeof sessionInterruptionReason> {
   return record.activity === "interrupted" ? sessionInterruptionReason(projection) : null;
 }

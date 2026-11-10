@@ -7,26 +7,28 @@
 - Environment lock: `VOLLI_EXPERIMENTAL=cloud` at boot wins over storage. The row then says **Set by environment** and the switch is disabled (experimental-settings.tsx:90-100; main/experiments.ts:56).
 
 ## How to get to it (user POV)
-1. Sidebar footer → **Settings** (sidebar/primary-sidebar.tsx:109-116). The category rail (nav `Settings categories`) appears.
+1. Sidebar footer → **Settings**, or ⌘,. One separate native Settings window opens with the category rail (`Settings categories`). Repeating the entry raises that window, retaining its current page.
 2. Click **Experimental**, or type `cloud` into the rail's search box `Search settings` (settings/kit/pref-shell.tsx:127,140-144).
 3. The section titled **Experimental** shows the row `Volli Cloud (unstable)` with a switch. Flip it on.
-4. Leave (sidebar **Home**, which closes Settings: sidebar/nav-list.tsx:57-64), come back, and the switch is still on.
+4. Close the native Settings window and reopen it. The switch is still on. Home stays usable independently; Escape does not close Settings.
 
 ## Driving it with volli-drive
 ```
 volli-drive launch --fixture basic
 volli-drive find vd-xxxx "Settings"              # sidebar button (also matches other text; take role=button)
 volli-drive act vd-xxxx --gen N --ref eA --kind click
-volli-drive find vd-xxxx "Experimental"          # button in navigation "Settings categories"
-volli-drive act vd-xxxx --gen N --ref eB --kind click
-volli-drive find vd-xxxx "Volli Cloud (unstable)" # role=switch, aria-label = label (experimental-settings.tsx:95-101)
-volli-drive act vd-xxxx --gen N --ref eC --kind click
-volli-drive wait vd-xxxx --text "Volli Cloud (unstable)"
-volli-drive snapshot vd-xxxx                      # switch now [checked]
-volli-drive screenshot vd-xxxx --name cloud-on
-# persistence across a remount
-volli-drive find vd-xxxx "Home"; volli-drive act … --kind click     # closes Settings
-# reopen Settings → Experimental, and re-check the switch state
+volli-drive windows vd-xxxx                     # find the #settings window, e.g. window-1
+volli-drive find vd-xxxx "Experimental" --window window-1 # Settings categories
+volli-drive act vd-xxxx --gen N --ref eB --kind click --window window-1
+volli-drive find vd-xxxx "Volli Cloud (unstable)" --window window-1 # role=switch, aria-label = label (experimental-settings.tsx:95-101)
+volli-drive act vd-xxxx --gen N --ref eC --kind click --window window-1
+volli-drive wait vd-xxxx --text "Volli Cloud (unstable)" --window window-1
+volli-drive snapshot vd-xxxx --window window-1     # switch now [checked]
+volli-drive screenshot vd-xxxx --name cloud-on --window window-1
+# persistence across a native close/remount, without activating a quiet window
+volli-drive settings-native vd-xxxx --action close
+volli-drive windows vd-xxxx                     # wait until Settings has closed
+# reopen via the main sidebar → Experimental in #settings, re-check the switch
 ```
 - Another way in, from a chat composer: type `/settings` and press ↵ (shared/src/composer-verb.ts; e2e/composer-verbs-smoke.mjs:206-220).
 
@@ -43,6 +45,6 @@ volli-drive state vd-xxxx sql "SELECT value, updated_at FROM app_state WHERE key
 ## Gotchas
 - Don't launch with `VOLLI_EXPERIMENTAL` in the environment. Its value wins, disables the switch, and makes the host refuse the write (`Experiment is set by environment`). Check `volli-drive doctor` or `logs` if the switch is disabled. A boot log line `[volli] Ignoring unknown VOLLI_EXPERIMENTAL ids` means a stray value (main/experiments.ts:34-37).
 - While a save is in flight the switch is disabled (`busy`). Snapshot again after the click before asserting.
-- No consumer reacts yet. In the desktop app, only the Settings page reads the flag: `isExperimentEnabled("cloud")` has no callers outside main/experiments.ts. So there is nothing else to see change. docs/experimental-flags.md also notes that services built at boot need a restart.
+- This fixture proves the stored switch, not a cloud launch. The flag now gates account, backend and runner features; boot-constructed services need a restart. A signed-in, configured cloud launch uses Convex, while this basic signed-out fixture remains local. Stable builds hide the switch and require a fresh preview grant. See [Experimental flags](../../../../docs/experimental-flags.md) for launch policy and current consumers.
 - `find "Settings"` matches several nodes (the button, nav `Settings categories`, the search box). Act on the sidebar `button`.
 - AGENTS.md "UI copy" rule: the description line under the label is the registry's own text. It isn't an error or a notice.

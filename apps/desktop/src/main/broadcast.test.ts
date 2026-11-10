@@ -212,3 +212,32 @@ describe("the host event bus over every window (VC-554)", () => {
     ]);
   });
 });
+
+it("delivers a local mutation to peers without echo, including mixed-origin coalescing", async () => {
+  const { withRendererCall } = await import("./renderer-call");
+  const main = windowFixture();
+  const settings = windowFixture();
+  Object.assign(main.webContents, { id: 11 });
+  Object.assign(settings.webContents, { id: 22 });
+  windows.push(main, settings);
+  withRendererCall(22, () =>
+    windowEventBus.publishToPeers?.("data-changed", { projectId: "p", kind: "ticket" }),
+  );
+  flushDataChangedForTest();
+  expect(settings.webContents.send).not.toHaveBeenCalled();
+  expect(main.webContents.send).toHaveBeenCalledExactlyOnceWith("volli:data-changed", {
+    entity: "tickets",
+    projectId: "p",
+    kind: "ticket",
+  });
+  main.webContents.send.mockClear();
+  withRendererCall(22, () =>
+    windowEventBus.publishToPeers?.("data-changed", { projectId: "p", kind: "ticket" }),
+  );
+  withRendererCall(11, () =>
+    windowEventBus.publishToPeers?.("data-changed", { projectId: "p", kind: "ticket" }),
+  );
+  flushDataChangedForTest();
+  expect(main.webContents.send).toHaveBeenCalledOnce();
+  expect(settings.webContents.send).toHaveBeenCalledOnce();
+});

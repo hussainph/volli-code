@@ -143,12 +143,13 @@ describe("wireframe focus and hover wiring", () => {
     }
   });
 
-  it("replaces an ungenerated summary with skeletons without hiding the question or actions", async () => {
+  it("keeps a pending summary silent without hiding the question or actions", async () => {
     await act(async () => control("loading").click());
     await press(row(), " ");
     const loading = card()?.querySelector('[data-summary-state="loading"]');
     expect(loading?.getAttribute("aria-busy")).toBe("true");
-    expect(loading?.querySelectorAll('[data-slot="skeleton"]')).toHaveLength(5);
+    expect(loading?.querySelectorAll('[data-slot="skeleton"]')).toHaveLength(0);
+    expect(loading?.textContent).toBe("");
     expect(card()?.textContent).not.toContain("Compared Redis");
     expect(card()?.textContent).toContain("Which cache backend");
     await act(async () => control("ready").click());

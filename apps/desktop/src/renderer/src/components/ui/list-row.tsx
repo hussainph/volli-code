@@ -31,34 +31,23 @@
  * those pass through to the activation target, which is the thing a test
  * clicks.
  *
- * TWO DENSITIES, AND ONE HEIGHT PER DENSITY. `two-line` is 52px: two `text-ui`
- * line boxes and 12. It was 52 in the Diffs page and 56 in the Files page for
- * no reason either page could state — `docs/DESIGN.md` recorded the 52 as a
- * measured exception belonging to `ticket-changes-panel.tsx`, and it turned out
- * to belong to the object rather than to the page. `min-h-13` is that same 52
- * as a floor, and it binds for one case: a repository-root file has no parent
- * path, so its second line draws no box and the row would otherwise sit 20px
- * shorter than its neighbours.
+ * Two-line navigation is 42px: an 18px name, 14px metadata and 10px
+ * vertical inset. The geometry lives in the shared CSS recipe and also
+ * applies consistently to every navigation surface.
  */
 import type * as React from "react";
 
-import { Skeleton } from "@renderer/components/ui/skeleton";
 import { cn } from "@renderer/lib/utils";
 
 export type ListRowDensity = "row" | "two-line";
 
-/**
- * The fixed Tailwind widths every VC-383 loading row deliberately draws.
- *
- * Width is placeholder geometry, not a styling escape hatch: allowing a bare
- * string here would let a caller add a new visual rhythm without documenting
- * it alongside the skeleton it changes.
- */
-export type LoadingBarWidth = "w-1/2" | "w-2/5" | "w-3/5" | "w-2/3" | "w-3/4" | "w-10" | "w-12";
+/** Dense source navigation uses the same accent washes as the sidebar. */
+export const SOURCE_LIST_ROW =
+  "rounded-row hover:bg-(--accent-tint) data-[selected=true]:bg-(--accent-selected)";
 
 const DENSITY: Record<ListRowDensity, string> = {
   row: "py-2",
-  "two-line": "min-h-13 py-1.5",
+  "two-line": "min-h-10 py-1",
 };
 
 export function ListRow({
@@ -71,6 +60,7 @@ export function ListRow({
   onActivate,
   selected = false,
   density = "row",
+  variant = "list",
   className,
   ...rest
 }: React.HTMLAttributes<HTMLElement> & {
@@ -103,6 +93,7 @@ export function ListRow({
   onActivate: (() => void) | null;
   selected?: boolean;
   density?: ListRowDensity;
+  variant?: "list" | "source";
 }) {
   const activatable = onActivate !== null;
 
@@ -144,7 +135,9 @@ export function ListRow({
           {primaryTrailing}
         </span>
         {secondary === undefined ? null : typeof secondary === "string" ? (
-          <span className="block truncate text-ui text-muted-foreground/70">{secondary}</span>
+          <span className="list-row-secondary block truncate text-label text-muted-foreground">
+            {secondary}
+          </span>
         ) : (
           secondary
         )}
@@ -157,16 +150,20 @@ export function ListRow({
   // pointer and a right-click land on, and a target shorter than its own row
   // leaves a dead strip above and below every entry in the list.
   const target =
-    "flex min-w-0 flex-1 items-center gap-2 self-stretch text-left outline-none focus-visible:ring-2 focus-visible:ring-ring";
+    "flex min-w-0 flex-1 items-center gap-2 self-stretch rounded-control-small text-left outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
   return (
     <div
+      data-density={density}
+      data-selected={selected || undefined}
       className={cn(
-        "group relative flex w-full items-center gap-2 rounded-lg border border-transparent px-2",
+        "list-row group relative flex w-full items-center gap-2 rounded-row px-2",
         DENSITY[density],
-        selected
-          ? "border-sidebar-border bg-accent/70"
-          : activatable && "hover:border-sidebar-border hover:bg-accent/50",
+        variant === "source"
+          ? activatable && SOURCE_LIST_ROW
+          : selected
+            ? "bg-(--accent-selected)"
+            : activatable && "hover:bg-(--accent-tint)",
         className,
       )}
     >
@@ -214,40 +211,3 @@ export function ListRow({
  * bars keep the two-line placeholder's measured vertical footprint until the
  * real labels replace them. The ladder's 8px gap changes that first paint.
  */
-export function ListRowSkeleton({
-  primaryWidth,
-  trailingWidth,
-  mark = false,
-  density = "row",
-  className,
-  ...rest
-}: React.HTMLAttributes<HTMLElement> & {
-  /** The fixed width utility for the name's bar. */
-  primaryWidth: LoadingBarWidth;
-  /** The fixed width utility for the figure at the end, or none. */
-  trailingWidth?: LoadingBarWidth;
-  /** Whether the row will carry a leading mark — a dot or a glyph. */
-  mark?: boolean;
-  density?: ListRowDensity;
-}) {
-  return (
-    <div
-      aria-hidden
-      className={cn(
-        "flex w-full items-center gap-2 rounded-lg border border-transparent px-2",
-        DENSITY[density],
-        className,
-      )}
-      {...rest}
-    >
-      {mark ? <Skeleton className="size-3 shrink-0 rounded-full" /> : null}
-      <span className="flex min-w-0 flex-1 flex-col gap-1.5">
-        <Skeleton className={cn("h-4", primaryWidth)} />
-        {density === "two-line" ? <Skeleton className="h-3.5 w-2/5" /> : null}
-      </span>
-      {trailingWidth !== undefined ? (
-        <Skeleton className={cn("h-3 shrink-0", trailingWidth)} />
-      ) : null}
-    </div>
-  );
-}

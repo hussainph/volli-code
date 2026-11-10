@@ -26,7 +26,7 @@
  */
 
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import {
   shellCommandLine,
   shellStanding,

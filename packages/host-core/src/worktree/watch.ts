@@ -33,7 +33,12 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve as resolvePath } from "node:path";
 import type Database from "better-sqlite3";
-import type { TicketEventActor, TicketStatus } from "@volli/shared";
+import {
+  computeWorktreeReclaim,
+  type DataChangeKind,
+  type TicketEventActor,
+  type TicketStatus,
+} from "@volli/shared";
 import type { PrCheck, TicketRetentionState } from "@volli/shared";
 
 import { projectFreeze } from "../cloud-move/freeze";
@@ -60,6 +65,7 @@ import {
 } from "./retention";
 import { getTrimSettings } from "./trim-settings";
 import { hostLogger } from "../log/root";
+import { withMainSpan } from "../log/context";
 
 const log = hostLogger("worktree-watch");
 
@@ -99,6 +105,14 @@ const LOAD_SUMMARY_INTERVAL_MS = 60 * 60_000;
  * it, the ticket is read as having no PR without a `gh pr list` every cycle.
  */
 const DONE_DISCOVERY_GRACE_MS = 7 * 24 * 60 * 60_000;
+/**
+ * How long a project whose repository has no git remote is left out of PR
+ * discovery (VC-1077). `gh pr list` cannot succeed there, and asking once per
+ * branch ticket every backoff ceiling was most of the watch's error log. A
+ * committed change to one of its tickets asks again at once, so a remote added
+ * and pushed to is noticed on the next move rather than an hour later.
+ */
+const REMOTELESS_RECHECK_MS = 60 * 60_000;
 
 /** The watch's tunables — derived once from the environment. */
 export interface RetentionWatchConfig {
@@ -111,6 +125,14 @@ export interface RetentionWatchConfig {
   trimRecheckMs: number;
   /** How long a burst of ticket changes is folded into one cycle. */
   changeDebounceMs: number;
+  /**
+   * The least time between two cycles a person's presence triggers (window
+   * focus, the manual poll). Focus fires on every app switch; a cycle per
+   * switch re-walked every candidate for nothing new (VC-1077). Defaults to
+   * {@link intervalMs}: a present cycle refreshes reads older than the base
+   * interval, so one sooner than that could only find what the last one found.
+   */
+  presentMinIntervalMs?: number;
 }
 
 /** Parses a positive-int env string, falling back on absent/invalid/non-positive values. */
@@ -213,6 +235,14 @@ export interface RetentionStore {
   dismissed: Set<string>;
   reads: Map<string, ReadSchedule>;
   trims: Map<string, TrimMemo>;
+  /** Projects whose repository has no git remote, until when (VC-1077). */
+  remoteless: Map<string, number>;
+  /**
+   * Each ticket's dated Done entry, keyed by the row's status and `updated_at`
+   * (VC-1077): every status move bumps both, and the event-log scan behind it
+   * otherwise ran per Done ticket per cycle.
+   */
+  doneEntries: Map<string, { key: string; at: number | null }>;
 }
 
 export function createRetentionStore(): RetentionStore {
@@ -222,6 +252,8 @@ export function createRetentionStore(): RetentionStore {
     dismissed: new Set(),
     reads: new Map(),
     trims: new Map(),
+    remoteless: new Map(),
+    doneEntries: new Map(),
   };
 }
 
@@ -325,8 +357,13 @@ export interface RetentionPollPorts {
    * a body, and the preference is decided in one place for all three.
    */
   notify: (request: NotificationRequest) => void;
-  /** Broadcast seam (wired to `broadcastDataChanged`) — called once when any observation changed. */
-  onChange?: () => void;
+  /**
+   * Broadcast seam — called once per cycle that changed anything, naming every
+   * ticket it changed (VC-1077). A host publishes one scoped notice per entry
+   * rather than an untargeted one: an untargeted notice makes every window
+   * re-read the whole board, and a cycle typically moves one ticket.
+   */
+  onChange?: (changes: readonly RetentionChange[]) => void;
   /**
    * The duration-gated worktree reclaim (VC-113). Absent — in tests, and in any
    * degraded boot that could not build the worktree seams — means the poll stays
@@ -342,10 +379,23 @@ export interface RetentionPollPorts {
   trim?: TrimFinishPorts;
 }
 
+/**
+ * One ticket a cycle changed, scoped for a `data-changed` notice. `worktree`
+ * when its checkout was removed (the working copy boundary reads that kind),
+ * `ticket` when a row was stamped, else `retention`.
+ */
+export interface RetentionChange {
+  ticketId: string;
+  projectId: string;
+  kind: Extract<DataChangeKind, "worktree" | "ticket" | "retention">;
+}
+
 /** The poll cycle's outcome — the driver reads it to update backoff and broadcast. */
 export interface PollResult {
   /** At least one observation was created or changed (the driver broadcasts). */
   changed: boolean;
+  /** Every ticket this cycle changed, one entry each (VC-1077). */
+  changes: RetentionChange[];
   /** How many `gh` reads were attempted this cycle (one process each). */
   attempted: number;
   /** How many of those failed (a wholly-failed cycle drives backoff). */
@@ -422,10 +472,86 @@ function knownTerminalObservation(
  * entry the log cannot date has been there longer than anything the log
  * remembers, so it is past the grace too.
  */
-function shouldDiscover(deps: RetentionPollPorts, ticket: TicketRow): boolean {
+function shouldDiscover(
+  deps: RetentionPollPorts,
+  store: RetentionStore,
+  ticket: TicketRow,
+): boolean {
   if (ticket.status !== "done") return true;
-  const doneEntryAt = doneEntryTimestamp(deps.db, ticket.id);
+  const doneEntryAt = knownDoneEntry(deps, store, ticket);
   return doneEntryAt !== null && deps.now() - doneEntryAt < DONE_DISCOVERY_GRACE_MS;
+}
+
+/**
+ * {@link doneEntryTimestamp}, remembered per ticket row (VC-1077). The anchor
+ * moves only when the ticket moves, and a move bumps the row's status or
+ * `updated_at`, so an unchanged row answers from memory instead of scanning
+ * its event log every cycle.
+ */
+function knownDoneEntry(
+  deps: RetentionPollPorts,
+  store: RetentionStore,
+  ticket: TicketRow,
+): number | null {
+  const key = `${ticket.status}\u0000${ticket.updated_at}`;
+  const known = store.doneEntries.get(ticket.id);
+  if (known !== undefined && known.key === key) return known.at;
+  const at = doneEntryTimestamp(deps.db, ticket.id);
+  store.doneEntries.set(ticket.id, { key, at });
+  return at;
+}
+
+/**
+ * What one cycle reads once and every candidate shares (VC-1077): the freeze
+ * per project, the project checkout per project, and the Done TTL. Each was a
+ * read per ticket per cycle, and on a board of hundreds of finished tickets
+ * that was most of a cycle's time on the host thread.
+ */
+interface CycleReads {
+  frozen: (projectId: string) => boolean;
+  projectPath: (projectId: string) => string | null;
+  ttlMs: () => number;
+}
+
+function cycleReads(db: Database.Database): CycleReads {
+  const frozen = new Map<string, boolean>();
+  const paths = new Map<string, string | null>();
+  let ttl: number | undefined;
+  return {
+    frozen(projectId) {
+      let answer = frozen.get(projectId);
+      if (answer === undefined) {
+        answer = projectFreeze(db, projectId) !== null;
+        frozen.set(projectId, answer);
+      }
+      return answer;
+    },
+    projectPath(projectId) {
+      if (!paths.has(projectId)) paths.set(projectId, getProjectById(db, projectId)?.path ?? null);
+      return paths.get(projectId) ?? null;
+    },
+    ttlMs: () => (ttl ??= retentionTtlMs(db)),
+  };
+}
+
+/** Whether a project's PR discovery is paused for want of a git remote (VC-1077). */
+function remotelessUntil(store: RetentionStore, projectId: string, now: number): number | null {
+  const until = store.remoteless.get(projectId);
+  // A clock stepped backwards must not stretch the pause by the size of the step.
+  if (until === undefined || now >= until || until - now > REMOTELESS_RECHECK_MS) return null;
+  return until;
+}
+
+/** Holds a ticket's next read until `dueAt`, keeping its backoff (VC-1077). */
+function holdRead(
+  store: RetentionStore,
+  ticketId: string,
+  fingerprint: string,
+  now: number,
+  dueAt: number,
+): void {
+  const delayMs = store.reads.get(ticketId)?.delayMs ?? dueAt - now;
+  store.reads.set(ticketId, { fingerprint, readAt: now, delayMs, dueAt });
 }
 
 /**
@@ -477,11 +603,17 @@ function hasUsableGit(dir: string): boolean {
  * removed on archive while the branch + `pr_url` are retained and still worth
  * watching, or left behind as a directory git no longer recognises).
  */
-function ghCwd(deps: RetentionPollPorts, ticket: TicketRow): string | null {
+function ghCwd(reads: CycleReads, ticket: TicketRow): string | null {
   if (ticket.worktree_path && hasUsableGit(ticket.worktree_path)) return ticket.worktree_path;
-  const project = getProjectById(deps.db, ticket.project_id);
-  return project?.path ?? null;
+  return reads.projectPath(ticket.project_id);
 }
+
+/** Which kind wins when one ticket changed more than one way in a cycle. */
+const CHANGE_RANK: Record<RetentionChange["kind"], number> = {
+  retention: 0,
+  ticket: 1,
+  worktree: 2,
+};
 
 /**
  * One poll cycle (issue #76). For every non-archived worktree/branch ticket:
@@ -505,6 +637,7 @@ export async function pollRetention(
 ): Promise<PollResult> {
   const result: PollResult = {
     changed: false,
+    changes: [],
     attempted: 0,
     failed: 0,
     trimChecks: 0,
@@ -520,19 +653,37 @@ export async function pollRetention(
   const mergedThisCycle = new Set<string>();
   /** Every candidate this cycle saw; a schedule for anything else is dropped. */
   const seen = new Set<string>();
+  const reads = cycleReads(deps.db);
+  const changes = new Map<string, RetentionChange>();
+  /** Records that this cycle changed `ticket`, for the one scoped broadcast. */
+  const noteChange = (
+    ticket: Pick<TicketRow, "id" | "project_id">,
+    kind: RetentionChange["kind"],
+  ): void => {
+    result.changed = true;
+    const previous = changes.get(ticket.id);
+    if (previous !== undefined && CHANGE_RANK[previous.kind] >= CHANGE_RANK[kind]) return;
+    changes.set(ticket.id, { ticketId: ticket.id, projectId: ticket.project_id, kind });
+  };
+  const reclaim = (ticket: TicketRow, prState: RetentionObservation["prState"]) =>
+    maybeReclaim(deps, store, reads, ticket, prState);
 
   for (const ticket of listRetentionCandidates(deps.db)) {
     seen.add(ticket.id);
     // A project moving to Volli Cloud takes no write, a pull request's
     // included (VC-993): its tickets are polled again once it is unfrozen.
-    if (projectFreeze(deps.db, ticket.project_id) !== null) continue;
+    if (reads.frozen(ticket.project_id)) continue;
     // Per-ticket isolation: a throw here (SQLITE_BUSY, an FK failure on a
     // ticket deleted mid-cycle, ...) must not abort the whole candidate loop —
     // log it and move on so every OTHER ticket's discovery/status/merge still
     // runs this cycle, and `deps.onChange` still fires for whatever changed.
     try {
-      const cwd = ghCwd(deps, ticket);
-      if (cwd === null) {
+      // The `gh` cwd is resolved only when a `gh` call is about to run
+      // (VC-1077): it reads the worktree's `.git` from disk, and most
+      // candidates make no call in most cycles. A ticket whose project row
+      // still exists always has one — the project checkout — so only a
+      // projectless ticket has to answer now whether it has any.
+      if (reads.projectPath(ticket.project_id) === null && ghCwd(reads, ticket) === null) {
         store.reads.delete(ticket.id);
         continue;
       }
@@ -548,7 +699,7 @@ export async function pollRetention(
 
       // (1) DISCOVER — adopt an agent-opened PR for a branch with no stored url.
       const branch = prUrl === null ? ticket.branch : null;
-      const discoverable = branch !== null && branch !== "" && shouldDiscover(deps, ticket);
+      const discoverable = branch !== null && branch !== "" && shouldDiscover(deps, store, ticket);
       // Nothing left to discover (no branch, past the Done grace, or a PR
       // already stored): no schedule, so the driver never wakes for it.
       if (prUrl === null && !discoverable) store.reads.delete(ticket.id);
@@ -556,14 +707,44 @@ export async function pollRetention(
       // answer is good enough to show, but not to delete by: the reclaim below
       // waits for the cycle whose discovery is fresh.
       const staleDiscovery = discoverable && !due;
-      if (discoverable && due) {
+      // A repository with no git remote cannot have a PR `gh` can find
+      // (VC-1077): its project is left out of discovery until the pause
+      // lapses, or until a committed change to this ticket asks again.
+      const pausedUntil = remotelessUntil(store, ticket.project_id, now);
+      if (discoverable && due && pausedUntil !== null && !cycle.woken.has(ticket.id)) {
+        holdRead(store, ticket.id, fingerprint, now, pausedUntil);
+        continue;
+      }
+      const discoveryCwd = discoverable && due ? ghCwd(reads, ticket) : null;
+      if (discoverable && due && discoveryCwd === null) {
+        store.reads.delete(ticket.id);
+        continue;
+      }
+      if (discoverable && due && discoveryCwd !== null) {
         result.attempted += 1;
         const discovered = await ghDiscoverPr(deps.net, {
-          worktreePath: cwd,
+          worktreePath: discoveryCwd,
           branch,
         });
+        // The freeze again, at the write, fresh rather than from the cycle's
+        // memo: a move can freeze the project while `gh` answers.
+        if (projectFreeze(deps.db, ticket.project_id) !== null) continue;
         if (!discovered.ok) {
           result.failed += 1;
+          if (discovered.failure.kind === "no-remote") {
+            const until = now + REMOTELESS_RECHECK_MS;
+            // One line per pause, not one per branch per cycle.
+            if (remotelessUntil(store, ticket.project_id, now) === null) {
+              log.info("pull request discovery paused: the repository has no git remote", {
+                projectId: ticket.project_id,
+                ticketId: ticket.id,
+                pausedForMs: REMOTELESS_RECHECK_MS,
+              });
+            }
+            store.remoteless.set(ticket.project_id, until);
+            holdRead(store, ticket.id, fingerprint, now, until);
+            continue;
+          }
           log.error("pull request discovery failed", {
             ticketId: ticket.id,
             error: discovered.failure.message,
@@ -571,13 +752,14 @@ export async function pollRetention(
           scheduleRead(store, ticket.id, fingerprint, now, cycle.cadence, false);
           continue;
         }
+        store.remoteless.delete(ticket.project_id);
         if (discovered.value.url !== null) {
           // A durable write, isolated in its own try/catch below — a failure
           // there leaves `prUrl` null so DISCOVER simply retries next poll,
           // rather than treating a stamp we couldn't persist as adopted.
           if (stampDiscoveredPr(deps, ticket, discovered.value.url)) {
             prUrl = discovered.value.url;
-            result.changed = true;
+            noteChange(ticket, "ticket");
             // The stamp rewrote the row; schedule against what is stored now,
             // or the next cycle reads this ticket again as "changed".
             const stamped = getTicketRow(deps.db, ticket.id);
@@ -602,9 +784,9 @@ export async function pollRetention(
       // when this cycle skipped a discovery that is still owed (VC-686): "no
       // PR" from an earlier cycle is not an answer a deletion may rest on.
       if (prUrl === null) {
-        if (store.observations.delete(ticket.id)) result.changed = true;
-        if (!prUnresolved && !staleDiscovery && (await maybeReclaim(deps, ticket, null))) {
-          result.changed = true;
+        if (store.observations.delete(ticket.id)) noteChange(ticket, "retention");
+        if (!prUnresolved && !staleDiscovery && (await reclaim(ticket, null))) {
+          noteChange(ticket, "worktree");
         }
         continue;
       }
@@ -616,7 +798,9 @@ export async function pollRetention(
       const terminal = knownTerminalObservation(deps, store, ticket.id, prUrl);
       if (terminal !== null) {
         store.reads.delete(ticket.id);
-        if (observationChanged(store.observations.get(ticket.id), terminal)) result.changed = true;
+        if (observationChanged(store.observations.get(ticket.id), terminal)) {
+          noteChange(ticket, "retention");
+        }
         store.observations.set(ticket.id, terminal);
         if (terminal.prState === "merged") {
           // Known merged means the one-shot event exists, which is exactly
@@ -624,7 +808,7 @@ export async function pollRetention(
           store.notifiedMerged.add(ticket.id);
           mergedThisCycle.add(ticket.id);
         }
-        if (await maybeReclaim(deps, ticket, terminal.prState)) result.changed = true;
+        if (await reclaim(ticket, terminal.prState)) noteChange(ticket, "worktree");
         continue;
       }
 
@@ -637,14 +821,22 @@ export async function pollRetention(
       const mergeOwed = last?.prState === "merged" && !store.notifiedMerged.has(ticket.id);
       if (!due && !mergeOwed) {
         if (last !== undefined && last.prUrl === prUrl) {
-          if (await maybeReclaim(deps, ticket, last.prState)) result.changed = true;
+          if (await reclaim(ticket, last.prState)) noteChange(ticket, "worktree");
         }
         continue;
       }
 
       // (2) STATUS — read the PR's live state.
+      const statusCwd = ghCwd(reads, ticket);
+      if (statusCwd === null) {
+        store.reads.delete(ticket.id);
+        continue;
+      }
       result.attempted += 1;
-      const status = await ghPrStatus(deps.net, { worktreePath: cwd, prUrl });
+      const status = await ghPrStatus(deps.net, { worktreePath: statusCwd, prUrl });
+      // The freeze again, fresh rather than from the cycle's memo: a move can
+      // freeze the project while `gh` answers.
+      if (projectFreeze(deps.db, ticket.project_id) !== null) continue;
       if (!status.ok) {
         result.failed += 1;
         log.error("pull request status failed", {
@@ -662,7 +854,7 @@ export async function pollRetention(
         checks: status.value.checks,
       };
       const moved = observationChanged(last, observation);
-      if (moved) result.changed = true;
+      if (moved) noteChange(ticket, "retention");
       store.observations.set(ticket.id, observation);
 
       // (3) MERGE — the one-shot merged event + notification. `notifiedMerged`
@@ -687,7 +879,7 @@ export async function pollRetention(
             // the ticket it merged for.
             target: { kind: "ticket", projectId: ticket.project_id, ticketId: ticket.id },
           });
-          result.changed = true;
+          noteChange(ticket, "retention");
         }
         store.notifiedMerged.add(ticket.id);
       }
@@ -715,7 +907,7 @@ export async function pollRetention(
       // (4) RECLAIM — the duration gate (VC-113). Runs LAST, after the PR state
       // this cycle observed is known, because "is a PR still open on it?" is
       // half the question of whether a Done ticket is finished.
-      if (await maybeReclaim(deps, ticket, observation.prState)) result.changed = true;
+      if (await reclaim(ticket, observation.prState)) noteChange(ticket, "worktree");
     } catch (error) {
       log.error("retention poll failed", { ticketId: ticket.id, error });
     }
@@ -725,7 +917,7 @@ export async function pollRetention(
   // anything this cycle saw merged. Runs after the reclaim so a directory that
   // was just removed is not walked on the way out.
   const trim = await runTrimPass(deps, store, mergedThisCycle, now, cycle.cadence);
-  if (trim.changed) result.changed = true;
+  for (const trimmed of trim.trimmed) noteChange(trimmed, "retention");
   result.trimChecks = trim.checks;
 
   // A ticket that left the candidate set takes its schedule with it, so an
@@ -735,9 +927,13 @@ export async function pollRetention(
     if (!seen.has(ticketId)) store.reads.delete(ticketId);
     else if (nextDueAt === null || entry.dueAt < nextDueAt) nextDueAt = entry.dueAt;
   }
+  for (const ticketId of store.doneEntries.keys()) {
+    if (!seen.has(ticketId)) store.doneEntries.delete(ticketId);
+  }
   result.nextDueInMs = nextDueAt === null ? null : Math.max(0, nextDueAt - now);
 
-  if (result.changed) deps.onChange?.();
+  result.changes = [...changes.values()];
+  if (result.changed) deps.onChange?.(result.changes);
   return result;
 }
 
@@ -761,9 +957,9 @@ async function runTrimPass(
   mergedThisCycle: ReadonlySet<string>,
   now: number,
   cadence: RetentionCadence,
-): Promise<{ changed: boolean; checks: number }> {
+): Promise<{ trimmed: Pick<TicketRow, "id" | "project_id">[]; checks: number }> {
   const trim = deps.trim;
-  if (trim === undefined) return { changed: false, checks: 0 };
+  if (trim === undefined) return { trimmed: [], checks: 0 };
   const rows = new Map<string, TicketRow | undefined>(
     listTrimCandidates(deps.db).map((ticket) => [ticket.id, ticket]),
   );
@@ -776,7 +972,7 @@ async function runTrimPass(
   // Settings belong in the memo's key: a person who changes what a trim keeps,
   // or turns it back on, has asked a new question of every worktree.
   const settings = JSON.stringify(getTrimSettings(deps.db));
-  let changed = false;
+  const trimmed: Pick<TicketRow, "id" | "project_id">[] = [];
   let checks = 0;
   for (const [ticketId, row] of rows) {
     try {
@@ -805,7 +1001,11 @@ async function runTrimPass(
         });
       }
       if (outcome.kind !== "trimmed") continue;
-      changed = true;
+      // A merged ticket outside the trim set was read for this pass, so its
+      // row is in hand unless it vanished mid-cycle — and a vanished ticket
+      // cannot have been trimmed.
+      const owner = row ?? getTicketRow(deps.db, ticketId);
+      if (owner !== undefined) trimmed.push({ id: ticketId, project_id: owner.project_id });
       log.info("ignored paths trimmed", {
         ticketId,
         removed: outcome.report.removed.length,
@@ -817,7 +1017,7 @@ async function runTrimPass(
       log.error("trim failed", { ticketId, error });
     }
   }
-  return { changed, checks };
+  return { trimmed, checks };
 }
 
 /**
@@ -832,10 +1032,29 @@ async function runTrimPass(
  */
 async function maybeReclaim(
   deps: RetentionPollPorts,
+  store: RetentionStore,
+  reads: CycleReads,
   ticket: TicketRow,
   prState: "open" | "merged" | "closed" | null,
 ): Promise<boolean> {
   if (!deps.reclaim) return false;
+  // The same pure verdict the reclaim asks, answered first from the row this
+  // cycle already holds (VC-1077). It can only refuse: a ticket it passes is
+  // asked again by `reclaimIfStale` against a fresh row, so a row that moved
+  // mid-cycle is answered next cycle. Without it every finished ticket paid
+  // a row read, a freeze read, a disk check and an event-log scan per cycle
+  // to learn it was not stale yet — or had no checkout to reclaim at all.
+  if (ticket.worktree_path === null) return false;
+  const worthAsking = computeWorktreeReclaim({
+    status: ticket.status as TicketStatus,
+    keep: ticket.retention_keep !== 0,
+    prUrl: ticket.pr_url,
+    prState,
+    doneEntryAt: ticket.status === "done" ? knownDoneEntry(deps, store, ticket) : null,
+    now: deps.now(),
+    ttlMs: reads.ttlMs(),
+  });
+  if (!worthAsking.reclaim) return false;
   const outcome = await reclaimIfStale(deps.reclaim, ticket.id, prState);
   if (outcome.kind !== "reclaimed") return false;
   deps.notify({
@@ -1002,6 +1221,8 @@ export class RetentionWatcher {
   private inFlight: Promise<void> | null = null;
   private started = false;
   private load: LoadWindow | null = null;
+  /** When the last presence-triggered cycle was accepted (VC-1077). */
+  private lastPresentAt: number | null = null;
 
   constructor(
     private readonly deps: RetentionPollPorts,
@@ -1038,8 +1259,21 @@ export class RetentionWatcher {
    * Runs a poll immediately (on window focus / manual trigger), then
    * reschedules. A person is looking, so every ticket read longer than the
    * base interval ago is read again, whatever its backoff.
+   *
+   * At most one such cycle per {@link RetentionWatchConfig.presentMinIntervalMs}
+   * (VC-1077): focus fires on every switch back to the app, and a cycle
+   * sooner than the base interval after the last one can refresh nothing — it
+   * only re-walks every candidate on the host thread. A trigger inside the
+   * window is dropped and the schedule already set stands.
    */
   triggerNow(): void {
+    const now = this.deps.now();
+    const minIntervalMs = this.config.presentMinIntervalMs ?? this.config.intervalMs;
+    const last = this.lastPresentAt;
+    // A clock stepped backwards must not hold presence off by the size of the step.
+    if (last !== null && now >= last && now - last < minIntervalMs) return;
+    if (this.inFlight !== null) return;
+    this.lastPresentAt = now;
     if (this.timer !== null) {
       clearTimeout(this.timer);
       this.timer = null;
@@ -1087,7 +1321,7 @@ export class RetentionWatcher {
         clearTimeout(this.timer);
         this.timer = null;
       }
-      void this.runOnce(false);
+      void withMainSpan({ door: "timer", operation: "retention-poll" }, () => this.runOnce(false));
     }, this.config.changeDebounceMs);
     this.changeTimer.unref();
   }
@@ -1099,7 +1333,13 @@ export class RetentionWatcher {
     // in-flight run's `finally` schedule a SECOND self-perpetuating chain
     // that stop() can no longer reach (it only clears the last-written id).
     if (this.timer !== null) clearTimeout(this.timer);
-    this.timer = setTimeout(() => void this.runOnce(false), delay);
+    this.timer = setTimeout(
+      () =>
+        void withMainSpan({ door: "timer", operation: "retention-poll" }, () =>
+          this.runOnce(false),
+        ),
+      delay,
+    );
     // Never keep the process alive for a poll at quit (park.ts precedent).
     this.timer.unref();
   }

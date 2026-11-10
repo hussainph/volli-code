@@ -14,18 +14,38 @@ fails.
 
 ## Open a terminal
 
-1. In Home or a Ticket view, open the menu beside **Chat**.
-2. Select **Terminal**. You can also use `⌥⌘T`.
+1. In Home or a Ticket view, select **Open a tab** (`+`).
+2. Choose **Terminal**. You can also use `⌥⌘T`.
 
 A Home terminal starts in the project's main checkout. A ticket terminal uses
 the ticket's selected destination: its worktree, or the project's **Project
 checkout**. If the ticket needs a worktree, Volli creates it when the terminal
-starts. When that worktree is new and its **Then run** setup command has not run
+starts. When that worktree is new and its **Setup command** setup command has not run
 yet, the setup command runs first in the terminal.
 
 The terminal opens as a Session with a shell. To use an external TUI, start it
 from that shell yourself. Volli never starts one for you. Choose **Chat** when
 you want Volli's built-in agent conversation and tools.
+
+## Split a terminal
+
+With the terminal focused, press `⌘D` to open a shell pane to the right, or
+`⇧⌘D` to open one below. Each pane starts its own shell in the same ticket or
+project scope. Use `⌥⌘` plus an arrow key to move between shell panes, and drag
+their dividers to resize them.
+
+These shell panes share one terminal tab. To put a terminal beside a chat,
+file, or Browser Tab instead, use [split view](/guides/split-view/).
+
+## Park a terminal
+
+Right-click a live terminal tab and choose **Park Now** to pause its process
+tree. Choose **Wake** to resume it. Parking keeps the process in memory; it
+does not save a restorable terminal screen.
+
+Use **Keep Awake** to prevent automatic parking, or **Allow Parking** to make
+the terminal eligible again. For a split terminal tab, these actions apply to
+its live shell panes.
 
 ## Use the `volli` CLI
 

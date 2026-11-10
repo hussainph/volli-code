@@ -34,7 +34,13 @@ import * as handlerModule from "../handlers/host-handlers";
 import * as boot from "./boot-recovery";
 import { readRecoveredSessionServices, SessionRuntimeClosingError } from "./lifecycle";
 import * as pi from "./pi-adapter";
-import { createRunnerComposition, type RunnerHostEdge, type RunnerProductStore } from "./runner";
+import {
+  createRunnerComposition,
+  type RunnerHostEdge,
+  type RunnerProductStore,
+  type RunnerCompositionInput,
+} from "./runner";
+import { SourceIconDisk } from "../source-icons/storage";
 import { createCloudProductStore } from "../cloud-store";
 import { registerSessionNoticeJob } from "../cloud-store/notice-jobs";
 import { ownerGuardedInbox } from "../cloud-store/session-jobs";
@@ -135,6 +141,7 @@ function gateRecovery(calls: string[]): PromiseWithResolvers<void> {
 function compose(
   { host, ports, root }: Awaited<ReturnType<typeof composedHost>>,
   store: RunnerProductStore = { kind: "local", host },
+  capabilities: RunnerCompositionInput["capabilities"] = { askUser: false, requestSecret: false },
 ) {
   const calls: string[] = [];
   const transport = {
@@ -159,7 +166,7 @@ function compose(
     secrets: new SecretService(
       isLiveHost(host) ? host.secretStore : new SecretStore(join(root, "s.enc"), noKeys),
     ),
-    capabilities: { askUser: false, requestSecret: false },
+    capabilities,
     beforeExecution: async () => {},
     // What this host's doors answer; nothing here calls a verb.
     doors,
@@ -628,6 +635,50 @@ describe("runner composition", () => {
     await expect(host.stop("quit")).resolves.toBe(report);
     expect(f.transport.close).toHaveBeenCalledOnce();
     await expect(f.runner.ready()).rejects.toBeInstanceOf(SessionRuntimeClosingError);
+  });
+
+  it("joins source icon persistence even when desktop quit skips detached-work draining", async () => {
+    const fixture = await composedHost("desktop-quit");
+    const gate = Promise.withResolvers<void>();
+    gates.push(gate);
+    const originalSettled = SourceIconDisk.prototype.settled;
+    const persisted = vi
+      .spyOn(SourceIconDisk.prototype, "settled")
+      .mockImplementation(async function (this: SourceIconDisk) {
+        await gate.promise;
+        await originalSettled.call(this);
+      });
+    const unsubscribe = vi.fn();
+    const subscribe = vi.fn(() => unsubscribe);
+    const f = compose(fixture, undefined, {
+      askUser: false,
+      requestSecret: false,
+      sourceIconEpoch: () => "epoch",
+      sourceIconOwner: () => "a".repeat(64),
+      sourceIconRestoring: () => false,
+      watchSourceIconAuthority: subscribe,
+    });
+    await fixture.host.start(f.runner.owner());
+    expect(subscribe).toHaveBeenCalledOnce();
+    let stopped = false;
+    let settled = false;
+    const stopping = fixture.host.stop("quit").then(() => {
+      stopped = true;
+    });
+    const joining = f.runner.settleSourceIcons().then(() => {
+      settled = true;
+    });
+    await vi.waitFor(() => expect(persisted).toHaveBeenCalled());
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(stopped).toBe(false);
+    expect(settled).toBe(false);
+    expect(unsubscribe).toHaveBeenCalled();
+    gate.resolve();
+    await Promise.all([stopping, joining]);
+    expect(stopped).toBe(true);
+    expect(settled).toBe(true);
+    expect(f.shellsClose).not.toHaveBeenCalled();
+    if (isLiveHost(fixture.host)) expect(fixture.host.database.db.open).toBe(true);
   });
 
   it("a quit during recovery never binds, joins the open sweep, and leaves desktop's database open", async () => {
