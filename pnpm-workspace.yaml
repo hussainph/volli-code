@@ -166,6 +166,8 @@ patchedDependencies:
   # main's memory for the length of its deadline. Upstream bounds the VM heap
   # but not what the host accumulates from it. Absent, upstream behavior.
   "@earendil-works/pi-codemode@1.0.0": patches/@earendil-works__pi-codemode@1.0.0.patch
+  # Also raises Anthropic OAuth's Claude Code identity to 2.1.321 (pi#11969).
+  # Remove that identity hunk once upstream advertises 2.1.321 or newer.
   # Stops the providers re-parsing a tool call's whole accumulated argument
   # JSON on every streamed delta (VC-1074). Upstream's per-delta
   # `parseStreamingJson` is quadratic in the argument's size and runs

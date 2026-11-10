@@ -68,16 +68,26 @@ path; and record any policy or API divergence here before bumping the pin.
 
 ## Local patches
 
-Two Pi patches remain, declared in `pnpm-workspace.yaml` and stored in
+Two Pi patches are declared in `pnpm-workspace.yaml` and stored in
 `patches/` at the repo root:
 
+- `@earendil-works/pi-ai@1.0.0` — raises the Anthropic OAuth Claude Code
+  identity from `2.1.280` to `2.1.321` in `dist/api/anthropic-messages.js`
+  and its source map's embedded TypeScript. No declaration carries the constant.
+  Subscription requests for Claude Fable 5.2 require at least `2.1.290`
+  ([upstream issue #11969](https://github.com/earendil-works/pi/issues/11969),
+  [closed, unmerged fix #11970](https://github.com/earendil-works/pi/pull/11970)).
+  Remove this patch once a pinned upstream release advertises `2.1.321` or
+  newer; `src/pi/anthropic-oauth.test.ts` captures the outgoing request through
+  Pi's real Anthropic SDK to guard the identity. This does not add Fable 5.2
+  to the model catalog.
 - `@earendil-works/pi-codemode@1.0.0` — rebased unchanged from 0.99.2;
   upstream still lacks `maxOutputChars` and `maxCallChars`. Host/worker bounds
   cover text, console/image output, return values, error text and serialized
   call arguments before an oversized worker message reaches Electron main.
   Defaults and failure text remain identical. `src/codemode/tool.test.ts`
   covers each bound and the host/worker path.
-- `@earendil-works/pi-ai@1.0.0` (VC-1074) — upstream re-parses a tool call's
+  The same AI patch retains the VC-1074 streaming fix: upstream re-parses a tool call's
   whole accumulated argument JSON on every streamed delta (Anthropic, OpenAI
   Responses/Completions, Mistral, Bedrock and Pi Messages), which is quadratic
   in the argument's size and runs on Electron main. A new
@@ -103,12 +113,9 @@ All paths above are under `src/pi/`. See the vendor README for npm/source-map
 provenance, MIT notice, every retained module and the omitted harness paths.
 Session Engine remains the durability authority; JSONL format does not change.
 
-Dropped at the 0.85.1 bump: the `pi-ai` Claude Code identity patch
-(`claudeCodeVersion`) added in `a1ce395c`, when pi-ai hardcoded a ~6-month-stale
-`2.1.75` and Anthropic's version gate rejected newer models such as Fable 5.1.
-Upstream now ships `2.1.251` in `dist/api/anthropic-messages.js` and we ride it
-rather than pinning our own number. If a model starts failing with "You need a
-newer version than …", that gate is the first place to look.
+The earlier Claude Code identity patch (`claudeCodeVersion`, added in
+`a1ce395c` for `2.1.75`) was dropped at the 0.85.1 bump when upstream caught
+up. The patch above restores that compatibility measure for the newer gate.
 
 When bumping the pin, audit each patch against the new tarball before
 regenerating it: diff the release against the previous one and check whether
