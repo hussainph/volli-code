@@ -5,7 +5,7 @@ Generated file. Do not edit by hand.
   verify:      pnpm run check:notices
 
 Scope: the macOS arm64 Volli Code application bundle (app id app.volli.desktop).
-It covers 576 third-party packages: the production dependency closure
+It covers 465 third-party packages: the production dependency closure
 of the desktop app and of the bundled `volli` CLI, the native platform packages
 electron-builder ships as binaries, the build-time sources whose output is part of
 the bundle, and the vendored material recorded in apps/desktop/notices/sources.json.
@@ -54,7 +54,7 @@ they are listed so the index accounts for every module in the bundle.
   @volli/shared
 
 =========================================================================================================
-2. PACKAGE INDEX (576 packages)
+2. PACKAGE INDEX (465 packages)
 =========================================================================================================
 
   <package>@<version>  <licence declared by the package>  [how it reaches the .app]
@@ -62,7 +62,6 @@ they are listed so the index accounts for every module in the bundle.
   @ai-sdk/gateway@4.0.136  Apache-2.0  [bundled into a chunk]
   @ai-sdk/provider@4.0.36  Apache-2.0  [bundled into a chunk]
   @ai-sdk/provider-utils@5.0.75  Apache-2.0  [bundled into a chunk]
-  @antfu/install-pkg@2.1.0  MIT  [bundled into a chunk]
   @anthropic-ai/sandbox-runtime@0.0.81  Apache-2.0  [bundled into a chunk]
   @anthropic-ai/sdk@0.129.0  MIT  [bundled into a chunk]
   @asamuzakjp/css-color@7.1.6  MIT  [node_modules tree]
@@ -88,9 +87,7 @@ they are listed so the index accounts for every module in the bundle.
   @aws-sdk/xml-builder@3.972.41  Apache-2.0  [bundled into a chunk]
   @aws/lambda-invoke-store@0.3.0  Apache-2.0  [bundled into a chunk]
   @babel/runtime@7.29.10  MIT  [bundled into a chunk]
-  @braintree/sanitize-url@7.1.2  MIT  [bundled into a chunk]
   @bramus/specificity@2.4.2  MIT  [node_modules tree]
-  @chevrotain/types@11.1.2  Apache-2.0  [bundled into a chunk]
   @csstools/color-helpers@6.1.2  MIT-0  [node_modules tree]
   @csstools/css-calc@3.4.3  MIT  [node_modules tree]
   @csstools/css-color-parser@4.2.6  MIT  [node_modules tree]
@@ -119,15 +116,12 @@ they are listed so the index accounts for every module in the bundle.
   @google/genai@2.21.0  Apache-2.0  [bundled into a chunk]
   @hugeicons/core-free-icons@4.4.0  MIT  [bundled into a chunk]
   @hugeicons/react@1.1.10  MIT  [bundled into a chunk]
-  @iconify/types@2.0.0  MIT  [bundled into a chunk]
-  @iconify/utils@3.1.7  MIT  [bundled into a chunk]
   @img/colour@1.1.0  MIT  [node_modules tree, unpacked from the asar]
   @img/sharp-darwin-arm64@0.35.5  Apache-2.0  [native binary, unpacked]
   @img/sharp-libvips-darwin-arm64@1.3.4  LGPL-3.0-or-later  [native binary, unpacked]
   @lezer/common@1.5.3  MIT  [bundled into a chunk]
   @lezer/highlight@1.2.5  MIT  [bundled into a chunk]
   @lezer/markdown@1.8.1  MIT  [bundled into a chunk]
-  @mermaid-js/parser@1.2.1  MIT  [bundled into a chunk]
   @mixmark-io/domino@2.2.0  BSD-2-Clause  [bundled into a chunk]
   @mozilla/readability@0.6.0  Apache-2.0  [bundled into a chunk]
   @noble/hashes@2.4.0  MIT  [bundled into a chunk]
@@ -234,44 +228,11 @@ they are listed so the index accounts for every module in the bundle.
   @standard-schema/spec@1.1.0  MIT  [bundled into a chunk]
   @streamdown/cjk@1.0.4  Apache-2.0  [bundled into a chunk]
   @streamdown/code@2.0.0  Apache-2.0  [bundled into a chunk]
-  @streamdown/mermaid@1.0.3  Apache-2.0  [bundled into a chunk]
   @trpc/client@11.24.0  MIT  [node_modules tree]
   @trpc/server@11.24.0  MIT  [node_modules tree]
-  @types/d3@7.4.3  MIT  [bundled into a chunk]
-  @types/d3-array@3.2.2  MIT  [bundled into a chunk]
-  @types/d3-axis@3.0.6  MIT  [bundled into a chunk]
-  @types/d3-brush@3.0.6  MIT  [bundled into a chunk]
-  @types/d3-chord@3.0.6  MIT  [bundled into a chunk]
-  @types/d3-color@3.1.3  MIT  [bundled into a chunk]
-  @types/d3-contour@3.0.6  MIT  [bundled into a chunk]
-  @types/d3-delaunay@6.0.4  MIT  [bundled into a chunk]
-  @types/d3-dispatch@3.0.7  MIT  [bundled into a chunk]
-  @types/d3-drag@3.0.7  MIT  [bundled into a chunk]
-  @types/d3-dsv@3.0.7  MIT  [bundled into a chunk]
-  @types/d3-ease@3.0.2  MIT  [bundled into a chunk]
-  @types/d3-fetch@3.0.7  MIT  [bundled into a chunk]
-  @types/d3-force@3.0.10  MIT  [bundled into a chunk]
-  @types/d3-format@3.0.4  MIT  [bundled into a chunk]
-  @types/d3-geo@3.1.1  MIT  [bundled into a chunk]
-  @types/d3-hierarchy@3.1.7  MIT  [bundled into a chunk]
-  @types/d3-interpolate@3.0.4  MIT  [bundled into a chunk]
-  @types/d3-path@3.1.1  MIT  [bundled into a chunk]
-  @types/d3-polygon@3.0.2  MIT  [bundled into a chunk]
-  @types/d3-quadtree@3.0.6  MIT  [bundled into a chunk]
-  @types/d3-random@3.0.4  MIT  [bundled into a chunk]
-  @types/d3-scale@4.0.9  MIT  [bundled into a chunk]
-  @types/d3-scale-chromatic@3.1.0  MIT  [bundled into a chunk]
-  @types/d3-selection@3.0.12  MIT  [bundled into a chunk]
-  @types/d3-shape@3.2.0  MIT  [bundled into a chunk]
-  @types/d3-time@3.0.4  MIT  [bundled into a chunk]
-  @types/d3-time-format@4.0.3  MIT  [bundled into a chunk]
-  @types/d3-timer@3.0.2  MIT  [bundled into a chunk]
-  @types/d3-transition@3.0.9  MIT  [bundled into a chunk]
-  @types/d3-zoom@3.0.9  MIT  [bundled into a chunk]
   @types/debug@4.1.13  MIT  [bundled into a chunk]
   @types/estree@1.0.9  MIT  [bundled into a chunk]
   @types/estree-jsx@1.0.5  MIT  [bundled into a chunk]
-  @types/geojson@7946.0.16  MIT  [bundled into a chunk]
   @types/hast@3.0.5  MIT  [bundled into a chunk]
   @types/mdast@4.0.4  MIT  [bundled into a chunk]
   @types/ms@2.1.0  MIT  [bundled into a chunk]
@@ -281,7 +242,6 @@ they are listed so the index accounts for every module in the bundle.
   @types/unist@2.0.11  MIT  [bundled into a chunk]
   @types/unist@3.0.3  MIT  [bundled into a chunk]
   @ungap/structured-clone@1.4.0  ISC  [bundled into a chunk]
-  @upsetjs/venn.js@2.0.0  MIT  [bundled into a chunk]
   @vercel/oidc@3.2.0  Apache-2.0  [bundled into a chunk]
   @vscode/ripgrep@1.18.0  MIT  [node_modules tree, unpacked from the asar]
   @vscode/ripgrep-darwin-arm64@1.18.0  MIT  [native binary, unpacked]
@@ -314,59 +274,14 @@ they are listed so the index accounts for every module in the bundle.
   cmdk@1.1.1  MIT  [bundled into a chunk]
   comma-separated-tokens@2.0.3  MIT  [bundled into a chunk]
   commander@12.1.0  MIT  [bundled into a chunk]
-  commander@7.2.0  MIT  [bundled into a chunk]
-  commander@8.3.0  MIT  [bundled into a chunk]
   convex@1.48.0  Apache-2.0  [bundled into a chunk]
-  cose-base@1.0.3  MIT  [bundled into a chunk]
-  cose-base@2.2.0  MIT  [bundled into a chunk]
   cross-spawn@7.0.6  MIT  [bundled into a chunk]
   css-tree@3.2.1  MIT  [node_modules tree]
-  cytoscape@3.34.4  MIT  [bundled into a chunk]
-  cytoscape-cose-bilkent@4.1.0  MIT  [bundled into a chunk]
-  cytoscape-fcose@2.2.0  MIT  [bundled into a chunk]
-  d3@7.9.0  ISC  [bundled into a chunk]
-  d3-array@2.12.1  BSD-3-Clause  [bundled into a chunk]
-  d3-array@3.2.4  ISC  [bundled into a chunk]
-  d3-axis@3.0.0  ISC  [bundled into a chunk]
-  d3-brush@3.0.0  ISC  [bundled into a chunk]
-  d3-chord@3.0.1  ISC  [bundled into a chunk]
-  d3-color@3.1.0  ISC  [bundled into a chunk]
-  d3-contour@4.0.2  ISC  [bundled into a chunk]
-  d3-delaunay@6.0.4  ISC  [bundled into a chunk]
-  d3-dispatch@3.0.1  ISC  [bundled into a chunk]
-  d3-drag@3.0.0  ISC  [bundled into a chunk]
-  d3-dsv@3.0.1  ISC  [bundled into a chunk]
-  d3-ease@3.0.1  BSD-3-Clause  [bundled into a chunk]
-  d3-fetch@3.0.1  ISC  [bundled into a chunk]
-  d3-force@3.0.0  ISC  [bundled into a chunk]
-  d3-format@3.1.2  ISC  [bundled into a chunk]
-  d3-geo@3.1.1  ISC  [bundled into a chunk]
-  d3-hierarchy@3.1.2  ISC  [bundled into a chunk]
-  d3-interpolate@3.0.1  ISC  [bundled into a chunk]
-  d3-path@1.0.9  BSD-3-Clause  [bundled into a chunk]
-  d3-path@3.1.0  ISC  [bundled into a chunk]
-  d3-polygon@3.0.1  ISC  [bundled into a chunk]
-  d3-quadtree@3.0.1  ISC  [bundled into a chunk]
-  d3-random@3.0.1  ISC  [bundled into a chunk]
-  d3-sankey@0.12.3  BSD-3-Clause  [bundled into a chunk]
-  d3-scale@4.0.2  ISC  [bundled into a chunk]
-  d3-scale-chromatic@3.1.0  ISC  [bundled into a chunk]
-  d3-selection@3.0.0  ISC  [bundled into a chunk]
-  d3-shape@1.3.7  BSD-3-Clause  [bundled into a chunk]
-  d3-shape@3.2.0  ISC  [bundled into a chunk]
-  d3-time@3.1.0  ISC  [bundled into a chunk]
-  d3-time-format@4.1.0  ISC  [bundled into a chunk]
-  d3-timer@3.0.1  ISC  [bundled into a chunk]
-  d3-transition@3.0.1  ISC  [bundled into a chunk]
-  d3-zoom@3.0.0  ISC  [bundled into a chunk]
-  dagre-d3-es@7.0.14  MIT  [bundled into a chunk]
   data-uri-to-buffer@4.0.1  MIT  [bundled into a chunk]
   data-urls@8.0.0  MIT  [node_modules tree]
-  dayjs@1.11.23  MIT  [bundled into a chunk]
   debug@4.4.3  MIT  [node_modules tree]
   decimal.js@10.6.0  MIT  [node_modules tree]
   decode-named-character-reference@1.3.0  MIT  [bundled into a chunk]
-  delaunator@5.1.0  ISC  [bundled into a chunk]
   dequal@2.0.3  MIT  [bundled into a chunk]
   detect-libc@2.1.2  Apache-2.0  [node_modules tree]
   detect-node-es@1.1.0  MIT  [bundled into a chunk]
@@ -378,7 +293,6 @@ they are listed so the index accounts for every module in the bundle.
   electron-updater@6.8.11  MIT  [node_modules tree]
   entities@6.0.1  BSD-2-Clause  [node_modules tree]
   entities@8.0.0  BSD-2-Clause  [node_modules tree]
-  es-toolkit@1.52.0  MIT  [bundled into a chunk]
   esbuild@0.27.0  MIT  [bundled into a chunk]
   escape-string-regexp@5.0.0  MIT  [bundled into a chunk]
   estree-util-is-identifier-name@3.0.0  MIT  [bundled into a chunk]
@@ -387,7 +301,6 @@ they are listed so the index accounts for every module in the bundle.
   fast-deep-equal@3.1.3  MIT  [bundled into a chunk]
   fast-sha256@1.3.0  Unlicense  [bundled into a chunk]
   fast-uri@3.1.9  BSD-3-Clause  [bundled into a chunk]
-  fastdom@1.0.12  MIT  [bundled into a chunk]
   fetch-blob@3.2.0  MIT  [bundled into a chunk]
   formdata-polyfill@4.0.10  MIT  [bundled into a chunk]
   fractional-indexing@3.2.0  CC0-1.0  [bundled into a chunk]
@@ -403,7 +316,6 @@ they are listed so the index accounts for every module in the bundle.
   google-logging-utils@1.2.0  Apache-2.0  [bundled into a chunk]
   gpt-tokenizer@4.1.1  MIT  [bundled into a chunk]
   graceful-fs@4.2.11  ISC  [node_modules tree]
-  hachure-fill@0.5.2  MIT  [bundled into a chunk]
   hast-util-from-parse5@8.0.3  MIT  [bundled into a chunk]
   hast-util-parse-selector@4.0.0  MIT  [bundled into a chunk]
   hast-util-raw@9.1.0  MIT  [bundled into a chunk]
@@ -419,11 +331,7 @@ they are listed so the index accounts for every module in the bundle.
   http-proxy-agent@9.1.0  MIT  [bundled into a chunk]
   https-proxy-agent@7.0.6  MIT  [bundled into a chunk]
   https-proxy-agent@9.1.0  MIT  [bundled into a chunk]
-  iconv-lite@0.6.3  MIT  [bundled into a chunk]
-  import-meta-resolve@4.2.0  MIT  [bundled into a chunk]
   inline-style-parser@0.2.7  MIT  [bundled into a chunk]
-  internmap@1.0.1  ISC  [bundled into a chunk]
-  internmap@2.0.3  ISC  [bundled into a chunk]
   is-alphabetical@2.0.1  MIT  [bundled into a chunk]
   is-alphanumerical@2.0.1  MIT  [bundled into a chunk]
   is-decimal@2.0.1  MIT  [bundled into a chunk]
@@ -440,12 +348,7 @@ they are listed so the index accounts for every module in the bundle.
   jsonfile@6.2.1  MIT  [node_modules tree]
   jwa@2.0.1  MIT  [bundled into a chunk]
   jws@4.0.1  MIT  [bundled into a chunk]
-  katex@0.18.2  MIT  [bundled into a chunk]
-  khroma@2.1.0  (undeclared)  [bundled into a chunk]
-  layout-base@1.0.2  MIT  [bundled into a chunk]
-  layout-base@2.0.1  MIT  [bundled into a chunk]
   lazy-val@1.0.5  MIT  [node_modules tree]
-  lodash-es@4.18.1  MIT  [bundled into a chunk]
   lodash.escaperegexp@4.1.2  MIT  [node_modules tree]
   lodash.isequal@4.5.0  MIT  [node_modules tree]
   long@5.3.2  Apache-2.0  [bundled into a chunk]
@@ -453,7 +356,6 @@ they are listed so the index accounts for every module in the bundle.
   lru-cache@11.5.3  BlueOak-1.0.0  [node_modules tree]
   markdown-table@3.0.4  MIT  [bundled into a chunk]
   marked@14.0.0  MIT  [bundled into a chunk]
-  marked@16.4.2  MIT  [bundled into a chunk]
   marked@18.1.3  MIT  [bundled into a chunk]
   mdast-util-find-and-replace@3.0.3  MIT  [bundled into a chunk]
   mdast-util-from-markdown@2.1.0  MIT  [bundled into a chunk]
@@ -473,7 +375,6 @@ they are listed so the index accounts for every module in the bundle.
   mdast-util-to-markdown-cjk-friendly-gfm-strikethrough@1.0.0  MIT  [bundled into a chunk]
   mdast-util-to-string@4.0.0  MIT  [bundled into a chunk]
   mdn-data@2.27.1  CC0-1.0  [node_modules tree]
-  mermaid@11.17.2  MIT  [bundled into a chunk]
   micromark@4.0.3  MIT  [bundled into a chunk]
   micromark-core-commonmark@2.0.4  MIT  [bundled into a chunk]
   micromark-extension-cjk-friendly@2.0.2  MIT  [bundled into a chunk]
@@ -522,15 +423,12 @@ they are listed so the index accounts for every module in the bundle.
   oniguruma-to-es@4.3.6  MIT  [bundled into a chunk]
   openai@7.19.0  Apache-2.0  [bundled into a chunk]
   p-retry@4.6.2  MIT  [bundled into a chunk]
-  package-manager-detector@1.9.0  MIT  [bundled into a chunk]
   parse-entities@4.0.2  MIT  [bundled into a chunk]
   parse5@7.3.0  MIT  [node_modules tree]
   parse5@8.0.1  MIT  [node_modules tree]
   partial-json@0.1.7  MIT  [bundled into a chunk]
-  path-data-parser@0.1.0  MIT  [bundled into a chunk]
   path-key@3.1.1  MIT  [bundled into a chunk]
-  points-on-curve@0.2.0  MIT  [bundled into a chunk]
-  points-on-path@0.2.1  MIT  [bundled into a chunk]
+  pele@1.13.0  MIT  [bundled into a chunk]
   prettier@3.9.6  MIT  [bundled into a chunk]
   proper-lockfile@4.1.2  MIT  [bundled into a chunk]
   property-information@7.2.0  MIT  [bundled into a chunk]
@@ -560,11 +458,7 @@ they are listed so the index accounts for every module in the bundle.
   require-from-string@2.0.2  MIT  [node_modules tree]
   retry@0.12.0  MIT  [bundled into a chunk]
   retry@0.13.1  MIT  [bundled into a chunk]
-  robust-predicates@3.0.3  Unlicense  [bundled into a chunk]
-  roughjs@4.6.6  MIT  [bundled into a chunk]
-  rw@1.3.3  BSD-3-Clause  [bundled into a chunk]
   safe-buffer@5.2.1  MIT  [bundled into a chunk]
-  safer-buffer@2.1.2  MIT  [bundled into a chunk]
   sax@1.6.1  BlueOak-1.0.0  [node_modules tree]
   saxes@6.0.0  ISC  [node_modules tree]
   scheduler@0.28.0  MIT  [bundled into a chunk]
@@ -580,15 +474,12 @@ they are listed so the index accounts for every module in the bundle.
   space-separated-tokens@2.0.2  MIT  [bundled into a chunk]
   standardwebhooks@1.1.1  MIT  [bundled into a chunk]
   streamdown@2.7.1  Apache-2.0  [bundled into a chunk]
-  strictdom@1.0.1  MIT  [bundled into a chunk]
   stringify-entities@4.0.4  MIT  [bundled into a chunk]
   style-to-js@1.1.21  MIT  [bundled into a chunk]
   style-to-object@1.0.14  MIT  [bundled into a chunk]
-  stylis@4.4.0  MIT  [bundled into a chunk]
   tailwind-merge@3.7.0  MIT  [bundled into a chunk]
   tailwindcss@4.3.4  MIT  [build-time source]
   tiny-typed-emitter@2.1.0  MIT  [node_modules tree]
-  tinyexec@1.3.1  MIT  [bundled into a chunk]
   tldts@7.4.19  MIT  [node_modules tree]
   tldts-core@7.4.20  MIT  [node_modules tree]
   tough-cookie@6.0.2  BSD-3-Clause  [node_modules tree]
@@ -596,7 +487,6 @@ they are listed so the index accounts for every module in the bundle.
   trim-lines@3.0.1  MIT  [bundled into a chunk]
   trough@2.2.0  MIT  [bundled into a chunk]
   ts-algebra@2.0.0  MIT  [bundled into a chunk]
-  ts-dedent@2.3.0  MIT  [bundled into a chunk]
   tslib@2.8.1  0BSD  [bundled into a chunk]
   turndown@7.2.5  MIT  [bundled into a chunk]
   tw-animate-css@1.4.0  MIT  [build-time source]
@@ -615,7 +505,6 @@ they are listed so the index accounts for every module in the bundle.
   use-callback-ref@1.3.3  MIT  [bundled into a chunk]
   use-sidecar@1.1.3  MIT  [bundled into a chunk]
   use-stick-to-bottom@1.1.6  MIT  [bundled into a chunk]
-  uuid@14.0.3  MIT  [bundled into a chunk]
   vfile@6.0.3  MIT  [bundled into a chunk]
   vfile-location@5.0.3  MIT  [bundled into a chunk]
   vfile-message@4.0.3  MIT  [bundled into a chunk]
@@ -637,14 +526,14 @@ they are listed so the index accounts for every module in the bundle.
   zwitch@2.0.4  MIT  [bundled into a chunk]
 
 =========================================================================================================
-3. PACKAGE LICENCES (231 distinct licence texts)
+3. PACKAGE LICENCES (182 distinct licence texts)
 =========================================================================================================
 
 Packages carrying byte-identical terms share one block; the package line names
 every one of them. A block reproduces each licence file the package publishes.
 
 =========================================================================================================
-Packages: @ai-sdk/gateway@4.0.136, @ai-sdk/provider@4.0.36, @streamdown/cjk@1.0.4, @streamdown/code@2.0.0, @streamdown/mermaid@1.0.3, ai@7.0.163, remend@1.4.0, streamdown@2.7.1
+Packages: @ai-sdk/gateway@4.0.136, @ai-sdk/provider@4.0.36, @streamdown/cjk@1.0.4, @streamdown/code@2.0.0, ai@7.0.163, remend@1.4.0, streamdown@2.7.1
 SPDX: Apache-2.0
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -661,34 +550,6 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
-
-=========================================================================================================
-Packages: @antfu/install-pkg@2.1.0
-SPDX: MIT
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-MIT License
-
-Copyright (c) 2021 Anthony Fu <https://github.com/antfu>
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
 
 =========================================================================================================
 Packages: @anthropic-ai/sandbox-runtime@0.0.81
@@ -2426,34 +2287,6 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
 =========================================================================================================
-Packages: @braintree/sanitize-url@7.1.2
-SPDX: MIT
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-MIT License
-
-Copyright (c) 2017 Braintree
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-
-=========================================================================================================
 Packages: @bramus/specificity@2.4.2
 SPDX: MIT
 File: LICENSE
@@ -2477,215 +2310,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
-
-
-=========================================================================================================
-Packages: @chevrotain/types@11.1.2
-SPDX: Apache-2.0
-File: LICENSE.txt
----------------------------------------------------------------------------------------------------------
-
-                                 Apache License
-                           Version 2.0, January 2004
-                        http://www.apache.org/licenses/
-
-   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
-
-   1. Definitions.
-
-      "License" shall mean the terms and conditions for use, reproduction,
-      and distribution as defined by Sections 1 through 9 of this document.
-
-      "Licensor" shall mean the copyright owner or entity authorized by
-      the copyright owner that is granting the License.
-
-      "Legal Entity" shall mean the union of the acting entity and all
-      other entities that control, are controlled by, or are under common
-      control with that entity. For the purposes of this definition,
-      "control" means (i) the power, direct or indirect, to cause the
-      direction or management of such entity, whether by contract or
-      otherwise, or (ii) ownership of fifty percent (50%) or more of the
-      outstanding shares, or (iii) beneficial ownership of such entity.
-
-      "You" (or "Your") shall mean an individual or Legal Entity
-      exercising permissions granted by this License.
-
-      "Source" form shall mean the preferred form for making modifications,
-      including but not limited to software source code, documentation
-      source, and configuration files.
-
-      "Object" form shall mean any form resulting from mechanical
-      transformation or translation of a Source form, including but
-      not limited to compiled object code, generated documentation,
-      and conversions to other media types.
-
-      "Work" shall mean the work of authorship, whether in Source or
-      Object form, made available under the License, as indicated by a
-      copyright notice that is included in or attached to the work
-      (an example is provided in the Appendix below).
-
-      "Derivative Works" shall mean any work, whether in Source or Object
-      form, that is based on (or derived from) the Work and for which the
-      editorial revisions, annotations, elaborations, or other modifications
-      represent, as a whole, an original work of authorship. For the purposes
-      of this License, Derivative Works shall not include works that remain
-      separable from, or merely link (or bind by name) to the interfaces of,
-      the Work and Derivative Works thereof.
-
-      "Contribution" shall mean any work of authorship, including
-      the original version of the Work and any modifications or additions
-      to that Work or Derivative Works thereof, that is intentionally
-      submitted to Licensor for inclusion in the Work by the copyright owner
-      or by an individual or Legal Entity authorized to submit on behalf of
-      the copyright owner. For the purposes of this definition, "submitted"
-      means any form of electronic, verbal, or written communication sent
-      to the Licensor or its representatives, including but not limited to
-      communication on electronic mailing lists, source code control systems,
-      and issue tracking systems that are managed by, or on behalf of, the
-      Licensor for the purpose of discussing and improving the Work, but
-      excluding communication that is conspicuously marked or otherwise
-      designated in writing by the copyright owner as "Not a Contribution."
-
-      "Contributor" shall mean Licensor and any individual or Legal Entity
-      on behalf of whom a Contribution has been received by Licensor and
-      subsequently incorporated within the Work.
-
-   2. Grant of Copyright License. Subject to the terms and conditions of
-      this License, each Contributor hereby grants to You a perpetual,
-      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
-      copyright license to reproduce, prepare Derivative Works of,
-      publicly display, publicly perform, sublicense, and distribute the
-      Work and such Derivative Works in Source or Object form.
-
-   3. Grant of Patent License. Subject to the terms and conditions of
-      this License, each Contributor hereby grants to You a perpetual,
-      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
-      (except as stated in this section) patent license to make, have made,
-      use, offer to sell, sell, import, and otherwise transfer the Work,
-      where such license applies only to those patent claims licensable
-      by such Contributor that are necessarily infringed by their
-      Contribution(s) alone or by combination of their Contribution(s)
-      with the Work to which such Contribution(s) was submitted. If You
-      institute patent litigation against any entity (including a
-      cross-claim or counterclaim in a lawsuit) alleging that the Work
-      or a Contribution incorporated within the Work constitutes direct
-      or contributory patent infringement, then any patent licenses
-      granted to You under this License for that Work shall terminate
-      as of the date such litigation is filed.
-
-   4. Redistribution. You may reproduce and distribute copies of the
-      Work or Derivative Works thereof in any medium, with or without
-      modifications, and in Source or Object form, provided that You
-      meet the following conditions:
-
-      (a) You must give any other recipients of the Work or
-          Derivative Works a copy of this License; and
-
-      (b) You must cause any modified files to carry prominent notices
-          stating that You changed the files; and
-
-      (c) You must retain, in the Source form of any Derivative Works
-          that You distribute, all copyright, patent, trademark, and
-          attribution notices from the Source form of the Work,
-          excluding those notices that do not pertain to any part of
-          the Derivative Works; and
-
-      (d) If the Work includes a "NOTICE" text file as part of its
-          distribution, then any Derivative Works that You distribute must
-          include a readable copy of the attribution notices contained
-          within such NOTICE file, excluding those notices that do not
-          pertain to any part of the Derivative Works, in at least one
-          of the following places: within a NOTICE text file distributed
-          as part of the Derivative Works; within the Source form or
-          documentation, if provided along with the Derivative Works; or,
-          within a display generated by the Derivative Works, if and
-          wherever such third-party notices normally appear. The contents
-          of the NOTICE file are for informational purposes only and
-          do not modify the License. You may add Your own attribution
-          notices within Derivative Works that You distribute, alongside
-          or as an addendum to the NOTICE text from the Work, provided
-          that such additional attribution notices cannot be construed
-          as modifying the License.
-
-      You may add Your own copyright statement to Your modifications and
-      may provide additional or different license terms and conditions
-      for use, reproduction, or distribution of Your modifications, or
-      for any such Derivative Works as a whole, provided Your use,
-      reproduction, and distribution of the Work otherwise complies with
-      the conditions stated in this License.
-
-   5. Submission of Contributions. Unless You explicitly state otherwise,
-      any Contribution intentionally submitted for inclusion in the Work
-      by You to the Licensor shall be under the terms and conditions of
-      this License, without any additional terms or conditions.
-      Notwithstanding the above, nothing herein shall supersede or modify
-      the terms of any separate license agreement you may have executed
-      with Licensor regarding such Contributions.
-
-   6. Trademarks. This License does not grant permission to use the trade
-      names, trademarks, service marks, or product names of the Licensor,
-      except as required for reasonable and customary use in describing the
-      origin of the Work and reproducing the content of the NOTICE file.
-
-   7. Disclaimer of Warranty. Unless required by applicable law or
-      agreed to in writing, Licensor provides the Work (and each
-      Contributor provides its Contributions) on an "AS IS" BASIS,
-      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
-      implied, including, without limitation, any warranties or conditions
-      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
-      PARTICULAR PURPOSE. You are solely responsible for determining the
-      appropriateness of using or redistributing the Work and assume any
-      risks associated with Your exercise of permissions under this License.
-
-   8. Limitation of Liability. In no event and under no legal theory,
-      whether in tort (including negligence), contract, or otherwise,
-      unless required by applicable law (such as deliberate and grossly
-      negligent acts) or agreed to in writing, shall any Contributor be
-      liable to You for damages, including any direct, indirect, special,
-      incidental, or consequential damages of any character arising as a
-      result of this License or out of the use or inability to use the
-      Work (including but not limited to damages for loss of goodwill,
-      work stoppage, computer failure or malfunction, or any and all
-      other commercial damages or losses), even if such Contributor
-      has been advised of the possibility of such damages.
-
-   9. Accepting Warranty or Additional Liability. While redistributing
-      the Work or Derivative Works thereof, You may choose to offer,
-      and charge a fee for, acceptance of support, warranty, indemnity,
-      or other liability obligations and/or rights consistent with this
-      License. However, in accepting such obligations, You may act only
-      on Your own behalf and on Your sole responsibility, not on behalf
-      of any other Contributor, and only if You agree to indemnify,
-      defend, and hold each Contributor harmless for any liability
-      incurred by, or claims asserted against, such Contributor by reason
-      of your accepting any such warranty or additional liability.
-
-   END OF TERMS AND CONDITIONS
-
-   APPENDIX: How to apply the Apache License to your work.
-
-      To apply the Apache License to your work, attach the following
-      boilerplate notice, with the fields enclosed by brackets "[]"
-      replaced with your own identifying information. (Don't include
-      the brackets!)  The text should be enclosed in the appropriate
-      comment syntax for the file format. We also recommend that a
-      file or class name and description of purpose be included on the
-      same "printed page" as the copyright notice for easier
-      identification within third-party archives.
-
-   Copyright [yyyy] [name of copyright owner]
-
-   Licensed under the Apache License, Version 2.0 (the "License");
-   you may not use this file except in compliance with the License.
-   You may obtain a copy of the License at
-
-       http://www.apache.org/licenses/LICENSE-2.0
-
-   Unless required by applicable law or agreed to in writing, software
-   distributed under the License is distributed on an "AS IS" BASIS,
-   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-   See the License for the specific language governing permissions and
-   limitations under the License.
 
 
 =========================================================================================================
@@ -3289,60 +2913,6 @@ SOFTWARE.
 
 
 =========================================================================================================
-Packages: @iconify/types@2.0.0
-SPDX: MIT
-File: license.txt
----------------------------------------------------------------------------------------------------------
-MIT License
-
-Copyright (c) 2021 - 2022 Vjacheslav Trushkin / Iconify OÜ
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-=========================================================================================================
-Packages: @iconify/utils@3.1.7
-SPDX: MIT
-File: license.txt
----------------------------------------------------------------------------------------------------------
-MIT License
-
-Copyright (c) 2021-PRESENT Vjacheslav Trushkin
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-=========================================================================================================
 Packages: @img/colour@1.1.0
 SPDX: MIT
 File: LICENSE.md
@@ -3485,34 +3055,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
-
-
-=========================================================================================================
-Packages: @mermaid-js/parser@1.2.1
-SPDX: MIT
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-The MIT License (MIT)
-
-Copyright (c) 2023 Yokozuna59
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
 
 
 =========================================================================================================
@@ -4031,7 +3573,7 @@ SOFTWARE.
 
 
 =========================================================================================================
-Packages: @types/d3@7.4.3, @types/d3-array@3.2.2, @types/d3-axis@3.0.6, @types/d3-brush@3.0.6, @types/d3-chord@3.0.6, @types/d3-color@3.1.3, @types/d3-contour@3.0.6, @types/d3-delaunay@6.0.4, @types/d3-dispatch@3.0.7, @types/d3-drag@3.0.7, @types/d3-dsv@3.0.7, @types/d3-ease@3.0.2, @types/d3-fetch@3.0.7, @types/d3-force@3.0.10, @types/d3-format@3.0.4, @types/d3-geo@3.1.1, @types/d3-hierarchy@3.1.7, @types/d3-interpolate@3.0.4, @types/d3-path@3.1.1, @types/d3-polygon@3.0.2, @types/d3-quadtree@3.0.6, @types/d3-random@3.0.4, @types/d3-scale@4.0.9, @types/d3-scale-chromatic@3.1.0, @types/d3-selection@3.0.12, @types/d3-shape@3.2.0, @types/d3-time@3.0.4, @types/d3-time-format@4.0.3, @types/d3-timer@3.0.2, @types/d3-transition@3.0.9, @types/d3-zoom@3.0.9, @types/debug@4.1.13, @types/estree@1.0.9, @types/estree-jsx@1.0.5, @types/geojson@7946.0.16, @types/hast@3.0.5, @types/mdast@4.0.4, @types/ms@2.1.0, @types/node@26.6.6, @types/trusted-types@2.0.7, @types/unist@2.0.11, @types/unist@3.0.3
+Packages: @types/debug@4.1.13, @types/estree@1.0.9, @types/estree-jsx@1.0.5, @types/hast@3.0.5, @types/mdast@4.0.4, @types/ms@2.1.0, @types/node@26.6.6, @types/trusted-types@2.0.7, @types/unist@2.0.11, @types/unist@3.0.3
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -4106,35 +3648,6 @@ INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
 LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE
 OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
-
-
-=========================================================================================================
-Packages: @upsetjs/venn.js@2.0.0
-SPDX: MIT
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-MIT License
-
-Copyright (c) 2013 Ben Frederickson
-Copyright (c) 2021 Samuel Gratzl
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
 
 
 =========================================================================================================
@@ -5316,7 +4829,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
 =========================================================================================================
-Packages: commander@12.1.0, commander@7.2.0, commander@8.3.0
+Packages: commander@12.1.0
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -5554,34 +5067,6 @@ File: LICENSE
 
 
 =========================================================================================================
-Packages: cose-base@1.0.3, cose-base@2.2.0
-SPDX: MIT
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-MIT License
-
-Copyright (c) 2019 - present, iVis@Bilkent.
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-
-=========================================================================================================
 Packages: cross-spawn@7.0.6, proper-lockfile@4.1.2
 SPDX: MIT
 File: LICENSE
@@ -5636,542 +5121,6 @@ THE SOFTWARE.
 
 
 =========================================================================================================
-Packages: cytoscape@3.34.4
-SPDX: MIT
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-Copyright (c) 2016-2026, The Cytoscape Consortium.
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of
-this software and associated documentation files (the “Software”), to deal in
-the Software without restriction, including without limitation the rights to
-use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
-of the Software, and to permit persons to whom the Software is furnished to do
-so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-=========================================================================================================
-Packages: cytoscape-cose-bilkent@4.1.0
-SPDX: MIT
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-
-
-Copyright (c) 2016-2018, The Cytoscape Consortium.
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of
-this software and associated documentation files (the “Software”), to deal in
-the Software without restriction, including without limitation the rights to
-use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
-of the Software, and to permit persons to whom the Software is furnished to do
-so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-=========================================================================================================
-Packages: cytoscape-fcose@2.2.0
-SPDX: MIT
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-Copyright (c) 2018 - present, iVis-at-Bilkent.
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of
-this software and associated documentation files (the “Software”), to deal in
-the Software without restriction, including without limitation the rights to
-use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
-of the Software, and to permit persons to whom the Software is furnished to do
-so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-
-=========================================================================================================
-Packages: d3@7.9.0, d3-array@3.2.4
-SPDX: ISC
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-Copyright 2010-2023 Mike Bostock
-
-Permission to use, copy, modify, and/or distribute this software for any purpose
-with or without fee is hereby granted, provided that the above copyright notice
-and this permission notice appear in all copies.
-
-THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
-FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
-OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
-TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
-THIS SOFTWARE.
-
-
-=========================================================================================================
-Packages: d3-array@2.12.1
-SPDX: BSD-3-Clause
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-Copyright 2010-2020 Mike Bostock
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without modification,
-are permitted provided that the following conditions are met:
-
-* Redistributions of source code must retain the above copyright notice, this
-  list of conditions and the following disclaimer.
-
-* Redistributions in binary form must reproduce the above copyright notice,
-  this list of conditions and the following disclaimer in the documentation
-  and/or other materials provided with the distribution.
-
-* Neither the name of the author nor the names of contributors may be used to
-  endorse or promote products derived from this software without specific prior
-  written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
-ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
-(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
-ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
-SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-
-=========================================================================================================
-Packages: d3-axis@3.0.0, d3-brush@3.0.0, d3-chord@3.0.1, d3-dispatch@3.0.1, d3-drag@3.0.0, d3-force@3.0.0, d3-hierarchy@3.1.2, d3-interpolate@3.0.1, d3-polygon@3.0.1, d3-quadtree@3.0.1, d3-random@3.0.1, d3-scale@4.0.2, d3-selection@3.0.0, d3-time-format@4.1.0, d3-timer@3.0.1, d3-transition@3.0.1, d3-zoom@3.0.0
-SPDX: ISC
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-Copyright 2010-2021 Mike Bostock
-
-Permission to use, copy, modify, and/or distribute this software for any purpose
-with or without fee is hereby granted, provided that the above copyright notice
-and this permission notice appear in all copies.
-
-THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
-FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
-OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
-TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
-THIS SOFTWARE.
-
-
-=========================================================================================================
-Packages: d3-color@3.1.0, d3-shape@3.2.0, d3-time@3.1.0
-SPDX: ISC
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-Copyright 2010-2022 Mike Bostock
-
-Permission to use, copy, modify, and/or distribute this software for any purpose
-with or without fee is hereby granted, provided that the above copyright notice
-and this permission notice appear in all copies.
-
-THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
-FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
-OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
-TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
-THIS SOFTWARE.
-
-
-=========================================================================================================
-Packages: d3-contour@4.0.2
-SPDX: ISC
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-Copyright 2012-2023 Mike Bostock
-
-Permission to use, copy, modify, and/or distribute this software for any purpose
-with or without fee is hereby granted, provided that the above copyright notice
-and this permission notice appear in all copies.
-
-THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
-FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
-OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
-TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
-THIS SOFTWARE.
-
-
-=========================================================================================================
-Packages: d3-delaunay@6.0.4
-SPDX: ISC
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-Copyright 2018-2021 Observable, Inc.
-Copyright 2021 Mapbox
-
-Permission to use, copy, modify, and/or distribute this software for any purpose
-with or without fee is hereby granted, provided that the above copyright notice
-and this permission notice appear in all copies.
-
-THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
-FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
-OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
-TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
-THIS SOFTWARE.
-
-
-=========================================================================================================
-Packages: d3-dsv@3.0.1
-SPDX: ISC
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-Copyright 2013-2021 Mike Bostock
-
-Permission to use, copy, modify, and/or distribute this software for any purpose
-with or without fee is hereby granted, provided that the above copyright notice
-and this permission notice appear in all copies.
-
-THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
-FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
-OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
-TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
-THIS SOFTWARE.
-
-
-=========================================================================================================
-Packages: d3-ease@3.0.1
-SPDX: BSD-3-Clause
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-Copyright 2010-2021 Mike Bostock
-Copyright 2001 Robert Penner
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without modification,
-are permitted provided that the following conditions are met:
-
-* Redistributions of source code must retain the above copyright notice, this
-  list of conditions and the following disclaimer.
-
-* Redistributions in binary form must reproduce the above copyright notice,
-  this list of conditions and the following disclaimer in the documentation
-  and/or other materials provided with the distribution.
-
-* Neither the name of the author nor the names of contributors may be used to
-  endorse or promote products derived from this software without specific prior
-  written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
-ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
-(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
-ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
-SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-
-=========================================================================================================
-Packages: d3-fetch@3.0.1
-SPDX: ISC
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-Copyright 2016-2021 Mike Bostock
-
-Permission to use, copy, modify, and/or distribute this software for any purpose
-with or without fee is hereby granted, provided that the above copyright notice
-and this permission notice appear in all copies.
-
-THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
-FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
-OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
-TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
-THIS SOFTWARE.
-
-
-=========================================================================================================
-Packages: d3-format@3.1.2
-SPDX: ISC
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-Copyright 2010-2026 Mike Bostock
-
-Permission to use, copy, modify, and/or distribute this software for any purpose
-with or without fee is hereby granted, provided that the above copyright notice
-and this permission notice appear in all copies.
-
-THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
-FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
-OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
-TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
-THIS SOFTWARE.
-
-
-=========================================================================================================
-Packages: d3-geo@3.1.1
-SPDX: ISC
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-Copyright 2010-2024 Mike Bostock
-
-Permission to use, copy, modify, and/or distribute this software for any purpose
-with or without fee is hereby granted, provided that the above copyright notice
-and this permission notice appear in all copies.
-
-THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
-FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
-OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
-TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
-THIS SOFTWARE.
-
-This license applies to GeographicLib, versions 1.12 and later.
-
-Copyright 2008-2012 Charles Karney
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of
-this software and associated documentation files (the "Software"), to deal in
-the Software without restriction, including without limitation the rights to
-use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software is furnished to do so,
-subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
-FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE AUTHORS OR
-COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
-IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-
-=========================================================================================================
-Packages: d3-path@1.0.9
-SPDX: BSD-3-Clause
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-Copyright 2015-2016 Mike Bostock
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without modification,
-are permitted provided that the following conditions are met:
-
-* Redistributions of source code must retain the above copyright notice, this
-  list of conditions and the following disclaimer.
-
-* Redistributions in binary form must reproduce the above copyright notice,
-  this list of conditions and the following disclaimer in the documentation
-  and/or other materials provided with the distribution.
-
-* Neither the name of the author nor the names of contributors may be used to
-  endorse or promote products derived from this software without specific prior
-  written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
-ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
-(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
-ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
-SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-
-=========================================================================================================
-Packages: d3-path@3.1.0
-SPDX: ISC
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-Copyright 2015-2022 Mike Bostock
-
-Permission to use, copy, modify, and/or distribute this software for any purpose
-with or without fee is hereby granted, provided that the above copyright notice
-and this permission notice appear in all copies.
-
-THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
-FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
-OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
-TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
-THIS SOFTWARE.
-
-
-=========================================================================================================
-Packages: d3-sankey@0.12.3
-SPDX: BSD-3-Clause
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-Copyright 2015, Mike Bostock
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without modification,
-are permitted provided that the following conditions are met:
-
-* Redistributions of source code must retain the above copyright notice, this
-  list of conditions and the following disclaimer.
-
-* Redistributions in binary form must reproduce the above copyright notice,
-  this list of conditions and the following disclaimer in the documentation
-  and/or other materials provided with the distribution.
-
-* Neither the name of the author nor the names of contributors may be used to
-  endorse or promote products derived from this software without specific prior
-  written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
-ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
-(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
-ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
-SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-
-=========================================================================================================
-Packages: d3-scale-chromatic@3.1.0
-SPDX: ISC
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-Copyright 2010-2024 Mike Bostock
-
-Permission to use, copy, modify, and/or distribute this software for any purpose
-with or without fee is hereby granted, provided that the above copyright notice
-and this permission notice appear in all copies.
-
-THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
-FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
-OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
-TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
-THIS SOFTWARE.
-
-Apache-Style Software License for ColorBrewer software and ColorBrewer Color Schemes
-
-Copyright 2002 Cynthia Brewer, Mark Harrower, and The Pennsylvania State University
-
-Licensed under the Apache License, Version 2.0 (the "License"); you may not use
-this file except in compliance with the License. You may obtain a copy of the
-License at
-
-http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software distributed
-under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
-CONDITIONS OF ANY KIND, either express or implied. See the License for the
-specific language governing permissions and limitations under the License.
-
-
-=========================================================================================================
-Packages: d3-shape@1.3.7
-SPDX: BSD-3-Clause
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-Copyright 2010-2015 Mike Bostock
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without modification,
-are permitted provided that the following conditions are met:
-
-* Redistributions of source code must retain the above copyright notice, this
-  list of conditions and the following disclaimer.
-
-* Redistributions in binary form must reproduce the above copyright notice,
-  this list of conditions and the following disclaimer in the documentation
-  and/or other materials provided with the distribution.
-
-* Neither the name of the author nor the names of contributors may be used to
-  endorse or promote products derived from this software without specific prior
-  written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
-ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
-(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
-ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
-SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-
-=========================================================================================================
-Packages: dagre-d3-es@7.0.14
-SPDX: MIT
-File: LICENSE.md
----------------------------------------------------------------------------------------------------------
-Original dagre-d3 copyright: Copyright (c) 2013 Chris Pettitt
-Original dagre copyright: Copyright (c) 2012-2014 Chris Pettitt
-Original graphlib copyright: Copyright (c) 2012-2014 Chris Pettitt
-
-Copyright (c) 2022-2024 Thibaut Lassalle, David Newell, Alois Klink, Sidharth Vinod and dagre-es contributors
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
-
-
-=========================================================================================================
 Packages: data-urls@8.0.0, html-encoding-sniffer@7.0.0, whatwg-mimetype@5.0.0
 SPDX: MIT
 File: LICENSE.txt
@@ -6183,34 +5132,6 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-
-=========================================================================================================
-Packages: dayjs@1.11.23
-SPDX: MIT
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-MIT License
-
-Copyright (c) 2018-present, iamkun
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
 
 
 =========================================================================================================
@@ -6297,28 +5218,6 @@ IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
 CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
 TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-
-=========================================================================================================
-Packages: delaunator@5.1.0
-SPDX: ISC
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-ISC License
-
-Copyright (c) 2026, Mapbox
-
-Permission to use, copy, modify, and/or distribute this software for any purpose
-with or without fee is hereby granted, provided that the above copyright notice
-and this permission notice appear in all copies.
-
-THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
-FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
-OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
-TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
-THIS SOFTWARE.
 
 
 =========================================================================================================
@@ -7461,75 +6360,6 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
 =========================================================================================================
-Packages: es-toolkit@1.52.0
-SPDX: MIT
-File: LICENSE
-File: NOTICE
----------------------------------------------------------------------------------------------------------
-MIT License
-
-Copyright (c) 2024 Viva Republica, Inc.
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-es-toolkit
-
-Parts of the test suite and compatibility layer in es-toolkit/compat are
-derived from Lodash (https://github.com/lodash/lodash).
-
-Lodash copyright notice and MIT permission notice:
-
-Copyright OpenJS Foundation and other contributors <https://openjsf.org/>
-
-Based on Underscore.js, copyright Jeremy Ashkenas,
-DocumentCloud and Investigative Reporters & Editors <http://underscorejs.org/>
-
-This software consists of voluntary contributions made by many
-individuals. For exact contribution history, see the revision history
-available at https://github.com/lodash/lodash
-
-The following license applies to all parts of this software except as
-documented below:
-
-====
-
-Permission is hereby granted, free of charge, to any person obtaining
-a copy of this software and associated documentation files (the
-"Software"), to deal in the Software without restriction, including
-without limitation the rights to use, copy, modify, merge, publish,
-distribute, sublicense, and/or sell copies of the Software, and to
-permit persons to whom the Software is furnished to do so, subject to
-the following conditions:
-
-The above copyright notice and this permission notice shall be
-included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
-LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
-WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-
-=========================================================================================================
 Packages: esbuild@0.27.0
 SPDX: MIT
 File: LICENSE.md
@@ -7689,7 +6519,7 @@ SOFTWARE.
 
 
 =========================================================================================================
-Packages: fast-sha256@1.3.0, robust-predicates@3.0.3
+Packages: fast-sha256@1.3.0
 SPDX: Unlicense
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
@@ -8095,34 +6925,6 @@ IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 
 =========================================================================================================
-Packages: hachure-fill@0.5.2
-SPDX: MIT
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-MIT License
-
-Copyright (c) 2023 Preet Shihn
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-
-=========================================================================================================
 Packages: html-url-attributes@3.0.1
 SPDX: MIT
 File: license
@@ -8180,115 +6982,6 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
 =========================================================================================================
-Packages: iconv-lite@0.6.3
-SPDX: MIT
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-Copyright (c) 2011 Alexander Shtuchkin
-
-Permission is hereby granted, free of charge, to any person obtaining
-a copy of this software and associated documentation files (the
-"Software"), to deal in the Software without restriction, including
-without limitation the rights to use, copy, modify, merge, publish,
-distribute, sublicense, and/or sell copies of the Software, and to
-permit persons to whom the Software is furnished to do so, subject to
-the following conditions:
-
-The above copyright notice and this permission notice shall be
-included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
-LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
-WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-
-
-=========================================================================================================
-Packages: import-meta-resolve@4.2.0
-SPDX: MIT
-File: license
----------------------------------------------------------------------------------------------------------
-(The MIT License)
-
-Copyright (c) Titus Wormer <mailto:tituswormer@gmail.com>
-
-Permission is hereby granted, free of charge, to any person obtaining
-a copy of this software and associated documentation files (the
-'Software'), to deal in the Software without restriction, including
-without limitation the rights to use, copy, modify, merge, publish,
-distribute, sublicense, and/or sell copies of the Software, and to
-permit persons to whom the Software is furnished to do so, subject to
-the following conditions:
-
-The above copyright notice and this permission notice shall be
-included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND,
-EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
-IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
-TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
-SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
----
-
-This is a derivative work based on:
-<https://github.com/nodejs/node>.
-Which is licensed:
-
-"""
-Copyright Node.js contributors. All rights reserved.
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to
-deal in the Software without restriction, including without limitation the
-rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
-sell copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
-IN THE SOFTWARE.
-"""
-
-This license applies to parts of Node.js originating from the
-https://github.com/joyent/node repository:
-
-"""
-Copyright Joyent, Inc. and other Node contributors. All rights reserved.
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to
-deal in the Software without restriction, including without limitation the
-rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
-sell copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
-IN THE SOFTWARE.
-"""
-
-
-=========================================================================================================
 Packages: inline-style-parser@0.2.7
 SPDX: MIT
 File: LICENSE
@@ -8302,26 +6995,6 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-
-=========================================================================================================
-Packages: internmap@1.0.1, internmap@2.0.3
-SPDX: ISC
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-Copyright 2021 Mike Bostock
-
-Permission to use, copy, modify, and/or distribute this software for any purpose
-with or without fee is hereby granted, provided that the above copyright notice
-and this permission notice appear in all copies.
-
-THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
-FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
-OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
-TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
-THIS SOFTWARE.
 
 
 =========================================================================================================
@@ -8734,144 +7407,6 @@ ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEAL
 
 
 =========================================================================================================
-Packages: katex@0.18.2
-SPDX: MIT
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-The MIT License (MIT)
-
-Copyright (c) 2013-2020 Khan Academy and other contributors
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-
-=========================================================================================================
-Packages: khroma@2.1.0
-SPDX: (undeclared)
-File: license
----------------------------------------------------------------------------------------------------------
-The MIT License (MIT)
-
-Copyright (c) 2019-present Fabio Spampinato, Andrew Maney
-
-Permission is hereby granted, free of charge, to any person obtaining a
-copy of this software and associated documentation files (the "Software"),
-to deal in the Software without restriction, including without limitation
-the rights to use, copy, modify, merge, publish, distribute, sublicense,
-and/or sell copies of the Software, and to permit persons to whom the
-Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
-
-
-=========================================================================================================
-Packages: layout-base@1.0.2, layout-base@2.0.1
-SPDX: MIT
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-MIT License
-
-Copyright (c) 2019 iVis@Bilkent
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-
-=========================================================================================================
-Packages: lodash-es@4.18.1
-SPDX: MIT
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-Copyright OpenJS Foundation and other contributors <https://openjsf.org/>
-
-Based on Underscore.js, copyright Jeremy Ashkenas,
-DocumentCloud and Investigative Reporters & Editors <http://underscorejs.org/>
-
-This software consists of voluntary contributions made by many
-individuals. For exact contribution history, see the revision history
-available at https://github.com/lodash/lodash
-
-The following license applies to all parts of this software except as
-documented below:
-
-====
-
-Permission is hereby granted, free of charge, to any person obtaining
-a copy of this software and associated documentation files (the
-"Software"), to deal in the Software without restriction, including
-without limitation the rights to use, copy, modify, merge, publish,
-distribute, sublicense, and/or sell copies of the Software, and to
-permit persons to whom the Software is furnished to do so, subject to
-the following conditions:
-
-The above copyright notice and this permission notice shall be
-included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
-LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
-WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-====
-
-Copyright and related rights for sample code are waived via CC0. Sample
-code is defined as all source code displayed within the prose of the
-documentation.
-
-CC0: http://creativecommons.org/publicdomain/zero/1.0/
-
-====
-
-Files located in the node_modules and vendor directories are externally
-maintained libraries used by this software which have their own
-licenses; we recommend you read them, as their terms may differ from the
-terms above.
-
-
-=========================================================================================================
 Packages: lodash.escaperegexp@4.1.2
 SPDX: MIT
 File: LICENSE
@@ -9071,7 +7606,7 @@ software or this license, under any kind of legal claim.***
 
 
 =========================================================================================================
-Packages: marked@14.0.0, marked@16.4.2
+Packages: marked@14.0.0
 SPDX: MIT
 File: LICENSE.md
 ---------------------------------------------------------------------------------------------------------
@@ -9358,34 +7893,6 @@ Affirmer's express Statement of Purpose.
 
 For more information, please see
 <http://creativecommons.org/publicdomain/zero/1.0/>
-
-
-=========================================================================================================
-Packages: mermaid@11.17.2
-SPDX: MIT
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-The MIT License (MIT)
-
-Copyright (c) 2014 - 2022 Knut Sveidqvist
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
 
 
 =========================================================================================================
@@ -10401,34 +8908,6 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 
 =========================================================================================================
-Packages: package-manager-detector@1.9.0
-SPDX: MIT
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-MIT License
-
-Copyright (c) 2020-PRESENT Anthony Fu <https://github.com/antfu>
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-
-=========================================================================================================
 Packages: parse-entities@4.0.2, property-information@7.2.0
 SPDX: MIT
 File: license
@@ -10512,13 +8991,13 @@ SOFTWARE.
 
 
 =========================================================================================================
-Packages: path-data-parser@0.1.0, points-on-curve@0.2.0
+Packages: pele@1.13.0
 SPDX: MIT
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------
 MIT License
 
-Copyright (c) 2020 Preet Shihn
+Copyright (c) 2026 kepano
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -10538,33 +9017,24 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+---
 
-=========================================================================================================
-Packages: points-on-path@0.2.1
-SPDX: MIT
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-MIT License
+The reset icon of the zoom controls is "rotate-ccw" from Lucide v1.14.0
+(https://lucide.dev), under the ISC License:
 
-Copyright (c) 2020 Preet
+Copyright (c) 2026 Lucide Icons and Contributors
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 
 =========================================================================================================
@@ -10852,67 +9322,6 @@ Felix Geisendörfer (felix@debuggable.com)
 
 
 =========================================================================================================
-Packages: roughjs@4.6.6
-SPDX: MIT
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-MIT License
-
-Copyright (c) 2019 Preet Shihn
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-
-=========================================================================================================
-Packages: rw@1.3.3
-SPDX: BSD-3-Clause
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-Copyright (c) 2014-2016, Michael Bostock
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
-
-* Redistributions of source code must retain the above copyright notice, this
-  list of conditions and the following disclaimer.
-
-* Redistributions in binary form must reproduce the above copyright notice,
-  this list of conditions and the following disclaimer in the documentation
-  and/or other materials provided with the distribution.
-
-* The name Michael Bostock may not be used to endorse or promote products
-  derived from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL MICHAEL BOSTOCK BE LIABLE FOR ANY DIRECT,
-INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
-BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
-OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
-NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
-EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-
-=========================================================================================================
 Packages: safe-buffer@5.2.1
 SPDX: MIT
 File: LICENSE
@@ -10938,34 +9347,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
-
-
-=========================================================================================================
-Packages: safer-buffer@2.1.2
-SPDX: MIT
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-MIT License
-
-Copyright (c) 2018 Nikita Skovoroda <chalkerx@gmail.com>
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
 
 
 =========================================================================================================
@@ -11327,34 +9708,6 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
 =========================================================================================================
-Packages: stylis@4.4.0
-SPDX: MIT
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-MIT License
-
-Copyright (c) 2016-present Sultan Tarimo
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-
-=========================================================================================================
 Packages: tailwind-merge@3.7.0
 SPDX: MIT
 File: LICENSE.md
@@ -11390,34 +9743,6 @@ File: LICENSE
 MIT License
 
 Copyright (c) 2020 Zurab Benashvili (binier) <zura.bena@gmail.com>
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-
-=========================================================================================================
-Packages: tinyexec@1.3.1
-SPDX: MIT
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-MIT License
-
-Copyright (c) 2024 Tinylibs
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -11531,34 +9856,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
-
-
-=========================================================================================================
-Packages: ts-dedent@2.3.0
-SPDX: MIT
-File: LICENSE
----------------------------------------------------------------------------------------------------------
-MIT License
-
-Copyright (c) 2018 Tamino Martinius
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
 
 
 =========================================================================================================
@@ -12277,22 +10574,6 @@ SOFTWARE.
 
 
 =========================================================================================================
-Packages: uuid@14.0.3
-SPDX: MIT
-File: LICENSE.md
----------------------------------------------------------------------------------------------------------
-The MIT License (MIT)
-
-Copyright (c) 2010-2020 Robert Kieffer and other contributors
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-
-=========================================================================================================
 Packages: w3c-xmlserializer@6.0.0
 SPDX: MIT
 File: LICENSE.md
@@ -12712,7 +10993,7 @@ SOFTWARE.
 
 
 =========================================================================================================
-4. PACKAGES THAT PUBLISH NO LICENCE FILE (18)
+4. PACKAGES THAT PUBLISH NO LICENCE FILE (16)
 =========================================================================================================
 
 These packages declare a licence in their manifest but ship no licence file in the
@@ -12752,9 +11033,6 @@ no licence text is substituted for them here.
   data-uri-to-buffer@4.0.1
     declared: MIT
     source:   git://github.com/TooTallNate/node-data-uri-to-buffer
-  fastdom@1.0.12
-    declared: MIT
-    source:   git://github.com/wilsonpage/fastdom
   lazy-val@1.0.5
     declared: MIT
     source:   develar/lazy-val
@@ -12770,9 +11048,6 @@ no licence text is substituted for them here.
   standardwebhooks@1.1.1
     declared: MIT
     source:   https://github.com/standard-webhooks/standard-webhooks
-  strictdom@1.0.1
-    declared: MIT
-    source:   git://github.com/wilsonpage/strictdom
 
 =========================================================================================================
 5. NATIVE PLATFORM PACKAGES (3)

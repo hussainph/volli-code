@@ -6,6 +6,7 @@ import { createServer } from "node:http";
 import { readFile, realpath } from "node:fs/promises";
 import { extname, join, sep } from "node:path";
 import { measureChatWindow } from "../../bench/chat-window/measure.mjs";
+import { readBenchCadence } from "../../bench/chat-window/production.mjs";
 import { benchSettings } from "../../bench/chat-window/settings.mjs";
 import { tracePhases } from "../../bench/chat-window/trace-summary.mjs";
 
@@ -57,7 +58,9 @@ export async function guardedChatWindowBench({
   const recipe = benchSettings(settings);
   const guard = await doctor();
   if (!guard.ok) throw new Error(`bench guard failed: ${guard.problems.join("; ")}`);
-  const server = await serveBench(join(repo, "apps/desktop/e2e/bench/chat-window/dist"));
+  const dist = join(repo, "apps/desktop/e2e/bench/chat-window/dist");
+  const benchCadence = await readBenchCadence(dist, recipe.diagramSampleMs);
+  const server = await serveBench(dist);
   let windowId, cdp, timer;
   const trace = { active: false, files: [] };
   const traced =
@@ -187,6 +190,7 @@ export async function guardedChatWindowBench({
     if (report.quietWindow.focusable || report.quietWindow.focused)
       throw new Error("bench native quiet-window violation");
     report.guard = guard;
+    report.benchCadence = benchCadence;
     report.measuredRendererPid = measuredPid;
     return report;
   } finally {

@@ -1,6 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
 
+const { pluginMaps } = vi.hoisted(() => ({ pluginMaps: [] as Record<string, unknown>[] }));
+
 vi.mock("streamdown", () => ({
   // Shaped like the real export because `message.tsx` derives its sanitizer
   // config from it (VC-273): the `sanitize` entry is a `[plugin, schema]` pair
@@ -15,24 +17,30 @@ vi.mock("streamdown", () => ({
     animated,
     plugins,
     rehypePlugins,
+    isAnimating,
   }: {
     animated?: boolean;
+    isAnimating?: boolean;
     plugins?: Record<string, unknown>;
     rehypePlugins?: unknown[];
-  }) => (
-    <output
-      data-animated={animated ? "enabled" : "disabled"}
-      data-plugins={Object.keys(plugins ?? {}).join(",")}
-      data-image-protocols={JSON.stringify(
-        (rehypePlugins ?? [])
-          .filter((entry): entry is [unknown, { protocols?: { src?: string[] } }] =>
-            Array.isArray(entry),
-          )
-          .map(([, schema]) => schema?.protocols?.src)
-          .find((src) => src !== undefined) ?? null,
-      )}
-    />
-  ),
+  }) => {
+    if (plugins) pluginMaps.push(plugins);
+    return (
+      <output
+        data-animated={animated ? "enabled" : "disabled"}
+        data-turn-active={isAnimating ? "yes" : "no"}
+        data-plugins={Object.keys(plugins ?? {}).join(",")}
+        data-image-protocols={JSON.stringify(
+          (rehypePlugins ?? [])
+            .filter((entry): entry is [unknown, { protocols?: { src?: string[] } }] =>
+              Array.isArray(entry),
+            )
+            .map(([, schema]) => schema?.protocols?.src)
+            .find((src) => src !== undefined) ?? null,
+        )}
+      />
+    );
+  },
 }));
 
 import { MessageResponse } from "@renderer/components/ui/ai-elements/message";
@@ -58,6 +66,12 @@ describe("MessageResponse", () => {
     );
   });
 
+  it("passes reasoning liveness separately from the animation scheduler", () => {
+    const html = renderToStaticMarkup(<ReasoningBody isAnimating>Thinking</ReasoningBody>);
+    expect(html).toContain('data-turn-active="yes"');
+    expect(html).toContain('data-animated="disabled"');
+  });
+
   it("selects the live and settled plugin maps", () => {
     const live = renderToStaticMarkup(
       <MessageResponse isAnimating>Incremental response</MessageResponse>,
@@ -65,9 +79,26 @@ describe("MessageResponse", () => {
     const settled = renderToStaticMarkup(<MessageResponse>Answer</MessageResponse>);
     const reasoning = renderToStaticMarkup(<ReasoningBody>Thinking</ReasoningBody>);
 
-    expect(live).toContain('data-plugins="cjk,mermaid"');
-    expect(settled).toContain('data-plugins="cjk,code,mermaid"');
-    expect(reasoning).toContain('data-plugins="cjk,code,mermaid"');
+    expect(live).toContain('data-plugins="cjk,mermaid,renderers"');
+    expect(settled).toContain('data-plugins="cjk,code,mermaid,renderers"');
+    expect(reasoning).toContain('data-plugins="cjk,code,mermaid,renderers"');
+  });
+
+  it("keeps each phase's plugin map and diagram renderer stable across updates", () => {
+    pluginMaps.length = 0;
+    renderToStaticMarkup(<MessageResponse isAnimating>One</MessageResponse>);
+    renderToStaticMarkup(<MessageResponse isAnimating>Two</MessageResponse>);
+    renderToStaticMarkup(<MessageResponse>Three</MessageResponse>);
+    renderToStaticMarkup(<MessageResponse>Four</MessageResponse>);
+    renderToStaticMarkup(<ReasoningBody>Five</ReasoningBody>);
+    renderToStaticMarkup(<ReasoningBody>Six</ReasoningBody>);
+    expect(pluginMaps[0]).toBe(pluginMaps[1]);
+    expect(pluginMaps[2]).toBe(pluginMaps[3]);
+    expect(pluginMaps[4]).toBe(pluginMaps[5]);
+    expect(pluginMaps[0]?.renderers).toBe(pluginMaps[2]?.renderers);
+    expect(pluginMaps[2]?.renderers).toBe(pluginMaps[4]?.renderers);
+    expect(pluginMaps[0]?.mermaid).toBe(pluginMaps[2]?.mermaid);
+    expect(pluginMaps.every((map) => !("math" in map))).toBe(true);
   });
 
   /*

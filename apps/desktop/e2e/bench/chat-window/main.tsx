@@ -299,20 +299,46 @@ const STREAM_SUFFIX =
     /(?<=\s)/,
   );
 
-function streamText(tokenCount: number): string {
-  if (tokenCount <= STREAM_TOKENS.length) return STREAM_TOKENS.slice(0, tokenCount).join("");
+/** Invented topology, not a transcript: each group and cross-edge reshapes layout.
+ * Split group declarations/nodes/edges/end across snapshots so live validation
+ * sees incomplete syntax as well as valid, increasingly expensive graphs.
+ */
+const DIAGRAM_TOKENS = [
+  "Streaming diagram probe.\n\n",
+  "```mermaid\n",
+  'flowchart LR\nroot["Probe root"]\n',
+  ...Array.from({ length: 18 }, (_value, index) => [
+    `subgraph group${index}["Probe group ${index}"]\n`,
+    `a${index}["Input ${index}"] --> b${index}["Transform ${index}"]\n`,
+    `b${index} --> c${index}["Output ${index}"]\n`,
+    "end\n",
+    index === 0 ? "root --> a0\n" : `c${index - 1} --> a${index}\nroot --> b${index}\n`,
+  ]).flat(),
+  "```\n",
+  "The invented graph is complete. ",
+];
+type StreamContent = "code" | "diagram";
+
+function streamText(tokenCount: number, content: StreamContent = "code"): string {
+  const tokens = content === "diagram" ? DIAGRAM_TOKENS : STREAM_TOKENS;
+  if (tokenCount <= tokens.length) return tokens.slice(0, tokenCount).join("");
   return [
-    ...STREAM_TOKENS,
+    ...tokens,
     ...Array.from(
-      { length: tokenCount - STREAM_TOKENS.length },
+      { length: tokenCount - tokens.length },
       (_value, index) => STREAM_SUFFIX[index % STREAM_SUFFIX.length],
     ),
   ].join("");
 }
 
 /** Replace one in-flight assistant overlay, preserving the message id. */
-function streamSnapshot(sessionId: string, base: readonly UIMessage[], tokenCount: number): number {
-  const text = streamText(tokenCount);
+function streamSnapshot(
+  sessionId: string,
+  base: readonly UIMessage[],
+  tokenCount: number,
+  content: StreamContent = "code",
+): number {
+  const text = streamText(tokenCount, content);
   const message: UIMessage = {
     id: `${sessionId}-stream-probe`,
     role: "assistant",
@@ -402,6 +428,7 @@ async function streamAndScroll(
   index: number,
   steps: number,
   tokenRate: number,
+  content: StreamContent = "code",
 ): Promise<unknown> {
   const scroller = planeScroller(index);
   if (scroller === null) return { ok: false, why: "no scroller" };
@@ -426,7 +453,7 @@ async function streamAndScroll(
   // what caught it; without that check it would have read as a clean result.
   resetStream(sessionId, base);
   await settle();
-  streamSnapshot(sessionId, base, 1);
+  streamSnapshot(sessionId, base, 1, content);
   await settle();
   scroller.scrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight - 120);
   await settle();
@@ -463,8 +490,33 @@ async function streamAndScroll(
   let priorTop = scroller.scrollTop;
   let readerOffsetPx = 120;
   let readerDirection = 1;
-  let streamedCharacters = streamText(1).length;
+  let streamedCharacters = streamText(1, content).length;
   let priorTokenCount = 1;
+  const liveDiagramSources = new Set<string>();
+  let liveDiagramSvgs = 0;
+  let visibleDiagramFrames = 0;
+  let maxDiagramLabels = 0;
+  const diagramState = (): { svgs: number; visible: boolean; labels: number } => {
+    const plane = document.querySelectorAll<HTMLElement>("[data-bench-plane]")[index];
+    const svgs = [
+      ...(plane?.querySelectorAll<SVGSVGElement>('[data-streamdown="mermaid"] svg') ?? []),
+    ];
+    // No icons, empty placeholder, or unrelated SVG can satisfy this contract.
+    const svg = svgs.find((candidate) => candidate.textContent?.includes("Probe root"));
+    if (svg === undefined) return { svgs: 0, visible: false, labels: 0 };
+    const sourceLabels = svg.textContent ?? "";
+    const bounds = svg.getBoundingClientRect();
+    const viewport = scroller.getBoundingClientRect();
+    const visible =
+      bounds.width > 0 &&
+      bounds.height > 0 &&
+      bounds.bottom > viewport.top &&
+      bounds.top < viewport.bottom &&
+      bounds.right > viewport.left &&
+      bounds.left < viewport.right;
+    if (visible) liveDiagramSources.add(sourceLabels);
+    return { svgs: 1, visible, labels: (sourceLabels.match(/Output /g) ?? []).length };
+  };
   let liveCodeBlocks = 0;
   let liveHighlightedCodeBlocks = 0;
   let liveHighlightedTokens = 0;
@@ -509,7 +561,7 @@ async function streamAndScroll(
   for (let step = 0; step < steps; step += 1) {
     const tokenCount = Math.max(1, Math.floor(((performance.now() - started) * tokenRate) / 1_000));
     if (tokenCount !== priorTokenCount) {
-      streamedCharacters = streamSnapshot(sessionId, base, tokenCount);
+      streamedCharacters = streamSnapshot(sessionId, base, tokenCount, content);
       priorTokenCount = tokenCount;
     }
     // The second paint is load-bearing. Streamdown hands the code source to its
@@ -521,6 +573,12 @@ async function streamAndScroll(
       moveScroller();
       frames.push(await new Promise<number>((resolve) => requestAnimationFrame(resolve)));
       recordScroll();
+      if (content === "diagram") {
+        const diagram = diagramState();
+        liveDiagramSvgs = Math.max(liveDiagramSvgs, diagram.svgs);
+        visibleDiagramFrames += Number(diagram.visible);
+        maxDiagramLabels = Math.max(maxDiagramLabels, diagram.labels);
+      }
     }
     const code = codeState();
     liveCodeBlocks = Math.max(liveCodeBlocks, code.blocks);
@@ -569,6 +627,7 @@ async function streamAndScroll(
     await frame();
     settledCode = codeState();
   }
+  const settledDiagram = content === "diagram" ? diagramState() : null;
   const settleLatencyMs = performance.now() - settleStarted;
   for (const entry of settleObserver?.takeRecords() ?? []) settleLongTasks.push(entry.duration);
   settleObserver?.disconnect();
@@ -579,15 +638,43 @@ async function streamAndScroll(
           (sum, duration) => sum + Math.max(0, Math.round(duration / refreshIntervalMs) - 1),
           0,
         );
+  const fenceOpened = priorTokenCount >= (content === "diagram" ? 2 : STREAM_FENCE_OPEN_TOKEN);
+  const fenceClosed =
+    priorTokenCount >=
+    (content === "diagram" ? DIAGRAM_TOKENS.length - 1 : STREAM_FENCE_CLOSE_TOKEN);
+  const validDiagram =
+    content !== "diagram" ||
+    (fenceOpened &&
+      fenceClosed &&
+      liveDiagramSvgs > 0 &&
+      visibleDiagramFrames > 1 &&
+      liveDiagramSources.size > 1 &&
+      maxDiagramLabels === 18 &&
+      settledDiagram?.svgs === 1 &&
+      settledDiagram.labels === 18 &&
+      scrollDistancePx > 0 &&
+      refreshIntervalMs !== null);
   return {
-    ok: true,
+    ok: validDiagram,
+    ...(validDiagram ? {} : { why: "diagram probe missed visible/changing/complete SVG contract" }),
+    ...(content === "diagram"
+      ? {
+          streamContent: content,
+          liveDiagramSvgs,
+          visibleDiagramFrames,
+          distinctVisibleDiagramSources: liveDiagramSources.size,
+          maxDiagramLabels,
+          settledDiagramSvgs: settledDiagram?.svgs,
+          settledDiagramLabels: settledDiagram?.labels,
+        }
+      : {}),
     steps,
     tokenRate,
     streamedTokens: priorTokenCount,
     streamedWhileWorking,
     streamedWhileTurnActive,
-    codeFenceOpened: priorTokenCount >= STREAM_FENCE_OPEN_TOKEN,
-    codeFenceClosed: priorTokenCount >= STREAM_FENCE_CLOSE_TOKEN,
+    codeFenceOpened: fenceOpened,
+    codeFenceClosed: fenceClosed,
     latencyMs,
     refreshIntervalMs,
     frameTimesMs,
@@ -736,13 +823,7 @@ function nodes(): number {
 function planeScroller(index: number): HTMLElement | null {
   const plane = document.querySelectorAll<HTMLElement>("[data-bench-plane]")[index];
   if (plane === undefined) return null;
-  // `StickToBottom` renders the scrolling element as the first child of the
-  // `role="log"` box (its `Content` wrapper), with the measured content inside
-  // it. The library offers no hook for a data attribute on that element, so the
-  // bench walks to it rather than marking it.
-  const log = plane.querySelector<HTMLElement>('[role="log"]');
-  const scroller = log?.querySelector<HTMLElement>(":scope > div") ?? null;
-  return scroller;
+  return transcriptScroller(plane);
 }
 
 function geometry(index: number): { top: number; height: number; client: number } | null {
@@ -1005,8 +1086,21 @@ async function stopRevealProbe(): Promise<unknown> {
 /** The scroller of one Session's plane, shown or hidden. */
 function sessionScroller(sessionId: string): HTMLElement | null {
   const plane = document.querySelector<HTMLElement>(`[data-bench-plane="${sessionId}"]`);
+  return transcriptScroller(plane);
+}
+
+/** Current product marks the real scroll ref. Newer containment adds a viewport
+ * wrapper: writing its scrollTop measures no scrolling at all. Keep the legacy
+ * walk only for exact-source comparisons whose product predates the marker.
+ */
+function transcriptScroller(plane: HTMLElement | null): HTMLElement | null {
   const log = plane?.querySelector<HTMLElement>('[role="log"]');
-  return log?.querySelector<HTMLElement>(":scope > div") ?? null;
+  return (
+    log?.querySelector<HTMLElement>("[data-conversation-scroller]") ??
+    log?.querySelector<HTMLElement>(":scope > [data-conversation-viewport] > div") ??
+    log?.querySelector<HTMLElement>(":scope > div") ??
+    null
+  );
 }
 
 /** Which kept plane is in front, and where its reader stands. */
@@ -1035,7 +1129,12 @@ interface ChatBench {
   geometry(index: number): unknown;
   reachFirst(index: number, steps: number): Promise<unknown>;
   tailProbe(index: number): Promise<unknown>;
-  streamAndScroll(index: number, steps: number, tokenRate: number): Promise<unknown>;
+  streamAndScroll(
+    index: number,
+    steps: number,
+    tokenRate: number,
+    content?: StreamContent,
+  ): Promise<unknown>;
   showDraft(backgroundPlanes: number, ballast: number): Promise<{ nodes: number }>;
   startTyping(): boolean;
   stopTyping(): Promise<unknown>;
@@ -1074,10 +1173,10 @@ const bench: ChatBench = {
     if (sessionId === undefined) return { ok: false, why: "no session" };
     return tailProbe(sessionId, index);
   },
-  async streamAndScroll(index, steps, tokenRate) {
+  async streamAndScroll(index, steps, tokenRate, content) {
     const sessionId = sessionIds[index];
     if (sessionId === undefined) return { ok: false, why: "no session" };
-    return streamAndScroll(sessionId, index, steps, tokenRate);
+    return streamAndScroll(sessionId, index, steps, tokenRate, content);
   },
   async showDraft(backgroundPlanes, ballast) {
     useChatDraftsStore.getState().openProvisional(DRAFT_SESSION, {

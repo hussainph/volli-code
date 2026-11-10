@@ -7,6 +7,8 @@ const defaults = {
   streamSamples: 8,
   streamSteps: 120,
   streamTokenRate: 30,
+  streamContent: "code",
+  diagramSampleMs: null,
   draftPlanes: 2,
   draftBallast: 8000,
   draftKeys: 150,
@@ -29,6 +31,18 @@ export function benchSettings(input = {}) {
   const result = { ...defaults, ...input };
   if (!["transcript", "draft", "reveal", "stream"].includes(result.arm))
     throw new Error("--arm is transcript, draft, reveal or stream");
+  if (!["code", "diagram"].includes(result.streamContent))
+    throw new Error("--stream-content is code or diagram");
+  if (result.streamContent === "diagram" && !["stream", "transcript"].includes(result.arm))
+    throw new Error("diagram content requires --arm stream or transcript");
+  if (result.diagramSampleMs !== null) {
+    if (
+      result.streamContent !== "diagram" ||
+      ![0, 100, "0", "100"].includes(result.diagramSampleMs)
+    )
+      throw new Error("--diagram-sample-ms requires diagram content and 0 or 100");
+    result.diagramSampleMs = Number(result.diagramSampleMs);
+  }
   for (const [key, value] of Object.entries(defaults)) {
     if (typeof value !== "number") continue;
     const number = Number(result[key]);

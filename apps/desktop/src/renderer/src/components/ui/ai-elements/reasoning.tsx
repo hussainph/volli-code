@@ -17,12 +17,12 @@ import { ThinkingOrbs } from "@renderer/components/ui/thinking-orbs";
 import { cn } from "@renderer/lib/utils";
 import { cjk } from "@streamdown/cjk";
 import { code } from "@streamdown/code";
-import { mermaid } from "@streamdown/mermaid";
 import * as React from "react";
 import { Streamdown, type Components } from "streamdown";
 
 import { chatMarkdownComponents, chatRehypePlugins } from "./chat-markdown";
 import { Shimmer } from "./shimmer";
+import { pele, peleRenderers } from "./pele-diagram";
 
 /**
  * How long a thought took, for streams that carry no timestamps of their own.
@@ -153,7 +153,7 @@ export const reasoningMarkdownComponents: Components = {
   ),
 };
 
-const streamdownPlugins = { cjk, code, mermaid };
+const streamdownPlugins = { cjk, code, mermaid: pele, renderers: peleRenderers };
 // No `animated`, for the reason `message.tsx` sets out at length: any truthy
 // value builds Streamdown's animation controller, and a controller is what
 // forces the blocking scheduler.
@@ -168,23 +168,27 @@ const streamdownPlugins = { cjk, code, mermaid };
 export type ReasoningBodyProps = {
   children: string;
   className?: string;
+  isAnimating?: boolean;
 };
 
-export const ReasoningBody = React.memo(({ children, className }: ReasoningBodyProps) => (
-  <div className={cn("text-ui leading-5 text-muted-foreground", className)}>
-    {/* `rehypePlugins` rides with the components, never without them (VC-273):
+export const ReasoningBody = React.memo(
+  ({ children, className, isAnimating = false }: ReasoningBodyProps) => (
+    <div className={cn("text-ui leading-5 text-muted-foreground", className)}>
+      {/* `rehypePlugins` rides with the components, never without them (VC-273):
         Streamdown sanitizes before the `img` override runs, so a reasoning body
         given only the components would have an attachment's `volli-blob:` src
         deleted upstream and draw `[Image blocked]` where the answer above it
         draws the picture. */}
-    <Streamdown
-      plugins={streamdownPlugins}
-      rehypePlugins={chatRehypePlugins}
-      components={reasoningMarkdownComponents}
-    >
-      {children}
-    </Streamdown>
-  </div>
-));
+      <Streamdown
+        plugins={streamdownPlugins}
+        isAnimating={isAnimating}
+        rehypePlugins={chatRehypePlugins}
+        components={reasoningMarkdownComponents}
+      >
+        {children}
+      </Streamdown>
+    </div>
+  ),
+);
 
 ReasoningBody.displayName = "ReasoningBody";
