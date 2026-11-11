@@ -1786,6 +1786,51 @@ async function interruptedRecovery(f: ReturnType<typeof fixture>) {
   return { runtime, sessionId, attachmentId };
 }
 
+class GatedAdapter extends Adapter {
+  gate: Promise<void> | undefined;
+  override async attach(...args: Parameters<Adapter["attach"]>) {
+    const gate = this.gate;
+    this.gate = undefined;
+    await gate;
+    return super.attach(...args);
+  }
+}
+
+/** A Session that attached once and was released, whose next preparation stalls. */
+async function releasedWithStalledPreparation() {
+  const gate = Promise.withResolvers<void>();
+  let hold = false;
+  const f = fixture({
+    admissionTimeoutMs: 10,
+    directAttachTimeoutMs: 10,
+    retryDelays: [],
+    prepare: () => (hold ? gate.promise : undefined),
+  });
+  const runtime = f.runtime();
+  const sessionId = await create(runtime);
+  await attach(runtime, sessionId);
+  const attachmentId = (await runtime.projection({ sessionId })).projection.liveExecutor!.id;
+  await runtime.command({
+    commandId: "release",
+    sessionId,
+    command: { kind: "adapter.release", attachmentId },
+  });
+  hold = true;
+  return { f, runtime, sessionId, gate };
+}
+
+/** A Session attached by one runtime, and a second runtime that never held it. */
+async function coldBinding(options: { admissionTimeoutMs?: number } = {}) {
+  const adapter = new GatedAdapter();
+  const f = fixture({ adapter, retryDelays: [], directAttachTimeoutMs: 60_000, ...options });
+  const first = f.runtime();
+  const sessionId = await create(first);
+  await attach(first, sessionId);
+  const attachmentId = (await first.projection({ sessionId })).projection.liveExecutor!.id;
+  await first.close();
+  return { f, adapter, sessionId, attachmentId, recovered: f.runtime() };
+}
+
 /**
  * VC-675 regressions for follow-ups that could get stuck with no exit.
  * Every path must settle or report a recoverable failure.
@@ -1793,15 +1838,6 @@ async function interruptedRecovery(f: ReturnType<typeof fixture>) {
 describe("host follow-ups never strand a row", () => {
   const AMBIGUOUS =
     "This follow-up may have been delivered. Check the transcript before resending.";
-  class GatedAdapter extends Adapter {
-    gate: Promise<void> | undefined;
-    override async attach(...args: Parameters<Adapter["attach"]>) {
-      const gate = this.gate;
-      this.gate = undefined;
-      await gate;
-      return super.attach(...args);
-    }
-  }
 
   it("P1: clearing the Attention that held a queue wakes it, with no restart", async () => {
     const f = fixture();
@@ -3110,29 +3146,6 @@ describe("host follow-ups never strand a row", () => {
     await runtime.close();
   });
 
-  /** A Session that attached once and was released, whose next preparation stalls. */
-  async function releasedWithStalledPreparation() {
-    const gate = Promise.withResolvers<void>();
-    let hold = false;
-    const f = fixture({
-      admissionTimeoutMs: 10,
-      directAttachTimeoutMs: 10,
-      retryDelays: [],
-      prepare: () => (hold ? gate.promise : undefined),
-    });
-    const runtime = f.runtime();
-    const sessionId = await create(runtime);
-    await attach(runtime, sessionId);
-    const attachmentId = (await runtime.projection({ sessionId })).projection.liveExecutor!.id;
-    await runtime.command({
-      commandId: "release",
-      sessionId,
-      command: { kind: "adapter.release", attachmentId },
-    });
-    hold = true;
-    return { f, runtime, sessionId, gate };
-  }
-
   it("words a direct reattach's preparation timeout as a timeout, not a stopped runtime (VC-1072)", async () => {
     const { f, runtime, sessionId, gate } = await releasedWithStalledPreparation();
 
@@ -3255,18 +3268,6 @@ describe("host follow-ups never strand a row", () => {
   });
 
   describe("a launch's boot sweep rebuilding a binding (VC-1072)", () => {
-    /** A Session attached by one runtime, and a second runtime that never held it. */
-    async function coldBinding(options: { admissionTimeoutMs?: number } = {}) {
-      const adapter = new GatedAdapter();
-      const f = fixture({ adapter, retryDelays: [], directAttachTimeoutMs: 60_000, ...options });
-      const first = f.runtime();
-      const sessionId = await create(first);
-      await attach(first, sessionId);
-      const attachmentId = (await first.projection({ sessionId })).projection.liveExecutor!.id;
-      await first.close();
-      return { f, adapter, sessionId, attachmentId, recovered: f.runtime() };
-    }
-
     it("keeps the queue's bound, not a direct door's ceiling: nobody is waiting on it", async () => {
       const { adapter, sessionId, attachmentId, recovered } = await coldBinding({
         admissionTimeoutMs: 10,

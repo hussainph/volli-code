@@ -1419,6 +1419,9 @@ async function createKickoffSession(
   return { result, pty };
 }
 
+const spawnedConcurrencyHint = () =>
+  Number.parseInt(lastSpawnEnv()["VOLLI_CONCURRENCY_HINT"] ?? "0", 10);
+
 describe("ticket sessions", () => {
   beforeEach(() => {
     // Non-worktree: these tests exercise the direct-launch path, unchanged by
@@ -1475,19 +1478,18 @@ describe("ticket sessions", () => {
     });
     // A terminal the ledger still calls open, with no process behind it.
     insertSession(testDb.db, testSession("w", null, { id: "orphaned-terminal" }));
-    const hint = () => Number.parseInt(lastSpawnEnv()["VOLLI_CONCURRENCY_HINT"] ?? "0", 10);
     const cores = os.availableParallelism();
 
     await createSession();
-    expect(hint()).toBe(cores);
+    expect(spawnedConcurrencyHint()).toBe(cores);
     vi.setSystemTime(Date.now() + 10_000);
     await createSession();
     // One running PTY: still every core.
-    expect(hint()).toBe(cores);
+    expect(spawnedConcurrencyHint()).toBe(cores);
     vi.setSystemTime(Date.now() + 10_000);
     await createSession();
     // Two running PTYs, the orphaned attachment not among them.
-    expect(hint()).toBe(Math.max(1, Math.floor(cores / 2)));
+    expect(spawnedConcurrencyHint()).toBe(Math.max(1, Math.floor(cores / 2)));
   });
 
   it("leaves an exported budget variable exactly as the user set it", async () => {
