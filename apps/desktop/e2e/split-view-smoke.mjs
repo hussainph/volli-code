@@ -197,7 +197,7 @@ function readChips(page) {
 }
 
 /**
- * {@link readChips}, plus each group's `tabs`: its panes' fronts in pane order
+ * {@link readChips}, plus each group's `fronts`: its panes' fronts in pane order
  * (an empty pane lists nothing) — what the chip's segments used to draw. A chip
  * draws only one tab now, so this reads its popover's rows (`data-front`),
  * opened by hover and closed by moving the pointer away, which moves neither
@@ -209,7 +209,7 @@ async function readGroups(page) {
   for (const chip of chips) {
     const locator = page.locator(`${TOP_CHIPS}[data-group-id="${chip.id}"]`).first();
     const rows = (await locator.isVisible()) ? await readChipRows(page, locator) : [];
-    groups.push({ ...chip, rows, tabs: rows.filter((row) => row.front).map((row) => row.title) });
+    groups.push({ ...chip, rows, fronts: rows.filter((row) => row.front).map((row) => row.title) });
   }
   return groups;
 }
@@ -301,7 +301,7 @@ async function groupAtTabEdge(page, movingLabel, targetLabel, edge) {
       (await readChips(page)).some((chip) => chip.active) &&
       (await readGroups(page)).some(
         (group) =>
-          group.active && group.tabs.includes(movingLabel) && group.tabs.includes(targetLabel),
+          group.active && group.fronts.includes(movingLabel) && group.fronts.includes(targetLabel),
       ),
     { timeout: 6000 },
   );
@@ -516,7 +516,7 @@ async function main() {
             panes[0]?.paneId !== "root" &&
             groups.length === 1 &&
             groups[0].active &&
-            JSON.stringify(groups[0].tabs) === JSON.stringify([displayId]) &&
+            JSON.stringify(groups[0].fronts) === JSON.stringify([displayId]) &&
             (await hasOneTopStrip(page)),
           detail: JSON.stringify({ panes, groups }),
         };
@@ -552,7 +552,7 @@ async function main() {
             const seen = await readPanes(page);
             if (seen.length !== 2 || seen[1]?.empty || seen[1]?.tabs.length !== 1) return null;
             const groups = await readGroups(page);
-            return groups.length === 1 && groups[0].active && groups[0].tabs.length === 2
+            return groups.length === 1 && groups[0].active && groups[0].fronts.length === 2
               ? seen
               : null;
           },
@@ -707,7 +707,7 @@ async function main() {
             after[2]?.label === "Pane 3 of 3" &&
             groups.length === 1 &&
             groups[0].id === groupId &&
-            groups[0].tabs.length === 3 &&
+            groups[0].fronts.length === 3 &&
             (await hasOneTopStrip(page)),
           detail: `lit=${JSON.stringify(lit)} panes=${JSON.stringify(after)} groups=${JSON.stringify(groups)}`,
         };
@@ -813,7 +813,7 @@ async function main() {
             after[1]?.paneId === before[2]?.paneId &&
             // One chip, nothing beside it, and its group down to two panes.
             (await readSurfaceStrip(page)).length === 1 &&
-            (await readGroups(page))[0]?.tabs.length === 2 &&
+            (await readGroups(page))[0]?.fronts.length === 2 &&
             (await hasOneTopStrip(page)),
           detail: `centre=${JSON.stringify(centre)} panes=${JSON.stringify(after)}`,
         };
@@ -999,7 +999,7 @@ async function main() {
             preview &&
             cells.length === 2 &&
             grouped.length === 1 &&
-            JSON.stringify(grouped[0].tabs) === JSON.stringify(expected) &&
+            JSON.stringify(grouped[0].fronts) === JSON.stringify(expected) &&
             boxes[1].x > boxes[0].x &&
             Math.abs(boxes[1].y - boxes[0].y) < 2 &&
             cells.filter((cell) => cell.focused).length === 1 &&
@@ -1206,7 +1206,7 @@ async function main() {
           after.length === 2 &&
           after.find((pane) => pane.paneId === paneId)?.focused === true &&
           groups.length === 1 &&
-          groups[0].tabs.length === 2 &&
+          groups[0].fronts.length === 2 &&
           (await readChips(page))[0]?.id === groups[0].id &&
           (await screen.evaluate((node) => node === window.volliSmokeHomeTerminalScreen)) &&
           (await hasOneTopStrip(page, "Home tabs")),
@@ -1251,7 +1251,10 @@ async function main() {
           groups.length === 1 &&
           groups[0].id === groupId &&
           groups[0].active &&
-          JSON.stringify(groups[0].tabs) === JSON.stringify(["Board", terminal, "Chat"]) &&
+          // VC-1052's chip summarizes pane fronts; its popover still lists ALL
+          // members, including the terminal now behind Chat in the same pane.
+          JSON.stringify(groups[0].rows.map((row) => row.title)) ===
+            JSON.stringify(["Board", terminal, "Chat"]) &&
           (await hasOneTopStrip(page, "Home tabs")),
         detail: `panes=${JSON.stringify(after)} groups=${JSON.stringify(groups)}`,
       };
