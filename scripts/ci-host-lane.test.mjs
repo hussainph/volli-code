@@ -249,10 +249,15 @@ test("actual path classifier selects lanes and fails safe", () => {
   }
 });
 
-test("extended lanes run after merge, nightly and on demand — never as a PR gate", () => {
+test("extended runs at release, on lane-definition PRs or exceptional dispatch only", () => {
   assert.deepEqual(workflow.on.schedule, [{ cron: "30 7 * * *" }]);
-  assert.deepEqual(extended.on.push, { branches: ["main"] });
-  assert.equal(extended.on.schedule.length, 1);
+  assert.equal(extended.on.push, undefined);
+  assert.equal(extended.on.schedule, undefined);
+  assert.deepEqual(extended.on.workflow_call.inputs.ref, {
+    description: "Exact release commit to prove",
+    required: true,
+    type: "string",
+  });
   assert.ok("workflow_dispatch" in extended.on);
   // PRs run it only to prove an edit to the lane's own definition.
   assert.deepEqual(extended.on.pull_request, {
@@ -264,7 +269,7 @@ test("extended lanes run after merge, nightly and on demand — never as a PR ga
       "scripts/convex-compat/**",
     ],
   });
-  // A main run is never cancelled by the next merge; a PR's newer push may.
+  // Release proof is never superseded; only a lane-definition PR may cancel.
   assert.equal(
     extended.concurrency["cancel-in-progress"],
     "${{ github.event_name == 'pull_request' }}",
@@ -305,7 +310,7 @@ test("cloud acceptance is macOS-only and separate from flag-off core e2e", () =>
   assert.equal(job.if, "${{ !cancelled() }}");
   assert.equal(
     job.steps.find((step) => step.name === "Checkout").with.ref,
-    "${{ github.event.pull_request.head.sha || github.sha }}",
+    "${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}",
   );
   const smoke = job.steps.find((step) => step.name === "Run flag-on remote acceptance");
   assert.equal(smoke.run, "node apps/desktop/e2e/volli-drive/remote-acceptance-smoke.mjs");
@@ -558,7 +563,10 @@ test("workspace globs discover a newly added host package and require its covera
 test("N-1 compatibility runs rolling and fixed downgrade promises from full history", () => {
   const job = jobs["n1-compat"];
   // The lanes come from Scope: every one off-PR, `base` alone on most PRs.
-  assert.equal(job.strategy.matrix.lane, "${{ fromJSON(needs.changes.outputs.n1-lanes) }}");
+  assert.equal(job.strategy, undefined);
+  assert.equal(job.name, "N-1 compatibility");
+  assert.equal(job["timeout-minutes"], 75);
+  assert.equal(job.steps.at(-1).env.LANES, "${{ needs.changes.outputs.n1-lanes }}");
   assert.deepEqual(JSON.parse(n1All), [
     "release",
     "latest-canary",
@@ -567,18 +575,117 @@ test("N-1 compatibility runs rolling and fixed downgrade promises from full hist
     "v0.2.2-canary.1",
   ]);
   assert.ok(filter.run.includes(`n1_all='${n1All}'`));
-  const prepare = job.steps.find((step) => step.id === "prepare").run;
+  const prepare = job.steps.at(-1).run;
   assert.match(prepare, /"\$LANE" == "release" \]\]; then\s+args=\(--release\)/);
   assert.match(prepare, /"\$LANE" == "latest-canary" \]\]; then\s+args=\(--canary\)/);
   assert.match(
     prepare,
     /"\$LANE" == "v0\.2\.1" \|\| "\$LANE" == "v0\.2\.2-canary\.1" \]\]; then\s+args=\(--ref "\$LANE"\)/,
   );
-  assert.equal(job.strategy["fail-fast"], false);
   assert.equal(job.steps.find((step) => step.name === "Checkout").with["fetch-depth"], 0);
   const run = job.steps.at(-1).run;
   assert.ok(run.includes("src/db/n1-compatibility.test.ts"));
-  assert.equal(job.steps.at(-1).env.VOLLI_N1_MANIFEST, "${{ steps.prepare.outputs.manifest }}");
+  assert.match(run, /VOLLI_N1_MANIFEST="\$manifest" vp test run/);
+});
+
+test("every extended lane checks out the exact supplied release SHA", () => {
+  for (const [name, job] of Object.entries(extended.jobs)) {
+    if (name === "summary") continue;
+    const checkout = job.steps.find((step) => step.name === "Checkout");
+    assert.equal(
+      checkout.with.ref,
+      "${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}",
+      name,
+    );
+  }
+});
+
+test("CodeQL stays off PRs and never writes TRAP caches", () => {
+  const codeql = parse(readFileSync(join(root, ".github/workflows/codeql.yml"), "utf8"));
+  assert.equal(codeql.on.pull_request, undefined);
+  assert.deepEqual(codeql.on.push, { branches: ["main"] });
+  assert.deepEqual(codeql.on.schedule, [{ cron: "0 4 * * 1" }]);
+  assert.equal(
+    codeql.jobs.analyze.steps.find((step) => step.name === "Initialize CodeQL").with[
+      "trap-caching"
+    ],
+    false,
+  );
+});
+
+test("sequential N-1 runs all selected lanes and reports preparation or test failures at the end", () => {
+  mkdirSync(join(root, ".tmp"), { recursive: true });
+  const temporary = mkdtempSync(join(root, ".tmp/ci-n1-sequential-"));
+  const run = jobs["n1-compat"].steps.at(-1).run;
+  const stub = `
+    nproc() { echo 1; }
+    git() { echo parent; }
+    node() {
+      echo "prepare:$LANE:$2:$3" >> "$TRACE"
+      if [[ "$FAIL" == "prepare-$LANE" ]]; then return 37; fi
+      manifest="$RUNNER_TEMP/$LANE.json"
+      if [[ "$FAIL" != "manifest-$LANE" ]]; then touch "$manifest"; fi
+      echo "prepared $LANE"
+      echo "$manifest"
+    }
+    vp() {
+      test "$PWD" = "$EXPECTED_CWD/packages/host-core" || return 99
+      test "$VOLLI_N1_MANIFEST" = "$RUNNER_TEMP/$LANE.json" || return 98
+      echo "test:$LANE" >> "$TRACE"
+      if [[ "$FAIL" == "test-$LANE" ]]; then return 42; fi
+    }
+  `;
+  try {
+    const lanes = JSON.parse(n1All);
+    const cases = [
+      "none",
+      ...lanes.flatMap((lane) => [`prepare-${lane}`, `manifest-${lane}`, `test-${lane}`]),
+    ];
+    for (const fail of cases) {
+      const dir = join(temporary, fail);
+      mkdirSync(dir);
+      const trace = join(dir, "trace");
+      const summary = join(dir, "summary");
+      const outcome = spawnSync("bash", ["-c", stub + run], {
+        cwd: root,
+        env: {
+          ...process.env,
+          LANES: n1All,
+          EVENT: "pull_request",
+          PR_BASE: "pr-base",
+          PUSH_BEFORE: "push-before",
+          RUNNER_TEMP: dir,
+          GITHUB_STEP_SUMMARY: summary,
+          TRACE: trace,
+          EXPECTED_CWD: root,
+          FAIL: fail,
+        },
+        encoding: "utf8",
+      });
+      assert.equal(outcome.status === 0, fail === "none", outcome.stdout + outcome.stderr);
+      const log = readFileSync(trace, "utf8");
+      const report = readFileSync(summary, "utf8");
+      for (const lane of lanes) {
+        const selector =
+          lane === "release"
+            ? "--release:"
+            : lane === "latest-canary"
+              ? "--canary:"
+              : `--ref:${lane === "base" ? "pr-base" : lane}`;
+        assert.ok(log.includes(`prepare:${lane}:${selector}`), log);
+        assert.equal(
+          log.includes(`test:${lane}`),
+          !["prepare-", "manifest-"].some((prefix) => fail === prefix + lane),
+          log,
+        );
+        const expected = fail.endsWith(`-${lane}`) ? "failure" : "success";
+        assert.ok(report.includes(`| ${lane} | ${expected}`), report);
+        assert.ok(outcome.stdout.includes(`::group::N-1 ${lane}`), outcome.stdout);
+      }
+    }
+  } finally {
+    rmSync(temporary, { recursive: true, force: true });
+  }
 });
 
 test("the older-app live lane runs the newest shipped build against THIS commit's backend", () => {
@@ -595,7 +702,10 @@ test("the older-app live lane runs the newest shipped build against THIS commit'
   // make the backend older too, and prove nothing.
   const checkout = job.steps.find((step) => step.name === "Checkout").with;
   assert.equal(checkout["fetch-depth"], 0);
-  assert.equal(checkout.ref, undefined);
+  assert.equal(
+    checkout.ref,
+    "${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}",
+  );
   assert.equal(checkout["persist-credentials"], false);
 
   // The build comes out of the tag; the backend and the deployed functions out

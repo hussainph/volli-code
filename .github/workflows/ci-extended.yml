@@ -1,63 +1,44 @@
 name: CI extended
 
-# The lanes that left the PR gate (VC-934), kept rather than deleted: the rest
-# smoke tier (every non-core, non-quarantined journey) and flag-on cloud
-# acceptance, plus the move engine's kill/resume matrix, the large-profile
-# backup restore rehearsal, the older-app live check (the newest shipped
-# build against this commit's backend) and the BYO runner acceptance (all
-# Linux). The smoke
-# lanes are macOS-only and long, and gating every PR on them held
-# all five of the account's concurrent macOS slots per PR run, so PRs queued
-# behind each other. Here they run:
-#   - on every push to main — the merged tree, after the PR gate;
-#   - nightly, so a quiet day still gets a result;
-#   - on demand for ANY branch: `gh workflow run ci-extended.yml --ref <branch>`.
-#     A PR that changes a journey's area or the cloud path should dispatch it
-#     before merge; its result shows on that commit;
-#   - on a PR only when it changes this file, the smoke runner, or the
-#     older-app live harness, so the lane definition is proven by the PR that
-#     edits it (as ci.yml is).
+# Release proof, not routine PR/main CI: every non-core, non-quarantined
+# journey, flag-on cloud acceptance, move acceptance, backup rehearsal,
+# older-app live compatibility and BYO runner acceptance.
+# Release calls this workflow with the exact SHA it will ship and requires
+# every lane green before tagging, signing or publishing (unless explicitly
+# bypassed with require_green=false). Red at release time blocks the release;
+# fix it on its own branch, not by re-running until green.
 #
-# Results are visible, not gating: a red here is a red X on the commit and a
-# failed `Extended result`, never a required PR check. The release workflow
-# reads it — a commit is released only when this workflow AND CI succeeded on
-# it. A red on main is a regression to triage (AGENTS.md, CI is the gate);
-# measured repeat flakers belong in smoke-quarantine.yml, not in a re-run.
+# Lane-definition PRs still prove their own changes. Manual dispatch on a
+# risky branch is an exception, not a pre-merge requirement:
+#   gh workflow run ci-extended.yml --ref <branch>
+# No main-push or nightly trigger: those runs compete with core PR checks.
 #
-# The rest tier is ONE macOS job, not the three shards it was on PRs. The four
-# macOS lanes (cloud wake, rest tier, cloud acceptance, app-path move) run in
-# parallel: release latency is bounded by the slowest lane rather than their
-# sum. With main's core e2e in ci.yml that can fill the account's five macOS
-# slots for a few minutes after a merge, so a PR's core e2e may queue briefly. The runner still globs apps/desktop/e2e/*-smoke.mjs and subtracts
-# core, credential/legacy exclusions and measured quarantine, so a new smoke
-# joins this lane with no registration step. The small two-Mac cloud journey
-# proves the wake path and, in the same slot and build, the Automation path
-# (VC-1004). Every lane runs regardless of another's failure, and the summary
-# requires all of them.
+# The four macOS lanes run in parallel to bound release latency.
+# The runner globs apps/desktop/e2e/*-smoke.mjs and subtracts core,
+# credential/legacy exclusions and measured quarantine. Every later lane
+# still runs after a failure; the summary requires all of them.
 on:
-  push:
-    branches: [main]
   pull_request:
     paths:
       - .github/workflows/ci-extended.yml
       - apps/desktop/scripts/run-smokes.mjs
       - apps/desktop/scripts/smoke-quiet-check.mjs
       - scripts/convex-compat/**
-  schedule:
-    - cron: "17 6 * * *"
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: Exact release commit to prove
+        required: true
+        type: string
 
 permissions:
   contents: read
 
-# A push to main gets its own group per commit: it starts at once instead of
-# queueing behind the previous commit's run, and is never cancelled or
-# replaced, so every main commit gets a result the release guard can read.
-# Bursts spend more runner slots in exchange for no cross-commit queue. A
-# PR's newer push still supersedes its older run; schedule and dispatch keep
-# one run per ref.
+# Never supersede release proof. Only a lane-definition PR's newer push may
+# cancel its older run. The prefix separates this group from the caller's.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  group: extended-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -70,6 +51,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
       - name: Setup Vite+
@@ -114,9 +96,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-          # acceptance.json must name the PR head, not GitHub's synthetic merge.
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Setup Vite+
         uses: ./.github/actions/setup-toolchain
@@ -201,9 +182,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-          # acceptance.json must name the PR head, not GitHub's synthetic merge.
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Setup Vite+
         uses: ./.github/actions/setup-toolchain
@@ -303,6 +283,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
       - name: Setup Vite+
@@ -327,8 +308,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Setup Vite+
         uses: ./.github/actions/setup-toolchain
@@ -390,6 +371,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
       - name: Setup Vite+
@@ -457,6 +439,7 @@ jobs:
         with:
           # Tags: which build shipped is chosen from them.
           fetch-depth: 0
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
       # Bootstrap this commit's backend; prepare installs the tag's own frozen
@@ -542,8 +525,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Check the packaging is on this tree
         id: present
@@ -600,8 +583,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Check the matrix is on this tree
         id: present
@@ -664,8 +647,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Setup Vite+
         uses: ./.github/actions/setup-toolchain
