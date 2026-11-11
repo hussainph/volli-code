@@ -438,6 +438,7 @@ it("keeps session acceptance and recorded titles distinct from completion", () =
   expect(
     presentTranscriptTool(call("session_send", { session: "alias" }, "unknown"), {
       sessionNames: new Map([["alias", "Audit"]]),
+      sessionIds: new Map(),
     })?.sessionId,
   ).toBeNull();
 });
