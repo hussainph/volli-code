@@ -867,7 +867,7 @@ test("runner assets are verified and attested, and gate every publishing path", 
   const assets = workflow.jobs["runner-assets"];
   assert.deepEqual(assets.needs, ["hostd-ref", "runner"]);
   const nodeSetup = assets.steps.find((step) => step.name === "Setup pinned Node");
-  assert.equal(nodeSetup.uses, "actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38");
+  assert.equal(nodeSetup.uses, "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1");
   assert.deepEqual(nodeSetup.with, {
     "node-version-file": ".nvmrc",
     "package-manager-cache": false,

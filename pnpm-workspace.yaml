@@ -34,7 +34,7 @@ allowBuilds:
   workerd: true
 
 catalog:
-  "@types/node": ^26.6.5
+  "@types/node": ^26.6.6
   "@types/react": ^19.3.0
   "@types/react-dom": ^19.3.0
   typescript: ~7.0.2
@@ -94,7 +94,7 @@ overrides:
   # VC-963: sandbox-runtime imports zod/v3, an API also shipped by Zod 4. Upgrade
   # its 3.x package without changing that API; GHSA-mrhx-c7xc-m3w5.
   # Remove once the parent declares a patched Zod package itself.
-  "@anthropic-ai/sandbox-runtime@0.0.79>zod": "4.6.7"
+  "@anthropic-ai/sandbox-runtime@0.0.81>zod": "4.6.7"
   # VC-963: Miniflare's exact pin cannot float to the content-encoding/EventSource/
   # SRI fixes (GHSA-xjj6-f33q-929c, GHSA-4qv8-2p9j-2685, GHSA-f72v-6w45-q472).
   # Remove once the pinned Miniflare declares undici >=7.30.1.
@@ -117,12 +117,6 @@ overrides:
   # re-selecting a vulnerable copy. Scoped to the vulnerable range only.
   # Remove once no parent in the tree resolves below 1.2.2 without it.
   "source-map-js@<1.2.2": "1.2.2"
-  # VC-793 / GHSA-wq5f-xc86-pv6w: miniflare 5.20260926.1-alpha (wrangler's
-  # local runtime, a docs/website devDependency) pins vulnerable sharp 0.35.4
-  # exactly. Patch-level only, scoped to that parent; the sites and the
-  # desktop app already declare 0.35.5 themselves. Remove when a wrangler
-  # bump brings a miniflare that declares >=0.35.5.
-  "miniflare@5.20260926.1-alpha>sharp": "0.35.5"
   # One Radix dismissable layer in the renderer. cmdk (the ⌘K and ⌘P overlays)
   # declares @radix-ui/react-dialog ^1.1.6 and resolved its own older copy
   # beside radix-ui's. Each copy keeps its own layer stack and saves the body's
@@ -141,11 +135,11 @@ overrides:
   #
   # 4.4.3 was the deliberate retake (VC-211, taking over Dependabot #418).
   # The desktop app's shiki/@shikijs/{langs,monaco,themes} pins now move to
-  # 4.5.0 together with this override. The override stays rather than being
+  # 4.6.0 together with this override. The override stays rather than being
   # deleted — without it the next shiki 4.x release re-splits the
   # tree exactly as before, because the app pins exactly while the transitive
   # ranges float. Keep this equal to the desktop pins; never let them drift.
-  "shiki@^4": "4.5.0"
+  "shiki@^4": "4.6.0"
 
 packageExtensions:
   vite-plus@*:

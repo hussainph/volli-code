@@ -5,8 +5,9 @@
  * `spanExporterFactory` swaps only the transport: the tracer provider, the batch
  * processor, the id generator and the span construction under test are the ones
  * that run in production. What is proven here is what the collector would
- * otherwise have to be running to show — trace grouping, timing, status, and
- * that a delivery failure is reported once and never raised.
+ * otherwise have to be running to show — trace grouping, timing, status, the
+ * content of the two request bodies themselves, and that a delivery failure is
+ * reported once and never raised.
  */
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { createServer } from "node:http";
@@ -70,14 +71,21 @@ afterEach(async () => {
 
 async function localCollector(): Promise<{
   endpoint: string;
-  requests: string[];
+  /** The paths hit, in arrival order. */
+  urls: string[];
+  /** Each request's body, parsed as JSON at the boundary: non-JSON fails here. */
+  bodies: Map<string, unknown>;
   close: () => Promise<void>;
 }> {
-  const requests: string[] = [];
+  const urls: string[] = [];
+  const bodies = new Map<string, unknown>();
   const server = createServer((request, response) => {
-    request.resume();
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk) => chunks.push(chunk));
     request.on("end", () => {
-      requests.push(request.url ?? "");
+      const url = request.url ?? "";
+      urls.push(url);
+      bodies.set(url, JSON.parse(Buffer.concat(chunks).toString("utf8")));
       response.writeHead(200);
       response.end();
     });
@@ -88,7 +96,8 @@ async function localCollector(): Promise<{
     throw new Error("Collector did not bind TCP.");
   return {
     endpoint: `http://127.0.0.1:${address.port}`,
-    requests,
+    urls,
+    bodies,
     close: () =>
       new Promise((resolve, reject) =>
         server.close((error) => (error ? reject(error) : resolve())),
@@ -132,7 +141,7 @@ describe("OtlpObservabilityExporter", () => {
     expect(urls).toEqual(["http://localhost:4318/v1/traces", "http://localhost:4318/v1/metrics"]);
   });
 
-  it("uses a fixed, explicit transport for both signal paths", async () => {
+  it("uses a fixed, explicit transport for both signal paths and ships recognizable OTLP payloads", async () => {
     const collector = await localCollector();
     const exporter = new OtlpObservabilityExporter({
       endpoint: collector.endpoint,
@@ -144,7 +153,64 @@ describe("OtlpObservabilityExporter", () => {
         at({ kind: "tool", activityKind: "read-file", outcome: "completed", durationMs: 10 }, 1000),
       ]);
       await exporter.flush(2000);
-      expect(collector.requests.toSorted()).toEqual(["/v1/metrics", "/v1/traces"]);
+      expect(collector.urls.toSorted()).toEqual(["/v1/metrics", "/v1/traces"]);
+
+      // The routes only prove delivery; the bodies prove what rode on them.
+      // Matchers pin mapped content a collector could query — one span, one
+      // data point — never the whole envelope.
+      expect(collector.bodies.get("/v1/traces")).toEqual(
+        expect.objectContaining({
+          resourceSpans: [
+            expect.objectContaining({
+              resource: expect.objectContaining({
+                attributes: expect.arrayContaining([
+                  { key: "service.name", value: { stringValue: "volli" } },
+                ]),
+              }),
+              scopeSpans: [
+                expect.objectContaining({
+                  spans: [
+                    expect.objectContaining({
+                      name: "execute_tool read-file",
+                      attributes: expect.arrayContaining([
+                        { key: "gen_ai.tool.name", value: { stringValue: "read-file" } },
+                      ]),
+                    }),
+                  ],
+                }),
+              ],
+            }),
+          ],
+        }),
+      );
+      expect(collector.bodies.get("/v1/metrics")).toEqual(
+        expect.objectContaining({
+          resourceMetrics: [
+            expect.objectContaining({
+              scopeMetrics: [
+                expect.objectContaining({
+                  metrics: expect.arrayContaining([
+                    expect.objectContaining({
+                      name: "volli.agent.tool.call.count",
+                      sum: expect.objectContaining({
+                        dataPoints: expect.arrayContaining([
+                          expect.objectContaining({
+                            attributes: expect.arrayContaining([
+                              { key: "gen_ai.tool.name", value: { stringValue: "read-file" } },
+                              { key: "volli.tool.outcome", value: { stringValue: "completed" } },
+                            ]),
+                            asDouble: 1, // this SDK's counter encoding on the wire
+                          }),
+                        ]),
+                      }),
+                    }),
+                  ]),
+                }),
+              ],
+            }),
+          ],
+        }),
+      );
     } finally {
       await exporter.shutdown(1000);
       await collector.close();
