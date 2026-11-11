@@ -577,17 +577,17 @@ describe("a sweep over the real inspector whose lsof never answers (VC-833)", ()
   });
 });
 
-describe("ParkController.breathe (via sweep)", () => {
-  /** Registers a hidden session, auto-parks it, and clears signal/push history. */
-  async function autoParked(config: ParkConfig = ENABLED_CONFIG) {
-    const h = harness(config);
-    const session = h.register("s");
-    await h.controller.park("s", { manual: false });
-    h.signal.mockClear();
-    h.pushParkState.mockClear();
-    return { ...h, session };
-  }
+/** Registers a hidden session, auto-parks it, and clears signal/push history. */
+async function autoParked(config: ParkConfig = ENABLED_CONFIG) {
+  const h = harness(config);
+  const session = h.register("s");
+  await h.controller.park("s", { manual: false });
+  h.signal.mockClear();
+  h.pushParkState.mockClear();
+  return { ...h, session };
+}
 
+describe("ParkController.breathe (via sweep)", () => {
   it("re-freezes a session whose breathe window stays quiet", async () => {
     const { controller, session, contCalls, stopCalls } = await autoParked();
     await controller.sweep(idleNow());

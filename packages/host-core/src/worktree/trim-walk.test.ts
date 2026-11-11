@@ -76,6 +76,33 @@ describe("trim walk — off the calling thread", () => {
     expect(existsSync(join(root, ".env"))).toBe(true);
   });
 
+  it("deduplicates overlapping candidates through the worker's serialized helpers", async () => {
+    const root = mkdtempSync(join(tmpdir(), "volli-trim-walk-overlap-"));
+    roots.push(root);
+    mkdirSync(join(root, "certs"));
+    writeFileSync(join(root, "certs", "local.pem"), "1234");
+    writeFileSync(join(root, "cache.bin"), "12");
+
+    for (const dryRun of [true, false]) {
+      const answer = await runTrimWalk({
+        worktreePath: root,
+        candidates: ["certs/", "certs/local.pem", "cache.bin"],
+        patterns: [],
+        dryRun,
+      });
+      expect(answer).toEqual({
+        ok: true,
+        removed: [
+          { path: "certs/", bytes: 4 },
+          { path: "cache.bin", bytes: 2 },
+        ],
+        kept: [],
+      });
+      expect(existsSync(join(root, "certs", "local.pem"))).toBe(dryRun);
+      expect(existsSync(join(root, "cache.bin"))).toBe(dryRun);
+    }
+  });
+
   it("refuses, rather than walking here, when the worker cannot read the worktree", async () => {
     const missing = join(tmpdir(), "volli-trim-walk-missing", String(process.pid));
     const answer = await runTrimWalk({

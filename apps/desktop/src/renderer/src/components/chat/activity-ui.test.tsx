@@ -253,11 +253,10 @@ function thinkingPart(key: string, text: string, streaming = false): BundleRow {
     part: { type: "reasoning", text, state: streaming ? "streaming" : "done" },
   };
 }
+const render = (rows: readonly BundleRow[], progressEnabled = true) =>
+  act(() => root!.render(<ActivityBundle rows={rows} progressEnabled={progressEnabled} />));
 
 describe("single Thinking row", () => {
-  const render = (rows: readonly BundleRow[], progressEnabled = true) =>
-    act(() => root!.render(<ActivityBundle rows={rows} progressEnabled={progressEnabled} />));
-
   it("updates one stable row and keeps all original summaries and reasoning inspectable", () => {
     const first = thinkingPart("first", "**Checking contrast**\n\nOriginal reasoning.");
     render([first]);
@@ -329,6 +328,12 @@ describe("single Thinking row", () => {
     );
   });
 });
+const renderToolPart = (part: DynamicToolUIPart) => {
+  act(() => root!.render(<ActivityBundle rows={[{ kind: "tool", part, key: "stable-call" }]} />));
+};
+
+const header = () =>
+  container!.querySelector<HTMLButtonElement>('[data-slot="activity-bundle-header"]')!;
 
 describe("reader-owned bundle disclosure", () => {
   const running: DynamicToolUIPart = {
@@ -344,17 +349,12 @@ describe("reader-owned bundle disclosure", () => {
     state: "output-denied",
     approval: { id: "denied-call", approved: false },
   };
-  const header = () =>
-    container!.querySelector<HTMLButtonElement>('[data-slot="activity-bundle-header"]')!;
-  const render = (part: DynamicToolUIPart) => {
-    act(() => root!.render(<ActivityBundle rows={[{ kind: "tool", part, key: "stable-call" }]} />));
-  };
 
   it.each([row, failed, denied])(
     "starts collapsed for $state and preserves the original part",
     (part) => {
       const original = JSON.stringify(part);
-      render(part);
+      renderToolPart(part);
       expect(header().getAttribute("aria-expanded")).toBe("false");
       expect(container!.textContent).not.toContain("boom");
       if (part.state === "output-error") expect(header().textContent).toContain("1 failed");
@@ -364,10 +364,10 @@ describe("reader-owned bundle disclosure", () => {
   );
 
   it("keeps closed on failure arrival without taking focus", () => {
-    render(running);
+    renderToolPart(running);
     header().focus();
     const focused = document.activeElement;
-    render(failed);
+    renderToolPart(failed);
     expect(header().getAttribute("aria-expanded")).toBe("false");
     expect(header().textContent).toContain("1 failed");
     expect(document.activeElement).toBe(focused);
@@ -375,10 +375,10 @@ describe("reader-owned bundle disclosure", () => {
   });
 
   it("keeps an explicit open choice through failure and a closed choice through recovery", () => {
-    render(running);
+    renderToolPart(running);
     act(() => header().click());
     expect(header().getAttribute("aria-expanded")).toBe("true");
-    render(failed);
+    renderToolPart(failed);
     expect(header().getAttribute("aria-expanded")).toBe("true");
     // The individual call still starts collapsed, even in an explicitly open bundle.
     expect(container!.textContent).not.toContain("boom");
@@ -388,7 +388,7 @@ describe("reader-owned bundle disclosure", () => {
     act(() => callDisclosure.click());
     expect(container!.textContent).toContain("boom");
     act(() => header().click());
-    render(row);
+    renderToolPart(row);
     expect(header().getAttribute("aria-expanded")).toBe("false");
     expect(container!.textContent).not.toContain("export {};");
   });
@@ -888,34 +888,38 @@ describe("ToolRow copy control", () => {
   });
 });
 
-describe("v2 group and live command rows", () => {
-  const live = (output?: string): Extract<DynamicToolUIPart, { state: "output-available" }> => ({
-    ...bashRow,
-    toolCallId: "streaming-command",
-    state: "output-available",
-    preliminary: true,
-    output: { content: [{ type: "text", text: output ?? "" }] },
-    toolMetadata: {
-      [ACTIVITY_METADATA_KEY]: {
-        ...descriptor,
-        kind: "run-command",
-        nativeToolName: "bash",
-        subject: { label: "pnpm build", path: null, lineRange: null },
-        startedAt: Date.now() - 2000,
-        endedAt: null,
-      },
-    } as DynamicToolUIPart["toolMetadata"],
-  });
+const liveCommandPart = (
+  output?: string,
+): Extract<DynamicToolUIPart, { state: "output-available" }> => ({
+  ...bashRow,
+  toolCallId: "streaming-command",
+  state: "output-available",
+  preliminary: true,
+  output: { content: [{ type: "text", text: output ?? "" }] },
+  toolMetadata: {
+    [ACTIVITY_METADATA_KEY]: {
+      ...descriptor,
+      kind: "run-command",
+      nativeToolName: "bash",
+      subject: { label: "pnpm build", path: null, lineRange: null },
+      startedAt: Date.now() - 2000,
+      endedAt: null,
+    },
+  } as DynamicToolUIPart["toolMetadata"],
+});
 
+const renderLiveToolRow = (next: DynamicToolUIPart) =>
+  act(() => root!.render(<ToolRow part={next} />));
+
+describe("v2 group and live command rows", () => {
   it("opens on first output, shows a bounded tail and a ticking sans timer, and respects a reader close", () => {
     vi.useFakeTimers();
     try {
-      const part = live();
-      const render = (next: DynamicToolUIPart) => act(() => root!.render(<ToolRow part={next} />));
-      render(part);
+      const part = liveCommandPart();
+      renderLiveToolRow(part);
       expect(container!.querySelector('[aria-label="Show details"]')).not.toBeNull();
       const output = Array.from({ length: 40 }, (_, index) => `output-line-${index}`).join("\n");
-      render({ ...part, output: { content: [{ type: "text", text: output }] } });
+      renderLiveToolRow({ ...part, output: { content: [{ type: "text", text: output }] } });
       expect(container!.querySelector('[aria-label="Hide details"]')).not.toBeNull();
       expect(container!.textContent).toContain("output-line-39");
       expect(container!.textContent).not.toContain("output-line-0");
@@ -927,10 +931,10 @@ describe("v2 group and live command rows", () => {
       act(() =>
         container!.querySelector<HTMLButtonElement>('[aria-label="Hide details"]')!.click(),
       );
-      render({ ...part, output: { content: [{ type: "text", text: "new output" }] } });
+      renderLiveToolRow({ ...part, output: { content: [{ type: "text", text: "new output" }] } });
       expect(container!.querySelector('[aria-label="Show details"]')).not.toBeNull();
       expect(container!.textContent).not.toContain("new output");
-      render({ ...bashRow, toolCallId: part.toolCallId });
+      renderLiveToolRow({ ...bashRow, toolCallId: part.toolCallId });
       expect(container!.textContent).toContain("Ran");
       expect(container!.querySelector('[aria-label="Show details"]')).not.toBeNull();
     } finally {
@@ -939,7 +943,7 @@ describe("v2 group and live command rows", () => {
   });
 
   it("honours an early reader choice and keeps arriving failures behind the disclosure", () => {
-    const part = live();
+    const part = liveCommandPart();
     act(() => root!.render(<ToolRow part={part} />));
     act(() => container!.querySelector<HTMLButtonElement>('[aria-label="Show details"]')!.click());
     act(() => container!.querySelector<HTMLButtonElement>('[aria-label="Hide details"]')!.click());
@@ -964,14 +968,14 @@ describe("v2 group and live command rows", () => {
   it("keeps gist on opening, adds a guide rail and moves the breakdown into the list", () => {
     const rows: BundleRow[] = [{ kind: "tool", key: "read", part: row }];
     act(() => root!.render(<ActivityBundle rows={rows} />));
-    const header = container!.querySelector<HTMLButtonElement>(
+    const bundleHeader = container!.querySelector<HTMLButtonElement>(
       '[data-slot="activity-bundle-header"]',
     )!;
-    const gist = header.textContent;
+    const gist = bundleHeader.textContent;
     expect(gist).toContain("Explored 1 file");
     expect(container!.querySelector(".transcript-work-rail")).toBeNull();
-    act(() => header.click());
-    expect(header.textContent).toBe(gist);
+    act(() => bundleHeader.click());
+    expect(bundleHeader.textContent).toBe(gist);
     expect(container!.querySelector(".transcript-work-rail")).not.toBeNull();
     expect(
       container!.querySelector('[data-slot="activity-bundle-viewport"]')!.textContent,
@@ -1005,8 +1009,8 @@ it("aggregates raw and envelope failures once in the collapsed gist", () => {
       />,
     ),
   );
-  const header = container!.querySelector('[data-slot="activity-bundle-header"]')!;
-  expect(header.textContent).toBe("2 failed");
+  const failureHeader = container!.querySelector('[data-slot="activity-bundle-header"]')!;
+  expect(failureHeader.textContent).toBe("2 failed");
 });
 
 it("keeps paused MCP, code and web rows static without turning their group into a success", () => {
@@ -1024,12 +1028,12 @@ it("keeps paused MCP, code and web rows static without turning their group into 
     }),
   );
   act(() => root!.render(<ActivityBundle rows={rows} progressEnabled={false} />));
-  const header = container!.querySelector<HTMLButtonElement>(
+  const pausedHeader = container!.querySelector<HTMLButtonElement>(
     '[data-slot="activity-bundle-header"]',
   )!;
   const pending = renderToStaticMarkup(<ActivityBundle rows={rows} progressEnabled={false} />);
   expect(pending).not.toContain("animate-spin");
-  act(() => header.click());
+  act(() => pausedHeader.click());
   expect(container!.querySelector(".chat-shimmer")).toBeNull();
   expect(container!.querySelector(".animate-spin")).toBeNull();
   expect(container!.textContent).toContain("Using");

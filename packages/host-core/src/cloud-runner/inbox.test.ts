@@ -95,6 +95,18 @@ function manualTimers() {
   };
 }
 
+const sameSessionJob = (id: string) => {
+  const claimed = job(id);
+  (claimed.job as { sessionId: string | null }).sessionId = "s1";
+  return claimed;
+};
+
+const sessionJob = (id: string, sessionId: string | null) => {
+  const claimed = job(id);
+  (claimed.job as { sessionId: string | null }).sessionId = sessionId;
+  return claimed;
+};
+
 describe("the inbox worker", () => {
   it("claims, runs the registered executor, journals the outcome before reporting it, then forgets it", async () => {
     const inbox = fakeInbox([[job("j1")]]);
@@ -392,6 +404,30 @@ describe("the inbox worker", () => {
     await expect(worker.renewInFlight()).resolves.toBeUndefined();
   });
 
+  it("does not execute a job twice when a later claim repeats an in-flight job", async () => {
+    const inbox = fakeInbox([[job("j1")], [job("j1")]]);
+    const pending = Promise.withResolvers<JobOutcome>();
+    const execute = vi.fn(() => pending.promise);
+    const worker = createInboxWorker({
+      backend: inbox.backend,
+      journal: memoryJournal().store,
+      bootId: BOOT,
+      ...manualTimers(),
+    });
+    worker.register("workingCopy.refresh", execute);
+    await worker.start();
+    expect(worker.running).toBe(1);
+    await worker.claimNow();
+    expect(inbox.backend.claim).toHaveBeenCalledTimes(2);
+    expect(execute).toHaveBeenCalledOnce();
+    expect(worker.running).toBe(1);
+    pending.resolve(DONE);
+    await flush();
+    expect(inbox.completes).toEqual([{ jobId: "j1", outcome: DONE, attempt: 1 }]);
+    expect(worker.running).toBe(0);
+    worker.stop();
+  });
+
   it("claims only what it has room for, one claim at a time, and not while stopped or full", async () => {
     const inbox = fakeInbox();
     let holds: ((o: JobOutcome) => void)[] = [];
@@ -570,13 +606,13 @@ describe("the inbox worker", () => {
   });
 
   it("runs one Session's jobs one at a time in claim order, other jobs alongside", async () => {
-    const session = (id: string, sessionId: string | null) => {
-      const claimed = job(id);
-      (claimed.job as { sessionId: string | null }).sessionId = sessionId;
-      return claimed;
-    };
     const inbox = fakeInbox([
-      [session("a1", "s1"), session("a2", "s1"), session("b1", "s2"), session("x", null)],
+      [
+        sessionJob("a1", "s1"),
+        sessionJob("a2", "s1"),
+        sessionJob("b1", "s2"),
+        sessionJob("x", null),
+      ],
     ]);
     const timers = manualTimers();
     const worker = createInboxWorker({
@@ -610,12 +646,7 @@ describe("the inbox worker", () => {
   });
 
   it("a job whose lease is taken away while it waits in its lane does not run", async () => {
-    const session = (id: string) => {
-      const claimed = job(id);
-      (claimed.job as { sessionId: string | null }).sessionId = "s1";
-      return claimed;
-    };
-    const inbox = fakeInbox([[session("a1"), session("a2")]]);
+    const inbox = fakeInbox([[sameSessionJob("a1"), sameSessionJob("a2")]]);
     const worker = createInboxWorker({
       backend: inbox.backend,
       journal: memoryJournal().store,

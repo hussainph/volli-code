@@ -66,6 +66,11 @@ function entry(
   };
 }
 
+const write = (state: SessionFollowUpState) => {
+  state.commands.queued = { signature: "sig", result: queuedResult("queued") };
+  state.revision++;
+};
+
 export function describeSessionFollowUpLedgerContract(
   adapter: string,
   open: SessionFollowUpLedgerContractFactory,
@@ -229,10 +234,6 @@ export function describeSessionFollowUpLedgerContract(
 
     it("keeps queue identities Session-scoped and never leaks them from failed or read-only work", async () => {
       const { followUps } = await fresh("session-identity-a", "session-identity-b");
-      const write = (state: SessionFollowUpState) => {
-        state.commands.queued = { signature: "sig", result: queuedResult("queued") };
-        state.revision++;
-      };
       await expect(
         followUps.transaction("session-identity-a", (state) => {
           write(state);

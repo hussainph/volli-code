@@ -1094,284 +1094,284 @@ function subscriptionOverflowError(message: string): HostProcedureError {
   return new HostProcedureError("subscription-overflow", message);
 }
 
+const subscription = (key: "session.subscribe" | "session.subscribeQueue") =>
+  workspaceProcedure(key, sessionSubscriptionSchema, sessionResource).subscription(
+    async function* ({ ctx, input, signal }) {
+      if (signal?.aborted) return;
+      const afterSequence = maxCursor(input.afterSequence, input.lastEventId);
+      // A bounded door (the WebSocket, D9) refuses a resume it would have
+      // to replay too much for, before the source is opened at all.
+      const bounds = ctx.replayBounds;
+      if (
+        bounds !== undefined &&
+        replayExceedsEvents(
+          bounds,
+          afterSequence,
+          (
+            await hostAnswer(() =>
+              ctx.handlers["session.projection"]({ sessionId: input.sessionId }, ctx.call),
+            )
+          ).throughSequence,
+        )
+      ) {
+        throw resnapshotRequired();
+      }
+      const replay = bounds === undefined ? null : new ReplayMeter(bounds);
+      const frameBound = ctx.maxResponseBytes;
+      // Bounded in bytes too on a bounded door: twice the replay bound holds a
+      // whole admitted replay and the live frames that arrive behind it.
+      const queue = new AsyncQueue<RendererSessionStreamEmission>(
+        SESSION_STREAM_QUEUE_CAPACITY,
+        bounds === undefined ? undefined : 2 * bounds.bytes,
+      );
+      const sourceFailure: { current: { error: unknown } | null } = { current: null };
+      // What this stream ends with instead of a frame it refused to stage:
+      // resnapshot past the replay bounds, response-too-large past the frame
+      // bound. Set once; the source is cancelled with it.
+      const refused: { current: HostProcedureError | null } = { current: null };
+      // Cancels the runtime's side even while its subscribe call is still
+      // replaying: a refused replay is not read any further.
+      const source = new AbortController();
+      const abort = (): void => {
+        source.abort();
+        queue.close();
+      };
+      signal?.addEventListener("abort", abort, { once: true });
+      // A subscription's handler runs inside the stream, past the policy
+      // middleware, so its "unavailable" is mapped here.
+      const unsubscribe = await hostAnswer(() =>
+        ctx.handlers[key](
+          {
+            sessionId: input.sessionId,
+            afterSequence,
+            ...(replay === null ? {} : { signal: source.signal }),
+          },
+          ctx.call,
+          {
+            // Live emissions pass through untouched: `rendererFrame` exists to
+            // keep runtime identity and recovery locators behind the server
+            // boundary, and no transient arm carries either. Asked as the
+            // negation of the durable arm so a third transient arm needs no
+            // edit here.
+            emit: (emission) => {
+              if (refused.current !== null) return;
+              // The old network operation's closed output cannot gain a new
+              // union arm. Queue-aware peers opt into the new feature's path;
+              // the private desktop IPC stream keeps its existing vocabulary.
+              if (
+                key === "session.subscribe" &&
+                ctx.transport !== "electron-ipc" &&
+                "kind" in emission &&
+                emission.kind === "queue"
+              )
+                return;
+              const durable = isSessionStreamFrame(emission);
+              const sent = durable ? rendererFrame(emission) : emission;
+              if (replay === null) {
+                queue.push(sent);
+                return;
+              }
+              // Judged before it is staged: nothing past a bound is ever held.
+              const bytes = jsonByteLength(sent);
+              if (frameBound !== undefined && bytes > frameBound) {
+                refused.current = new HostProcedureError(
+                  "response-too-large",
+                  SESSION_FRAME_TOO_LARGE_MESSAGE,
+                );
+              } else if (!replay.admit(bytes, durable)) {
+                refused.current = resnapshotRequired();
+              } else {
+                queue.push(sent, bytes);
+                return;
+              }
+              // A refused replay sends nothing of itself; a live refusal still
+              // drains what came before it.
+              queue.close(replay.replaying);
+              source.abort();
+            },
+            // The runtime's drain died behind this subscription. Ended like an
+            // overflow — buffered contiguous frames still drain, then the
+            // stream closes with an error instead of a clean `done`, because a
+            // clean end here is the one thing the client must never see: it
+            // reads as a stream with nothing left to say, not one that lost
+            // `turn.completed` mid-turn.
+            fail: (error) => {
+              sourceFailure.current = { error };
+              queue.close(false);
+            },
+          },
+        ),
+      );
+      // The runtime replays history before its subscribe call returns, so
+      // a refusal so far was a replay's: nothing of it is sent.
+      replay?.end();
+      if (refused.current !== null) {
+        signal?.removeEventListener("abort", abort);
+        unsubscribe();
+        throw refused.current;
+      }
+      if (signal?.aborted) {
+        unsubscribe();
+        return;
+      }
+      try {
+        // A transient emission is tracked by the durable sequence it was
+        // emitted beside, never by a suffixed id: `sseCursor` rejects one on
+        // resubscribe, and duplicate ids are safe on both transports. A
+        // reconnect from an overlay id therefore replays durable history and
+        // is served a fresh baseline.
+        for await (const emission of queue) {
+          yield isRendererStreamTransient(emission)
+            ? tracked(String(emission.throughSequence), emission)
+            : tracked(String(emission.sequence), emission);
+        }
+        // The loop ends the same way on a clean close and on an overflow, so
+        // this throw is the only thing that tells them apart downstream. It
+        // sits inside the `try` on purpose: `finally` still runs on the way
+        // out, so `unsubscribe()` fires before the error leaves the
+        // generator and no runtime listener outlives the stream it fed.
+        // A consumer that tears the iterator down instead resumes at the
+        // `yield` with a return completion and never reaches this line —
+        // an overflow the client already walked away from stays a diagnostic.
+        // A frame refused after the replay ended the stream, once what
+        // came before it drained.
+        if (refused.current !== null) throw refused.current;
+        if (queue.overflowed) throw subscriptionOverflowError(SESSION_OVERFLOW_MESSAGE);
+        // A source failure ends the same way an overflow does, and for the
+        // same reason: whatever this stream still owed its consumer is now
+        // only in the ledger, and only an error makes the client go back
+        // for it.
+        if (sourceFailure.current !== null) {
+          throw new HostProcedureError(
+            "subscription-source-failed",
+            SESSION_SOURCE_FAILURE_MESSAGE,
+            sourceFailure.current.error,
+          );
+        }
+      } finally {
+        signal?.removeEventListener("abort", abort);
+        unsubscribe();
+        if (queue.overflowed) {
+          ctx.diagnostics.record({
+            procedure: key,
+            phase: "error",
+            transport: ctx.transport ?? "unknown",
+            code: SUBSCRIPTION_OVERFLOW_CODE,
+            message: SESSION_OVERFLOW_MESSAGE,
+          });
+        }
+        if (sourceFailure.current !== null) {
+          ctx.diagnostics.record({
+            procedure: key,
+            phase: "error",
+            transport: ctx.transport ?? "unknown",
+            code: SUBSCRIPTION_SOURCE_FAILURE_CODE,
+            message: SESSION_SOURCE_FAILURE_MESSAGE,
+          });
+        }
+      }
+    },
+  );
+
+// One schema/handler projection, two independently frozen wire features.
+// hostModels admission is stricter; its domain command remains modelAccess.
+function modelAccessProcedures(namespace: "modelAccess" | "hostModels") {
+  return {
+    inspect: hostProcedure(`${namespace}.inspect`)
+      .input(z.object({ refresh: z.boolean().optional() }))
+      .output(modelAccessSnapshotSchema)
+      .query(async ({ ctx, input }) =>
+        modelAccessSnapshotSchema.parse(await ctx.handlers["modelAccess.inspect"](input, ctx.call)),
+      ),
+    defaults: hostProcedure(`${namespace}.defaults`)
+      .output(modelAccessDefaultsSchema)
+      .query(async ({ ctx }) =>
+        modelAccessDefaultsSchema.parse(
+          await ctx.handlers["modelAccess.defaults"](undefined, ctx.call),
+        ),
+      ),
+    setDefault: hostProcedure(`${namespace}.setDefault`)
+      .input(
+        z
+          .object({ purpose: modelPurposeSchema, selection: modelSelectionSchema.nullable() })
+          // Clearing ticket/utility means "use the Board default"; clearing
+          // global would leave every purpose resolving to nothing, which is a
+          // state the UI never offers and this edge refuses to mint.
+          .refine(
+            (input) => input.purpose !== "global" || input.selection !== null,
+            "The Board default cannot be cleared — choose a model instead",
+          ),
+      )
+      .output(modelAccessDefaultsSchema)
+      .mutation(async ({ ctx, input }) =>
+        modelAccessDefaultsSchema.parse(
+          await ctx.handlers["modelAccess.setDefault"](input, ctx.call),
+        ),
+      ),
+    hiddenModels: hostProcedure(`${namespace}.hiddenModels`)
+      .output(hiddenModelsSchema)
+      .query(async ({ ctx }) =>
+        hiddenModelsSchema.parse(
+          await ctx.handlers["modelAccess.hiddenModels"](undefined, ctx.call),
+        ),
+      ),
+    setHiddenModels: hostProcedure(`${namespace}.setHiddenModels`)
+      .input(hiddenModelsSchema)
+      .output(hiddenModelsSchema)
+      .mutation(async ({ ctx, input }) => {
+        await ctx.handlers["modelAccess.setHiddenModels"](input, ctx.call);
+        return input;
+      }),
+    compactionPolicy: hostProcedure(`${namespace}.compactionPolicy`)
+      .output(compactionPolicySchema)
+      .query(async ({ ctx }) =>
+        compactionPolicySchema.parse(
+          await ctx.handlers["modelAccess.compactionPolicy"](undefined, ctx.call),
+        ),
+      ),
+    setCompactionPolicy: hostProcedure(`${namespace}.setCompactionPolicy`)
+      .input(compactionPolicySchema)
+      .output(compactionPolicySchema)
+      .mutation(async ({ ctx, input }) =>
+        compactionPolicySchema.parse(
+          await ctx.handlers["modelAccess.setCompactionPolicy"](input, ctx.call),
+        ),
+      ),
+    codeModePolicy: hostProcedure(`${namespace}.codeModePolicy`)
+      .output(codeModePolicySchema)
+      .query(async ({ ctx }) =>
+        codeModePolicySchema.parse(
+          await ctx.handlers["modelAccess.codeModePolicy"](undefined, ctx.call),
+        ),
+      ),
+    setCodeModePolicy: hostProcedure(`${namespace}.setCodeModePolicy`)
+      .input(codeModePolicySchema)
+      .output(codeModePolicySchema)
+      .mutation(async ({ ctx, input }) =>
+        codeModePolicySchema.parse(
+          await ctx.handlers["modelAccess.setCodeModePolicy"](input, ctx.call),
+        ),
+      ),
+    pickerView: hostProcedure(`${namespace}.pickerView`)
+      .output(modelPickerViewSchema)
+      .query(async ({ ctx }) =>
+        modelPickerViewSchema.parse(
+          await ctx.handlers["modelAccess.pickerView"](undefined, ctx.call),
+        ),
+      ),
+    setPickerView: hostProcedure(`${namespace}.setPickerView`)
+      .input(modelPickerViewSchema)
+      .output(modelPickerViewSchema)
+      .mutation(async ({ ctx, input }) =>
+        modelPickerViewSchema.parse(
+          await ctx.handlers["modelAccess.setPickerView"](input, ctx.call),
+        ),
+      ),
+  };
+}
+
 /** Creates the transport-independent Session API, currently hosted over Electron IPC. */
 export function createSessionRouter() {
-  const subscription = (key: "session.subscribe" | "session.subscribeQueue") =>
-    workspaceProcedure(key, sessionSubscriptionSchema, sessionResource).subscription(
-      async function* ({ ctx, input, signal }) {
-        if (signal?.aborted) return;
-        const afterSequence = maxCursor(input.afterSequence, input.lastEventId);
-        // A bounded door (the WebSocket, D9) refuses a resume it would have
-        // to replay too much for, before the source is opened at all.
-        const bounds = ctx.replayBounds;
-        if (
-          bounds !== undefined &&
-          replayExceedsEvents(
-            bounds,
-            afterSequence,
-            (
-              await hostAnswer(() =>
-                ctx.handlers["session.projection"]({ sessionId: input.sessionId }, ctx.call),
-              )
-            ).throughSequence,
-          )
-        ) {
-          throw resnapshotRequired();
-        }
-        const replay = bounds === undefined ? null : new ReplayMeter(bounds);
-        const frameBound = ctx.maxResponseBytes;
-        // Bounded in bytes too on a bounded door: twice the replay bound holds a
-        // whole admitted replay and the live frames that arrive behind it.
-        const queue = new AsyncQueue<RendererSessionStreamEmission>(
-          SESSION_STREAM_QUEUE_CAPACITY,
-          bounds === undefined ? undefined : 2 * bounds.bytes,
-        );
-        const sourceFailure: { current: { error: unknown } | null } = { current: null };
-        // What this stream ends with instead of a frame it refused to stage:
-        // resnapshot past the replay bounds, response-too-large past the frame
-        // bound. Set once; the source is cancelled with it.
-        const refused: { current: HostProcedureError | null } = { current: null };
-        // Cancels the runtime's side even while its subscribe call is still
-        // replaying: a refused replay is not read any further.
-        const source = new AbortController();
-        const abort = (): void => {
-          source.abort();
-          queue.close();
-        };
-        signal?.addEventListener("abort", abort, { once: true });
-        // A subscription's handler runs inside the stream, past the policy
-        // middleware, so its "unavailable" is mapped here.
-        const unsubscribe = await hostAnswer(() =>
-          ctx.handlers[key](
-            {
-              sessionId: input.sessionId,
-              afterSequence,
-              ...(replay === null ? {} : { signal: source.signal }),
-            },
-            ctx.call,
-            {
-              // Live emissions pass through untouched: `rendererFrame` exists to
-              // keep runtime identity and recovery locators behind the server
-              // boundary, and no transient arm carries either. Asked as the
-              // negation of the durable arm so a third transient arm needs no
-              // edit here.
-              emit: (emission) => {
-                if (refused.current !== null) return;
-                // The old network operation's closed output cannot gain a new
-                // union arm. Queue-aware peers opt into the new feature's path;
-                // the private desktop IPC stream keeps its existing vocabulary.
-                if (
-                  key === "session.subscribe" &&
-                  ctx.transport !== "electron-ipc" &&
-                  "kind" in emission &&
-                  emission.kind === "queue"
-                )
-                  return;
-                const durable = isSessionStreamFrame(emission);
-                const sent = durable ? rendererFrame(emission) : emission;
-                if (replay === null) {
-                  queue.push(sent);
-                  return;
-                }
-                // Judged before it is staged: nothing past a bound is ever held.
-                const bytes = jsonByteLength(sent);
-                if (frameBound !== undefined && bytes > frameBound) {
-                  refused.current = new HostProcedureError(
-                    "response-too-large",
-                    SESSION_FRAME_TOO_LARGE_MESSAGE,
-                  );
-                } else if (!replay.admit(bytes, durable)) {
-                  refused.current = resnapshotRequired();
-                } else {
-                  queue.push(sent, bytes);
-                  return;
-                }
-                // A refused replay sends nothing of itself; a live refusal still
-                // drains what came before it.
-                queue.close(replay.replaying);
-                source.abort();
-              },
-              // The runtime's drain died behind this subscription. Ended like an
-              // overflow — buffered contiguous frames still drain, then the
-              // stream closes with an error instead of a clean `done`, because a
-              // clean end here is the one thing the client must never see: it
-              // reads as a stream with nothing left to say, not one that lost
-              // `turn.completed` mid-turn.
-              fail: (error) => {
-                sourceFailure.current = { error };
-                queue.close(false);
-              },
-            },
-          ),
-        );
-        // The runtime replays history before its subscribe call returns, so
-        // a refusal so far was a replay's: nothing of it is sent.
-        replay?.end();
-        if (refused.current !== null) {
-          signal?.removeEventListener("abort", abort);
-          unsubscribe();
-          throw refused.current;
-        }
-        if (signal?.aborted) {
-          unsubscribe();
-          return;
-        }
-        try {
-          // A transient emission is tracked by the durable sequence it was
-          // emitted beside, never by a suffixed id: `sseCursor` rejects one on
-          // resubscribe, and duplicate ids are safe on both transports. A
-          // reconnect from an overlay id therefore replays durable history and
-          // is served a fresh baseline.
-          for await (const emission of queue) {
-            yield isRendererStreamTransient(emission)
-              ? tracked(String(emission.throughSequence), emission)
-              : tracked(String(emission.sequence), emission);
-          }
-          // The loop ends the same way on a clean close and on an overflow, so
-          // this throw is the only thing that tells them apart downstream. It
-          // sits inside the `try` on purpose: `finally` still runs on the way
-          // out, so `unsubscribe()` fires before the error leaves the
-          // generator and no runtime listener outlives the stream it fed.
-          // A consumer that tears the iterator down instead resumes at the
-          // `yield` with a return completion and never reaches this line —
-          // an overflow the client already walked away from stays a diagnostic.
-          // A frame refused after the replay ended the stream, once what
-          // came before it drained.
-          if (refused.current !== null) throw refused.current;
-          if (queue.overflowed) throw subscriptionOverflowError(SESSION_OVERFLOW_MESSAGE);
-          // A source failure ends the same way an overflow does, and for the
-          // same reason: whatever this stream still owed its consumer is now
-          // only in the ledger, and only an error makes the client go back
-          // for it.
-          if (sourceFailure.current !== null) {
-            throw new HostProcedureError(
-              "subscription-source-failed",
-              SESSION_SOURCE_FAILURE_MESSAGE,
-              sourceFailure.current.error,
-            );
-          }
-        } finally {
-          signal?.removeEventListener("abort", abort);
-          unsubscribe();
-          if (queue.overflowed) {
-            ctx.diagnostics.record({
-              procedure: key,
-              phase: "error",
-              transport: ctx.transport ?? "unknown",
-              code: SUBSCRIPTION_OVERFLOW_CODE,
-              message: SESSION_OVERFLOW_MESSAGE,
-            });
-          }
-          if (sourceFailure.current !== null) {
-            ctx.diagnostics.record({
-              procedure: key,
-              phase: "error",
-              transport: ctx.transport ?? "unknown",
-              code: SUBSCRIPTION_SOURCE_FAILURE_CODE,
-              message: SESSION_SOURCE_FAILURE_MESSAGE,
-            });
-          }
-        }
-      },
-    );
-  // One schema/handler projection, two independently frozen wire features.
-  // hostModels admission is stricter; its domain command remains modelAccess.
-  function modelAccessProcedures(namespace: "modelAccess" | "hostModels") {
-    return {
-      inspect: hostProcedure(`${namespace}.inspect`)
-        .input(z.object({ refresh: z.boolean().optional() }))
-        .output(modelAccessSnapshotSchema)
-        .query(async ({ ctx, input }) =>
-          modelAccessSnapshotSchema.parse(
-            await ctx.handlers["modelAccess.inspect"](input, ctx.call),
-          ),
-        ),
-      defaults: hostProcedure(`${namespace}.defaults`)
-        .output(modelAccessDefaultsSchema)
-        .query(async ({ ctx }) =>
-          modelAccessDefaultsSchema.parse(
-            await ctx.handlers["modelAccess.defaults"](undefined, ctx.call),
-          ),
-        ),
-      setDefault: hostProcedure(`${namespace}.setDefault`)
-        .input(
-          z
-            .object({ purpose: modelPurposeSchema, selection: modelSelectionSchema.nullable() })
-            // Clearing ticket/utility means "use the Board default"; clearing
-            // global would leave every purpose resolving to nothing, which is a
-            // state the UI never offers and this edge refuses to mint.
-            .refine(
-              (input) => input.purpose !== "global" || input.selection !== null,
-              "The Board default cannot be cleared — choose a model instead",
-            ),
-        )
-        .output(modelAccessDefaultsSchema)
-        .mutation(async ({ ctx, input }) =>
-          modelAccessDefaultsSchema.parse(
-            await ctx.handlers["modelAccess.setDefault"](input, ctx.call),
-          ),
-        ),
-      hiddenModels: hostProcedure(`${namespace}.hiddenModels`)
-        .output(hiddenModelsSchema)
-        .query(async ({ ctx }) =>
-          hiddenModelsSchema.parse(
-            await ctx.handlers["modelAccess.hiddenModels"](undefined, ctx.call),
-          ),
-        ),
-      setHiddenModels: hostProcedure(`${namespace}.setHiddenModels`)
-        .input(hiddenModelsSchema)
-        .output(hiddenModelsSchema)
-        .mutation(async ({ ctx, input }) => {
-          await ctx.handlers["modelAccess.setHiddenModels"](input, ctx.call);
-          return input;
-        }),
-      compactionPolicy: hostProcedure(`${namespace}.compactionPolicy`)
-        .output(compactionPolicySchema)
-        .query(async ({ ctx }) =>
-          compactionPolicySchema.parse(
-            await ctx.handlers["modelAccess.compactionPolicy"](undefined, ctx.call),
-          ),
-        ),
-      setCompactionPolicy: hostProcedure(`${namespace}.setCompactionPolicy`)
-        .input(compactionPolicySchema)
-        .output(compactionPolicySchema)
-        .mutation(async ({ ctx, input }) =>
-          compactionPolicySchema.parse(
-            await ctx.handlers["modelAccess.setCompactionPolicy"](input, ctx.call),
-          ),
-        ),
-      codeModePolicy: hostProcedure(`${namespace}.codeModePolicy`)
-        .output(codeModePolicySchema)
-        .query(async ({ ctx }) =>
-          codeModePolicySchema.parse(
-            await ctx.handlers["modelAccess.codeModePolicy"](undefined, ctx.call),
-          ),
-        ),
-      setCodeModePolicy: hostProcedure(`${namespace}.setCodeModePolicy`)
-        .input(codeModePolicySchema)
-        .output(codeModePolicySchema)
-        .mutation(async ({ ctx, input }) =>
-          codeModePolicySchema.parse(
-            await ctx.handlers["modelAccess.setCodeModePolicy"](input, ctx.call),
-          ),
-        ),
-      pickerView: hostProcedure(`${namespace}.pickerView`)
-        .output(modelPickerViewSchema)
-        .query(async ({ ctx }) =>
-          modelPickerViewSchema.parse(
-            await ctx.handlers["modelAccess.pickerView"](undefined, ctx.call),
-          ),
-        ),
-      setPickerView: hostProcedure(`${namespace}.setPickerView`)
-        .input(modelPickerViewSchema)
-        .output(modelPickerViewSchema)
-        .mutation(async ({ ctx, input }) =>
-          modelPickerViewSchema.parse(
-            await ctx.handlers["modelAccess.setPickerView"](input, ctx.call),
-          ),
-        ),
-    };
-  }
   return catalogRouter({
     // Sign-ins on a host (VC-702): their own module, this router's family.
     ...signInProcedures(),

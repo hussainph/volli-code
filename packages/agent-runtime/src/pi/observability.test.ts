@@ -207,24 +207,39 @@ describe("teeObservationsToSink", () => {
   });
 });
 
-describe("instrumentStreamFn", () => {
-  function scripted(message: AssistantMessage): {
-    inner: StreamFn;
-    finish: () => void;
-    stream: AssistantMessageEventStream;
-  } {
-    const stream = createAssistantMessageEventStream();
-    return {
-      stream,
-      inner: (() => stream) as StreamFn,
-      finish: () => {
-        stream.push({ type: "start", partial: message });
-        stream.push({ type: "text_delta", contentIndex: 0, delta: SENSITIVE, partial: message });
-        stream.push({ type: "done", reason: "stop", message });
-      },
-    };
-  }
+function scripted(message: AssistantMessage): {
+  inner: StreamFn;
+  finish: () => void;
+  stream: AssistantMessageEventStream;
+} {
+  const stream = createAssistantMessageEventStream();
+  return {
+    stream,
+    inner: (() => stream) as StreamFn,
+    finish: () => {
+      stream.push({ type: "start", partial: message });
+      stream.push({ type: "text_delta", contentIndex: 0, delta: SENSITIVE, partial: message });
+      stream.push({ type: "done", reason: "stop", message });
+    },
+  };
+}
 
+/** An inner that reports the headers the scripted provider answered with. */
+function responding(headers: Record<string, string> | null): {
+  inner: StreamFn;
+  seen: unknown[];
+} {
+  const seen: unknown[] = [];
+  const stream = createAssistantMessageEventStream();
+  const inner: StreamFn = ((_model, _context, options) => {
+    seen.push(options);
+    void options?.onResponse?.({ status: 200, headers: headers ?? {} }, model());
+    return stream;
+  }) as StreamFn;
+  return { inner, seen };
+}
+
+describe("instrumentStreamFn", () => {
   it("emits one attempt envelope with identity, usage, timing, and no content", async () => {
     const { sink, events } = recordingSink();
     const message = settledMessage({ responseModel: "claude-haiku-4-5-concrete" });
@@ -305,21 +320,6 @@ describe("instrumentStreamFn", () => {
       "anthropic-ratelimit-unified-5h-utilization": "0.37",
       "anthropic-ratelimit-unified-7d-utilization": "0.04",
     };
-
-    /** An inner that reports the headers the scripted provider answered with. */
-    function responding(headers: Record<string, string> | null): {
-      inner: StreamFn;
-      seen: unknown[];
-    } {
-      const seen: unknown[] = [];
-      const stream = createAssistantMessageEventStream();
-      const inner: StreamFn = ((_model, _context, options) => {
-        seen.push(options);
-        void options?.onResponse?.({ status: 200, headers: headers ?? {} }, model());
-        return stream;
-      }) as StreamFn;
-      return { inner, seen };
-    }
 
     it("maps the response's usage headers and hands them to the sink", () => {
       const recorded: [string, unknown][] = [];

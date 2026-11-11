@@ -207,17 +207,16 @@ describe("loadEditorDraft defensiveness", () => {
     expect(loadEditorDraft("p1", storage)?.runtime).toBeNull();
   });
 });
+const blank = (): AutomationEditorDraft =>
+  draft({
+    name: "",
+    instructions: "",
+    ownership: "project",
+    triggerChoice: "none",
+    runtime: null,
+  });
 
 describe("isEmptyEditorDraft", () => {
-  const blank = (): AutomationEditorDraft =>
-    draft({
-      name: "",
-      instructions: "",
-      ownership: "project",
-      triggerChoice: "none",
-      runtime: null,
-    });
-
   it("only discards a draft that still matches the new editor's meaningful defaults", () => {
     expect(isEmptyEditorDraft(blank())).toBe(true);
     expect(isEmptyEditorDraft({ ...blank(), name: " " })).toBe(true);

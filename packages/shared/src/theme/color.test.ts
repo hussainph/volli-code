@@ -244,17 +244,18 @@ describe("gamutMap", () => {
     }
   });
 
+  // culori's own `clampChroma` is NOT a cusp finder — it accepts a clipped
+  // color once the ΔE is small, and returns c = 0 outright at some hues.
+  // The honest cross-check is the same bisection run against culori's
+  // OKLCH → sRGB math, which is what this compares our cusp against.
+  const inGamutPerCulori = (L: number, C: number, h: number) => {
+    const { r, g, b } = toRgb({ mode: "oklch", l: L, c: C, h })!;
+    // Same in-gamut tolerance the implementation uses, so what this
+    // compares is the conversion math and not the choice of epsilon.
+    return Math.min(r, g, b) >= -1e-5 && Math.max(r, g, b) <= 1 + 1e-5;
+  };
+
   it("finds the same cusp chroma as a bisection over culori's converter", () => {
-    // culori's own `clampChroma` is NOT a cusp finder — it accepts a clipped
-    // color once the ΔE is small, and returns c = 0 outright at some hues.
-    // The honest cross-check is the same bisection run against culori's
-    // OKLCH → sRGB math, which is what this compares our cusp against.
-    const inGamutPerCulori = (L: number, C: number, h: number) => {
-      const { r, g, b } = toRgb({ mode: "oklch", l: L, c: C, h })!;
-      // Same in-gamut tolerance the implementation uses, so what this
-      // compares is the conversion math and not the choice of epsilon.
-      return Math.min(r, g, b) >= -1e-5 && Math.max(r, g, b) <= 1 + 1e-5;
-    };
     for (let h = 0; h < 360; h += 11) {
       for (const L of [0.155, 0.2, 0.45, 0.661, 0.85]) {
         let low = 0;

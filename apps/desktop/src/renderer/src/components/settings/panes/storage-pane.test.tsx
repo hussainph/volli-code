@@ -421,18 +421,17 @@ describe("Settings → Storage build artifacts", () => {
     expect(main.setTrimSettings).toHaveBeenCalledWith({ trimOnFinish: false });
   });
 });
+async function mountDatabase() {
+  await act(async () =>
+    root?.render(
+      <TooltipProvider>
+        <DatabaseSection />
+      </TooltipProvider>,
+    ),
+  );
+}
 
 describe("Settings → Database section", () => {
-  async function mountDatabase() {
-    await act(async () =>
-      root?.render(
-        <TooltipProvider>
-          <DatabaseSection />
-        </TooltipProvider>,
-      ),
-    );
-  }
-
   it("names the action as a data export rather than a database export", () => {
     const html = renderToStaticMarkup(
       <TooltipProvider>
@@ -528,17 +527,17 @@ describe("Storage page", () => {
     expect(html).toContain("Removes the folder; keeps the branch, commits, PR link and ticket.");
   });
 });
+async function overview() {
+  await act(async () =>
+    root?.render(
+      <TooltipProvider>
+        <StorageOverviewPane />
+      </TooltipProvider>,
+    ),
+  );
+}
 
 describe("Storage overview", () => {
-  async function overview() {
-    await act(async () =>
-      root?.render(
-        <TooltipProvider>
-          <StorageOverviewPane />
-        </TooltipProvider>,
-      ),
-    );
-  }
   it("scans all file families into one summary without deleting anything", async () => {
     const api = bridge();
     await overview();

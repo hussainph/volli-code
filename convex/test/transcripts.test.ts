@@ -267,6 +267,14 @@ const stageArgs = (w: World, claim = w.claim) => ({
   artifacts: [staged("a", 2)],
 });
 
+const patchMembership = (w: World, status: "left" | "suspended") =>
+  w.t.run(async (ctx: Ctx) => {
+    const member = (await ctx.db.query("workspaceMembers").collect()).find(
+      (row) => row.userId === w.alice,
+    );
+    await ctx.db.patch(member!._id, { status });
+  });
+
 describe("the producer fence, for the runner itself", () => {
   test("the claimed runner stages, commits and reads its head back with its own token", async () => {
     const w = await world({ acceptedThrough: 10 });
@@ -390,13 +398,6 @@ describe("the producer fence, for the runner itself", () => {
   });
 
   test("refuses once the owner loses the project, the Session goes, or the claim is released", async () => {
-    const patchMembership = (w: World, status: "left" | "suspended") =>
-      w.t.run(async (ctx: Ctx) => {
-        const member = (await ctx.db.query("workspaceMembers").collect()).find(
-          (row) => row.userId === w.alice,
-        );
-        await ctx.db.patch(member!._id, { status });
-      });
     for (const status of ["left", "suspended"] as const) {
       const w = await world();
       await patchMembership(w, status);
@@ -717,28 +718,28 @@ describe("commitSegment", () => {
   });
 });
 
-describe("commitPiLogSegment", () => {
-  function piSegment(w: World, startOffset: number, endOffset: number, extra: object = {}) {
-    return {
+function piSegment(w: World, startOffset: number, endOffset: number, extra: object = {}) {
+  return {
+    sessionId: w.sessionId,
+    claim: w.claim,
+    attachmentId: "att-1",
+    piFileId: "2026-10-25T01-02-03-004Z_abc",
+    startOffset,
+    endOffset,
+    key: piLogSegmentKey({
+      projectId: w.projectId,
       sessionId: w.sessionId,
-      claim: w.claim,
       attachmentId: "att-1",
       piFileId: "2026-10-25T01-02-03-004Z_abc",
-      startOffset,
-      endOffset,
-      key: piLogSegmentKey({
-        projectId: w.projectId,
-        sessionId: w.sessionId,
-        attachmentId: "att-1",
-        piFileId: "2026-10-25T01-02-03-004Z_abc",
-        offset: startOffset,
-      }),
-      bytes: 10,
-      sha256: hex("3"),
-      ...extra,
-    };
-  }
+      offset: startOffset,
+    }),
+    bytes: 10,
+    sha256: hex("3"),
+    ...extra,
+  };
+}
 
+describe("commitPiLogSegment", () => {
   test("ranges are contiguous per Pi file from 0, idempotent, and reported by the head", async () => {
     const w = await world();
     const commit = (input: object) =>

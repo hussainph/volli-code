@@ -59,6 +59,8 @@ function build(overrides: Partial<BuildBoardSessionActivityInput> = {}) {
     ...overrides,
   });
 }
+const child = (overrides: Partial<ChatSessionRecord> = {}) =>
+  chat({ sessionId: "child", role: "subagent", parentSessionId: "parent", ...overrides });
 
 describe("buildBoardSessionActivity", () => {
   it("says nothing about a board with nothing running on it", () => {
@@ -178,9 +180,6 @@ describe("buildBoardSessionActivity", () => {
   // parent's Activity Island, which draws and announces it — and this board
   // shows the only thing it can honestly show about a busy child: work.
   describe("a Subagent Session", () => {
-    const child = (overrides: Partial<ChatSessionRecord> = {}) =>
-      chat({ sessionId: "child", role: "subagent", parentSessionId: "parent", ...overrides });
-
     it("still lights its ticket while it works — that is work happening here", () => {
       // The parent may have ended its own turn and gone idle; the ticket is
       // busy all the same.

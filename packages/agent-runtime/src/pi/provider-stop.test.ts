@@ -141,6 +141,20 @@ describe("provider stop facts", () => {
     });
   });
 
+  it.each([
+    [{ type: "error", code: "overloaded_error" }, "provider-overloaded", "overloaded_error"],
+    [{ code: "rate_limit_exceeded" }, "rate-limited", "rate_limit_exceeded"],
+    [{ type: "authentication_error", code: "future_code" }, "auth-failed", "authentication_error"],
+    [{ code: "future_code" }, "unknown", null],
+  ])(
+    "reads top-level provider codes without guessing unknown ones: %j",
+    (event, category, type) => {
+      const capture = new ProviderStopCapture();
+      capture.event(event);
+      expect(capture.detail(message())).toMatchObject({ category, providerType: type });
+    },
+  );
+
   it("records structured network diagnostics and does not keep their stacks", () => {
     const detail = new ProviderStopCapture().detail(
       message({

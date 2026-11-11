@@ -255,7 +255,7 @@ function harness(payload: unknown = PAYLOAD) {
   const inbox = backendInbox(payload);
   const artifacts = artifactStore();
   const contexts: unknown[] = [];
-  let context: () => SessionStartContext = () => ready();
+  let context: () => SessionStartContext = ready;
   function boot(bootId: string) {
     const worker = createInboxWorker({
       backend: inbox.backend(bootId),

@@ -25,6 +25,17 @@ const provenance = {
   venue: LOCAL_RUNNER,
 };
 
+const create = (engine: SessionEngine, commandId: string) =>
+  engine.createSession({
+    commandId,
+    projectId: "p",
+    ticketId: "t",
+    role: "ticket",
+    parentSessionId: null,
+    title: commandId,
+    provenance,
+  });
+
 function setup() {
   ctx = openTestDb();
   const { db } = ctx;
@@ -51,16 +62,6 @@ function setup() {
   const a = owner("a");
   const b = owner("b");
   const local = createLocalSessionEngine({ db, engine: wake.engine });
-  const create = (engine: SessionEngine, commandId: string) =>
-    engine.createSession({
-      commandId,
-      projectId: "p",
-      ticketId: "t",
-      role: "ticket",
-      parentSessionId: null,
-      title: commandId,
-      provenance,
-    });
   return { db, raw: wake.engine, wake, cursors, a, b, local, create };
 }
 

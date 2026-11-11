@@ -266,14 +266,14 @@ describe("buildTerminalHistoryDetail actions", () => {
   });
 });
 
+const resumable = (overrides: Partial<SessionRecord>) =>
+  canResumeTerminalRecord(record({ id: "s1", ...overrides }), getHarnessAdapter);
+
 /**
  * The resume rule itself, named once here so the sidebar, the ticket rail and
  * this detail cannot drift into three answers about the same record.
  */
 describe("canResumeTerminalRecord", () => {
-  const resumable = (overrides: Partial<SessionRecord>) =>
-    canResumeTerminalRecord(record({ id: "s1", ...overrides }), getHarnessAdapter);
-
   it("is false for a still-live agent session — nothing has ended to resume into", () => {
     expect(resumable({ launchKind: "agent", endedAt: null })).toBe(false);
   });

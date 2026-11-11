@@ -453,12 +453,24 @@ describe("blob atomic publication and descriptor safety", () => {
   });
 });
 
-describe("blob durability and torn-file repair", () => {
-  function plantTorn(content: string | Buffer): void {
-    mkdirSync(dirname(destination), { recursive: true });
+/** Swap the path's inode once, just after the store first looks at it. */
+function replaceOnceAfterJudging(content: string | Buffer): () => number | undefined {
+  let replaced: number | undefined;
+  state.afterStat = (path) => {
+    if (path !== destination || replaced !== undefined) return;
+    rmSync(destination);
     writeFileSync(destination, content);
-  }
+    replaced = statSync(destination).ino;
+  };
+  return () => replaced;
+}
 
+function plantTorn(content: string | Buffer): void {
+  mkdirSync(dirname(destination), { recursive: true });
+  writeFileSync(destination, content);
+}
+
+describe("blob durability and torn-file repair", () => {
   it("fsyncs the staged file before publishing and the new directories after", () => {
     writeBlob(root, bytes);
     const shard = dirname(destination);
@@ -547,18 +559,6 @@ describe("blob durability and torn-file repair", () => {
       chmodSync(dirname(destination), 0o755);
     }
   });
-
-  /** Swap the path's inode once, just after the store first looks at it. */
-  function replaceOnceAfterJudging(content: string | Buffer): () => number | undefined {
-    let replaced: number | undefined;
-    state.afterStat = (path) => {
-      if (path !== destination || replaced !== undefined) return;
-      rmSync(destination);
-      writeFileSync(destination, content);
-      replaced = statSync(destination).ino;
-    };
-    return () => replaced;
-  }
 
   it("never overwrites a path that changed after it was judged torn", () => {
     plantTorn("torn");

@@ -60,19 +60,20 @@ it("bounds 1000 choices and reaches the last logical item from the keyboard", as
   );
   expect(choose).toHaveBeenCalledWith("Choice 999");
 });
+const draw = (items: string[], query: string) =>
+  root.render(
+    <SearchableCommand
+      items={items}
+      keyOf={(item) => item}
+      renderItem={(item) => <span>{item}</span>}
+      onSelect={() => {}}
+      query={query}
+      onQueryChange={() => {}}
+      placeholder="Search choices"
+    />,
+  );
+
 it("reconciles a shortened query with no stale window and names an empty result", async () => {
-  const draw = (items: string[], query: string) =>
-    root.render(
-      <SearchableCommand
-        items={items}
-        keyOf={(item) => item}
-        renderItem={(item) => <span>{item}</span>}
-        onSelect={() => {}}
-        query={query}
-        onQueryChange={() => {}}
-        placeholder="Search choices"
-      />,
-    );
   await act(async () => draw(["Only"], "Only"));
   expect(host.querySelector('[role="option"]')?.textContent).toBe("Only");
   await act(async () => draw([], "missing"));

@@ -164,9 +164,11 @@ async function fakeBackend(): Promise<FakeBackend> {
   const state = boardState();
   const calls: Call[] = [];
   const override = new Map<string, (call: Call) => Answer | "hang" | "contention">();
+
+  const byId = (id: unknown) => state.tickets.find((row) => row.id === id);
+
   const answer = (call: Call): Answer => {
     const { path, args } = call;
-    const byId = (id: unknown) => state.tickets.find((row) => row.id === id);
     switch (path) {
       case "agentTokens:mint":
         return {

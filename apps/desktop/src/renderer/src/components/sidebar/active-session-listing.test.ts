@@ -674,6 +674,40 @@ describe("buildActiveSessionListing — who started each Session", () => {
     expect(result.active[0]?.provenance).toEqual(RUN);
   });
 });
+const parentWithChildrenListing = (
+  children: readonly Partial<ChatSessionRecord>[],
+  now = 5_000_000,
+) =>
+  buildActiveSessionListing({
+    tickets: [ticket({ id: "t1", status: "doing" })],
+    containers: {},
+    signalsByTicket: {},
+    records: [],
+    chatSessions: [
+      chatSession({
+        sessionId: "parent",
+        ticketId: "t1",
+        title: "The chat that delegated",
+        activity: "idle",
+        // Long past the quiet window on its own account.
+        lastActivityAt: now - ACTIVE_QUIET_WINDOW_MS - 60_000,
+      }),
+      ...children.map((child, index) =>
+        chatSession({
+          sessionId: `child-${index}`,
+          ticketId: "t1",
+          title: `Helper ${index}`,
+          role: "subagent",
+          parentSessionId: "parent",
+          ...child,
+        }),
+      ),
+    ],
+    lastOutputAt: {},
+    parkState: {},
+    harness: {},
+    now,
+  });
 
 describe("buildActiveSessionListing — chat Sessions", () => {
   it("puts an attached chat Session in Active on its own recency, with no terminal involved", () => {
@@ -1002,40 +1036,10 @@ describe("buildActiveSessionListing — chat Sessions", () => {
   // disagree with the board and then clean the parent away on a clock its own
   // work should have been resetting.
   describe("a parent that is only busy through its children", () => {
-    const listing = (children: readonly Partial<ChatSessionRecord>[], now = 5_000_000) =>
-      buildActiveSessionListing({
-        tickets: [ticket({ id: "t1", status: "doing" })],
-        containers: {},
-        signalsByTicket: {},
-        records: [],
-        chatSessions: [
-          chatSession({
-            sessionId: "parent",
-            ticketId: "t1",
-            title: "The chat that delegated",
-            activity: "idle",
-            // Long past the quiet window on its own account.
-            lastActivityAt: now - ACTIVE_QUIET_WINDOW_MS - 60_000,
-          }),
-          ...children.map((child, index) =>
-            chatSession({
-              sessionId: `child-${index}`,
-              ticketId: "t1",
-              title: `Helper ${index}`,
-              role: "subagent",
-              parentSessionId: "parent",
-              ...child,
-            }),
-          ),
-        ],
-        lastOutputAt: {},
-        parkState: {},
-        harness: {},
-        now,
-      });
-
     it("stays in Active, and says working, while a child works", () => {
-      const result = listing([{ activity: "working", lastActivityAt: 4_999_000 }]);
+      const result = parentWithChildrenListing([
+        { activity: "working", lastActivityAt: 4_999_000 },
+      ]);
       expect(titles(result.active)).toEqual(["The chat that delegated"]);
       expect(result.active[0]?.activity).toBe("working");
       // Reported, not inferred: a child's `working` is main's word about the
@@ -1047,7 +1051,9 @@ describe("buildActiveSessionListing — chat Sessions", () => {
     it("ages by the freshest fact in the delegation, not by when the parent last spoke", () => {
       // The parent's own stamp is an hour old and the child's is a minute old;
       // the row must sort and age by the minute.
-      const result = listing([{ activity: "working", lastActivityAt: 4_940_000 }]);
+      const result = parentWithChildrenListing([
+        { activity: "working", lastActivityAt: 4_940_000 },
+      ]);
       expect(result.active[0]?.lastActivityAt).toBe(4_940_000);
       expect(result.nextBoundaryAt).toBe(4_940_000 + ACTIVE_QUIET_WINDOW_MS);
     });
@@ -1055,7 +1061,9 @@ describe("buildActiveSessionListing — chat Sessions", () => {
     it("counts a child stopped on a person as busy — the delegation is unfinished", () => {
       // Its wait is answered in the parent's Activity Island, so the row does
       // not say `waiting`; what it must not do is go quiet.
-      const result = listing([{ activity: "waiting", lastActivityAt: 4_999_000 }]);
+      const result = parentWithChildrenListing([
+        { activity: "waiting", lastActivityAt: 4_999_000 },
+      ]);
       expect(titles(result.active)).toEqual(["The chat that delegated"]);
       expect(result.active[0]?.activity).toBe("working");
       expect(result.active[0]?.attention).toBeNull();
@@ -1065,7 +1073,7 @@ describe("buildActiveSessionListing — chat Sessions", () => {
       // Both children ended, and long enough ago that the delegation's own
       // freshest stamp is outside the window too.
       const endedAt = 5_000_000 - ACTIVE_QUIET_WINDOW_MS - 30_000;
-      const result = listing([
+      const result = parentWithChildrenListing([
         { activity: "idle", outcome: "completed", lastActivityAt: endedAt },
         { activity: "stopped", lastActivityAt: endedAt - 5_000 },
       ]);
@@ -1112,7 +1120,9 @@ describe("buildActiveSessionListing — chat Sessions", () => {
     it("gives a `session_start` peer's activity to nobody — only a subagent's counts", () => {
       // A peer keeps its own row, so its work is already visible as itself;
       // reading it into the parent as well would double-count one Session.
-      const result = listing([{ role: "ticket", activity: "working", lastActivityAt: 4_999_000 }]);
+      const result = parentWithChildrenListing([
+        { role: "ticket", activity: "working", lastActivityAt: 4_999_000 },
+      ]);
       expect(titles(result.active)).toEqual(["Helper 0"]);
       expect(result.previous.map((row) => row.title)).toEqual(["The chat that delegated"]);
     });
@@ -1837,25 +1847,23 @@ describe("buildActiveSessionListing — cleanup", () => {
       }),
     ).toBe(false);
   });
+  const predates = (createdAt: number | null) =>
+    isConcludedBusiness({
+      ...cleanupFacts,
+      createdAt,
+      statusEnteredAt: new Map([["t1", 1_000]]),
+    });
 
   it("(c) cleans a Session that predates its ticket's entry into the current column", () => {
-    const predates = (createdAt: number | null) =>
-      isConcludedBusiness({
-        ...cleanupFacts,
-        createdAt,
-        statusEnteredAt: new Map([["t1", 1_000]]),
-      });
-
     expect(predates(999)).toBe(true);
     expect(predates(1_000)).toBe(false);
     // Nothing durable can date the Session, so the rule declines to guess.
     expect(predates(null)).toBe(false);
   });
+  const aged = (endedOrQuietAt: number) =>
+    isConcludedBusiness({ ...cleanupFacts, now: 10_000_000, endedOrQuietAt });
 
   it("(d) cleans a Session once it is old enough, and not before", () => {
-    const aged = (endedOrQuietAt: number) =>
-      isConcludedBusiness({ ...cleanupFacts, now: 10_000_000, endedOrQuietAt });
-
     expect(aged(10_000_000 - PREVIOUS_MAX_AGE_MS + 1)).toBe(false);
     expect(aged(10_000_000 - PREVIOUS_MAX_AGE_MS)).toBe(true);
   });
@@ -2662,6 +2670,17 @@ describe("buildActiveSessionListing — harness-reported attention", () => {
     expect(result.previous).toEqual([]);
   });
 });
+const inferredListing = (now: number) =>
+  buildActiveSessionListing({
+    tickets: [ticket({ id: "t1", status: "doing" })],
+    containers: useSessionsStore.getState().byOwner,
+    signalsByTicket: {},
+    records: [],
+    lastOutputAt: {},
+    parkState: {},
+    harness: useSessionsStore.getState().harness,
+    now,
+  });
 
 describe("buildActiveSessionListing — fed by a real launch", () => {
   afterEach(() => {
@@ -2680,31 +2699,19 @@ describe("buildActiveSessionListing — fed by a real launch", () => {
       createdAt: 1000,
     });
 
-    const listing = (now: number) =>
-      buildActiveSessionListing({
-        tickets: [ticket({ id: "t1", status: "doing" })],
-        containers: useSessionsStore.getState().byOwner,
-        signalsByTicket: {},
-        records: [],
-        lastOutputAt: {},
-        parkState: {},
-        harness: useSessionsStore.getState().harness,
-        now,
-      });
-
     // Nothing has run yet — the terminal may sit here all day without being
     // accused of anything.
     expect(
-      listing(1000 + HARNESS_EVENT_GRACE_MS + 1).active.map((row) => row.activitySource),
+      inferredListing(1000 + HARNESS_EVENT_GRACE_MS + 1).active.map((row) => row.activitySource),
     ).toEqual(["inferred"]);
 
     useSessionsStore.getState().announceHarness("s1", "claude-code", 5000);
 
-    expect(listing(5000 + HARNESS_EVENT_GRACE_MS).active.map((row) => row.activitySource)).toEqual([
-      "inferred",
-    ]);
     expect(
-      listing(5000 + HARNESS_EVENT_GRACE_MS + 1).active.map((row) => row.activitySource),
+      inferredListing(5000 + HARNESS_EVENT_GRACE_MS).active.map((row) => row.activitySource),
+    ).toEqual(["inferred"]);
+    expect(
+      inferredListing(5000 + HARNESS_EVENT_GRACE_MS + 1).active.map((row) => row.activitySource),
     ).toEqual(["silent"]);
   });
 
@@ -2903,6 +2910,13 @@ describe("groupPreviousByTicket", () => {
 const sliceIds = (slice: { entries: readonly { id: string }[] }) =>
   slice.entries.map((entry) => entry.id);
 const nothingPinned = () => false;
+/** `count` ticketless entries, newest first, ids `s0`…`s{count-1}`. */
+const entriesOf = (count: number) =>
+  groupPreviousByTicket(
+    Array.from({ length: count }, (_, index) =>
+      previousRow({ id: `s${index}`, endedOrQuietAt: 100_000 - index }),
+    ),
+  );
 
 /**
  * VC-116: the Previous band draws its first {@link PREVIOUS_BAND_LIMIT}
@@ -2910,13 +2924,6 @@ const nothingPinned = () => false;
  */
 describe("capPreviousEntries", () => {
   const t1 = ticket({ id: "t1", status: "doing", ticketNumber: 1 });
-  /** `count` ticketless entries, newest first, ids `s0`…`s{count-1}`. */
-  const entriesOf = (count: number) =>
-    groupPreviousByTicket(
-      Array.from({ length: count }, (_, index) =>
-        previousRow({ id: `s${index}`, endedOrQuietAt: 100_000 - index }),
-      ),
-    );
 
   it("shows a band that fits whole, with nothing held back", () => {
     const entries = entriesOf(PREVIOUS_BAND_LIMIT);
@@ -2967,6 +2974,18 @@ describe("capPreviousEntries", () => {
     expect(slice.hiddenCount).toBe(1);
   });
 });
+const harnessListing = (input: Partial<Parameters<typeof buildActiveSessionListing>[0]> = {}) =>
+  buildActiveSessionListing({
+    tickets: [ticket({ id: "t1", status: "doing" })],
+    containers: {},
+    signalsByTicket: {},
+    records: [],
+    lastOutputAt: {},
+    parkState: {},
+    harness: {},
+    now: 100_000,
+    ...input,
+  });
 
 /**
  * VC-402: WHICH CLI each row is running, carried so the bands can draw it.
@@ -2979,21 +2998,8 @@ describe("capPreviousEntries", () => {
  * and a structured Session.
  */
 describe("buildActiveSessionListing — the harness a row is running", () => {
-  const listing = (input: Partial<Parameters<typeof buildActiveSessionListing>[0]> = {}) =>
-    buildActiveSessionListing({
-      tickets: [ticket({ id: "t1", status: "doing" })],
-      containers: {},
-      signalsByTicket: {},
-      records: [],
-      lastOutputAt: {},
-      parkState: {},
-      harness: {},
-      now: 100_000,
-      ...input,
-    });
-
   it("names the harness on a live companion, and none on a shell", () => {
-    const result = listing({
+    const result = harnessListing({
       containers: { t1: container("s1", [paneTab("s1", "Agent"), paneTab("s2", "Shell")]) },
       records: [
         record({ id: "s1", ticketId: "t1", harnessId: "codex" }),
@@ -3011,7 +3017,7 @@ describe("buildActiveSessionListing — the harness a row is running", () => {
   // A pane whose durable record has not landed says nothing, rather than
   // drawing the default harness's glyph over a Session nobody has described.
   it("names none for a pane with no record yet", () => {
-    const result = listing({
+    const result = harnessListing({
       containers: { t1: container("s1", [paneTab("s1", "Fresh")]) },
       lastOutputAt: { s1: 100_000 },
     });
@@ -3021,7 +3027,7 @@ describe("buildActiveSessionListing — the harness a row is running", () => {
 
   it("carries it into Previous by every route a row gets there", () => {
     // Live, but quiet for longer than the Active window.
-    const quiet = listing({
+    const quiet = harnessListing({
       containers: { t1: container("s1", [paneTab("s1", "Quiet")]) },
       records: [record({ id: "s1", ticketId: "t1", harnessId: "cursor" })],
       lastOutputAt: { s1: 100_000 },
@@ -3031,14 +3037,14 @@ describe("buildActiveSessionListing — the harness a row is running", () => {
     expect(quiet.previous.map((row) => row.harnessId)).toEqual(["cursor"]);
 
     // An exited tab, whose subject pane is gone: read off the tab's own record.
-    const exited = listing({
+    const exited = harnessListing({
       containers: { t1: container("s1", [paneTab("s1", "Done", 0)]) },
       records: [record({ id: "s1", ticketId: "t1", harnessId: "opencode" })],
     });
     expect(exited.previous.map((row) => row.harnessId)).toEqual(["opencode"]);
 
     // A durable record the live layout no longer holds at all.
-    const ended = listing({
+    const ended = harnessListing({
       records: [record({ id: "s9", ticketId: "t1", harnessId: "codex", endedAt: 50_000 })],
     });
     expect(ended.previous.map((row) => row.harnessId)).toEqual(["codex"]);
@@ -3047,12 +3053,12 @@ describe("buildActiveSessionListing — the harness a row is running", () => {
   // A structured Session runs the Agent Runtime, not a CLI: no harness in
   // either band, which is what keeps its row exactly as it was.
   it("names none for a chat Session, in either band", () => {
-    const live = listing({
+    const live = harnessListing({
       chatSessions: [chatSession({ ticketId: "t1", lastActivityAt: 100_000, live: true })],
     });
     expect(live.active.map((row) => row.harnessId)).toEqual([null]);
 
-    const quiet = listing({
+    const quiet = harnessListing({
       chatSessions: [chatSession({ ticketId: "t1", lastActivityAt: 100_000, live: false })],
       now: 100_000 + ACTIVE_QUIET_WINDOW_MS,
     });

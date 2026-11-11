@@ -71,6 +71,7 @@ afterEach(() => {
   container.remove();
   vi.unstubAllGlobals();
 });
+const indicator = () => container.querySelector('article [role="img"][aria-label^="Priority:"]');
 
 it("projects the priority on the real board in the mutation commit, before IPC answers", async () => {
   let resolvePriority!: (result: TicketResult) => void;
@@ -88,7 +89,6 @@ it("projects the priority on the real board in the mutation commit, before IPC a
       </TooltipProvider>,
     ),
   );
-  const indicator = () => container.querySelector('article [role="img"][aria-label^="Priority:"]');
   expect(indicator()?.getAttribute("aria-label")).toBe("Priority: Medium");
 
   let pending!: Promise<void>;
@@ -126,6 +126,8 @@ function menuRow(slot: string, label: string, within: ParentNode = document): HT
   if (found === undefined) throw new Error(`no ${slot} named ${label}`);
   return found;
 }
+const menuPriorityIndicator = () =>
+  container.querySelector('article [role="img"][aria-label^="Priority:"]');
 
 it("projects High in the commit of the menu select itself, before IPC answers", async () => {
   // VC-665: the store action above is only half the path a person takes. The
@@ -148,8 +150,7 @@ it("projects High in the commit of the menu select itself, before IPC answers", 
       </TooltipProvider>,
     ),
   );
-  const indicator = () => container.querySelector('article [role="img"][aria-label^="Priority:"]');
-  expect(indicator()?.getAttribute("aria-label")).toBe("Priority: Medium");
+  expect(menuPriorityIndicator()?.getAttribute("aria-label")).toBe("Priority: Medium");
 
   openCardMenu();
   act(() => menuRow("context-menu-sub-trigger", "Priority").click());
@@ -159,10 +160,10 @@ it("projects High in the commit of the menu select itself, before IPC answers", 
 
   act(() => high.click());
   expect(setPriority).toHaveBeenCalledWith({ ticketId: ticket.id, priority: "high" });
-  expect(indicator()?.getAttribute("aria-label")).toBe("Priority: High");
+  expect(menuPriorityIndicator()?.getAttribute("aria-label")).toBe("Priority: High");
 
   await act(async () => {
     resolvePriority({ ok: true, ticket: { ...ticket, priority: "high", updatedAt: 2 } });
   });
-  expect(indicator()?.getAttribute("aria-label")).toBe("Priority: High");
+  expect(menuPriorityIndicator()?.getAttribute("aria-label")).toBe("Priority: High");
 });

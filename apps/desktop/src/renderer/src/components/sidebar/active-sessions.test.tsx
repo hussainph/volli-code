@@ -287,12 +287,12 @@ describe("ActiveSessions ticket history (VC-374)", () => {
     expect(statusEntries).toHaveBeenCalledTimes(2);
   });
 });
+const bandText = (band: string) =>
+  container?.querySelector(`[data-session-band="${band}"]`)?.textContent ?? "";
+
+const loading = () => container?.querySelectorAll('[aria-label="Loading sessions"]') ?? [];
 
 describe("ActiveSessions bands while the listing is read (VC-383)", () => {
-  const loading = () => container?.querySelectorAll('[aria-label="Loading sessions"]') ?? [];
-  const bandText = (band: string) =>
-    container?.querySelector(`[data-session-band="${band}"]`)?.textContent ?? "";
-
   it("holds the rows' box in both bands until the project's listing answers", async () => {
     // A listing that never answers: the bands must not claim the project is
     // empty for as long as the baseline read is in flight.
@@ -750,6 +750,56 @@ describe("the peek on the left bands (VC-30)", () => {
     expect(document.activeElement).toBe(card());
   });
 });
+/** Puts ticketless chat `c{index}` in front of you, as Home's active tab. */
+const selectHomeChat = (index: number): void => {
+  useProjectUiStore.setState({
+    byProject: {
+      [PROJECT.id]: {
+        ...DEFAULT_PROJECT_UI,
+        nav: "home",
+        homeActiveTab: chatTabId(`c${index}`),
+      },
+    },
+  });
+};
+
+const reachButton = (label: "Show more" | "Show less"): HTMLButtonElement | null =>
+  [
+    ...(container?.querySelectorAll<HTMLButtonElement>('[data-session-band="previous"] button') ??
+      []),
+  ].find((button) => button.textContent === label) ?? null;
+
+const previousRowIds = (): string[] =>
+  [
+    ...(container?.querySelectorAll<HTMLElement>(
+      '[data-session-band="previous"] [data-peek-row]',
+    ) ?? []),
+  ].map((row) => row.dataset.peekRow ?? "");
+
+/** `count` ticketless chats, all past the quiet window, newest first: `c0`… */
+const seedPastChats = (count: number): void =>
+  seedSessions(
+    Array.from({ length: count }, (_, index) =>
+      listingRow(
+        chatRecord({
+          sessionId: `c${index}`,
+          title: `Past ${index}`,
+          ticketId: null,
+          role: "project",
+          bornTicketless: true,
+          lastActivityAt: NOW - 90 * 60_000 - index * 1_000,
+        }),
+      ),
+    ),
+  );
+async function pressReach(label: "Show more" | "Show less"): Promise<void> {
+  const button = reachButton(label);
+  if (button === null) throw new Error(`no ${label} button`);
+  await act(async () => {
+    button.focus();
+    button.click();
+  });
+}
 
 /**
  * VC-116 — the Previous band draws its first {@link PREVIOUS_BAND_LIMIT}
@@ -764,45 +814,6 @@ describe("the Previous band's cap (VC-116)", () => {
   afterEach(() => {
     vi.useRealTimers();
   });
-
-  /** `count` ticketless chats, all past the quiet window, newest first: `c0`… */
-  const seedPastChats = (count: number): void =>
-    seedSessions(
-      Array.from({ length: count }, (_, index) =>
-        listingRow(
-          chatRecord({
-            sessionId: `c${index}`,
-            title: `Past ${index}`,
-            ticketId: null,
-            role: "project",
-            bornTicketless: true,
-            lastActivityAt: NOW - 90 * 60_000 - index * 1_000,
-          }),
-        ),
-      ),
-    );
-
-  const previousRowIds = (): string[] =>
-    [
-      ...(container?.querySelectorAll<HTMLElement>(
-        '[data-session-band="previous"] [data-peek-row]',
-      ) ?? []),
-    ].map((row) => row.dataset.peekRow ?? "");
-
-  const reachButton = (label: "Show more" | "Show less"): HTMLButtonElement | null =>
-    [
-      ...(container?.querySelectorAll<HTMLButtonElement>('[data-session-band="previous"] button') ??
-        []),
-    ].find((button) => button.textContent === label) ?? null;
-
-  async function pressReach(label: "Show more" | "Show less"): Promise<void> {
-    const button = reachButton(label);
-    if (button === null) throw new Error(`no ${label} button`);
-    await act(async () => {
-      button.focus();
-      button.click();
-    });
-  }
 
   it("draws no reach control for a band that fits", async () => {
     seedPastChats(PREVIOUS_BAND_LIMIT);
@@ -872,19 +883,6 @@ describe("the Previous band's cap (VC-116)", () => {
     expect(document.activeElement).toBe(reachButton("Show more"));
   });
 
-  /** Puts ticketless chat `c{index}` in front of you, as Home's active tab. */
-  const selectHomeChat = (index: number): void => {
-    useProjectUiStore.setState({
-      byProject: {
-        [PROJECT.id]: {
-          ...DEFAULT_PROJECT_UI,
-          nav: "home",
-          homeActiveTab: chatTabId(`c${index}`),
-        },
-      },
-    });
-  };
-
   it("walks the arrow keys over the drawn rows, straight onto a pinned one past the cap", async () => {
     seedPastChats(PREVIOUS_BAND_LIMIT + 10);
     const pinned = `chat:c${PREVIOUS_BAND_LIMIT + 6}`;
@@ -910,14 +908,13 @@ describe("the Previous band's cap (VC-116)", () => {
     expect(reachButton("Show more")).not.toBeNull();
   });
 });
+const withReview = (): Ticket[] => [
+  ticket("t1", "needs_review", 0),
+  ticket("t2", "todo", 1),
+  ticket("t3", "doing", 0),
+];
 
 describe("ActiveSessions attention signals (VC-1078)", () => {
-  const withReview = (): Ticket[] => [
-    ticket("t1", "needs_review", 0),
-    ticket("t2", "todo", 1),
-    ticket("t3", "doing", 0),
-  ];
-
   it("re-reads only for a refresh that could move a shown signal", async () => {
     useBoardStore.getState().hydrate({ [PROJECT.id]: withReview() }, { [PROJECT.id]: [] });
     await mount();
@@ -954,6 +951,8 @@ describe("ActiveSessions attention signals (VC-1078)", () => {
     expect(latestSignals).toHaveBeenCalledTimes(3);
   });
 });
+const click = async (id: string, init: MouseEventInit) =>
+  act(async () => rowButton(id).dispatchEvent(new MouseEvent("click", { bubbles: true, ...init })));
 
 it("selects without navigation, ranges, selects all and clears, with existing read commands in bulk", async () => {
   // Distinct activity times pin the row order (c1, c2, c3); identical timestamps
@@ -972,10 +971,6 @@ it("selects without navigation, ranges, selects all and clears, with existing re
     ),
   );
   await mount();
-  const click = async (id: string, init: MouseEventInit) =>
-    act(async () =>
-      rowButton(id).dispatchEvent(new MouseEvent("click", { bubbles: true, ...init })),
-    );
   await click("chat:c1", { metaKey: true });
   await click("chat:c3", { shiftKey: true });
   expect(setRead).not.toHaveBeenCalled();

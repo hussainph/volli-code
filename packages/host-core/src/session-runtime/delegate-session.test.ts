@@ -1491,21 +1491,21 @@ describe("rearmJoined — a message steered into a running turn reports (VC-809)
   });
 });
 
-describe("commandOriginOf", () => {
-  const recorded = (overrides: Partial<SessionEvent>): SessionEvent => ({
-    ...event(CHILD, 8, {
-      kind: "command.recorded",
-      command: {
-        id: "c",
-        sessionId: CHILD,
-        intent: { kind: "message.submit", reference: { id: "m", mediaType: "m", digest: "d" } },
-        createdAt: 8,
-        route: { adapterId: "pi", attachmentId: null },
-      },
-    } as SessionEvent["payload"]),
-    ...overrides,
-  });
+const recorded = (overrides: Partial<SessionEvent>): SessionEvent => ({
+  ...event(CHILD, 8, {
+    kind: "command.recorded",
+    command: {
+      id: "c",
+      sessionId: CHILD,
+      intent: { kind: "message.submit", reference: { id: "m", mediaType: "m", digest: "d" } },
+      createdAt: 8,
+      route: { adapterId: "pi", attachmentId: null },
+    },
+  } as SessionEvent["payload"]),
+  ...overrides,
+});
 
+describe("commandOriginOf", () => {
   it("reads the door's attribution from provenance, and prefers the slim field", () => {
     expect(
       commandOriginOf(

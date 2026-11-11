@@ -759,6 +759,7 @@ export async function runMigrationDryRun(
     const numbers = new Map<string, Set<number>>();
     const nextNumber = new Map<string, number>();
     const needles = [...pathNeedles];
+    const bumpInvariant = (name: string) => (invariants[name] = (invariants[name] ?? 0) + 1);
     await time("verify", async () => {
       for (const stream of MIGRATION_IMPORT_STREAMS) {
         log(`verify: ${stream}`);
@@ -825,7 +826,6 @@ export async function runMigrationDryRun(
     });
 
     async function checkRow(stream: MigrationImportStream, row: Row) {
-      const bump = (name: string) => (invariants[name] = (invariants[name] ?? 0) + 1);
       switch (stream) {
         case "tickets": {
           const column = `${String(row.projectId)}\u0000${String(row.status)}`;
@@ -833,7 +833,7 @@ export async function runMigrationDryRun(
           list.push({ id: row.id as string, position: row.position as string });
           columns.set(column, list);
           const seen = numbers.get(row.projectId as string) ?? new Set<number>();
-          if (seen.has(row.number as number)) bump("duplicateTicketKeys");
+          if (seen.has(row.number as number)) bumpInvariant("duplicateTicketKeys");
           seen.add(row.number as number);
           numbers.set(row.projectId as string, seen);
           break;
@@ -848,7 +848,7 @@ export async function runMigrationDryRun(
           hotEventsBySession.set(row.sessionId as string, entry);
           // Stored the intake's way: the payload is JSON text, never a spill.
           if (typeof row.payload !== "string" || typeof row.provenance !== "string") {
-            bump("sessionEventsNotStoredAsText");
+            bumpInvariant("sessionEventsNotStoredAsText");
           }
           break;
         }
@@ -858,12 +858,12 @@ export async function runMigrationDryRun(
           archivesBySession.set(row.sessionId as string, ranges);
           const path = join(r2Root, row.key as string);
           if (!existsSync(path)) {
-            bump("archiveObjectsMissing");
+            bumpInvariant("archiveObjectsMissing");
             break;
           }
           const bytes = await readFile(path);
           if (bytes.length !== row.bytes || sha256Hex(bytes) !== row.sha256) {
-            bump("archiveObjectsDamaged");
+            bumpInvariant("archiveObjectsDamaged");
             break;
           }
           const lines = zstdDecompressSync(bytes).toString("utf8").trimEnd().split("\n");
@@ -873,14 +873,14 @@ export async function runMigrationDryRun(
             lines.length - 1 !== row.eventCount ||
             (row.lastSequence as number) - (row.firstSequence as number) + 1 !== row.eventCount
           ) {
-            bump("archiveObjectsInconsistent");
+            bumpInvariant("archiveObjectsInconsistent");
           }
           break;
         }
         case "sessionIntake":
           intakeBySession.set(row.sessionId as string, row.acceptedThrough as number);
           if ((row.claim as { runnerId: string }).runnerId !== target.runnerId)
-            bump("intakeWrongClaim");
+            bumpInvariant("intakeWrongClaim");
           break;
         case "blobs": {
           let expectedKey: string | null = null;
@@ -889,9 +889,9 @@ export async function runMigrationDryRun(
           } catch {
             // A key part the layout refuses: counted as a wrong key below.
           }
-          if (row.key !== expectedKey) bump("blobKeysOffLayout");
+          if (row.key !== expectedKey) bumpInvariant("blobKeysOffLayout");
           const path = join(r2Root, row.key as string);
-          if (!existsSync(path)) bump("blobObjectsMissing");
+          if (!existsSync(path)) bumpInvariant("blobObjectsMissing");
           break;
         }
         default:

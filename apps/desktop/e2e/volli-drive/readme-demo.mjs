@@ -268,6 +268,13 @@ export function frameManifest(frames, duration) {
   concat.push(`file '${frames.at(-1).path}'`, "option framerate 1000");
   return `${concat.join("\n")}\n`;
 }
+const driveDemo = async (...args) =>
+  (
+    await exec(process.execPath, [join(REPO, "apps/desktop/e2e/volli-drive/cli.mjs"), ...args], {
+      timeout: 180_000,
+      maxBuffer: 4 * 1024 * 1024,
+    })
+  ).stdout;
 
 async function main() {
   const scratch = join(REPO, ".scratch/readme-demo");
@@ -293,17 +300,10 @@ async function main() {
       { text: SUMMARY, delayMs: 600, chunkDelayMs: 300 },
     ]),
   );
-  const drive = async (...args) =>
-    (
-      await exec(process.execPath, [join(REPO, "apps/desktop/e2e/volli-drive/cli.mjs"), ...args], {
-        timeout: 180_000,
-        maxBuffer: 4 * 1024 * 1024,
-      })
-    ).stdout;
   let id;
   try {
     ({ id } = JSON.parse(
-      await drive(
+      await driveDemo(
         "launch",
         "--fixture",
         "empty",
@@ -320,10 +320,10 @@ async function main() {
     console.log(`Capturing ${id}`);
     const entry = await createRegistry().get(id);
     const layout = instanceLayout(entry.scratch, entry.evidence);
-    await drive("doctor", id);
+    await driveDemo("doctor", id);
     const capture = await request(layout.driveSocket, "readme-demo", {}, { timeoutMs: 120_000 });
     console.log(JSON.stringify(capture));
-    const proof = await drive(
+    const proof = await driveDemo(
       "state",
       id,
       "sql",
@@ -391,9 +391,9 @@ async function main() {
     console.log(
       `${out}: ${bytes} bytes; ${duration.toFixed(2)}s; ${capture.frames} captured frames; ${probe.streams[0].nb_frames} GIF frames`,
     );
-    console.log(await drive("doctor", id));
+    console.log(await driveDemo("doctor", id));
   } finally {
-    if (id) console.log(await drive("stop", id));
+    if (id) console.log(await driveDemo("stop", id));
   }
 }
 

@@ -571,22 +571,21 @@ describe("composerPickerToken", () => {
     expect(composerPickerToken({ text: "plain prose", caret: 5 })).toBeNull();
   });
 });
+function commandRow(name: string): ComposerPickerRow {
+  const found = TEMPLATES.find((entry) => entry.name === name);
+  if (!found) throw new Error(`no fixture template ${name}`);
+  return {
+    kind: "command",
+    value: found.name,
+    name: found.name,
+    label: `/${found.name}`,
+    detail: found.description,
+    heading: "Commands",
+    template: found,
+  };
+}
 
 describe("applyPickerRow", () => {
-  function commandRow(name: string): ComposerPickerRow {
-    const found = TEMPLATES.find((entry) => entry.name === name);
-    if (!found) throw new Error(`no fixture template ${name}`);
-    return {
-      kind: "command",
-      value: found.name,
-      name: found.name,
-      label: `/${found.name}`,
-      detail: found.description,
-      heading: "Commands",
-      template: found,
-    };
-  }
-
   it("stages `/name ` for a template that reads arguments", () => {
     const state = pick("/rev");
     if (state === null) throw new Error("expected an open picker");

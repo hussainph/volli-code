@@ -121,12 +121,12 @@ const headerSpans = () =>
       .querySelector<HTMLButtonElement>("button[aria-expanded]")!
       .querySelectorAll("span"),
   ].map((span) => span.textContent);
+const render = (rows: readonly Extract<BundleRow, { kind: "tool" }>[]) =>
+  act(() => root.render(<WebWorkGroup rows={rows} />));
 
 it("the web group counts sources with singular and plural, and omits the count at zero", () => {
   const one = "https://one.example/docs/";
   const two = "https://two.example/docs/";
-  const render = (rows: readonly Extract<BundleRow, { kind: "tool" }>[]) =>
-    act(() => root.render(<WebWorkGroup rows={rows} />));
 
   render([webRow(one, fetchOutput(one))]);
   expect(headerSpans()).toEqual(["Searched the web", "1 source"]);

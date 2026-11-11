@@ -454,16 +454,16 @@ describe("createHostMaintenance", () => {
   });
 });
 
-describe("HostMaintenance.settled (VC-627)", () => {
-  function maintenanceOver() {
-    return createHostMaintenance({
-      db: testDb.db,
-      ports: { events, attention },
-      worktrees,
-      processReaders: readers(),
-    });
-  }
+function maintenanceOver() {
+  return createHostMaintenance({
+    db: testDb.db,
+    ports: { events, attention },
+    worktrees,
+    processReaders: readers(),
+  });
+}
 
+describe("HostMaintenance.settled (VC-627)", () => {
   it("joins a retention poll and an automatic reap still in flight after stop", async () => {
     const { calls, retention, autoReap } = recordingLoops();
     const poll = deferred();

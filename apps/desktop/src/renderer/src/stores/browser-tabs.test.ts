@@ -134,6 +134,8 @@ describe("browserTabDisplayTitle", () => {
     );
   });
 });
+const agent = (tabId: string, owner: string, presentation: BrowserTabState["presentation"]) =>
+  tab({ tabId, createdBy: "session", ownerSessionId: owner, presentation });
 
 /**
  * Which tabs a strip draws, and which tabs a chat owns (VC-238). Both are pure
@@ -141,9 +143,6 @@ describe("browserTabDisplayTitle", () => {
  * disagree about what "shown" means.
  */
 describe("strip and inventory selection (VC-238)", () => {
-  const agent = (tabId: string, owner: string, presentation: BrowserTabState["presentation"]) =>
-    tab({ tabId, createdBy: "session", ownerSessionId: owner, presentation });
-
   it("draws in the strip only a person's tabs and the agent tabs a person promoted there", () => {
     const tabs = [
       tab({ tabId: "person" }),

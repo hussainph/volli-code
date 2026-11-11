@@ -103,6 +103,32 @@ async function world(options: { answer?: (body: unknown) => Response; allowHttp?
 
 const GITHUB = "protocol=https\nhost=github.com\npath=acme/app.git\n\n";
 
+const at = (name: string, line: string) => {
+  const socketPath = join(dir, name);
+  const open = new Set<Socket>();
+  const server = createServer((socket) => {
+    open.add(socket);
+    socket.on("error", () => {});
+    socket.end(line);
+  });
+  closers.push(
+    () =>
+      new Promise((resolve) => {
+        for (const socket of open) socket.destroy();
+        server.close(() => resolve());
+      }),
+  );
+  return new Promise<string>((resolve) => server.listen(socketPath, () => resolve(socketPath)));
+};
+
+const askWithStderr = async (line: string) =>
+  askGitCredentialDaemon({
+    socketPath: await at(`s${closers.length}.sock`, line),
+    action: "get",
+    request: GITHUB,
+    env: {},
+  });
+
 describe("a runner Session's git credentials", () => {
   it("answer the owner's token for the token's host, over a socket only this account opens", async () => {
     const { ask, fake, tokens, socketPath, servedGrant } = await world();
@@ -335,50 +361,30 @@ describe("a runner Session's git credentials", () => {
   });
 
   it("the helper prints at most one plain line of what the runner sends for stderr", async () => {
-    const at = (name: string, line: string) => {
-      const socketPath = join(dir, name);
-      const open = new Set<Socket>();
-      const server = createServer((socket) => {
-        open.add(socket);
-        socket.on("error", () => {});
-        socket.end(line);
-      });
-      closers.push(
-        () =>
-          new Promise((resolve) => {
-            for (const socket of open) socket.destroy();
-            server.close(() => resolve());
-          }),
-      );
-      return new Promise<string>((resolve) => server.listen(socketPath, () => resolve(socketPath)));
-    };
-    const ask = async (line: string) =>
-      askGitCredentialDaemon({
-        socketPath: await at(`s${closers.length}.sock`, line),
-        action: "get",
-        request: GITHUB,
-        env: {},
-      });
     // An older runner sends no stderr.
-    expect(await ask(`${JSON.stringify({ v: 1, answer: "a" })}\n`)).toEqual({
+    expect(await askWithStderr(`${JSON.stringify({ v: 1, answer: "a" })}\n`)).toEqual({
       answer: "a",
       stderr: "",
     });
     expect(
-      await ask(`${JSON.stringify({ v: 1, answer: "", stderr: "one\u001b[2J\rline\nsecond" })}\n`),
+      await askWithStderr(
+        `${JSON.stringify({ v: 1, answer: "", stderr: "one\u001b[2J\rline\nsecond" })}\n`,
+      ),
     ).toEqual({ answer: "", stderr: "one[2Jline\n" });
     expect(
-      await ask(`${JSON.stringify({ v: 1, answer: "", stderr: "a\u202eb\u2028c" })}\n`),
+      await askWithStderr(`${JSON.stringify({ v: 1, answer: "", stderr: "a\u202eb\u2028c" })}\n`),
     ).toEqual({ answer: "", stderr: "ab\n" });
-    expect(await ask(`${JSON.stringify({ v: 1, answer: "", stderr: "\nx" })}\n`)).toEqual({
+    expect(await askWithStderr(`${JSON.stringify({ v: 1, answer: "", stderr: "\nx" })}\n`)).toEqual(
+      {
+        answer: "",
+        stderr: "",
+      },
+    );
+    expect(await askWithStderr(`${JSON.stringify({ v: 2, answer: "a" })}\n`)).toEqual({
       answer: "",
       stderr: "",
     });
-    expect(await ask(`${JSON.stringify({ v: 2, answer: "a" })}\n`)).toEqual({
-      answer: "",
-      stderr: "",
-    });
-    expect(await ask("not json\n")).toEqual({ answer: "", stderr: "" });
+    expect(await askWithStderr("not json\n")).toEqual({ answer: "", stderr: "" });
   });
 
   it("Volli not installed on the repository's account is remembered for a minute and keeps the connection", async () => {

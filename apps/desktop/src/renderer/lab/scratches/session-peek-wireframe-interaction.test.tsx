@@ -63,6 +63,9 @@ function control(text: string): HTMLButtonElement {
   if (button === undefined) throw new Error(`Missing control ${text}`);
   return button;
 }
+const move = async () => {
+  await act(async () => row().dispatchEvent(new MouseEvent("pointermove", { bubbles: true })));
+};
 
 // These exercise DOM focus/timer wiring, not just the reducer's focus labels.
 describe("wireframe focus and hover wiring", () => {
@@ -110,9 +113,6 @@ describe("wireframe focus and hover wiring", () => {
   });
 
   it("waits until the pointer rests rather than opening during a sweep within a row", async () => {
-    const move = async () => {
-      await act(async () => row().dispatchEvent(new MouseEvent("pointermove", { bubbles: true })));
-    };
     await move();
     await advance(300);
     await move();

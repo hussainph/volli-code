@@ -650,22 +650,34 @@ describe("compactProviderNative — OpenAI request shaping", () => {
   });
 });
 
-describe("compactProviderNative — Anthropic request shaping", () => {
-  function anthropicFetch(
-    messagesBody: unknown,
-    countOverride?: { body: unknown; status?: number },
-  ): { mock: { calls: [string, RequestInit][] } } & typeof fetch {
-    const fn = vi.fn(async (url: URL | RequestInfo) =>
-      String(url).endsWith("/count_tokens")
-        ? jsonResponse(
-            countOverride?.body ?? { input_tokens: 60_000 },
-            countOverride?.status ?? 200,
-          )
-        : jsonResponse(messagesBody),
-    );
-    return fn as unknown as { mock: { calls: [string, RequestInit][] } } & typeof fetch;
-  }
+function anthropicFetch(
+  messagesBody: unknown,
+  countOverride?: { body: unknown; status?: number },
+): { mock: { calls: [string, RequestInit][] } } & typeof fetch {
+  const fn = vi.fn(async (url: URL | RequestInfo) =>
+    String(url).endsWith("/count_tokens")
+      ? jsonResponse(countOverride?.body ?? { input_tokens: 60_000 }, countOverride?.status ?? 200)
+      : jsonResponse(messagesBody),
+  );
+  return fn as unknown as { mock: { calls: [string, RequestInit][] } } & typeof fetch;
+}
 
+// Three shapes the Responses API actually produces: a cached share larger
+// than the prompt it claims to be part of, a detail object carrying no
+// usable cached count, and output with no prompt count beside it.
+const measured = async (usage: unknown) => {
+  const outcome = await compactProviderNative({
+    model: OPENAI_MODEL,
+    models: modelsReturningAuth({ apiKey: "sk-test" }),
+    messages: [user("hello")],
+    enabled: true,
+    fetch: fetchReturning({ output: canonicalWindow, usage }),
+  });
+  expect(outcome.kind).toBe("compacted");
+  return outcome.kind === "compacted" ? outcome.usage : null;
+};
+
+describe("compactProviderNative — Anthropic request shaping", () => {
   const compactedResponse = {
     stop_reason: "compaction",
     content: [compactionBlock],
@@ -966,20 +978,6 @@ describe("compactProviderNative — Anthropic request shaping", () => {
   });
 
   it("reports only what OpenAI measured, cached share included and never doubled", async () => {
-    // Three shapes the Responses API actually produces: a cached share larger
-    // than the prompt it claims to be part of, a detail object carrying no
-    // usable cached count, and output with no prompt count beside it.
-    const measured = async (usage: unknown) => {
-      const outcome = await compactProviderNative({
-        model: OPENAI_MODEL,
-        models: modelsReturningAuth({ apiKey: "sk-test" }),
-        messages: [user("hello")],
-        enabled: true,
-        fetch: fetchReturning({ output: canonicalWindow, usage }),
-      });
-      expect(outcome.kind).toBe("compacted");
-      return outcome.kind === "compacted" ? outcome.usage : null;
-    };
     expect(
       await measured({ input_tokens: 100, input_tokens_details: { cached_tokens: 900 } }),
     ).toMatchObject({ inputTokens: 0, cacheReadTokens: 100 });

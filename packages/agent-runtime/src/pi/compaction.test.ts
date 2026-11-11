@@ -535,18 +535,18 @@ describe("contextMessages", () => {
   });
 });
 
+/** A history long enough that Pi's cut point leaves something behind it. */
+function longPath(): MessageEntry[] {
+  return [
+    messageEntry(user("the original request")),
+    messageEntry(assistant("a long early answer")),
+    messageEntry(user("x".repeat(90_000))),
+    messageEntry(assistant("the recent answer")),
+  ];
+}
+
 describe("compactSession", () => {
   const settings = DEFAULT_COMPACTION_SETTINGS;
-
-  /** A history long enough that Pi's cut point leaves something behind it. */
-  function longPath(): MessageEntry[] {
-    return [
-      messageEntry(user("the original request")),
-      messageEntry(assistant("a long early answer")),
-      messageEntry(user("x".repeat(90_000))),
-      messageEntry(assistant("the recent answer")),
-    ];
-  }
 
   it("appends a durable compaction entry and returns the elided context", async () => {
     const sidecar = await memorySession();

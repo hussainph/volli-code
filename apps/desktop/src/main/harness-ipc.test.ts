@@ -419,6 +419,10 @@ describe("volli:harness-trust-set — a verdict has to take effect", () => {
     expect(getRegisteredHarness(fixture.db, "my-harness")).toEqual(before);
   });
 });
+/** A file where the directory belongs — ENOTDIR, whichever user the suite runs as. */
+async function breakTheDirectory(): Promise<void> {
+  await writeFile(harnessesDir(), "", "utf8");
+}
 
 describe("a manifest directory that would not read", () => {
   let warn: ReturnType<typeof vi.spyOn>;
@@ -430,11 +434,6 @@ describe("a manifest directory that would not read", () => {
   afterEach(() => {
     warn.mockRestore();
   });
-
-  /** A file where the directory belongs — ENOTDIR, whichever user the suite runs as. */
-  async function breakTheDirectory(): Promise<void> {
-    await writeFile(harnessesDir(), "", "utf8");
-  }
 
   it("says so rather than answering that nothing is pending", async () => {
     await breakTheDirectory();
@@ -479,11 +478,10 @@ const registeredSlug = (value: string): HarnessId => {
   if (parsed === null) throw new Error(`${value} is not a harness slug`);
   return parsed;
 };
+const registered = (): HarnessRegisteredResult =>
+  invoke<HarnessRegisteredResult>("volli:harness-registered");
 
 describe("volli:harness-registered", () => {
-  const registered = (): HarnessRegisteredResult =>
-    invoke<HarnessRegisteredResult>("volli:harness-registered");
-
   it("names nothing when the launch path resolved nothing", () => {
     setup();
 

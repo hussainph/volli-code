@@ -57,6 +57,13 @@ function classesFor(state: StatusDotState): string[] {
 function toneOf(state: StatusDotState): string | undefined {
   return classesFor(state).find((one) => one.startsWith("bg-"));
 }
+// Motion is the channel a glance reads. A haloed dot is the same amount of
+// ink as a resting one, which is why a running Session was hard to find in
+// a strip of tabs — and why `setup`, which is busy too, deliberately stays
+// still: a band where several kinds of busy all move has no signal left.
+const breathes = (state: StatusDotState) => classesFor(state).includes("status-dot-live");
+
+const halo = (state: StatusDotState) => classesFor(state).some((one) => one.startsWith("shadow-"));
 
 describe("StatusDot", () => {
   it("paints every state, with no state falling through to nothing", () => {
@@ -75,20 +82,12 @@ describe("StatusDot", () => {
     expect(toneOf("working")).toBe("bg-positive");
     expect(toneOf("setup")).toBe("bg-positive");
     expect(toneOf("ready")).toBe("bg-positive");
-
-    const halo = (state: StatusDotState) =>
-      classesFor(state).some((one) => one.startsWith("shadow-"));
     expect(halo("working")).toBe(true);
     expect(halo("ready")).toBe(false);
     expect(halo("setup")).toBe(false);
   });
 
   it("lets the live turn breathe, and nothing else", () => {
-    // Motion is the channel a glance reads. A haloed dot is the same amount of
-    // ink as a resting one, which is why a running Session was hard to find in
-    // a strip of tabs — and why `setup`, which is busy too, deliberately stays
-    // still: a band where several kinds of busy all move has no signal left.
-    const breathes = (state: StatusDotState) => classesFor(state).includes("status-dot-live");
     expect(breathes("working")).toBe(true);
     expect(EVERY_STATE.filter(breathes)).toEqual(["working"]);
   });

@@ -297,19 +297,19 @@ describe("attachBlob: the guards that keep a session usable", () => {
   });
 });
 
-describe("sessionLinkBudgetRefusal: the same ceiling, asked at promotion (VC-358)", () => {
-  /** Stages one ownerless image, the way a provisional chat's composer does. */
-  async function staged(name: string, bytes: Uint8Array): Promise<string> {
-    const outcome = await attachBlob(
-      ctx.db,
-      root,
-      { fileName: name, bytes, owner: { unowned: true } },
-      1,
-    );
-    if (outcome.kind !== "blob") throw new Error("expected a staged blob");
-    return outcome.blob.blobHash;
-  }
+/** Stages one ownerless image, the way a provisional chat's composer does. */
+async function staged(name: string, bytes: Uint8Array): Promise<string> {
+  const outcome = await attachBlob(
+    ctx.db,
+    root,
+    { fileName: name, bytes, owner: { unowned: true } },
+    1,
+  );
+  if (outcome.kind !== "blob") throw new Error("expected a staged blob");
+  return outcome.blob.blobHash;
+}
 
+describe("sessionLinkBudgetRefusal: the same ceiling, asked at promotion (VC-358)", () => {
   it("admits a staged batch that fits", async () => {
     const hash = await staged("one.png", new Uint8Array(1024));
     expect(sessionLinkBudgetRefusal(ctx.db, sessionId, [hash])).toBeNull();

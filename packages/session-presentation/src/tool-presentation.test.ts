@@ -438,14 +438,16 @@ it("keeps session acceptance and recorded titles distinct from completion", () =
   expect(
     presentTranscriptTool(call("session_send", { session: "alias" }, "unknown"), {
       sessionNames: new Map([["alias", "Audit"]]),
+      sessionIds: new Map(),
     })?.sessionId,
   ).toBeNull();
 });
 
+const watchCall = (details: Record<string, unknown>) => call("watch", {}, { details });
+
 it("reports watch targets, unwatch counts and retained lifecycle states truthfully", () => {
-  const watch = (details: Record<string, unknown>) => call("watch", {}, { details });
   const base = { action: "watch", sessions: ["known", "missing"], tickets: ["VC-12"] };
-  const model = presentTranscriptTool(watch({ ...base, detached: ["missing"] }), {
+  const model = presentTranscriptTool(watchCall({ ...base, detached: ["missing"] }), {
     sessionNames: new Map([["known", "Audit"]]),
   });
   expect(model).toMatchObject({
@@ -455,13 +457,15 @@ it("reports watch targets, unwatch counts and retained lifecycle states truthful
       { label: "Outcome", format: "note" },
     ],
   });
-  expect(presentTranscriptTool(watch({ ...base, stopped: ["missing"] }))?.sections).toHaveLength(2);
   expect(
-    presentTranscriptTool(watch({ ...base, stopped: [], detached: [] }))?.sections,
+    presentTranscriptTool(watchCall({ ...base, stopped: ["missing"] }))?.sections,
+  ).toHaveLength(2);
+  expect(
+    presentTranscriptTool(watchCall({ ...base, stopped: [], detached: [] }))?.sections,
   ).toHaveLength(1);
-  expect(presentTranscriptTool(watch(base))?.label).toBe("Watching 3 targets");
+  expect(presentTranscriptTool(watchCall(base))?.label).toBe("Watching 3 targets");
   for (const ended of [0, 1, -1, 1.5, "1"]) {
-    const result = presentTranscriptTool(watch({ ...base, action: "unwatch", ended }));
+    const result = presentTranscriptTool(watchCall({ ...base, action: "unwatch", ended }));
     expect(result?.label).toBe(ended === 0 ? "No watches changed" : "Stopped watching 3 targets");
     expect(result?.meta).toBe(ended === 0 || ended === 1 ? `${ended} ended` : null);
   }
@@ -470,10 +474,10 @@ it("reports watch targets, unwatch counts and retained lifecycle states truthful
     ["failed", "Watch failed"],
     ["denied", "Watch denied"],
   ] as const)
-    expect(presentTranscriptTool(inState(watch(base), state))?.label).toBe(label);
-  expect(presentTranscriptTool(watch({ action: "watch", sessions: [1], tickets: [] }))?.label).toBe(
-    "Watch result unavailable",
-  );
+    expect(presentTranscriptTool(inState(watchCall(base), state))?.label).toBe(label);
+  expect(
+    presentTranscriptTool(watchCall({ action: "watch", sessions: [1], tickets: [] }))?.label,
+  ).toBe("Watch result unavailable");
 });
 
 const webRefusal =

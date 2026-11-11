@@ -40,6 +40,8 @@ const place = (
     formatSince: clock,
   });
 
+const paused = (patch: Partial<RunnerPlace>) => place(mac(patch), { turnActive: true }).label;
+
 describe("sessionPlaceState", () => {
   test("a serving runner runs the Session", () => {
     for (const status of ["online", "draining", "degraded"]) {
@@ -96,7 +98,6 @@ describe("sessionPlaceState", () => {
   });
 
   test("a live turn on a waiting runner is paused", () => {
-    const paused = (patch: Partial<RunnerPlace>) => place(mac(patch), { turnActive: true }).label;
     expect(paused({ status: "asleep" })).toBe("Paused — hp-mac is asleep");
     expect(paused({ status: "offline" })).toBe("Paused — hp-mac is offline");
     expect(paused({ status: "stopped" })).toBe("Paused — Volli is closed on hp-mac");

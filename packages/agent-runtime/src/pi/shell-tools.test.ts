@@ -37,6 +37,9 @@ function resultText(result: { content: { type: string; text?: string }[] }): str
     .join("\n");
 }
 
+const dead = (id: string): RuntimeShellRecord =>
+  record({ shellId: id, state: "exited", code: 0, exitedAt: NOW - 1_000 });
+
 describe("shell tools", () => {
   it("reaches the Session's surface through createSessionTools when the one port is wired", async () => {
     const port = unusedPort();
@@ -343,8 +346,6 @@ describe("shell tools", () => {
     // holds one of four and may start three more. A footer that counted
     // records would read "5 of 4" and stop the model starting anything.
     const port = unusedPort();
-    const dead = (id: string): RuntimeShellRecord =>
-      record({ shellId: id, state: "exited", code: 0, exitedAt: NOW - 1_000 });
     port.output = async () => ({
       shell: record(),
       output: "",

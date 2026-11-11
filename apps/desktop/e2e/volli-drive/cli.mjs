@@ -161,6 +161,8 @@ function printSnapshot(snap, find) {
   } else out(snap.text);
   out(`(saved: ${snap.path})`);
 }
+const runMetadataGit = async (args) =>
+  (await execFileAsync("git", args, { cwd: REPO }).catch(() => ({ stdout: "" }))).stdout.trim();
 
 // ---- launch --------------------------------------------------------------------
 
@@ -174,11 +176,9 @@ async function gitFacts() {
     const metadata = JSON.parse(source);
     return { commit: metadata.commit, dirty: false, driverOverlay: metadata.overlay };
   }
-  const run = async (args) =>
-    (await execFileAsync("git", args, { cwd: REPO }).catch(() => ({ stdout: "" }))).stdout.trim();
   return {
-    commit: await run(["rev-parse", "HEAD"]),
-    dirty: (await run(["status", "--porcelain"])).length > 0,
+    commit: await runMetadataGit(["rev-parse", "HEAD"]),
+    dirty: (await runMetadataGit(["status", "--porcelain"])).length > 0,
   };
 }
 

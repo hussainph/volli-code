@@ -139,19 +139,18 @@ describe("launch-cached keychain wrapping", () => {
       expect(() => codec.decryptString(value)).toThrow();
   });
 });
+function withStore(run: (path: string) => void): void {
+  const dir = mkdtempSync(join(tmpdir(), "volli-keychain-locked-"));
+  try {
+    const path = join(dir, "session-secrets.enc");
+    writeFileSync(path, Buffer.from(VSC1_STORE, "base64"), { mode: 0o600 });
+    run(path);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 describe("a locked or denied keychain (VC-641)", () => {
-  function withStore(run: (path: string) => void): void {
-    const dir = mkdtempSync(join(tmpdir(), "volli-keychain-locked-"));
-    try {
-      const path = join(dir, "session-secrets.enc");
-      writeFileSync(path, Buffer.from(VSC1_STORE, "base64"), { mode: 0o600 });
-      run(path);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  }
-
   it("locks stored secrets, keeps the file, and asks the keychain once until retried", () => {
     withStore((path) => {
       let unlocked = false;

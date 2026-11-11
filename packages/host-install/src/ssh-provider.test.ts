@@ -141,26 +141,27 @@ const ENROLLED = {
 
 type Handler = (script: string, options: SshExecOptions) => Partial<SshExecResult> | undefined;
 
+const defaults: Handler = (script, options) => {
+  if (script === "echo volli-ok") return { stdout: "volli-ok\n" };
+  if (script === PROBE_SCRIPT) return { stdout: probeOutput() };
+  if (options.label === "upload: check") return { stdout: "\n" };
+  if (script.includes("cat > ")) return {};
+  if (script.includes(".part' 2>/dev/null; } | cut")) return { stdout: `${SHA}\n` };
+  if (script.includes("tar -xzf")) return { stdout: `dir=${STAGED}\nversion=1.1.0\n` };
+  if (script.includes(" install --"))
+    return json(INSTALLED(script.includes("--user") ? "user" : "system"));
+  if (script.includes(" start --"))
+    return json(STARTED(script.includes("--user") ? "user" : "system"));
+  if (script.includes(" enroll --")) return json(ENROLLED);
+  return {};
+};
+
 /**
  * A fake box over a fake SSH connection. Each script is answered by the first
  * override that answers it, else by a fresh Ubuntu box with passwordless sudo.
  */
 function fakeBox(...overrides: Handler[]) {
   const scripts: { script: string; stdin: string | null }[] = [];
-  const defaults: Handler = (script, options) => {
-    if (script === "echo volli-ok") return { stdout: "volli-ok\n" };
-    if (script === PROBE_SCRIPT) return { stdout: probeOutput() };
-    if (options.label === "upload: check") return { stdout: "\n" };
-    if (script.includes("cat > ")) return {};
-    if (script.includes(".part' 2>/dev/null; } | cut")) return { stdout: `${SHA}\n` };
-    if (script.includes("tar -xzf")) return { stdout: `dir=${STAGED}\nversion=1.1.0\n` };
-    if (script.includes(" install --"))
-      return json(INSTALLED(script.includes("--user") ? "user" : "system"));
-    if (script.includes(" start --"))
-      return json(STARTED(script.includes("--user") ? "user" : "system"));
-    if (script.includes(" enroll --")) return json(ENROLLED);
-    return {};
-  };
   const ssh: SshTransport = {
     target: { destination: "deploy@box", port: null, label: "box" },
     async exec(script, options = {}) {
@@ -531,10 +532,10 @@ describe("connect", () => {
   });
 });
 
-describe("probe", () => {
-  const probing = (output: string) =>
-    fakeBox((script) => (script === PROBE_SCRIPT ? { stdout: output } : undefined));
+const probing = (output: string) =>
+  fakeBox((script) => (script === PROBE_SCRIPT ? { stdout: output } : undefined));
 
+describe("probe", () => {
   it("refuses a box Volli cannot run on, each for its own reason", async () => {
     for (const [overrides, expected] of [
       [{ kernel: "FreeBSD" }, { code: "unsupported-system", system: "FreeBSD" }],
@@ -702,6 +703,13 @@ const MAC = {
   mem_bytes: "17179869184",
 };
 
+const asset = (platform: string, arch: string) => ({
+  platform,
+  arch,
+  name: `volli-hostd-1.1.0-${platform}-${arch}.tar.gz`,
+  sha256: SHA,
+});
+
 describe("a Mac", () => {
   it("installs a launchd agent as the person once this build carries a Mac host", async () => {
     const box = fakeBox((script) =>
@@ -718,12 +726,6 @@ describe("a Mac", () => {
   // VC-700 PR 1c: the release pin carries darwin, so a Mac is no longer target-unavailable.
   it("installs on a Mac end to end from a four-target VC-701 manifest, and dev defaults refuse it", async () => {
     const macName = "volli-hostd-1.1.0-darwin-arm64.tar.gz";
-    const asset = (platform: string, arch: string) => ({
-      platform,
-      arch,
-      name: `volli-hostd-1.1.0-${platform}-${arch}.tar.gz`,
-      sha256: SHA,
-    });
     const pin = parseHostdReleasePin({
       schemaVersion: 1,
       version: "1.1.0",
@@ -1003,12 +1005,12 @@ describe("upload", () => {
   });
 });
 
-describe("sudo with a password", () => {
-  const passworded = (...overrides: Handler[]) =>
-    fakeBox(...overrides, (script) =>
-      script === PROBE_SCRIPT ? { stdout: probeOutput({ sudo: null }) } : undefined,
-    );
+const passworded = (...overrides: Handler[]) =>
+  fakeBox(...overrides, (script) =>
+    script === PROBE_SCRIPT ? { stdout: probeOutput({ sudo: null }) } : undefined,
+  );
 
+describe("sudo with a password", () => {
   it("asks for it, sends it only on sudo's stdin, and never keeps it in state or a log", async () => {
     const box = passworded();
     const p = ports(box);
@@ -1304,33 +1306,35 @@ describe("install, start and enroll on the box", () => {
   });
 });
 
+/** A box whose `start --user` wants lingering until `loginctl enable-linger` ran. */
+const userBox = (facts: Record<string, string | null>, ...overrides: Handler[]) => {
+  let lingering = false;
+  return fakeBox(...overrides, (script) => {
+    if (script.includes("loginctl enable-linger")) {
+      lingering = true;
+      return {};
+    }
+    if (script.includes(" start --user") && !lingering) {
+      return json({
+        v: 1,
+        ok: false,
+        code: "linger-required",
+        message: "Run: sudo loginctl enable-linger deploy",
+      });
+    }
+    return script === PROBE_SCRIPT ? { stdout: probeOutput(facts) } : undefined;
+  });
+};
+
+const asUser = async (box: ReturnType<typeof fakeBox>, secrets?: ProvisionSecrets) => {
+  const asked = await advanceWith(start(), ports(box));
+  expect(stoppedWith(asked)).toMatchObject({ kind: "sudo-password", reason: "install" });
+  return advanceWith(answer(asked, { kind: "user-install" }), ports(box), secrets);
+};
+
 describe("a user unit's lingering", () => {
-  /** A box whose `start --user` wants lingering until `loginctl enable-linger` ran. */
-  const userBox = (facts: Record<string, string | null>, ...overrides: Handler[]) => {
-    let lingering = false;
-    return fakeBox(...overrides, (script) => {
-      if (script.includes("loginctl enable-linger")) {
-        lingering = true;
-        return {};
-      }
-      if (script.includes(" start --user") && !lingering) {
-        return json({
-          v: 1,
-          ok: false,
-          code: "linger-required",
-          message: "Run: sudo loginctl enable-linger deploy",
-        });
-      }
-      return script === PROBE_SCRIPT ? { stdout: probeOutput(facts) } : undefined;
-    });
-  };
   /** sudo with a password: the person settles for a user unit, which then needs lingering. */
   const PASSWORD = { sudo: null };
-  const asUser = async (box: ReturnType<typeof fakeBox>, secrets?: ProvisionSecrets) => {
-    const asked = await advanceWith(start(), ports(box));
-    expect(stoppedWith(asked)).toMatchObject({ kind: "sudo-password", reason: "install" });
-    return advanceWith(answer(asked, { kind: "user-install" }), ports(box), secrets);
-  };
 
   it("asks for sudo's password to turn it on, and sends it only to sudo", async () => {
     const box = userBox(PASSWORD);
@@ -1530,18 +1534,27 @@ describe("retrying after the box changed", () => {
   });
 });
 
-describe("a state it did not expect", () => {
-  /** A state as a damaged store might hand it back: some results null, decisions at odds. */
-  const damaged = (results: Record<string, unknown>, decisions = {}): State => ({
-    ...start(),
-    results: results as SshStepResults,
-    decisions,
-  });
-  const probed = (overrides: Record<string, string | null> = {}, extra = "") => {
-    const facts = parseProbe(probeOutput(overrides, extra));
-    return { ...facts, artifactTarget: "linux-x64" };
-  };
+/** A state as a damaged store might hand it back: some results null, decisions at odds. */
+const damaged = (results: Record<string, unknown>, decisions = {}): State => ({
+  ...start(),
+  results: results as SshStepResults,
+  decisions,
+});
 
+const probed = (overrides: Record<string, string | null> = {}, extra = "") => {
+  const facts = parseProbe(probeOutput(overrides, extra));
+  return { ...facts, artifactTarget: "linux-x64" };
+};
+
+const results = (status: Partial<HostdManagedStatus>) => ({
+  connect: { ok: true },
+  probe: probed({}, existing("1.1.0", "system", status)),
+  deliver: { skipped: true },
+  install: { skipped: true, binary: CURRENT, mode: "system" },
+  start: { skipped: true },
+});
+
+describe("a state it did not expect", () => {
   it("stops with a typed failure, retried from the probe, never an exception", async () => {
     const p = ports(fakeBox());
     for (const [state, step, detail] of [
@@ -1600,13 +1613,6 @@ describe("a state it did not expect", () => {
   });
 
   it("names what an already-paired host's status lacks", async () => {
-    const results = (status: Partial<HostdManagedStatus>) => ({
-      connect: { ok: true },
-      probe: probed({}, existing("1.1.0", "system", status)),
-      deliver: { skipped: true },
-      install: { skipped: true, binary: CURRENT, mode: "system" },
-      start: { skipped: true },
-    });
     const running = { state: "serving", version: "1.1.0", pid: 1, listen: LISTEN } as const;
     const device = {
       deviceId: DEVICE_ID,
@@ -1739,44 +1745,44 @@ const deliverOnly = (_script: string, options: SshExecOptions) =>
 /** A hostd management command. */
 const hostdVerb = (script: string) => / (install|start|enroll) --/u.test(script);
 
-describe("delivering the pinned release, on a real local shell", { timeout: 30_000 }, () => {
-  /** A real release tarball: `bin/volli-hostd` prints its version. */
-  function buildRelease(file = FILE) {
-    const name = file.replace(/\.tar\.gz$/u, "");
-    const build = join(root, "build");
-    mkdirSync(join(build, name, "bin"), { recursive: true });
-    writeFileSync(join(build, name, "bin/volli-hostd"), "#!/bin/sh\nprintf '1.1.0\\n'\n", {
-      mode: 0o755,
-    });
-    writeFileSync(join(build, name, "MANIFEST.json"), '{"version":"1.1.0"}\n');
-    const path = join(root, "release", file);
-    mkdirSync(join(root, "release"), { recursive: true });
-    execFileSync("tar", ["-czf", path, "-C", build, name], {
-      env: { ...process.env, COPYFILE_DISABLE: "1" },
-    });
-    const bytes = readFileSync(path);
-    const artifact: HostdArtifact = {
-      version: "1.1.0",
-      target: "linux-x64",
-      fileName: file,
-      path,
-      sha256: createHash("sha256").update(bytes).digest("hex"),
-      bytes: bytes.length,
-      source: "cache",
-    };
-    return { artifact, bytes, binary: readFileSync(join(build, name, "bin/volli-hostd"), "utf8") };
-  }
-
-  /** An unpacked executable that says the right version, and leaves a mark when run. */
-  const tampered = (dir: string) => {
-    mkdirSync(join(dir, "bin"), { recursive: true });
-    writeFileSync(
-      join(dir, "bin/volli-hostd"),
-      `#!/bin/sh\nprintf '1.1.0\\n'\ntouch '${join(root, "untrusted-executed")}'\n`,
-      { mode: 0o755 },
-    );
+/** A real release tarball: `bin/volli-hostd` prints its version. */
+function buildRelease(file = FILE) {
+  const name = file.replace(/\.tar\.gz$/u, "");
+  const build = join(root, "build");
+  mkdirSync(join(build, name, "bin"), { recursive: true });
+  writeFileSync(join(build, name, "bin/volli-hostd"), "#!/bin/sh\nprintf '1.1.0\\n'\n", {
+    mode: 0o755,
+  });
+  writeFileSync(join(build, name, "MANIFEST.json"), '{"version":"1.1.0"}\n');
+  const path = join(root, "release", file);
+  mkdirSync(join(root, "release"), { recursive: true });
+  execFileSync("tar", ["-czf", path, "-C", build, name], {
+    env: { ...process.env, COPYFILE_DISABLE: "1" },
+  });
+  const bytes = readFileSync(path);
+  const artifact: HostdArtifact = {
+    version: "1.1.0",
+    target: "linux-x64",
+    fileName: file,
+    path,
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    bytes: bytes.length,
+    source: "cache",
   };
+  return { artifact, bytes, binary: readFileSync(join(build, name, "bin/volli-hostd"), "utf8") };
+}
 
+/** An unpacked executable that says the right version, and leaves a mark when run. */
+const tampered = (dir: string) => {
+  mkdirSync(join(dir, "bin"), { recursive: true });
+  writeFileSync(
+    join(dir, "bin/volli-hostd"),
+    `#!/bin/sh\nprintf '1.1.0\\n'\ntouch '${join(root, "untrusted-executed")}'\n`,
+    { mode: 0o755 },
+  );
+};
+
+describe("delivering the pinned release, on a real local shell", { timeout: 30_000 }, () => {
   it("never runs or installs an unpacked tree it finds, though the pinned tarball is reused", async () => {
     const { artifact, bytes, binary } = buildRelease();
     const home = join(root, "remote");

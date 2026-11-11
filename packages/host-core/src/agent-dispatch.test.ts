@@ -487,24 +487,24 @@ describe("every socket verb is a projection of the host's map (VC-668, VC-923)",
   });
 });
 
-describe("how often the coordination policy is read (VC-923)", () => {
-  function counted() {
-    const ctxScenario = scenario();
-    let reads = 0;
-    const service = createAgentCommandService({
-      handlers: testHostHandlers({ db: ctx.db }),
-      db: ctx.db,
-      sessionEngine: createTestSessionEngine(ctx.db),
-      appVersion: "1.2.3",
-      verifySessionToken: ctxScenario.verify,
-      readAuthorityPolicy: () => {
-        reads += 1;
-        return DEFAULT_AUTHORITY_POLICY;
-      },
-    });
-    return { service, env: ctxScenario.env, reads: () => reads };
-  }
+function counted() {
+  const ctxScenario = scenario();
+  let reads = 0;
+  const service = createAgentCommandService({
+    handlers: testHostHandlers({ db: ctx.db }),
+    db: ctx.db,
+    sessionEngine: createTestSessionEngine(ctx.db),
+    appVersion: "1.2.3",
+    verifySessionToken: ctxScenario.verify,
+    readAuthorityPolicy: () => {
+      reads += 1;
+      return DEFAULT_AUTHORITY_POLICY;
+    },
+  });
+  return { service, env: ctxScenario.env, reads: () => reads };
+}
 
+describe("how often the coordination policy is read (VC-923)", () => {
   it("reads it once for one of the socket's own verbs, the hot path included", async () => {
     const { service, env, reads } = counted();
     const response = await service.execute({

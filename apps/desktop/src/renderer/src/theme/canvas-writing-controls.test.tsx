@@ -115,6 +115,14 @@ function expectWriting(button: HTMLElement | undefined, writing: boolean) {
     writing && !button!.matches(":disabled"),
   );
 }
+const depth = (index: number) => {
+  let level = 0;
+  for (let i = 0; i < index; i++) {
+    if (css[i] === "{") level++;
+    else if (css[i] === "}") level--;
+  }
+  return level;
+};
 
 describe("floating writing-glass outline and secondary controls", () => {
   it("binds the production callers to outline Buttons on floating writing glass", () => {
@@ -150,14 +158,6 @@ describe("floating writing-glass outline and secondary controls", () => {
   });
 
   it("paints the writing pair unlayered, after the shared face and press", () => {
-    const depth = (index: number) => {
-      let level = 0;
-      for (let i = 0; i < index; i++) {
-        if (css[i] === "{") level++;
-        else if (css[i] === "}") level--;
-      }
-      return level;
-    };
     for (const rule of [writingRest, writingPress]) {
       expect(depth(rule.index)).toBe(0);
       expect(rule.index).toBeGreaterThan(css.indexOf(`${restingSelector} {`));

@@ -185,6 +185,27 @@ function drainOver(
   });
 }
 
+/** One Session mid-send, its row taken back before the backend answers. */
+async function releasedMidSend(answer?: Error) {
+  const backend = fakeBackend();
+  const { ledger, append } = memoryLedger();
+  const cursors = memoryCursors();
+  const blocked: string[] = [];
+  const drain = drainOver(backend, ledger, cursors.store, {
+    onBlocked: (sessionId) => blocked.push(sessionId),
+  });
+  drain.start();
+  append("s1", 1);
+  const answerNow = backend.holdAll();
+  if (answer !== undefined) backend.faults.push(() => answer);
+  drain.adopt("s1");
+  await vi.waitFor(() => expect(backend.stats().calls).toBe(1));
+  cursors.rows.delete("s1");
+  answerNow();
+  await drain.idle();
+  return { backend, cursors, drain, append, blocked };
+}
+
 describe("the fact drain", () => {
   it("sends a live Session's facts one per mutation, in order, and persists the cursor", async () => {
     const backend = fakeBackend();
@@ -664,27 +685,6 @@ describe("the fact drain", () => {
   });
 
   describe("a cursor taken back while the drain runs (a move's Go back or roll back)", () => {
-    /** One Session mid-send, its row taken back before the backend answers. */
-    async function releasedMidSend(answer?: Error) {
-      const backend = fakeBackend();
-      const { ledger, append } = memoryLedger();
-      const cursors = memoryCursors();
-      const blocked: string[] = [];
-      const drain = drainOver(backend, ledger, cursors.store, {
-        onBlocked: (sessionId) => blocked.push(sessionId),
-      });
-      drain.start();
-      append("s1", 1);
-      const answerNow = backend.holdAll();
-      if (answer !== undefined) backend.faults.push(() => answer);
-      drain.adopt("s1");
-      await vi.waitFor(() => expect(backend.stats().calls).toBe(1));
-      cursors.rows.delete("s1");
-      answerNow();
-      await drain.idle();
-      return { backend, cursors, drain, append, blocked };
-    }
-
     it("an accepted send writes no cursor back, and the Session is no longer drained", async () => {
       const { backend, cursors, drain, append } = await releasedMidSend();
       expect(cursors.rows.has("s1")).toBe(false);

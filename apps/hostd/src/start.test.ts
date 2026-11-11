@@ -101,6 +101,9 @@ async function refusal(work: Promise<unknown>): Promise<ManagementError> {
   return error as ManagementError;
 }
 
+const refusing = (database: HostdStatus["database"]) =>
+  ports({ probes: probes(null, status({ state: "refusing", database })) });
+
 describe("start", () => {
   it("does nothing when the recorded version already serves on the recorded port", async () => {
     const fake = box();
@@ -154,8 +157,6 @@ describe("start", () => {
   });
 
   it("says why a host that came up will not serve", async () => {
-    const refusing = (database: HostdStatus["database"]) =>
-      ports({ probes: probes(null, status({ state: "refusing", database })) });
     expect(
       await refusal(
         runStart(

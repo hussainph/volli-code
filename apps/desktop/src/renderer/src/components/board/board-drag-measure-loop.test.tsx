@@ -363,6 +363,23 @@ let canvasMeasures = 0;
  * many card shells and column droppables the deliveries re-rendered.
  */
 const delivery = { initial: 0, shells: 0 };
+// The board's own hit test (`board.tsx#pointerLanding`) is one
+// `elementsFromPoint` per pointer move — the stack, topmost first. jsdom
+// ships neither hit test; a browser ships both, and they agree.
+const boardHitsAt = (x: number, y: number): Element[] =>
+  boardBoxes()
+    .boxes.filter(
+      ([, box]) =>
+        x >= box.left && x <= box.left + box.width && y >= box.top && y <= box.top + box.height,
+    )
+    .map(([node]) => node)
+    .toReversed();
+
+function measured(this: Element) {
+  const { boxes, canvas } = boardBoxes();
+  if (canvas !== null && this === canvas) canvasMeasures += 1;
+  return domRect(boxes.findLast(([node]) => node === this)?.[1] ?? NO_BOX);
+}
 
 function installLayout(): () => void {
   const realRect = Element.prototype.getBoundingClientRect;
@@ -372,11 +389,7 @@ function installLayout(): () => void {
   const element = Element.prototype as unknown as Record<string, unknown>;
   for (const name of ["scrollBy", "scrollTo", "scrollIntoView"]) element[name] = () => {};
 
-  Element.prototype.getBoundingClientRect = function measured(this: Element) {
-    const { boxes, canvas } = boardBoxes();
-    if (canvas !== null && this === canvas) canvasMeasures += 1;
-    return domRect(boxes.findLast(([node]) => node === this)?.[1] ?? NO_BOX);
-  };
+  Element.prototype.getBoundingClientRect = measured;
 
   window.getComputedStyle = ((node: Element, pseudo?: string | null) => {
     const style = realStyle(node as HTMLElement, pseudo ?? undefined);
@@ -394,22 +407,10 @@ function installLayout(): () => void {
       },
     });
   }) as typeof window.getComputedStyle;
-
-  // The board's own hit test (`board.tsx#pointerLanding`) is one
-  // `elementsFromPoint` per pointer move — the stack, topmost first. jsdom
-  // ships neither hit test; a browser ships both, and they agree.
-  const hitsAt = (x: number, y: number): Element[] =>
-    boardBoxes()
-      .boxes.filter(
-        ([, box]) =>
-          x >= box.left && x <= box.left + box.width && y >= box.top && y <= box.top + box.height,
-      )
-      .map(([node]) => node)
-      .toReversed();
   document.elementFromPoint = ((x: number, y: number) =>
-    hitsAt(x, y)[0] ?? null) as typeof document.elementFromPoint;
+    boardHitsAt(x, y)[0] ?? null) as typeof document.elementFromPoint;
   document.elementsFromPoint = ((x: number, y: number) =>
-    hitsAt(x, y)) as typeof document.elementsFromPoint;
+    boardHitsAt(x, y)) as typeof document.elementsFromPoint;
 
   return () => {
     Element.prototype.getBoundingClientRect = realRect;
@@ -812,6 +813,18 @@ const MANY = 12;
  * instrumentation. Well clear of the default 5s, which it does exceed there.
  */
 const BUDGET = 60_000;
+// A pill is a column drawn small, and it grows the same list. Taking the
+// picker there and back is what puts a second droppable — with a shorter
+// scroll chain — between the flips.
+async function reachPastThePill(): Promise<Grip> {
+  const grip = await pickUp();
+  await press("keydown", { key: "Alt", altKey: true });
+  await move(grip.pill, true);
+  expect(grown("backlog")).toBe(true);
+  await move(grip.card, true);
+  expect(grown("doing")).toBe(true);
+  return grip;
+}
 
 describe("a card flipping between itself and the column holding it", () => {
   it(
@@ -911,19 +924,6 @@ describe("a card flipping between itself and the column holding it", () => {
   it(
     "stays bounded after the ⌥ picker has been grown over a collapsed pill",
     async () => {
-      // A pill is a column drawn small, and it grows the same list. Taking the
-      // picker there and back is what puts a second droppable — with a shorter
-      // scroll chain — between the flips.
-      async function reachPastThePill(): Promise<Grip> {
-        const grip = await pickUp();
-        await press("keydown", { key: "Alt", altKey: true });
-        await move(grip.pill, true);
-        expect(grown("backlog")).toBe(true);
-        await move(grip.card, true);
-        expect(grown("doing")).toBe(true);
-        return grip;
-      }
-
       const few = await flip(await reachPastThePill(), FEW, true);
       await endDrag();
       await unmountBoard();

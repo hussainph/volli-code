@@ -133,6 +133,30 @@ function pushProofTools(): { backend: string } | null {
 
 const tools = pushProofTools();
 
+/** git with nothing of this machine's: no system file, a scratch global file and home. */
+function isolated(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+  const home = join(root, "home");
+  mkdirSync(home, { recursive: true });
+  writeFileSync(join(root, "gitconfig"), "");
+  return {
+    PATH: process.env["PATH"],
+    HOME: home,
+    XDG_CONFIG_HOME: join(home, ".config"),
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: join(root, "gitconfig"),
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_AUTHOR_NAME: "Volli",
+    GIT_AUTHOR_EMAIL: "volli@example.invalid",
+    GIT_COMMITTER_NAME: "Volli",
+    GIT_COMMITTER_EMAIL: "volli@example.invalid",
+    ...extra,
+  };
+}
+
+function serverEnv(): NodeJS.ProcessEnv {
+  return isolated();
+}
+
 describe.skipIf(tools === null)("a Session's git push on a host", () => {
   const closers: (() => Promise<void>)[] = [];
   afterEach(async () => {
@@ -262,30 +286,6 @@ process.stdout.write(out);
       command: `!${[process.execPath, forward, socketPath].map(shellWord).join(" ")}`,
       asked,
     };
-  }
-
-  /** git with nothing of this machine's: no system file, a scratch global file and home. */
-  function isolated(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
-    const home = join(root, "home");
-    mkdirSync(home, { recursive: true });
-    writeFileSync(join(root, "gitconfig"), "");
-    return {
-      PATH: process.env["PATH"],
-      HOME: home,
-      XDG_CONFIG_HOME: join(home, ".config"),
-      GIT_CONFIG_NOSYSTEM: "1",
-      GIT_CONFIG_GLOBAL: join(root, "gitconfig"),
-      GIT_TERMINAL_PROMPT: "0",
-      GIT_AUTHOR_NAME: "Volli",
-      GIT_AUTHOR_EMAIL: "volli@example.invalid",
-      GIT_COMMITTER_NAME: "Volli",
-      GIT_COMMITTER_EMAIL: "volli@example.invalid",
-      ...extra,
-    };
-  }
-
-  function serverEnv(): NodeJS.ProcessEnv {
-    return isolated();
   }
 
   it(

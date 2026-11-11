@@ -117,18 +117,18 @@ describe("pollRetention — scoped change notices", () => {
   });
 });
 
-describe("pollRetention — a repository with no git remote", () => {
-  const noRemote = () =>
-    scriptedNet((_file, args) => {
-      if (args[1] === "list") {
-        throw netFailure({
-          stderr: "no git remotes found",
-          code: 1,
-        });
-      }
-      return prView("OPEN");
-    });
+const noRemote = () =>
+  scriptedNet((_file, args) => {
+    if (args[1] === "list") {
+      throw netFailure({
+        stderr: "no git remotes found",
+        code: 1,
+      });
+    }
+    return prView("OPEN");
+  });
 
+describe("pollRetention — a repository with no git remote", () => {
   it("pauses the project's discovery after one failure, logging it once", async () => {
     seed("p1", "a");
     seed("p1", "b");

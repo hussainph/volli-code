@@ -139,6 +139,16 @@ const revision = (handle: Database.Database = db) =>
   (handle.prepare("SELECT revision FROM web_credential_source").get() as { revision: number })
     .revision;
 
+const failing = (error: Error) =>
+  new WebCredentialMirror({
+    db,
+    inventory: {
+      mirror: () => {
+        throw error;
+      },
+    } as unknown as SealedInventory,
+  }).reconcile();
+
 describe("the web keys' sealed mirror (step E)", { timeout: 60_000 }, () => {
   it("seals nothing and makes no key on a profile with no keys", async () => {
     const results: WebMirrorResult[] = [];
@@ -433,15 +443,6 @@ describe("the web keys' sealed mirror (step E)", { timeout: 60_000 }, () => {
   });
 
   it("names each failure with a code, never a message", () => {
-    const failing = (error: Error) =>
-      new WebCredentialMirror({
-        db,
-        inventory: {
-          mirror: () => {
-            throw error;
-          },
-        } as unknown as SealedInventory,
-      }).reconcile();
     expect(failing(new CredentialLockBusyError())).toEqual({ sealing: "pending", reason: "busy" });
     expect(failing(new SealedFileChangedError())).toEqual({
       sealing: "pending",

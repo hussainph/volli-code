@@ -89,6 +89,8 @@ interface World {
   clock: { now: number };
 }
 
+const at = async () => ({ directory: "/projects/p", venue });
+
 function world(): World {
   const clock = { now: 100 };
   const now = () => clock.now++;
@@ -99,7 +101,6 @@ function world(): World {
     ids: { next: (kind) => `${kind}-${++sequence}` },
   });
   const executor = new Executor();
-  const at = async () => ({ directory: "/projects/p", venue });
   const runtime = createSessionRuntime({
     engine,
     executors: createSessionExecutorSlot(executor),

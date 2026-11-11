@@ -75,29 +75,31 @@ vi.mock("./submit", () => ({
   runKickoff: vi.fn(async () => ({ created: false })),
   runCreateWithAutomation: vi.fn(async () => ({ created: false })),
 }));
+function MonacoDouble({
+  value,
+  onChange,
+  ariaLabel,
+  savePolicy,
+  ref,
+}: ComponentProps<typeof MonacoDocumentEditor>) {
+  // The title's Enter hands focus to the body through this handle.
+  useImperativeHandle(ref, () => ({
+    focus: mocks.editorFocus,
+    insertAtCursor: () => false,
+    markSaved: () => {},
+  }));
+  return (
+    <textarea
+      aria-label={ariaLabel}
+      data-save-policy={savePolicy ?? "autosave"}
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  );
+}
+
 vi.mock("@renderer/components/editor/monaco-document-editor", () => ({
-  MonacoDocumentEditor: function MonacoDouble({
-    value,
-    onChange,
-    ariaLabel,
-    savePolicy,
-    ref,
-  }: ComponentProps<typeof MonacoDocumentEditor>) {
-    // The title's Enter hands focus to the body through this handle.
-    useImperativeHandle(ref, () => ({
-      focus: mocks.editorFocus,
-      insertAtCursor: () => false,
-      markSaved: () => {},
-    }));
-    return (
-      <textarea
-        aria-label={ariaLabel}
-        data-save-policy={savePolicy ?? "autosave"}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-      />
-    );
-  },
+  MonacoDocumentEditor: MonacoDouble,
 }));
 vi.mock("./composer-chips", () => ({
   ComposerChips: ({ createMore, onCreateMoreChange }: ComponentProps<typeof ComposerChips>) => (

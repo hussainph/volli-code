@@ -145,6 +145,8 @@ const probes = (
   accepts: () => Promise.resolve(accepts),
 });
 
+const detail = async (probed: StatusProbes) => (await checkStatus(dataDir, probed)).detail;
+
 describe("volli-hostd status", () => {
   it("reports serving and refusing from a live host", async () => {
     expect(await checkStatus(dataDir, probes(status()))).toEqual({
@@ -172,7 +174,6 @@ describe("volli-hostd status", () => {
   });
 
   it("reports not serving, and why, for everything else", async () => {
-    const detail = async (probed: StatusProbes) => (await checkStatus(dataDir, probed)).detail;
     expect(await detail(probes(null))).toBe("no status file");
     expect(await detail(probes("unreadable"))).toBe("status file unreadable");
     expect(await detail(probes(status({ state: "stopped" })))).toBe("stopped");

@@ -464,103 +464,103 @@ function countingStatements(db: Database.Database, run: () => void): number {
   return executed.length;
 }
 
-describe("readSessionProvenances", () => {
-  /** Every source the reader can answer from, in one project. */
-  function roster(): Fixture & { secondTicketId: string; sessionIds: string[] } {
-    const f = fixture();
-    const secondTicket = testTicket(f.projectId);
-    insertTicket(ctx.db, secondTicket);
+/** Every source the reader can answer from, in one project. */
+function roster(): Fixture & { secondTicketId: string; sessionIds: string[] } {
+  const f = fixture();
+  const secondTicket = testTicket(f.projectId);
+  insertTicket(ctx.db, secondTicket);
 
-    f.session("session-parent", "Orchestrator");
-    // 1. a completed Run, the only source that can carry a name
-    f.session("session-run", "Nightly sweep");
-    recordAutomationRun(
-      f.db,
-      {
-        automationId: "automation-1",
-        automationName: "Nightly sweep",
-        ticketId: f.ticketId,
-        sessionId: "session-run",
-        model: MODEL,
-      },
-      3_000,
-    );
-    // 2. a Run caught between Session mint and its Run row
-    f.session("session-premint", "Scheduled sweep", null);
-    f.db
-      .prepare("INSERT INTO automation_commands (id, intent, created_at) VALUES (?, ?, ?)")
-      .run("premint-run", JSON.stringify({ kind: "automation.run" }), 1_500);
-    f.db
-      .prepare(
-        `INSERT INTO automation_session_mint_intents
+  f.session("session-parent", "Orchestrator");
+  // 1. a completed Run, the only source that can carry a name
+  f.session("session-run", "Nightly sweep");
+  recordAutomationRun(
+    f.db,
+    {
+      automationId: "automation-1",
+      automationName: "Nightly sweep",
+      ticketId: f.ticketId,
+      sessionId: "session-run",
+      model: MODEL,
+    },
+    3_000,
+  );
+  // 2. a Run caught between Session mint and its Run row
+  f.session("session-premint", "Scheduled sweep", null);
+  f.db
+    .prepare("INSERT INTO automation_commands (id, intent, created_at) VALUES (?, ?, ?)")
+    .run("premint-run", JSON.stringify({ kind: "automation.run" }), 1_500);
+  f.db
+    .prepare(
+      `INSERT INTO automation_session_mint_intents
            (session_create_command_id, automation_command_id, recorded_at)
          VALUES (?, ?, ?)`,
-      )
-      .run("premint:create", "premint-run", 1_500);
-    f.db
-      .prepare(
-        `INSERT INTO session_commands (id, session_id, created_at, intent, route)
+    )
+    .run("premint:create", "premint-run", 1_500);
+  f.db
+    .prepare(
+      `INSERT INTO session_commands (id, session_id, created_at, intent, route)
          VALUES (?, ?, ?, ?, NULL)`,
-      )
-      .run("premint:create", "session-premint", 2_000, JSON.stringify({ kind: "session.create" }));
-    // 3. a launch by a parent Session, and one by a parent that is gone
-    f.session("session-child", "Delegated");
-    recordSessionStartedOnce(f.db, {
-      ticketId: f.ticketId,
-      sessionId: "session-child",
-      now: 2_100,
-      actor: { kind: "session", sessionId: "session-parent", ticketId: f.ticketId },
-    });
-    f.session("session-orphan", "Delegated by a deleted parent");
-    recordSessionStartedOnce(f.db, {
-      ticketId: f.ticketId,
-      sessionId: "session-orphan",
-      now: 2_200,
-      actor: { kind: "session", sessionId: "session-gone", ticketId: f.ticketId },
-    });
-    // 4. an Automation named only by its launch event
-    f.session("session-launched", "Run with no row");
-    recordSessionStartedOnce(f.db, {
-      ticketId: f.ticketId,
-      sessionId: "session-launched",
-      now: 2_300,
-      actor: { kind: "automation" },
-    });
-    // 5. the resting case, twice: a person on a Ticket, and a Board Session
-    f.session("session-person", "Opened by hand");
-    recordSessionStartedOnce(f.db, {
-      ticketId: f.ticketId,
-      sessionId: "session-person",
-      now: 2_400,
-      actor: { kind: "user" },
-    });
-    f.session("session-board", "Board chat", null);
-    // A Session on the OTHER Ticket, so the batch has more than one Ticket to
-    // scope by.
-    f.session("session-elsewhere", "Second ticket", secondTicket.id);
-    recordSessionStartedOnce(f.db, {
-      ticketId: secondTicket.id,
-      sessionId: "session-elsewhere",
-      now: 2_500,
-      actor: { kind: "session", sessionId: "session-parent", ticketId: secondTicket.id },
-    });
-    return {
-      ...f,
-      secondTicketId: secondTicket.id,
-      sessionIds: [
-        "session-parent",
-        "session-run",
-        "session-premint",
-        "session-child",
-        "session-orphan",
-        "session-launched",
-        "session-person",
-        "session-board",
-        "session-elsewhere",
-      ],
-    };
-  }
+    )
+    .run("premint:create", "session-premint", 2_000, JSON.stringify({ kind: "session.create" }));
+  // 3. a launch by a parent Session, and one by a parent that is gone
+  f.session("session-child", "Delegated");
+  recordSessionStartedOnce(f.db, {
+    ticketId: f.ticketId,
+    sessionId: "session-child",
+    now: 2_100,
+    actor: { kind: "session", sessionId: "session-parent", ticketId: f.ticketId },
+  });
+  f.session("session-orphan", "Delegated by a deleted parent");
+  recordSessionStartedOnce(f.db, {
+    ticketId: f.ticketId,
+    sessionId: "session-orphan",
+    now: 2_200,
+    actor: { kind: "session", sessionId: "session-gone", ticketId: f.ticketId },
+  });
+  // 4. an Automation named only by its launch event
+  f.session("session-launched", "Run with no row");
+  recordSessionStartedOnce(f.db, {
+    ticketId: f.ticketId,
+    sessionId: "session-launched",
+    now: 2_300,
+    actor: { kind: "automation" },
+  });
+  // 5. the resting case, twice: a person on a Ticket, and a Board Session
+  f.session("session-person", "Opened by hand");
+  recordSessionStartedOnce(f.db, {
+    ticketId: f.ticketId,
+    sessionId: "session-person",
+    now: 2_400,
+    actor: { kind: "user" },
+  });
+  f.session("session-board", "Board chat", null);
+  // A Session on the OTHER Ticket, so the batch has more than one Ticket to
+  // scope by.
+  f.session("session-elsewhere", "Second ticket", secondTicket.id);
+  recordSessionStartedOnce(f.db, {
+    ticketId: secondTicket.id,
+    sessionId: "session-elsewhere",
+    now: 2_500,
+    actor: { kind: "session", sessionId: "session-parent", ticketId: secondTicket.id },
+  });
+  return {
+    ...f,
+    secondTicketId: secondTicket.id,
+    sessionIds: [
+      "session-parent",
+      "session-run",
+      "session-premint",
+      "session-child",
+      "session-orphan",
+      "session-launched",
+      "session-person",
+      "session-board",
+      "session-elsewhere",
+    ],
+  };
+}
 
+describe("readSessionProvenances", () => {
   // THE constraint this ticket is not allowed to break.
   it("answers a roster exactly as the per-Session reader answers each row", () => {
     const f = roster();

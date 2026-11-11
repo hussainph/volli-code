@@ -1380,23 +1380,23 @@ describe("a typed tRPC client over the link", () => {
   });
 });
 
-describe("a typed call honours its AbortSignal on this side of the wire", () => {
-  async function typed(url: string) {
-    const { link: subject } = link(url);
-    const client = createTRPCClient({ links: [hostLinkTrpcLink(subject)] }) as unknown as {
-      record: {
-        mutate(input: { id: string }, opts?: { signal?: AbortSignal }): Promise<unknown>;
-      };
-      feed: {
-        subscribe(
-          input: undefined,
-          handlers: { signal?: AbortSignal; onStarted?(): void; onData?(data: unknown): void },
-        ): { unsubscribe(): void };
-      };
+async function typedAbortClient(url: string) {
+  const { link: subject } = link(url);
+  const client = createTRPCClient({ links: [hostLinkTrpcLink(subject)] }) as unknown as {
+    record: {
+      mutate(input: { id: string }, opts?: { signal?: AbortSignal }): Promise<unknown>;
     };
-    return { subject, client };
-  }
+    feed: {
+      subscribe(
+        input: undefined,
+        handlers: { signal?: AbortSignal; onStarted?(): void; onData?(data: unknown): void },
+      ): { unsubscribe(): void };
+    };
+  };
+  return { subject, client };
+}
 
+describe("a typed call honours its AbortSignal on this side of the wire", () => {
   const ABORTED = {
     code: "CLIENT_CLOSED_REQUEST",
     message:
@@ -1405,7 +1405,7 @@ describe("a typed call honours its AbortSignal on this side of the wire", () => 
 
   it("sends nothing for a call or a stream already aborted", async () => {
     const started = await startHost();
-    const { subject, client } = await typed(started.url);
+    const { subject, client } = await typedAbortClient(started.url);
     await until(subject, "ready");
     const controller = new AbortController();
     controller.abort();
@@ -1427,7 +1427,7 @@ describe("a typed call honours its AbortSignal on this side of the wire", () => 
 
   it("settles a call aborted mid-flight at once, and stops a stream aborted mid-flight", async () => {
     const started = await startHost();
-    const { subject, client } = await typed(started.url);
+    const { subject, client } = await typedAbortClient(started.url);
     await until(subject, "ready");
     started.host.hold = new Promise(() => {});
     const controller = new AbortController();

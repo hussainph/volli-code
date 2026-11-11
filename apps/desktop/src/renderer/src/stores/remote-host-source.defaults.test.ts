@@ -76,6 +76,13 @@ afterEach(() => {
   vi.useRealTimers();
   bridge.handlers.length = 0;
 });
+const two = (p1: RemoteHostsSnapshot["projects"][string]["link"], p2: typeof p1) => {
+  const base = snapshot(p1);
+  return {
+    ...base,
+    projects: { p1: { hostId: HOST, link: p1 }, p2: { hostId: HOST, link: p2 } },
+  };
+};
 
 describe("the remote host source's defaults", () => {
   it("re-words a dropped project on a real timer, and clears it at close", () => {
@@ -161,13 +168,6 @@ describe("the remote host source's defaults", () => {
       closeCode: null,
       retryAt: 0,
     } as const;
-    const two = (p1: RemoteHostsSnapshot["projects"][string]["link"], p2: typeof p1) => {
-      const base = snapshot(p1);
-      return {
-        ...base,
-        projects: { p1: { hostId: HOST, link: p1 }, p2: { hostId: HOST, link: p2 } },
-      };
-    };
     handlers[0]!.onData(two({ status: "ready" }, { status: "ready" }));
     handlers[0]!.onData(two({ status: "ready" }, down));
     vi.advanceTimersByTime(1_000);

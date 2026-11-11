@@ -864,39 +864,40 @@ export function describeSessionLedgerContract(
       });
     });
 
-    describe("usage", () => {
-      async function spend() {
-        const context = await fresh();
-        const { ledger, engine, createSession, head } = context;
-        const ticketed = await createSession("session-ticketed", { ticketId: "ticket-a" });
-        const ticketedToo = await createSession("session-ticketed-too", { ticketId: "ticket-a" });
-        const loose = await createSession("session-loose");
-        const elsewhere = await createSession("session-elsewhere", { projectId: OTHER_PROJECT });
-        const observed = [
-          { session: ticketed, at: 1_000, costUsd: 1 },
-          { session: loose, at: 2_000, costUsd: 2 },
-          { session: ticketedToo, at: 2_500, costUsd: 16 },
-          { session: elsewhere, at: 3_000, costUsd: 4 },
-          { session: ticketed, at: 4_000, costUsd: 8 },
-        ];
-        for (const [index, { session, at, costUsd }] of observed.entries()) {
-          await engine.observe({
-            id: `usage-${index}`,
-            kind: "usage.recorded",
-            sessionId: session.id,
-            occurredAt: at,
-            provenance,
-            attachmentId: null,
-            turnId: null,
-            usage: contractUsage({ costUsd }),
-          });
-        }
-        const sequence = (await head(loose.id)) + 1;
-        await ledger.transaction((transaction) =>
-          transaction.appendEvent(usageEvent(loose.id, sequence, stray)),
-        );
-        return { ...context, ticketed, loose };
+    async function spend() {
+      const context = await fresh();
+      const { ledger, engine, createSession, head } = context;
+      const ticketed = await createSession("session-ticketed", { ticketId: "ticket-a" });
+      const ticketedToo = await createSession("session-ticketed-too", { ticketId: "ticket-a" });
+      const loose = await createSession("session-loose");
+      const elsewhere = await createSession("session-elsewhere", { projectId: OTHER_PROJECT });
+      const observed = [
+        { session: ticketed, at: 1_000, costUsd: 1 },
+        { session: loose, at: 2_000, costUsd: 2 },
+        { session: ticketedToo, at: 2_500, costUsd: 16 },
+        { session: elsewhere, at: 3_000, costUsd: 4 },
+        { session: ticketed, at: 4_000, costUsd: 8 },
+      ];
+      for (const [index, { session, at, costUsd }] of observed.entries()) {
+        await engine.observe({
+          id: `usage-${index}`,
+          kind: "usage.recorded",
+          sessionId: session.id,
+          occurredAt: at,
+          provenance,
+          attachmentId: null,
+          turnId: null,
+          usage: contractUsage({ costUsd }),
+        });
       }
+      const sequence = (await head(loose.id)) + 1;
+      await ledger.transaction((transaction) =>
+        transaction.appendEvent(usageEvent(loose.id, sequence, stray)),
+      );
+      return { ...context, ticketed, loose };
+    }
+
+    describe("usage", () => {
       it("selects usage by the attribution on the fact, newest first, in a half-open window", async () => {
         const { ledger, ticketed, loose } = await spend();
         const read = await ledger.transaction((transaction) => ({

@@ -384,10 +384,9 @@ describe("activity filters", () => {
     expect(doors.comments).not.toHaveBeenCalled();
   });
 });
+const loading = () => container?.querySelector('[data-testid="ticket-activity-loading"]') ?? null;
 
 describe("the feed while its first read is in flight (VC-383)", () => {
-  const loading = () => container?.querySelector('[data-testid="ticket-activity-loading"]') ?? null;
-
   it("waits silently and says empty only once the read has answered so", async () => {
     let answer: (() => void) | null = null;
     doors.events.mockImplementationOnce(
@@ -434,6 +433,38 @@ function escape(target: HTMLElement, isComposing: boolean): KeyboardEvent {
   });
   return event;
 }
+// The feed's own "Add a comment" box is a textarea too.
+const editor = () =>
+  container?.querySelector<HTMLTextAreaElement>("li textarea:not([aria-label])") ?? null;
+async function openEditor(): Promise<HTMLTextAreaElement> {
+  doors.comments.mockResolvedValueOnce({
+    ok: true as const,
+    comments: [
+      {
+        id: "c1",
+        ticketId: "t1",
+        sessionId: null,
+        actor: USER_ACTOR,
+        body: "Original",
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ],
+  });
+  await mount();
+  await act(async () => {
+    container?.querySelector<HTMLButtonElement>('[aria-label="Edit comment"]')?.click();
+  });
+  const textarea = editor()!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
+      textarea,
+      "テスト",
+    );
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  return textarea;
+}
 
 /**
  * VC-806: Chromium on macOS delivers the Escape that closes an IME's candidate
@@ -441,10 +472,6 @@ function escape(target: HTMLElement, isComposing: boolean): KeyboardEvent {
  * taking it left edit mode and threw the edit away mid-word.
  */
 describe("a comment being edited", () => {
-  // The feed's own "Add a comment" box is a textarea too.
-  const editor = () =>
-    container?.querySelector<HTMLTextAreaElement>("li textarea:not([aria-label])") ?? null;
-
   beforeEach(() => {
     // The comment body's clamp measures itself; jsdom has no layout to report.
     vi.stubGlobal(
@@ -456,36 +483,6 @@ describe("a comment being edited", () => {
       },
     );
   });
-
-  async function openEditor(): Promise<HTMLTextAreaElement> {
-    doors.comments.mockResolvedValueOnce({
-      ok: true as const,
-      comments: [
-        {
-          id: "c1",
-          ticketId: "t1",
-          sessionId: null,
-          actor: USER_ACTOR,
-          body: "Original",
-          createdAt: 1,
-          updatedAt: 1,
-        },
-      ],
-    });
-    await mount();
-    await act(async () => {
-      container?.querySelector<HTMLButtonElement>('[aria-label="Edit comment"]')?.click();
-    });
-    const textarea = editor()!;
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
-        textarea,
-        "テスト",
-      );
-      textarea.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-    return textarea;
-  }
 
   it("stays in edit mode, draft intact, on a composing Escape", async () => {
     const textarea = await openEditor();

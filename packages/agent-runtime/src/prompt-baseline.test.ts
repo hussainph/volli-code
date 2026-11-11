@@ -390,6 +390,14 @@ function repo(text: string): PromptResource {
   return resource;
 }
 
+const classes = (promptResources: readonly PromptResource[]) =>
+  Object.fromEntries(
+    promptBaseline(input({ promptResources })).sections.map((section) => [
+      section.id,
+      section.cacheClass,
+    ]),
+  );
+
 /**
  * Repository instructions are project-sized, not Volli-sized (VC-1054): a
  * repository's `AGENTS.md` can be many times everything Volli composes. They
@@ -421,13 +429,6 @@ describe("promptBaseline — repository instructions as their own slice (VC-1054
 
   it("claims project-static for the instructions and for a set of only project facts", () => {
     const instructions = repo("rules");
-    const classes = (promptResources: readonly PromptResource[]) =>
-      Object.fromEntries(
-        promptBaseline(input({ promptResources })).sections.map((section) => [
-          section.id,
-          section.cacheClass,
-        ]),
-      );
     expect(classes([instructions, INDEX])).toMatchObject({
       operating: "project-static",
       execution: "role-static",

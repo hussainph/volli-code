@@ -80,17 +80,17 @@ describe("deleteProject", () => {
   });
 });
 
+function rowOf(id: string) {
+  return ctx.db
+    .prepare("SELECT removed_at, sort_order, row_version, updated_at FROM projects WHERE id = ?")
+    .get(id);
+}
+
 /**
  * VC-822: removing a project detaches it (migration 064). Every listing stops
  * returning it while its row, and everything hanging off it, stays.
  */
 describe("detachProject / reattachProject", () => {
-  function rowOf(id: string) {
-    return ctx.db
-      .prepare("SELECT removed_at, sort_order, row_version, updated_at FROM projects WHERE id = ?")
-      .get(id);
-  }
-
   it("hides a removed project from every listing, but not from an id or path lookup", () => {
     ctx = openTestDb();
     insertProject(ctx.db, testProject({ id: "a", path: "/a", sortOrder: 0, ticketPrefix: "AA" }));

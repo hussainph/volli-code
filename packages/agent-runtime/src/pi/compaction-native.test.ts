@@ -111,6 +111,30 @@ async function run(
   return { outcome, sent };
 }
 
+// The same native failure, twice, differing only in whether the caller's
+// signal aborted. Without that difference the assertion would pass on an
+// implementation that never read the signal at all.
+const attempt = async (abort: boolean) => {
+  const controller = new AbortController();
+  const local = {
+    completeSimple: vi.fn(async () => summary("stop", measured)),
+  } as unknown as typeof models;
+  native.mockImplementation(async () => {
+    if (abort) controller.abort();
+    return { kind: "failed", message: "native unavailable" };
+  });
+  const sidecar = await new MemorySessionRepo().create({}, piContext());
+  const outcome = await compactSession({
+    sidecar,
+    path: path(),
+    models: local,
+    model,
+    settings: { ...DEFAULT_COMPACTION_SETTINGS, keepRecentTokens: 1 },
+    signal: controller.signal,
+  });
+  return { outcome, localCalls: vi.mocked(local.completeSimple).mock.calls.length };
+};
+
 describe("native compaction fallback", () => {
   it("expands opaque state from the original history and sums both bills", async () => {
     native.mockResolvedValue({
@@ -209,29 +233,6 @@ describe("native compaction fallback", () => {
   });
 
   it("stops before the local request only when the supplied signal aborted", async () => {
-    // The same native failure, twice, differing only in whether the caller's
-    // signal aborted. Without that difference the assertion would pass on an
-    // implementation that never read the signal at all.
-    const attempt = async (abort: boolean) => {
-      const controller = new AbortController();
-      const local = {
-        completeSimple: vi.fn(async () => summary("stop", measured)),
-      } as unknown as typeof models;
-      native.mockImplementation(async () => {
-        if (abort) controller.abort();
-        return { kind: "failed", message: "native unavailable" };
-      });
-      const sidecar = await new MemorySessionRepo().create({}, piContext());
-      const outcome = await compactSession({
-        sidecar,
-        path: path(),
-        models: local,
-        model,
-        settings: { ...DEFAULT_COMPACTION_SETTINGS, keepRecentTokens: 1 },
-        signal: controller.signal,
-      });
-      return { outcome, localCalls: vi.mocked(local.completeSimple).mock.calls.length };
-    };
     const aborted = await attempt(true);
     expect(aborted.outcome).toEqual({ kind: "failed", message: "Compaction aborted." });
     expect(aborted.localCalls).toBe(0);

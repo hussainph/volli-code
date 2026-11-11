@@ -294,6 +294,9 @@ export function createHostConnectionStore() {
     records.set(host, next);
     return next;
   }
+  function route(hostId: HostId): HostConnectionSource | undefined {
+    return owners.get(hostId);
+  }
 
   return create<HostConnectionState>()((set, get) => {
     function merge(): void {
@@ -345,10 +348,6 @@ export function createHostConnectionStore() {
         projects: sameClaims(previous.projects, projects) ? previous.projects : projects,
         sourceError,
       });
-    }
-
-    function route(hostId: HostId): HostConnectionSource | undefined {
-      return owners.get(hostId);
     }
 
     return {

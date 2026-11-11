@@ -167,38 +167,38 @@ const MAX_FIELD_NAME = 1024;
 // Non-control ASCII, not starting with `$`.
 const FIELD_NAME = /^[\x20-\x23\x25-\x7e][\x20-\x7e]*$/;
 
+const walk = (node: unknown, path: string, depth: number): string | null => {
+  if (depth > MAX_DEPTH) return `nested deeper than ${MAX_DEPTH} at ${path}`;
+  if (Array.isArray(node)) {
+    if (node.length > MAX_ARRAY) return `array longer than ${MAX_ARRAY} at ${path}`;
+    for (const [index, item] of node.entries()) {
+      const problem = walk(item, `${path}[${index}]`, depth + 1);
+      if (problem !== null) return problem;
+    }
+    return null;
+  }
+  if (node !== null && typeof node === "object") {
+    const entries = Object.entries(node);
+    if (entries.length > MAX_FIELDS) return `object with more than ${MAX_FIELDS} fields at ${path}`;
+    for (const [key, item] of entries) {
+      if (key.length > MAX_FIELD_NAME || !FIELD_NAME.test(key)) {
+        return `field name the backend refuses at ${path}`;
+      }
+      const problem = walk(item, `${path}.${key}`, depth + 1);
+      if (problem !== null) return problem;
+    }
+    return null;
+  }
+  if (typeof node === "number" && !Number.isFinite(node)) return `non-finite number at ${path}`;
+  return null;
+};
+
 /**
  * Why the backend could not store `value` as a document field, or null. A
  * reason names the rule and the path to the first offending place, never a
  * value, so it is safe in a report.
  */
 export function storageProblem(value: unknown): string | null {
-  const walk = (node: unknown, path: string, depth: number): string | null => {
-    if (depth > MAX_DEPTH) return `nested deeper than ${MAX_DEPTH} at ${path}`;
-    if (Array.isArray(node)) {
-      if (node.length > MAX_ARRAY) return `array longer than ${MAX_ARRAY} at ${path}`;
-      for (const [index, item] of node.entries()) {
-        const problem = walk(item, `${path}[${index}]`, depth + 1);
-        if (problem !== null) return problem;
-      }
-      return null;
-    }
-    if (node !== null && typeof node === "object") {
-      const entries = Object.entries(node);
-      if (entries.length > MAX_FIELDS)
-        return `object with more than ${MAX_FIELDS} fields at ${path}`;
-      for (const [key, item] of entries) {
-        if (key.length > MAX_FIELD_NAME || !FIELD_NAME.test(key)) {
-          return `field name the backend refuses at ${path}`;
-        }
-        const problem = walk(item, `${path}.${key}`, depth + 1);
-        if (problem !== null) return problem;
-      }
-      return null;
-    }
-    if (typeof node === "number" && !Number.isFinite(node)) return `non-finite number at ${path}`;
-    return null;
-  };
   return walk(value, "$", 0);
 }
 

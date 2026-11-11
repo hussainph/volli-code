@@ -252,6 +252,32 @@ function request(items: OrphanCleanupPlanItem[], commandId = COMMAND_ID) {
   };
 }
 
+/** Every ordered act of one item, so the shape of the run is the assertion. */
+function timelineEngine(timeline: string[]): OrphanCleanupEngine {
+  return {
+    ...engine,
+    beginItem: async (input) => {
+      timeline.push("announced");
+      await engine.beginItem(input);
+    },
+    settleItem: async (input) => {
+      timeline.push(`settled:${input.state}`);
+      await engine.settleItem(input);
+    },
+  };
+}
+
+/** An engine whose `beginItem` write runs `mutate` while it is in flight. */
+function engineThatChangesTheWorldWhileAnnouncing(mutate: () => void): OrphanCleanupEngine {
+  return {
+    ...engine,
+    beginItem: async (input) => {
+      await engine.beginItem(input);
+      mutate();
+    },
+  };
+}
+
 describe("cleanupOrphans", () => {
   it("removes the confirmed orphan, keeps its branch, prunes the confirmed record, and records both", async () => {
     const f = fixture();
@@ -425,21 +451,6 @@ describe("cleanupOrphans", () => {
   // and these cases change the world from
   // inside that write to prove the gate still catches it.
   describe("the seam between announcing intent and mutating", () => {
-    /** Every ordered act of one item, so the shape of the run is the assertion. */
-    function timelineEngine(timeline: string[]): OrphanCleanupEngine {
-      return {
-        ...engine,
-        beginItem: async (input) => {
-          timeline.push("announced");
-          await engine.beginItem(input);
-        },
-        settleItem: async (input) => {
-          timeline.push(`settled:${input.state}`);
-          await engine.settleItem(input);
-        },
-      };
-    }
-
     it("asks what is live, then removes, with no durable write in between", async () => {
       const f = fixture();
       const timeline: string[] = [];
@@ -507,17 +518,6 @@ describe("cleanupOrphans", () => {
       // between is a record nobody confirmed.
       expect(timeline).toEqual(["announced", "listed", "pruned", "settled:completed"]);
     });
-
-    /** An engine whose `beginItem` write runs `mutate` while it is in flight. */
-    function engineThatChangesTheWorldWhileAnnouncing(mutate: () => void): OrphanCleanupEngine {
-      return {
-        ...engine,
-        beginItem: async (input) => {
-          await engine.beginItem(input);
-          mutate();
-        },
-      };
-    }
 
     it("catches a ticket that claims the path inside the beginItem write", async () => {
       const f = fixture();

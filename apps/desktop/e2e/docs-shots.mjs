@@ -367,6 +367,12 @@ function boardOverflow(page) {
     return scroller === undefined ? -1 : scroller.scrollWidth - scroller.clientWidth;
   });
 }
+const zoomBoard = async (command) => {
+  await app.evaluate(({ BrowserWindow }, cmd) => {
+    BrowserWindow.getAllWindows()[0].webContents.send("volli:ui-zoom-command", cmd);
+  }, command);
+  await sleep(500);
+};
 
 /**
  * Make all five columns fit the 1440px window.
@@ -381,18 +387,12 @@ function boardOverflow(page) {
  */
 async function fitBoardColumns(page) {
   const trace = [];
-  const zoom = async (command) => {
-    await app.evaluate(({ BrowserWindow }, cmd) => {
-      BrowserWindow.getAllWindows()[0].webContents.send("volli:ui-zoom-command", cmd);
-    }, command);
-    await sleep(500);
-  };
 
   let overflow = await boardOverflow(page);
   trace.push(`sidebar@1.0:${overflow}`);
   for (const rung of ["0.9", "0.8"]) {
     if (overflow <= 0) break;
-    await zoom("out");
+    await zoomBoard("out");
     overflow = await boardOverflow(page);
     trace.push(`sidebar@${rung}:${overflow}`);
   }

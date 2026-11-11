@@ -982,21 +982,22 @@ describe("a Mac that lost its credential", () => {
   });
 });
 
-describe("device-code linking", () => {
-  async function start(t: T, ip?: string) {
-    const result = await post(
-      ip === undefined ? t : t.withRequestMetadata({ ip }),
-      RUNNER_HTTP_PATHS.linkStart,
-      { host: LINUX_HOST },
-      // A header the caller sets is never the address shown to the person.
-      { "x-forwarded-for": "198.51.100.66", "cf-connecting-ip": "198.51.100.66" },
-    );
-    expect(result.status).toBe(200);
-    return parseRunnerDeviceLinkStart(result.body);
-  }
-  const poll = (t: T, requestId: string, pollSecret: string) =>
-    post(t, RUNNER_HTTP_PATHS.linkPoll, { requestId, pollSecret });
+async function start(t: T, ip?: string) {
+  const result = await post(
+    ip === undefined ? t : t.withRequestMetadata({ ip }),
+    RUNNER_HTTP_PATHS.linkStart,
+    { host: LINUX_HOST },
+    // A header the caller sets is never the address shown to the person.
+    { "x-forwarded-for": "198.51.100.66", "cf-connecting-ip": "198.51.100.66" },
+  );
+  expect(result.status).toBe(200);
+  return parseRunnerDeviceLinkStart(result.body);
+}
 
+const poll = (t: T, requestId: string, pollSecret: string) =>
+  post(t, RUNNER_HTTP_PATHS.linkPoll, { requestId, pollSecret });
+
+describe("device-code linking", () => {
   test("the box prints a code, the person sees which machine and approves, the next poll links it once", async () => {
     const t = setup();
     const alice = await signIn(t);
@@ -1205,17 +1206,18 @@ describe("device-code linking", () => {
   });
 });
 
+const exchange = (t: T, runnerId: string, credential: string) =>
+  post(t.withRequestMetadata({ ip: "198.51.100.4" }), RUNNER_HTTP_PATHS.token, {
+    runnerId,
+    credential,
+  });
+
 describe("the token exchange", () => {
   let keys: ReturnType<typeof issuerKeys>;
   beforeEach(() => {
     keys = issuerKeys();
     vi.stubEnv("VOLLI_RUNNER_SIGNING_KEY", keys.signingKey);
   });
-  const exchange = (t: T, runnerId: string, credential: string) =>
-    post(t.withRequestMetadata({ ip: "198.51.100.4" }), RUNNER_HTTP_PATHS.token, {
-      runnerId,
-      credential,
-    });
 
   test("a credential becomes a signed 15-minute runner token and its own successor", async () => {
     const t = setup();
@@ -1575,13 +1577,13 @@ describe("the runner's own calls", () => {
   });
 });
 
-describe("the offline sweep", () => {
-  async function online(t: T) {
-    const grant = await linkLinux(t);
-    await asRunner(t, grant.runnerId).mutation(api.runners.heartbeat, { bootId: "b", load: LOAD });
-    return grant.runnerId;
-  }
+async function online(t: T) {
+  const grant = await linkLinux(t);
+  await asRunner(t, grant.runnerId).mutation(api.runners.heartbeat, { bootId: "b", load: LOAD });
+  return grant.runnerId;
+}
 
+describe("the offline sweep", () => {
   test("marks a live runner offline after 90 s of silence, and leaves the rest alone", async () => {
     vi.useFakeTimers();
     const t = setup();

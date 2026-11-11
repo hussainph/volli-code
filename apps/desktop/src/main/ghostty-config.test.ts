@@ -259,6 +259,18 @@ function ipcDeps(): GhosttyConfigDeps {
     userDataDir: IPC_USER_DATA,
   };
 }
+const invokeGet = () =>
+  (
+    handlers.get("volli:ghostty-config-get" satisfies VolliIpcChannel) as (
+      ...a: unknown[]
+    ) => GhosttyConfigResult
+  )({ sender: {} });
+function fireWatch(dirIndex: 0 | 1 | 2 | 3, filename: string | null): void {
+  const cb = watchMock.mock.calls[dirIndex]?.[1] as
+    | ((event: string, filename: string | null) => void)
+    | undefined;
+  cb?.("rename", filename);
+}
 
 describe("registerGhosttyConfigIpc", () => {
   beforeEach(() => {
@@ -282,13 +294,6 @@ describe("registerGhosttyConfigIpc", () => {
   afterEach(() => {
     vi.useRealTimers();
   });
-
-  const invokeGet = () =>
-    (
-      handlers.get("volli:ghostty-config-get" satisfies VolliIpcChannel) as (
-        ...a: unknown[]
-      ) => GhosttyConfigResult
-    )({ sender: {} });
 
   it("returns ok:true with the resolved appearance", () => {
     readFileSyncMock.mockImplementation((path: string) => {
@@ -383,13 +388,6 @@ describe("registerGhosttyConfigIpc", () => {
   });
 
   describe("live reload", () => {
-    function fireWatch(dirIndex: 0 | 1 | 2 | 3, filename: string | null): void {
-      const cb = watchMock.mock.calls[dirIndex]?.[1] as
-        | ((event: string, filename: string | null) => void)
-        | undefined;
-      cb?.("rename", filename);
-    }
-
     it("ignores changes to files other than config", () => {
       vi.useFakeTimers();
       registerGhosttyConfigIpc(ipcDeps());

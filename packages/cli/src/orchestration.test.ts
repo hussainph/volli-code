@@ -387,13 +387,14 @@ describe("orchestration CLI", () => {
       );
     });
 
+    const peek = (extra: Record<string, unknown>) =>
+      renderCliSuccess(
+        "session.peek",
+        { ...base, turns: 3, turnDepth: 4, transcript: [], ...extra },
+        { json: false },
+      );
+
     it("puts both facts in a chat peek header and keeps old terminal replies compatible", () => {
-      const peek = (extra: Record<string, unknown>) =>
-        renderCliSuccess(
-          "session.peek",
-          { ...base, turns: 3, turnDepth: 4, transcript: [], ...extra },
-          { json: false },
-        );
       expect(peek({})).toBe("12345678  idle  last 2s  turn 3 depth 4\n");
       expect(peek({ startedBy: { kind: "user" } })).toBe(
         "12345678  idle  last 2s  turn 3 depth 4  started by the user\n",

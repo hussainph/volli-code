@@ -108,6 +108,8 @@ function listingFor(scenario: Scenario): Omit<RemoteHostProjects, "hostId"> | Er
       return new Error("Couldn't reach hetzner-1.");
   }
 }
+const openProjectSheet = (start: "list" | "new") =>
+  useRemoteHostsStore.getState().openProjectSheet(HOST.id, start);
 
 export default function HostOpenProjectScratch() {
   const [scenario, setScenario] = React.useState<Scenario>("projects");
@@ -252,9 +254,6 @@ export default function HostOpenProjectScratch() {
     };
   }, [scenario]);
 
-  const open = (start: "list" | "new") =>
-    useRemoteHostsStore.getState().openProjectSheet(HOST.id, start);
-
   return (
     <TooltipProvider>
       <div className="flex flex-col gap-6">
@@ -276,14 +275,14 @@ export default function HostOpenProjectScratch() {
           <button
             type="button"
             className="rounded-md border border-border px-3 py-1 hover:bg-muted"
-            onClick={() => open("list")}
+            onClick={() => openProjectSheet("list")}
           >
             Open a project on hetzner-1…
           </button>
           <button
             type="button"
             className="rounded-md border border-border px-3 py-1 hover:bg-muted"
-            onClick={() => open("new")}
+            onClick={() => openProjectSheet("new")}
           >
             New project…
           </button>

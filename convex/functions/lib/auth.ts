@@ -498,6 +498,8 @@ export async function requireSessionScope(
   return sessionScope(ctx, viewer, project, membership);
 }
 
+const absent = () => authError("not_found", "That session does not exist.");
+
 /**
  * A live Session the viewer can see: owner, shared, or the Workspace shares
  * everything. Whether a Session exists is part of what may be private, so
@@ -508,7 +510,6 @@ export async function requireSessionVisible(
   sessionId: SessionId | string,
   resolved?: Viewer,
 ): Promise<VisibleSession> {
-  const absent = () => authError("not_found", "That session does not exist.");
   const viewer = resolved ?? (await requireViewer(ctx));
   const session = await ctx.db
     .query("sessions")

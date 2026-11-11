@@ -232,20 +232,31 @@ afterEach(async () => {
   await rm(directory, { recursive: true, force: true });
 });
 
+const readImage = async (options?: Parameters<typeof createReadTool>[0]) =>
+  createReadTool(options).execute(
+    "call",
+    { path: "image" },
+    () => {},
+    { env },
+    invocation,
+    context,
+  );
+
+const readText = async (offset?: number, limit?: number) =>
+  createReadTool().execute(
+    "call",
+    { path: "text", offset, limit },
+    () => {},
+    { env },
+    invocation,
+    context,
+  );
+
 describe("retained read and edit tools", () => {
   it("projects images through optional conversion, including omitted BMP and conversion failures", async () => {
     const bytes = png({ type: "IHDR", length: 13 });
     await writeFile(join(directory, "image"), bytes);
-    const read = async (options?: Parameters<typeof createReadTool>[0]) =>
-      createReadTool(options).execute(
-        "call",
-        { path: "image" },
-        () => {},
-        { env },
-        invocation,
-        context,
-      );
-    expect(await read()).toMatchObject({
+    expect(await readImage()).toMatchObject({
       content: [
         { type: "text", text: "Read image file [image/png]" },
         { type: "image", mimeType: "image/png", data: encodeBase64(bytes) },
@@ -255,7 +266,7 @@ describe("retained read and edit tools", () => {
       const processor = vi
         .fn()
         .mockResolvedValue({ ok: true, data: "converted", mimeType: "image/jpeg", hints });
-      expect(await read({ imageProcessor: processor })).toMatchObject({
+      expect(await readImage({ imageProcessor: processor })).toMatchObject({
         content: [
           { type: "text", text: "Read image file [image/jpeg]" + (hints.length ? "\nhint" : "") },
           { type: "image", data: "converted" },
@@ -264,49 +275,40 @@ describe("retained read and edit tools", () => {
       expect(processor.mock.calls[0][2]).toEqual({ autoResizeImages: true });
     }
     const failure = vi.fn().mockResolvedValue({ ok: false, message: "conversion failed" });
-    expect(await read({ imageProcessor: failure, autoResizeImages: false })).toMatchObject({
+    expect(await readImage({ imageProcessor: failure, autoResizeImages: false })).toMatchObject({
       content: [{ type: "text", text: "Read image file [image/png]\nconversion failed" }],
     });
     expect(failure.mock.calls[0][2]).toEqual({ autoResizeImages: false });
     await writeFile(join(directory, "image"), bmp());
-    expect(await read()).toMatchObject({
+    expect(await readImage()).toMatchObject({
       content: [{ type: "text", text: expect.stringContaining("Image omitted") }],
     });
   });
 
   it("explains oversized first lines and offers exact continuation offsets", async () => {
-    const read = async (offset?: number, limit?: number) =>
-      createReadTool().execute(
-        "call",
-        { path: "text", offset, limit },
-        () => {},
-        { env },
-        invocation,
-        context,
-      );
     await writeFile(join(directory, "text"), "x".repeat(51201));
-    expect(await read()).toMatchObject({
+    expect(await readText()).toMatchObject({
       content: [{ type: "text", text: expect.stringContaining("Line 1 is 50.0KB") }],
       details: { truncation: { firstLineExceedsLimit: true } },
     });
     await writeFile(join(directory, "text"), "line\n".repeat(2002));
-    expect(await read()).toMatchObject({
+    expect(await readText()).toMatchObject({
       content: [{ type: "text", text: expect.stringContaining("Use offset=2001 to continue") }],
       details: { truncation: { truncatedBy: "lines" } },
     });
     await writeFile(join(directory, "text"), ("x".repeat(1000) + "\n").repeat(60));
-    expect(await read()).toMatchObject({
+    expect(await readText()).toMatchObject({
       content: [{ type: "text", text: expect.stringContaining("50.0KB limit") }],
       details: { truncation: { truncatedBy: "bytes" } },
     });
     await writeFile(join(directory, "text"), "a\nb\nc");
-    expect(await read(1, 2)).toMatchObject({
+    expect(await readText(1, 2)).toMatchObject({
       content: [
         { type: "text", text: "a\nb\n\n[1 more lines in file. Use offset=3 to continue.]" },
       ],
     });
-    expect(await read(2, 2)).toMatchObject({ content: [{ type: "text", text: "b\nc" }] });
-    await expect(read(4)).rejects.toThrow("beyond end of file");
+    expect(await readText(2, 2)).toMatchObject({ content: [{ type: "text", text: "b\nc" }] });
+    await expect(readText(4)).rejects.toThrow("beyond end of file");
   });
 
   it("accepts recovered legacy edit argument shapes but rejects an empty edit list", () => {

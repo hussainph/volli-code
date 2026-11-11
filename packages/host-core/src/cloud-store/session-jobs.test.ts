@@ -415,6 +415,9 @@ it("keeps local exception paths out of journaled Session outcomes", async () => 
   expect(JSON.stringify(outcome)).not.toContain("/runner/private");
 });
 
+const sent = (commandId = "delivery-command") =>
+  cloudMessageSubmit({ sessionId: "a-session", commandId, message });
+
 describe("a message staged with its command", () => {
   const spools: string[] = [];
   afterEach(() => {
@@ -444,9 +447,6 @@ describe("a message staged with its command", () => {
     };
     return { store, command, send };
   }
-
-  const sent = (commandId = "delivery-command") =>
-    cloudMessageSubmit({ sessionId: "a-session", commandId, message });
 
   it("names the reference the runtime's own transcript store writes for the command", async () => {
     const { store } = await staged();

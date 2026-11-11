@@ -236,24 +236,24 @@ it("positions native bounds before showing, including a same-size anchor handoff
   expect(mounted).toHaveBeenCalledTimes(1);
   expect(unmounted).not.toHaveBeenCalled();
 });
+const render = (firstVisible: boolean) =>
+  act(() =>
+    root.render(
+      <>
+        <BrowserPaneAnchor
+          tabId="opaque-tab-a"
+          visible={firstVisible}
+          onClose={() => {}}
+          onHide={() => {}}
+        />
+        <BrowserPaneAnchor tabId="opaque-tab-b" visible onClose={() => {}} onHide={() => {}} />
+        <ResidentBrowserPanes api={api} />
+      </>,
+    ),
+  );
 
 it("shows both pair members and hides only the anchor whose surface becomes inactive", () => {
   receive(tab(), tab({ tabId: "opaque-tab-b", ticketId: "ticket-b" }));
-  const render = (firstVisible: boolean) =>
-    act(() =>
-      root.render(
-        <>
-          <BrowserPaneAnchor
-            tabId="opaque-tab-a"
-            visible={firstVisible}
-            onClose={() => {}}
-            onHide={() => {}}
-          />
-          <BrowserPaneAnchor tabId="opaque-tab-b" visible onClose={() => {}} onHide={() => {}} />
-          <ResidentBrowserPanes api={api} />
-        </>,
-      ),
-    );
   render(true);
   const boxes = [...host.querySelectorAll<HTMLElement>('[data-slot="terminal-viewport-box"]')];
   expect(boxes.map((box) => box.style.display)).toEqual(["block", "block"]);
@@ -355,11 +355,10 @@ it("routes native-page chords through the current surface without remounting the
   expect(latestClose).toHaveBeenCalledTimes(1);
   expect(mounted).toHaveBeenCalledTimes(1);
 });
+const hideButton = () =>
+  host.querySelector<HTMLButtonElement>('button[aria-label="Hide to Island"]');
 
 describe("Hide to Island (VC-1118)", () => {
-  const hideButton = () =>
-    host.querySelector<HTMLButtonElement>('button[aria-label="Hide to Island"]');
-
   it("keeps the current surface's hide handoff without restoring a duplicate chrome control", () => {
     receive(tab({ createdBy: "session", ownerSessionId: "ses-a" }));
     const staleHide = vi.fn();

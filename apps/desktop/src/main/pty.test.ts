@@ -829,17 +829,16 @@ describe("output batching", () => {
     expect(sender.send).not.toHaveBeenCalled();
   });
 });
+/** Boots a session and pushes one over-watermark payload through a flush. */
+async function createPausedSession() {
+  const session = await createSession();
+  session.pty.emitData("x".repeat(100_001));
+  flushBatchWindow();
+  expect(session.pty.pause).toHaveBeenCalledTimes(1);
+  return session;
+}
 
 describe("flow control", () => {
-  /** Boots a session and pushes one over-watermark payload through a flush. */
-  async function createPausedSession() {
-    const session = await createSession();
-    session.pty.emitData("x".repeat(100_001));
-    flushBatchWindow();
-    expect(session.pty.pause).toHaveBeenCalledTimes(1);
-    return session;
-  }
-
   it("pauses the pty once unacked output exceeds the 100k high watermark", async () => {
     vi.useFakeTimers();
     const { pty } = await createSession();
@@ -892,6 +891,47 @@ describe("flow control", () => {
     expect(() => sendAck(makeWebContents(), "nope", 10)).not.toThrow();
   });
 });
+function wireRenderer(sender: WebContentsDouble) {
+  const unparsed: Array<() => void> = [];
+  const inFlight: TerminalDataEvent[] = [];
+  let throwOnWrite = false;
+  const engine: TerminalEngine = {
+    attach: vi.fn(),
+    write: (_data, onParsed) => {
+      // xterm refuses a write past its discard watermark before queueing it.
+      if (throwOnWrite) throw new Error("write data discarded");
+      if (onParsed !== undefined) unparsed.push(onParsed);
+    },
+    onData: () => () => {},
+    onResize: () => () => {},
+    setPaused: vi.fn(),
+    fit: vi.fn(),
+    focus: vi.fn(),
+    adjustFontSize: vi.fn(),
+    resetFontSize: vi.fn(),
+    dispose: vi.fn(),
+  };
+  sender.send.mockImplementation((channel: string, payload: unknown) => {
+    if (channel === "volli:terminal-data") inFlight.push(payload as TerminalDataEvent);
+  });
+  return {
+    /** Delivers every sent batch to the renderer — one IPC hop. */
+    deliver() {
+      for (const event of inFlight.splice(0)) {
+        deliverTerminalOutput(event, engine, (sessionId, chars) =>
+          sendAck(sender, sessionId, chars),
+        );
+      }
+    },
+    /** The engine finishes parsing everything it has queued. */
+    parseAll() {
+      for (const release of unparsed.splice(0)) release();
+    },
+    throwOnNextWrites(value: boolean) {
+      throwOnWrite = value;
+    },
+  };
+}
 
 /**
  * The renderer's half of flow control, driven end to end (VC-821): main's real
@@ -903,48 +943,6 @@ describe("flow control", () => {
 describe("flow control through the renderer's output dispatch", () => {
   /** `yes`-style output: a chunk per batch window, `chars` wide. */
   const CHUNK = 10_000;
-
-  function wireRenderer(sender: WebContentsDouble) {
-    const unparsed: Array<() => void> = [];
-    const inFlight: TerminalDataEvent[] = [];
-    let throwOnWrite = false;
-    const engine: TerminalEngine = {
-      attach: vi.fn(),
-      write: (_data, onParsed) => {
-        // xterm refuses a write past its discard watermark before queueing it.
-        if (throwOnWrite) throw new Error("write data discarded");
-        if (onParsed !== undefined) unparsed.push(onParsed);
-      },
-      onData: () => () => {},
-      onResize: () => () => {},
-      setPaused: vi.fn(),
-      fit: vi.fn(),
-      focus: vi.fn(),
-      adjustFontSize: vi.fn(),
-      resetFontSize: vi.fn(),
-      dispose: vi.fn(),
-    };
-    sender.send.mockImplementation((channel: string, payload: unknown) => {
-      if (channel === "volli:terminal-data") inFlight.push(payload as TerminalDataEvent);
-    });
-    return {
-      /** Delivers every sent batch to the renderer — one IPC hop. */
-      deliver() {
-        for (const event of inFlight.splice(0)) {
-          deliverTerminalOutput(event, engine, (sessionId, chars) =>
-            sendAck(sender, sessionId, chars),
-          );
-        }
-      },
-      /** The engine finishes parsing everything it has queued. */
-      parseAll() {
-        for (const release of unparsed.splice(0)) release();
-      },
-      throwOnNextWrites(value: boolean) {
-        throwOnWrite = value;
-      },
-    };
-  }
 
   it("pauses the pty while the engine has not parsed a burst, and resumes once it has", async () => {
     vi.useFakeTimers();
@@ -1421,6 +1419,9 @@ async function createKickoffSession(
   return { result, pty };
 }
 
+const spawnedConcurrencyHint = () =>
+  Number.parseInt(lastSpawnEnv()["VOLLI_CONCURRENCY_HINT"] ?? "0", 10);
+
 describe("ticket sessions", () => {
   beforeEach(() => {
     // Non-worktree: these tests exercise the direct-launch path, unchanged by
@@ -1477,19 +1478,18 @@ describe("ticket sessions", () => {
     });
     // A terminal the ledger still calls open, with no process behind it.
     insertSession(testDb.db, testSession("w", null, { id: "orphaned-terminal" }));
-    const hint = () => Number.parseInt(lastSpawnEnv()["VOLLI_CONCURRENCY_HINT"] ?? "0", 10);
     const cores = os.availableParallelism();
 
     await createSession();
-    expect(hint()).toBe(cores);
+    expect(spawnedConcurrencyHint()).toBe(cores);
     vi.setSystemTime(Date.now() + 10_000);
     await createSession();
     // One running PTY: still every core.
-    expect(hint()).toBe(cores);
+    expect(spawnedConcurrencyHint()).toBe(cores);
     vi.setSystemTime(Date.now() + 10_000);
     await createSession();
     // Two running PTYs, the orphaned attachment not among them.
-    expect(hint()).toBe(Math.max(1, Math.floor(cores / 2)));
+    expect(spawnedConcurrencyHint()).toBe(Math.max(1, Math.floor(cores / 2)));
   });
 
   it("leaves an exported budget variable exactly as the user set it", async () => {
@@ -1979,53 +1979,52 @@ describe("PtyManager.interruptTicketSessions", () => {
     }
   });
 });
+/**
+ * Attempts a resume WITHOUT queueing a spawn — the error paths reject before
+ * spawning, and a queued-but-unconsumed pty would leak into later tests
+ * (`clearAllMocks` does not drain a `mockReturnValueOnce`).
+ */
+const resumeExpectingError = (ticketId: string, priorSessionId: string) =>
+  invokeCreate(makeWebContents(), {
+    workspaceId: "w",
+    cwd: root,
+    cols: 80,
+    rows: 24,
+    ticket: { ticketId, resume: { sessionId: priorSessionId } },
+  });
+
+/** Boots a resume session for `ticketId` picking up `priorSessionId`. */
+async function resumeSession(ticketId: string, priorSessionId: string) {
+  const pty = makeFakePty();
+  spawn.mockReturnValueOnce(pty);
+  const result = await invokeCreate(makeWebContents(), {
+    workspaceId: "w",
+    cwd: root,
+    cols: 80,
+    rows: 24,
+    ticket: { ticketId, resume: { sessionId: priorSessionId } },
+  });
+  return { result, pty };
+}
+
+/** Inserts an ENDED session for `ticketId` with the given resume seed + harness. */
+function insertEndedAgent(
+  ticketId: string,
+  harnessSessionId: string | null,
+  harnessId: HarnessId = "claude-code",
+) {
+  const record = testSession("w", ticketId, { harnessId, launchKind: "agent" });
+  record.harnessSessionId = harnessSessionId;
+  record.endedAt = 1000;
+  insertSession(testDb.db, record);
+  return record;
+}
 
 describe("resume launch (issue #78)", () => {
   beforeEach(() => {
     insertTicket(testDb.db, testTicket("w", { id: "rtk1", ticketNumber: 50, usesWorktree: false }));
     insertTicket(testDb.db, testTicket("w", { id: "rtk2", ticketNumber: 51, usesWorktree: false }));
   });
-
-  /** Inserts an ENDED session for `ticketId` with the given resume seed + harness. */
-  function insertEndedAgent(
-    ticketId: string,
-    harnessSessionId: string | null,
-    harnessId: HarnessId = "claude-code",
-  ) {
-    const record = testSession("w", ticketId, { harnessId, launchKind: "agent" });
-    record.harnessSessionId = harnessSessionId;
-    record.endedAt = 1000;
-    insertSession(testDb.db, record);
-    return record;
-  }
-
-  /** Boots a resume session for `ticketId` picking up `priorSessionId`. */
-  async function resumeSession(ticketId: string, priorSessionId: string) {
-    const pty = makeFakePty();
-    spawn.mockReturnValueOnce(pty);
-    const result = await invokeCreate(makeWebContents(), {
-      workspaceId: "w",
-      cwd: root,
-      cols: 80,
-      rows: 24,
-      ticket: { ticketId, resume: { sessionId: priorSessionId } },
-    });
-    return { result, pty };
-  }
-
-  /**
-   * Attempts a resume WITHOUT queueing a spawn — the error paths reject before
-   * spawning, and a queued-but-unconsumed pty would leak into later tests
-   * (`clearAllMocks` does not drain a `mockReturnValueOnce`).
-   */
-  const resumeExpectingError = (ticketId: string, priorSessionId: string) =>
-    invokeCreate(makeWebContents(), {
-      workspaceId: "w",
-      cwd: root,
-      cols: 80,
-      rows: 24,
-      ticket: { ticketId, resume: { sessionId: priorSessionId } },
-    });
 
   it("resumes an ended claude session with a recorded id via `claude --resume '<id>'`", async () => {
     const prior = insertEndedAgent("rtk1", "abc-123");
@@ -2256,12 +2255,26 @@ describe("resume launch (issue #78)", () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 });
+/** Boots the wt1 worktree session with an optional kickoff, returning its result + pty. */
+async function createWorktreeSession(kickoff?: { harnessId: string; prompt: string }) {
+  const pty = makeFakePty();
+  spawn.mockReturnValueOnce(pty);
+  const result = await invokeCreate(makeWebContents(), {
+    workspaceId: "wp",
+    cwd: root,
+    cols: 80,
+    rows: 24,
+    ticket: { ticketId: "wt1", ...(kickoff ? { kickoff } : {}) },
+  });
+  return { result, pty };
+}
+
+// A real worktree lands in ~/.volli/worktrees; here `ensure` is mocked to
+// return a path inside the project root, so the main-derived cwd passes
+// `isPathWithinRoots` (the OR branch the guard allows) without touching disk.
+const wtCwd = () => join(root, "wt-WP-20");
 
 describe("worktree ticket sessions", () => {
-  // A real worktree lands in ~/.volli/worktrees; here `ensure` is mocked to
-  // return a path inside the project root, so the main-derived cwd passes
-  // `isPathWithinRoots` (the OR branch the guard allows) without touching disk.
-  const wtCwd = () => join(root, "wt-WP-20");
   const wtBranch = "volli/WP-20-worktree";
 
   /**
@@ -2301,20 +2314,6 @@ describe("worktree ticket sessions", () => {
     insertTicket(testDb.db, testTicket("wp", { id: "wt1", ticketNumber: 20, usesWorktree: true }));
     syncProjectRoots([root]);
   });
-
-  /** Boots the wt1 worktree session with an optional kickoff, returning its result + pty. */
-  async function createWorktreeSession(kickoff?: { harnessId: string; prompt: string }) {
-    const pty = makeFakePty();
-    spawn.mockReturnValueOnce(pty);
-    const result = await invokeCreate(makeWebContents(), {
-      workspaceId: "wp",
-      cwd: root,
-      cols: 80,
-      rows: 24,
-      ticket: { ticketId: "wt1", ...(kickoff ? { kickoff } : {}) },
-    });
-    return { result, pty };
-  }
 
   it("runs ensure before spawn, roots the pty at the worktree, and opens the prompt with the orientation preamble", async () => {
     ensureOk(false); // reused worktree → launch immediately, no setup gate
@@ -3340,17 +3339,16 @@ describe("warm park", () => {
       }).not.toThrow();
     });
   });
+  /** Spawns a hidden session, auto-parks it, and clears signal/send history. */
+  async function createAutoParked() {
+    const created = await createParkSession();
+    await parkManager.park(asWc(created.sender), created.sessionId, { manual: false });
+    parts.signal.mockClear();
+    created.sender.send.mockClear();
+    return created;
+  }
 
   describe("breathe", () => {
-    /** Spawns a hidden session, auto-parks it, and clears signal/send history. */
-    async function createAutoParked() {
-      const created = await createParkSession();
-      await parkManager.park(asWc(created.sender), created.sessionId, { manual: false });
-      parts.signal.mockClear();
-      created.sender.send.mockClear();
-      return created;
-    }
-
     it("re-freezes a session whose breathe window stays quiet", async () => {
       const { sessionId, pty, sender } = await createAutoParked();
       await parkManager.sweep(idleNow());

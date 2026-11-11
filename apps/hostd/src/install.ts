@@ -661,6 +661,8 @@ function unescapeXml(text: string): string {
     .replaceAll("&amp;", "&");
 }
 
+const string = (value: string) => `<string>${escapeXml(value)}</string>`;
+
 /**
  * A Mac's launchd agent: the shipped template's settings (VC-562), with this
  * install's paths. It runs as the person, and so does every agent on it.
@@ -669,7 +671,6 @@ function unescapeXml(text: string): string {
  * told apart, and `start` reports from the log.
  */
 function launchdAgent(layout: InstallLayout, port: number, keyFile: string | null): string {
-  const string = (value: string) => `<string>${escapeXml(value)}</string>`;
   const environment: [string, string][] = [
     ["VOLLI_HOSTD_LOG_LEVEL", "info"],
     ["VOLLI_EXPERIMENTAL", "cloud"],

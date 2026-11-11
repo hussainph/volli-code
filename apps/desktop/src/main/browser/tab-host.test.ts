@@ -1259,6 +1259,58 @@ describe("BrowserTabHost wakefulness", () => {
     expect(contents.setBackgroundThrottling.mock.calls).toEqual([[false]]);
   });
 });
+/** A Session's colour alone on a fresh host: its hashed slot's hue. */
+const soloColor = (id: string): string => {
+  const probe = new BrowserTabHost({
+    createId: () => "probe",
+    createView: () => new FakeView() as unknown as WebContentsView,
+    fromPartition: () => new FakeSession() as unknown as Session,
+    getWindow: () => null,
+    createStageWindow: newStage,
+    publishState: () => undefined,
+    publishClosed: () => undefined,
+    pictures,
+  });
+  const tabId = probe.open({
+    url: "https://example.com",
+    projectId: "p",
+    ticketId: null,
+    createdBy: "session",
+    ownerSessionId: id,
+  }).tabId;
+  const outcome = probe.hold(tabId, { sessionId: id, attachmentId: "x" });
+  return outcome.kind === "held" ? (outcome.tab.heldBy as { color: string }).color : "";
+};
+
+/** The last `heldBy` published for one tab. */
+function lastHeldBy(tabId: string): unknown {
+  const states = published.filter(
+    (event): event is { tabId: string; heldBy: unknown } =>
+      typeof event === "object" && event !== null && "tabId" in event && event.tabId === tabId,
+  );
+  return states.at(-1)?.heldBy;
+}
+
+/** Every hold event the host emitted, in order. */
+function holdEvents(): unknown[] {
+  const events: unknown[] = [];
+  host.onHoldChange((event) => events.push(event));
+  return events;
+}
+/**
+ * Two ids that hash to the same slot, found by search, so a test asserts
+ * the collision case rather than hoping for it.
+ */
+const collidingPair = (): [string, string] => {
+  const seen = new Map<string, string>();
+  for (let n = 0; ; n += 1) {
+    const id = `ses-${n}`;
+    const color = soloColor(id);
+    const earlier = seen.get(color);
+    if (earlier !== undefined) return [earlier, id];
+    seen.set(color, id);
+  }
+};
 
 describe("BrowserTabHost holds (VC-239)", () => {
   const A = { sessionId: "ses-a", attachmentId: "att-a1" };
@@ -1273,22 +1325,6 @@ describe("BrowserTabHost holds (VC-239)", () => {
       // Owned from birth (VC-238); held only when a hold is taken (VC-239).
       ownerSessionId: owner,
     }).tabId;
-  }
-
-  /** Every hold event the host emitted, in order. */
-  function holdEvents(): unknown[] {
-    const events: unknown[] = [];
-    host.onHoldChange((event) => events.push(event));
-    return events;
-  }
-
-  /** The last `heldBy` published for one tab. */
-  function lastHeldBy(tabId: string): unknown {
-    const states = published.filter(
-      (event): event is { tabId: string; heldBy: unknown } =>
-        typeof event === "object" && event !== null && "tabId" in event && event.tabId === tabId,
-    );
-    return states.at(-1)?.heldBy;
   }
 
   it("is free at birth, taken by the first write, kept by its holder, and refused to anyone else", () => {
@@ -1379,44 +1415,6 @@ describe("BrowserTabHost holds (VC-239)", () => {
     await Promise.resolve();
     expect(lastHeldBy(second)).toMatchObject({ name: "Session ses-b" });
   });
-
-  /** A Session's colour alone on a fresh host: its hashed slot's hue. */
-  const soloColor = (id: string): string => {
-    const probe = new BrowserTabHost({
-      createId: () => "probe",
-      createView: () => new FakeView() as unknown as WebContentsView,
-      fromPartition: () => new FakeSession() as unknown as Session,
-      getWindow: () => null,
-      createStageWindow: newStage,
-      publishState: () => undefined,
-      publishClosed: () => undefined,
-      pictures,
-    });
-    const tabId = probe.open({
-      url: "https://example.com",
-      projectId: "p",
-      ticketId: null,
-      createdBy: "session",
-      ownerSessionId: id,
-    }).tabId;
-    const outcome = probe.hold(tabId, { sessionId: id, attachmentId: "x" });
-    return outcome.kind === "held" ? (outcome.tab.heldBy as { color: string }).color : "";
-  };
-
-  /**
-   * Two ids that hash to the same slot, found by search, so a test asserts
-   * the collision case rather than hoping for it.
-   */
-  const collidingPair = (): [string, string] => {
-    const seen = new Map<string, string>();
-    for (let n = 0; ; n += 1) {
-      const id = `ses-${n}`;
-      const color = soloColor(id);
-      const earlier = seen.get(color);
-      if (earlier !== undefined) return [earlier, id];
-      seen.set(color, id);
-    }
-  };
 
   it("gives concurrent Sessions different colours and keeps each one's colour while it lives", () => {
     const [first, second] = collidingPair();
@@ -2131,6 +2129,14 @@ describe("BrowserTabHost ownership and presentation (VC-238)", () => {
     expect(stage().contentView.addChildView).toHaveBeenLastCalledWith(views[0]);
   });
 });
+const agentTab = (index = 0) =>
+  host.open({
+    url: `https://agent.example.com/${index}`,
+    projectId: "project-1",
+    ticketId: null,
+    createdBy: "session",
+    ownerSessionId: "session-a",
+  });
 
 /**
  * The off-screen stage (VC-278): the never-shown window every Browser Tab is
@@ -2139,15 +2145,6 @@ describe("BrowserTabHost ownership and presentation (VC-238)", () => {
  * while its accessibility tree reads perfectly, which is what hid the fault.
  */
 describe("BrowserTabHost stage (VC-278)", () => {
-  const agentTab = (index = 0) =>
-    host.open({
-      url: `https://agent.example.com/${index}`,
-      projectId: "project-1",
-      ticketId: null,
-      createdBy: "session",
-      ownerSessionId: "session-a",
-    });
-
   it("parks every new tab in the off-screen stage before its first navigation", () => {
     const tab = agentTab();
 
@@ -2348,22 +2345,21 @@ describe("BrowserTabHost stage (VC-278)", () => {
     expect(() => host.reload(tab.tabId)).toThrow("Unknown Browser Tab");
   });
 });
+const lifecycleAgentTab = (owner: string, ticketId: string | null, index: number) =>
+  host.open({
+    url: `https://agent.example.com/${owner}/${index}`,
+    projectId: "project-1",
+    ticketId,
+    createdBy: "session",
+    ownerSessionId: owner,
+  });
 
 describe("BrowserTabHost lifecycle (VC-238)", () => {
-  const agentTab = (owner: string, ticketId: string | null, index: number) =>
-    host.open({
-      url: `https://agent.example.com/${owner}/${index}`,
-      projectId: "project-1",
-      ticketId,
-      createdBy: "session",
-      ownerSessionId: owner,
-    });
-
   it("closes a Session's headless tabs when its attachment ends and leaves the ones a person has shown", () => {
-    const headless = agentTab("session-a", "ticket-1", 0);
-    const previewed = agentTab("session-a", "ticket-1", 1);
-    const promoted = agentTab("session-a", "ticket-1", 2);
-    const sibling = agentTab("session-b", "ticket-1", 0);
+    const headless = lifecycleAgentTab("session-a", "ticket-1", 0);
+    const previewed = lifecycleAgentTab("session-a", "ticket-1", 1);
+    const promoted = lifecycleAgentTab("session-a", "ticket-1", 2);
+    const sibling = lifecycleAgentTab("session-b", "ticket-1", 0);
     host.setPresentation(previewed.tabId, "preview");
     host.setPresentation(promoted.tabId, "tab");
 
@@ -2386,12 +2382,12 @@ describe("BrowserTabHost lifecycle (VC-238)", () => {
       session,
       cursorFor: undefined,
     });
-    const free = agentTab(session.sessionId, "ticket-1", 0);
-    const held = agentTab(session.sessionId, "ticket-1", 1);
-    const previewed = agentTab(session.sessionId, "ticket-1", 2);
-    const promoted = agentTab(session.sessionId, "ticket-1", 3);
-    const personHeld = agentTab(session.sessionId, "ticket-1", 4);
-    const otherHeld = agentTab(session.sessionId, "ticket-1", 5);
+    const free = lifecycleAgentTab(session.sessionId, "ticket-1", 0);
+    const held = lifecycleAgentTab(session.sessionId, "ticket-1", 1);
+    const previewed = lifecycleAgentTab(session.sessionId, "ticket-1", 2);
+    const promoted = lifecycleAgentTab(session.sessionId, "ticket-1", 3);
+    const personHeld = lifecycleAgentTab(session.sessionId, "ticket-1", 4);
+    const otherHeld = lifecycleAgentTab(session.sessionId, "ticket-1", 5);
     host.setPresentation(previewed.tabId, "preview");
     host.setPresentation(promoted.tabId, "tab");
     host.takeOver(personHeld.tabId);
@@ -2421,10 +2417,10 @@ describe("BrowserTabHost lifecycle (VC-238)", () => {
   });
 
   it("closes a Ticket's headless agent tabs when the Ticket is archived, whoever owned them", () => {
-    const a = agentTab("session-a", "ticket-1", 0);
-    const b = agentTab("session-b", "ticket-1", 0);
-    const shown = agentTab("session-b", "ticket-1", 1);
-    const elsewhere = agentTab("session-c", "ticket-2", 0);
+    const a = lifecycleAgentTab("session-a", "ticket-1", 0);
+    const b = lifecycleAgentTab("session-b", "ticket-1", 0);
+    const shown = lifecycleAgentTab("session-b", "ticket-1", 1);
+    const elsewhere = lifecycleAgentTab("session-c", "ticket-2", 0);
     const person = host.open({
       url: "https://person.example.com",
       projectId: "project-1",
@@ -2694,19 +2690,40 @@ describe("agent partition retirement", () => {
     }
   });
 });
+/** A host whose composition listens to preview outcomes (VC-1150), as dev diagnostics do. */
+const observedHost = () => {
+  const seen: BrowserPreviewDiagnostic[] = [];
+  let nextId = 0;
+  host = new BrowserTabHost({
+    createId: () => `opaque-observed-${++nextId}`,
+    createView: () => {
+      const view = new FakeView();
+      views.push(view);
+      return view as unknown as WebContentsView;
+    },
+    fromPartition: () => new FakeSession() as unknown as Session,
+    getWindow: () => fakeWindow as unknown as BrowserWindow,
+    createStageWindow: newStage,
+    publishState: (event) => published.push(event),
+    publishClosed: (tabId) => published.push({ closedTabId: tabId }),
+    pictures,
+    previewDiagnostics: (diagnostic) => void seen.push(diagnostic),
+  });
+  return seen;
+};
+
+const pictureAgentTab = () =>
+  host.open({
+    url: "https://agent.example.com",
+    projectId: "project-1",
+    ticketId: "ticket-1",
+    createdBy: "session",
+    ownerSessionId: "session-a",
+  });
 
 describe("BrowserTabHost pictures (VC-238)", () => {
-  const agentTab = () =>
-    host.open({
-      url: "https://agent.example.com",
-      projectId: "project-1",
-      ticketId: "ticket-1",
-      createdBy: "session",
-      ownerSessionId: "session-a",
-    });
-
   it("captures a live JPEG of a headless tab into the picture store and hands back its id", async () => {
-    const tab = agentTab();
+    const tab = pictureAgentTab();
     views[0]!.webContents.captureBytes = "after-click";
 
     const pictureId = await host.capturePicture(tab.tabId);
@@ -2718,31 +2735,9 @@ describe("BrowserTabHost pictures (VC-238)", () => {
     expect(pictures.describe("picture-1")).toMatchObject({ tabId: tab.tabId, generation: 0 });
   });
 
-  /** A host whose composition listens to preview outcomes (VC-1150), as dev diagnostics do. */
-  const observedHost = () => {
-    const seen: BrowserPreviewDiagnostic[] = [];
-    let nextId = 0;
-    host = new BrowserTabHost({
-      createId: () => `opaque-observed-${++nextId}`,
-      createView: () => {
-        const view = new FakeView();
-        views.push(view);
-        return view as unknown as WebContentsView;
-      },
-      fromPartition: () => new FakeSession() as unknown as Session,
-      getWindow: () => fakeWindow as unknown as BrowserWindow,
-      createStageWindow: newStage,
-      publishState: (event) => published.push(event),
-      publishClosed: (tabId) => published.push({ closedTabId: tabId }),
-      pictures,
-      previewDiagnostics: (diagnostic) => void seen.push(diagnostic),
-    });
-    return seen;
-  };
-
   it("reports each camera ending, ids and lookup sizes included, without page data", async () => {
     const seen = observedHost();
-    const tab = agentTab();
+    const tab = pictureAgentTab();
     const capture = Promise.withResolvers<Awaited<ReturnType<FakeWebContents["capturePage"]>>>();
     views[0]!.webContents.capturePage.mockReturnValueOnce(capture.promise);
     const pending = host.capturePicture(tab.tabId);
@@ -2806,7 +2801,7 @@ describe("BrowserTabHost pictures (VC-238)", () => {
         throw new Error("diagnostic sink failed");
       },
     });
-    const tab = agentTab();
+    const tab = pictureAgentTab();
     views[0]!.webContents.captureBytes = "after-click";
     expect(await host.capturePicture(tab.tabId)).toBe("picture-1");
     expect(await host.capturePicture("never-opened")).toBeNull();
@@ -2814,7 +2809,7 @@ describe("BrowserTabHost pictures (VC-238)", () => {
 
   it("reports the two early endings without changing what they answer", async () => {
     const seen = observedHost();
-    const tab = agentTab();
+    const tab = pictureAgentTab();
     expect(await host.capturePicture("never-opened")).toBeNull();
     const withdrawn = new AbortController();
     withdrawn.abort();
@@ -2834,10 +2829,10 @@ describe("BrowserTabHost pictures (VC-238)", () => {
   });
 
   it("forwards only the fixed frame-fence fields, and wires nothing when no one listens", () => {
-    const tabAbsent = agentTab();
+    const tabAbsent = pictureAgentTab();
     expect(host.transportFor(tabAbsent.tabId).onPreviewFrame).toBeUndefined();
     const seen = observedHost();
-    const tab = agentTab();
+    const tab = pictureAgentTab();
     host.transportFor(tab.tabId).onPreviewFrame?.({
       outcome: "deadline",
       generation: 2,
@@ -2852,7 +2847,7 @@ describe("BrowserTabHost pictures (VC-238)", () => {
   });
 
   it("does not capture while the person is interacting with a shown tab", async () => {
-    const tab = agentTab();
+    const tab = pictureAgentTab();
     host.setPresentation(tab.tabId, "preview");
     views[0]!.webContents.focused = true;
 
@@ -2866,7 +2861,7 @@ describe("BrowserTabHost pictures (VC-238)", () => {
   });
 
   it("declines for a tab in the strip too, not only the pinned preview", async () => {
-    const tab = agentTab();
+    const tab = pictureAgentTab();
     host.setPresentation(tab.tabId, "tab");
     views[0]!.webContents.focused = true;
 
@@ -2875,7 +2870,7 @@ describe("BrowserTabHost pictures (VC-238)", () => {
   });
 
   it("keeps its camera shut for a window after the person's last keystroke, then opens again", async () => {
-    const tab = agentTab();
+    const tab = pictureAgentTab();
     host.setPresentation(tab.tabId, "preview");
     host.show(tab.tabId);
     // Typed, then clicked Hide or another window: focus has already left, and
@@ -2891,7 +2886,7 @@ describe("BrowserTabHost pictures (VC-238)", () => {
   });
 
   it("counts a wheel or a hover as using the tab, which focus alone never reports", async () => {
-    const tab = agentTab();
+    const tab = pictureAgentTab();
     host.setPresentation(tab.tabId, "preview");
     host.show(tab.tabId);
     views[0]!.webContents.emit("input-event", { type: "mouseWheel" });
@@ -2901,14 +2896,14 @@ describe("BrowserTabHost pictures (VC-238)", () => {
   });
 
   it("does not treat CDP input on a never-shown headless tab as person interaction", async () => {
-    const tab = agentTab();
+    const tab = pictureAgentTab();
     views[0]!.webContents.emit("input-event", { type: "keyDown" });
 
     expect(await host.capturePicture(tab.tabId)).toBe("picture-1");
   });
 
   it("does not erase recent interaction when a shown tab becomes headless", async () => {
-    const tab = agentTab();
+    const tab = pictureAgentTab();
     host.setPresentation(tab.tabId, "preview");
     host.show(tab.tabId);
     views[0]!.webContents.emit("input-event", { type: "keyDown" });
@@ -2923,7 +2918,7 @@ describe("BrowserTabHost pictures (VC-238)", () => {
   });
 
   it("declines an empty capture rather than minting a picture of nothing", async () => {
-    const tab = agentTab();
+    const tab = pictureAgentTab();
     // What Chromium hands back for a view with no compositor surface: a 0x0
     // image, not a failure. Stored, it became `data:image/jpeg;base64,` in a
     // transcript card — a broken frame nobody could tell from a real one
@@ -2942,7 +2937,7 @@ describe("BrowserTabHost pictures (VC-238)", () => {
   });
 
   it("declines a failed optional preview instead of failing the completed browser action", async () => {
-    const tab = agentTab();
+    const tab = pictureAgentTab();
     views[0]!.webContents.capturePage.mockRejectedValueOnce(new Error("UnknownVizError"));
     const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     try {
@@ -2961,7 +2956,7 @@ describe("BrowserTabHost pictures (VC-238)", () => {
       vi.useFakeTimers();
       const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
       try {
-        const tab = agentTab();
+        const tab = pictureAgentTab();
         const contents = views[0]!.webContents;
         const image = await contents.capturePage();
         const pending = Promise.withResolvers<typeof image>();
@@ -2987,7 +2982,7 @@ describe("BrowserTabHost pictures (VC-238)", () => {
     vi.useFakeTimers();
     const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     try {
-      const tab = agentTab();
+      const tab = pictureAgentTab();
       const contents = views[0]!.webContents;
       const image = await contents.capturePage();
       contents.capturePage.mockClear();
@@ -3017,7 +3012,7 @@ describe("BrowserTabHost pictures (VC-238)", () => {
     vi.useFakeTimers();
     const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     try {
-      const tab = agentTab();
+      const tab = pictureAgentTab();
       const contents = views[0]!.webContents;
       const image = await contents.capturePage();
       contents.capturePage.mockClear();
@@ -3040,7 +3035,7 @@ describe("BrowserTabHost pictures (VC-238)", () => {
   });
 
   it("does not start a preview after withdrawal or tab closure", async () => {
-    const tab = agentTab();
+    const tab = pictureAgentTab();
     expect(await host.capturePicture(tab.tabId, AbortSignal.abort())).toBeNull();
     host.close(tab.tabId);
     expect(await host.capturePicture(tab.tabId)).toBeNull();
@@ -3050,7 +3045,7 @@ describe("BrowserTabHost pictures (VC-238)", () => {
   it.each(["navigation", "close", "interaction"])(
     "discards preview pixels if %s happens during capture",
     async (change) => {
-      const tab = agentTab();
+      const tab = pictureAgentTab();
       if (change === "interaction") {
         host.setPresentation(tab.tabId, "preview");
         host.show(tab.tabId);
@@ -3070,7 +3065,7 @@ describe("BrowserTabHost pictures (VC-238)", () => {
   );
 
   it("refuses to relabel an older screenshot at the persistence boundary", () => {
-    const tab = agentTab();
+    const tab = pictureAgentTab();
     host.navigate(tab.tabId, "https://example.com/replacement");
 
     expect(() =>
@@ -3081,7 +3076,7 @@ describe("BrowserTabHost pictures (VC-238)", () => {
   });
 
   it("refuses to keep a screenshot with no pixels, at the store's door too", () => {
-    const tab = agentTab();
+    const tab = pictureAgentTab();
 
     expect(() => host.keepScreenshot(tab.tabId, "", tab.generation)).toThrow(
       "Refusing to keep an empty Browser Tab screenshot",
@@ -3090,7 +3085,7 @@ describe("BrowserTabHost pictures (VC-238)", () => {
   });
 
   it("keeps a screenshot the model asked for as a persisted picture, attributed to its Session", () => {
-    const tab = agentTab();
+    const tab = pictureAgentTab();
     const png = Buffer.from("png-bytes").toString("base64");
 
     const pictureId = host.keepScreenshot(tab.tabId, png, tab.generation);
@@ -3124,13 +3119,28 @@ describe("BrowserTabHost pictures (VC-238)", () => {
   });
 
   it("resolves a picture for the renderer, or nothing for an id it never minted", () => {
-    const tab = agentTab();
+    const tab = pictureAgentTab();
     const id = host.keepScreenshot(tab.tabId, Buffer.from("x").toString("base64"), tab.generation);
 
     expect(host.pictureOf(id)).toMatch(/^data:image\/png;base64,/);
     expect(host.pictureOf("missing")).toBeNull();
   });
 });
+const port = (cursorFor?: Parameters<typeof browserAgentPort>[0]["cursorFor"]) =>
+  browserAgentPort({
+    backend: host,
+    scope: { projectId: "project-1", ticketId: null },
+    session: { sessionId: "boundary-session", attachmentId: "boundary-attachment" },
+    cursorFor,
+  });
+
+const openPreviewBoundaryTab = () =>
+  host.open({
+    url: "https://example.com/first",
+    projectId: "project-1",
+    ticketId: null,
+    createdBy: "user",
+  });
 
 describe("BrowserTabHost agent dispatch and capture boundaries", () => {
   const tree = {
@@ -3146,20 +3156,6 @@ describe("BrowserTabHost agent dispatch and capture boundaries", () => {
   };
   const png = "iVBORw0KGgoAAAANSUhEUgAABkAAAASw";
   const signal = new AbortController().signal;
-  const open = () =>
-    host.open({
-      url: "https://example.com/first",
-      projectId: "project-1",
-      ticketId: null,
-      createdBy: "user",
-    });
-  const port = (cursorFor?: Parameters<typeof browserAgentPort>[0]["cursorFor"]) =>
-    browserAgentPort({
-      backend: host,
-      scope: { projectId: "project-1", ticketId: null },
-      session: { sessionId: "boundary-session", attachmentId: "boundary-attachment" },
-      cursorFor,
-    });
 
   it("reports the preview's frame and camera endings through the production port chain (VC-1150)", async () => {
     // Real chain, nothing hand-wired: BrowserTabHost.transportFor -> the real
@@ -3183,7 +3179,7 @@ describe("BrowserTabHost agent dispatch and capture boundaries", () => {
       pictures,
       previewDiagnostics: (diagnostic) => void seen.push(diagnostic),
     });
-    const tab = open();
+    const tab = openPreviewBoundaryTab();
     let attached = false;
     Object.assign(views.at(-1)!.webContents, {
       debugger: {
@@ -3225,7 +3221,7 @@ describe("BrowserTabHost agent dispatch and capture boundaries", () => {
   });
 
   it("sends no input when navigation occurs during the real debugger transport's reinitialization", async () => {
-    const tab = open();
+    const tab = openPreviewBoundaryTab();
     const domain = Promise.withResolvers<object>();
     const initializing = Promise.withResolvers<void>();
     let attached = false;
@@ -3277,7 +3273,7 @@ describe("BrowserTabHost agent dispatch and capture boundaries", () => {
   });
 
   it("sends neither a press nor a cleanup release after navigation during the cursor glide", async () => {
-    const tab = open();
+    const tab = openPreviewBoundaryTab();
     const sendCommand = vi.fn(async (method: string) => {
       if (method === "Accessibility.getFullAXTree") return tree;
       if (method === "DOM.getBoxModel")
@@ -3311,7 +3307,7 @@ describe("BrowserTabHost agent dispatch and capture boundaries", () => {
   });
 
   it("does not return or persist old pixels when navigation occurs during capture", async () => {
-    const tab = open();
+    const tab = openPreviewBoundaryTab();
     const capture = Promise.withResolvers<object>();
     const capturing = Promise.withResolvers<void>();
     const sendCommand = vi.fn(async (method: string) => {
@@ -3339,50 +3335,50 @@ describe("BrowserTabHost agent dispatch and capture boundaries", () => {
     }
   });
 });
+const limitedAgentTab = (owner: string, index: number) =>
+  host.open({
+    url: `https://agent.example.com/${owner}/${index}`,
+    projectId: "project-1",
+    ticketId: "ticket-1",
+    createdBy: "session",
+    ownerSessionId: owner,
+  });
 
 describe("BrowserTabHost limits (VC-238)", () => {
-  const agentTab = (owner: string, index: number) =>
-    host.open({
-      url: `https://agent.example.com/${owner}/${index}`,
-      projectId: "project-1",
-      ticketId: "ticket-1",
-      createdBy: "session",
-      ownerSessionId: owner,
-    });
-
   it("caps one Session's tabs with its own error, and lets another Session keep opening", () => {
     for (let index = 0; index < BROWSER_MAX_TABS_PER_SESSION; index += 1)
-      agentTab("session-a", index);
+      limitedAgentTab("session-a", index);
 
-    expect(() => agentTab("session-a", 99)).toThrow(BrowserSessionTabLimitError);
-    expect(() => agentTab("session-a", 99)).toThrow(
+    expect(() => limitedAgentTab("session-a", 99)).toThrow(BrowserSessionTabLimitError);
+    expect(() => limitedAgentTab("session-a", 99)).toThrow(
       `A Session can have at most ${BROWSER_MAX_TABS_PER_SESSION} Browser Tabs open`,
     );
-    expect(() => agentTab("session-b", 0)).not.toThrow();
+    expect(() => limitedAgentTab("session-b", 0)).not.toThrow();
   });
 
   it("counts only what the agent holds unseen: a tab the person adopted frees its place", () => {
     const tabs = [];
     for (let index = 0; index < BROWSER_MAX_TABS_PER_SESSION; index += 1) {
-      tabs.push(agentTab("session-a", index));
+      tabs.push(limitedAgentTab("session-a", index));
     }
-    expect(() => agentTab("session-a", 99)).toThrow(BrowserSessionTabLimitError);
+    expect(() => limitedAgentTab("session-a", 99)).toThrow(BrowserSessionTabLimitError);
 
     // Show and Open as tab hand a tab to the person (§6): it is theirs to
     // close and outlives the Session, so charging it to the agent's allowance
     // would let the person's own act lock the agent out.
     host.setPresentation(tabs[0]!.tabId, "preview");
-    expect(() => agentTab("session-a", 98)).not.toThrow();
+    expect(() => limitedAgentTab("session-a", 98)).not.toThrow();
 
     host.setPresentation(tabs[1]!.tabId, "tab");
-    expect(() => agentTab("session-a", 97)).not.toThrow();
-    expect(() => agentTab("session-a", 96)).toThrow(BrowserSessionTabLimitError);
+    expect(() => limitedAgentTab("session-a", 97)).not.toThrow();
+    expect(() => limitedAgentTab("session-a", 96)).toThrow(BrowserSessionTabLimitError);
   });
 
   it("counts agent tabs apart from the person's, so agents at their cap never stop a person opening one", () => {
     // Six Sessions at their cap: 36 agent tabs in one project, past the project cap.
     for (const owner of ["a", "b", "c", "d", "e", "f"]) {
-      for (let index = 0; index < BROWSER_MAX_TABS_PER_SESSION; index += 1) agentTab(owner, index);
+      for (let index = 0; index < BROWSER_MAX_TABS_PER_SESSION; index += 1)
+        limitedAgentTab(owner, index);
     }
     expect(host.list({ projectId: "project-1" }).length).toBeGreaterThan(
       BROWSER_MAX_TABS_PER_PROJECT,
@@ -3399,7 +3395,7 @@ describe("BrowserTabHost limits (VC-238)", () => {
   });
 
   it("still caps the person's own tabs per project, without agent tabs in the count", () => {
-    agentTab("session-a", 0);
+    limitedAgentTab("session-a", 0);
     for (let index = 0; index < BROWSER_MAX_TABS_PER_PROJECT; index += 1) {
       host.open({
         url: `https://person.example.com/${index}`,
@@ -3576,20 +3572,19 @@ describe("BrowserTabHost traces (VC-453)", () => {
     warn.mockRestore();
   });
 });
+function backendAgentTab(): BrowserTabState {
+  return host.open({
+    url: "https://example.com/",
+    projectId: "project-1",
+    ticketId: null,
+    createdBy: "session",
+    ownerSessionId: "session-1",
+  });
+}
 
 describe("BrowserTabHost as the desktop's Browser backend (VC-561)", () => {
-  function agentTab(): BrowserTabState {
-    return host.open({
-      url: "https://example.com/",
-      projectId: "project-1",
-      ticketId: null,
-      createdBy: "session",
-      ownerSessionId: "session-1",
-    });
-  }
-
   it("answers a tab's CDP wire with its own app-private debugger, never a port", async () => {
-    const tab = agentTab();
+    const tab = backendAgentTab();
     const sent: string[] = [];
     let attached = false;
     Object.assign(views[0]!.webContents, {
@@ -3618,7 +3613,7 @@ describe("BrowserTabHost as the desktop's Browser backend (VC-561)", () => {
   });
 
   it("logs only safe timeout context, reading current stage and wake state without CDP", () => {
-    const tab = agentTab();
+    const tab = backendAgentTab();
     const contents = views[0]!.webContents;
     const sendCommand = vi.fn(async () => ({}));
     Object.assign(contents, {
@@ -3695,7 +3690,7 @@ describe("BrowserTabHost as the desktop's Browser backend (VC-561)", () => {
     { visible: false, minimized: true, destroyed: false },
     { visible: true, minimized: false, destroyed: true },
   ])("records the containing window flags without inferring occlusion: %j", (state) => {
-    const tab = agentTab();
+    const tab = backendAgentTab();
     const containingWindow = newAppWindow();
     appWindow = containingWindow;
     host.setPresentation(tab.tabId, "preview");
@@ -3737,7 +3732,7 @@ describe("BrowserTabHost as the desktop's Browser backend (VC-561)", () => {
   });
 
   it("settles a load wait off the tab's own loading events", async () => {
-    const tab = agentTab();
+    const tab = backendAgentTab();
     const contents = views[0]!.webContents;
     contents.loading = true;
     let settled = false;
@@ -3778,19 +3773,18 @@ function press(contents: FakeWebContents, input: Electron.Input) {
   contents.emit("before-input-event", event, input);
   return event.preventDefault;
 }
+function shownUserTab() {
+  const tab = host.open({
+    url: "https://example.com",
+    projectId: "project-1",
+    ticketId: null,
+    createdBy: "user",
+  });
+  host.show(tab.tabId);
+  return tab;
+}
 
 describe("BrowserTabHost app shortcuts (VC-301)", () => {
-  function shownUserTab() {
-    const tab = host.open({
-      url: "https://example.com",
-      projectId: "project-1",
-      ticketId: null,
-      createdBy: "user",
-    });
-    host.show(tab.tabId);
-    return tab;
-  }
-
   it("takes an app chord from the focused page and hands it to the window the page is on", () => {
     const tab = shownUserTab();
     const contents = views[0]!.webContents;

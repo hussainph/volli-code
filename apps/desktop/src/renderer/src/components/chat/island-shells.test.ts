@@ -65,6 +65,10 @@ function renderHook<T>(use: () => T): { current: T } {
   act(() => root.render(React.createElement(Probe)));
   return result;
 }
+// The island's contract says `command`; the title is the model's own
+// label and only steps in when the command has no line to show.
+const named = (over: Partial<BackgroundShellState>) =>
+  projectIslandShells([shell(over)], "session-1")[0]?.command;
 
 describe("projectIslandShells", () => {
   it("projects one Session's shells in start order, commands cut to their first line", () => {
@@ -94,10 +98,6 @@ describe("projectIslandShells", () => {
   });
 
   it("names a shell by its first non-blank line, then its title, then its id", () => {
-    // The island's contract says `command`; the title is the model's own
-    // label and only steps in when the command has no line to show.
-    const named = (over: Partial<BackgroundShellState>) =>
-      projectIslandShells([shell(over)], "session-1")[0]?.command;
     expect(named({ title: "dev", command: "\n\npnpm dev" })).toBe("pnpm dev");
     expect(named({ title: "dev", command: "  " })).toBe("dev");
     expect(named({ command: "  " })).toBe("sh-1");

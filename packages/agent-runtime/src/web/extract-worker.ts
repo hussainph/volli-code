@@ -127,6 +127,13 @@ export function createWorkerWebExtractor(
     return worker;
   };
 
+  // A kept worker that dies while idle is forgotten, so the next read starts
+  // a live one rather than posting into a thread that will never answer.
+  // `take` removes this listener, so it only ever fires while kept.
+  const onIdleWorkerExit = (): void => {
+    take();
+  };
+
   /** Keep a worker that answered, unless one is already kept. */
   const keep = (worker: Worker): void => {
     if (warm !== undefined || idleMs <= 0) {
@@ -138,14 +145,8 @@ export function createWorkerWebExtractor(
       void worker.terminate();
     }, idleMs);
     timer.unref();
-    // A kept worker that dies while idle is forgotten, so the next read starts
-    // a live one rather than posting into a thread that will never answer.
-    // `take` removes this listener, so it only ever fires while kept.
-    const onExit = (): void => {
-      take();
-    };
-    worker.once("exit", onExit);
-    warm = { worker, timer, onExit };
+    worker.once("exit", onIdleWorkerExit);
+    warm = { worker, timer, onExit: onIdleWorkerExit };
   };
 
   return ({ html, url, signal }) => {

@@ -162,14 +162,15 @@ describe("enroll", () => {
   });
 });
 
+const system = (overrides: Partial<EnrollCommand> = {}) =>
+  command({ mode: "system", dataDir: null, ...overrides });
+
+const asRoot = (overrides: Partial<EnrollPorts> = {}) => ports({ uid: () => 0, ...overrides });
+
 // S-B1: an enrolled device acts as the person. On a system install every
 // Session runs as `volli`, so `volli` must be able neither to enroll nor to
 // write where enrolled keys are kept.
 describe("enroll --system", () => {
-  const system = (overrides: Partial<EnrollCommand> = {}) =>
-    command({ mode: "system", dataDir: null, ...overrides });
-  const asRoot = (overrides: Partial<EnrollPorts> = {}) => ports({ uid: () => 0, ...overrides });
-
   it("refuses the service account: only root may enroll a device that acts as the person", async () => {
     const error = await refusal(runEnroll(system(), ports({ uid: () => VOLLI_UID })));
     expect(error).toMatchObject({ code: "not-root", exitCode: 77 });

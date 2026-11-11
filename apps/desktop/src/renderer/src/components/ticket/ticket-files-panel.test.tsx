@@ -511,6 +511,12 @@ describe("TicketFilesPanel", () => {
       expect(document.body.textContent).toContain("spec");
     });
   });
+  /** Listings whose answers the test hands out one at a time. */
+  function deferredListings(): ((result: ListDirectoryResult) => void)[] {
+    const queue: ((result: ListDirectoryResult) => void)[] = [];
+    api([], async () => await new Promise<ListDirectoryResult>((resolve) => queue.push(resolve)));
+    return queue;
+  }
 
   describe("when the ticket under it is swapped", () => {
     const WITH_WORKTREE: Ticket = {
@@ -518,13 +524,6 @@ describe("TicketFilesPanel", () => {
       worktreePath: "/worktrees/VC-406",
       branch: "volli/VC-406",
     } as Ticket;
-
-    /** Listings whose answers the test hands out one at a time. */
-    function deferredListings(): ((result: ListDirectoryResult) => void)[] {
-      const queue: ((result: ListDirectoryResult) => void)[] = [];
-      api([], async () => await new Promise<ListDirectoryResult>((resolve) => queue.push(resolve)));
-      return queue;
-    }
 
     it("draws no trace of the previous ticket in the frame the new one arrives", async () => {
       const reads = deferredListings();

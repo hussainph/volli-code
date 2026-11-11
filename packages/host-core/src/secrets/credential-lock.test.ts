@@ -272,12 +272,13 @@ describe("credential lock in one process", () => {
   it("closes the connection when ROLLBACK fails, so the kernel lock still drops", async () => {
     const lock = lockAt();
     const exec = Database.prototype.exec;
-    vi.spyOn(Database.prototype, "exec").mockImplementation(
-      function (this: Database.Database, sql) {
-        if (sql === "ROLLBACK") throw new Error("no transaction");
-        return exec.call(this, sql);
-      },
-    );
+    vi.spyOn(Database.prototype, "exec").mockImplementation(function (
+      this: Database.Database,
+      sql,
+    ) {
+      if (sql === "ROLLBACK") throw new Error("no transaction");
+      return exec.call(this, sql);
+    });
     lock.withSync(() => 0);
     vi.restoreAllMocks();
     // A fresh connection, and another process can take it.
@@ -395,16 +396,17 @@ describe("credential lock across processes", () => {
   it("treats a lock file replaced on every attempt as busy", () => {
     const lock = lockAt();
     const exec = Database.prototype.exec;
-    vi.spyOn(Database.prototype, "exec").mockImplementation(
-      function (this: Database.Database, sql) {
-        const result = exec.call(this, sql);
-        if (sql === "BEGIN EXCLUSIVE") {
-          rmSync(lock.path);
-          writeFileSync(lock.path, "", { mode: 0o600 });
-        }
-        return result;
-      },
-    );
+    vi.spyOn(Database.prototype, "exec").mockImplementation(function (
+      this: Database.Database,
+      sql,
+    ) {
+      const result = exec.call(this, sql);
+      if (sql === "BEGIN EXCLUSIVE") {
+        rmSync(lock.path);
+        writeFileSync(lock.path, "", { mode: 0o600 });
+      }
+      return result;
+    });
     expect(() => lock.withSync(() => 0)).toThrow(CredentialLockBusyError);
   });
 

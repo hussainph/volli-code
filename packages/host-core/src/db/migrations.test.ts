@@ -2955,6 +2955,16 @@ function schema(db: Database.Database): Array<{ name: string; sql: string }> {
   ).map(({ name, sql }) => ({ name, sql: sql.replace(/ IF NOT EXISTS /g, " ") }));
 }
 
+/** A fresh install's schema, to converge against. */
+function freshSchema(): Array<{ name: string; sql: string }> {
+  const freshPath = tempDbPath();
+  const fresh = openRawDb(freshPath);
+  migrate(fresh, freshPath);
+  const shape = schema(fresh);
+  fresh.close();
+  return shape;
+}
+
 describe("migrate — 035, the blobs reconciler (VC-220)", () => {
   it("lands the tables a skipped 020 owed, and converges on the fresh schema", () => {
     const dbPath = tempDbPath();
@@ -3055,16 +3065,6 @@ describe("migrate — 035, the blobs reconciler (VC-220)", () => {
    * equals a fresh install's — because those are the two ways this can go wrong.
    */
   describe("partial profiles", () => {
-    /** A fresh install's schema, to converge against. */
-    function freshSchema(): Array<{ name: string; sql: string }> {
-      const freshPath = tempDbPath();
-      const fresh = openRawDb(freshPath);
-      migrate(fresh, freshPath);
-      const shape = schema(fresh);
-      fresh.close();
-      return shape;
-    }
-
     it("lands `blob_links` under a lineage that has only `blobs`", () => {
       const dbPath = tempDbPath();
       const db = buildPartial020Lineage(dbPath, { surgery: "DROP TABLE blob_links;" });
@@ -3537,58 +3537,62 @@ describe("migration 044 — durable Session Event sequence", () => {
     return db;
   }
 
-  describe.sequential("keeps the kind index equal to the log after every migration, including future repairs", () => {
-    let fixtureDir: string;
-    let dbPath: string;
-    let db: Database.Database;
-    let previousVersion = 43;
+  describe(
+    "keeps the kind index equal to the log after every migration, including future repairs",
+    { concurrent: false },
+    () => {
+      let fixtureDir: string;
+      let dbPath: string;
+      let db: Database.Database;
+      let previousVersion = 43;
 
-    beforeAll(() => {
-      // Own this directory for the whole walk, outside tempDbPath's per-test
-      // cleanup. Every case observes the same interleaved event history.
-      fixtureDir = mkdtempSync(join(tmpdir(), "volli-kind-index-walk-"));
-      dbPath = join(fixtureDir, "volli.db");
-      db = buildV43WithInterleavedEvents(dbPath);
-    });
-    afterAll(() => {
-      db?.close();
-      if (fixtureDir) rmSync(fixtureDir, { recursive: true, force: true });
-    });
+      beforeAll(() => {
+        // Own this directory for the whole walk, outside tempDbPath's per-test
+        // cleanup. Every case observes the same interleaved event history.
+        fixtureDir = mkdtempSync(join(tmpdir(), "volli-kind-index-walk-"));
+        dbPath = join(fixtureDir, "volli.db");
+        db = buildV43WithInterleavedEvents(dbPath);
+      });
+      afterAll(() => {
+        db?.close();
+        if (fixtureDir) rmSync(fixtureDir, { recursive: true, force: true });
+      });
 
-    // VC-717: at an 8 ms flush delay on CI, the original 19-step test still
-    // took 5427 ms after optimizing fixture setup. Give each real migration
-    // its own case, not a growing sum under one timeout. Explicit sequential
-    // execution preserves the original walk and its mutation assertions.
-    it.each(MIGRATIONS.filter((candidate) => candidate.version >= 44))(
-      "migration $version",
-      (migration) => {
-        expect(db.pragma("user_version", { simple: true })).toBe(previousVersion);
-        migrate(db, dbPath, { toVersion: migration.version });
-        previousVersion = migration.version;
-        expectKindIndexMatchesLog(db);
-        if (migration.version >= 57) {
-          const cursors = db
-            .prepare("SELECT sequence, event_id FROM session_event_sequence ORDER BY sequence")
-            .all();
-          const highWater = currentSessionEventSequence(db);
-          db.prepare(
-            "UPDATE session_events SET payload = json_set(payload, '$.kind', ?) WHERE id = 'e-one-1'",
-          ).run(migration.version % 2 === 0 ? "turn.completed" : "turn.interrupted");
+      // VC-717: at an 8 ms flush delay on CI, the original 19-step test still
+      // took 5427 ms after optimizing fixture setup. Give each real migration
+      // its own case, not a growing sum under one timeout. Explicit sequential
+      // execution preserves the original walk and its mutation assertions.
+      it.each(MIGRATIONS.filter((candidate) => candidate.version >= 44))(
+        "migration $version",
+        (migration) => {
+          expect(db.pragma("user_version", { simple: true })).toBe(previousVersion);
+          migrate(db, dbPath, { toVersion: migration.version });
+          previousVersion = migration.version;
           expectKindIndexMatchesLog(db);
-          db.prepare(
-            "UPDATE session_events SET recorded_at = recorded_at + 1 WHERE id = 'e-one-1'",
-          ).run();
-          expectKindIndexMatchesLog(db);
-          expect(
-            db
+          if (migration.version >= 57) {
+            const cursors = db
               .prepare("SELECT sequence, event_id FROM session_event_sequence ORDER BY sequence")
-              .all(),
-          ).toEqual(cursors);
-          expect(currentSessionEventSequence(db)).toBe(highWater);
-        }
-      },
-    );
-  });
+              .all();
+            const highWater = currentSessionEventSequence(db);
+            db.prepare(
+              "UPDATE session_events SET payload = json_set(payload, '$.kind', ?) WHERE id = 'e-one-1'",
+            ).run(migration.version % 2 === 0 ? "turn.completed" : "turn.interrupted");
+            expectKindIndexMatchesLog(db);
+            db.prepare(
+              "UPDATE session_events SET recorded_at = recorded_at + 1 WHERE id = 'e-one-1'",
+            ).run();
+            expectKindIndexMatchesLog(db);
+            expect(
+              db
+                .prepare("SELECT sequence, event_id FROM session_event_sequence ORDER BY sequence")
+                .all(),
+            ).toEqual(cursors);
+            expect(currentSessionEventSequence(db)).toBe(highWater);
+          }
+        },
+      );
+    },
+  );
 
   it("repairs pre-057 kind drift without reassigning cursors or reusing deleted positions", () => {
     const dbPath = tempDbPath();

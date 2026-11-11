@@ -147,6 +147,10 @@ afterEach(async () => {
   container?.remove();
   container = null;
 });
+const stops = () =>
+  [...container!.querySelectorAll<HTMLElement>('button[role="checkbox"]')].filter(
+    (candidate) => candidate.tabIndex === 0,
+  );
 
 describe("McpToolPicker", () => {
   it("groups read-only tools first, says the label is the server's, and counts what is on", async () => {
@@ -273,11 +277,6 @@ describe("McpToolPicker", () => {
 
   it("is one Tab stop: arrows, Home and End walk every checkbox, Right and Left reach details", async () => {
     await render();
-
-    const stops = () =>
-      [...container!.querySelectorAll<HTMLElement>('button[role="checkbox"]')].filter(
-        (candidate) => candidate.tabIndex === 0,
-      );
     // One stop for the whole list, and it starts on Select all.
     expect(stops()).toEqual([box("Select all tools")]);
     const details = button("Show details for List issues");

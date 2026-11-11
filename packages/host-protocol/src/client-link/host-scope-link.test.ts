@@ -32,6 +32,10 @@ class Refusal extends Error {
   }
 }
 
+const fail = (error: HostError): never => {
+  throw new TRPCError({ code: error.code, cause: new Refusal(error), message: error.message });
+};
+
 async function host() {
   const key = generateDeviceKey("enrolled");
   const auth = signedDeviceVerifier(HOST, Date.now);
@@ -66,9 +70,6 @@ async function host() {
       },
     }),
   });
-  const fail = (error: HostError): never => {
-    throw new TRPCError({ code: error.code, cause: new Refusal(error), message: error.message });
-  };
   const router = t.router({
     protocol: t.router({
       hostWelcome: t.procedure.query(async ({ ctx }) => {

@@ -205,6 +205,11 @@ export function ipcLink<Router extends AnyRouter>(
     if (awaitingAck === 0) unclaimed.clear();
   };
 
+  const retire = (subscriptionId: string): void => {
+    consumers.delete(subscriptionId);
+    unclaimed.delete(subscriptionId);
+  };
+
   return () =>
     ({ op }) =>
       observable((observer) => {
@@ -256,10 +261,6 @@ export function ipcLink<Router extends AnyRouter>(
         // also what a React effect's cleanup calls.
         let claimed: string | null = null;
         let left = false;
-        const retire = (subscriptionId: string): void => {
-          consumers.delete(subscriptionId);
-          unclaimed.delete(subscriptionId);
-        };
         const onFrame = (event: IpcEvent): void => {
           if (event.kind === "done") {
             retire(event.subscriptionId);

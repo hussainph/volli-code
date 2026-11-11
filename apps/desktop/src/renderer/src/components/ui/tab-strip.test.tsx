@@ -107,6 +107,9 @@ function renderStrip(onReorder: (movedId: string, ids: readonly string[]) => voi
  * while the strip's viewport stays put.
  */
 let observers: { targets: Element[]; notify(): void }[] = [];
+function getRect(this: Element) {
+  return layout(this);
+}
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -141,9 +144,7 @@ beforeEach(() => {
       }
     },
   );
-  Element.prototype.getBoundingClientRect = function getRect(this: Element) {
-    return layout(this);
-  };
+  Element.prototype.getBoundingClientRect = getRect;
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -295,6 +296,8 @@ function scrollArea(): HTMLElement {
 
 /** How much width one mounted chevron takes out of the scroller. */
 const AFFORDANCE_WIDTH = 24;
+const affordances = (): number =>
+  (container?.querySelectorAll('[aria-label="All tabs"]').length ?? 0) * AFFORDANCE_WIDTH;
 
 /**
  * The strip's geometry, INCLUDING the part that made the first attempt wrong:
@@ -310,8 +313,6 @@ function layoutStrip(options: { area?: number; content: number; scrollLeft?: num
   let area = options.area ?? 300;
   let content = options.content;
   let left = options.scrollLeft ?? 0;
-  const affordances = (): number =>
-    (container?.querySelectorAll('[aria-label="All tabs"]').length ?? 0) * AFFORDANCE_WIDTH;
   const port = scroller();
   Object.defineProperty(scrollArea(), "clientWidth", { configurable: true, get: () => area });
   Object.defineProperty(port, "clientWidth", {
@@ -413,6 +414,23 @@ function clipLabel(tab: HTMLElement): void {
 function revealText(): string | null {
   return document.body.querySelector('[data-slot="tooltip-content"]')?.textContent ?? null;
 }
+const draw = (selected: number) =>
+  act(() =>
+    root?.render(
+      <TabStrip label="Home tabs">
+        {Array.from({ length: 9 }, (_, index) => (
+          <Tab
+            key={index}
+            label={`Tab ${index}`}
+            active={index === selected}
+            tabStop={index === selected}
+            onActivate={() => {}}
+            onClose={() => {}}
+          />
+        ))}
+      </TabStrip>,
+    ),
+  );
 
 /**
  * VC-288. A strip narrower than its tabs hid them behind one undiscoverable
@@ -479,23 +497,6 @@ describe("TabStrip overflow", () => {
   });
 
   it("does not reveal a capsule over a focused control when pane selection changes", () => {
-    const draw = (selected: number) =>
-      act(() =>
-        root?.render(
-          <TabStrip label="Home tabs">
-            {Array.from({ length: 9 }, (_, index) => (
-              <Tab
-                key={index}
-                label={`Tab ${index}`}
-                active={index === selected}
-                tabStop={index === selected}
-                onActivate={() => {}}
-                onClose={() => {}}
-              />
-            ))}
-          </TabStrip>,
-        ),
-      );
     draw(0);
     const port = measureScroller(9, 320);
     const close = tabsInStrip()[3]!.querySelector<HTMLButtonElement>('[data-slot="tab-close"]')!;

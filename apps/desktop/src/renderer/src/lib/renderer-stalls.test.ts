@@ -388,22 +388,21 @@ function fakeObserver(supportedEntryTypes: readonly string[]) {
     disconnected: () => disconnected,
   };
 }
+function install(supported: readonly string[]) {
+  const observer = fakeObserver(supported);
+  const time = clock(0);
+  const timeline = createInteractionTimeline({ now: time.now });
+  const sent: RendererStallBatch[] = [];
+  const undo = installRendererStallSignals({
+    observer: observer.host,
+    door: () => (batch) => sent.push(batch),
+    timeline,
+    batcher: (send) => createStallBatcher({ send, setTimer: () => 1, clearTimer: () => {} }),
+  });
+  return { observer, timeline, time, sent, undo };
+}
 
 describe("installing the stall signals", () => {
-  function install(supported: readonly string[]) {
-    const observer = fakeObserver(supported);
-    const time = clock(0);
-    const timeline = createInteractionTimeline({ now: time.now });
-    const sent: RendererStallBatch[] = [];
-    const undo = installRendererStallSignals({
-      observer: observer.host,
-      door: () => (batch) => sent.push(batch),
-      timeline,
-      batcher: (send) => createStallBatcher({ send, setTimer: () => 1, clearTimer: () => {} }),
-    });
-    return { observer, timeline, time, sent, undo };
-  }
-
   it("labels long frames and slow inputs, ignores short ones, and sends them on undo", () => {
     const { observer, timeline, time, sent, undo } = install(["long-animation-frame", "event"]);
     expect(observer.live.map((each) => each.options)).toEqual([

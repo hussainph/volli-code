@@ -107,19 +107,20 @@ describe("the perf arithmetic", () => {
   });
 });
 
+const frame = (overrides: Partial<PerfStallRecord> = {}) =>
+  stall({
+    process: "renderer",
+    kind: "frame",
+    door: "renderer",
+    operation: "long-animation-frame",
+    ...overrides,
+  });
+
 describe("LoAF reporting", () => {
   const runs = [
     { startedAt: T0, lastSeenAt: T0 + HOUR, version: "old", build: null },
     { startedAt: T0 + HOUR, lastSeenAt: T0 + 3 * HOUR, version: "new", build: null },
   ];
-  const frame = (overrides: Partial<PerfStallRecord> = {}) =>
-    stall({
-      process: "renderer",
-      kind: "frame",
-      door: "renderer",
-      operation: "long-animation-frame",
-      ...overrides,
-    });
   const window = {
     since: T0,
     until: T0 + 3 * HOUR,

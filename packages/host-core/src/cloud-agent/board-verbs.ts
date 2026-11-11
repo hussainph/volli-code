@@ -404,6 +404,98 @@ async function archivedCount(io: VerbIo, projectId: string): Promise<number> {
   }
 }
 
+async function events(io: VerbIo, ticket: ResolvedTicket, limit: number) {
+  if (limit === 0) return [];
+  const rows = (
+    await io.query<BoardEventRow[]>("board:ticketEvents", { ticketId: ticket.ticketId })
+  ).slice(-limit);
+  // The ticket an acting Session worked on, as its key (`null` when it cannot be read).
+  const keys = new Map<string, Promise<string | null>>([
+    [ticket.ticketId, Promise.resolve(ticket.key)],
+  ]);
+  const keyOf = (ticketId: string) => {
+    let key = keys.get(ticketId);
+    if (key === undefined) {
+      key = (async () => {
+        try {
+          const read = await io.query<TicketRead>("board:getTicket", { ticketId });
+          const project = await io.query<ProjectRow>("projects:get", {
+            projectId: read.ticket.projectId,
+          });
+          return displayTicketId(project.ticketPrefix, read.ticket.number);
+        } catch (error) {
+          if (error instanceof CloudFunctionError) return null;
+          throw error;
+        }
+      })();
+      keys.set(ticketId, key);
+    }
+    return key;
+  };
+  return Promise.all(
+    rows.map(async (event) => {
+      const { actor } = event;
+      const acting =
+        actor.kind === "agent" && typeof actor.sessionId === "string"
+          ? {
+              session: shortSessionId(actor.sessionId),
+              ticket: typeof actor.ticketId === "string" ? await keyOf(actor.ticketId) : null,
+            }
+          : null;
+      return {
+        actor: actorToken(actor),
+        actorContext: acting,
+        payload: publicPayload(event.payload),
+        createdAt: event.occurredAt,
+      };
+    }),
+  );
+}
+
+async function ticketFor(io: VerbIo, raw: unknown): Promise<ResolvedTicket> {
+  if (typeof raw !== "string" || raw.trim() === "") {
+    return refuse("INVALID_REQUEST", "A ticket display id is required.");
+  }
+  const key = raw.trim();
+  const ticketId = isUuid(key)
+    ? key
+    : (await io.query<{ ticketId: string }>("board:resolveTicketKey", { key })).ticketId;
+  const read = await io.query<TicketRead>("board:getTicket", { ticketId });
+  const project = await io.query<ProjectRow>("projects:get", {
+    projectId: read.ticket.projectId,
+  });
+  return {
+    ...read,
+    ticketId,
+    project,
+    key: displayTicketId(project.ticketPrefix, read.ticket.number),
+  };
+}
+
+// ── reads the verbs share ──────────────────────────────────────────────────
+
+async function projectFor(io: VerbIo, request: AgentRequest): Promise<ProjectRow> {
+  const { projects, current } = await io.projects();
+  const selector = request.args["project"];
+  if (typeof selector === "string") {
+    const wanted = selector.trim().toLowerCase();
+    const matches = projects.filter(
+      (project) =>
+        project.name.toLowerCase() === wanted || project.ticketPrefix.toLowerCase() === wanted,
+    );
+    if (matches.length > 1) {
+      refuse("AMBIGUOUS_PROJECT", `More than one project matches ${selector}.`);
+    }
+    if (matches.length === 0) refuse("PROJECT_NOT_FOUND", `No project matches ${selector}.`);
+    return matches[0]!;
+  }
+  const project = projects.find(({ id }) => id === current);
+  if (project === undefined) {
+    return refuse("PROJECT_REQUIRED", "This Session's project is not on the board.");
+  }
+  return project;
+}
+
 export function createCloudBoardVerbs(options: CloudBoardVerbsOptions): CloudBoardVerbs {
   const { backend } = options;
   const newId = options.newId ?? randomUUID;
@@ -467,50 +559,6 @@ export function createCloudBoardVerbs(options: CloudBoardVerbsOptions): CloudBoa
     };
   }
 
-  // ── reads the verbs share ──────────────────────────────────────────────────
-
-  async function projectFor(io: VerbIo, request: AgentRequest): Promise<ProjectRow> {
-    const { projects, current } = await io.projects();
-    const selector = request.args["project"];
-    if (typeof selector === "string") {
-      const wanted = selector.trim().toLowerCase();
-      const matches = projects.filter(
-        (project) =>
-          project.name.toLowerCase() === wanted || project.ticketPrefix.toLowerCase() === wanted,
-      );
-      if (matches.length > 1) {
-        refuse("AMBIGUOUS_PROJECT", `More than one project matches ${selector}.`);
-      }
-      if (matches.length === 0) refuse("PROJECT_NOT_FOUND", `No project matches ${selector}.`);
-      return matches[0]!;
-    }
-    const project = projects.find(({ id }) => id === current);
-    if (project === undefined) {
-      return refuse("PROJECT_REQUIRED", "This Session's project is not on the board.");
-    }
-    return project;
-  }
-
-  async function ticketFor(io: VerbIo, raw: unknown): Promise<ResolvedTicket> {
-    if (typeof raw !== "string" || raw.trim() === "") {
-      return refuse("INVALID_REQUEST", "A ticket display id is required.");
-    }
-    const key = raw.trim();
-    const ticketId = isUuid(key)
-      ? key
-      : (await io.query<{ ticketId: string }>("board:resolveTicketKey", { key })).ticketId;
-    const read = await io.query<TicketRead>("board:getTicket", { ticketId });
-    const project = await io.query<ProjectRow>("projects:get", {
-      projectId: read.ticket.projectId,
-    });
-    return {
-      ...read,
-      ticketId,
-      project,
-      key: displayTicketId(project.ticketPrefix, read.ticket.number),
-    };
-  }
-
   function wireTicket(
     ticket: TicketRow,
     project: ProjectRow,
@@ -563,54 +611,6 @@ export function createCloudBoardVerbs(options: CloudBoardVerbsOptions): CloudBoa
         wire: wireTicket(ticket, project, labelNamesOf(ticket.labelIds, labels), undefined),
       }));
     return { rows, labels };
-  }
-
-  async function events(io: VerbIo, ticket: ResolvedTicket, limit: number) {
-    if (limit === 0) return [];
-    const rows = (
-      await io.query<BoardEventRow[]>("board:ticketEvents", { ticketId: ticket.ticketId })
-    ).slice(-limit);
-    // The ticket an acting Session worked on, as its key (`null` when it cannot be read).
-    const keys = new Map<string, Promise<string | null>>([
-      [ticket.ticketId, Promise.resolve(ticket.key)],
-    ]);
-    const keyOf = (ticketId: string) => {
-      let key = keys.get(ticketId);
-      if (key === undefined) {
-        key = (async () => {
-          try {
-            const read = await io.query<TicketRead>("board:getTicket", { ticketId });
-            const project = await io.query<ProjectRow>("projects:get", {
-              projectId: read.ticket.projectId,
-            });
-            return displayTicketId(project.ticketPrefix, read.ticket.number);
-          } catch (error) {
-            if (error instanceof CloudFunctionError) return null;
-            throw error;
-          }
-        })();
-        keys.set(ticketId, key);
-      }
-      return key;
-    };
-    return Promise.all(
-      rows.map(async (event) => {
-        const { actor } = event;
-        const acting =
-          actor.kind === "agent" && typeof actor.sessionId === "string"
-            ? {
-                session: shortSessionId(actor.sessionId),
-                ticket: typeof actor.ticketId === "string" ? await keyOf(actor.ticketId) : null,
-              }
-            : null;
-        return {
-          actor: actorToken(actor),
-          actorContext: acting,
-          payload: publicPayload(event.payload),
-          createdAt: event.occurredAt,
-        };
-      }),
-    );
   }
 
   // ── the verbs ──────────────────────────────────────────────────────────────

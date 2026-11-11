@@ -58,6 +58,26 @@ afterEach(async () => {
 const nope = async (): Promise<never> => {
   throw new Error("Unexpected boundary");
 };
+const moveView = async (row: MoveRow): Promise<Omit<CloudMoveStatus, "actions">> => ({
+  ...describeMove(row),
+  moveId: row.moveId,
+  queueId: row.queueId,
+  projectId: row.projectId,
+  projectName: "Project",
+  workspaceName: "Workspace",
+  progress: null,
+  estimateSeconds: null,
+  localReadOnly: row.state !== "returned" && row.state !== "rolled_back",
+  confirmedAt: row.confirmedAt,
+  backupPath: "/backup",
+  returnExportPath: "/changes",
+  rollback: null,
+  checks: [],
+  counts,
+  pausedAutomations: [],
+  localCredentials: [],
+});
+
 function setup(rearm?: MoveDesktopOptions["rearm"]) {
   const root = mkdtempSync(join(tmpdir(), "move-service-"));
   const db = openVolliDb(join(root, "volli.db"));
@@ -127,25 +147,6 @@ function setup(rearm?: MoveDesktopOptions["rearm"]) {
     engine.journal.setQueue(queueId, { state: "done" });
     return { kind: "done" };
   });
-  const view = async (row: MoveRow): Promise<Omit<CloudMoveStatus, "actions">> => ({
-    ...describeMove(row),
-    moveId: row.moveId,
-    queueId: row.queueId,
-    projectId: row.projectId,
-    projectName: "Project",
-    workspaceName: "Workspace",
-    progress: null,
-    estimateSeconds: null,
-    localReadOnly: row.state !== "returned" && row.state !== "rolled_back",
-    confirmedAt: row.confirmedAt,
-    backupPath: "/backup",
-    returnExportPath: "/changes",
-    rollback: null,
-    checks: [],
-    counts,
-    pausedAutomations: [],
-    localCredentials: [],
-  });
   const prepared = (input: CloudMovePreflightInput): PreparedLocalMoves => ({
     input,
     estimatedExportBytes: 10,
@@ -187,7 +188,7 @@ function setup(rearm?: MoveDesktopOptions["rearm"]) {
     account: accountPort,
     withSignal: (signal, work) => signals.run(signal, work),
     identity,
-    describe: view,
+    describe: moveView,
     prepare,
     remember: async () => {},
     setExportBudget: async () => {},

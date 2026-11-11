@@ -2546,6 +2546,104 @@ function bornWith(definitions: readonly McpToolDefinition[], ...allowlist: strin
   return withParallelReadEligibility(definitions, new Set(keys));
 }
 
+/**
+ * One emitted batch through the real attach path: every MCP call sleeps
+ * (the first one longest) while the fake port records overlap, and an
+ * optional built-in `write` joins the batch after them.
+ */
+async function runBatch(input: {
+  definitions: readonly McpToolDefinition[];
+  parallelMcpReads?: boolean;
+  withWrite?: boolean;
+  observability?: (event: ObservabilityEvent) => void;
+}) {
+  let active = 0;
+  let peakActive = 0;
+  const events: string[] = [];
+  const calls: RuntimeMcpCall[] = [];
+  let resultOrder: string[] = [];
+  const attachment = fixture({
+    tools: { tools: input.withWrite ? ["write"] : [], mcp: input.definitions },
+    mcp: {
+      call: async (request) => {
+        calls.push(request);
+        active += 1;
+        peakActive = Math.max(peakActive, active);
+        events.push(`start:${request.serverId}:${request.toolName}`);
+        const first = request.toolCallId === "tc-0";
+        await new Promise<void>((resolve) => setTimeout(resolve, first ? 40 : 5));
+        events.push(
+          `end:${request.serverId}:${request.toolName}` +
+            (input.withWrite && first
+              ? `:write-landed=${existsSync(join(attachment.worktreePath, "WRITE.txt"))}`
+              : ""),
+        );
+        active -= 1;
+        return { content: [{ type: "text", text: request.toolName }], isError: false };
+      },
+    },
+  });
+  const runtime = createPiAgentRuntime({
+    sessionDataDir: attachment.sessionDataDir,
+    ...(input.parallelMcpReads === undefined ? {} : { parallelMcpReads: input.parallelMcpReads }),
+    ...(input.observability === undefined
+      ? {}
+      : {
+          observability: {
+            record: (event: ObservabilityEvent) => {
+              input.observability?.(event);
+            },
+          },
+        }),
+    models: modelsWithStream(
+      scriptedStream([
+        (emit) => {
+          for (const tool of input.definitions) emit.toolCall(tool.providerName, {});
+          if (input.withWrite) {
+            emit.toolCall("write", {
+              path: join(attachment.worktreePath, "WRITE.txt"),
+              content: "written\n",
+            });
+          }
+          emit.finish();
+        },
+        (emit, context) => {
+          resultOrder = context.messages
+            .filter(
+              (message): message is Extract<Message, { role: "toolResult" }> =>
+                message.role === "toolResult",
+            )
+            .map((message) => message.toolCallId);
+          emit.text("complete");
+          emit.finish();
+        },
+      ]),
+    ),
+  });
+  const handle = await runtime.startSession(attachment.spec);
+  try {
+    await handle.submitUserMessage("Run the synthetic MCP batch.");
+  } finally {
+    await handle.close();
+  }
+  // The runtime observation each Pi result became, keyed by the same
+  // tool-call id the port received.
+  const activities = attachment.observations.flatMap((observation) =>
+    observation.kind === "activity" && observation.state === "completed"
+      ? [observation.activityId]
+      : [],
+  );
+  return { peakActive, events, resultOrder, calls, activities };
+}
+
+const twoReads = () => [
+  batchDefinition("fixture-1", "fixture/first"),
+  batchDefinition("fixture-1", "fixture/second"),
+];
+
+const contextCarryMarker = (path: string) =>
+  entryRecords(path).find((entry) => entry["customType"] === "volli.context.v1")!;
+
 describe("startSession", () => {
   it("attaches a shell Session without proving any process boundary", async () => {
     const attachment = fixture({ tools: { tools: ["execute"] } });
@@ -3475,103 +3573,6 @@ describe("startSession", () => {
   });
 
   describe("tool dispatch (VC-444 cases, VC-454 selection path)", () => {
-    /**
-     * One emitted batch through the real attach path: every MCP call sleeps
-     * (the first one longest) while the fake port records overlap, and an
-     * optional built-in `write` joins the batch after them.
-     */
-    async function runBatch(input: {
-      definitions: readonly McpToolDefinition[];
-      parallelMcpReads?: boolean;
-      withWrite?: boolean;
-      observability?: (event: ObservabilityEvent) => void;
-    }) {
-      let active = 0;
-      let peakActive = 0;
-      const events: string[] = [];
-      const calls: RuntimeMcpCall[] = [];
-      let resultOrder: string[] = [];
-      const attachment = fixture({
-        tools: { tools: input.withWrite ? ["write"] : [], mcp: input.definitions },
-        mcp: {
-          call: async (request) => {
-            calls.push(request);
-            active += 1;
-            peakActive = Math.max(peakActive, active);
-            events.push(`start:${request.serverId}:${request.toolName}`);
-            const first = request.toolCallId === "tc-0";
-            await new Promise<void>((resolve) => setTimeout(resolve, first ? 40 : 5));
-            events.push(
-              `end:${request.serverId}:${request.toolName}` +
-                (input.withWrite && first
-                  ? `:write-landed=${existsSync(join(attachment.worktreePath, "WRITE.txt"))}`
-                  : ""),
-            );
-            active -= 1;
-            return { content: [{ type: "text", text: request.toolName }], isError: false };
-          },
-        },
-      });
-      const runtime = createPiAgentRuntime({
-        sessionDataDir: attachment.sessionDataDir,
-        ...(input.parallelMcpReads === undefined
-          ? {}
-          : { parallelMcpReads: input.parallelMcpReads }),
-        ...(input.observability === undefined
-          ? {}
-          : {
-              observability: {
-                record: (event: ObservabilityEvent) => {
-                  input.observability?.(event);
-                },
-              },
-            }),
-        models: modelsWithStream(
-          scriptedStream([
-            (emit) => {
-              for (const tool of input.definitions) emit.toolCall(tool.providerName, {});
-              if (input.withWrite) {
-                emit.toolCall("write", {
-                  path: join(attachment.worktreePath, "WRITE.txt"),
-                  content: "written\n",
-                });
-              }
-              emit.finish();
-            },
-            (emit, context) => {
-              resultOrder = context.messages
-                .filter(
-                  (message): message is Extract<Message, { role: "toolResult" }> =>
-                    message.role === "toolResult",
-                )
-                .map((message) => message.toolCallId);
-              emit.text("complete");
-              emit.finish();
-            },
-          ]),
-        ),
-      });
-      const handle = await runtime.startSession(attachment.spec);
-      try {
-        await handle.submitUserMessage("Run the synthetic MCP batch.");
-      } finally {
-        await handle.close();
-      }
-      // The runtime observation each Pi result became, keyed by the same
-      // tool-call id the port received.
-      const activities = attachment.observations.flatMap((observation) =>
-        observation.kind === "activity" && observation.state === "completed"
-          ? [observation.activityId]
-          : [],
-      );
-      return { peakActive, events, resultOrder, calls, activities };
-    }
-
-    const twoReads = () => [
-      batchDefinition("fixture-1", "fixture/first"),
-      batchDefinition("fixture-1", "fixture/second"),
-    ];
-
     it("keeps ordinary production Sessions sequential for an emitted MCP batch", async () => {
       const run = await runBatch({ definitions: twoReads() });
       expect(run.peakActive).toBe(1);
@@ -4665,9 +4666,7 @@ describe("startSession", () => {
     });
     const secondRef = second.recovery!;
     await second.close();
-    const marker = (path: string) =>
-      entryRecords(path).find((entry) => entry["customType"] === "volli.context.v1")!;
-    const bounded = JSON.stringify(marker(secondRef.sessionFilePath)["data"]);
+    const bounded = JSON.stringify(contextCarryMarker(secondRef.sessionFilePath)["data"]);
     expect(bounded.length).toBeLessThan(CONTEXT_CARRY_MAX_CHARS);
     expect(bounded).not.toContain("hhhhhhhhhh");
     expect(bounded).not.toContain("huge question");
@@ -4683,7 +4682,9 @@ describe("startSession", () => {
     });
     const thirdRef = third.recovery!;
     await third.close();
-    const flattened = marker(thirdRef.sessionFilePath)["data"] as { entries: { type: string }[] };
+    const flattened = contextCarryMarker(thirdRef.sessionFilePath)["data"] as {
+      entries: { type: string }[];
+    };
     expect(flattened.entries.map((entry) => entry.type)).not.toContain("custom");
     expect(JSON.stringify(flattened)).toContain("small question");
     expect(JSON.stringify(flattened.entries)).not.toContain("context-carried");
@@ -8671,6 +8672,84 @@ describe("compacting a context that reached its reserve", () => {
   });
 });
 
+/**
+ * A Session that compacted natively, restarted under a different resolved
+ * credential.
+ *
+ * The catalog entry does not move: the same provider id, the same model id,
+ * the same `baseUrl`. What moves is what `getAuth` answers — which is the
+ * only thing that decides where the request actually goes. An opaque
+ * checkpoint minted by the metered public API is not replayable at an OAuth
+ * backend or behind a gateway, so the restart has to rebuild from the
+ * original durable history rather than project state into a request the
+ * other endpoint never issued.
+ */
+const nativeClaudeRestart = async (
+  resolvedAuth: { auth: { apiKey?: string; baseUrl?: string }; source?: string } | undefined,
+) => {
+  const attachment = fixture();
+  const nativeBlock = { type: "compaction", content: "native Claude summary" };
+  const fetch = vi.fn(
+    async (url: string) =>
+      new Response(
+        JSON.stringify(
+          url.endsWith("count_tokens")
+            ? { input_tokens: 60_000 }
+            : {
+                stop_reason: "compaction",
+                content: [nativeBlock],
+                usage: { input_tokens: 1000, output_tokens: 50 },
+              },
+        ),
+        { headers: { "content-type": "application/json" } },
+      ),
+  );
+  vi.stubGlobal("fetch", fetch);
+  try {
+    const requests: unknown[] = [];
+    const headers: (Record<string, string> | undefined)[] = [];
+    const script = scriptedStream([
+      settles("original answer"),
+      settlesHolding("recent answer", 200_000),
+      settles("finished"),
+      settles("after restart"),
+    ]);
+    const stream: StreamFn = async (model, context, options) => {
+      const payload = { messages: toAnthropicMessages(context.messages, model) };
+      requests.push((await options?.onPayload?.(payload, model)) ?? payload);
+      headers.push(options?.headers as Record<string, string> | undefined);
+      return script(model, context, options);
+    };
+    const models = modelsWithStream(stream, [
+      { id: "claude-opus-4-6", baseUrl: "https://api.anthropic.com" },
+    ]);
+    const spec = {
+      ...attachment.spec,
+      model: {
+        providerId: PROVIDER_ID,
+        modelId: "claude-opus-4-6",
+        reasoningLevel: "off" as const,
+      },
+    };
+    const first = await runtimeFor(attachment, models).startSession(spec);
+    await first.submitUserMessage("original request");
+    await first.submitUserMessage(PASTED);
+    await first.submitUserMessage("continue");
+    const recovery = first.recovery!;
+    expect(JSON.stringify(requests.at(-1))).toContain("native Claude summary");
+    await first.close();
+
+    // The credential resolves differently now. Nothing else changed.
+    const rerouted = withResolvedAuth(models, resolvedAuth);
+    const second = await runtimeFor(attachment, rerouted).startSession({ ...spec, recovery });
+    await second.submitUserMessage("resume");
+    await second.close();
+    return { requests, headers, observations: attachment.observations };
+  } finally {
+    vi.unstubAllGlobals();
+  }
+};
+
 describe("provider-native context persistence", () => {
   it.each([
     [true, undefined],
@@ -8892,84 +8971,6 @@ describe("provider-native context persistence", () => {
       vi.unstubAllGlobals();
     }
   });
-
-  /**
-   * A Session that compacted natively, restarted under a different resolved
-   * credential.
-   *
-   * The catalog entry does not move: the same provider id, the same model id,
-   * the same `baseUrl`. What moves is what `getAuth` answers — which is the
-   * only thing that decides where the request actually goes. An opaque
-   * checkpoint minted by the metered public API is not replayable at an OAuth
-   * backend or behind a gateway, so the restart has to rebuild from the
-   * original durable history rather than project state into a request the
-   * other endpoint never issued.
-   */
-  const nativeClaudeRestart = async (
-    resolvedAuth: { auth: { apiKey?: string; baseUrl?: string }; source?: string } | undefined,
-  ) => {
-    const attachment = fixture();
-    const nativeBlock = { type: "compaction", content: "native Claude summary" };
-    const fetch = vi.fn(
-      async (url: string) =>
-        new Response(
-          JSON.stringify(
-            url.endsWith("count_tokens")
-              ? { input_tokens: 60_000 }
-              : {
-                  stop_reason: "compaction",
-                  content: [nativeBlock],
-                  usage: { input_tokens: 1000, output_tokens: 50 },
-                },
-          ),
-          { headers: { "content-type": "application/json" } },
-        ),
-    );
-    vi.stubGlobal("fetch", fetch);
-    try {
-      const requests: unknown[] = [];
-      const headers: (Record<string, string> | undefined)[] = [];
-      const script = scriptedStream([
-        settles("original answer"),
-        settlesHolding("recent answer", 200_000),
-        settles("finished"),
-        settles("after restart"),
-      ]);
-      const stream: StreamFn = async (model, context, options) => {
-        const payload = { messages: toAnthropicMessages(context.messages, model) };
-        requests.push((await options?.onPayload?.(payload, model)) ?? payload);
-        headers.push(options?.headers as Record<string, string> | undefined);
-        return script(model, context, options);
-      };
-      const models = modelsWithStream(stream, [
-        { id: "claude-opus-4-6", baseUrl: "https://api.anthropic.com" },
-      ]);
-      const spec = {
-        ...attachment.spec,
-        model: {
-          providerId: PROVIDER_ID,
-          modelId: "claude-opus-4-6",
-          reasoningLevel: "off" as const,
-        },
-      };
-      const first = await runtimeFor(attachment, models).startSession(spec);
-      await first.submitUserMessage("original request");
-      await first.submitUserMessage(PASTED);
-      await first.submitUserMessage("continue");
-      const recovery = first.recovery!;
-      expect(JSON.stringify(requests.at(-1))).toContain("native Claude summary");
-      await first.close();
-
-      // The credential resolves differently now. Nothing else changed.
-      const rerouted = withResolvedAuth(models, resolvedAuth);
-      const second = await runtimeFor(attachment, rerouted).startSession({ ...spec, recovery });
-      await second.submitUserMessage("resume");
-      await second.close();
-      return { requests, headers, observations: attachment.observations };
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  };
 
   it.each([
     [
@@ -9381,49 +9382,49 @@ describe("recovering a turn that overflowed the window", () => {
   });
 });
 
+/** Two turns, the second measured at `occupied`, then a third message. */
+function reaching(occupied: number, calls: ProviderCall[]): StreamFn {
+  return scriptedStream([
+    recording(calls, settles("first answer")),
+    recording(calls, settlesHolding("second answer", occupied)),
+    recording(calls, settles("## Goal\nsummarized")),
+    recording(calls, settles("third answer")),
+  ]);
+}
+
+/** Drive one Session to `occupied` under `policy`; report what it did. */
+async function driveTo(
+  occupied: number,
+  policy: PiRuntimeHostOptions["compactionPolicy"],
+): Promise<{
+  calls: ProviderCall[];
+  compacted: CompactionObservation[];
+  observations: RuntimeObservation[];
+}> {
+  const attachment = fixture();
+  const calls: ProviderCall[] = [];
+  const runtime = createPiAgentRuntime({
+    sessionDataDir: attachment.sessionDataDir,
+    models: modelsWithStream(reaching(occupied, calls)),
+    ...(policy === undefined ? {} : { compactionPolicy: policy }),
+  });
+  const handle = await runtime.startSession(attachment.spec);
+  await handle.submitUserMessage("remember the marker");
+  await handle.submitUserMessage(PASTED);
+  await handle.submitUserMessage("carry on");
+  await handle.close();
+  return {
+    calls,
+    compacted: compactions(attachment.observations),
+    observations: attachment.observations,
+  };
+}
+
 describe("the compaction policy a Session is run under", () => {
   /** Over Pi's own reserve against the faux catalog's 128k window. */
   const OVER_RESERVE = 200_000;
   /** Under Pi's threshold (128,000 − 16,384): the executor's reserve holds it. */
   const BETWEEN_RESERVES = 100_000;
-
-  /** Two turns, the second measured at `occupied`, then a third message. */
-  function reaching(occupied: number, calls: ProviderCall[]): StreamFn {
-    return scriptedStream([
-      recording(calls, settles("first answer")),
-      recording(calls, settlesHolding("second answer", occupied)),
-      recording(calls, settles("## Goal\nsummarized")),
-      recording(calls, settles("third answer")),
-    ]);
-  }
-
-  /** Drive one Session to `occupied` under `policy`; report what it did. */
-  async function driveTo(
-    occupied: number,
-    policy: PiRuntimeHostOptions["compactionPolicy"],
-  ): Promise<{
-    calls: ProviderCall[];
-    compacted: CompactionObservation[];
-    observations: RuntimeObservation[];
-  }> {
-    const attachment = fixture();
-    const calls: ProviderCall[] = [];
-    const runtime = createPiAgentRuntime({
-      sessionDataDir: attachment.sessionDataDir,
-      models: modelsWithStream(reaching(occupied, calls)),
-      ...(policy === undefined ? {} : { compactionPolicy: policy }),
-    });
-    const handle = await runtime.startSession(attachment.spec);
-    await handle.submitUserMessage("remember the marker");
-    await handle.submitUserMessage(PASTED);
-    await handle.submitUserMessage("carry on");
-    await handle.close();
-    return {
-      calls,
-      compacted: compactions(attachment.observations),
-      observations: attachment.observations,
-    };
-  }
 
   it("leaves a Session compacting at the executor's own reserve when nothing is configured", async () => {
     // Three turns, three calls, no summary — this occupancy is under Pi's
@@ -9538,23 +9539,25 @@ describe("the compaction policy a Session is run under", () => {
   });
 });
 
-describe("compacting because somebody asked", () => {
-  /** Two ordinary turns, then whatever the summarization call does. */
-  function conversation(calls: ProviderCall[], summarization: ScriptStep): StreamFn {
-    return scriptedStream([
-      recording(calls, settles("first answer")),
-      recording(calls, settles("second answer")),
-      recording(calls, summarization),
-      recording(calls, settles("third answer")),
-    ]);
-  }
+/** Two ordinary turns, then whatever the summarization call does. */
+function compactionConversation(calls: ProviderCall[], summarization: ScriptStep): StreamFn {
+  return scriptedStream([
+    recording(calls, settles("first answer")),
+    recording(calls, settles("second answer")),
+    recording(calls, summarization),
+    recording(calls, settles("third answer")),
+  ]);
+}
 
+describe("compacting because somebody asked", () => {
   it("summarizes a context nowhere near its threshold, and says so with `manual`", async () => {
     const attachment = fixture();
     const calls: ProviderCall[] = [];
     const runtime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
-      models: modelsWithStream(conversation(calls, settles("## Goal\nfinish the marker work"))),
+      models: modelsWithStream(
+        compactionConversation(calls, settles("## Goal\nfinish the marker work")),
+      ),
     });
     const handle = await runtime.startSession(attachment.spec);
 
@@ -9613,7 +9616,7 @@ describe("compacting because somebody asked", () => {
     const runtime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
       models: modelsWithStream(
-        conversation([], async (emit) => {
+        compactionConversation([], async (emit) => {
           summarizing.resolve();
           await release.promise;
           emit.text("## Goal\nsummarized");
@@ -9648,7 +9651,7 @@ describe("compacting because somebody asked", () => {
       now: () => clock,
       observability: { record: (event) => void events.push(event) },
       models: modelsWithStream(
-        conversation([], async (emit) => {
+        compactionConversation([], async (emit) => {
           summarizing.resolve();
           await release.promise;
           emit.text("## Goal\nsummarized");
@@ -9688,7 +9691,9 @@ describe("compacting because somebody asked", () => {
     const calls: ProviderCall[] = [];
     const runtime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
-      models: modelsWithStream(conversation(calls, settles("## Goal\nsummarized to order"))),
+      models: modelsWithStream(
+        compactionConversation(calls, settles("## Goal\nsummarized to order")),
+      ),
     });
     const handle = await runtime.startSession(attachment.spec);
 
@@ -9738,7 +9743,7 @@ describe("compacting because somebody asked", () => {
     const calls: ProviderCall[] = [];
     const runtime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
-      models: modelsWithStream(conversation(calls, settles("## Goal\nsummarized"))),
+      models: modelsWithStream(compactionConversation(calls, settles("## Goal\nsummarized"))),
     });
     const handle = await runtime.startSession(attachment.spec);
 
@@ -9760,7 +9765,7 @@ describe("compacting because somebody asked", () => {
     const runtime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
       models: modelsWithStream(
-        conversation(calls, (emit) => emit.fail("the summarizer is unhappy")),
+        compactionConversation(calls, (emit) => emit.fail("the summarizer is unhappy")),
       ),
     });
     const handle = await runtime.startSession(attachment.spec);
@@ -9790,7 +9795,9 @@ describe("compacting because somebody asked", () => {
     const calls: ProviderCall[] = [];
     const runtime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
-      models: modelsWithStream(conversation(calls, settles("## Goal\nsummarized anyway"))),
+      models: modelsWithStream(
+        compactionConversation(calls, settles("## Goal\nsummarized anyway")),
+      ),
       compactionPolicy: () => ({ autoCompaction: false }),
     });
     const handle = await runtime.startSession(attachment.spec);
@@ -9838,7 +9845,7 @@ describe("compacting because somebody asked", () => {
     const runtime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
       models: modelsWithStream(
-        conversation(calls, async (emit) => {
+        compactionConversation(calls, async (emit) => {
           summarizing.resolve();
           await release.promise;
           emit.text("## Goal\nsummarized");
@@ -9878,7 +9885,7 @@ describe("compacting because somebody asked", () => {
     const runtime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
       models: modelsWithStream(
-        conversation(calls, async (emit) => {
+        compactionConversation(calls, async (emit) => {
           summarizing.resolve();
           await release.promise;
           emit.text("## Goal\nsummarized");
@@ -9926,7 +9933,7 @@ describe("compacting because somebody asked", () => {
     const runtime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
       models: modelsWithStream(
-        conversation(calls, async (emit) => {
+        compactionConversation(calls, async (emit) => {
           summarizing.resolve();
           await release.promise;
           emit.text("## Goal\nsummarized");
@@ -9972,7 +9979,7 @@ describe("compacting because somebody asked", () => {
     const runtime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
       models: modelsWithStream(
-        conversation(calls, async (emit) => {
+        compactionConversation(calls, async (emit) => {
           summarizing.resolve();
           await release.promise;
           emit.text("## Goal\nsummarized");
@@ -12224,14 +12231,14 @@ function declaredNames(message: SystemMessage): string[] {
   return (message.toolsAdded ?? []).map((tool) => tool.name);
 }
 
-describe("transcript context (pi 0.87)", () => {
-  /** The one system message a well-formed Volli request carries, asserted as such. */
-  function onlySystemMessage(call: ProviderCall): SystemMessage {
-    const system = systemMessagesOf(call.transcript);
-    expect(system).toHaveLength(1);
-    return system[0]!;
-  }
+/** The one system message a well-formed Volli request carries, asserted as such. */
+function onlySystemMessage(call: ProviderCall): SystemMessage {
+  const system = systemMessagesOf(call.transcript);
+  expect(system).toHaveLength(1);
+  return system[0]!;
+}
 
+describe("transcript context (pi 0.87)", () => {
   it("leads the first request with one system message carrying the composed prompt and every session tool", async () => {
     const attachment = fixture({ tools: { tools: ["read", "edit"] } });
     const calls: ProviderCall[] = [];

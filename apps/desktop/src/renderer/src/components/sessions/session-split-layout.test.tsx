@@ -30,12 +30,13 @@ const BOX = { left: 0, top: 0, width: 1000, height: 400 };
 
 let container: HTMLElement | null = null;
 let root: Root | null = null;
+function getRect(this: Element) {
+  return { ...BOX, right: BOX.width, bottom: BOX.height, x: 0, y: 0 } as DOMRect;
+}
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  Element.prototype.getBoundingClientRect = function getRect(this: Element) {
-    return { ...BOX, right: BOX.width, bottom: BOX.height, x: 0, y: 0 } as DOMRect;
-  };
+  Element.prototype.getBoundingClientRect = getRect;
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);

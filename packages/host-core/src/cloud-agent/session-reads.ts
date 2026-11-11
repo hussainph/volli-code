@@ -595,6 +595,275 @@ const sessionRelationSummary = (row: CloudSessionTarget) => ({
   status: row.activity,
 });
 
+async function inflate(bytes: Buffer): Promise<string> {
+  try {
+    const out = await new Promise<Buffer>((resolve, reject) =>
+      zstdDecompress(bytes, { maxOutputLength: SESSION_OBJECT_MAX_BYTES }, (error, result) =>
+        error === null ? resolve(result) : reject(error),
+      ),
+    );
+    return out.toString("utf8");
+  } catch {
+    throw new BodyUnreadable("A transcript object is not readable zstd.");
+  }
+}
+
+// ── history and bodies ─────────────────────────────────────────────────────
+
+/** Facts read newest first, a page at a time, until `enough` or the bound. */
+async function historyWindow(
+  io: ReadIo,
+  sessionId: string,
+  enough: (events: readonly SessionEvent[]) => boolean,
+): Promise<HistoryWindow> {
+  const pages: SessionEvent[][] = [];
+  const sequences = new Map<string, number>();
+  let before = NEWEST;
+  let complete = false;
+  for (let page = 0; page < SESSION_HISTORY_MAX_PAGES; page += 1) {
+    const answer: unknown = await io.query("sessions:history", {
+      sessionId,
+      beforeSequence: before,
+      limit: HISTORY_PAGE,
+    });
+    if (
+      !isRecord(answer) ||
+      !Array.isArray(answer["events"]) ||
+      typeof answer["hasMore"] !== "boolean"
+    ) {
+      throw new CloudReadMalformed("Session history");
+    }
+    const events: SessionEvent[] = [];
+    let first = before;
+    for (const row of answer["events"]) {
+      if (!isRecord(row) || typeof row["sequence"] !== "number") {
+        throw new CloudReadMalformed("Session history");
+      }
+      first = Math.min(first, row["sequence"]);
+      // A fact this build cannot read is passed over: tolerant on read.
+      if (row["status"] !== "ok" || typeof row["event"] !== "string") continue;
+      let raw: unknown;
+      try {
+        raw = JSON.parse(row["event"]);
+      } catch {
+        throw new CloudReadMalformed(`Session event ${row["sequence"]}`);
+      }
+      const parsed = parseRendererSessionEvent(raw, "cloud.history.event");
+      if (!parsed.ok) {
+        if (parsed.reason === "malformed") {
+          throw new CloudReadMalformed(`Session event ${row["sequence"]}`);
+        }
+        continue;
+      }
+      // The renderer-safe event: the folds below read only kinds, references,
+      // command intents and receipts, which the scrub keeps as they are.
+      const event = parsed.event as unknown as SessionEvent;
+      events.push(event);
+      const reference = transcriptReferenceFor(event);
+      const digest = reference === null ? null : digestOf(reference);
+      if (digest !== null && !sequences.has(digest)) sequences.set(digest, event.sequence);
+    }
+    pages.unshift(events);
+    if (!answer["hasMore"] || answer["events"].length === 0) {
+      complete = true;
+      break;
+    }
+    before = first;
+    if (enough(pages.flat())) break;
+  }
+  const events = pages.flat().toSorted((a, b) => a.sequence - b.sequence);
+  return { events, complete, sequences };
+}
+
+async function snapshotOf(io: ReadIo, sessionId: string): Promise<Snapshot> {
+  return readSnapshot(await io.query("sessions:snapshot", { sessionId }));
+}
+
+/** Display keys for the tickets `rows` name, from one roster read (and a read per stray). */
+async function ticketKeys(
+  io: ReadIo,
+  project: ProjectRow | undefined,
+  ticketIds: readonly (string | null)[],
+): Promise<(ticketId: string | null) => string | null> {
+  const wanted = new Set(ticketIds.filter((id): id is string => id !== null));
+  const keys = new Map<string, string | null>();
+  if (wanted.size > 0 && project !== undefined) {
+    const roster: unknown = await io.query("board:roster", { projectId: project.id });
+    const tickets = isRecord(roster) && Array.isArray(roster["tickets"]) ? roster["tickets"] : [];
+    for (const ticket of tickets) {
+      if (
+        isRecord(ticket) &&
+        typeof ticket["id"] === "string" &&
+        typeof ticket["number"] === "number"
+      ) {
+        keys.set(ticket["id"], displayTicketId(project.ticketPrefix, ticket["number"]));
+      }
+    }
+    // Archived tickets are not on the roster: read each one the rows still name.
+    const { projects } = await io.projects();
+    await Promise.all(
+      [...wanted]
+        .filter((id) => !keys.has(id))
+        .map(async (ticketId) => {
+          try {
+            const read: unknown = await io.query("board:getTicket", { ticketId });
+            const ticket = isRecord(read) && isRecord(read["ticket"]) ? read["ticket"] : null;
+            const owner = projects.find(({ id }) => id === ticket?.["projectId"]);
+            keys.set(
+              ticketId,
+              ticket !== null && owner !== undefined && typeof ticket["number"] === "number"
+                ? displayTicketId(owner.ticketPrefix, ticket["number"])
+                : null,
+            );
+          } catch (error) {
+            if (!(error instanceof CloudFunctionError)) throw error;
+            keys.set(ticketId, null);
+          }
+        }),
+    );
+  }
+  return (ticketId) => (ticketId === null ? null : (keys.get(ticketId) ?? null));
+}
+
+async function projectFor(io: ReadIo, selector: unknown): Promise<ProjectRow> {
+  const { projects, current } = await io.projects();
+  if (typeof selector === "string") {
+    const wanted = selector.trim().toLowerCase();
+    const matches = projects.filter(
+      (project) =>
+        project.name.toLowerCase() === wanted || project.ticketPrefix.toLowerCase() === wanted,
+    );
+    if (matches.length > 1)
+      refuse("AMBIGUOUS_PROJECT", `More than one project matches ${selector}.`);
+    if (matches.length === 0) refuse("PROJECT_NOT_FOUND", `No project matches ${selector}.`);
+    return matches[0]!;
+  }
+  const project = projects.find(({ id }) => id === current);
+  if (project === undefined) {
+    return refuse("PROJECT_REQUIRED", "This Session's project is not on the board.");
+  }
+  return project;
+}
+
+/** The fold, or a retryable refusal while the backend has folded nothing yet. */
+async function foldedSnapshot(io: ReadIo, target: CloudSessionTarget) {
+  const snapshot = await snapshotOf(io, target.id);
+  if (snapshot.view === null) {
+    return refuse(
+      "NOT_YET_SYNCED",
+      `Volli Cloud has not folded Session ${shortSessionId(target.id)}'s history yet.`,
+    );
+  }
+  return { target: snapshot.target, view: snapshot.view };
+}
+
+// ── listing ────────────────────────────────────────────────────────────────
+
+/** One project's (or ticket's) listing, newest first, within `maxPages`. */
+async function listSessionPages(
+  io: ReadIo,
+  projectId: string,
+  ticketId: string | null,
+  maxPages: number,
+): Promise<{ rows: CloudSessionTarget[]; complete: boolean; pages: number }> {
+  const rows: CloudSessionTarget[] = [];
+  let cursor: string | null = null;
+  for (let pages = 0; pages < maxPages;) {
+    const page: unknown = await io.query("sessions:list", {
+      projectId,
+      ...(ticketId === null ? {} : { ticketId }),
+      paginationOpts: { numItems: SESSION_LIST_PAGE, cursor },
+    });
+    pages += 1;
+    if (!isRecord(page) || !Array.isArray(page["page"]) || typeof page["isDone"] !== "boolean") {
+      throw new CloudReadMalformed("Session listing");
+    }
+    rows.push(...page["page"].map(readCloudSessionTarget));
+    if (page["isDone"]) return { rows, complete: true, pages };
+    if (typeof page["continueCursor"] !== "string") throw new CloudReadMalformed("Session listing");
+    cursor = page["continueCursor"];
+  }
+  return { rows, complete: false, pages: maxPages };
+}
+
+// ── resolving a handle ─────────────────────────────────────────────────────
+
+async function resolveIn(
+  io: ReadIo,
+  handle: unknown,
+  projectId: string | undefined,
+): Promise<{ target: CloudSessionTarget; rows: CloudSessionTarget[] | null }> {
+  if (typeof handle !== "string" || handle.trim() === "") {
+    return refuse("INVALID_REQUEST", "A session id is required.");
+  }
+  const selector = handle.trim();
+  if (isUuid(selector)) {
+    try {
+      const snapshot = readSnapshot(await io.query("sessions:snapshot", { sessionId: selector }));
+      return { target: snapshot.target, rows: null };
+    } catch (error) {
+      if (error instanceof CloudFunctionError && error.code === "not_found") {
+        return refuse("SESSION_NOT_FOUND", `No session matches ${selector}.`);
+      }
+      throw error;
+    }
+  }
+  const { projects, current } = await io.projects();
+  const order =
+    projectId !== undefined
+      ? [projectId]
+      : [
+          ...projects.filter(({ id }) => id === current),
+          ...projects.filter(({ id }) => id !== current),
+        ].map(({ id }) => id);
+  const matches: { target: CloudSessionTarget; rows: CloudSessionTarget[] }[] = [];
+  let budget = projectId !== undefined ? SESSION_LIST_MAX_PAGES : SESSION_RESOLVE_MAX_PAGES;
+  let bounded = false;
+  for (const id of order) {
+    if (budget <= 0) {
+      bounded = true;
+      break;
+    }
+    const scan = await listSessionPages(io, id, null, Math.min(budget, SESSION_LIST_MAX_PAGES));
+    budget -= scan.pages;
+    if (!scan.complete) bounded = true;
+    for (const row of scan.rows) {
+      if (shortSessionId(row.id) === selector) matches.push({ target: row, rows: scan.rows });
+    }
+  }
+  if (matches.length > 1) {
+    const names = new Map(projects.map((project) => [project.id, project.name]));
+    return refuse(
+      "AMBIGUOUS_CONTEXT",
+      `Session id ${selector} is ambiguous.`,
+      `It matches ${matches
+        .map(
+          ({ target }) =>
+            `${JSON.stringify(target.title ?? "untitled")} in ${names.get(target.projectId) ?? "another project"}`,
+        )
+        .join(", ")}; narrow it with --project.`,
+    );
+  }
+  if (matches.length === 0) {
+    return refuse(
+      "SESSION_NOT_FOUND",
+      bounded
+        ? `No session matches ${selector} among the newest Sessions Volli Cloud lists for you (the search reads at most ${(projectId !== undefined ? SESSION_LIST_MAX_PAGES : SESSION_RESOLVE_MAX_PAGES) * SESSION_LIST_PAGE} rows).`
+        : `No session matches ${selector}.`,
+      bounded ? "Name its project with --project to search further back there." : null,
+    );
+  }
+  return matches[0]!;
+}
+
+// ── the verbs ──────────────────────────────────────────────────────────────
+
+async function targetFor(io: ReadIo, request: AgentRequest) {
+  const selector = request.args["project"];
+  const projectId = typeof selector === "string" ? (await projectFor(io, selector)).id : undefined;
+  return resolveIn(io, request.args["id"], projectId);
+}
+
 export function createCloudSessionReads(options: CloudSessionReadsOptions): CloudSessionReads {
   const { backend } = options;
   const now = options.now ?? Date.now;
@@ -665,255 +934,6 @@ export function createCloudSessionReads(options: CloudSessionReadsOptions): Clou
     };
   }
 
-  // ── listing ────────────────────────────────────────────────────────────────
-
-  /** One project's (or ticket's) listing, newest first, within `maxPages`. */
-  async function listing(
-    io: ReadIo,
-    projectId: string,
-    ticketId: string | null,
-    maxPages: number,
-  ): Promise<{ rows: CloudSessionTarget[]; complete: boolean; pages: number }> {
-    const rows: CloudSessionTarget[] = [];
-    let cursor: string | null = null;
-    for (let pages = 0; pages < maxPages;) {
-      const page: unknown = await io.query("sessions:list", {
-        projectId,
-        ...(ticketId === null ? {} : { ticketId }),
-        paginationOpts: { numItems: SESSION_LIST_PAGE, cursor },
-      });
-      pages += 1;
-      if (!isRecord(page) || !Array.isArray(page["page"]) || typeof page["isDone"] !== "boolean") {
-        throw new CloudReadMalformed("Session listing");
-      }
-      rows.push(...page["page"].map(readCloudSessionTarget));
-      if (page["isDone"]) return { rows, complete: true, pages };
-      if (typeof page["continueCursor"] !== "string")
-        throw new CloudReadMalformed("Session listing");
-      cursor = page["continueCursor"];
-    }
-    return { rows, complete: false, pages: maxPages };
-  }
-
-  async function projectFor(io: ReadIo, selector: unknown): Promise<ProjectRow> {
-    const { projects, current } = await io.projects();
-    if (typeof selector === "string") {
-      const wanted = selector.trim().toLowerCase();
-      const matches = projects.filter(
-        (project) =>
-          project.name.toLowerCase() === wanted || project.ticketPrefix.toLowerCase() === wanted,
-      );
-      if (matches.length > 1)
-        refuse("AMBIGUOUS_PROJECT", `More than one project matches ${selector}.`);
-      if (matches.length === 0) refuse("PROJECT_NOT_FOUND", `No project matches ${selector}.`);
-      return matches[0]!;
-    }
-    const project = projects.find(({ id }) => id === current);
-    if (project === undefined) {
-      return refuse("PROJECT_REQUIRED", "This Session's project is not on the board.");
-    }
-    return project;
-  }
-
-  /** Display keys for the tickets `rows` name, from one roster read (and a read per stray). */
-  async function ticketKeys(
-    io: ReadIo,
-    project: ProjectRow | undefined,
-    ticketIds: readonly (string | null)[],
-  ): Promise<(ticketId: string | null) => string | null> {
-    const wanted = new Set(ticketIds.filter((id): id is string => id !== null));
-    const keys = new Map<string, string | null>();
-    if (wanted.size > 0 && project !== undefined) {
-      const roster: unknown = await io.query("board:roster", { projectId: project.id });
-      const tickets = isRecord(roster) && Array.isArray(roster["tickets"]) ? roster["tickets"] : [];
-      for (const ticket of tickets) {
-        if (
-          isRecord(ticket) &&
-          typeof ticket["id"] === "string" &&
-          typeof ticket["number"] === "number"
-        ) {
-          keys.set(ticket["id"], displayTicketId(project.ticketPrefix, ticket["number"]));
-        }
-      }
-      // Archived tickets are not on the roster: read each one the rows still name.
-      const { projects } = await io.projects();
-      await Promise.all(
-        [...wanted]
-          .filter((id) => !keys.has(id))
-          .map(async (ticketId) => {
-            try {
-              const read: unknown = await io.query("board:getTicket", { ticketId });
-              const ticket = isRecord(read) && isRecord(read["ticket"]) ? read["ticket"] : null;
-              const owner = projects.find(({ id }) => id === ticket?.["projectId"]);
-              keys.set(
-                ticketId,
-                ticket !== null && owner !== undefined && typeof ticket["number"] === "number"
-                  ? displayTicketId(owner.ticketPrefix, ticket["number"])
-                  : null,
-              );
-            } catch (error) {
-              if (!(error instanceof CloudFunctionError)) throw error;
-              keys.set(ticketId, null);
-            }
-          }),
-      );
-    }
-    return (ticketId) => (ticketId === null ? null : (keys.get(ticketId) ?? null));
-  }
-
-  // ── resolving a handle ─────────────────────────────────────────────────────
-
-  async function resolveIn(
-    io: ReadIo,
-    handle: unknown,
-    projectId: string | undefined,
-  ): Promise<{ target: CloudSessionTarget; rows: CloudSessionTarget[] | null }> {
-    if (typeof handle !== "string" || handle.trim() === "") {
-      return refuse("INVALID_REQUEST", "A session id is required.");
-    }
-    const selector = handle.trim();
-    if (isUuid(selector)) {
-      try {
-        const snapshot = readSnapshot(await io.query("sessions:snapshot", { sessionId: selector }));
-        return { target: snapshot.target, rows: null };
-      } catch (error) {
-        if (error instanceof CloudFunctionError && error.code === "not_found") {
-          return refuse("SESSION_NOT_FOUND", `No session matches ${selector}.`);
-        }
-        throw error;
-      }
-    }
-    const { projects, current } = await io.projects();
-    const order =
-      projectId !== undefined
-        ? [projectId]
-        : [
-            ...projects.filter(({ id }) => id === current),
-            ...projects.filter(({ id }) => id !== current),
-          ].map(({ id }) => id);
-    const matches: { target: CloudSessionTarget; rows: CloudSessionTarget[] }[] = [];
-    let budget = projectId !== undefined ? SESSION_LIST_MAX_PAGES : SESSION_RESOLVE_MAX_PAGES;
-    let bounded = false;
-    for (const id of order) {
-      if (budget <= 0) {
-        bounded = true;
-        break;
-      }
-      const scan = await listing(io, id, null, Math.min(budget, SESSION_LIST_MAX_PAGES));
-      budget -= scan.pages;
-      if (!scan.complete) bounded = true;
-      for (const row of scan.rows) {
-        if (shortSessionId(row.id) === selector) matches.push({ target: row, rows: scan.rows });
-      }
-    }
-    if (matches.length > 1) {
-      const names = new Map(projects.map((project) => [project.id, project.name]));
-      return refuse(
-        "AMBIGUOUS_CONTEXT",
-        `Session id ${selector} is ambiguous.`,
-        `It matches ${matches
-          .map(
-            ({ target }) =>
-              `${JSON.stringify(target.title ?? "untitled")} in ${names.get(target.projectId) ?? "another project"}`,
-          )
-          .join(", ")}; narrow it with --project.`,
-      );
-    }
-    if (matches.length === 0) {
-      return refuse(
-        "SESSION_NOT_FOUND",
-        bounded
-          ? `No session matches ${selector} among the newest Sessions Volli Cloud lists for you (the search reads at most ${(projectId !== undefined ? SESSION_LIST_MAX_PAGES : SESSION_RESOLVE_MAX_PAGES) * SESSION_LIST_PAGE} rows).`
-          : `No session matches ${selector}.`,
-        bounded ? "Name its project with --project to search further back there." : null,
-      );
-    }
-    return matches[0]!;
-  }
-
-  async function snapshotOf(io: ReadIo, sessionId: string): Promise<Snapshot> {
-    return readSnapshot(await io.query("sessions:snapshot", { sessionId }));
-  }
-
-  /** The fold, or a retryable refusal while the backend has folded nothing yet. */
-  async function foldedSnapshot(io: ReadIo, target: CloudSessionTarget) {
-    const snapshot = await snapshotOf(io, target.id);
-    if (snapshot.view === null) {
-      return refuse(
-        "NOT_YET_SYNCED",
-        `Volli Cloud has not folded Session ${shortSessionId(target.id)}'s history yet.`,
-      );
-    }
-    return { target: snapshot.target, view: snapshot.view };
-  }
-
-  // ── history and bodies ─────────────────────────────────────────────────────
-
-  /** Facts read newest first, a page at a time, until `enough` or the bound. */
-  async function historyWindow(
-    io: ReadIo,
-    sessionId: string,
-    enough: (events: readonly SessionEvent[]) => boolean,
-  ): Promise<HistoryWindow> {
-    const pages: SessionEvent[][] = [];
-    const sequences = new Map<string, number>();
-    let before = NEWEST;
-    let complete = false;
-    for (let page = 0; page < SESSION_HISTORY_MAX_PAGES; page += 1) {
-      const answer: unknown = await io.query("sessions:history", {
-        sessionId,
-        beforeSequence: before,
-        limit: HISTORY_PAGE,
-      });
-      if (
-        !isRecord(answer) ||
-        !Array.isArray(answer["events"]) ||
-        typeof answer["hasMore"] !== "boolean"
-      ) {
-        throw new CloudReadMalformed("Session history");
-      }
-      const events: SessionEvent[] = [];
-      let first = before;
-      for (const row of answer["events"]) {
-        if (!isRecord(row) || typeof row["sequence"] !== "number") {
-          throw new CloudReadMalformed("Session history");
-        }
-        first = Math.min(first, row["sequence"]);
-        // A fact this build cannot read is passed over: tolerant on read.
-        if (row["status"] !== "ok" || typeof row["event"] !== "string") continue;
-        let raw: unknown;
-        try {
-          raw = JSON.parse(row["event"]);
-        } catch {
-          throw new CloudReadMalformed(`Session event ${row["sequence"]}`);
-        }
-        const parsed = parseRendererSessionEvent(raw, "cloud.history.event");
-        if (!parsed.ok) {
-          if (parsed.reason === "malformed") {
-            throw new CloudReadMalformed(`Session event ${row["sequence"]}`);
-          }
-          continue;
-        }
-        // The renderer-safe event: the folds below read only kinds, references,
-        // command intents and receipts, which the scrub keeps as they are.
-        const event = parsed.event as unknown as SessionEvent;
-        events.push(event);
-        const reference = transcriptReferenceFor(event);
-        const digest = reference === null ? null : digestOf(reference);
-        if (digest !== null && !sequences.has(digest)) sequences.set(digest, event.sequence);
-      }
-      pages.unshift(events);
-      if (!answer["hasMore"] || answer["events"].length === 0) {
-        complete = true;
-        break;
-      }
-      before = first;
-      if (enough(pages.flat())) break;
-    }
-    const events = pages.flat().toSorted((a, b) => a.sequence - b.sequence);
-    return { events, complete, sequences };
-  }
-
   async function signedGet(io: ReadIo, sessionId: string, object: Record<string, unknown>) {
     const grant: unknown = await io.action("sessionTranscript:presignGet", { sessionId, object });
     if (isRecord(grant) && grant["status"] === "absent") return null;
@@ -972,19 +992,6 @@ export function createCloudSessionReads(options: CloudSessionReadsOptions): Clou
       bytes,
       sha256: isRecord(grant) && typeof grant["sha256"] === "string" ? grant["sha256"] : null,
     };
-  }
-
-  async function inflate(bytes: Buffer): Promise<string> {
-    try {
-      const out = await new Promise<Buffer>((resolve, reject) =>
-        zstdDecompress(bytes, { maxOutputLength: SESSION_OBJECT_MAX_BYTES }, (error, result) =>
-          error === null ? resolve(result) : reject(error),
-        ),
-      );
-      return out.toString("utf8");
-    } catch {
-      throw new BodyUnreadable("A transcript object is not readable zstd.");
-    }
   }
 
   function bodyReader(io: ReadIo, sessionId: string, window: HistoryWindow): BodyReader {
@@ -1120,15 +1127,6 @@ export function createCloudSessionReads(options: CloudSessionReadsOptions): Clou
     };
   }
 
-  // ── the verbs ──────────────────────────────────────────────────────────────
-
-  async function targetFor(io: ReadIo, request: AgentRequest) {
-    const selector = request.args["project"];
-    const projectId =
-      typeof selector === "string" ? (await projectFor(io, selector)).id : undefined;
-    return resolveIn(io, request.args["id"], projectId);
-  }
-
   return {
     resolveTarget: (callerSessionId, handle, projectId, callOptions = {}) =>
       (async (): Promise<CloudSessionResolution> => {
@@ -1217,7 +1215,12 @@ export function createCloudSessionReads(options: CloudSessionReadsOptions): Clou
       } else {
         project = await projectFor(io, request.args["project"]);
       }
-      const scan = await listing(io, project.id, ticket?.ticketId ?? null, SESSION_LIST_MAX_PAGES);
+      const scan = await listSessionPages(
+        io,
+        project.id,
+        ticket?.ticketId ?? null,
+        SESSION_LIST_MAX_PAGES,
+      );
       const keyOf = await ticketKeys(
         io,
         project,
@@ -1277,7 +1280,8 @@ export function createCloudSessionReads(options: CloudSessionReadsOptions): Clou
       const { target, view } = await snapshotOf(io, resolved.target.id);
       const observedAt = now();
       const rows =
-        resolved.rows ?? (await listing(io, target.projectId, null, SESSION_LIST_MAX_PAGES)).rows;
+        resolved.rows ??
+        (await listSessionPages(io, target.projectId, null, SESSION_LIST_MAX_PAGES)).rows;
       const { projects } = await io.projects();
       const project = projects.find(({ id }) => id === target.projectId);
       const keyOf = await ticketKeys(io, project, [target.ticketId]);
@@ -1356,7 +1360,8 @@ export function createCloudSessionReads(options: CloudSessionReadsOptions): Clou
       const { target, view } = await foldedSnapshot(io, resolved.target);
       const limit = positiveIntOr(request.args["lines"], CHAT_PEEK_ENTRIES);
       const rows =
-        resolved.rows ?? (await listing(io, target.projectId, null, SESSION_LIST_MAX_PAGES)).rows;
+        resolved.rows ??
+        (await listSessionPages(io, target.projectId, null, SESSION_LIST_MAX_PAGES)).rows;
       const window = await historyWindow(io, target.id, (events) => {
         let references = 0;
         let turnStarted = false;

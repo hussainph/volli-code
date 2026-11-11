@@ -775,6 +775,17 @@ function submitComposerWithResources(
   findElements(tree, PromptInput)[0]?.props.onSubmit?.();
   return sent;
 }
+function pillMarkup(overrides: Partial<Parameters<typeof ModelPill>[0]> = {}): string {
+  return renderToStaticMarkup(
+    <ModelPill
+      models={MODELS}
+      selection={{ providerId: "anthropic", modelId: "sonnet-4.5", reasoningLevel: "" }}
+      disabled={false}
+      onChange={() => undefined}
+      {...overrides}
+    />,
+  );
+}
 
 /**
  * The model pill under a controlled open — `/model`'s target. The pill keeps
@@ -783,18 +794,6 @@ function submitComposerWithResources(
  * marks the trigger `data-state="open"` the moment it is.
  */
 describe("the model pill's controlled open", () => {
-  function pillMarkup(overrides: Partial<Parameters<typeof ModelPill>[0]> = {}): string {
-    return renderToStaticMarkup(
-      <ModelPill
-        models={MODELS}
-        selection={{ providerId: "anthropic", modelId: "sonnet-4.5", reasoningLevel: "" }}
-        disabled={false}
-        onChange={() => undefined}
-        {...overrides}
-      />,
-    );
-  }
-
   it("takes the caller's open as the popover's own", () => {
     expect(pillMarkup({ open: true })).toContain('data-state="open"');
   });
@@ -916,17 +915,14 @@ describe("what a composed message actually sends", () => {
     ]);
   });
 });
+/** The blocked turn, exactly as the plane hands it over: live, and asked. */
+function askedComposer(overrides: Partial<SessionComposerProps> = {}): string {
+  return renderToStaticMarkup(
+    <SessionComposer {...composerProps({ working: true, interactionOpen: true, ...overrides })} />,
+  );
+}
 
 describe("the composer while a question is waiting on an answer", () => {
-  /** The blocked turn, exactly as the plane hands it over: live, and asked. */
-  function askedComposer(overrides: Partial<SessionComposerProps> = {}): string {
-    return renderToStaticMarkup(
-      <SessionComposer
-        {...composerProps({ working: true, interactionOpen: true, ...overrides })}
-      />,
-    );
-  }
-
   it("stays the message box it always was, named as one", () => {
     // It used to rename itself Answer and take the question's words, which made
     // two answer fields with two submit paths for one question — and the same
@@ -1129,6 +1125,23 @@ describe("the picker card", () => {
     expect(new Set(paths).size).toBe(COMPOSER_VERBS.length);
   });
 });
+function renderStack(layout: "overlay"): string {
+  return renderToStaticMarkup(
+    <ComposerPickerStack
+      layout={layout}
+      value=""
+      onValueChange={() => undefined}
+      ready
+      interactionOpen={false}
+      promptTemplates={TEMPLATES}
+      skills={[]}
+      verbs={[]}
+      files={[]}
+    >
+      <textarea aria-label="Layout probe" />
+    </ComposerPickerStack>,
+  );
+}
 
 /**
  * The layout contract, not decoration: `chat-plane.tsx` measures the whole
@@ -1140,24 +1153,6 @@ describe("the picker card", () => {
  * looking perfect on an empty one.
  */
 describe("the picker's place in the composer stack", () => {
-  function renderStack(layout: "overlay"): string {
-    return renderToStaticMarkup(
-      <ComposerPickerStack
-        layout={layout}
-        value=""
-        onValueChange={() => undefined}
-        ready
-        interactionOpen={false}
-        promptTemplates={TEMPLATES}
-        skills={[]}
-        verbs={[]}
-        files={[]}
-      >
-        <textarea aria-label="Layout probe" />
-      </ComposerPickerStack>,
-    );
-  }
-
   it("costs no height at all while it is closed", () => {
     expect(renderPicker(null)).toBe("");
   });

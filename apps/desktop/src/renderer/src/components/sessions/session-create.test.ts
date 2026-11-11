@@ -382,15 +382,14 @@ describe("bootChatSession", () => {
     expect(useChatSessionsStore.getState().starting).toEqual({});
   });
 });
+function startHarness() {
+  stubChatStore(async () => "durable-1");
+  const enqueue = vi.fn();
+  useChatSessionsStore.setState({ enqueue });
+  return { enqueue };
+}
 
 describe("startTicketChat", () => {
-  function startHarness() {
-    stubChatStore(async () => "durable-1");
-    const enqueue = vi.fn();
-    useChatSessionsStore.setState({ enqueue });
-    return { enqueue };
-  }
-
   it("carries a composed start's fallback as the opening message auto-title baseline", async () => {
     const { enqueue } = startHarness();
     const message = "Begin work on this ticket. Your assignment is the Ticket Brief above.";

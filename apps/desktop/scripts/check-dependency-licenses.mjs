@@ -228,7 +228,8 @@ function isPermissiveId(id, permissiveIds) {
  * name would have made the gate pass on macOS and fail on Linux for a reason
  * that has nothing to do with licensing. Three families in this tree need it:
  * the libvips binaries (LGPL), the lightningcss binaries (MPL), and the yuku
- * bindings (no license field). Every other platform family is MIT or Apache.
+ * bindings (MIT; older manifests omitted the license). Every other platform
+ * family is MIT or Apache.
  * @param {string} name
  * @param {string} pattern
  */

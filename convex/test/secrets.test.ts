@@ -557,29 +557,29 @@ function values(set: { entries: readonly { name: string; value: string }[] }) {
   return Object.fromEntries(set.entries.map((entry) => [entry.name, entry.value]));
 }
 
-describe("delivery to a runner", () => {
-  /** Carol's Session on Carol's Mac, with secrets at every level. */
-  async function stocked() {
-    const world = await team(convexTest(schema, modules));
-    const { t, workspaceId, projectId } = world;
-    const alice = world.owner.client;
-    const carol = world.member.client;
-    await setSecret(alice, { scope: "workspace", workspaceId }, "TOKEN", "workspace-token");
-    await setSecret(alice, { scope: "workspace", workspaceId }, "REGION", "eu", { kind: "env" });
-    await setSecret(alice, { scope: "project", projectId }, "TOKEN", "project-token");
-    await setSecret(alice, { scope: "project", projectId }, "NPM_TOKEN", "npm-token", {
-      exposure: "setup",
-    });
-    await setSecret(carol, { scope: "personal", projectId: null }, "TOKEN", "carol-token");
-    await setSecret(carol, { scope: "personal", projectId }, "OVERRIDE", "carol-here", {
-      exposure: "setup",
-    });
-    await setSecret(alice, { scope: "project", projectId }, "OVERRIDE", "project-override");
-    const runnerId = await insertRunner(t, world.member.userId);
-    const sessionId = await insertSession(t, projectId, world.member.userId, runnerId);
-    return { ...world, runnerId, sessionId };
-  }
+/** Carol's Session on Carol's Mac, with secrets at every level. */
+async function stocked() {
+  const world = await team(convexTest(schema, modules));
+  const { t, workspaceId, projectId } = world;
+  const alice = world.owner.client;
+  const carol = world.member.client;
+  await setSecret(alice, { scope: "workspace", workspaceId }, "TOKEN", "workspace-token");
+  await setSecret(alice, { scope: "workspace", workspaceId }, "REGION", "eu", { kind: "env" });
+  await setSecret(alice, { scope: "project", projectId }, "TOKEN", "project-token");
+  await setSecret(alice, { scope: "project", projectId }, "NPM_TOKEN", "npm-token", {
+    exposure: "setup",
+  });
+  await setSecret(carol, { scope: "personal", projectId: null }, "TOKEN", "carol-token");
+  await setSecret(carol, { scope: "personal", projectId }, "OVERRIDE", "carol-here", {
+    exposure: "setup",
+  });
+  await setSecret(alice, { scope: "project", projectId }, "OVERRIDE", "project-override");
+  const runnerId = await insertRunner(t, world.member.userId);
+  const sessionId = await insertSession(t, projectId, world.member.userId, runnerId);
+  return { ...world, runnerId, sessionId };
+}
 
+describe("delivery to a runner", () => {
   test("precedence personal-for-project > personal > project > workspace, then exposure", async () => {
     const world = await stocked();
     const claim = { kind: "session" as const, sessionId: world.sessionId };

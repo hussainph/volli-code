@@ -71,6 +71,10 @@ function receipt(status: "accepted" | "rejected" | "unreconciled"): CommandRecei
         : { status, detail: "unknown" }),
   } as CommandReceipt;
 }
+async function acceptedReceipt(): Promise<CommandReceipt> {
+  return receipt("accepted");
+}
+
 function fixture(options: { live?: boolean; replay?: SessionStreamEmission[] } = {}) {
   const rows = new Map<string, { notice: HostNotice | null; receipt: HostNoticeReceipt | null }>();
   const writes: string[] = [];
@@ -94,7 +98,7 @@ function fixture(options: { live?: boolean; replay?: SessionStreamEmission[] } =
   let receipts: CommandReceipt[] = [];
   const commands: SessionRuntimeCommandRequest[] = [];
   const reports: string[] = [];
-  let dispatch: () => Promise<CommandReceipt | null> = async () => receipt("accepted");
+  let dispatch: () => Promise<CommandReceipt | null> = acceptedReceipt;
   let onSubscribe: (() => Promise<void>) | null = null;
   let replay = options.replay ?? [];
   let subscriptions = 0;

@@ -564,9 +564,9 @@ function reportIndexLines(label, lines) {
   if (lines.length > 20) console.error(`  … and ${lines.length - 20} more`);
 }
 
+const indexOf = (document) => new Set(document.split("\n").filter((line) => INDEX_LINE.test(line)));
+
 function reportIndexDrift(current, generated) {
-  const indexOf = (document) =>
-    new Set(document.split("\n").filter((line) => INDEX_LINE.test(line)));
   const before = indexOf(current);
   const after = indexOf(generated);
   const added = [...after].filter((line) => !before.has(line));

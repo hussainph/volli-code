@@ -127,20 +127,20 @@ function statusGit(wt: string, gitDir: string, dirty = false) {
   });
 }
 
-describe("archiveAndClean", () => {
-  function seed(worktreePath: string | null, status = "done") {
-    insertProject(ctx.db, testProject({ id: "p1", path: "/repo" }));
-    insertTicket(ctx.db, testTicket("p1", { id: "t1", status: status as "done" }));
-    if (worktreePath) {
-      updateTicketFields(
-        ctx.db,
-        "t1",
-        { worktreePath, branch: "volli/VC-1-x", baseBranch: "main" },
-        1,
-      );
-    }
+function seed(worktreePath: string | null, status = "done") {
+  insertProject(ctx.db, testProject({ id: "p1", path: "/repo" }));
+  insertTicket(ctx.db, testTicket("p1", { id: "t1", status: status as "done" }));
+  if (worktreePath) {
+    updateTicketFields(
+      ctx.db,
+      "t1",
+      { worktreePath, branch: "volli/VC-1-x", baseBranch: "main" },
+      1,
+    );
   }
+}
 
+describe("archiveAndClean", () => {
   it("removes a clean worktree and archives the ticket", async () => {
     const wt = tempDir("wt");
     const gitDir = tempDir("gitdir");
@@ -216,6 +216,10 @@ describe("archiveAndClean", () => {
   });
 });
 
+function reclaimEvents() {
+  return listTicketEvents(ctx.db, "t1").filter((e) => e.payload.kind === "worktree_reclaimed");
+}
+
 // VC-113. The complaint was never "Volli reclaims disk", it was WHEN: a branch
 // reads clean the instant it is pushed, so the old sweep could take a checkout
 // away at the exact moment its review started. Dwell replaces tidiness as the
@@ -262,10 +266,6 @@ describe("reclaimIfStale", () => {
       busyWorktreeSites: async () =>
         busy.map((directory) => ({ directory, surface: "terminal" as const })),
     };
-  }
-
-  function reclaimEvents() {
-    return listTicketEvents(ctx.db, "t1").filter((e) => e.payload.kind === "worktree_reclaimed");
   }
 
   it("reclaims the directory after the TTL, keeping the ticket, branch, and PR url", async () => {
@@ -455,59 +455,58 @@ describe("reclaimIfStale", () => {
   });
 });
 
+function trimEvents() {
+  return listTicketEvents(ctx.db, "t1").filter((e) => e.payload.kind === "worktree_trimmed");
+}
+
+/** A ticket in `status`, pointed at `worktreePath`. */
+function seedTicket(
+  worktreePath: string,
+  status: "todo" | "doing" | "done",
+  opts: { keep?: boolean; archived?: boolean } = {},
+) {
+  insertProject(ctx.db, testProject({ id: "p1", path: "/repo" }));
+  insertTicket(ctx.db, testTicket("p1", { id: "t1", status }));
+  updateTicketFields(ctx.db, "t1", { worktreePath, branch: "volli/VC-1-x", baseBranch: "main" }, 1);
+  if (opts.keep === true) {
+    ctx.db.prepare("UPDATE tickets SET retention_keep = 1 WHERE id = 't1'").run();
+  }
+  if (opts.archived === true) {
+    ctx.db.prepare("UPDATE tickets SET archived_at = 5 WHERE id = 't1'").run();
+  }
+}
+
+/** A committed repo that ignores `node_modules/` and `.env`, with both present. */
+function seedWorktree(): string {
+  const root = tempDir("trim-wt");
+  const run = (args: readonly string[]) =>
+    execFileSync("git", args, {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "Volli Test",
+        GIT_AUTHOR_EMAIL: "test@volli.local",
+        GIT_COMMITTER_NAME: "Volli Test",
+        GIT_COMMITTER_EMAIL: "test@volli.local",
+      },
+    });
+  run(["init", "-q", "-b", "main"]);
+  writeFileSync(join(root, ".gitignore"), "node_modules/\n.env\n");
+  writeFileSync(join(root, "package.json"), "{}\n");
+  run(["add", "-A"]);
+  run(["commit", "-q", "-m", "fixture"]);
+  mkdirSync(join(root, "node_modules", "left-pad"), { recursive: true });
+  writeFileSync(join(root, "node_modules", "left-pad", "index.js"), "module.exports = 1;\n");
+  writeFileSync(join(root, ".env"), "TOKEN=secret\n");
+  return root;
+}
+
 // VC-340. The trim is the retention rule the FOOTPRINT earns, as distinct from
 // the reclaim above: it takes what a package manager rebuilds, so it may run the
 // moment a ticket finishes instead of waiting out the whole window.
 describe("trimFinishedWorktree", () => {
   const NOW = 1_000_000_000_000;
-
-  /** A committed repo that ignores `node_modules/` and `.env`, with both present. */
-  function seedWorktree(): string {
-    const root = tempDir("trim-wt");
-    const run = (args: readonly string[]) =>
-      execFileSync("git", args, {
-        cwd: root,
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          GIT_AUTHOR_NAME: "Volli Test",
-          GIT_AUTHOR_EMAIL: "test@volli.local",
-          GIT_COMMITTER_NAME: "Volli Test",
-          GIT_COMMITTER_EMAIL: "test@volli.local",
-        },
-      });
-    run(["init", "-q", "-b", "main"]);
-    writeFileSync(join(root, ".gitignore"), "node_modules/\n.env\n");
-    writeFileSync(join(root, "package.json"), "{}\n");
-    run(["add", "-A"]);
-    run(["commit", "-q", "-m", "fixture"]);
-    mkdirSync(join(root, "node_modules", "left-pad"), { recursive: true });
-    writeFileSync(join(root, "node_modules", "left-pad", "index.js"), "module.exports = 1;\n");
-    writeFileSync(join(root, ".env"), "TOKEN=secret\n");
-    return root;
-  }
-
-  /** A ticket in `status`, pointed at `worktreePath`. */
-  function seedTicket(
-    worktreePath: string,
-    status: "todo" | "doing" | "done",
-    opts: { keep?: boolean; archived?: boolean } = {},
-  ) {
-    insertProject(ctx.db, testProject({ id: "p1", path: "/repo" }));
-    insertTicket(ctx.db, testTicket("p1", { id: "t1", status }));
-    updateTicketFields(
-      ctx.db,
-      "t1",
-      { worktreePath, branch: "volli/VC-1-x", baseBranch: "main" },
-      1,
-    );
-    if (opts.keep === true) {
-      ctx.db.prepare("UPDATE tickets SET retention_keep = 1 WHERE id = 't1'").run();
-    }
-    if (opts.archived === true) {
-      ctx.db.prepare("UPDATE tickets SET archived_at = 5 WHERE id = 't1'").run();
-    }
-  }
 
   function trimDeps(busy: BusyWorktreeSite[] = []) {
     return {
@@ -520,10 +519,6 @@ describe("trimFinishedWorktree", () => {
       now: () => NOW,
       busySites: async () => busy,
     };
-  }
-
-  function trimEvents() {
-    return listTicketEvents(ctx.db, "t1").filter((e) => e.payload.kind === "worktree_trimmed");
   }
 
   it("skips trim when activity is unavailable, including JS callers", async () => {

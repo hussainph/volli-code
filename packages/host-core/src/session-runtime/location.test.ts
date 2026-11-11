@@ -79,6 +79,81 @@ function ticketSession(projectId: string, ticketId: string): Session {
   };
 }
 
+function recipeTicket(files: { setup?: string; resume?: string }) {
+  testDb = openTestDb();
+  const root = scratch();
+  worktreeHome.current = join(root, "home");
+  const worktreePath = join(root, "VC-3-doing");
+  mkdirSync(join(worktreePath, ".agents"), { recursive: true });
+  for (const [script, body] of Object.entries(files)) {
+    writeFileSync(join(worktreePath, ".agents", script), body);
+  }
+  const project = testProject({
+    id: "project-1",
+    path: join(root, "main"),
+    ticketPrefix: "VC",
+  });
+  const ticket = testTicket(project.id, {
+    id: "ticket-1",
+    ticketNumber: 3,
+    worktreePath: null,
+  });
+  insertProject(testDb.db, project);
+  insertTicket(testDb.db, ticket);
+  markFirstRunPending({ home: worktreeHome.current }, worktreePath, ticket.id, ["setup"]);
+  ensureWorktree.mockResolvedValue({
+    ok: true,
+    value: {
+      identity: { worktreePath, branch: "volli/VC-3-doing", baseBranch: "main" },
+      created: true,
+      restamped: false,
+      setupPending: true,
+    },
+  });
+  const resolver = createSessionLocationResolver(testDb.db, ports, {
+    ...options,
+    setupEnvironment: async () => ({
+      shellPath: "/bin/sh",
+      env: { PATH: process.env["PATH"] ?? "/usr/bin:/bin" },
+    }),
+    environmentRecipes: () => true,
+    power: { on: () => undefined, removeListener: () => undefined },
+  });
+  return { worktreePath, resolver, session: ticketSession(project.id, ticket.id) };
+}
+
+function setupTicket(setupCommand: string) {
+  testDb = openTestDb();
+  const root = scratch();
+  worktreeHome.current = join(root, "home");
+  const worktreePath = join(root, "VC-3-doing");
+  mkdirSync(worktreePath);
+  const project = testProject({ id: "project-1", path: join(root, "main"), setupCommand });
+  const ticket = testTicket(project.id, { id: "ticket-1", worktreePath: null });
+  insertProject(testDb.db, project);
+  insertTicket(testDb.db, ticket);
+  // What `ensure` records before it creates the worktree.
+  markFirstRunPending({ home: worktreeHome.current }, worktreePath, ticket.id, ["setup"]);
+  ensureWorktree.mockResolvedValue({
+    ok: true,
+    value: {
+      identity: { worktreePath, branch: "volli/VC-3-doing", baseBranch: "main" },
+      created: true,
+      restamped: true,
+      setupPending: true,
+    },
+  });
+  const resolver = createSessionLocationResolver(testDb.db, ports, {
+    ...options,
+    // A fixed shell, so the suite never runs the developer's own profile.
+    setupEnvironment: async () => ({
+      shellPath: "/bin/sh",
+      env: { PATH: process.env["PATH"] ?? "/usr/bin:/bin" },
+    }),
+  });
+  return { worktreePath, resolver, session: ticketSession(project.id, ticket.id) };
+}
+
 describe("desktop Session location resolver", () => {
   it("uses the host venue for resolution and preparation", async () => {
     testDb = openTestDb();
@@ -284,38 +359,6 @@ describe("desktop Session location resolver", () => {
   });
 
   describe("the project's setup command (VC-835)", () => {
-    function setupTicket(setupCommand: string) {
-      testDb = openTestDb();
-      const root = scratch();
-      worktreeHome.current = join(root, "home");
-      const worktreePath = join(root, "VC-3-doing");
-      mkdirSync(worktreePath);
-      const project = testProject({ id: "project-1", path: join(root, "main"), setupCommand });
-      const ticket = testTicket(project.id, { id: "ticket-1", worktreePath: null });
-      insertProject(testDb.db, project);
-      insertTicket(testDb.db, ticket);
-      // What `ensure` records before it creates the worktree.
-      markFirstRunPending({ home: worktreeHome.current }, worktreePath, ticket.id, ["setup"]);
-      ensureWorktree.mockResolvedValue({
-        ok: true,
-        value: {
-          identity: { worktreePath, branch: "volli/VC-3-doing", baseBranch: "main" },
-          created: true,
-          restamped: true,
-          setupPending: true,
-        },
-      });
-      const resolver = createSessionLocationResolver(testDb.db, ports, {
-        ...options,
-        // A fixed shell, so the suite never runs the developer's own profile.
-        setupEnvironment: async () => ({
-          shellPath: "/bin/sh",
-          env: { PATH: process.env["PATH"] ?? "/usr/bin:/bin" },
-        }),
-      });
-      return { worktreePath, resolver, session: ticketSession(project.id, ticket.id) };
-    }
-
     afterEach(() => {
       worktreeHome.current = "/volli-location-test-home";
     });
@@ -376,49 +419,6 @@ describe("desktop Session location resolver", () => {
   // .agents/setup runs, a failed one keeps refusing starts until answered,
   // and .agents/resume runs once per runner epoch.
   describe("the environment recipe (VC-584)", () => {
-    function recipeTicket(files: { setup?: string; resume?: string }) {
-      testDb = openTestDb();
-      const root = scratch();
-      worktreeHome.current = join(root, "home");
-      const worktreePath = join(root, "VC-3-doing");
-      mkdirSync(join(worktreePath, ".agents"), { recursive: true });
-      for (const [script, body] of Object.entries(files)) {
-        writeFileSync(join(worktreePath, ".agents", script), body);
-      }
-      const project = testProject({
-        id: "project-1",
-        path: join(root, "main"),
-        ticketPrefix: "VC",
-      });
-      const ticket = testTicket(project.id, {
-        id: "ticket-1",
-        ticketNumber: 3,
-        worktreePath: null,
-      });
-      insertProject(testDb.db, project);
-      insertTicket(testDb.db, ticket);
-      markFirstRunPending({ home: worktreeHome.current }, worktreePath, ticket.id, ["setup"]);
-      ensureWorktree.mockResolvedValue({
-        ok: true,
-        value: {
-          identity: { worktreePath, branch: "volli/VC-3-doing", baseBranch: "main" },
-          created: true,
-          restamped: false,
-          setupPending: true,
-        },
-      });
-      const resolver = createSessionLocationResolver(testDb.db, ports, {
-        ...options,
-        setupEnvironment: async () => ({
-          shellPath: "/bin/sh",
-          env: { PATH: process.env["PATH"] ?? "/usr/bin:/bin" },
-        }),
-        environmentRecipes: () => true,
-        power: { on: () => undefined, removeListener: () => undefined },
-      });
-      return { worktreePath, resolver, session: ticketSession(project.id, ticket.id) };
-    }
-
     afterEach(() => {
       worktreeHome.current = "/volli-location-test-home";
       resetResumeEpochForTest();

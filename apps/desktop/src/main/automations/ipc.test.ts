@@ -161,6 +161,84 @@ function setup(
   );
   return { project, ticket, mutations, scheduleRebases, engine, service };
 }
+/* ------------------------------ upgrade-era replays (VC-128) ---------- */
+
+/**
+ * Writes the durable rows the build BEFORE the Trigger wrote: an intent with
+ * no `trigger` key, a completed receipt whose Automation has none either, and
+ * the record itself with a NULL `trigger_spec`.
+ *
+ * Inserted rather than edited into shape, because the ledger's own triggers
+ * refuse to update a command or a receipt — which is the point. History
+ * cannot be migrated into today's vocabulary, so today's reader is what has
+ * to understand yesterday's rows, and this is the only honest way to hand it
+ * one. `automationId` is returned so a test can name the record the replay
+ * must answer with.
+ */
+function writeLegacyRows(input: {
+  commandId: string;
+  projectId: string;
+  name: string;
+  instructions: string;
+  kind: "create" | "update";
+  automationId?: string;
+}): string {
+  const automationId = input.automationId ?? randomUUID();
+  const automation = {
+    id: automationId,
+    projectId: input.projectId,
+    name: input.name,
+    instructions: input.instructions,
+    // No `trigger` — this build did not have one.
+    runtime: null,
+    createdAt: 1_000,
+    updatedAt: 1_000,
+  };
+  const intent =
+    input.kind === "create"
+      ? {
+          kind: "automation.create",
+          projectId: input.projectId,
+          name: input.name,
+          instructions: input.instructions,
+          runtime: null,
+        }
+      : {
+          kind: "automation.update",
+          automationId,
+          name: input.name,
+          instructions: input.instructions,
+          runtime: null,
+        };
+  if (input.automationId === undefined) {
+    ctx.db
+      .prepare(
+        `INSERT INTO automations
+             (id, project_id, name, instructions, trigger_spec, runtime, row_version,
+              created_at, updated_at)
+           VALUES (?, ?, ?, ?, NULL, NULL, 1, ?, ?)`,
+      )
+      .run(automationId, input.projectId, input.name, input.instructions, 1_000, 1_000);
+  }
+  ctx.db
+    .prepare("INSERT INTO automation_commands (id, intent, created_at) VALUES (?, ?, ?)")
+    .run(input.commandId, JSON.stringify(intent), 1_000);
+  ctx.db
+    .prepare(
+      `INSERT INTO automation_command_receipts (id, command_id, status, result, recorded_at)
+         VALUES (?, ?, 'completed', ?, ?)`,
+    )
+    .run(
+      randomUUID(),
+      input.commandId,
+      JSON.stringify({
+        kind: input.kind === "create" ? "automation.created" : "automation.updated",
+        automation,
+      }),
+      1_000,
+    );
+  return automationId;
+}
 
 describe("automation IPC", () => {
   it("degrades every channel to the db-open failure instead of hanging", async () => {
@@ -532,85 +610,6 @@ describe("automation IPC", () => {
     });
     expect(cleared).toMatchObject({ ok: true, automation: { trigger: { kind: "none" } } });
   });
-
-  /* ------------------------------ upgrade-era replays (VC-128) ---------- */
-
-  /**
-   * Writes the durable rows the build BEFORE the Trigger wrote: an intent with
-   * no `trigger` key, a completed receipt whose Automation has none either, and
-   * the record itself with a NULL `trigger_spec`.
-   *
-   * Inserted rather than edited into shape, because the ledger's own triggers
-   * refuse to update a command or a receipt — which is the point. History
-   * cannot be migrated into today's vocabulary, so today's reader is what has
-   * to understand yesterday's rows, and this is the only honest way to hand it
-   * one. `automationId` is returned so a test can name the record the replay
-   * must answer with.
-   */
-  function writeLegacyRows(input: {
-    commandId: string;
-    projectId: string;
-    name: string;
-    instructions: string;
-    kind: "create" | "update";
-    automationId?: string;
-  }): string {
-    const automationId = input.automationId ?? randomUUID();
-    const automation = {
-      id: automationId,
-      projectId: input.projectId,
-      name: input.name,
-      instructions: input.instructions,
-      // No `trigger` — this build did not have one.
-      runtime: null,
-      createdAt: 1_000,
-      updatedAt: 1_000,
-    };
-    const intent =
-      input.kind === "create"
-        ? {
-            kind: "automation.create",
-            projectId: input.projectId,
-            name: input.name,
-            instructions: input.instructions,
-            runtime: null,
-          }
-        : {
-            kind: "automation.update",
-            automationId,
-            name: input.name,
-            instructions: input.instructions,
-            runtime: null,
-          };
-    if (input.automationId === undefined) {
-      ctx.db
-        .prepare(
-          `INSERT INTO automations
-             (id, project_id, name, instructions, trigger_spec, runtime, row_version,
-              created_at, updated_at)
-           VALUES (?, ?, ?, ?, NULL, NULL, 1, ?, ?)`,
-        )
-        .run(automationId, input.projectId, input.name, input.instructions, 1_000, 1_000);
-    }
-    ctx.db
-      .prepare("INSERT INTO automation_commands (id, intent, created_at) VALUES (?, ?, ?)")
-      .run(input.commandId, JSON.stringify(intent), 1_000);
-    ctx.db
-      .prepare(
-        `INSERT INTO automation_command_receipts (id, command_id, status, result, recorded_at)
-         VALUES (?, ?, 'completed', ?, ?)`,
-      )
-      .run(
-        randomUUID(),
-        input.commandId,
-        JSON.stringify({
-          kind: input.kind === "create" ? "automation.created" : "automation.updated",
-          automation,
-        }),
-        1_000,
-      );
-    return automationId;
-  }
 
   it("replays a create written before the Trigger instead of calling the retry a conflict", async () => {
     const { project } = setup();
@@ -1672,32 +1671,31 @@ describe("automation IPC", () => {
     });
   });
 });
+/** Two Automations offered in Doing, so a rank has something to arrange. */
+async function twoOffered() {
+  const seeded = setup();
+  const first = await call<AutomationResult>("volli:automation-create", {
+    commandId: randomUUID(),
+    projectId: seeded.project.id,
+    name: "First",
+    instructions: "/review",
+    trigger: { kind: "columns", columns: ["doing", "needs_review"] },
+    runtime: null,
+  });
+  const second = await call<AutomationResult>("volli:automation-create", {
+    commandId: randomUUID(),
+    projectId: seeded.project.id,
+    name: "Second",
+    instructions: "/tdd",
+    trigger: { kind: "columns", columns: ["doing"] },
+    runtime: null,
+  });
+  if (!first.ok || !second.ok) throw new Error("refused");
+  seeded.mutations.length = 0;
+  return { ...seeded, first: first.automation, second: second.automation };
+}
 
 describe("the column's own order (VC-132)", () => {
-  /** Two Automations offered in Doing, so a rank has something to arrange. */
-  async function twoOffered() {
-    const seeded = setup();
-    const first = await call<AutomationResult>("volli:automation-create", {
-      commandId: randomUUID(),
-      projectId: seeded.project.id,
-      name: "First",
-      instructions: "/review",
-      trigger: { kind: "columns", columns: ["doing", "needs_review"] },
-      runtime: null,
-    });
-    const second = await call<AutomationResult>("volli:automation-create", {
-      commandId: randomUUID(),
-      projectId: seeded.project.id,
-      name: "Second",
-      instructions: "/tdd",
-      trigger: { kind: "columns", columns: ["doing"] },
-      runtime: null,
-    });
-    if (!first.ok || !second.ok) throw new Error("refused");
-    seeded.mutations.length = 0;
-    return { ...seeded, first: first.automation, second: second.automation };
-  }
-
   it("arranges a column through command → event → receipt, and answers with the whole set", async () => {
     const { project, first, second, mutations } = await twoOffered();
 

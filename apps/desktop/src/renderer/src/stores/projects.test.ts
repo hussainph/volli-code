@@ -987,6 +987,40 @@ const TERMINAL_APPEARANCE: GhosttyAppearancePayload = {
   overlayPaths: { global: "/data/volli/ghostty/config", project: null },
   ghosttyConfigPath: "/home/u/.config/ghostty/config",
 };
+/**
+ * A window stub whose `window.api.theme.state` records the scope reads the
+ * real theme gateway makes. `hash` decides which window the listener believes
+ * it is announcing in: the Settings window carries `#settings`.
+ */
+function stubThemeWindow(hash: string) {
+  const state = vi.fn<
+    (input: {
+      projectId?: string;
+    }) => Promise<{ ok: true; value: ThemeStatePayload } | { ok: false; error: string }>
+  >(async (input) => ({
+    ok: true,
+    value: {
+      projectOverride: null,
+      projectId: input.projectId ?? null,
+      terminal: TERMINAL_APPEARANCE,
+    },
+  }));
+  const remove = vi.fn(async () => ({ ok: true as const }));
+  vi.stubGlobal("window", {
+    location: { hash },
+    api: {
+      theme: {
+        state,
+        setFirstPaint: vi.fn(async () => ({ ok: true as const })),
+        systemPrefersDark: () => true,
+      },
+      projects: { remove },
+      terminal: { kill: vi.fn().mockResolvedValue({ ok: true }) },
+      appState: { set: vi.fn().mockResolvedValue({ ok: true }) },
+    },
+  });
+  return state;
+}
 
 /**
  * The default selection listener's native Settings guard (VC-1121).
@@ -1012,41 +1046,6 @@ describe("the default selection listener and the native Settings window", () => 
     useThemeStore.setState(themeSnapshot);
     useProjectsStore.setState(projectsSnapshot);
   });
-
-  /**
-   * A window stub whose `window.api.theme.state` records the scope reads the
-   * real theme gateway makes. `hash` decides which window the listener believes
-   * it is announcing in: the Settings window carries `#settings`.
-   */
-  function stubThemeWindow(hash: string) {
-    const state = vi.fn<
-      (input: {
-        projectId?: string;
-      }) => Promise<{ ok: true; value: ThemeStatePayload } | { ok: false; error: string }>
-    >(async (input) => ({
-      ok: true,
-      value: {
-        projectOverride: null,
-        projectId: input.projectId ?? null,
-        terminal: TERMINAL_APPEARANCE,
-      },
-    }));
-    const remove = vi.fn(async () => ({ ok: true as const }));
-    vi.stubGlobal("window", {
-      location: { hash },
-      api: {
-        theme: {
-          state,
-          setFirstPaint: vi.fn(async () => ({ ok: true as const })),
-          systemPrefersDark: () => true,
-        },
-        projects: { remove },
-        terminal: { kill: vi.fn().mockResolvedValue({ ok: true }) },
-        appState: { set: vi.fn().mockResolvedValue({ ok: true }) },
-      },
-    });
-    return state;
-  }
 
   it("skips theme hydration for every selection announced inside the Settings window", async () => {
     const state = stubThemeWindow("#settings");
@@ -1440,6 +1439,16 @@ describe("relink", () => {
     expect(gateway.checkFolder).toHaveBeenCalledWith("p1");
   });
 });
+/** A gateway whose only missing folder belongs to `missingId`. */
+function gatewayMissing(missingId: string) {
+  return fakeGateway({
+    checkFolder: vi.fn<ProjectsGateway["checkFolder"]>(async (projectId) => ({
+      ok: true,
+      path: `/Users/me/${projectId}`,
+      state: projectId === missingId ? "missing" : "present",
+    })),
+  });
+}
 
 /**
  * The trap VC-430 opens with, closed at the door a person actually walks
@@ -1449,17 +1458,6 @@ describe("relink", () => {
  * on disk can settle it — the old folder is gone — so the store stops and asks.
  */
 describe("addProject and the folder-claim question", () => {
-  /** A gateway whose only missing folder belongs to `missingId`. */
-  function gatewayMissing(missingId: string) {
-    return fakeGateway({
-      checkFolder: vi.fn<ProjectsGateway["checkFolder"]>(async (projectId) => ({
-        ok: true,
-        path: `/Users/me/${projectId}`,
-        state: projectId === missingId ? "missing" : "present",
-      })),
-    });
-  }
-
   it("adds the folder outright when every tracked folder is where it should be", async () => {
     const gateway = fakeGateway();
     const { store } = freshStore(gateway);

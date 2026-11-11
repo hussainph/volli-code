@@ -495,6 +495,14 @@ it("orders live work by observed position before a stepped-back clock, ties by s
   expect(turn.order()).toEqual([["R", "z", "b", "a"]]);
 });
 
+it("orders equal-start live calls by their observed ledger positions before view key", async () => {
+  const turn = live();
+  await turn.send(started("z", 100));
+  turn.advance();
+  await turn.send(started("a", 100));
+  expect(turn.order()).toEqual([["z", "a"]]);
+});
+
 it("keeps recorded order when live and durable-only work share no evidence", async () => {
   const turn = live();
   await turn.send({ kind: "delta", turnId: "turn", channel: "reasoning", text: "Weighing" });

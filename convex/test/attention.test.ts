@@ -368,41 +368,41 @@ describe("visibility", () => {
   });
 });
 
-describe("access_lost sweeps", () => {
-  async function bobHasItems() {
-    vi.useFakeTimers();
-    const seeded = await world();
-    const { t, bob, projectId, ticketId } = seeded;
-    await assign(t, ticketId, bob, { kind: "person", userId: bob });
-    await move(t, "alice", projectId, ticketId, "needs_review");
-    // Bob's own runner alert, and an item in a Workspace of his own: neither is swept.
-    const elsewhere = await t.run(async (ctx) => {
-      const other = await seedTestWorld(ctx, { ownerUserId: bob, runners: 0 });
-      const runnerId = await seedTestRunner(ctx, bob, "bobs-box");
-      await raiseRunnerAlert(
-        ctx,
-        { id: runnerId, ownerUserId: bob, name: "bobs-box" },
-        "credential_reuse",
-        1,
-      );
-      await raiseAttention(ctx, {
-        id: "elsewhere",
-        userId: bob,
-        projectId: other.projectId,
-        ticketId: null,
-        sessionId: null,
-        source: "mention",
-        sourceId: "m",
-        kind: "mention",
-        title: "M",
-        detail: null,
-        raisedAt: 1,
-      });
-      return runnerId;
+async function bobHasItems() {
+  vi.useFakeTimers();
+  const seeded = await world();
+  const { t, bob, projectId, ticketId } = seeded;
+  await assign(t, ticketId, bob, { kind: "person", userId: bob });
+  await move(t, "alice", projectId, ticketId, "needs_review");
+  // Bob's own runner alert, and an item in a Workspace of his own: neither is swept.
+  const elsewhere = await t.run(async (ctx) => {
+    const other = await seedTestWorld(ctx, { ownerUserId: bob, runners: 0 });
+    const runnerId = await seedTestRunner(ctx, bob, "bobs-box");
+    await raiseRunnerAlert(
+      ctx,
+      { id: runnerId, ownerUserId: bob, name: "bobs-box" },
+      "credential_reuse",
+      1,
+    );
+    await raiseAttention(ctx, {
+      id: "elsewhere",
+      userId: bob,
+      projectId: other.projectId,
+      ticketId: null,
+      sessionId: null,
+      source: "mention",
+      sourceId: "m",
+      kind: "mention",
+      title: "M",
+      detail: null,
+      raisedAt: 1,
     });
-    return { ...seeded, alertId: `r:${elsewhere}:credential_reuse` };
-  }
+    return runnerId;
+  });
+  return { ...seeded, alertId: `r:${elsewhere}:credential_reuse` };
+}
 
+describe("access_lost sweeps", () => {
   test.each(["suspend", "remove"] as const)(
     "%s clears the Member's open items in that Workspace only",
     async (change) => {
@@ -476,19 +476,19 @@ describe("access_lost sweeps", () => {
   });
 });
 
-describe("attention.raiseFromRunner (volli notify)", () => {
-  async function claimedSession() {
-    const seeded = await world();
-    const { t, projectId, runnerIds } = seeded;
-    const { sessionId, events } = await writeSession({ projectId });
-    await asRunner(t, runnerIds[0]!).mutation(api.sessions.accept, {
-      sessionId,
-      generation: 1,
-      events: events.slice(0, 1).map(wire),
-    });
-    return { ...seeded, sessionId };
-  }
+async function claimedSession() {
+  const seeded = await world();
+  const { t, projectId, runnerIds } = seeded;
+  const { sessionId, events } = await writeSession({ projectId });
+  await asRunner(t, runnerIds[0]!).mutation(api.sessions.accept, {
+    sessionId,
+    generation: 1,
+    events: events.slice(0, 1).map(wire),
+  });
+  return { ...seeded, sessionId };
+}
 
+describe("attention.raiseFromRunner (volli notify)", () => {
   test("the runner holding the Session raises an item for its owner, once per call", async () => {
     const { t, alice, projectId, runnerIds, sessionId } = await claimedSession();
     const notifyId = randomUUID();

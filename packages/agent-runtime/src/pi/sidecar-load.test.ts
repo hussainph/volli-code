@@ -544,18 +544,19 @@ describe("patched JSONL sidecar re-open (VC-462)", () => {
   });
 });
 
+// The conformance cases are backend-neutral and create without a `cwd`,
+// which a JSONL repo files every Session under; give each one the same.
+const factory = async (): Promise<SessionRepo<JsonlSessionMetadata>> => {
+  const repo = repoFor();
+  const withCwd = withOverrides(repo, {
+    create: (options: SessionCreateOptions, callContext: typeof context) =>
+      repo.create({ ...options, cwd }, callContext),
+  });
+  // Only `list`'s options type differs (JSONL takes an optional filter).
+  return withCwd as unknown as SessionRepo<JsonlSessionMetadata>;
+};
+
 describe("Pi SessionRepo conformance against the patched JSONL repo (VC-462)", () => {
-  // The conformance cases are backend-neutral and create without a `cwd`,
-  // which a JSONL repo files every Session under; give each one the same.
-  const factory = async (): Promise<SessionRepo<JsonlSessionMetadata>> => {
-    const repo = repoFor();
-    const withCwd = withOverrides(repo, {
-      create: (options: SessionCreateOptions, callContext: typeof context) =>
-        repo.create({ ...options, cwd }, callContext),
-    });
-    // Only `list`'s options type differs (JSONL takes an optional filter).
-    return withCwd as unknown as SessionRepo<JsonlSessionMetadata>;
-  };
   const cases = [
     ...createSessionRepoLifecycleConformance(factory),
     ...createSessionRepoOwnershipConformance(factory),

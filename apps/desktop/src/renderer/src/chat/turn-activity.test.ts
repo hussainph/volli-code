@@ -125,6 +125,8 @@ describe("activity vocabulary", () => {
     expect(selectTurnActivity("session", replay)).toEqual(result);
   });
 });
+const search = (id: string) =>
+  selected(tool("search", { query: "needle" }, { kind: "search", id }));
 
 describe("real tool activity projection", () => {
   it.each([
@@ -207,9 +209,8 @@ describe("real tool activity projection", () => {
       word,
     });
   });
+
   it("attaches prepositions to the selected word, not the activity", () => {
-    const search = (id: string) =>
-      selected(tool("search", { query: "needle" }, { kind: "search", id }));
     const candidates = Array.from({ length: 30 }, (_, i) => search(`s${i}`));
     expect(
       candidates.find((result) => result.word === "Tracking down")?.preposition,

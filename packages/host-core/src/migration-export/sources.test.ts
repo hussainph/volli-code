@@ -467,24 +467,25 @@ describe("mapping rules", () => {
   });
 });
 
-describe("corrupt sources stop the export", () => {
-  // Also drive each mapper's own guard without the ownership projection.
-  // Preflight refuses these FKs earlier in a complete export, but individual
-  // source consumers must never map an orphan into an apparently valid row.
-  function mapRaw(id: string) {
-    const source = EXPORT_SOURCES.find((s) => s.id === id)!;
-    const lookups = buildLookups(profile.db, { snapshotAt: 1, profileStep: true });
-    const prepared = source.prepare(profile.db, lookups);
-    for (const row of profile.db.prepare(source.sql).all())
-      source.map(row, prepared, lookups, () => {});
-  }
-  async function expectCorrupt(message: RegExp) {
-    await expect(exportProfile()).rejects.toMatchObject({
-      code: "source_corrupt",
-      message: expect.stringMatching(message),
-    });
-  }
+async function expectCorrupt(message: RegExp) {
+  await expect(exportProfile()).rejects.toMatchObject({
+    code: "source_corrupt",
+    message: expect.stringMatching(message),
+  });
+}
 
+// Also drive each mapper's own guard without the ownership projection.
+// Preflight refuses these FKs earlier in a complete export, but individual
+// source consumers must never map an orphan into an apparently valid row.
+function mapRaw(id: string) {
+  const source = EXPORT_SOURCES.find((s) => s.id === id)!;
+  const lookups = buildLookups(profile.db, { snapshotAt: 1, profileStep: true });
+  const prepared = source.prepare(profile.db, lookups);
+  for (const row of profile.db.prepare(source.sql).all())
+    source.map(row, prepared, lookups, () => {});
+}
+
+describe("corrupt sources stop the export", () => {
   it("a ticket whose project is gone", async () => {
     profile.db.pragma("foreign_keys = OFF");
     ticket("ticket-ghost", 99, { project_id: "proj-ghost" });

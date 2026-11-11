@@ -1227,6 +1227,33 @@ describe("BrowserTabController.find (VC-364)", () => {
   });
 });
 
+// The digest's walk is bounded like a find's: a change past 20,000 nodes
+// costs nothing to read and goes unseen.
+const long = (last: string) =>
+  tree(
+    Array.from({ length: 20_001 }, (_, index): [string, string, number] => [
+      "button",
+      index === 20_000 ? last : `B${index}`,
+      index,
+    ]),
+  );
+
+const fingerprintTree = (extra: object = {}) => ({
+  nodes: [
+    { ...BUTTON_TREE.nodes[0]!, childIds: ["2", "3"] },
+    BUTTON_TREE.nodes[1]!,
+    {
+      nodeId: "3",
+      ignored: false,
+      role: { value: "checkbox" },
+      name: { value: "Remember me" },
+      backendDOMNodeId: 78,
+      properties: [{ name: "checked", value: { value: "false" } }],
+      ...extra,
+    },
+  ],
+});
+
 describe("BrowserTabController empty trees, failed reads and tree digests (VC-277)", () => {
   /** A blank document, as Chromium answers it: the root and nothing under it. */
   const BLANK = {
@@ -1307,22 +1334,7 @@ describe("BrowserTabController empty trees, failed reads and tree digests (VC-27
   });
 
   it("fingerprints what an action could visibly change, whichever read saw it, and nothing else", async () => {
-    const node = (extra: object = {}) => ({
-      nodes: [
-        { ...BUTTON_TREE.nodes[0]!, childIds: ["2", "3"] },
-        BUTTON_TREE.nodes[1]!,
-        {
-          nodeId: "3",
-          ignored: false,
-          role: { value: "checkbox" },
-          name: { value: "Remember me" },
-          backendDOMNodeId: 78,
-          properties: [{ name: "checked", value: { value: "false" } }],
-          ...extra,
-        },
-      ],
-    });
-    const answers: Record<string, unknown> = { "Accessibility.getFullAXTree": node() };
+    const answers: Record<string, unknown> = { "Accessibility.getFullAXTree": fingerprintTree() };
     const controller = new BrowserTabController(wire(answers).transport);
     expect(controller.treeDigest).toBeNull();
 
@@ -1334,7 +1346,7 @@ describe("BrowserTabController empty trees, failed reads and tree digests (VC-27
     expect(controller.treeDigest).toBe(settled);
 
     // Focus moves on every click, so it is not a change anyone could see.
-    answers["Accessibility.getFullAXTree"] = node({
+    answers["Accessibility.getFullAXTree"] = fingerprintTree({
       properties: [
         { name: "checked", value: { value: "false" } },
         { name: "focused", value: { value: true } },
@@ -1346,8 +1358,8 @@ describe("BrowserTabController empty trees, failed reads and tree digests (VC-27
     // A state the page flipped, a value it took, and an element it added are.
     const seen = new Set([settled]);
     for (const changed of [
-      node({ properties: [{ name: "checked", value: { value: "true" } }] }),
-      node({ value: { value: "on" } }),
+      fingerprintTree({ properties: [{ name: "checked", value: { value: "true" } }] }),
+      fingerprintTree({ value: { value: "on" } }),
       tree([
         ["button", "Save", 77],
         ["dialog", "Composer", 79],
@@ -1358,17 +1370,6 @@ describe("BrowserTabController empty trees, failed reads and tree digests (VC-27
       expect(seen.has(controller.treeDigest)).toBe(false);
       seen.add(controller.treeDigest);
     }
-
-    // The digest's walk is bounded like a find's: a change past 20,000 nodes
-    // costs nothing to read and goes unseen.
-    const long = (last: string) =>
-      tree(
-        Array.from({ length: 20_001 }, (_, index): [string, string, number] => [
-          "button",
-          index === 20_000 ? last : `B${index}`,
-          index,
-        ]),
-      );
     answers["Accessibility.getFullAXTree"] = long("first");
     await controller.snapshot();
     const bounded = controller.treeDigest;
@@ -1485,19 +1486,19 @@ function piecewiseWire(
   return page;
 }
 
-describe("BrowserTabController piecewise tree reads (VC-1082)", () => {
-  async function readBoth(
-    whole: { nodes: AXNodeShape[] },
-    read: (controller: BrowserTabController) => Promise<unknown>,
-  ): Promise<{ full: unknown; pieces: unknown; page: ReturnType<typeof wire> }> {
-    const fullPage = piecewiseWire(whole, 5_000);
-    const piecePage = piecewiseWire(whole, 5_001);
-    const full = await read(new BrowserTabController(fullPage.transport));
-    const pieces = await read(new BrowserTabController(piecePage.transport));
-    expect(fullPage.sent.map((call) => call.method)).toContain("Accessibility.getFullAXTree");
-    return { full, pieces, page: piecePage };
-  }
+async function readBoth(
+  whole: { nodes: AXNodeShape[] },
+  read: (controller: BrowserTabController) => Promise<unknown>,
+): Promise<{ full: unknown; pieces: unknown; page: ReturnType<typeof wire> }> {
+  const fullPage = piecewiseWire(whole, 5_000);
+  const piecePage = piecewiseWire(whole, 5_001);
+  const full = await read(new BrowserTabController(fullPage.transport));
+  const pieces = await read(new BrowserTabController(piecePage.transport));
+  expect(fullPage.sent.map((call) => call.method)).toContain("Accessibility.getFullAXTree");
+  return { full, pieces, page: piecePage };
+}
 
+describe("BrowserTabController piecewise tree reads (VC-1082)", () => {
   it("reads a page at the size bound in one answer, and past it a piece at a time", async () => {
     const { page } = await readBoth(bigTree(3), (controller) => controller.snapshot());
     const methods = page.sent.map((call) => call.method);

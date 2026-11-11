@@ -246,6 +246,49 @@ describe("scanOrphans is read-only", () => {
   );
 });
 
+function staleFixture(recordPath: string) {
+  const projectPath = tempDir("proj");
+  const home = tempDir("home");
+  const container = join(home, ".volli", "worktrees", projectContainerName(projectPath, "proj-1"));
+  mkdirSync(container, { recursive: true });
+  insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
+  const { git, gitAsync } = scriptedGit((rawArgs) => {
+    const args = verb(rawArgs);
+    if (args[0] === "worktree" && args[1] === "list") {
+      return (
+        `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\n` +
+        `worktree ${recordPath}\nHEAD b\nprunable gitdir file points to non-existent location\n`
+      );
+    }
+    return "";
+  });
+  return { git, gitAsync, home, container, projectPath };
+}
+
+function activeFixture() {
+  const projectPath = tempDir("proj");
+  const home = tempDir("home");
+  const container = join(home, ".volli", "worktrees", projectContainerName(projectPath, "proj-1"));
+  const orphan = join(container, "VC-20-busy");
+  mkdirSync(orphan, { recursive: true });
+  ageDir(orphan, 400);
+  const gitDir = tempDir("gitdir");
+  insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
+  const { git, gitAsync } = scriptedGit((rawArgs) => {
+    const args = verb(rawArgs);
+    if (args[0] === "worktree" && args[1] === "list") {
+      return (
+        `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\n` +
+        `worktree ${orphan}\nHEAD b\nbranch refs/heads/volli/VC-20\n`
+      );
+    }
+    if (args[0] === "rev-parse") return gitDir;
+    if (args[0] === "log" && args[1] === "-1") return String((NOW - 400 * DAY_MS) / 1000);
+    return "";
+  });
+  return { git, gitAsync, home, orphan };
+}
+
 describe("scanOrphans report", () => {
   it("names the removal candidate, the metadata to prune, and the reason every other path is kept", async () => {
     const projectPath = tempDir("proj");
@@ -979,39 +1022,11 @@ describe("scanOrphans report", () => {
     expect(report.dirty).toEqual([]);
     expect(report.removable).toEqual([]);
   });
+
   // The sweep's activity guard used to live only in the destructive
   // half, so a checkout somebody was working in was PROPOSED and then refused
   // after the confirmation. The report is where that has to be said.
   describe("live work", () => {
-    function activeFixture() {
-      const projectPath = tempDir("proj");
-      const home = tempDir("home");
-      const container = join(
-        home,
-        ".volli",
-        "worktrees",
-        projectContainerName(projectPath, "proj-1"),
-      );
-      const orphan = join(container, "VC-20-busy");
-      mkdirSync(orphan, { recursive: true });
-      ageDir(orphan, 400);
-      const gitDir = tempDir("gitdir");
-      insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
-      const { git, gitAsync } = scriptedGit((rawArgs) => {
-        const args = verb(rawArgs);
-        if (args[0] === "worktree" && args[1] === "list") {
-          return (
-            `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\n` +
-            `worktree ${orphan}\nHEAD b\nbranch refs/heads/volli/VC-20\n`
-          );
-        }
-        if (args[0] === "rev-parse") return gitDir;
-        if (args[0] === "log" && args[1] === "-1") return String((NOW - 400 * DAY_MS) / 1000);
-        return "";
-      });
-      return { git, gitAsync, home, orphan };
-    }
-
     for (const [surface, refusal] of [
       ["terminal", /terminal/i],
       ["agent", /agent/i],
@@ -1070,30 +1085,6 @@ describe("scanOrphans report", () => {
   // gates the directories go through, so the confirmation could offer to prune
   // a record that is not this flow's to touch.
   describe("stale git records", () => {
-    function staleFixture(recordPath: string) {
-      const projectPath = tempDir("proj");
-      const home = tempDir("home");
-      const container = join(
-        home,
-        ".volli",
-        "worktrees",
-        projectContainerName(projectPath, "proj-1"),
-      );
-      mkdirSync(container, { recursive: true });
-      insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
-      const { git, gitAsync } = scriptedGit((rawArgs) => {
-        const args = verb(rawArgs);
-        if (args[0] === "worktree" && args[1] === "list") {
-          return (
-            `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\n` +
-            `worktree ${recordPath}\nHEAD b\nprunable gitdir file points to non-existent location\n`
-          );
-        }
-        return "";
-      });
-      return { git, gitAsync, home, container, projectPath };
-    }
-
     it("proposes a stale record inside a container this database owns", async () => {
       const projectPath = tempDir("proj");
       const home = tempDir("home");

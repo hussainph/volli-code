@@ -1987,6 +1987,11 @@ describe("the HOST relay's stream lifecycle", () => {
   });
 });
 
+const granting = (granted: readonly string[]) => ({
+  ...SNAPSHOT,
+  projects: { p1: { hostId: HOST, link: { status: "ready" as const }, granted } },
+});
+
 describe("the desktop router's grammar", () => {
   it("publishes both validators of every desktop-only procedure", () => {
     const schemas = desktopProcedureSchemas();
@@ -2147,10 +2152,6 @@ describe("the desktop router's grammar", () => {
   });
 
   it("bounds a project's granted features as a welcome bounds its own (VC-712)", () => {
-    const granting = (granted: readonly string[]) => ({
-      ...SNAPSHOT,
-      projects: { p1: { hostId: HOST, link: { status: "ready" as const }, granted } },
-    });
     const most = Array.from({ length: MAX_GRANTED_FEATURES }, (_, index) =>
       `f${index}`.padEnd(MAX_GRANTED_FEATURE_LENGTH, "x"),
     );

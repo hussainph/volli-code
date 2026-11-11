@@ -893,49 +893,49 @@ describe("nextBackoffDelay + config", () => {
   });
 });
 
+function trimSeams() {
+  return {
+    worktree: {
+      db: ctx.db,
+      gitAsync: runGitCapturingAsync,
+      blobsRoot: "unused",
+    },
+    now: () => 1000,
+    busySites: async () => [],
+  };
+}
+
+/** A committed repo ignoring `node_modules/`, with one inside it. */
+function trimmableWorktree(): string {
+  const root = mkdtempSync(join(tmpdir(), "volli-watch-trim-"));
+  tempDirs.push(root);
+  const run = (args: readonly string[]) =>
+    execFileSync("git", args, {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "Volli Test",
+        GIT_AUTHOR_EMAIL: "test@volli.local",
+        GIT_COMMITTER_NAME: "Volli Test",
+        GIT_COMMITTER_EMAIL: "test@volli.local",
+      },
+    });
+  run(["init", "-q", "-b", "main"]);
+  writeFileSync(join(root, ".gitignore"), "node_modules/\n");
+  writeFileSync(join(root, "package.json"), "{}\n");
+  run(["add", "-A"]);
+  run(["commit", "-q", "-m", "fixture"]);
+  mkdirSync(join(root, "node_modules"), { recursive: true });
+  writeFileSync(join(root, "node_modules", "index.js"), "1\n");
+  return root;
+}
+
 // VC-340: the poll is where everything ALREADY finished gets caught up. The move
 // and archive doors trim at the moment a ticket finishes; this pass is what
 // reaches the 131 worktrees that finished before the feature existed, plus the
 // archived ones the merge-watch has never looked at.
 describe("pollRetention — trim-on-finish backfill (VC-340)", () => {
-  /** A committed repo ignoring `node_modules/`, with one inside it. */
-  function trimmableWorktree(): string {
-    const root = mkdtempSync(join(tmpdir(), "volli-watch-trim-"));
-    tempDirs.push(root);
-    const run = (args: readonly string[]) =>
-      execFileSync("git", args, {
-        cwd: root,
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          GIT_AUTHOR_NAME: "Volli Test",
-          GIT_AUTHOR_EMAIL: "test@volli.local",
-          GIT_COMMITTER_NAME: "Volli Test",
-          GIT_COMMITTER_EMAIL: "test@volli.local",
-        },
-      });
-    run(["init", "-q", "-b", "main"]);
-    writeFileSync(join(root, ".gitignore"), "node_modules/\n");
-    writeFileSync(join(root, "package.json"), "{}\n");
-    run(["add", "-A"]);
-    run(["commit", "-q", "-m", "fixture"]);
-    mkdirSync(join(root, "node_modules"), { recursive: true });
-    writeFileSync(join(root, "node_modules", "index.js"), "1\n");
-    return root;
-  }
-
-  function trimSeams() {
-    return {
-      worktree: {
-        db: ctx.db,
-        gitAsync: runGitCapturingAsync,
-        blobsRoot: "unused",
-      },
-      now: () => 1000,
-      busySites: async () => [],
-    };
-  }
-
   it("trims a Done ticket's worktree and broadcasts once", async () => {
     seedProject();
     const wt = trimmableWorktree();
@@ -1095,44 +1095,44 @@ describe("RetentionWatcher — settled(): stop, then drain before the database c
   });
 });
 
+/** The durable fact an earlier launch left behind when it saw the merge. */
+function recordMerged(ticketId: string, url: string): void {
+  recordTicketEvent(ctx.db, ticketId, { kind: "pr_merged", url }, 1, { kind: "automation" });
+}
+
+/** Inserts a candidate ticket with its own id, branch and (optional) pr_url. */
+function seedNamed(opts: {
+  id: string;
+  status: "needs_review" | "done";
+  prUrl: string | null;
+  worktreePath?: string;
+  doneAt?: number;
+}): void {
+  insertTicket(
+    ctx.db,
+    testTicket("p1", {
+      id: opts.id,
+      status: opts.status,
+      worktreePath: opts.worktreePath ?? `/repo/wt-${opts.id}`,
+      branch: `volli/${opts.id}`,
+    }),
+  );
+  if (opts.prUrl) updateTicketFields(ctx.db, opts.id, { prUrl: opts.prUrl }, 1);
+  if (opts.doneAt !== undefined) {
+    recordTicketEvent(
+      ctx.db,
+      opts.id,
+      { kind: "status_changed", from: "needs_review", to: "done" },
+      opts.doneAt,
+    );
+  }
+}
+
 // VC-836: a merged or closed PR does not change, so the watch must not re-read
 // it every cycle — on a board of finished tickets that was hundreds of `gh`
 // calls per "60 s" cycle, a cycle measured in minutes, and most of the user's
 // GitHub API budget.
 describe("pollRetention — terminal PRs are not re-polled (VC-836)", () => {
-  /** Inserts a candidate ticket with its own id, branch and (optional) pr_url. */
-  function seedNamed(opts: {
-    id: string;
-    status: "needs_review" | "done";
-    prUrl: string | null;
-    worktreePath?: string;
-    doneAt?: number;
-  }): void {
-    insertTicket(
-      ctx.db,
-      testTicket("p1", {
-        id: opts.id,
-        status: opts.status,
-        worktreePath: opts.worktreePath ?? `/repo/wt-${opts.id}`,
-        branch: `volli/${opts.id}`,
-      }),
-    );
-    if (opts.prUrl) updateTicketFields(ctx.db, opts.id, { prUrl: opts.prUrl }, 1);
-    if (opts.doneAt !== undefined) {
-      recordTicketEvent(
-        ctx.db,
-        opts.id,
-        { kind: "status_changed", from: "needs_review", to: "done" },
-        opts.doneAt,
-      );
-    }
-  }
-
-  /** The durable fact an earlier launch left behind when it saw the merge. */
-  function recordMerged(ticketId: string, url: string): void {
-    recordTicketEvent(ctx.db, ticketId, { kind: "pr_merged", url }, 1, { kind: "automation" });
-  }
-
   it("does not poll a merged PR again on the next cycle", async () => {
     seedProject();
     seedTicket({ prUrl: "https://x/pull/7" });
@@ -1389,25 +1389,25 @@ describe("pollRetention — Done discovery is bounded (VC-836)", () => {
   });
 });
 
-describe("pollRetention — ghCwd needs a usable .git, not just a directory (VC-836)", () => {
-  /** Polls one ticket whose worktree is `wt`, returning the cwd its `gh` call used. */
-  async function cwdFor(wt: string): Promise<string | undefined> {
-    const projectDir = mkdtempSync(join(tmpdir(), "volli-ghcwd-project-"));
-    tempDirs.push(projectDir);
-    insertProject(ctx.db, testProject({ id: "p1", path: projectDir }));
-    seedTicket({ prUrl: "https://x/pull/7", worktreePath: wt });
-    const { run, calls } = scriptedNet((_file, _args, cwd) => {
-      if (cwd !== projectDir && cwd !== wt) throw new Error("unexpected cwd");
-      return prView({ state: "MERGED" });
-    });
-    const deps: RetentionPollPorts = { db: ctx.db, net: run, now: () => 1000, notify: () => {} };
-    const store = createRetentionStore();
-    await pollRetention(deps, store);
-    // The PR state still resolves from wherever `gh` ran.
-    expect(getRetentionState(deps, store, "t1")!.prState).toBe("merged");
-    return calls[0]?.cwd === projectDir ? "project" : calls[0]?.cwd === wt ? "worktree" : undefined;
-  }
+/** Polls one ticket whose worktree is `wt`, returning the cwd its `gh` call used. */
+async function cwdFor(wt: string): Promise<string | undefined> {
+  const projectDir = mkdtempSync(join(tmpdir(), "volli-ghcwd-project-"));
+  tempDirs.push(projectDir);
+  insertProject(ctx.db, testProject({ id: "p1", path: projectDir }));
+  seedTicket({ prUrl: "https://x/pull/7", worktreePath: wt });
+  const { run, calls } = scriptedNet((_file, _args, cwd) => {
+    if (cwd !== projectDir && cwd !== wt) throw new Error("unexpected cwd");
+    return prView({ state: "MERGED" });
+  });
+  const deps: RetentionPollPorts = { db: ctx.db, net: run, now: () => 1000, notify: () => {} };
+  const store = createRetentionStore();
+  await pollRetention(deps, store);
+  // The PR state still resolves from wherever `gh` ran.
+  expect(getRetentionState(deps, store, "t1")!.prState).toBe("merged");
+  return calls[0]?.cwd === projectDir ? "project" : calls[0]?.cwd === wt ? "worktree" : undefined;
+}
 
+describe("pollRetention — ghCwd needs a usable .git, not just a directory (VC-836)", () => {
   it("runs gh in the project root when the stamped dir is an empty leftover", async () => {
     const wt = mkdtempSync(join(tmpdir(), "volli-ghcwd-empty-"));
     tempDirs.push(wt);

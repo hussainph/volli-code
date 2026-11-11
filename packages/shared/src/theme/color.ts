@@ -135,12 +135,13 @@ export function srgbToLinear(channel: number): number {
   return Math.sign(channel) * linear;
 }
 
+const luminance = (hex: string) => {
+  const { r, g, b } = hexToRgb(hex);
+  return 0.2126 * srgbToLinear(r) + 0.7152 * srgbToLinear(g) + 0.0722 * srgbToLinear(b);
+};
+
 /** WCAG 2 relative-luminance contrast on emitted sRGB colors (not APCA). */
 export function wcagContrast(foreground: string, background: string): number {
-  const luminance = (hex: string) => {
-    const { r, g, b } = hexToRgb(hex);
-    return 0.2126 * srgbToLinear(r) + 0.7152 * srgbToLinear(g) + 0.0722 * srgbToLinear(b);
-  };
   const a = luminance(foreground);
   const b = luminance(background);
   return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);

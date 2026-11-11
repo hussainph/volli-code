@@ -608,6 +608,35 @@ async function installFakeVolli(shimPath: string, script: string): Promise<void>
   await mkdir(join(shimPath, ".."), { recursive: true });
   await writeFile(shimPath, script, { mode: 0o755 });
 }
+/** Every call the wrappers made to `volli`, in order. */
+async function volliCalls(): Promise<string[]> {
+  const log = await readFile(join(scratchRoot, "mint-log"), "utf8").catch(() => "");
+  return log.split("\n").filter(Boolean);
+}
+
+/** A session environment that can reach an app, with the mint's bookkeeping. */
+function mintingSession(env: Record<string, string>): Record<string, string> {
+  return {
+    ...env,
+    VOLLI_SESSION: "5f0d0f7a-0000-4000-8000-000000000000",
+    VOLLI_SOCKET: join(scratchRoot, "volli.sock"),
+    VOLLI_MINT_LOG: join(scratchRoot, "mint-log"),
+    VOLLI_MINT_COUNT: join(scratchRoot, "mint-count"),
+  };
+}
+/**
+ * The calls once `expected` of them have landed, and a moment more for any
+ * straggler. The announce is detached by design, so a launch that makes one
+ * is waited for rather than read once.
+ */
+async function volliCallsSettled(expected: number): Promise<string[]> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if ((await volliCalls()).length >= expected) break;
+    await pause(20);
+  }
+  await pause(250);
+  return volliCalls();
+}
 
 describe("the generated wrapper, run", () => {
   /** A harness whose injected settings carry every character a shell reacts to. */
@@ -670,17 +699,6 @@ describe("the generated wrapper, run", () => {
       wrapperPath,
       shimPath: paths.shimPath,
       env: { ...runtime.env, PATH: "/nonexistent" },
-    };
-  }
-
-  /** A session environment that can reach an app, with the mint's bookkeeping. */
-  function mintingSession(env: Record<string, string>): Record<string, string> {
-    return {
-      ...env,
-      VOLLI_SESSION: "5f0d0f7a-0000-4000-8000-000000000000",
-      VOLLI_SOCKET: join(scratchRoot, "volli.sock"),
-      VOLLI_MINT_LOG: join(scratchRoot, "mint-log"),
-      VOLLI_MINT_COUNT: join(scratchRoot, "mint-count"),
     };
   }
 
@@ -905,26 +923,6 @@ describe("the generated wrapper, run", () => {
     if (wrapperPath === undefined) throw new Error("no wrapper was written");
     await installFakeVolli(paths.shimPath, FAKE_VOLLI);
     return { wrapperPath, session: mintingSession({ ...runtime.env, PATH: "/nonexistent" }) };
-  }
-
-  /** Every call the wrappers made to `volli`, in order. */
-  async function volliCalls(): Promise<string[]> {
-    const log = await readFile(join(scratchRoot, "mint-log"), "utf8").catch(() => "");
-    return log.split("\n").filter(Boolean);
-  }
-
-  /**
-   * The calls once `expected` of them have landed, and a moment more for any
-   * straggler. The announce is detached by design, so a launch that makes one
-   * is waited for rather than read once.
-   */
-  async function volliCallsSettled(expected: number): Promise<string[]> {
-    for (let attempt = 0; attempt < 100; attempt += 1) {
-      if ((await volliCalls()).length >= expected) break;
-      await pause(20);
-    }
-    await pause(250);
-    return volliCalls();
   }
 
   // VC-807. Each of these went through the wrapper and was minted for as a

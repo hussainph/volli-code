@@ -200,12 +200,12 @@ describe("POST /runner/link/start", () => {
   });
 });
 
-describe("POST /runner/link/poll", () => {
-  async function started(t: T) {
-    const result = await start(t, "203.0.113.7");
-    return parseRunnerDeviceLinkStart(result.body);
-  }
+async function started(t: T) {
+  const result = await start(t, "203.0.113.7");
+  return parseRunnerDeviceLinkStart(result.body);
+}
 
+describe("POST /runner/link/poll", () => {
   test("the box polling at its interval is never held back", async () => {
     vi.useFakeTimers();
     const t = setup();

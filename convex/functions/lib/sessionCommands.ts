@@ -156,6 +156,8 @@ export interface CommandArtifact {
   body: string;
 }
 
+const bad = (why: string) => refuse("invalid_request", `The message body ${why}.`);
+
 /**
  * Checks an inline body against the `message.submit` it travels with (see the
  * module comment), or throws `invalid_request` naming what is wrong.
@@ -166,7 +168,6 @@ export async function readCommandArtifact(
   commandId: string,
   queued?: { messageId: string; allowRichParts: boolean },
 ): Promise<CommandArtifact> {
-  const bad = (why: string) => refuse("invalid_request", `The message body ${why}.`);
   const bytes = utf8Length(artifact);
   if (bytes > INLINE_ARTIFACT_MAX_BYTES) {
     throw bad(`is limited to ${INLINE_ARTIFACT_MAX_BYTES} bytes`);

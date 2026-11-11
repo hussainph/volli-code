@@ -464,6 +464,29 @@ describe("volli:database", () => {
     );
   });
 });
+function onRail(projectId: string): boolean {
+  const bootstrap = invoke<BootstrapResult>("volli:data-bootstrap");
+  return bootstrap.ok && bootstrap.data.projects.some(({ id }) => id === projectId);
+}
+function liveWork(projectId: string, stillOpen: readonly string[] = []) {
+  const stopped: string[] = [];
+  const stop = (step: string) => {
+    // Each stop runs while the project is still on the rail.
+    expect(onRail(projectId)).toBe(true);
+    stopped.push(step);
+  };
+  const live: ProjectLiveWork = {
+    releaseBindings: async () => {
+      stop("bindings");
+      return { stillOpen };
+    },
+    disposeShells: () => stop("shells"),
+    killTerminals: () => stop("terminals"),
+    closeBrowserTabs: () => stop("tabs"),
+    mcp: null,
+  };
+  return { live, stopped };
+}
 
 /**
  * The door the product was missing (VC-172). The handler is where a policy
@@ -476,31 +499,6 @@ describe("volli:database", () => {
 // every window (a second one included) is told. VC-822: the project is then
 // detached, not deleted, so adding its folder again brings its board back.
 describe("project removal", () => {
-  function onRail(projectId: string): boolean {
-    const bootstrap = invoke<BootstrapResult>("volli:data-bootstrap");
-    return bootstrap.ok && bootstrap.data.projects.some(({ id }) => id === projectId);
-  }
-
-  function liveWork(projectId: string, stillOpen: readonly string[] = []) {
-    const stopped: string[] = [];
-    const stop = (step: string) => {
-      // Each stop runs while the project is still on the rail.
-      expect(onRail(projectId)).toBe(true);
-      stopped.push(step);
-    };
-    const live: ProjectLiveWork = {
-      releaseBindings: async () => {
-        stop("bindings");
-        return { stillOpen };
-      },
-      disposeShells: () => stop("shells"),
-      killTerminals: () => stop("terminals"),
-      closeBrowserTabs: () => stop("tabs"),
-      mcp: null,
-    };
-    return { live, stopped };
-  }
-
   it("stops the project's live work before detaching it, then tells every window", async () => {
     const projectId = createProject();
     const { live, stopped } = liveWork(projectId);
@@ -1030,22 +1028,21 @@ describe("volli:project-create — workspace-unique ticket prefixes", () => {
     });
   });
 });
+/**
+ * Renames `from` to a fresh sibling, and tracks the result for cleanup.
+ *
+ * The target name is MADE rather than fixed: the temp root is shared with
+ * every other test process on the machine, and a `rename` onto a name a
+ * previous run left behind fails with ENOTEMPTY rather than saying so.
+ */
+function renameProjectDir(from: string, hint: string): string {
+  const to = `${mkdtempSync(join(tmpdir(), `volli-${hint}-`))}/moved`;
+  createdProjectDirs.push(dirname(to));
+  renameSync(from, to);
+  return to;
+}
 
 describe("volli:project-relink — a folder that was renamed or moved", () => {
-  /**
-   * Renames `from` to a fresh sibling, and tracks the result for cleanup.
-   *
-   * The target name is MADE rather than fixed: the temp root is shared with
-   * every other test process on the machine, and a `rename` onto a name a
-   * previous run left behind fails with ENOTEMPTY rather than saying so.
-   */
-  function renameProjectDir(from: string, hint: string): string {
-    const to = `${mkdtempSync(join(tmpdir(), `volli-${hint}-`))}/moved`;
-    createdProjectDirs.push(dirname(to));
-    renameSync(from, to);
-    return to;
-  }
-
   it("reports the registered folder as missing once it has been renamed", async () => {
     const project = createProjectWithPath();
     renameProjectDir(project.path, "renamed");
@@ -1419,35 +1416,34 @@ describe("volli:ticket-create — ticket numbers never recycle across a hard del
     expect(four.ticketNumber).toBe(4);
   });
 });
+function piToolOutput(sessionsRoot: string, ticketId: string, name: string): string {
+  const directory = join(sessionsRoot, "--Users-test-project--");
+  mkdirSync(directory, { recursive: true });
+  const sidecar = join(directory, `${name}.jsonl`);
+  writeFileSync(sidecar, "{}\n");
+  const output = join(directory, `${name}.tool-output`);
+  mkdirSync(output, { recursive: true });
+  writeFileSync(join(output, "tc-1.txt"), "saved");
+  const session = testSession(
+    ctx.db.prepare("SELECT project_id FROM tickets WHERE id = ?").pluck().get(ticketId) as string,
+    ticketId,
+  );
+  insertSession(ctx.db, session);
+  ctx.db
+    .prepare(
+      `UPDATE session_attachments SET adapter_id = 'pi', native_detail = ? WHERE session_id = ?`,
+    )
+    .run(
+      JSON.stringify({
+        kind: "volli.native-binding.v1",
+        locator: { runtime: "pi", sessionId: name, sessionFilePath: sidecar },
+      }),
+      session.id,
+    );
+  return output;
+}
 
 describe("archiving or deleting a ticket drops its Sessions' saved tool output (VC-469)", () => {
-  function piToolOutput(sessionsRoot: string, ticketId: string, name: string): string {
-    const directory = join(sessionsRoot, "--Users-test-project--");
-    mkdirSync(directory, { recursive: true });
-    const sidecar = join(directory, `${name}.jsonl`);
-    writeFileSync(sidecar, "{}\n");
-    const output = join(directory, `${name}.tool-output`);
-    mkdirSync(output, { recursive: true });
-    writeFileSync(join(output, "tc-1.txt"), "saved");
-    const session = testSession(
-      ctx.db.prepare("SELECT project_id FROM tickets WHERE id = ?").pluck().get(ticketId) as string,
-      ticketId,
-    );
-    insertSession(ctx.db, session);
-    ctx.db
-      .prepare(
-        `UPDATE session_attachments SET adapter_id = 'pi', native_detail = ? WHERE session_id = ?`,
-      )
-      .run(
-        JSON.stringify({
-          kind: "volli.native-binding.v1",
-          locator: { runtime: "pi", sessionId: name, sessionFilePath: sidecar },
-        }),
-        session.id,
-      );
-    return output;
-  }
-
   it("removes it on archive, and on deleting a ticket archived before this existed", () => {
     const sessionsRoot = mkdtempSync(join(tmpdir(), "volli-pi-sessions-"));
     createdProjectDirs.push(sessionsRoot);
@@ -1802,40 +1798,39 @@ describe("volli:ticket-update — worktree identity", () => {
     expect(result.ok).toBe(true);
   });
 });
+/** Stands in for the real pipeline: stamps identity the way `ensure` does on success. */
+function ensureStamps(worktreePath: string): void {
+  vi.mocked(ensure).mockImplementation(async (_deps, ticketId: string) => {
+    updateTicketFieldsCommand(
+      ctx.db,
+      { ticketId, worktreePath, branch: "volli/VC-1-a-ticket", baseBranch: "main" },
+      { now: Date.now(), actor: { kind: "automation" } },
+    );
+    return {
+      ok: true as const,
+      value: {
+        identity: { worktreePath, branch: "volli/VC-1-a-ticket", baseBranch: "main" },
+        created: true,
+        restamped: true,
+        setupPending: false,
+      },
+    };
+  });
+}
+
+/** A ticket that starts out running in the project's main checkout. */
+function mainCheckoutTicket(projectId: string): Ticket {
+  const result = invoke<TicketResult>("volli:ticket-create", {
+    projectId,
+    status: "todo",
+    title: "A ticket",
+    usesWorktree: false,
+  });
+  if (!result.ok) throw new Error(result.error);
+  return result.ticket;
+}
 
 describe("volli:ticket-update — switching worktree scope on (VC-98)", () => {
-  /** A ticket that starts out running in the project's main checkout. */
-  function mainCheckoutTicket(projectId: string): Ticket {
-    const result = invoke<TicketResult>("volli:ticket-create", {
-      projectId,
-      status: "todo",
-      title: "A ticket",
-      usesWorktree: false,
-    });
-    if (!result.ok) throw new Error(result.error);
-    return result.ticket;
-  }
-
-  /** Stands in for the real pipeline: stamps identity the way `ensure` does on success. */
-  function ensureStamps(worktreePath: string): void {
-    vi.mocked(ensure).mockImplementation(async (_deps, ticketId: string) => {
-      updateTicketFieldsCommand(
-        ctx.db,
-        { ticketId, worktreePath, branch: "volli/VC-1-a-ticket", baseBranch: "main" },
-        { now: Date.now(), actor: { kind: "automation" } },
-      );
-      return {
-        ok: true as const,
-        value: {
-          identity: { worktreePath, branch: "volli/VC-1-a-ticket", baseBranch: "main" },
-          created: true,
-          restamped: true,
-          setupPending: false,
-        },
-      };
-    });
-  }
-
   it("materializes the worktree and answers with the stamped identity", async () => {
     const projectId = createProject();
     const ticket = mainCheckoutTicket(projectId);
@@ -2283,28 +2278,27 @@ describe("volli:ticket-move — armed-column arrival", () => {
     expect(onDeliberateMove).not.toHaveBeenCalled();
   });
 });
+function move(projectId: string, ticketId: string, toStatus: string): TicketsResult {
+  return invoke<TicketsResult>("volli:ticket-move", {
+    projectId,
+    ticketId,
+    toStatus,
+    toIndex: 0,
+  });
+}
+
+/** Re-registers the data handlers with a stubbed interrupt seam returning `ids`. */
+function withInterrupt(ids: string[]) {
+  const interruptTicketSessions = vi.fn((_ticketId: string) => ids);
+  handlers.clear();
+  registerDataIpcHandlers(
+    { ok: true, db: ctx.db },
+    { sessionEngine: fixtureSessionEngine, interruptTicketSessions },
+  );
+  return interruptTicketSessions;
+}
 
 describe("volli:ticket-move — backward-move interrupt (issue #78)", () => {
-  /** Re-registers the data handlers with a stubbed interrupt seam returning `ids`. */
-  function withInterrupt(ids: string[]) {
-    const interruptTicketSessions = vi.fn((_ticketId: string) => ids);
-    handlers.clear();
-    registerDataIpcHandlers(
-      { ok: true, db: ctx.db },
-      { sessionEngine: fixtureSessionEngine, interruptTicketSessions },
-    );
-    return interruptTicketSessions;
-  }
-
-  function move(projectId: string, ticketId: string, toStatus: string): TicketsResult {
-    return invoke<TicketsResult>("volli:ticket-move", {
-      projectId,
-      ticketId,
-      toStatus,
-      toIndex: 0,
-    });
-  }
-
   it("interrupts the ticket's agent attachments on a doing→todo move without planner history", () => {
     const interrupt = withInterrupt(["s1", "s2"]);
     const projectId = createProject();
@@ -2993,28 +2987,27 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
     });
   });
 });
+/** One chat Session, minted through the engine the handlers are given. */
+async function chatSession(
+  sessionEngine: ReturnType<typeof createTestSessionEngine>,
+  ticketId: string | null,
+): Promise<string> {
+  const created = await sessionEngine.createSession({
+    commandId: "create-read",
+    projectId: createProject(),
+    ticketId,
+    role: roleImpliedByTicket(ticketId),
+    parentSessionId: null,
+    title: "Plan the migration",
+    provenance: {
+      source: { kind: "user", id: "test", detail: null },
+      venue: { id: "local", kind: "local" },
+    },
+  });
+  return created.session.id;
+}
 
 describe("volli:session-read-set (VC-30)", () => {
-  /** One chat Session, minted through the engine the handlers are given. */
-  async function chatSession(
-    sessionEngine: ReturnType<typeof createTestSessionEngine>,
-    ticketId: string | null,
-  ): Promise<string> {
-    const created = await sessionEngine.createSession({
-      commandId: "create-read",
-      projectId: createProject(),
-      ticketId,
-      role: roleImpliedByTicket(ticketId),
-      parentSessionId: null,
-      title: "Plan the migration",
-      provenance: {
-        source: { kind: "user", id: "test", detail: null },
-        venue: { id: "local", kind: "local" },
-      },
-    });
-    return created.session.id;
-  }
-
   it("persists the receipt and re-publishes the row every sidebar holds", async () => {
     const sessionEngine = createTestSessionEngine(ctx.db, { now: () => 500 });
     const sessionId = await chatSession(sessionEngine, null);
@@ -3360,20 +3353,19 @@ describe("volli:session-rename", () => {
     ).toEqual({ ok: false, error: "Session rename was not completed" });
   });
 });
+/** A renameable session plus a recorder for whatever titling it asks for. */
+function renameHarness(): AutoTitleRequest[] {
+  const projectId = createProject();
+  insertSession(ctx.db, testSession(projectId, null, { id: "s1", title: "Session 1" }));
+  const requests: AutoTitleRequest[] = [];
+  registerDataIpcHandlers(
+    { ok: true, db: ctx.db },
+    { sessionEngine: fixtureSessionEngine, autoTitle: (input) => requests.push(input) },
+  );
+  return requests;
+}
 
 describe("volli:session-rename auto-title rider", () => {
-  /** A renameable session plus a recorder for whatever titling it asks for. */
-  function renameHarness(): AutoTitleRequest[] {
-    const projectId = createProject();
-    insertSession(ctx.db, testSession(projectId, null, { id: "s1", title: "Session 1" }));
-    const requests: AutoTitleRequest[] = [];
-    registerDataIpcHandlers(
-      { ok: true, db: ctx.db },
-      { sessionEngine: fixtureSessionEngine, autoTitle: (input) => requests.push(input) },
-    );
-    return requests;
-  }
-
   it("hands the refinement to the titling seam once the rename has stuck", async () => {
     const requests = renameHarness();
 
@@ -3821,6 +3813,44 @@ describe("volli:worktree-change-watch (VC-369)", () => {
     expect(closed).toHaveBeenCalledOnce();
   });
 });
+/**
+ * The real manager reports this once a released root's rewatch grace expires
+ * (or its handle faults). The read-level suite drives the real timing; here it
+ * is the door into the same observer call.
+ */
+function endCoverage(ticketId: string): void {
+  worktreeWatch.options?.onCoverageChange?.(ticketId, false);
+}
+
+/** The watcher's eager change report, as the real manager sends it. */
+function fireWorktreeChange(...ticketIds: string[]): void {
+  worktreeWatch.options?.onRelevantChange?.(ticketIds);
+}
+
+async function subscribe(ticketId = "t1"): Promise<void> {
+  vi.mocked(resolveWorktreeTarget).mockReturnValue({
+    kind: "ok",
+    target: { displayId: "VC-1", worktreePath: "/wt/VC-1", branch: "b", baseBranch: "main" },
+  } as never);
+  await invoke<Promise<Result>>("volli:worktree-change-watch", { ticketId });
+}
+
+async function readPair(ticketId = "t1"): Promise<void> {
+  await invoke<Promise<WorktreeStatusResult>>("volli:worktree-status", { ticketId });
+  await invoke<Promise<WorktreeChangeSetResult>>("volli:worktree-change-set", { ticketId });
+}
+/** The unwatch → read → watch beat of a rail page flip. */
+async function flipPanel(ticketId = "t1"): Promise<void> {
+  invoke<Result>("volli:worktree-change-unwatch", { ticketId });
+  await readPair(ticketId);
+  await subscribe(ticketId);
+}
+
+/** Everything one panel's mount does: read the pair, then subscribe. */
+async function mountPanel(ticketId = "t1"): Promise<void> {
+  await readPair(ticketId);
+  await subscribe(ticketId);
+}
 
 /**
  * VC-372. Now↔Diffs unmounts one rail panel and mounts the other — both asking
@@ -3864,46 +3894,6 @@ describe("the rail's last-known worktree snapshot (VC-372)", () => {
   function stubReads(): void {
     vi.mocked(readWorktreeStatus).mockResolvedValue(okStatus as never);
     vi.mocked(readWorktreeChangeSet).mockResolvedValue(okChangeSet as never);
-  }
-
-  async function readPair(ticketId = "t1"): Promise<void> {
-    await invoke<Promise<WorktreeStatusResult>>("volli:worktree-status", { ticketId });
-    await invoke<Promise<WorktreeChangeSetResult>>("volli:worktree-change-set", { ticketId });
-  }
-
-  async function subscribe(ticketId = "t1"): Promise<void> {
-    vi.mocked(resolveWorktreeTarget).mockReturnValue({
-      kind: "ok",
-      target: { displayId: "VC-1", worktreePath: "/wt/VC-1", branch: "b", baseBranch: "main" },
-    } as never);
-    await invoke<Promise<Result>>("volli:worktree-change-watch", { ticketId });
-  }
-
-  /** Everything one panel's mount does: read the pair, then subscribe. */
-  async function mountPanel(ticketId = "t1"): Promise<void> {
-    await readPair(ticketId);
-    await subscribe(ticketId);
-  }
-
-  /** The unwatch → read → watch beat of a rail page flip. */
-  async function flipPanel(ticketId = "t1"): Promise<void> {
-    invoke<Result>("volli:worktree-change-unwatch", { ticketId });
-    await readPair(ticketId);
-    await subscribe(ticketId);
-  }
-
-  /** The watcher's eager change report, as the real manager sends it. */
-  function fireWorktreeChange(...ticketIds: string[]): void {
-    worktreeWatch.options?.onRelevantChange?.(ticketIds);
-  }
-
-  /**
-   * The real manager reports this once a released root's rewatch grace expires
-   * (or its handle faults). The read-level suite drives the real timing; here it
-   * is the door into the same observer call.
-   */
-  function endCoverage(ticketId: string): void {
-    worktreeWatch.options?.onCoverageChange?.(ticketId, false);
   }
 
   it("serves the Now↔Diffs↔Now flips from the panel's first read", async () => {
@@ -4112,6 +4102,15 @@ describe("volli:worktree-branches", () => {
     expect(vi.mocked(listBranches)).not.toHaveBeenCalled();
   });
 });
+function worktreeTicket(projectId: string): Ticket {
+  const result = invoke<TicketResult>("volli:ticket-create", {
+    projectId,
+    status: "doing",
+    title: "A ticket",
+  });
+  if (!result.ok) throw new Error(result.error);
+  return result.ticket;
+}
 
 // VC-113: the way back from a worktree something outside the app deleted. The
 // branch survives every route that takes the directory (a second install's
@@ -4120,16 +4119,6 @@ describe("volli:worktree-branches", () => {
 // whole Session, and the rail could offer nothing but a Retry that always
 // failed.
 describe("volli:worktree-recreate", () => {
-  function worktreeTicket(projectId: string): Ticket {
-    const result = invoke<TicketResult>("volli:ticket-create", {
-      projectId,
-      status: "doing",
-      title: "A ticket",
-    });
-    if (!result.ok) throw new Error(result.error);
-    return result.ticket;
-  }
-
   it("re-materializes on the existing branch and broadcasts the new identity", async () => {
     const projectId = createProject();
     const ticket = worktreeTicket(projectId);
@@ -5022,40 +5011,41 @@ describe("volli:worktree-orphan-delete", () => {
     expect(existsSync(target)).toBe(false);
   });
 });
+// Dispatch through the real registered guard and handler into the real DB.
+// The optional baseline intentionally remains raw so malformed wire inputs
+// can be checked before either persistence or a peer announcement happens.
+const writeFrom = (
+  senderId: number,
+  key: string,
+  value: string,
+  ...baseline: unknown[]
+): AppStateSetResult => {
+  const handler = handlers.get("volli:app-state-set");
+  if (handler === undefined) throw new Error("No app-state handler registered");
+  return (handler as (...args: unknown[]) => AppStateSetResult)(
+    { sender: { id: senderId } },
+    key,
+    value,
+    ...baseline,
+  );
+};
+
+const stored = (key: string): string | undefined => {
+  const row = ctx.db.prepare("SELECT value FROM app_state WHERE key = ?").get(key) as
+    | { value: string }
+    | undefined;
+  return row?.value;
+};
+
+const seed = (key: string, value: string): void => {
+  ctx.db
+    .prepare(
+      "INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+    )
+    .run(key, value, 0);
+};
 
 describe("cross-window preference snapshot writes (VC-1121)", () => {
-  const seed = (key: string, value: string): void => {
-    ctx.db
-      .prepare(
-        "INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-      )
-      .run(key, value, 0);
-  };
-  const stored = (key: string): string | undefined => {
-    const row = ctx.db.prepare("SELECT value FROM app_state WHERE key = ?").get(key) as
-      | { value: string }
-      | undefined;
-    return row?.value;
-  };
-  // Dispatch through the real registered guard and handler into the real DB.
-  // The optional baseline intentionally remains raw so malformed wire inputs
-  // can be checked before either persistence or a peer announcement happens.
-  const writeFrom = (
-    senderId: number,
-    key: string,
-    value: string,
-    ...baseline: unknown[]
-  ): AppStateSetResult => {
-    const handler = handlers.get("volli:app-state-set");
-    if (handler === undefined) throw new Error("No app-state handler registered");
-    return (handler as (...args: unknown[]) => AppStateSetResult)(
-      { sender: { id: senderId } },
-      key,
-      value,
-      ...baseline,
-    );
-  };
-
   beforeEach(() => {
     windowPeers.splice(
       0,
@@ -5161,6 +5151,8 @@ describe("cross-window preference snapshot writes (VC-1121)", () => {
     expect(appStateChangedSends).toEqual([]);
   });
 });
+const storedUiPreference = (): unknown =>
+  ctx.db.prepare("SELECT value FROM app_state WHERE key = 'volli:ui'").get();
 
 describe("a main-side app-state effect (VC-1037)", () => {
   type AppStateEffect = (key: string, value: string) => AppStateSetResult;
@@ -5171,8 +5163,6 @@ describe("a main-side app-state effect (VC-1037)", () => {
       { sessionEngine: fixtureSessionEngine, onAppStateSet: effect },
     );
   };
-  const stored = (): unknown =>
-    ctx.db.prepare("SELECT value FROM app_state WHERE key = 'volli:ui'").get();
 
   it("runs before the write is acknowledged", () => {
     const seen: Array<[string, string]> = [];
@@ -5185,7 +5175,7 @@ describe("a main-side app-state effect (VC-1037)", () => {
       ok: true,
     });
     expect(seen).toEqual([["volli:ui", "next"]]);
-    expect(stored()).toEqual({ value: "next" });
+    expect(storedUiPreference()).toEqual({ value: "next" });
   });
 
   it("restores the previous value when the effect refuses, so the ack and the row agree", () => {
@@ -5198,7 +5188,7 @@ describe("a main-side app-state effect (VC-1037)", () => {
       ok: false,
       error: "Allow Volli in System Settings.",
     });
-    expect(stored()).toEqual({ value: "before" });
+    expect(storedUiPreference()).toEqual({ value: "before" });
   });
 
   it("removes a first write the effect refused, rather than leaving it behind", () => {
@@ -5208,7 +5198,7 @@ describe("a main-side app-state effect (VC-1037)", () => {
       ok: false,
       error: "refused",
     });
-    expect(stored()).toBeUndefined();
+    expect(storedUiPreference()).toBeUndefined();
   });
 
   it("treats a thrown effect as the same refused write", () => {
@@ -5223,7 +5213,7 @@ describe("a main-side app-state effect (VC-1037)", () => {
       ok: false,
       error: "The OS refused the login item.",
     });
-    expect(stored()).toEqual({ value: "before" });
+    expect(storedUiPreference()).toEqual({ value: "before" });
   });
 
   it("never runs for a write main itself refuses", () => {

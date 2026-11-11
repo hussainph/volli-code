@@ -446,14 +446,14 @@ describe("read names a binary file instead of decoding it (VC-801)", () => {
   });
 });
 
-describe("openFileReader (VC-801)", () => {
-  async function mockedEnv(files: Record<string, unknown>) {
-    vi.resetModules();
-    vi.doMock("node:fs/promises", () => ({ ...fs, ...files }));
-    const { NodeExecutionEnv: Env } = await import("./vendor/pi-harness/env/nodejs");
-    return new Env({ cwd: scratch });
-  }
+async function mockedEnv(files: Record<string, unknown>) {
+  vi.resetModules();
+  vi.doMock("node:fs/promises", () => ({ ...fs, ...files }));
+  const { NodeExecutionEnv: Env } = await import("./vendor/pi-harness/env/nodejs");
+  return new Env({ cwd: scratch });
+}
 
+describe("openFileReader (VC-801)", () => {
   it("reads positionally, short only at end of file, and refuses use after close", async () => {
     const env = new NodeExecutionEnv({ cwd: scratch });
     await fs.writeFile(join(scratch, "f"), "0123456789");

@@ -377,6 +377,7 @@ describe("recording normalization and fresh response checks", () => {
           retryOutput: 2,
         },
         { procedure: "read", input: null, error },
+        { procedure: "legacy-read", input: null, output: error },
         {
           start: { procedure: "signIns.start", input: {}, output: { flowId: "flow" } },
           frames: [1],
@@ -392,6 +393,7 @@ describe("recording normalization and fresh response checks", () => {
       { procedure: "write", input: [1, { a: true }], output: 1 },
       { procedure: "write", input: [1, { a: true }], output: 2 },
       { procedure: "read", input: null, error },
+      { procedure: "legacy-read", input: null, error },
       { procedure: "signIns.start", input: {}, output: { flowId: "flow" } },
       { procedure: "signIns.subscribe", input: { flowId: "flow" }, frames: [1] },
       { procedure: "stream", input: {}, frames: [2] },
@@ -505,6 +507,9 @@ describe("bundle persistence and frozen request selection", () => {
           b.provenance.commit = "bad";
         },
         (b) => {
+          b.provenance.commit = undefined as unknown as string;
+        },
+        (b) => {
           b.provenance.distributed = null as unknown as boolean;
         },
         (b) => {
@@ -616,50 +621,51 @@ describe("bundle persistence and frozen request selection", () => {
   });
 });
 
+function playbackBundle(transport: "ipc" | "websocket") {
+  const bundle = testBundle();
+  const schema = {
+    kind: "mutation" as const,
+    input: {},
+    output: {},
+    noInput: false,
+    voidOutput: false,
+  };
+  bundle.schema.tiers.public = {
+    "commands.run": schema,
+    plain: { ...schema, kind: "query", noInput: true },
+    "events.subscribe": { ...schema, kind: "subscription" },
+    "events.empty": { ...schema, kind: "subscription" },
+  };
+  bundle.recordings.playback = {
+    provenance: { ...provenance, how: "test playback" },
+    transport,
+    recording: null,
+    exchanges: [
+      { procedure: "commands.run", input: [1, { a: true }], output: { step: 1 } },
+      { procedure: "commands.run", input: [1, { a: true }], output: { step: 2 } },
+      {
+        procedure: "commands.run",
+        input: { fail: 1 },
+        error: { code: "NOT_FOUND", message: "missing", reason: "workspace-unknown" },
+      },
+      {
+        procedure: "commands.run",
+        input: { fail: 2 },
+        error: { code: "NOT_FOUND", message: "missing" },
+      },
+      { procedure: "plain", input: null, output: null },
+      {
+        procedure: "events.subscribe",
+        input: {},
+        frames: [null, { plain: true }, { id: "id", data: { tracked: true } }],
+      },
+      { procedure: "events.empty", input: {}, frames: [] },
+    ],
+  };
+  return bundle;
+}
+
 describe("release playback router", () => {
-  function playbackBundle(transport: "ipc" | "websocket") {
-    const bundle = testBundle();
-    const schema = {
-      kind: "mutation" as const,
-      input: {},
-      output: {},
-      noInput: false,
-      voidOutput: false,
-    };
-    bundle.schema.tiers.public = {
-      "commands.run": schema,
-      plain: { ...schema, kind: "query", noInput: true },
-      "events.subscribe": { ...schema, kind: "subscription" },
-      "events.empty": { ...schema, kind: "subscription" },
-    };
-    bundle.recordings.playback = {
-      provenance: { ...provenance, how: "test playback" },
-      transport,
-      recording: null,
-      exchanges: [
-        { procedure: "commands.run", input: [1, { a: true }], output: { step: 1 } },
-        { procedure: "commands.run", input: [1, { a: true }], output: { step: 2 } },
-        {
-          procedure: "commands.run",
-          input: { fail: 1 },
-          error: { code: "NOT_FOUND", message: "missing", reason: "workspace-unknown" },
-        },
-        {
-          procedure: "commands.run",
-          input: { fail: 2 },
-          error: { code: "NOT_FOUND", message: "missing" },
-        },
-        { procedure: "plain", input: null, output: null },
-        {
-          procedure: "events.subscribe",
-          input: {},
-          frames: [null, { plain: true }, { id: "id", data: { tracked: true } }],
-        },
-        { procedure: "events.empty", input: {}, frames: [] },
-      ],
-    };
-    return bundle;
-  }
   for (const transport of ["ipc", "websocket"] as const) {
     it(`replays mutations, failures, no-input queries and both frame forms over ${transport}`, async () => {
       const bundle = playbackBundle(transport);

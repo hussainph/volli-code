@@ -1276,54 +1276,53 @@ describe("selector stability", () => {
     expect(effectiveCanvas(store.getState())).toBe(TEAL);
   });
 });
+/** Every `window.api.theme` verb the store's real deps reach for, recorded. */
+function stubBridge() {
+  const calls: [string, unknown[]][] = [];
+  const verb =
+    (name: string) =>
+    (...args: unknown[]) => {
+      calls.push([name, args]);
+      return Promise.resolve({ ok: true as const, value: statePayload() });
+    };
+  // The real deps paint and arm the crossfade, so this needs a document as
+  // well as a bridge — the point of the case is that the wiring runs, not
+  // that it is bypassed.
+  vi.stubGlobal("document", {
+    documentElement: {
+      // `getPropertyValue` is read as well as written: the crossfade captures
+      // the outgoing gradient off this element before the paint replaces it.
+      style: {
+        setProperty: () => {},
+        getPropertyValue: () => "",
+        removeProperty: () => {},
+      },
+      classList: { toggle: () => {} },
+      setAttribute: () => {},
+      removeAttribute: () => {},
+      offsetWidth: 0,
+    },
+  });
+  vi.stubGlobal("window", {
+    api: {
+      theme: {
+        // Not a verb: it is read synchronously off this window's process
+        // arguments, and the default deps call it once for the initial state.
+        systemPrefersDark: () => true,
+        state: verb("state"),
+        setGlobalCanvas: verb("setGlobalCanvas"),
+        setGlobalAppearance: verb("setGlobalAppearance"),
+        setProjectCanvas: verb("setProjectCanvas"),
+        setProjectAppearance: verb("setProjectAppearance"),
+        setFirstPaint: verb("setFirstPaint"),
+        setProject: verb("setProject"),
+      },
+    },
+  });
+  return calls;
+}
 
 describe("the default gateway", () => {
-  /** Every `window.api.theme` verb the store's real deps reach for, recorded. */
-  function stubBridge() {
-    const calls: [string, unknown[]][] = [];
-    const verb =
-      (name: string) =>
-      (...args: unknown[]) => {
-        calls.push([name, args]);
-        return Promise.resolve({ ok: true as const, value: statePayload() });
-      };
-    // The real deps paint and arm the crossfade, so this needs a document as
-    // well as a bridge — the point of the case is that the wiring runs, not
-    // that it is bypassed.
-    vi.stubGlobal("document", {
-      documentElement: {
-        // `getPropertyValue` is read as well as written: the crossfade captures
-        // the outgoing gradient off this element before the paint replaces it.
-        style: {
-          setProperty: () => {},
-          getPropertyValue: () => "",
-          removeProperty: () => {},
-        },
-        classList: { toggle: () => {} },
-        setAttribute: () => {},
-        removeAttribute: () => {},
-        offsetWidth: 0,
-      },
-    });
-    vi.stubGlobal("window", {
-      api: {
-        theme: {
-          // Not a verb: it is read synchronously off this window's process
-          // arguments, and the default deps call it once for the initial state.
-          systemPrefersDark: () => true,
-          state: verb("state"),
-          setGlobalCanvas: verb("setGlobalCanvas"),
-          setGlobalAppearance: verb("setGlobalAppearance"),
-          setProjectCanvas: verb("setProjectCanvas"),
-          setProjectAppearance: verb("setProjectAppearance"),
-          setFirstPaint: verb("setFirstPaint"),
-          setProject: verb("setProject"),
-        },
-      },
-    });
-    return calls;
-  }
-
   it("routes every write to the channel of the same name", async () => {
     // The default deps are the only untested seam between this store and the
     // preload bridge, and a verb wired to the wrong channel fails silently — the

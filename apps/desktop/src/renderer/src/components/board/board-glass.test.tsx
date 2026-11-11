@@ -34,6 +34,17 @@ function markup(html: string): HTMLElement {
   host.innerHTML = html;
   return host;
 }
+const render = (visible: number) =>
+  markup(
+    renderToStaticMarkup(
+      <BoardHeader
+        projectId="p1"
+        ticketCount={visible}
+        tickets={[ticket, { ...ticket, id: "t2" }]}
+        filter={EMPTY_TICKET_FILTER}
+      />,
+    ),
+  );
 
 describe("Glass board", () => {
   it("keeps capture on one paper plane with ghost footer controls", () => {
@@ -118,17 +129,6 @@ describe("Glass board", () => {
   });
 
   it("groups facets, ordering and layout on the right, qualifying only the filtered count", () => {
-    const render = (visible: number) =>
-      markup(
-        renderToStaticMarkup(
-          <BoardHeader
-            projectId="p1"
-            ticketCount={visible}
-            tickets={[ticket, { ...ticket, id: "t2" }]}
-            filter={EMPTY_TICKET_FILTER}
-          />,
-        ),
-      );
     const full = render(2);
     const priority = [...full.querySelectorAll("button")].find(
       (node) => node.textContent === "Priority",

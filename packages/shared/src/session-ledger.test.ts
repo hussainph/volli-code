@@ -1106,6 +1106,8 @@ describe("projectSession", () => {
   });
 });
 
+const valid = (): SessionProjectionCheckpoint => createSessionProjectionCheckpoint(session, []);
+
 describe("Session projection checkpoints", () => {
   it("resumes every split with the same projection as a whole-log fold", () => {
     const first = {
@@ -1220,8 +1222,6 @@ describe("Session projection checkpoints", () => {
   // The adapters call the assertion directly at their write boundary, so its
   // own cascade is tested directly rather than only through a fold.
   describe("assertSessionProjectionCheckpoint", () => {
-    const valid = (): SessionProjectionCheckpoint => createSessionProjectionCheckpoint(session, []);
-
     it("rejects anything that is not a checkpoint-shaped object", () => {
       // Persisted JSON is untrusted cache state, so the input is `unknown` and
       // a string, an array or a null row must be refused before any field read.
@@ -2158,39 +2158,94 @@ function importOrigin(detail: import("./session-ledger").SessionNativeDetail | n
   );
 }
 
-describe("turn origins and stopped resumption", () => {
-  function messageCommand(
-    sequence: number,
-    origin?: import("./session-origin").SessionOrigin,
-    kind: "message.submit" | "executor.retry" = "message.submit",
-  ): SessionEvent {
-    return {
-      ...event(sequence, {
-        kind: "command.recorded",
-        command: {
-          id: `c${sequence}`,
-          sessionId: session.id,
-          createdAt: sequence,
-          intent:
-            kind === "message.submit"
-              ? { kind, reference: { id: "message", mediaType: null, digest: null } }
-              : { kind, attachmentId: "a" },
-          route: null,
-        },
-      }),
-      provenance: {
-        ...systemProvenance,
-        source: {
-          ...systemProvenance.source,
-          detail: origin === undefined ? null : { sessionOrigin: origin },
-        },
+function messageCommand(
+  sequence: number,
+  origin?: import("./session-origin").SessionOrigin,
+  kind: "message.submit" | "executor.retry" = "message.submit",
+): SessionEvent {
+  return {
+    ...event(sequence, {
+      kind: "command.recorded",
+      command: {
+        id: `c${sequence}`,
+        sessionId: session.id,
+        createdAt: sequence,
+        intent:
+          kind === "message.submit"
+            ? { kind, reference: { id: "message", mediaType: null, digest: null } }
+            : { kind, attachmentId: "a" },
+        route: null,
+      },
+    }),
+    provenance: {
+      ...systemProvenance,
+      source: {
+        ...systemProvenance.source,
+        detail: origin === undefined ? null : { sessionOrigin: origin },
+      },
+    },
+  };
+}
+
+const turn = (sequence: number) =>
+  event(sequence, { kind: "turn.started", attachmentId: "a", turnId: `t${sequence}` });
+
+const stoppedEvent = (sequence: number) =>
+  event(sequence, { kind: "session.stopped", reason: null, by: { kind: "user" } });
+
+function openedAttachmentEvent(sequence: number, id: string, commandId?: string): SessionEvent {
+  return {
+    ...event(sequence, {
+      kind: "attachment.opened",
+      attachment: {
+        id,
+        sessionId: session.id,
+        adapterId: "pi",
+        venue: localRunner,
+        continuity: "context_replay",
+        native: null,
+        authority: null,
+      },
+    }),
+    commandId,
+  };
+}
+
+function verifyPartitions(events: SessionEvent[]) {
+  const full = projectSession(session, events);
+  const slim = events.map(({ provenance, ...rest }) => ({
+    ...rest,
+    commandOrigin:
+      rest.payload.kind === "command.recorded" ? importOrigin(provenance.source.detail) : undefined,
+  }));
+  expect(projectSession(session, slim)).toEqual(full);
+  // Re-reading a checkpoint tail, and every possible split, preserve identity.
+  for (const log of [events, slim]) {
+    for (let split = 0; split <= log.length; split++) {
+      const prefix = createSessionProjectionCheckpoint(session, log.slice(0, split));
+      const checkpoint = advanceSessionProjection(prefix, log.slice(split));
+      expect(checkpoint.projection).toEqual(full);
+      expect(advanceSessionProjection(checkpoint, log).projection).toEqual(full);
+    }
+  }
+  return full;
+}
+
+function attachCommand(sequence: number, origin?: import("./session-origin").SessionOrigin) {
+  const command = messageCommand(sequence, origin);
+  if (command.payload.kind === "command.recorded") {
+    command.payload = {
+      kind: "command.recorded",
+      command: {
+        ...command.payload.command,
+        intent: { kind: "executor.start", adapterId: "pi", continuity: "context_replay" },
       },
     };
   }
-  const turn = (sequence: number) =>
-    event(sequence, { kind: "turn.started", attachmentId: "a", turnId: `t${sequence}` });
-  const stop = (sequence: number) =>
-    event(sequence, { kind: "session.stopped", reason: null, by: { kind: "user" } });
+  return command;
+}
+
+describe("turn origins and stopped resumption", () => {
   it("reads legacy events as unknown, not user, and does not invent a resume", () => {
     expect(projectSession(session, [messageCommand(1), turn(2)])).toMatchObject({
       latestTurnId: "t2",
@@ -2202,66 +2257,15 @@ describe("turn origins and stopped resumption", () => {
       resumedAfterStop: false,
     });
   });
-  function attachCommand(sequence: number, origin?: import("./session-origin").SessionOrigin) {
-    const command = messageCommand(sequence, origin);
-    if (command.payload.kind === "command.recorded") {
-      command.payload = {
-        kind: "command.recorded",
-        command: {
-          ...command.payload.command,
-          intent: { kind: "executor.start", adapterId: "pi", continuity: "context_replay" },
-        },
-      };
-    }
-    return command;
-  }
-  function opened(sequence: number, id: string, commandId?: string): SessionEvent {
-    return {
-      ...event(sequence, {
-        kind: "attachment.opened",
-        attachment: {
-          id,
-          sessionId: session.id,
-          adapterId: "pi",
-          venue: localRunner,
-          continuity: "context_replay",
-          native: null,
-          authority: null,
-        },
-      }),
-      commandId,
-    };
-  }
-  function verifyPartitions(events: SessionEvent[]) {
-    const full = projectSession(session, events);
-    const slim = events.map(({ provenance, ...rest }) => ({
-      ...rest,
-      commandOrigin:
-        rest.payload.kind === "command.recorded"
-          ? importOrigin(provenance.source.detail)
-          : undefined,
-    }));
-    expect(projectSession(session, slim)).toEqual(full);
-    // Re-reading a checkpoint tail, and every possible split, preserve identity.
-    for (const log of [events, slim]) {
-      for (let split = 0; split <= log.length; split++) {
-        const prefix = createSessionProjectionCheckpoint(session, log.slice(0, split));
-        const checkpoint = advanceSessionProjection(prefix, log.slice(split));
-        expect(checkpoint.projection).toEqual(full);
-        expect(advanceSessionProjection(checkpoint, log).projection).toEqual(full);
-      }
-    }
-    return full;
-  }
   it("attributes successful reopening immediately, separately from the next turn submitter", () => {
     const origin = { kind: "session", sessionId: "parent" } as const;
     const events = [
-      opened(1, "a"),
+      openedAttachmentEvent(1, "a"),
       messageCommand(2, { kind: "user" }),
       turn(3),
-      stop(4),
+      stoppedEvent(4),
       attachCommand(5, origin),
-      opened(6, "b", "c5"),
+      openedAttachmentEvent(6, "b", "c5"),
     ];
     const attached = verifyPartitions(events);
     expect(attached.resumptions).toEqual([{ attachmentId: "b", origin, startedAt: 60 }]);
@@ -2287,13 +2291,18 @@ describe("turn origins and stopped resumption", () => {
     ).toBe(false);
   });
   it("never calls an already-admitted racing turn a resumption", () => {
-    const racing = [opened(1, "a"), messageCommand(2, { kind: "user" }), stop(3), turn(4)];
+    const racing = [
+      openedAttachmentEvent(1, "a"),
+      messageCommand(2, { kind: "user" }),
+      stoppedEvent(3),
+      turn(4),
+    ];
     const full = verifyPartitions(racing);
     expect(full).toMatchObject({ resumedAfterStop: false, resumptions: [], stopped: { at: 30 } });
     const recovered = verifyPartitions([
       ...racing,
       attachCommand(5, { kind: "user" }),
-      opened(6, "b", "c5"),
+      openedAttachmentEvent(6, "b", "c5"),
       turn(7), // Old attachment must not consume the recovery of b.
       event(8, { kind: "turn.started", attachmentId: "b", turnId: "t8" }),
     ]);
@@ -2302,8 +2311,12 @@ describe("turn origins and stopped resumption", () => {
   });
   it("retains every successful reopening but deduplicates attachment identity", () => {
     expect(
-      verifyPartitions([opened(1, "a"), opened(2, "b"), opened(3, "c"), opened(4, "c")])
-        .resumptions,
+      verifyPartitions([
+        openedAttachmentEvent(1, "a"),
+        openedAttachmentEvent(2, "b"),
+        openedAttachmentEvent(3, "c"),
+        openedAttachmentEvent(4, "c"),
+      ]).resumptions,
     ).toEqual([
       { attachmentId: "b", origin: null, startedAt: 20 },
       { attachmentId: "c", origin: null, startedAt: 30 },
@@ -2311,13 +2324,13 @@ describe("turn origins and stopped resumption", () => {
   });
   it("records crash recovery with no turn and preserves explicit terminal recreation", () => {
     for (const continuity of ["native_resume", "context_replay", "recreate"] as const) {
-      const reopen = opened(5, "b", "c4");
+      const reopen = openedAttachmentEvent(5, "b", "c4");
       if (reopen.payload.kind === "attachment.opened") {
         reopen.payload.attachment.continuity = continuity;
         reopen.payload.attachment.adapterId = "terminal";
       }
       const full = verifyPartitions([
-        opened(1, "a"),
+        openedAttachmentEvent(1, "a"),
         turn(2),
         event(3, { kind: "attachment.closed", attachmentId: "a", outcome: "interrupted" }),
         attachCommand(4, { kind: "volli", reason: "relaunch-recovery" }),
@@ -2336,7 +2349,7 @@ describe("turn origins and stopped resumption", () => {
     }
   });
   it("does not treat a failed or rejected attach as successful history or carry its attribution", () => {
-    const failed = opened(2, "failed", "c1");
+    const failed = openedAttachmentEvent(2, "failed", "c1");
     if (failed.payload.kind !== "attachment.opened") throw new Error("fixture");
     const failure = {
       ...failed,
@@ -2349,7 +2362,7 @@ describe("turn origins and stopped resumption", () => {
     const initial = verifyPartitions([
       attachCommand(1, { kind: "user" }),
       failure,
-      opened(3, "a", "c1"),
+      openedAttachmentEvent(3, "a", "c1"),
     ]);
     expect(initial.resumptions).toEqual([]);
     expect(initial.liveExecutor).toMatchObject({ origin: null, reattached: false });
@@ -2366,27 +2379,31 @@ describe("turn origins and stopped resumption", () => {
       },
     });
     expect(
-      verifyPartitions([opened(1, "a"), stop(2), attachCommand(4, { kind: "user" }), rejected])
-        .resumptions,
+      verifyPartitions([
+        openedAttachmentEvent(1, "a"),
+        stoppedEvent(2),
+        attachCommand(4, { kind: "user" }),
+        rejected,
+      ]).resumptions,
     ).toEqual([]);
     expect(
       verifyPartitions([
-        opened(1, "a"),
+        openedAttachmentEvent(1, "a"),
         attachCommand(4, { kind: "user" }),
         rejected,
-        opened(6, "b", "c4"),
+        openedAttachmentEvent(6, "b", "c4"),
       ]).attachments.find(({ id }) => id === "b")?.origin,
     ).toBeNull();
   });
   it("matches only the opening command, never native detail or competing commands", () => {
-    const reattach = opened(4, "b", "c2");
+    const reattach = openedAttachmentEvent(4, "b", "c2");
     if (reattach.payload.kind !== "attachment.opened") throw new Error("fixture");
     reattach.payload.attachment.native = {
       id: "native",
       detail: { sessionOrigin: { kind: "user" } },
     };
     const full = verifyPartitions([
-      opened(1, "a"),
+      openedAttachmentEvent(1, "a"),
       attachCommand(2, { kind: "session", sessionId: "parent" }),
       attachCommand(3, { kind: "user" }),
       reattach,
@@ -2396,13 +2413,17 @@ describe("turn origins and stopped resumption", () => {
       sessionId: "parent",
     });
     expect(
-      verifyPartitions([opened(1, "a"), reattach]).attachments.find(({ id }) => id === "b")?.origin,
+      verifyPartitions([openedAttachmentEvent(1, "a"), reattach]).attachments.find(
+        ({ id }) => id === "b",
+      )?.origin,
     ).toBeNull();
     const explicitUnknown = { ...attachCommand(2, { kind: "user" }), commandOrigin: null };
     expect(
-      projectSession(session, [opened(1, "a"), explicitUnknown, reattach]).attachments.find(
-        ({ id }) => id === "b",
-      )?.origin,
+      projectSession(session, [
+        openedAttachmentEvent(1, "a"),
+        explicitUnknown,
+        reattach,
+      ]).attachments.find(({ id }) => id === "b")?.origin,
     ).toBeNull();
   });
   it("does not carry a mid-turn notice steer into a user's resumption", () => {
@@ -2411,7 +2432,7 @@ describe("turn origins and stopped resumption", () => {
       turn(2),
       messageCommand(3, { kind: "volli", reason: "watch-notice" }),
       event(4, { kind: "turn.completed", attachmentId: "a", turnId: "t2" }),
-      stop(5),
+      stoppedEvent(5),
       messageCommand(6, { kind: "user" }),
       turn(7),
     ];

@@ -464,6 +464,27 @@ describe("FileTranscriptArtifactStore group-committed directory syncs (VC-465)",
   });
 });
 
+/**
+ * Arms the race: the first touch of the compressed path replaces it, in one
+ * atomic rename, with a symlink to a decoy holding ANOTHER artifact's valid
+ * bytes. Reading through the symlink therefore fails the digest check, and
+ * reading the file the store actually opened and checked succeeds.
+ */
+async function armSwap() {
+  const artifacts = await store();
+  const value = artifact("the bytes that were checked");
+  const reference = await artifacts.write(value);
+  const decoy = await artifacts.write(artifact("a decoy behind the symlink"));
+  const digestPath = (id: string) => join(directory!, `${id.slice("sha256:".length)}.json.gz`);
+  const swapLink = join(directory!, "swap.link");
+  race.target = digestPath(reference.id);
+  race.swap = () => {
+    symlinkSync(digestPath(decoy.id), swapLink);
+    renameSync(swapLink, digestPath(reference.id));
+  };
+  return { artifacts, reference, value };
+}
+
 describe("FileTranscriptArtifactStore", () => {
   it("writes gzip bytes at the canonical digest and reads them back verified", async () => {
     const artifacts = await store();
@@ -734,27 +755,6 @@ describe("FileTranscriptArtifactStore", () => {
   });
 
   describe("a digest path swapped for a symlink after the store first touches it", () => {
-    /**
-     * Arms the race: the first touch of the compressed path replaces it, in one
-     * atomic rename, with a symlink to a decoy holding ANOTHER artifact's valid
-     * bytes. Reading through the symlink therefore fails the digest check, and
-     * reading the file the store actually opened and checked succeeds.
-     */
-    async function armSwap() {
-      const artifacts = await store();
-      const value = artifact("the bytes that were checked");
-      const reference = await artifacts.write(value);
-      const decoy = await artifacts.write(artifact("a decoy behind the symlink"));
-      const digestPath = (id: string) => join(directory!, `${id.slice("sha256:".length)}.json.gz`);
-      const swapLink = join(directory!, "swap.link");
-      race.target = digestPath(reference.id);
-      race.swap = () => {
-        symlinkSync(digestPath(decoy.id), swapLink);
-        renameSync(swapLink, digestPath(reference.id));
-      };
-      return { artifacts, reference, value };
-    }
-
     it("reads the file it checked on the async path", async () => {
       const { artifacts, reference, value } = await armSwap();
 

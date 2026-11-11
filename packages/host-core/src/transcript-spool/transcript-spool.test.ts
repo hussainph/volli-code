@@ -530,11 +530,12 @@ function jsonLine(value: object): string {
   return `${JSON.stringify(value)}\n`;
 }
 
+const file = () => ({
+  attachmentId: "att-1",
+  path: join(root, "2026-10-25T01-02-03-004Z_abc.jsonl"),
+});
+
 describe("packPiLogs", () => {
-  const file = () => ({
-    attachmentId: "att-1",
-    path: join(root, "2026-10-25T01-02-03-004Z_abc.jsonl"),
-  });
   const piFileId = "2026-10-25T01-02-03-004Z_abc";
   async function readSegment(offset: number) {
     const key = piLogSegmentKey({

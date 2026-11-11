@@ -772,32 +772,32 @@ function dataDocument(bytes: Buffer): {
   return JSON.parse(data.bytes.toString("utf8")) as ReturnType<typeof dataDocument>;
 }
 
-describe("restoreBackupBundle — a backup of a database from a newer build (VC-602)", () => {
-  /**
-   * What a newer, compatible build leaves behind as far as this build can see:
-   * an additive table, an additive column with data in it, a `user_version`
-   * past this head, and a floor this head satisfies.
-   */
-  function newerCompatibleBundle(): Buffer {
-    source = createFixtureProfile();
-    source.db.exec(`
+/**
+ * What a newer, compatible build leaves behind as far as this build can see:
+ * an additive table, an additive column with data in it, a `user_version`
+ * past this head, and a floor this head satisfies.
+ */
+function newerCompatibleBundle(): Buffer {
+  source = createFixtureProfile();
+  source.db.exec(`
       CREATE TABLE future_feature (id TEXT PRIMARY KEY);
       INSERT INTO future_feature VALUES ('only-the-newer-build-knows');
       ALTER TABLE tickets ADD COLUMN future_column TEXT DEFAULT 'newer';
     `);
-    source.db.pragma(`user_version = ${HEAD_SCHEMA + 1}`);
-    source.db
-      .prepare("INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, 1)")
-      .run(MIN_READER_VERSION_KEY, String(HEAD_SCHEMA));
-    return createBackupBundle({
-      db: source.db,
-      blobsRoot: source.blobsRoot,
-      transcriptsRoot: source.transcriptsRoot,
-      appVersion: "0.2.0-test",
-      now: 1_700_000_000_000,
-    }).bytes;
-  }
+  source.db.pragma(`user_version = ${HEAD_SCHEMA + 1}`);
+  source.db
+    .prepare("INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, 1)")
+    .run(MIN_READER_VERSION_KEY, String(HEAD_SCHEMA));
+  return createBackupBundle({
+    db: source.db,
+    blobsRoot: source.blobsRoot,
+    transcriptsRoot: source.transcriptsRoot,
+    appVersion: "0.2.0-test",
+    now: 1_700_000_000_000,
+  }).bytes;
+}
 
+describe("restoreBackupBundle — a backup of a database from a newer build (VC-602)", () => {
   it("stamps this build's head and carries only this build's tables and columns", () => {
     const document = dataDocument(newerCompatibleBundle());
 

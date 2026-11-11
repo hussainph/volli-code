@@ -393,24 +393,26 @@ async function buildProducts() {
     );
   });
 }
+const metadataSwVers = async (key) =>
+  command("/usr/bin/sw_vers", [`-${key}`])
+    .then((value) => value.trim())
+    .catch(() => "unknown");
+
+const metadataSysctl = async (key) =>
+  command("/usr/sbin/sysctl", ["-n", key])
+    .then((value) => value.trim())
+    .catch(() => "unknown");
+
+const metadataGit = async (...args) => (await command("git", args)).trim();
 
 export async function hostMetadata() {
-  const git = async (...args) => (await command("git", args)).trim();
-  const sysctl = async (key) =>
-    command("/usr/sbin/sysctl", ["-n", key])
-      .then((value) => value.trim())
-      .catch(() => "unknown");
-  const swVers = async (key) =>
-    command("/usr/bin/sw_vers", [`-${key}`])
-      .then((value) => value.trim())
-      .catch(() => "unknown");
   const [sha, status, model, cpu, macosVersion, macosBuild] = await Promise.all([
-    git("rev-parse", "HEAD"),
-    git("status", "--porcelain"),
-    sysctl("hw.model"),
-    sysctl("machdep.cpu.brand_string"),
-    swVers("productVersion"),
-    swVers("buildVersion"),
+    metadataGit("rev-parse", "HEAD"),
+    metadataGit("status", "--porcelain"),
+    metadataSysctl("hw.model"),
+    metadataSysctl("machdep.cpu.brand_string"),
+    metadataSwVers("productVersion"),
+    metadataSwVers("buildVersion"),
   ]);
   return {
     device: {
@@ -2087,6 +2089,7 @@ export function summaryReport(report) {
     armGap: report.backgroundLoadGap,
   };
 }
+const labelOf = (id) => INTERACTIONS.find(([known]) => known === id)?.[1] ?? id;
 
 export function markdown(report) {
   // What this run covered and how its load really ended. Both belong in the
@@ -2208,7 +2211,6 @@ export function markdown(report) {
       ),
     );
   }
-  const labelOf = (id) => INTERACTIONS.find(([known]) => known === id)?.[1] ?? id;
   lines.push(...signalsMarkdown(report.arms, labelOf));
   lines.push(
     "",

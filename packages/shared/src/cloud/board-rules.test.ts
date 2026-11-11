@@ -96,23 +96,23 @@ describe("BoardRuleError", () => {
   });
 });
 
-describe("labels", () => {
-  const create = (labels: BoardLabel[], names: string[]) =>
-    decideCreateTicket(
-      { projectId: PROJECT, number: 1, columnEnd: null, labels, mintLabelId: minter() },
-      { ticketId: tid(1), status: "todo", title: "T", labels: names },
-    );
+const createWithLabels = (labels: BoardLabel[], names: string[]) =>
+  decideCreateTicket(
+    { projectId: PROJECT, number: 1, columnEnd: null, labels, mintLabelId: minter() },
+    { ticketId: tid(1), status: "todo", title: "T", labels: names },
+  );
 
+describe("labels", () => {
   test("a name is trimmed and bounded", () => {
-    expect(create([], [" ui "]).createdLabels[0]!.name).toBe("ui");
-    expect(refusal(() => create([], [" "])).code).toBe("invalid_argument");
-    expect(refusal(() => create([], ["x".repeat(BOARD_LIMITS.labelNameLength + 1)])).code).toBe(
-      "invalid_argument",
-    );
+    expect(createWithLabels([], [" ui "]).createdLabels[0]!.name).toBe("ui");
+    expect(refusal(() => createWithLabels([], [" "])).code).toBe("invalid_argument");
+    expect(
+      refusal(() => createWithLabels([], ["x".repeat(BOARD_LIMITS.labelNameLength + 1)])).code,
+    ).toBe("invalid_argument");
   });
 
   test("a name resolves to an existing label ignoring ASCII case, or mints one, once", () => {
-    const decision = create([label(1, "UI")], ["ui", " Backend ", "BACKEND", "UI"]);
+    const decision = createWithLabels([label(1, "UI")], ["ui", " Backend ", "BACKEND", "UI"]);
     expect(decision.ticket.labelIds).toEqual([lid(1), lid(100)]);
     expect(decision.createdLabels).toEqual([
       {
@@ -135,7 +135,7 @@ describe("labels", () => {
       label(5, "loop-a", { mergedIntoId: lid(6) }),
       label(6, "loop-b", { mergedIntoId: lid(5) }),
     ];
-    expect(create(chain, ["OLD", "dangling", "loop-a"]).ticket.labelIds).toEqual([
+    expect(createWithLabels(chain, ["OLD", "dangling", "loop-a"]).ticket.labelIds).toEqual([
       lid(3),
       lid(4),
       lid(6),
@@ -145,11 +145,11 @@ describe("labels", () => {
   test("a live label wins its name over an alias that shares it, in either order", () => {
     const alias = label(1, "ui", { mergedIntoId: lid(9) });
     const live = label(2, "UI", { nameKey: "ui" });
-    expect(create([alias, live], ["ui"]).ticket.labelIds).toEqual([lid(2)]);
-    expect(create([live, alias], ["ui"]).ticket.labelIds).toEqual([lid(2)]);
+    expect(createWithLabels([alias, live], ["ui"]).ticket.labelIds).toEqual([lid(2)]);
+    expect(createWithLabels([live, alias], ["ui"]).ticket.labelIds).toEqual([lid(2)]);
     // Two aliases (of labels that are gone): the first keeps the key.
     const other = label(3, "ui", { mergedIntoId: lid(8) });
-    expect(create([alias, other], ["ui"]).ticket.labelIds).toEqual([lid(1)]);
+    expect(createWithLabels([alias, other], ["ui"]).ticket.labelIds).toEqual([lid(1)]);
   });
 
   test("labelNamesOf wears each stored id as its live label, once, unknown ids dropped", () => {
@@ -247,36 +247,41 @@ describe("decideCreateTicket", () => {
     });
   });
 
+  const creationRefusal = (fields: Record<string, unknown>) =>
+    refusal(() =>
+      decideCreateTicket(base, { ticketId: tid(7), status: "todo", title: "T", ...fields }),
+    ).code;
+
   test("refuses a bad title, body, harness, base branch or too many labels", () => {
-    const create = (fields: Record<string, unknown>) =>
-      refusal(() =>
-        decideCreateTicket(base, { ticketId: tid(7), status: "todo", title: "T", ...fields }),
-      ).code;
-    expect(create({ title: "  " })).toBe("invalid_argument");
-    expect(create({ title: "x".repeat(BOARD_LIMITS.titleLength + 1) })).toBe("invalid_argument");
-    expect(create({ body: "é".repeat(BOARD_LIMITS.bodyBytes / 2 + 1) })).toBe("invalid_argument");
-    expect(create({ preferredHarnessId: "Not A Harness" })).toBe("invalid_argument");
-    expect(create({ baseBranch: "bad..branch" })).toBe("invalid_argument");
+    expect(creationRefusal({ title: "  " })).toBe("invalid_argument");
+    expect(creationRefusal({ title: "x".repeat(BOARD_LIMITS.titleLength + 1) })).toBe(
+      "invalid_argument",
+    );
+    expect(creationRefusal({ body: "é".repeat(BOARD_LIMITS.bodyBytes / 2 + 1) })).toBe(
+      "invalid_argument",
+    );
+    expect(creationRefusal({ preferredHarnessId: "Not A Harness" })).toBe("invalid_argument");
+    expect(creationRefusal({ baseBranch: "bad..branch" })).toBe("invalid_argument");
     expect(
-      create({
+      creationRefusal({
         labels: Array.from({ length: BOARD_LIMITS.labelsPerTicket + 1 }, (_, i) => `l${i}`),
       }),
     ).toBe("invalid_argument");
   });
 });
 
-describe("decideUpdateTicket", () => {
-  function state(overrides: Partial<UpdateTicketState> = {}): UpdateTicketState {
-    return {
-      ticket: ticket(1, { labelIds: [lid(1)] }),
-      body: "Hello",
-      labels: [label(1, "UI"), label(2, "Backend")],
-      hasWorktree: false,
-      mintLabelId: minter(),
-      ...overrides,
-    };
-  }
+function state(overrides: Partial<UpdateTicketState> = {}): UpdateTicketState {
+  return {
+    ticket: ticket(1, { labelIds: [lid(1)] }),
+    body: "Hello",
+    labels: [label(1, "UI"), label(2, "Backend")],
+    hasWorktree: false,
+    mintLabelId: minter(),
+    ...overrides,
+  };
+}
 
+describe("decideUpdateTicket", () => {
   test("an update that changes nothing records nothing", () => {
     const decision = decideUpdateTicket(state(), {
       title: "Ticket 1",
@@ -417,10 +422,11 @@ describe("decideUpdateTicket", () => {
   });
 });
 
+const column = (n: number, position: string, overrides: Partial<BoardTicket> = {}) =>
+  ticket(n, { status: "doing", position, ...overrides });
+
 describe("decideMoveTickets", () => {
   const now = 50_000;
-  const column = (n: number, position: string, overrides: Partial<BoardTicket> = {}) =>
-    ticket(n, { status: "doing", position, ...overrides });
 
   test("a cross-column move between two neighbours records the move and its consequences", () => {
     const moved = ticket(1, { status: "doing" });
@@ -566,14 +572,15 @@ describe("decideMoveTickets", () => {
     expect(above.changes).toHaveLength(1);
   });
 
+  const move = (tickets: BoardTicket[], ticketIds: TicketId[]) =>
+    refusal(() =>
+      decideMoveTickets(
+        { tickets, after: null, before: null, now },
+        { ticketIds, toStatus: "doing" },
+      ),
+    ).code;
+
   test("refuses an empty or oversized move, an unknown, archived or foreign ticket", () => {
-    const move = (tickets: BoardTicket[], ticketIds: TicketId[]) =>
-      refusal(() =>
-        decideMoveTickets(
-          { tickets, after: null, before: null, now },
-          { ticketIds, toStatus: "doing" },
-        ),
-      ).code;
     expect(move([], [])).toBe("invalid_argument");
     expect(
       move(
@@ -732,10 +739,11 @@ describe("comments", () => {
     expect(() => requireCommentEditable(comment, person)).not.toThrow();
   });
 
+  const cites = (actor: Actor) =>
+    decideCreateComment(ticket(1), { commentId, body: "Hi" }, actor).comment.sessionId;
+
   test("an automation's comment cites its Session only when it has one", () => {
     const automation: Actor = { kind: "automation", userId: ALICE, automationId: "a", runId: "r" };
-    const cites = (actor: Actor) =>
-      decideCreateComment(ticket(1), { commentId, body: "Hi" }, actor).comment.sessionId;
     expect(cites(automation)).toBeNull();
     expect(cites({ ...automation, sessionId: SESSION })).toBe(SESSION);
   });

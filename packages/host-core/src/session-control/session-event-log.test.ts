@@ -45,6 +45,21 @@ const cause = (attachmentId: string) => ({
   elapsedMs: 1,
 });
 
+const failed = (sequence: number, attachmentId: string) =>
+  event(
+    sequence,
+    {
+      kind: "attachment.failed",
+      attachment: { id: attachmentId },
+      failure: {
+        code: "queue_admission_timeout",
+        detail: "queue_admission_timeout: executor attach did not finish in /private/path",
+        diagnostic: null,
+      },
+    },
+    { commandId: "op:start" },
+  );
+
 describe("a Session's committed facts as log lines (VC-699)", () => {
   it("writes turns, commands and Attention at info inside the operation's trace, and the rest at debug", () => {
     const records = capture("info");
@@ -157,20 +172,6 @@ describe("a Session's committed facts as log lines (VC-699)", () => {
 
   it("files an attach failure's code and cause on its line, never its detail (VC-1099)", () => {
     const records = capture("info");
-    const failed = (sequence: number, attachmentId: string) =>
-      event(
-        sequence,
-        {
-          kind: "attachment.failed",
-          attachment: { id: attachmentId },
-          failure: {
-            code: "queue_admission_timeout",
-            detail: "queue_admission_timeout: executor attach did not finish in /private/path",
-            diagnostic: null,
-          },
-        },
-        { commandId: "op:start" },
-      );
     noteAttachFailureCause({
       sessionId: "s-1",
       commandId: "op:start",

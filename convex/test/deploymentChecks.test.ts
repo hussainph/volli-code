@@ -50,10 +50,10 @@ function cloudEnv(overrides: Record<string, string | undefined> = {}) {
 
 const reader = (env: Record<string, string | undefined>) => (name: string) => env[name];
 
-describe("the loopback fence", () => {
-  const deployment = (url: string | undefined) =>
-    checkDeployment("test", reader({ [DEPLOYMENT_URL_VARIABLE]: url })).deployment;
+const deployment = (url: string | undefined) =>
+  checkDeployment("test", reader({ [DEPLOYMENT_URL_VARIABLE]: url })).deployment;
 
+describe("the loopback fence", () => {
   test("is http(s) on 127.0.0.1, localhost and ::1 only", () => {
     for (const url of [
       "http://127.0.0.1:3210",
@@ -254,21 +254,21 @@ describe("describeProblems", () => {
   });
 });
 
+function stub(env: Record<string, string | undefined>) {
+  for (const name of [
+    DEPLOYMENT_URL_VARIABLE,
+    TEST_JWKS_VARIABLE,
+    ...REQUIRED_VARIABLES,
+    ...GITHUB_APP_VARIABLES,
+  ]) {
+    vi.stubEnv(name, env[name] ?? "");
+  }
+}
+
 describe("health.deploymentChecks", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });
-
-  function stub(env: Record<string, string | undefined>) {
-    for (const name of [
-      DEPLOYMENT_URL_VARIABLE,
-      TEST_JWKS_VARIABLE,
-      ...REQUIRED_VARIABLES,
-      ...GITHUB_APP_VARIABLES,
-    ]) {
-      vi.stubEnv(name, env[name] ?? "");
-    }
-  }
 
   test("returns the report for a safe deployment, as cloud by default", async () => {
     stub(cloudEnv());

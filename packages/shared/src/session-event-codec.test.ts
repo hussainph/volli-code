@@ -808,6 +808,12 @@ const resolved = (resolution: unknown) =>
     "payload",
   );
 
+const opened = (candidate: Record<string, unknown>) =>
+  decodeSessionEventPayload(
+    { kind: "interaction.opened", interaction: { ...interaction, ...candidate } },
+    "payload",
+  );
+
 describe("decodeSessionEventPayload tolerance and corruption", () => {
   it("reads a stopped-run Attention written before `resetsAt` existed as stating no reset", () => {
     const legacy = decodeSessionEventPayload(
@@ -1409,11 +1415,6 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
         "payload",
       ),
     ).toThrow("payload.attention.retryAt must be an integer");
-    const opened = (candidate: Record<string, unknown>) =>
-      decodeSessionEventPayload(
-        { kind: "interaction.opened", interaction: { ...interaction, ...candidate } },
-        "payload",
-      );
     expect(() => opened({ options: "once" })).toThrow(
       "payload.interaction.options must be an array",
     );
@@ -2040,6 +2041,8 @@ function rendererEvent(overrides: Record<string, unknown> = {}): Record<string, 
   };
 }
 
+const parse = (payload: unknown) => parseRendererSessionEvent(rendererEvent({ payload }), "event");
+
 describe("the renderer-side parse", () => {
   it("round-trips what the edge ships: scrub, JSON, parse", () => {
     const durable: SessionEvent = {
@@ -2185,8 +2188,6 @@ describe("the renderer-side parse", () => {
   });
 
   it("rejects a malformed renderer-safe command or attachment", () => {
-    const parse = (payload: unknown) =>
-      parseRendererSessionEvent(rendererEvent({ payload }), "event");
     expect(parse({ kind: "command.recorded", command: { ...command, id: "" } })).toEqual({
       ok: false,
       reason: "malformed",

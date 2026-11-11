@@ -3,7 +3,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { MotionGlobalConfig } from "motion/react";
-import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vite-plus/test";
 import {
   DEFAULT_CODE_MODE_POLICY,
   DEFAULT_COMPACTION_POLICY,
@@ -105,15 +105,19 @@ interface HostFixture {
   terminal: Promise<void>;
   close(): Promise<void>;
 }
-async function realFixture(provider: ReturnType<typeof gatedProvider>): Promise<HostFixture> {
+let hostFixtureModule: {
+  silentEndsFixture(options: { provider: ReturnType<typeof gatedProvider> }): Promise<HostFixture>;
+};
+beforeAll(async () => {
+  // Loading the host graph is setup, not part of the Send-path behavior budget.
   const path = decodeURIComponent(
     new URL("../../../../../../../packages/host-core/src/testing/silent-ends.ts", import.meta.url)
       .pathname,
   );
-  const module: {
-    silentEndsFixture(options: { provider: typeof provider }): Promise<HostFixture>;
-  } = await import(path);
-  return module.silentEndsFixture({ provider });
+  hostFixtureModule = await import(path);
+});
+async function realFixture(provider: ReturnType<typeof gatedProvider>): Promise<HostFixture> {
+  return hostFixtureModule.silentEndsFixture({ provider });
 }
 let fixture: HostFixture | undefined;
 let provider: ReturnType<typeof gatedProvider> | undefined;

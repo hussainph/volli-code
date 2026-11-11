@@ -105,11 +105,12 @@ const SESSION_READS = "Session reads are unavailable on this transport";
 const SIGN_INS = "Sign-ins are unavailable on this host";
 const LISTING = "The Session listing is unavailable on this host";
 
+const unavailable = (): never => {
+  throw new OperationUnavailableError(SIGN_INS);
+};
+
 /** Each sign-in handler the test stated, or one that answers unavailable. */
 function signInHandlersFrom(stated: Partial<SignInRouterHandlers> = {}): SignInRouterHandlers {
-  const unavailable = (): never => {
-    throw new OperationUnavailableError(SIGN_INS);
-  };
   return {
     "signIns.status": stated["signIns.status"] ?? unavailable,
     "signIns.setApiKey": stated["signIns.setApiKey"] ?? unavailable,

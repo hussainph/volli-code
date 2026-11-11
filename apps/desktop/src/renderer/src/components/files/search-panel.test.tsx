@@ -565,6 +565,15 @@ describe("a query typed over an answer, before the debounce elapses", () => {
     expect(summaryText()).toBe("Searching “needlessly” · results below are for “needle”");
   });
 });
+async function show(scope: SearchScope): Promise<void> {
+  await act(async () => {
+    root?.render(
+      <TooltipProvider>
+        <FileSearchPanel scope={scope} root="volli/VC-193-search" onOpenMatch={onOpenMatch} />
+      </TooltipProvider>,
+    );
+  });
+}
 
 /**
  * VC-406: the rail mounts this page ONCE and hands it another scope, so
@@ -573,16 +582,6 @@ describe("a query typed over an answer, before the debounce elapses", () => {
  * looking at.
  */
 describe("a scope swapped under the page", () => {
-  async function show(scope: SearchScope): Promise<void> {
-    await act(async () => {
-      root?.render(
-        <TooltipProvider>
-          <FileSearchPanel scope={scope} root="volli/VC-193-search" onOpenMatch={onOpenMatch} />
-        </TooltipProvider>,
-      );
-    });
-  }
-
   it("drops the previous checkout's matches in the frame the new scope arrives", async () => {
     const answers = deferred();
     await mount({ kind: "ticket", projectId: "p1", ticketId: "t1" }, answers.next);

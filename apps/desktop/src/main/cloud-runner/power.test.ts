@@ -62,6 +62,8 @@ const blocker = (calls: string[]) => ({
   hold: () => void calls.push("hold"),
   release: () => void calls.push("release"),
 });
+const wanted = (enabled: boolean) =>
+  SOURCES.filter((source) => residencyHoldWanted({ enabled, source }));
 
 describe("keeping this Mac working as a runner", () => {
   it("reports the switch as alwaysOn and the reading as the source", () => {
@@ -79,8 +81,6 @@ describe("keeping this Mac working as a runner", () => {
   });
 
   it("wants the assertion only from a Mac asked to stay available on wall power", () => {
-    const wanted = (enabled: boolean) =>
-      SOURCES.filter((source) => residencyHoldWanted({ enabled, source }));
     expect(wanted(true)).toEqual(["ac"]);
     expect(wanted(false)).toEqual([]);
   });

@@ -754,6 +754,8 @@ function hostSnapshot(): HostSnapshot {
   };
 }
 
+const toMs = (ns: number): number | null => (Number.isFinite(ns) ? round(ns / 1e6) : null);
+
 function histogramSummary(histogram: ReturnType<typeof monitorEventLoopDelay>): {
   sampleCount: number;
   p50Ms: number | null;
@@ -761,7 +763,6 @@ function histogramSummary(histogram: ReturnType<typeof monitorEventLoopDelay>): 
   maxMs: number | null;
   meanMs: number | null;
 } {
-  const toMs = (ns: number): number | null => (Number.isFinite(ns) ? round(ns / 1e6) : null);
   return {
     sampleCount: histogram.count,
     p50Ms: toMs(histogram.percentile(50)),

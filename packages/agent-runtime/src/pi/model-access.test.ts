@@ -735,19 +735,19 @@ function usageSource(
 const usageJson = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status });
 
+/** The scripted collection plus `getAuth`, which only the usage probe calls. */
+function modelsWithAuth(specs: readonly Spec[], token: string | undefined): Models {
+  const base = fakeModels(specs);
+  return Object.assign(base, {
+    getAuth: async () => (token === undefined ? undefined : { auth: { apiKey: token } }),
+  }) as Models;
+}
+
 describe("inspectPiModelAccess usage limits", () => {
   const ANTHROPIC_BODY = {
     five_hour: { utilization: 37, resets_at: "2026-03-01T14:00:00Z" },
     seven_day: { utilization: 4, resets_at: "2026-03-05T09:30:00Z" },
   };
-
-  /** The scripted collection plus `getAuth`, which only the usage probe calls. */
-  function modelsWithAuth(specs: readonly Spec[], token: string | undefined): Models {
-    const base = fakeModels(specs);
-    return Object.assign(base, {
-      getAuth: async () => (token === undefined ? undefined : { auth: { apiKey: token } }),
-    }) as Models;
-  }
 
   it("carries a subscribed account's windows on its provider row and nothing on the rest", async () => {
     const source = usageSource(() => usageJson(ANTHROPIC_BODY));

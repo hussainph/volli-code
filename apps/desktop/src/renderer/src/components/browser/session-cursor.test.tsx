@@ -22,10 +22,10 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
+const pulse = () => container.querySelector(".session-cursor-live")?.getAttribute("data-live");
 
 describe("SessionCursor hold arrival", () => {
   it("pulses only while present and not handing off", () => {
-    const pulse = () => container.querySelector(".session-cursor-live")?.getAttribute("data-live");
     act(() => root.render(<SessionCursor {...props} />));
     expect(pulse()).toBe("true");
     act(() => root.render(<SessionCursor {...props} handoff />));

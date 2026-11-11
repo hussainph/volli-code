@@ -641,6 +641,7 @@ describe("running by hand", () => {
     expect(ticketNotice.classList.contains("text-sm")).toBe(false);
   });
 });
+const skipRow = () => historySection().querySelector('[data-run-history-skip="skip-1"]')!;
 
 describe("run history", () => {
   it("ticks Run and skipped due ages with one clock without reloading history", async () => {
@@ -651,7 +652,6 @@ describe("run history", () => {
       runs: [run({ createdAt: now - 44_000 })],
       skips: [skip({ dueAt: now - 43_000, recordedAt: now })],
     });
-    const skipRow = () => historySection().querySelector('[data-run-history-skip="skip-1"]')!;
     expect(historyRun("run-1").textContent).toContain("just now");
     expect(skipRow().textContent).toContain("just now");
     expect(vi.getTimerCount()).toBe(1);

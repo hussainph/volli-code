@@ -95,17 +95,17 @@ describe("createCloudRestartRecovery (N2-3)", () => {
   });
 });
 
-describe("the sibling answer", () => {
-  function over(reply: unknown) {
-    const link = fakeLink({ state: "connected" }, async () => reply).link;
-    return createCloudRestartRecovery({ currentLink: () => link }).ticketSiblings({
-      sessionId: "s1",
-      projectId: "p",
-      ticketId: "t",
-      since: 5,
-    });
-  }
+function over(reply: unknown) {
+  const link = fakeLink({ state: "connected" }, async () => reply).link;
+  return createCloudRestartRecovery({ currentLink: () => link }).ticketSiblings({
+    sessionId: "s1",
+    projectId: "p",
+    ticketId: "t",
+    since: 5,
+  });
+}
 
+describe("the sibling answer", () => {
   it("reads the backend's shape and nothing else", async () => {
     await expect(
       over({

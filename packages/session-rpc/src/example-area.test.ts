@@ -229,6 +229,18 @@ function area<
   } satisfies VerbEntry;
 }
 
+const namedProjectResource = () => ({ kind: PROJECT_RESOURCE, id: WORKSPACE });
+
+function withPorts(caller: RouterCaller, ports: Partial<ExampleAreaContext>) {
+  const tickets = ledger();
+  const create = vi.spyOn(tickets, "create");
+  const client = createExampleAreaRouter().createCaller({
+    ...exampleAreaContext(tickets, caller, new RpcDiagnosticLog()),
+    ...ports,
+  });
+  return { client, create };
+}
+
 describe("the area's builder family", () => {
   it("binds the example router to its catalog exactly, at compile time", () => {
     expectTypeOf<ExampleAreaCatalogBinding>().toEqualTypeOf<never>();
@@ -260,7 +272,6 @@ describe("the area's builder family", () => {
     const { workspaceProcedure } = createCatalogBuilders<CatalogCallerContext, typeof withholding>({
       entries: [withholding],
     });
-    const named = () => ({ kind: PROJECT_RESOURCE, id: WORKSPACE });
     for (const schema of [
       z.object({ commandId: z.string() }),
       z.object({ command: z.string() }),
@@ -269,14 +280,14 @@ describe("the area's builder family", () => {
     ]) {
       expect(() =>
         // @ts-expect-error -- a withholding entry's input must be a command.kind envelope.
-        workspaceProcedure("area.write", schema, named),
+        workspaceProcedure("area.write", schema, namedProjectResource),
       ).toThrow("Catalog entry area.write withholds intents, but its input has no command.kind");
     }
     expect(() =>
       workspaceProcedure(
         "area.write",
         z.object({ command: z.object({ kind: z.string() }) }),
-        named,
+        namedProjectResource,
       ),
     ).not.toThrow();
   });
@@ -353,15 +364,6 @@ describe("the area's builder family", () => {
   // policy that answers anything but `true`, never reaches the handler.
   describe("ports that fail or answer loosely", () => {
     const input = { commandId: COMMAND, parentTicketId: "mine", title: "Sub-task" };
-    function withPorts(caller: RouterCaller, ports: Partial<ExampleAreaContext>) {
-      const tickets = ledger();
-      const create = vi.spyOn(tickets, "create");
-      const client = createExampleAreaRouter().createCaller({
-        ...exampleAreaContext(tickets, caller, new RpcDiagnosticLog()),
-        ...ports,
-      });
-      return { client, create };
-    }
 
     it("refuses when the Workspace port throws or rejects, before the handler", async () => {
       for (const resourceWorkspace of [

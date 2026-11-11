@@ -1576,42 +1576,42 @@ function metered(overrides: Partial<SessionUsage> = {}): SessionUsage {
   };
 }
 
+async function record(
+  control: ReturnType<typeof createSessionEngine>,
+  sessionId: string,
+  id: string,
+  occurredAt: number,
+  usage: SessionUsage,
+): Promise<void> {
+  await control.observe({
+    id,
+    kind: "usage.recorded",
+    sessionId,
+    occurredAt,
+    provenance,
+    attachmentId: null,
+    turnId: null,
+    usage,
+  });
+}
+
+async function meteredSession(
+  control: ReturnType<typeof createSessionEngine>,
+  options: { projectId: string; ticketId: string | null; commandId: string },
+): Promise<string> {
+  const created = await control.createSession({
+    commandId: options.commandId,
+    projectId: options.projectId,
+    ticketId: options.ticketId,
+    role: roleImpliedByTicket(options.ticketId),
+    parentSessionId: null,
+    title: options.commandId,
+    provenance,
+  });
+  return created.session.id;
+}
+
 describe("the Session usage projection", () => {
-  async function meteredSession(
-    control: ReturnType<typeof createSessionEngine>,
-    options: { projectId: string; ticketId: string | null; commandId: string },
-  ): Promise<string> {
-    const created = await control.createSession({
-      commandId: options.commandId,
-      projectId: options.projectId,
-      ticketId: options.ticketId,
-      role: roleImpliedByTicket(options.ticketId),
-      parentSessionId: null,
-      title: options.commandId,
-      provenance,
-    });
-    return created.session.id;
-  }
-
-  async function record(
-    control: ReturnType<typeof createSessionEngine>,
-    sessionId: string,
-    id: string,
-    occurredAt: number,
-    usage: SessionUsage,
-  ): Promise<void> {
-    await control.observe({
-      id,
-      kind: "usage.recorded",
-      sessionId,
-      occurredAt,
-      provenance,
-      attachmentId: null,
-      turnId: null,
-      usage,
-    });
-  }
-
   it("indexes a usage fact as it is appended, without re-reading the event log", async () => {
     const { control, projectId } = setup();
     insertTicket(ctx.db, testTicket(projectId, { id: "ticket-a", usesWorktree: false }));
@@ -1936,6 +1936,52 @@ describe("the Session usage projection", () => {
   });
 });
 
+/** Opens an attachment on a fresh Session and hands back both ids. */
+async function sessionWithAttachment(
+  control: ReturnType<typeof createSessionEngine>,
+  projectId: string,
+  name: string,
+  adapterId: "terminal" | "opencode",
+): Promise<{ sessionId: string; attachmentId: string }> {
+  const created = await control.createSession({
+    commandId: `create-${name}`,
+    projectId,
+    ticketId: null,
+    role: "project",
+    parentSessionId: null,
+    title: name,
+    provenance,
+  });
+  const start = await control.submit({
+    commandId: `start-${name}`,
+    sessionId: created.session.id,
+    intent: { kind: "executor.start", adapterId, continuity: "fresh" },
+    provenance,
+  });
+  const attachmentId = `attachment-${name}`;
+  await control.observe({
+    id: `opened-${name}`,
+    kind: "attachment.opened",
+    sessionId: created.session.id,
+    commandId: start.command.id,
+    occurredAt: 200,
+    provenance,
+    attachment: {
+      id: attachmentId,
+      sessionId: created.session.id,
+      adapterId,
+      venue: { id: "local", kind: "local" },
+      continuity: "fresh",
+      native:
+        adapterId === "terminal"
+          ? { id: null, detail: { kind: "volli.terminal.v1", cwd: "/repo" } }
+          : null,
+      authority: null,
+    },
+  });
+  return { sessionId: created.session.id, attachmentId };
+}
+
 /**
  * The concurrency budget's narrowing (VC-403).
  *
@@ -1946,52 +1992,6 @@ describe("the Session usage projection", () => {
  * only these is the same count.
  */
 describe("listAttachedSessions (VC-403)", () => {
-  /** Opens an attachment on a fresh Session and hands back both ids. */
-  async function sessionWithAttachment(
-    control: ReturnType<typeof createSessionEngine>,
-    projectId: string,
-    name: string,
-    adapterId: "terminal" | "opencode",
-  ): Promise<{ sessionId: string; attachmentId: string }> {
-    const created = await control.createSession({
-      commandId: `create-${name}`,
-      projectId,
-      ticketId: null,
-      role: "project",
-      parentSessionId: null,
-      title: name,
-      provenance,
-    });
-    const start = await control.submit({
-      commandId: `start-${name}`,
-      sessionId: created.session.id,
-      intent: { kind: "executor.start", adapterId, continuity: "fresh" },
-      provenance,
-    });
-    const attachmentId = `attachment-${name}`;
-    await control.observe({
-      id: `opened-${name}`,
-      kind: "attachment.opened",
-      sessionId: created.session.id,
-      commandId: start.command.id,
-      occurredAt: 200,
-      provenance,
-      attachment: {
-        id: attachmentId,
-        sessionId: created.session.id,
-        adapterId,
-        venue: { id: "local", kind: "local" },
-        continuity: "fresh",
-        native:
-          adapterId === "terminal"
-            ? { id: null, detail: { kind: "volli.terminal.v1", cwd: "/repo" } }
-            : null,
-        authority: null,
-      },
-    });
-    return { sessionId: created.session.id, attachmentId };
-  }
-
   it("agrees with the fold it replaces, for terminals and chats alike", async () => {
     const { ledger, control, projectId } = setup();
     const terminal = await sessionWithAttachment(control, projectId, "terminal", "terminal");
@@ -2242,19 +2242,19 @@ describe("additive birth owner without a Session SQL column", () => {
   });
 });
 
-describe("birth payload memo (VC-1076)", () => {
-  const request = (commandId: string, ownerUserId: string) => ({
-    commandId,
-    projectId: "project",
-    ticketId: null,
-    role: "project" as const,
-    parentSessionId: null,
-    title: null,
-    requestedSessionId: "reused-session",
-    ownerUserId,
-    provenance,
-  });
+const birthRequest = (commandId: string, ownerUserId: string) => ({
+  commandId,
+  projectId: "project",
+  ticketId: null,
+  role: "project" as const,
+  parentSessionId: null,
+  title: null,
+  requestedSessionId: "reused-session",
+  ownerUserId,
+  provenance,
+});
 
+describe("birth payload memo (VC-1076)", () => {
   it("keeps nothing a rolled-back transaction read", async () => {
     const { ledger, control } = setup();
     let rolled = 0;
@@ -2272,11 +2272,11 @@ describe("birth payload memo (VC-1076)", () => {
       clock: { now: () => 100 },
       ids: { next: (kind) => `${kind}-rolled-${++rolled}` },
     });
-    await expect(failing.createSession(request("create-a", "owner-a"))).rejects.toThrow(
+    await expect(failing.createSession(birthRequest("create-a", "owner-a"))).rejects.toThrow(
       "rolled back",
     );
 
-    await control.createSession(request("create-b", "owner-b"));
+    await control.createSession(birthRequest("create-b", "owner-b"));
     expect((await control.getBaseSession({ sessionId: "reused-session" }))?.ownerUserId).toBe(
       "owner-b",
     );
@@ -2287,7 +2287,7 @@ describe("birth payload memo (VC-1076)", () => {
 
   it("answers repeat reads from the memo, identically", async () => {
     const { control } = setup();
-    const created = await control.createSession(request("create-memo", "owner-a"));
+    const created = await control.createSession(birthRequest("create-memo", "owner-a"));
     const first = await control.listSessions({ projectId: "project", scope: "all" });
     // Birth facts are immutable, so the memo may answer instead of the log.
     // Proved by changing the log beneath it, which production never does.
@@ -2307,7 +2307,7 @@ describe("birth payload memo (VC-1076)", () => {
 
   it("replaces a checkpoint row an older build wrote at another schema version on listing", async () => {
     const { control } = setup();
-    const created = await control.createSession(request("create-version", "owner-a"));
+    const created = await control.createSession(birthRequest("create-version", "owner-a"));
     await control.listSessions({ projectId: "project", scope: "all" });
     ctx.db
       .prepare("UPDATE session_projection_checkpoints SET schema_version = 1 WHERE session_id = ?")

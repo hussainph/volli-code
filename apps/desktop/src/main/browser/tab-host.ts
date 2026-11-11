@@ -281,6 +281,8 @@ export class BrowserStageUnavailableError extends Error {
 export function isAllowedBrowserTarget(target: string): boolean {
   return isBrowserStartUrl(target) || isAllowedBrowserUrl(target);
 }
+const encode = (image: NativeImage): string =>
+  `data:image/jpeg;base64,${image.toJPEG(BROWSER_CAPTURE_JPEG_QUALITY).toString("base64")}`;
 
 /**
  * Owns every live WebContentsView-backed Browser Tab in Electron main: the
@@ -1048,8 +1050,6 @@ export class BrowserTabHost extends BrowserTabRegistry<
    */
   async capture(tabId: string): Promise<BrowserTabCaptureFrame[]> {
     const entry = this.requireTab(tabId);
-    const encode = (image: NativeImage): string =>
-      `data:image/jpeg;base64,${image.toJPEG(BROWSER_CAPTURE_JPEG_QUALITY).toString("base64")}`;
     const split = browserSurfaceBounds(
       entry.bounds,
       entry.devToolsOpen && entry.devToolsView !== null,

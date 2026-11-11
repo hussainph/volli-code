@@ -301,6 +301,16 @@ function windowClient(main: Awaited<ReturnType<typeof desktopMain>>) {
 }
 
 const OFFLINE: HostLinkView = { status: "offline", since: 0, retryAt: null };
+const projectLinkView = (link: HostLink): ProjectLink => {
+  const current = link.getState();
+  if (current.status === "ready") {
+    return { hostId: HOST, link: { status: "open" }, granted: current.welcome.features };
+  }
+  return {
+    hostId: HOST,
+    link: current.status === "closed" ? OFFLINE : { status: "reconnecting" },
+  };
+};
 
 /**
  * The window's host-connection state, from main's links as its snapshot
@@ -313,20 +323,10 @@ function hostConnection(links: ReadonlyMap<string, HostLink>) {
   let forgotten = false;
   const views = new Map<string, ProjectLink>();
   let state: Pick<HostConnectionState, "hosts" | "projects">;
-  const viewOf = (link: HostLink): ProjectLink => {
-    const current = link.getState();
-    if (current.status === "ready") {
-      return { hostId: HOST, link: { status: "open" }, granted: current.welcome.features };
-    }
-    return {
-      hostId: HOST,
-      link: current.status === "closed" ? OFFLINE : { status: "reconnecting" },
-    };
-  };
   const compute = (): void => {
     const projects: Record<string, ProjectLink> = {};
     for (const [workspaceId, link] of links) {
-      const next = viewOf(link);
+      const next = projectLinkView(link);
       const before = views.get(workspaceId);
       // An unchanged project keeps its object, as the store's does.
       projects[workspaceId] =

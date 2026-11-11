@@ -392,11 +392,11 @@ describe("install --system", () => {
   });
 });
 
-describe("install --user", () => {
-  function userLayout(env: Record<string, string> = {}): InstallLayout {
-    return installLayout("user", { home: join(root, "home"), env });
-  }
+function userLayout(env: Record<string, string> = {}): InstallLayout {
+  return installLayout("user", { home: join(root, "home"), env });
+}
 
+describe("install --user", () => {
   it("installs a user unit that runs as you, with lingering left to start", () => {
     const layout = userLayout({ XDG_STATE_HOME: join(root, "state") });
     const fake = box({ systemctl: (args) => (args.includes("is-enabled") ? { code: 1 } : {}) });
@@ -629,11 +629,11 @@ describe("install converges and never orphans a key", () => {
   });
 });
 
+const macLayout = (): InstallLayout =>
+  installLayout("user", { home: join(root, "Users/alice"), env: {}, platform: "darwin" });
+
 // VC-700 PR 1c: a Mac's host is the person's launchd agent.
 describe("install --user on a Mac", () => {
-  const macLayout = (): InstallLayout =>
-    installLayout("user", { home: join(root, "Users/alice"), env: {}, platform: "darwin" });
-
   it("writes the launchd agent and touches nothing in launchd itself", () => {
     const layout = macLayout();
     const fake = box();

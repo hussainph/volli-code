@@ -1344,28 +1344,27 @@ function unusedTransport(): BoardSyncTransport {
     archivedTickets: vi.fn(unused),
   };
 }
+function startProtocol(followed: string[]) {
+  const { sync } = startBoardProtocol({
+    view: {
+      paint: vi.fn(),
+      adoptProject: vi.fn(),
+      notePlanningChange: vi.fn(),
+      checkoutMoved: vi.fn(),
+      failed: vi.fn(),
+    },
+    client: {} as never,
+    sync: { transport: unusedTransport() },
+  });
+  return {
+    sync,
+    follows: vi.spyOn(sync, "follows").mockImplementation((id) => followed.includes(id)),
+    open: vi.spyOn(sync, "open").mockResolvedValue(),
+    close: vi.spyOn(sync, "close"),
+  };
+}
 
 describe("refreshPlanningData with the protocol on", () => {
-  function startProtocol(followed: string[]) {
-    const { sync } = startBoardProtocol({
-      view: {
-        paint: vi.fn(),
-        adoptProject: vi.fn(),
-        notePlanningChange: vi.fn(),
-        checkoutMoved: vi.fn(),
-        failed: vi.fn(),
-      },
-      client: {} as never,
-      sync: { transport: unusedTransport() },
-    });
-    return {
-      sync,
-      follows: vi.spyOn(sync, "follows").mockImplementation((id) => followed.includes(id)),
-      open: vi.spyOn(sync, "open").mockResolvedValue(),
-      close: vi.spyOn(sync, "close"),
-    };
-  }
-
   beforeEach(() => {
     useBoardStore.getState().hydrate({}, {});
   });

@@ -242,6 +242,14 @@ const STAGED = `0.4.0-${REV.slice(0, 12)}`;
 const top = (into: string, version: string): string =>
   join(into, `volli-runner-${version}-linux-x64`);
 
+async function refused(h: Harness, code: string): Promise<void> {
+  const result = await apply(h);
+  expect(result).toMatchObject({ kind: "refused", code });
+  const last = state().outcomes.at(-1);
+  expect(last).toMatchObject({ kind: "update_failed", reason: code });
+  expect(readdirSync(layout.releasesDir).filter((entry) => entry !== "0.3.0-install")).toEqual([]);
+}
+
 describe("staging", () => {
   it("does nothing without a request, or with one it already handled", async () => {
     installed();
@@ -318,16 +326,6 @@ describe("staging", () => {
     expect((await apply(h)).kind).toBe("staged");
     expect(existsSync(join(layout.releasesDir, STAGED, "junk"))).toBe(false);
   });
-
-  async function refused(h: Harness, code: string): Promise<void> {
-    const result = await apply(h);
-    expect(result).toMatchObject({ kind: "refused", code });
-    const last = state().outcomes.at(-1);
-    expect(last).toMatchObject({ kind: "update_failed", reason: code });
-    expect(readdirSync(layout.releasesDir).filter((entry) => entry !== "0.3.0-install")).toEqual(
-      [],
-    );
-  }
 
   it("refuses a forged request for a URL outside the release origin", async () => {
     installed();
@@ -466,16 +464,29 @@ describe("staging", () => {
   });
 });
 
-describe("activating", () => {
-  async function staged(h: Harness): Promise<string> {
-    const target = installed();
-    makeRelease(join(layout.releasesDir, "0.2.0-old"), "0.2.0");
-    publish(h.documents, "0.4.0");
-    stageRequest("0.4.0");
-    expect((await apply(h)).kind).toBe("staged");
-    return target;
-  }
+async function staged(h: Harness): Promise<string> {
+  const target = installed();
+  makeRelease(join(layout.releasesDir, "0.2.0-old"), "0.2.0");
+  publish(h.documents, "0.4.0");
+  stageRequest("0.4.0");
+  expect((await apply(h)).kind).toBe("staged");
+  return target;
+}
 
+async function rolledBack(h: Harness, reason: string, back: string | null = null) {
+  expect(await apply(h)).toEqual({ kind: "rolled_back", version: "0.4.0", to: "0.3.0", reason });
+  const after = state();
+  expect(after.bad).toEqual(["0.4.0"]);
+  expect(after.activating).toBeNull();
+  expect(after.outcomes.slice(-2).map((o) => [o.kind, o.version, o.fromVersion, o.reason])).toEqual(
+    [
+      ["update_failed", "0.4.0", "0.3.0", reason],
+      ["rolled_back", "0.3.0", "0.4.0", back],
+    ],
+  );
+}
+
+describe("activating", () => {
   it("moves current, restarts, and keeps the new release once it stays online", async () => {
     const h = harness();
     await staged(h);
@@ -549,19 +560,6 @@ describe("activating", () => {
     activate();
     expect(await apply(h)).toMatchObject({ kind: "refused", code: "not_staged" });
   });
-
-  async function rolledBack(h: Harness, reason: string, back: string | null = null) {
-    expect(await apply(h)).toEqual({ kind: "rolled_back", version: "0.4.0", to: "0.3.0", reason });
-    const after = state();
-    expect(after.bad).toEqual(["0.4.0"]);
-    expect(after.activating).toBeNull();
-    expect(
-      after.outcomes.slice(-2).map((o) => [o.kind, o.version, o.fromVersion, o.reason]),
-    ).toEqual([
-      ["update_failed", "0.4.0", "0.3.0", reason],
-      ["rolled_back", "0.3.0", "0.4.0", back],
-    ]);
-  }
 
   it("rolls back a release that never comes online, to exactly the link it had", async () => {
     const h = harness();
@@ -673,24 +671,24 @@ describe("activating", () => {
   });
 });
 
-describe("an interrupted activation", () => {
-  function interrupted(switched: boolean): string {
-    const target = installed();
-    makeRelease(join(layout.releasesDir, STAGED), "0.4.0");
-    writeUpdaterState(layout.stateFile, {
-      ...EMPTY_STATE,
-      activating: {
-        version: "0.4.0",
-        name: STAGED,
-        fromTarget: target,
-        fromVersion: "0.3.0",
-        at: "1970-01-01T00:00:00.000Z",
-      },
-    });
-    if (switched) pointCurrentAt(layout, join("releases", STAGED));
-    return target;
-  }
+function interrupted(switched: boolean): string {
+  const target = installed();
+  makeRelease(join(layout.releasesDir, STAGED), "0.4.0");
+  writeUpdaterState(layout.stateFile, {
+    ...EMPTY_STATE,
+    activating: {
+      version: "0.4.0",
+      name: STAGED,
+      fromTarget: target,
+      fromVersion: "0.3.0",
+      at: "1970-01-01T00:00:00.000Z",
+    },
+  });
+  if (switched) pointCurrentAt(layout, join("releases", STAGED));
+  return target;
+}
 
+describe("an interrupted activation", () => {
   it("keeps a release that came up healthy", async () => {
     interrupted(true);
     const h = harness();

@@ -222,10 +222,10 @@ describe("matchOperator", () => {
   });
 });
 
-describe("openOperators", () => {
-  const open = (log = logger(), processUid = 4000042) =>
-    openOperators({ path: file, trustedOwnerUid: ME, processUid, logger: log });
+const open = (log = logger(), processUid = 4000042) =>
+  openOperators({ path: file, trustedOwnerUid: ME, processUid, logger: log });
 
+describe("openOperators", () => {
   it("refuses to boot on an unsafe file, naming the fix", () => {
     write([], 0o666);
     const error = (() => {
