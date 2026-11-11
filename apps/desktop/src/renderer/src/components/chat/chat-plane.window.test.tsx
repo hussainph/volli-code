@@ -174,7 +174,7 @@ afterEach(async () => {
 
 /** Transcript geometry and the island's announcement have separate owners. */
 function turnClearance() {
-  return container!.querySelector("[data-turn-bead-clearance]");
+  return container!.querySelector("[data-turn-bead-clearance], [data-recovery-bead-clearance]");
 }
 function activityStatus() {
   return container!.querySelector('[data-slot="chat-composer-dock"] [role="status"].sr-only');
@@ -2353,6 +2353,13 @@ describe("VC-758 visible timeline regressions", () => {
     expect(row).not.toBeNull();
     expect(row?.closest('[data-slot="chat-composer-dock"]')).toBeNull();
     expect(row?.textContent).toContain("Retry");
+    expect(turnClearance()).not.toBeNull();
+    expect(
+      container?.querySelectorAll("[data-turn-bead-clearance], [data-recovery-bead-clearance]"),
+    ).toHaveLength(1);
+    expect(
+      row!.compareDocumentPosition(turnClearance()!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 });
 

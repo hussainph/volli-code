@@ -2242,7 +2242,7 @@ function ChatPlaneContent({
                         {liveCompaction ? (
                           <CompactionProgress compaction={liveCompaction} announce={false} />
                         ) : null}
-                        {turnRunning || turnActivity !== null ? <TurnRunningMark /> : null}
+                        {turnRunning ? <TurnRunningMark /> : null}
                         {pendingMessages
                           .filter(
                             (message) => !message.deliveryAccepted || message.delivery === "queue",
@@ -2254,7 +2254,20 @@ function ChatPlaneContent({
                               context={turnContext}
                             />
                           ))}
-                        {timelineBlocker ? <SessionBlocker blocker={timelineBlocker} /> : null}
+                        {timelineBlocker ? (
+                          <>
+                            <SessionBlocker blocker={timelineBlocker} />
+                            {/* Recovery is the last transcript item. Its clearance
+                                must follow it, not leave the bead over its controls. */}
+                            {turnActivity !== null ? (
+                              <div
+                                aria-hidden
+                                data-recovery-bead-clearance=""
+                                className="h-10 shrink-0"
+                              />
+                            ) : null}
+                          </>
+                        ) : null}
                       </ChatTranscript>
                     )}
                   </ConversationContent>
