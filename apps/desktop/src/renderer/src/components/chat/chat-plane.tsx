@@ -73,6 +73,7 @@ import {
 import { Message, MessageContent } from "@renderer/components/ui/ai-elements/message";
 import {
   groupTurns,
+  islandEmpty,
   currentTurnReply,
   isDeliverable,
   readInteractionResolutionMessage,
@@ -2109,6 +2110,21 @@ function ChatPlaneContent({
   }, [blockerPresentation.dismissedKey, dismissedBlockerKey]);
   const blocker = blockerPresentation.blocker;
   const timelineBlocker = blocker?.placement === "timeline" ? blocker : null;
+  // A stopped turn's error stays in the transcript, but is not an island
+  // occupant. It may qualify a live turn or retained cluster; automatic
+  // recovery/waits are themselves ongoing activity. The island's polite
+  // status node stays mounted even when its text and visual bead clear.
+  const islandBlocker =
+    timelineBlocker &&
+    !timelineBlocker.duringTurn &&
+    (timelineBlocker.tone !== "error" ||
+      turnRunning ||
+      !islandEmpty(island.model) ||
+      strip.some((entry) => !entry.localUnsent) ||
+      (projection?.interactions.active.length ?? 0) > 0 ||
+      (!progressPaused && liveCompaction !== null))
+      ? timelineBlocker
+      : null;
   const turnActivity = useTurnActivity(sessionId, {
     messages: liveTurn ?? [],
     working: turnRunning && !progressPaused,
@@ -2117,14 +2133,13 @@ function ChatPlaneContent({
     liveCompaction: progressPaused ? null : liveCompaction,
     // Use the resolved, dismissible blocker, not a second set of recovery rules.
     // Retrying remains visible even while the last-known live overlay is paused.
-    status:
-      timelineBlocker && !timelineBlocker.duringTurn
-        ? {
-            key: timelineBlocker.dismissKey ?? timelineBlocker.message,
-            label: timelineBlocker.tone === "error" ? "Needs attention" : timelineBlocker.message,
-            ...(timelineBlocker.tone === "error" ? { detail: timelineBlocker.message } : {}),
-          }
-        : null,
+    status: islandBlocker
+      ? {
+          key: islandBlocker.dismissKey ?? islandBlocker.message,
+          label: islandBlocker.tone === "error" ? "Needs attention" : islandBlocker.message,
+          ...(islandBlocker.tone === "error" ? { detail: islandBlocker.message } : {}),
+        }
+      : null,
     queue: strip,
     steeringIds: pendingSteerIds,
   });
