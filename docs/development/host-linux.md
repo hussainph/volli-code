@@ -6,16 +6,27 @@
 plain Node/Vitest at the exact `.nvmrc` version, not the Electron executable:
 
 ```sh
-vp run --filter './packages/*' --filter './apps/*' --filter '!@volli/desktop' test:coverage --maxWorkers=$(nproc)
+vp run --parallel --concurrency-limit=$(nproc) --filter './packages/*' --filter './apps/*' --filter '!@volli/desktop' --filter '!@volli/host-core' test:coverage --maxWorkers=1
 ```
 
 It covers `session-engine`, `session-rpc`, `agent-runtime`, `shared`,
-`host-protocol` and `host-core` (and the other non-desktop workspace suites)
-through those directory filters, and `apps/hostd`. They must
+`host-protocol` (and the other non-desktop workspace suites) through those
+directory filters, plus `apps/hostd` and `apps/runner`. Tests import workspace
+sources, not another package’s test outputs; packaging tests build their own bundles.
+One Vitest worker per task avoids oversubscribing the runner. They must
 provide `test:coverage`: the CI policy self-test refuses a host manifest that
 would otherwise silently skip. This lane runs on **every PR**, including every
 host-path change, and `CI gate` requires success. There is no duplicate host
 suite and no path-based waiver of these unit tests.
+
+**Test (host-core i/2)** runs host-core separately in two shards, including
+Node-native PTY and sandboxed Chromium setup. Each uploads a blob report with
+thresholds zeroed only on its command line. **Coverage (host-core)** first
+requires every shard’s nonempty blob against the actual matrix, then merges
+with `--coverage` and the unchanged 100% protected thresholds. Desktop uses the
+same gate with four duration-balanced shards. Merge jobs install only their dependency closure
+without lifecycle scripts; they execute no tests or native code. Deterministic
+workspace typechecks use a persisted vp task cache; live tests remain uncached.
 
 **Check + Build** runs the host Electron import guard, its deliberate failing
 fixture, and the CI policy tests. **Build (host container)** builds and checks
@@ -131,7 +142,7 @@ On macOS the Electron rebuild's `build/Release/pty.node` also loads under
 plain Node, so host-core's PTY tests run on a desktop checkout as-is. On Linux
 the package compiles from source at install, and in a full workspace install
 desktop's postinstall then rebuilds it against Electron's headers. The host
-lane does not lean on that: **Test (packages)** rebuilds node-pty for its own
+lane does not lean on that: **Test (host-core i/2)** rebuilds node-pty for its own
 Node and probes it before the tests run:
 
 ```sh

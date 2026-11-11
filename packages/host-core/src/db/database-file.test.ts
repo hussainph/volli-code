@@ -185,6 +185,7 @@ function swap(
   { root, dbPath }: Fixture,
   replacing: Mode,
   faults?: (step: DatabaseFileStep) => void,
+  busyTimeoutMs?: number,
 ): void {
   swapInStagedProfile({
     dbPath,
@@ -193,6 +194,7 @@ function swap(
     replacing,
     companions: COMPANIONS,
     faults,
+    busyTimeoutMs,
   });
 }
 
@@ -520,6 +522,43 @@ describe.each(["healthy", "damaged"] as const)("swapInStagedProfile — %s", (mo
 });
 
 describe("swapInStagedProfile — refusals", () => {
+  it.each(["open", "swap", "restore"] as const)(
+    "%s uses the injected timeout when another boot holds the open lock",
+    (operation) => {
+      const fx = fixture();
+      const lock = new Database(`${fx.dbPath}.open-lock`);
+      lock.exec("BEGIN EXCLUSIVE");
+      try {
+        const attempt = () => {
+          if (operation === "open") openVolliDb(fx.dbPath, { busyTimeoutMs: 0 }).close();
+          else if (operation === "swap") swap(fx, "healthy", undefined, 0);
+          else
+            restoreDatabaseFile({
+              dbPath: fx.dbPath,
+              sourcePath: join(fx.root, ".staged", "volli.db"),
+              schemaVersion: SCHEMA_HEAD,
+              busyTimeoutMs: 0,
+            });
+        };
+        if (operation === "open")
+          expect(attempt).toThrow(expect.objectContaining({ code: "SQLITE_BUSY" }));
+        else
+          expect(attempt).toThrow(
+            expect.objectContaining({
+              phase: "opening",
+              cause: expect.objectContaining({ code: "SQLITE_BUSY" }),
+            }),
+          );
+        expect(existsSync(recoveryPendingPath(fx.dbPath))).toBe(false);
+        expect(existsSync(join(fx.root, ".aside"))).toBe(false);
+      } finally {
+        lock.close();
+      }
+      // A refusal released its own handle and left the live database intact.
+      expect(boot(fx.dbPath)).toBe("original");
+    },
+  );
+
   it.each([false, true])(
     "a damaged-profile busy refusal creates no marker and keeps any inherited intent (%s)",
     (inherited) => {
@@ -528,7 +567,7 @@ describe("swapInStagedProfile — refusals", () => {
       const marker = JSON.stringify({ preservedDirectory: "earlier-attempt" });
       if (inherited) writeFileSync(recoveryPendingPath(fx.dbPath), marker);
       try {
-        expect(() => swap(fx, "damaged")).toThrow(DatabaseFileBusyError);
+        expect(() => swap(fx, "damaged", undefined, 0)).toThrow(DatabaseFileBusyError);
         expect(existsSync(recoveryPendingPath(fx.dbPath))).toBe(inherited);
         if (inherited) expect(readFileSync(recoveryPendingPath(fx.dbPath), "utf8")).toBe(marker);
         expect(existsSync(join(fx.root, ".aside"))).toBe(false);
@@ -539,7 +578,6 @@ describe("swapInStagedProfile — refusals", () => {
       if (!inherited) expect(boot(fx.dbPath)).toBe("written after busy refusal");
       else expect(boot(fx.dbPath)).toBe("refused");
     },
-    15_000,
   );
 
   it.each([false, true])(
@@ -574,7 +612,7 @@ describe("swapInStagedProfile — refusals", () => {
     const fx = fixture();
     const writer = openVolliDb(fx.dbPath);
     try {
-      expect(() => swap(fx, "healthy")).toThrow(DatabaseFileBusyError);
+      expect(() => swap(fx, "healthy", undefined, 0)).toThrow(DatabaseFileBusyError);
       setProbe(writer, "written after the refusal");
     } finally {
       writer.close();
@@ -582,7 +620,7 @@ describe("swapInStagedProfile — refusals", () => {
     expect(existsSync(recoveryPendingPath(fx.dbPath))).toBe(false);
     expect(existsSync(join(fx.root, ".aside"))).toBe(false);
     expect(boot(fx.dbPath)).toBe("written after the refusal");
-  }, 15_000);
+  });
 
   it("never starts a healthy swap over an interrupted one", () => {
     const fx = fixture();
