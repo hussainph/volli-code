@@ -13,9 +13,9 @@ after main merges. `--tier boot` is a compatibility alias for `--tier core`.
 | Journey | Core probes (`-smoke.mjs` omitted) |
 |---|---|
 | Boot, board, persistence | board |
-| Session/composer transport | composer-basics, session-rpc-transport |
+| Session/composer transport | composer-basics (includes Session RPC exposure/refusals) |
 | Terminal and worktree | terminal, worktree |
-| Agent socket and real CLI | agent-socket, agent-cli-roundtrip |
+| Agent socket and real CLI | agent-cli-roundtrip (includes private socket/raw NDJSON/shim) |
 | Degraded database, restore and relaunch | database-recovery |
 | Tokens, appearance, inheritance and persistence | canvas-theming |
 
@@ -38,6 +38,48 @@ The runner's `SERIAL` set runs one probe at a time after its lane's concurrent
 work drains.
 Do not quarantine a sole core journey based on historical flakes or weaken
 graceful-exit assertions.
+
+## Consolidated journeys
+
+Standalone probes share a boot only when their original assertion doors and
+fixture boundaries remain explicit:
+
+| Retained journey | Assertions carried from the former standalone probe |
+|---|---|
+| agent-installer | background-install: live CLI status/profile-local executable link, independent skipped-install profile; three installed-profile generations plus the skipped profile |
+| agent-cli-roundtrip | agent-socket: actual socket type/mode, raw NDJSON identity, executable generated launcher, before authority grants |
+| automations-page | automations: CRUD readbacks, invalid-create no-write, exact Run refusal/no Run or Session; automations-rail: genuinely empty rail before creation, geometry, offers/arming, inspection/native Settings recovery, context menus |
+| changeset-diff-tabs | changeset-navigators: referenced context/worktree hierarchy, refresh focus retention, Changes/Files/rail screenshot evidence |
+| project-files | quick-open: real shortcuts, ranking, preview/pin, Main/worktree index isolation and Ticket destination, without changing the existing two-boot File-tab restore checkpoint |
+| done-flow | retention: separate branch-only discovery, Keep, real archive/branch survival, independent dirty refusal; not merely cleanup of the published ticket |
+| composer-basics | session-rpc-transport: installed bridge shape, real router validation and withheld-procedure refusal before project seeding |
+
+The real-node-pty supervisor test in
+`packages/host-core/src/pty/manager.pty.test.ts` covers two finite high-output
+rounds, consuming acknowledgments and a subsequent command. The retained
+terminal journey still checks actual renderer output, scrollback and shell
+continuity. Neither is a replacement memory benchmark.
+
+### Deliberately retired coverage
+
+The following standalone workloads are not part of smoke acceptance:
+
+- **memory:** per-process RSS/heap snapshots, idle/residency comparisons, the
+  exact eight-Claude workload and two 16 MB output dumps. These recorded no
+  memory budget or plateau oracle. Finite-output stream correctness is retained
+  in the real-PTY test; hardware memory/performance observations are not.
+- **peek-summary-readability:** real Chromium overflow/last-line reachability,
+  fixed header/footer geometry and viewport containment in both appearances.
+  Component tests retain full text, non-shrinking rows, bounded scrollers and
+  header/footer placement, not a real layout oracle.
+- **automations-picker:** actual Alt/pointer/dnd-kit hit testing, rendered
+  collapsed/expanded targets and empty-column picker interaction. Deterministic
+  picker/model/board-dispatch tests retain selection, Move only, cancellation
+  and empty-column rules; arming retains real countdown/CLI-arrival checks.
+- **composer-draft:** full-app Escape/overlay draft restoration, restored-draft
+  creation/reset and cold-relaunch editor restoration. Draft serialization,
+  latest-revision/consumption and composer-form tests remain; these do not prove
+  SQLite-to-editor restoration across Electron lifetimes.
 
 ## Retry and reports
 

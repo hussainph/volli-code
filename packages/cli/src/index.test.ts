@@ -22,9 +22,9 @@ import {
 import { join } from "node:path";
 import type { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { beforeAll, describe, expect, it } from "vite-plus/test";
+import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 
-const bundlePath = fileURLToPath(new URL("../dist/volli.cjs", import.meta.url));
+let bundlePath: string;
 const readerGatePath = fileURLToPath(
   new URL("./__fixtures__/departed-reader-gate.cjs", import.meta.url),
 );
@@ -195,11 +195,23 @@ function runWithUnwritableStdout(argv: readonly string[]): Promise<BrokenOutputR
 }
 
 describe("volli built entrypoint", () => {
+  let bundleDirectory: string;
   beforeAll(() => {
+    // hostd's suite also builds the CLI. Never clean or execute its shared dist/
+    // while package test tasks run in parallel; this fixture owns its output.
+    bundleDirectory = mkdtempSync(
+      fileURLToPath(new URL("../.entrypoint-bundle-", import.meta.url)),
+    );
+    bundlePath = join(bundleDirectory, "volli.cjs");
     const built = spawnSync(fileURLToPath(new URL("../node_modules/.bin/vp", import.meta.url)), [
       "pack",
+      "--out-dir",
+      bundleDirectory,
     ]);
     expect(built.status, `vp pack failed: ${built.stderr?.toString() ?? ""}`).toBe(0);
+  });
+  afterAll(() => {
+    if (bundleDirectory) rmSync(bundleDirectory, { recursive: true, force: true });
   });
 
   it("embeds source and per-build identity separately from promoted versions", () => {

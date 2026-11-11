@@ -1201,10 +1201,9 @@ export const Board = React.memo(function Board({
               <div
                 ref={canvasRef}
                 {...canvasProps}
-                // Which card is in the air, for the one thing outside this
-                // component that has to know a drag is live: the picker smoke,
-                // which cannot start reading a panel before dnd-kit has
-                // actually activated (`automations-picker-smoke.mjs`).
+                // Which card is in the air. Board smokes and the drop stress
+                // harness wait for actual dnd-kit activation before reading
+                // a panel or pumping updates into a live drag.
                 data-board-drag={drag === null ? undefined : drag.activeTicket.id}
                 // How many cards the board is HOLDING, as against how many its
                 // columns currently mount (VC-316). Published because the two

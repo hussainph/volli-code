@@ -57,11 +57,28 @@ describe("openVolliDb read tuning (VC-355)", () => {
       // The pre-existing steady-state pragmas survive alongside the new ones.
       expect(db.pragma("journal_mode", { simple: true })).toBe("wal");
       expect(db.pragma("foreign_keys", { simple: true })).toBe(1);
+      expect(db.pragma("busy_timeout", { simple: true })).toBe(5000);
       expect(db.pragma("synchronous", { simple: true })).toBe(1); // NORMAL
     } finally {
       db.close();
     }
   });
+
+  it.each([0, 7])(
+    "accepts an injected %i ms busy timeout on fresh and existing opens",
+    (busyTimeoutMs) => {
+      dir = mkdtempSync(join(tmpdir(), "volli-db-timeout-"));
+      const path = join(dir, "volli.db");
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const db = openVolliDb(path, { busyTimeoutMs });
+        try {
+          expect(db.pragma("busy_timeout", { simple: true })).toBe(busyTimeoutMs);
+        } finally {
+          db.close();
+        }
+      }
+    },
+  );
 
   it("leaves bounded planner statistics behind after migrations", () => {
     dir = mkdtempSync(join(tmpdir(), "volli-db-tuning-"));

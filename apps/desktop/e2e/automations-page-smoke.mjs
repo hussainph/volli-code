@@ -1,9 +1,10 @@
 /**
  * The Automations page (VC-127), driven through the REAL packed app.
  *
- * The tracer smoke beside this one (`automations-smoke.mjs`) owns the record's
- * CRUD and the Run door. What this one proves is what the PAGE promises, and
- * every claim below is one a unit test cannot make:
+ * One isolated, model-less profile exercises the page, preload record guards,
+ * and ticket rail. The genuinely empty rail runs BEFORE any record is created;
+ * the populated rail fixtures come AFTER the page's exact lane/rank checks.
+ * Every claim below crosses the real app boundary:
  *
  *   1. A dedicated Automations nav control exists, and clicking it lands on
  *      a page — not on a room inside Home.
@@ -29,9 +30,11 @@
  *      reload — the rank is durable, and machine-local like the arming.
  *  12. One Automation holds a different rank in two columns.
  *
- * Every act above goes through the CONTROL a person would use, not the IPC
- * door underneath it. The doors are the tracer smoke's subject; whether the
- * page is wired to them is this one's.
+ * Page and rail acts use the controls a person would use. Separately reported
+ * M6 checks read durable records and probe invalid writes and MODEL_REQUIRED
+ * directly through preload, requiring zero Run/Session rows after refusal.
+ * M5 checks retain real rail geometry, inspection/Run and card context menus.
+ * A live successful Run still needs credentials; none are used here.
  *
  * Needs a display and the built app; it runs on the desktop smoke lane with no
  * registration step (`apps/desktop/scripts/run-smokes.mjs` globs this name).
@@ -46,6 +49,7 @@ import { promisify } from "node:util";
 import {
   assertBuiltRendererLoaded,
   assertProfileIsolated,
+  cardById,
   closeAppBounded,
   createRunner,
   launch,
@@ -129,15 +133,117 @@ try {
     const ticket = await window.api.tickets.create({
       projectId: project.id,
       title: "Probe ticket",
-      status: "todo",
+      status: "doing",
     });
     if (!ticket.ok) return { fail: ticket.error };
     return { projectId: project.id, ticketId: ticket.ticket.id };
   });
-  await must(0, "a project and a ticket exist", async () => ({
+  await must(0, "a project and a ticket in Doing exist", async () => ({
     ok: seeded.fail === undefined,
     detail: seeded.fail ?? `project=${seeded.projectId} ticket=${seeded.ticketId}`,
   }));
+
+  // Tickets seeded straight into SQLite are not a board broadcast, so the
+  // renderer meets them on its next read — the same reload the arming smoke
+  // uses for the same reason.
+  await page.reload();
+  await cardById(page, "PRB-1").first().waitFor({ timeout: 30000 });
+
+  /** Open the Ticket view the way a person does: double-click its card. */
+  async function openTicket() {
+    await cardById(page, "PRB-1").first().dblclick();
+    await page.locator('[data-testid="ticket-rail-automations"]').waitFor({ timeout: 20000 });
+  }
+
+  /** Return the main window to the board after closing any native Settings window. */
+  async function backToBoard() {
+    await page.getByRole("button", { name: "Home", exact: true }).first().click();
+    await cardById(page, "PRB-1").first().waitFor({ timeout: 15000 });
+  }
+
+  const rail = () => page.locator('[data-testid="ticket-rail-automations"]');
+
+  /** The rail's page door, in its header row at every state (VC-257/VC-406). */
+  const pageDoor = () => rail().getByRole("button", { name: "Open Automations", exact: true });
+
+  /** The offer list's rows — one per Automation this Ticket may be made to run. */
+  const offerRows = () => rail().locator('[data-testid="ticket-rail-automation-row"]');
+
+  /**
+   * The one row wearing this column's Armed mark, wherever the lane's rank put
+   * it (VC-132) — the list is not reordered to bring it to the front.
+   */
+  const armedOfferRow = () =>
+    rail().locator('[data-testid="ticket-rail-automation-row"][data-armed="true"]');
+
+  /**
+   * Rows whose Automation has every Trigger switched off. The mark rides on
+   * the ROW itself (VC-406), not on anything inside it.
+   */
+  const switchedOffRows = () =>
+    rail().locator('[data-testid="ticket-rail-automation-row"][data-triggers="off"]');
+
+  /** A row's inspection — the popover both a press and a right-click open. */
+  const inspection = () => page.locator('[data-testid="ticket-rail-automation-inspect"]');
+
+  await must(
+    "M5.1",
+    "with nothing to run, the block is still there and the header's door reaches the page",
+    async () => {
+      await openTicket();
+      const heading = rail().getByRole("heading", { name: "Automations", exact: true });
+      await heading.waitFor({ timeout: 15000 });
+      const said = await rail().innerText();
+      // VC-406 retired the rail's Run once; the block ends at its rows.
+      const runOnce = await rail().locator('[data-testid="ticket-rail-run-once"]').count();
+      const emptyReport = rail().getByText("No automations", { exact: true });
+      const door = pageDoor();
+      const [headingBox, doorBox] = await Promise.all([heading.boundingBox(), door.boundingBox()]);
+      const reportMetrics = await emptyReport.evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        return {
+          height: box.height,
+          lineHeight: Number.parseFloat(getComputedStyle(element).lineHeight),
+        };
+      });
+      const doorSharesHeadingRow =
+        headingBox !== null &&
+        doorBox !== null &&
+        Math.abs(headingBox.y + headingBox.height / 2 - (doorBox.y + doorBox.height / 2)) <= 1;
+      const reportIsOneLine = reportMetrics.height <= reportMetrics.lineHeight + 1;
+      // The report is never a second door under the heading (VC-257).
+      const strayLinks = await rail()
+        .getByRole("button", { name: "Automations", exact: true })
+        .count();
+      // The moved door still reaches the page the rail does not author (VC-112).
+      await door.click();
+      await page
+        .getByRole("heading", { name: "Automations", exact: true })
+        .waitFor({ timeout: 15000 });
+      await backToBoard();
+      return {
+        ok:
+          said.includes("No automations") &&
+          runOnce === 0 &&
+          strayLinks === 0 &&
+          doorSharesHeadingRow &&
+          reportIsOneLine,
+        detail: `${said.replaceAll("\n", " ").slice(0, 160)} · heading row: ${doorSharesHeadingRow} · one-line report: ${reportIsOneLine} · stray "Automations" links: ${strayLinks} · run once controls: ${runOnce}`,
+      };
+    },
+  );
+
+  let ownRecord;
+  let globalRecord;
+
+  /** Exact durable records, not only their rendered names. */
+  async function listedRecords() {
+    return page.evaluate(async (projectId) => {
+      const listed = await window.api.automations.list({ projectId });
+      if (!listed.ok) throw new Error(listed.error);
+      return listed.automations;
+    }, seeded.projectId);
+  }
 
   /** Every Automation this project lists, by name, straight from the record. */
   async function listedNames() {
@@ -190,7 +296,7 @@ try {
           .getAttribute("aria-selected")) === "true" &&
         body.includes("Project default");
       if (ok) {
-        await form.getByRole("textbox", { name: "Name", exact: true }).fill("Review sweep");
+        await form.getByRole("textbox", { name: "Name", exact: true }).fill("  Review sweep  ");
         await instructions.fill("Review the change set");
         // The default was None. Offer Doing explicitly so the later machine-local
         // arming test acts on a trigger that can actually fire.
@@ -204,6 +310,68 @@ try {
       return {
         ok,
         detail: `empty=${opensEmpty} placeholder=${JSON.stringify(placeholder)} ${body.replaceAll("\n", " ").slice(0, 200)}`,
+      };
+    },
+  );
+
+  await must(
+    "M6.1",
+    "UI create persists a trimmed name, UUID, project and inherited runtime",
+    async () => {
+      const records = await listedRecords();
+      ownRecord = records.find((record) => record.name === "Review sweep");
+      return {
+        ok:
+          records.length === 1 &&
+          ownRecord?.projectId === seeded.projectId &&
+          ownRecord.runtime === null &&
+          ownRecord.instructions === "Review the change set" &&
+          ownRecord.trigger.kind === "columns" &&
+          JSON.stringify(ownRecord.trigger.columns) === JSON.stringify(["doing"]) &&
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(ownRecord.id),
+        detail: JSON.stringify(records),
+      };
+    },
+  );
+
+  await attempt(
+    "M6.2",
+    "blank names and unavailable pins are refused without inserting rows",
+    async () => {
+      const refusals = await page.evaluate(async (projectId) => {
+        const before = await window.api.automations.list({ projectId });
+        const blank = await window.api.automations.create({
+          commandId: crypto.randomUUID(),
+          projectId,
+          name: "   ",
+          instructions: "x",
+          trigger: { kind: "none" },
+          runtime: null,
+        });
+        const pin = await window.api.automations.create({
+          commandId: crypto.randomUUID(),
+          projectId,
+          name: "Pinned",
+          instructions: "x",
+          trigger: { kind: "none" },
+          runtime: { providerId: "nope", modelId: "ghost", reasoningLevel: "high" },
+        });
+        const after = await window.api.automations.list({ projectId });
+        return {
+          blank: blank.ok ? "ACCEPTED" : blank.error,
+          pin: pin.ok ? "ACCEPTED" : pin.error,
+          before: before.ok ? before.automations.map((record) => record.id) : null,
+          after: after.ok ? after.automations.map((record) => record.id) : null,
+        };
+      }, seeded.projectId);
+      return {
+        ok:
+          /Name/.test(refusals.blank) &&
+          /not currently available/.test(refusals.pin) &&
+          refusals.before?.length === 1 &&
+          refusals.after?.length === refusals.before.length &&
+          JSON.stringify(refusals.before) === JSON.stringify(refusals.after),
+        detail: JSON.stringify(refusals),
       };
     },
   );
@@ -240,6 +408,26 @@ try {
       body.indexOf("review sweep") < body.indexOf("nightly sweep");
     return { ok, detail: ok ? "both listed, own first" : body.slice(0, 400) };
   });
+
+  await must(
+    "M6.3",
+    "the durable list puts the project's record before the global record",
+    async () => {
+      const records = await listedRecords();
+      globalRecord = records.find((record) => record.name === "Nightly sweep");
+      return {
+        ok:
+          records.length === 2 &&
+          records[0].id === ownRecord.id &&
+          records[1].id === globalRecord?.id &&
+          globalRecord?.projectId === null &&
+          globalRecord.runtime === null &&
+          globalRecord.instructions === "Run the nightly sweep" &&
+          globalRecord.trigger.kind === "none",
+        detail: JSON.stringify(records),
+      };
+    },
+  );
 
   await attempt(
     4,
@@ -306,8 +494,11 @@ try {
         () => settingsPageOf(app),
         { timeout: 20000 },
       );
-      await assertSettingsWindow(app, page, settings);
-      await closeSettingsWindow(app, settings);
+      try {
+        await assertSettingsWindow(app, page, settings);
+      } finally {
+        await closeSettingsWindow(app, settings);
+      }
       await chooser.waitFor({ state: "hidden", timeout: 10000 });
       await page
         .locator('[data-slot="automation-editor"]')
@@ -317,6 +508,41 @@ try {
         .getByRole("heading", { name: "Automations", exact: true })
         .waitFor({ timeout: 15000 });
       return { ok: true, detail: "ran from the row, refused for the missing model" };
+    },
+  );
+
+  await attempt(
+    "M6.5",
+    "a direct Run returns MODEL_REQUIRED/shared guidance and leaves no Run or Session",
+    async () => {
+      const outcome = await page.evaluate(
+        async ({ automationId, ticketId }) => {
+          const runResult = await window.api.automations.run({
+            commandId: crypto.randomUUID(),
+            target: { kind: "automation", automationId },
+            ticketId,
+            modelOverride: null,
+          });
+          const runs = await window.api.automations.runsForTicket({ ticketId });
+          const sessions = await window.api.sessions.listForTicket({ ticketId });
+          return {
+            refusal: runResult.ok
+              ? { started: true }
+              : { code: runResult.code, error: runResult.error },
+            runRows: runs.ok ? runs.runs.length : -1,
+            sessionRows: sessions.ok ? sessions.sessions.length : -1,
+          };
+        },
+        { automationId: ownRecord.id, ticketId: seeded.ticketId },
+      );
+      return {
+        ok:
+          outcome.refusal.code === "MODEL_REQUIRED" &&
+          /Choose a default model/.test(outcome.refusal.error ?? "") &&
+          outcome.runRows === 0 &&
+          outcome.sessionRows === 0,
+        detail: JSON.stringify(outcome),
+      };
     },
   );
 
@@ -366,33 +592,55 @@ try {
     },
   );
 
-  await attempt(7, "the row opens the one authoring form, and an edit sticks", async () => {
-    const reviewId = await listedId("Review sweep");
-    await page
-      .locator('[data-slot="automation-editor"]')
-      .getByRole("button", { name: "All automations", exact: true })
-      .click();
-    await page.locator(`[data-automation-rail-row="${reviewId}"]`).click();
-    const form = page.locator('[data-slot="automation-editor"]');
-    await form
-      .getByRole("heading", { name: "Review sweep", exact: true })
-      .getByRole("button")
-      .click();
-    const name = form.getByRole("textbox", { name: "Name", exact: true });
-    await name.fill("Review sweep v2");
-    await form.getByRole("button", { name: "Save name", exact: true }).click();
-    // `.first()`: the lanes above the list draw the same names, so a rename is
-    // on screen twice — in its lane and in its row.
-    await form
-      .getByRole("heading", { name: "Review sweep v2", exact: true })
-      .waitFor({ timeout: 10000 });
-    const names = await listedNames();
-    return { ok: names.includes("Review sweep v2"), detail: names.join(" | ") };
-  });
+  await attempt(
+    "7/M6.4",
+    "the row's inline-name and instructions edits persist exact fields",
+    async () => {
+      const reviewId = await listedId("Review sweep");
+      await page
+        .locator('[data-slot="automation-editor"]')
+        .getByRole("button", { name: "All automations", exact: true })
+        .click();
+      await page.locator(`[data-automation-rail-row="${reviewId}"]`).click();
+      const form = page.locator('[data-slot="automation-editor"]');
+      await form
+        .getByRole("heading", { name: "Review sweep", exact: true })
+        .getByRole("button")
+        .click();
+      const name = form.getByRole("textbox", { name: "Name", exact: true });
+      await name.fill("Review sweep v2");
+      await form.getByRole("button", { name: "Save name", exact: true }).click();
+      // `.first()`: the lanes above the list draw the same names, so a rename is
+      // on screen twice — in its lane and in its row.
+      await form
+        .getByRole("heading", { name: "Review sweep v2", exact: true })
+        .waitFor({ timeout: 10000 });
+      // Save another editable field as well as the inline name: the original
+      // bridge tracer rewrote Instructions, and a name-only oracle is weaker.
+      await form.getByRole("button", { name: "Edit instructions", exact: true }).click();
+      await form.getByRole("textbox", { name: "Instructions", exact: true }).fill("/review again");
+      await form.getByRole("button", { name: "Save instructions", exact: true }).click();
+      await form
+        .getByRole("region", { name: "Instructions", exact: true })
+        .getByText("/review again", { exact: true })
+        .waitFor();
+      const records = await listedRecords();
+      const updated = records.find((record) => record.id === ownRecord.id);
+      return {
+        ok:
+          updated?.name === "Review sweep v2" &&
+          updated.instructions === "/review again" &&
+          updated.projectId === seeded.projectId &&
+          updated.runtime === null &&
+          JSON.stringify(updated.trigger) === JSON.stringify(ownRecord.trigger),
+        detail: JSON.stringify(updated),
+      };
+    },
+  );
 
   await attempt(8, "the Run-history door answers for this project and guards the id", async () => {
     // A Run needs a live model and spends tokens, so this probe stops at the
-    // door \u2014 the same line `automations-smoke.mjs` draws. What the door OWES
+    // door. What the door OWES
     // (project scoping through the Run's own Session, newest-first order, the
     // resolved model, and a door that survives its Ticket) is pinned in
     // `automations-repo.test.ts` and the page test.
@@ -413,8 +661,8 @@ try {
   });
 
   await attempt(
-    9,
-    "Delete asks once, then removes the record \u2014 there is no archive",
+    "9/M6.6",
+    "Delete asks once, removes only the own record, and preserves the global record",
     async () => {
       await page
         .locator('[data-slot="automation-editor"]')
@@ -424,10 +672,22 @@ try {
       const confirm = page.getByRole("alertdialog");
       await confirm.getByText("Delete \u201cReview sweep v2\u201d?").waitFor({ timeout: 10000 });
       await confirm.getByRole("button", { name: "Delete" }).click();
-      const names = await listedNames();
+      await waitUntil(
+        "the deleted record to leave the durable list",
+        async () => !(await listedRecords()).some((record) => record.id === ownRecord.id),
+      );
+      const records = await listedRecords();
+      const survivingGlobal = records.find((record) => record.id === globalRecord.id);
       return {
-        ok: !names.includes("Review sweep v2") && names.includes("Nightly sweep"),
-        detail: names.join(" | "),
+        ok:
+          !records.some((record) => record.id === ownRecord.id) &&
+          records.length === 2 &&
+          records.some((record) => record.name === "Review sweep (copy)") &&
+          survivingGlobal?.name === "Nightly sweep" &&
+          survivingGlobal.projectId === null &&
+          survivingGlobal.instructions === globalRecord.instructions &&
+          survivingGlobal.runtime === null,
+        detail: JSON.stringify(records),
       };
     },
   );
@@ -611,6 +871,341 @@ try {
       detail: `doing=${inDoing} needs_review=${inReview} doingOrder=${JSON.stringify(doing.map((row) => row.digit + row.name))}`,
     };
   });
+
+  /* ------------------------ populated ticket rail (M5, after lane ranks) ---- */
+
+  await must(
+    "M5.prepare",
+    "all page fixtures are removed before the three-offer rail phase",
+    async () => {
+      const outcome = await page.evaluate(async (projectId) => {
+        // Manual records are offered as Any column too. After all page and
+        // surviving-global proofs, retire every fixture in this private
+        // profile, not just the three records used by the rank tests.
+        const before = await window.api.automations.list({ projectId });
+        if (!before.ok) throw new Error(`list before rail isolation: ${before.error}`);
+        const disarmed = await window.api.automations.arm({
+          commandId: crypto.randomUUID(),
+          projectId,
+          status: "doing",
+          automationId: null,
+        });
+        const deleted = [];
+        for (const { id: automationId } of before.automations) {
+          const off = await window.api.automations.setEnabled({
+            commandId: crypto.randomUUID(),
+            automationId,
+            enabled: false,
+          });
+          const removed = await window.api.automations.delete({
+            commandId: crypto.randomUUID(),
+            automationId,
+          });
+          deleted.push({ automationId, off: off.ok, removed: removed.ok });
+        }
+        const listed = await window.api.automations.list({ projectId });
+        const armings = await window.api.automations.armings({ projectId });
+        const enabled = await window.api.automations.enablement();
+        return {
+          disarmed: disarmed.ok,
+          deleted,
+          records: listed.ok ? listed.automations : null,
+          armings: armings.ok ? armings.armings : null,
+          enabledIds: enabled.ok ? enabled.enabledAutomationIds : null,
+        };
+      }, seeded.projectId);
+      await backToBoard();
+      return {
+        ok:
+          outcome.disarmed &&
+          outcome.deleted.every((record) => record.off && record.removed) &&
+          outcome.records?.length === 0 &&
+          outcome.armings?.every((arm) => arm.automationId === null) &&
+          outcome.enabledIds?.length === 0,
+        detail: JSON.stringify(outcome),
+      };
+    },
+  );
+
+  const created = await page.evaluate(async (projectId) => {
+    const armed = await window.api.automations.create({
+      commandId: crypto.randomUUID(),
+      projectId,
+      name: "Review sweep",
+      instructions: "/review the change set",
+      trigger: { kind: "columns", columns: ["doing"] },
+      runtime: null,
+    });
+    const offered = await window.api.automations.create({
+      commandId: crypto.randomUUID(),
+      projectId,
+      name: "Nightly sweep",
+      instructions: "/tdd",
+      trigger: { kind: "columns", columns: ["doing"] },
+      runtime: null,
+    });
+    const elsewhere = await window.api.automations.create({
+      commandId: crypto.randomUUID(),
+      projectId,
+      name: "Done sweep",
+      instructions: "/ship",
+      trigger: { kind: "columns", columns: ["done"] },
+      runtime: null,
+    });
+    if (!armed.ok || !offered.ok || !elsewhere.ok) {
+      return { fail: armed.ok ? (offered.ok ? elsewhere.error : offered.error) : armed.error };
+    }
+    const arm = await window.api.automations.arm({
+      commandId: crypto.randomUUID(),
+      projectId,
+      status: "doing",
+      automationId: armed.automation.id,
+    });
+    if (!arm.ok) return { fail: arm.error };
+    const listed = await window.api.automations.list({ projectId });
+    const armings = await window.api.automations.armings({ projectId });
+    const enabled = await window.api.automations.enablement();
+    return {
+      armedId: armed.automation.id,
+      offeredId: offered.automation.id,
+      elsewhereId: elsewhere.automation.id,
+      offered: listed.ok
+        ? listed.automations.filter((record) => record.trigger.kind === "columns")
+        : null,
+      armings: armings.ok ? armings.armings : null,
+      enabledIds: enabled.ok ? enabled.enabledAutomationIds : null,
+    };
+  }, seeded.projectId);
+  try {
+    await must(
+      "M5.2",
+      "three exact rail offers persist, Doing armed and all automatic triggers off",
+      async () => {
+        const ids = [created.armedId, created.offeredId, created.elsewhereId];
+        const columns = new Map(
+          created.offered?.map((record) => [record.id, record.trigger.columns]),
+        );
+        return {
+          ok:
+            created.fail === undefined &&
+            created.offered?.length === 3 &&
+            ids.every((id) => created.offered.some((record) => record.id === id)) &&
+            JSON.stringify(columns.get(created.armedId)) === JSON.stringify(["doing"]) &&
+            JSON.stringify(columns.get(created.offeredId)) === JSON.stringify(["doing"]) &&
+            JSON.stringify(columns.get(created.elsewhereId)) === JSON.stringify(["done"]) &&
+            created.armings?.some(
+              (arm) => arm.status === "doing" && arm.automationId === created.armedId,
+            ) &&
+            created.enabledIds !== null &&
+            ids.every((id) => !created.enabledIds.includes(id)),
+          detail: JSON.stringify(created),
+        };
+      },
+    );
+
+    await must("M5.3", "the offer list marks this column's Armed automation in place", async () => {
+      await openTicket();
+      await offerRows().first().waitFor({ timeout: 15000 });
+      // Marked WHERE IT SITS, not floated: the list keeps the lane's rank
+      // (VC-132, pinned in `ticket-rail-automations-model.test.ts`), so this
+      // asks which row wears the mark rather than what the first row is. The
+      // row is the Inspect affordance now (VC-406) — the press that RUNS is its
+      // own control inside the row, which check 4 takes.
+      const markedRows = armedOfferRow();
+      const markedCount = await markedRows.count();
+      const label = markedCount > 0 ? await markedRows.first().getAttribute("aria-label") : null;
+      // The door is in the header at EVERY state now (VC-406) — it used to be
+      // the empty state's consolation prize, which left the one reader who could
+      // not reach the page from here as the one with lanes to arrange.
+      const pageDoors = await pageDoor().count();
+      const authoringControls = await rail().getByRole("textbox").count();
+      return {
+        ok:
+          label === "Inspect Review sweep" &&
+          markedCount === 1 &&
+          pageDoors === 1 &&
+          authoringControls === 0,
+        detail: `marked=${label} markedCount=${markedCount} pageDoors=${pageDoors} authoringControls=${authoringControls}`,
+      };
+    });
+
+    await attempt("M5.4", "the list draws every column's Offered work as a row", async () => {
+      const items = await rail().locator('[data-testid="ticket-rail-automation-list"]').innerText();
+      const rowCount = await offerRows().count();
+      const offRows = await switchedOffRows().count();
+      const offTitle =
+        offRows === 0 ? "" : ((await switchedOffRows().first().getAttribute("title")) ?? "");
+      return {
+        ok:
+          items.includes("Review sweep") &&
+          items.includes("Nightly sweep") &&
+          // Cross-column hand-runs remain available without moving this Ticket;
+          // each row names the column where it is normally offered.
+          items.includes("Done sweep") &&
+          items.includes("Armed") &&
+          items.indexOf("Armed") < items.indexOf("Done") &&
+          // Nobody switched anything on here, and a switched-off Automation is
+          // still offered — the note left the face for the bolt and the title
+          // (VC-406), so the words are NOT in the list's text any more.
+          !items.includes("Manual only") &&
+          rowCount === 3 &&
+          offRows === 3 &&
+          offTitle.includes("Manual only"),
+        detail: `${items.replaceAll("\n", " | ").slice(0, 200)} · rows: ${rowCount} · off rows: ${offRows} · title: ${offTitle}`,
+      };
+    });
+
+    await attempt("M5.5", "the Armed row's inspection reaches the Run door", async () => {
+      // Two acts now, not one (VC-406): the ROW opens the record, and the Run
+      // inside it is its own labelled press. No default model on this profile,
+      // so the Run's own refusal opens Model Access — which is the evidence the
+      // press reached the door.
+      await armedOfferRow().first().click();
+      await inspection().waitFor({ timeout: 15000 });
+      await page.getByTestId("ticket-rail-automation-run").click();
+      // The missing-model refusal opens Model Access in the native Settings
+      // window; the press itself is the evidence, so never click Settings again.
+      const settings = await waitUntil(
+        "the native Settings window for Model Access",
+        () => settingsPageOf(app),
+        { timeout: 20000 },
+      );
+      try {
+        await assertSettingsWindow(app, page, settings);
+      } finally {
+        await closeSettingsWindow(app, settings);
+      }
+      await backToBoard();
+      return { ok: true, detail: "ran the armed Automation, refused for the missing model" };
+    });
+
+    await attempt(
+      "M5.6",
+      "the rail draws no Runs list of its own; the Ticket's door still answers",
+      async () => {
+        // Runs are Sessions, and since VC-406 the rail lists them once — in the
+        // Sessions roster, wearing the bolt — never under the Automations block.
+        // So the block draws no run list in ANY state, and this guards that the
+        // list does not quietly come back. The `runsForTicket` door itself is
+        // still read here: a Run needs a live model and spends tokens, so nothing
+        // has run on this Ticket and the door has to say so.
+        await openTicket();
+        const drawn = await rail().locator('[data-testid="ticket-rail-runs"]').count();
+        const outcome = await page.evaluate(async (ticketId) => {
+          const mine = await window.api.automations.runsForTicket({ ticketId });
+          const sessions = await window.api.sessions.listForTicket({ ticketId });
+          return {
+            runs: mine.ok ? mine.runs.length : -1,
+            sessions: sessions.ok ? sessions.sessions.length : -1,
+          };
+        }, seeded.ticketId);
+        return {
+          ok: drawn === 0 && outcome.runs === 0 && outcome.sessions === 0,
+          detail: `lists=${drawn} ${JSON.stringify(outcome)}`,
+        };
+      },
+    );
+
+    await attempt("M5.7", "right-clicking a row opens that row's own inspection", async () => {
+      // The second deliberate surface VC-112 names beside the rail itself, and
+      // since VC-406 it is PER ROW. It is deliberately NOT a second menu: the
+      // right-click opens the SAME inspection the press does, because a
+      // right-click that offered different controls would be a second answer to
+      // what this row can be made to do. Check 6 left the Ticket open.
+      await armedOfferRow().first().click({ button: "right" });
+      await inspection().waitFor({ timeout: 10000 });
+      const items = await inspection().innerText();
+      await page.keyboard.press("Escape");
+      await backToBoard();
+      return {
+        // The inspection is about THAT row: it runs the Automation it was opened
+        // on, and offers no sibling's name to run by mistake.
+        ok: items.includes("Review sweep") && !items.includes("Done sweep"),
+        detail: items.replaceAll("\n", " | ").slice(0, 240),
+      };
+    });
+
+    await attempt("M5.8", "the board card runs one without opening the Ticket", async () => {
+      await cardById(page, "PRB-1").first().click({ button: "right" });
+      const menu = page.getByRole("menu").first();
+      await menu.waitFor({ timeout: 10000 });
+      await menu.getByRole("menuitem", { name: "Automations" }).hover();
+      const submenu = page.getByRole("menu").nth(1);
+      await submenu.waitFor({ timeout: 10000 });
+      const items = await submenu.innerText();
+      // Group labels read as their parts — the column, then the mark naming this
+      // Ticket's own — case-folded: how the label lays out and cases those parts
+      // is presentation, while the order is the claim.
+      const headings = await submenu
+        .locator('[data-slot="context-menu-label"]')
+        .evaluateAll((labels) =>
+          labels.map((label) =>
+            [...label.childNodes]
+              .map((part) => part.textContent?.trim() ?? "")
+              .filter(Boolean)
+              .join(" · ")
+              .toLowerCase(),
+          ),
+        );
+      await page.keyboard.press("Escape");
+      await page.keyboard.press("Escape");
+      const ownColumn = headings.indexOf("doing · this ticket");
+      const doneColumn = headings.indexOf("done");
+      return {
+        ok:
+          items.includes("Review sweep") &&
+          items.includes("Nightly sweep") &&
+          items.includes("Done sweep") &&
+          ownColumn >= 0 &&
+          ownColumn < doneColumn &&
+          // A card has nowhere to type an Unbound Run, so it offers none.
+          !items.includes("Run once"),
+        detail: `headings=${JSON.stringify(headings)} ${items.replaceAll("\n", " | ").slice(0, 200)}`,
+      };
+    });
+  } finally {
+    await attempt("M5.cleanup", "the rail fixtures finish disarmed and disabled", async () => {
+      const outcome = await page.evaluate(
+        async ({ projectId, ids }) => {
+          const disarmed = await window.api.automations.arm({
+            commandId: crypto.randomUUID(),
+            projectId,
+            status: "doing",
+            automationId: null,
+          });
+          const off = [];
+          for (const automationId of ids) {
+            const result = await window.api.automations.setEnabled({
+              commandId: crypto.randomUUID(),
+              automationId,
+              enabled: false,
+            });
+            off.push(result.ok);
+          }
+          const armings = await window.api.automations.armings({ projectId });
+          const enabled = await window.api.automations.enablement();
+          return {
+            disarmed: disarmed.ok,
+            off,
+            armings: armings.ok ? armings.armings : null,
+            enabledIds: enabled.ok ? enabled.enabledAutomationIds : null,
+          };
+        },
+        {
+          projectId: seeded.projectId,
+          ids: [created.armedId, created.offeredId, created.elsewhereId].filter(Boolean),
+        },
+      );
+      return {
+        ok:
+          outcome.disarmed &&
+          outcome.off.every(Boolean) &&
+          outcome.armings?.every((arm) => arm.automationId === null) &&
+          outcome.enabledIds?.length === 0,
+        detail: JSON.stringify(outcome),
+      };
+    });
+  }
 
   exitCode = summarize();
 } finally {

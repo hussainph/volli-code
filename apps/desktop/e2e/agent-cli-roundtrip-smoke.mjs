@@ -2,7 +2,8 @@
  * E2e probe: real CLI against the running app.
  *
  * Drives the ACTUAL generated `volli` shim (Electron-as-node over the built CLI
- * bundle) against a live app's Unix socket.
+ * bundle) against a live app's Unix socket. Before widening policy, it also
+ * checks the private socket, raw NDJSON identity and executable shim contents.
  *
  * This process is NOT a Volli Session — it is a plain shell running as the
  * user, holding no `VOLLI_SESSION_TOKEN`, which since VC-163 is the
@@ -29,11 +30,14 @@
  *
  * MANUALLY-RUN (needs a display + the built app); NOT wired into `vp test`.
  */
+import { constants, promises as fs } from "node:fs";
 import { join } from "node:path";
 
 import {
   grantUnauthenticatedWrites,
+  identifyRequest,
   makeShortScratch,
+  requestOverSocket,
   runVolliShim,
   shimPathFor,
   socketPathFor,
@@ -76,6 +80,70 @@ async function main() {
     await waitUntil(
       "shim + socket to exist",
       async () => (await pathExists(shimPath)) && (await pathExists(socketPath)),
+    );
+
+    // Socket donor contracts stay distinct from the installed-CLI checks:
+    // a raw NDJSON client must work, not just the generated launcher.
+    await attempt("SOCKET1", "volli.sock exists and is a 0600 socket", async () => {
+      const stat = await fs.lstat(socketPath);
+      const isSocket = stat.isSocket();
+      const mode = stat.mode & 0o777;
+      return {
+        ok: isSocket && mode === 0o600,
+        detail: `isSocket=${isSocket} mode=0${mode.toString(8)}`,
+      };
+    });
+
+    await attempt(
+      "SOCKET2",
+      "raw identify resolves the exact project prefix + v1 app version",
+      async () => {
+        const response = await waitUntil(
+          "raw identify to answer ok",
+          async () => {
+            try {
+              const reply = await requestOverSocket(socketPath, identifyRequest(projectPath));
+              return reply?.ok ? reply : null;
+            } catch {
+              return null;
+            }
+          },
+          { timeout: 15000 },
+        );
+        const ok =
+          response?.v === 1 &&
+          response?.ok === true &&
+          typeof response?.data?.appVersion === "string" &&
+          response.data.appVersion.length > 0 &&
+          response?.data?.project?.prefix === PREFIX;
+        return {
+          ok,
+          detail: `v=${response?.v} ok=${response?.ok} appVersion=${JSON.stringify(response?.data?.appVersion)} project=${JSON.stringify(response?.data?.project?.prefix)}`,
+        };
+      },
+    );
+
+    await attempt(
+      "SOCKET3",
+      "generated executable shim sets ELECTRON_RUN_AS_NODE and execs",
+      async () => {
+        // Inspect and read the same opened file even if its pathname is
+        // replaced between operations. Do not follow a substituted symlink.
+        const shim = await fs.open(shimPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+        try {
+          const stat = await shim.stat();
+          const executable = stat.isFile() && (stat.mode & 0o111) !== 0;
+          const contents = await shim.readFile("utf8");
+          const runAsNode = contents.includes("ELECTRON_RUN_AS_NODE");
+          const exec = contents.includes("exec");
+          return {
+            ok: executable && runAsNode && exec,
+            detail: `executable=${executable} bakesRunAsNode=${runAsNode} exec=${exec}`,
+          };
+        } finally {
+          await shim.close();
+        }
+      },
     );
 
     let displayId = null;

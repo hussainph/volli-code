@@ -47,8 +47,8 @@ test("all Vite+ workflow sites use the shared locked bootstrap after checkout", 
   }
   // Keep an explicit inventory so removing an entire setup step cannot silently
   // pass a loop that checks only the sites it still discovers.
-  assert.equal(sites.length, 22, `bootstrap inventory changed:\n${sites.join("\n")}`);
-  assert.equal(deferredInstalls.length, 3, `deferred installs:\n${deferredInstalls.join("\n")}`);
+  assert.equal(sites.length, 24, `bootstrap inventory changed:\n${sites.join("\n")}`);
+  assert.equal(deferredInstalls.length, 5, `deferred installs:\n${deferredInstalls.join("\n")}`);
 });
 
 test("CodeQL init and analyze share one pin and Dependabot updates them together", () => {
