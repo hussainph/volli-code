@@ -1903,8 +1903,9 @@ function ChatPlaneContent({
   // markdown treatment, but do not animate last-known activity as live work.
   const progressPaused =
     session.sessionError !== null ||
-    projection?.attention.active.some((attention) => attention.kind === "transport_retrying") ===
-      true;
+    projection?.attention.active.some((attention) =>
+      ["transport_retrying", "input_required", "permission_required"].includes(attention.kind),
+    ) === true;
   const transcriptFrames = useStore(
     sessionsStore,
     (state) => state.sessions[sessionId]?.transcript.frames,
@@ -2083,13 +2084,6 @@ function ChatPlaneContent({
   React.useEffect(() => {
     if (turnRunning) setTurnExitKind("done");
   }, [turnRunning]);
-  const turnActivity = useTurnActivity(sessionId, {
-    messages: liveTurn ?? [],
-    working: turnRunning && !progressPaused,
-    turnActive: turnActive && !progressPaused,
-    projection: progressPaused ? null : projection,
-    liveCompaction: progressPaused ? null : liveCompaction,
-  });
   // A turn running in view: its frames are the stream's unless a person's own
   // interaction claims them (VC-1091).
   React.useEffect(() => (turnRunning ? holdInteraction("stream") : undefined), [turnRunning]);
@@ -2098,7 +2092,10 @@ function ChatPlaneContent({
   // removes the old failure surface, even before Attention catches up — all
   // but a row about that turn itself (a restart resume's).
   const blockerPresentation = visibleBlocker(
-    turnRunning && candidateBlocker?.placement === "timeline" && !candidateBlocker.duringTurn
+    turnRunning &&
+      !progressPaused &&
+      candidateBlocker?.placement === "timeline" &&
+      !candidateBlocker.duringTurn
       ? null
       : candidateBlocker,
     dismissedBlockerKey,
@@ -2110,6 +2107,24 @@ function ChatPlaneContent({
   }, [blockerPresentation.dismissedKey, dismissedBlockerKey]);
   const blocker = blockerPresentation.blocker;
   const timelineBlocker = blocker?.placement === "timeline" ? blocker : null;
+  const turnActivity = useTurnActivity(sessionId, {
+    messages: liveTurn ?? [],
+    working: turnRunning && !progressPaused,
+    turnActive: turnActive && !progressPaused,
+    projection,
+    liveCompaction: progressPaused ? null : liveCompaction,
+    // Use the resolved, dismissible blocker, not a second set of recovery rules.
+    // Retrying remains visible even while the last-known live overlay is paused.
+    status:
+      timelineBlocker && !timelineBlocker.duringTurn
+        ? {
+            key: timelineBlocker.dismissKey ?? timelineBlocker.message,
+            label: timelineBlocker.tone === "error" ? "Needs attention" : timelineBlocker.message,
+            ...(timelineBlocker.tone === "error" ? { detail: timelineBlocker.message } : {}),
+          }
+        : null,
+    queue: strip,
+  });
   const pendingMessages = held.filter(
     (message) =>
       message.state === "sending" &&
@@ -2221,7 +2236,9 @@ function ChatPlaneContent({
                               context={turnContext}
                             />
                           ))}
-                        {liveCompaction ? <CompactionProgress compaction={liveCompaction} /> : null}
+                        {liveCompaction ? (
+                          <CompactionProgress compaction={liveCompaction} announce={false} />
+                        ) : null}
                         {turnRunning ? <TurnRunningMark /> : null}
                         {pendingMessages
                           .filter(
@@ -2340,6 +2357,7 @@ function ChatPlaneContent({
               <SecretCards sessionId={sessionId} interactions={interactions} />
               <ComposerInteractionStack
                 interaction={pending}
+                announce={false}
                 resolving={pending ? resolving.has(pending.id) : false}
                 onResolve={answer}
                 // Request withdrawal cancels the durable interaction. The

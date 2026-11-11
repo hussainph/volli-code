@@ -1376,6 +1376,7 @@ function OptionChip({
  */
 export function ComposerInteractionStack({
   interaction,
+  announce = true,
   resolving,
   onResolve,
   onWithdraw,
@@ -1383,6 +1384,8 @@ export function ComposerInteractionStack({
   className,
 }: React.PropsWithChildren<{
   interaction: RendererSessionInteraction | null;
+  /** ChatPlane routes request announcements through the persistent activity island. */
+  announce?: boolean;
   resolving?: boolean;
   onResolve(
     interactionId: string,
@@ -1422,7 +1425,7 @@ export function ComposerInteractionStack({
 
   return (
     <div className={cn("flex flex-col gap-2", className)}>
-      <PendingInteractionAnnouncement interaction={interaction} />
+      {announce ? <PendingInteractionAnnouncement interaction={interaction} /> : null}
       {/* Sync, not `popLayout`. Popping a leaving card out of flow needs a
           projection parent to anchor it to, and the only thing that was ever
           providing one here was the `layout` prop above — without it the popped

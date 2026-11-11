@@ -78,6 +78,16 @@ function input(parts: UIMessage["parts"] = []): TurnActivityInput {
 function selected(part: DynamicToolUIPart) {
   return selectTurnActivity("session", input([part]))!;
 }
+function streaming(part: DynamicToolUIPart, args: unknown): DynamicToolUIPart {
+  return {
+    type: "dynamic-tool",
+    toolName: part.toolName,
+    toolCallId: part.toolCallId,
+    toolMetadata: part.toolMetadata,
+    state: "input-streaming",
+    input: args,
+  };
+}
 
 describe("activity vocabulary", () => {
   it("pins the approved pools rather than adding invented synonyms", () => {
@@ -231,11 +241,11 @@ describe("real tool activity projection", () => {
 });
 
 describe("current activity selection", () => {
-  it("returns null when idle and defaults to idless reasoning before output", () => {
+  it("returns null when idle and never claims reasoning before output", () => {
     expect(selectTurnActivity("s", { ...input(), working: false, turnActive: false })).toBeNull();
     expect(selectTurnActivity("s", input())).toMatchObject({
-      activity: "reason",
-      word: "Mulling",
+      activity: "busy",
+      word: "On it",
       payload: null,
     });
   });
@@ -255,11 +265,11 @@ describe("current activity selection", () => {
       ...state.messages,
       { id: "new-user", role: "user", parts: [{ type: "text", text: "again" }] },
     ];
-    expect(selectTurnActivity("s", state)?.activity).toBe("reason");
+    expect(selectTurnActivity("s", state)?.activity).toBe("busy");
   });
   it("keeps preliminary output live but stops claiming completed and failed tools run", () => {
     expect(selected(tool("read", { path: "a" }, { preliminary: true })).activity).toBe("read");
-    expect(selected(tool("read", { path: "a" }, { done: true })).activity).toBe("reason");
+    expect(selected(tool("read", { path: "a" }, { done: true })).activity).toBe("busy");
     const failed: DynamicToolUIPart = {
       type: "dynamic-tool",
       toolName: "bash",
@@ -268,7 +278,7 @@ describe("current activity selection", () => {
       input: { command: "pnpm test" },
       errorText: "failed",
     };
-    expect(selected(failed).activity).toBe("reason");
+    expect(selected(failed).activity).toBe("busy");
   });
   it("chooses the newest still-running parallel call, not a completed sibling", () => {
     expect(
@@ -287,7 +297,7 @@ describe("current activity selection", () => {
       const live = tool("read", { path: "settled.ts" }, { id: "duplicate" });
       const result = tool("read", { path: "settled.ts" }, { id: "duplicate", done: true });
       const duplicate = resultFirst ? [result, live] : [live, result];
-      expect(selectTurnActivity("s", input(duplicate))?.activity).toBe("reason");
+      expect(selectTurnActivity("s", input(duplicate))?.activity).toBe("busy");
       expect(
         selectTurnActivity(
           "s",
@@ -316,10 +326,64 @@ describe("current activity selection", () => {
       interactions: { active: [{ id: "q", kind: "question" }] },
     };
     expect(selectTurnActivity("s", state)).toMatchObject({
-      activity: "askUser",
+      activity: "status",
+      word: "Waiting for you",
       waiting: true,
       payload: null,
     });
+  });
+  it("prioritizes factual state over questions, queue, compaction and stale work", () => {
+    const state = input([tool("read", { path: "stale.ts" })]);
+    state.queue = [{ id: "follow-up" }];
+    expect(selectTurnActivity("s", state)).toMatchObject({
+      word: "Message queued",
+      priority: true,
+    });
+    state.queue = [{ id: "one" }, { id: "two" }];
+    expect(selectTurnActivity("s", state)?.word).toBe("2 messages queued");
+    state.queue = [...state.queue, { id: "steer", afterCurrentStep: true }];
+    expect(selectTurnActivity("s", state)?.word).toBe("Sends after this step");
+    state.projection = {
+      turnActive: true,
+      interactions: { active: [{ id: "p", kind: "permission" }] },
+    };
+    expect(selectTurnActivity("s", state)).toMatchObject({
+      word: "Waiting for approval",
+      waiting: true,
+    });
+    state.status = { key: "retry", label: "Reconnecting" };
+    state.working = state.turnActive = false;
+    expect(selectTurnActivity("s", state)).toMatchObject({
+      word: "Reconnecting",
+      announcement: "Reconnecting",
+      priority: true,
+    });
+    state.status = { key: "fault", label: "Needs attention", detail: "Run stopped" };
+    expect(selectTurnActivity("s", state)?.announcement).toBe("Needs attention: Run stopped");
+  });
+  it("ignores failed local sends and keeps completed background calls out of turn presence", () => {
+    const state = {
+      ...input([tool("shell_start", { command: "long task" }, { done: true })]),
+      queue: [{ id: "unsent", localUnsent: true as const }],
+    };
+    expect(selectTurnActivity("s", state)?.activity).toBe("busy");
+    state.working = state.turnActive = false;
+    expect(selectTurnActivity("s", state)).toBeNull();
+  });
+  it("announces tool arguments only once they are available, never per streamed character", () => {
+    const read = tool("read", { path: "a" });
+    const announcements = ["a", "ab", "abc"].map(
+      (path) => selected(streaming(read, { path })).announcement,
+    );
+    expect(announcements).toEqual(["Reading", "Reading", "Reading"]);
+    expect(selected({ ...read, input: { path: "abc" } }).announcement).toBe("Reading abc");
+    const command = tool("bash", { command: "git commit" });
+    expect(selected(streaming(command, command.input))).toMatchObject({
+      activity: "run",
+      payload: null,
+      announcement: "Running",
+    });
+    expect(selected(command).word).toBe("Committing");
   });
   it("escalates only command/reasoning without losing the full announcement", () => {
     const run = selected(tool("bash", { command: "long command" }));
@@ -328,7 +392,10 @@ describe("current activity selection", () => {
       announcement: "Running long command",
       key: run.key,
     });
-    const reason = selectTurnActivity("s", input())!;
+    const reason = selectTurnActivity(
+      "s",
+      input([{ type: "reasoning", text: "", state: "streaming" }]),
+    )!;
     expect(escalateTurnActivity(reason).word).toBe("Deep in thought");
     const test = selected(tool("bash", { command: "pnpm test" }));
     expect(escalateTurnActivity(test)).toBe(test);

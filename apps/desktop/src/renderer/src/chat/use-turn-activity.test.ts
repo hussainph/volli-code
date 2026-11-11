@@ -67,17 +67,17 @@ afterEach(async () => {
 });
 
 describe("useTurnActivity", () => {
-  it("opens with Mulling and escalates once after twenty seconds in StrictMode", async () => {
+  it("keeps generic busy grounded and stable regardless of dwell in StrictMode", async () => {
     await render();
-    expect(value).toMatchObject({ word: "Mulling", payload: null, announcement: "Reasoning" });
+    expect(value).toMatchObject({ word: "On it", payload: null, announcement: "Working" });
     await advance(19_999);
-    expect(value?.word).toBe("Mulling");
+    expect(value?.word).toBe("On it");
     await advance(1);
-    expect(value?.word).toBe("Deep in thought");
+    expect(value?.word).toBe("On it");
     const key = value?.key;
     await render();
     await advance(20_000);
-    expect(value).toMatchObject({ key, word: "Deep in thought", announcement: "Reasoning" });
+    expect(value).toMatchObject({ key, word: "On it", announcement: "Working" });
   });
   it("does not cycle words or restart a command's clock on streaming input updates", async () => {
     state.messages = [command()];
@@ -100,11 +100,11 @@ describe("useTurnActivity", () => {
     await advance(19_000);
     state.messages = [command("long-command", true)];
     await render();
-    expect(value?.word).toBe("Mulling");
+    expect(value?.word).toBe("On it");
     await advance(1_000);
-    expect(value?.word).toBe("Mulling");
+    expect(value?.word).toBe("On it");
     await advance(19_000);
-    expect(value?.word).toBe("Deep in thought");
+    expect(value?.word).toBe("On it");
   });
   it("never escalates tests, builds, replies or user waits", async () => {
     for (const message of [
@@ -128,7 +128,7 @@ describe("useTurnActivity", () => {
     };
     await render();
     await advance(25_000);
-    expect(value).toMatchObject({ activity: "askUser", word: "Asking", waiting: true });
+    expect(value).toMatchObject({ activity: "status", word: "Waiting for you", waiting: true });
   });
   it("cancels on idle/paused inputs and does not leak an expired timer into another Session", async () => {
     await render();
@@ -141,11 +141,18 @@ describe("useTurnActivity", () => {
     sessionId = "another-session";
     state = { ...state, working: true };
     await render();
-    expect(value?.word).toBe("Mulling");
+    expect(value?.word).toBe("On it");
     await advance(1_000);
-    expect(value?.word).toBe("Mulling");
+    expect(value?.word).toBe("On it");
   });
   it("does not resurrect an old escalation after a wait interrupts reasoning", async () => {
+    state.messages = [
+      {
+        id: "thought",
+        role: "assistant",
+        parts: [{ type: "reasoning", text: "", state: "streaming" }],
+      },
+    ];
     await render();
     await advance(20_000);
     state.projection = {

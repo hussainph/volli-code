@@ -9,11 +9,19 @@ import {
 
 /** Pass the SessionView already read by ChatPlane; no additional store or backend fields. */
 export function useTurnActivity(sessionId: string, input: TurnActivityInput): TurnActivity | null {
-  const { messages, working, turnActive, projection, liveCompaction } = input;
+  const { messages, working, turnActive, projection, liveCompaction, status, queue } = input;
   const selected = React.useMemo(
     () =>
-      selectTurnActivity(sessionId, { messages, working, turnActive, projection, liveCompaction }),
-    [sessionId, messages, working, turnActive, projection, liveCompaction],
+      selectTurnActivity(sessionId, {
+        messages,
+        working,
+        turnActive,
+        projection,
+        liveCompaction,
+        status,
+        queue,
+      }),
+    [sessionId, messages, working, turnActive, projection, liveCompaction, status, queue],
   );
   const key = selected?.key;
   const kind = selected?.activity;

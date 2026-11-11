@@ -43,12 +43,16 @@ import { Spinner } from "@renderer/components/ui/spinner";
  */
 export const CompactionProgress = React.memo(function CompactionProgress({
   compaction,
+  announce = true,
 }: {
   compaction: LiveTranscriptCompaction;
+  /** ChatPlane's persistent island region owns live turn announcements. */
+  announce?: boolean;
 }) {
   return (
     <div
-      role="status"
+      role={announce ? "status" : undefined}
+      data-compaction-progress=""
       title={compaction.reason === "manual" ? "Manual compaction" : "Automatic compaction"}
       className="not-prose flex min-w-0 items-center gap-3 rounded-card border border-border bg-(--accent-tint) px-3 py-2 text-ui"
     >

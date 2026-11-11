@@ -4,13 +4,13 @@
 - Ticket chat: open a ticket, then press **New chat** (⌘T) in the `Ticket tabs` strip. This opens a *provisional Draft* tab. No Session row exists until the first Send.
 - Project chat: Home, then **New chat** in the `Home tabs` strip.
 - Shortcut: in the New-ticket dialog, **Create & start** (⇧⌘↵) creates the ticket and starts its chat in one step (new-ticket/composer-launch.ts:25).
-- Send: the `Message` textbox, then ↵ or the **Send** button. Any idle Send goes straight to a transcript bubble + the island's **Mulling** pill, including an existing Session with history and no live executor while reattaching. The verb follows real tool activity; the transcript reserves clearance instead of drawing a “Working” line. While the turn runs, **Stop turn** shows.
+- Send: the `Message` textbox, then ↵ or the **Send** button. Any idle Send goes straight to a transcript bubble + the island's **On it** pill, including an existing Session with history and no live executor while reattaching. Generic busy never claims reasoning; factual waits/recovery/queued messages take priority, and observed activity supplies the verb; the transcript reserves clearance instead of drawing a “Working” line. While the turn runs, **Stop turn** shows.
 - Enter during a running turn remains a queued follow-up (see 03), not an idle Send.
 
 ## How to get to it (user POV)
 1. Board → open card `DRV-1` (see 01). Its ticket tab `DRV-1` comes to the front.
 2. Press **New chat**. A tab (fallback label `Chat`, ticket-chat-tab.ts:19) opens, showing a composer with placeholder `Ask, plan, or implement…`.
-3. Type `hello drive` and press ↵. The user bubble stays in the transcript and **Mulling** shows on the island even while the Session is attaching, with no delivery tab or composer queue strip. Once the turn opens, **Stop turn** shows, then the reply `fake-agent: hello drive`.
+3. Type `hello drive` and press ↵. The user bubble stays in the transcript and **On it** shows on the island even while the Session is attaching, with no delivery tab or composer queue strip. Once the turn opens, **Stop turn** shows, then the reply `fake-agent: hello drive`.
 
 ## Driving it with volli-drive
 PROVEN transcript (vd-1b7e41, VC-703) — a Ticket chat on DRV-5, from the board:
