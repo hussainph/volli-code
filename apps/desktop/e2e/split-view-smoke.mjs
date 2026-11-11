@@ -17,7 +17,8 @@
  *   4. New terminal OPENS into that pane; a file opened from the rail stacks in
  *      front of it in the same pane; the terminal comes back unremounted. The
  *      file dragged from its pane strip up to the top strip leaves the group
- *      and shows full width; clicking the chip restores the group exactly.
+ *      and shows full width; choosing the terminal from the chip's popover
+ *      restores the group exactly.
  *   5. A tab dragged onto a pane's right edge lights that zone and adds a THIRD
  *      pane to the group, focused on the dropped tab.
  *   6. ⇧⌘\ splits the focused pane again (four panes); Close pane on the empty
@@ -26,7 +27,7 @@
  *      collapses.
  *   8. A FILE ROW native HTML5 drag onto a pane's right edge opens the file in a
  *      new pane of the group, retaining its DataTransfer type and zone feedback.
- *   9. The chip's right-click menu lists the whole group and Ungroups it, every
+ *   9. The chip's popover lists the whole group and Ungroups it, every
  *      tab staying open. Left AND right top-strip tab-edge drops group two tabs
  *      in order; closing a tab of a group of two dissolves it, keeping the other.
  *  10. A centre-of-tab drag inside the top strip still reorders (VC-189).
@@ -51,7 +52,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 
 import { createTicketViaBridge } from "./lib/agent-kit.mjs";
-import { selectStripTab } from "./lib/strip-tabs.mjs";
+import { readChipRows, selectStripTab, ungroupChip } from "./lib/strip-tabs.mjs";
 import {
   assertProfileIsolated,
   closeAppBounded,
@@ -177,32 +178,43 @@ async function hasOneTopStrip(page, label = "Ticket tabs") {
   }, label);
 }
 
-/** Every group chip on the top strip: its id, whether it is shown, its segments. */
+const TOP_CHIPS = '[data-slot="split-view-tab-bar"] [data-slot="grouped-tab-chip"]';
+
+/**
+ * Every group chip on the top strip, read from the DOM alone: its id, whether
+ * it is shown, and its one tab — the group's FRONT (VC-1052).
+ */
+function readChips(page) {
+  return page.evaluate(
+    (selector) =>
+      Array.from(document.querySelectorAll(selector)).map((chip) => ({
+        id: chip.getAttribute("data-group-id"),
+        active: chip.getAttribute("data-active") === "true",
+        front: (chip.querySelector('[role="tab"]')?.getAttribute("aria-label") ?? "").trim(),
+      })),
+    TOP_CHIPS,
+  );
+}
+
+/**
+ * {@link readChips}, plus each group's `tabs`: its panes' fronts in pane order
+ * (an empty pane lists nothing) — what the chip's segments used to draw. A chip
+ * draws only one tab now, so this reads its popover's rows (`data-front`),
+ * opened by hover and closed by moving the pointer away, which moves neither
+ * focus nor selection. `rows` is every row, pane by pane.
+ */
 async function readGroups(page) {
-  const chips = page.locator('[data-slot="split-view-tab-bar"] [data-slot="grouped-tab-chip"]');
+  const chips = await readChips(page);
   const groups = [];
-  for (let i = 0; i < (await chips.count()); i++) {
-    const chip = chips.nth(i);
-    const id = await chip.getAttribute("data-group-id");
-    const active = (await chip.getAttribute("data-active")) === "true";
-    // A group is a summary, not hidden member tabs. Read its actual hover
-    // inventory without taking focus from the newly split pane's first row.
-    await chip.hover();
-    const card = page.locator('[aria-label="Tab group items"][data-slot="hover-card-content"]');
-    await card.waitFor({ state: "visible" });
-    const tabs = await card
-      .locator("[data-tab-id]")
-      .evaluateAll((rows) =>
-        rows.map((row) => row.querySelector(".truncate.text-ui")?.textContent?.trim() ?? ""),
-      );
-    groups.push({ id, active, tabs });
-    await page.mouse.move(0, 0);
-    await card.waitFor({ state: "detached" });
+  for (const chip of chips) {
+    const locator = page.locator(`${TOP_CHIPS}[data-group-id="${chip.id}"]`).first();
+    const rows = (await locator.isVisible()) ? await readChipRows(page, locator) : [];
+    groups.push({ ...chip, rows, tabs: rows.filter((row) => row.front).map((row) => row.title) });
   }
   return groups;
 }
 
-/** A tab on the TOP strip — an ordinary tab, or a group chip's segment. */
+/** A tab on the TOP strip — an ordinary tab, or a group chip's front. */
 function topTab(page, label) {
   return page
     .locator('[data-slot="split-view-tab-bar"]')
@@ -211,16 +223,20 @@ function topTab(page, label) {
 }
 
 /**
- * {@link topTab}, including a segment folded into a summarized chip's +n —
- * what {@link selectStripTab} needs to find the tab it will choose from the menu.
+ * Select the top-strip tab `label`: clicked when it is drawn there, otherwise
+ * chosen from the row of whichever group chip's popover lists it.
  */
-function topTabAny(_page, label) {
-  return { label };
+function selectTopTab(page, label) {
+  return selectStripTab(
+    page,
+    { tab: topTab(page, label), label },
+    { strip: page.locator('[data-slot="split-view-tab-bar"]') },
+  );
 }
 
 /**
  * The tab a drag picks up: a grouped tab drags from its pane's strip (a chip
- * segment does not drag), an ordinary one from the top strip.
+ * does not drag), an ordinary one from the top strip.
  */
 async function draggableTab(page, label) {
   const inPane = page
@@ -237,35 +253,12 @@ async function topStripPoint(page) {
   return { x: Math.round(bar.x + bar.width * 0.6), y: Math.round(bar.y + bar.height / 2) };
 }
 
-/** Right-click a group chip and choose a row of its menu. */
-async function chipMenu(page, groupId, item) {
-  await page
-    .locator(`[data-slot="grouped-tab-chip"][data-group-id="${groupId}"]`)
-    .click({ button: "right" });
-  await page.getByRole("menuitem", { name: item, exact: true }).click();
-}
-
-/**
- * The tabs a chip's menu lists, pane by pane, and which is its pane's front.
- * One row per tab (`data-pane`); its accessible name is `"<label>, pane <n>…"`.
- */
-async function readChipMenu(page, groupId) {
-  const chip = page.locator(`[data-slot="grouped-tab-chip"][data-group-id="${groupId}"]`);
-  await chip.hover();
-  await chip.getByRole("button", { name: /^Actions for / }).click();
-  const menu = page.getByRole("menu").filter({ has: page.locator("[data-tab-id]") });
-  try {
-    await menu.waitFor({ state: "visible" });
-    return await menu.locator("[data-tab-id]").evaluateAll((rows) =>
-      rows.map((row) => ({
-        label: row.querySelector(".truncate.text-ui")?.textContent?.trim() ?? "",
-        id: row.getAttribute("data-tab-id"),
-      })),
-    );
-  } finally {
-    await page.keyboard.press("Escape");
-    await menu.waitFor({ state: "detached" });
-  }
+/** Right-click a group chip and choose its popover's Ungroup. */
+function ungroup(page, groupId) {
+  return ungroupChip(
+    page,
+    page.locator(`[data-slot="grouped-tab-chip"][data-group-id="${groupId}"]`).first(),
+  );
 }
 
 async function groupAtTabEdge(page, movingLabel, targetLabel, edge) {
@@ -305,6 +298,7 @@ async function groupAtTabEdge(page, movingLabel, targetLabel, edge) {
   await waitUntil(
     `grouped chip (${movingLabel} → ${edge} edge of ${targetLabel}; preview=${highlighted})`,
     async () =>
+      (await readChips(page)).some((chip) => chip.active) &&
       (await readGroups(page)).some(
         (group) =>
           group.active && group.tabs.includes(movingLabel) && group.tabs.includes(targetLabel),
@@ -409,13 +403,28 @@ async function dragTabTo(page, tabLabel, target, { drop = true } = {}) {
   if (drop) await page.mouse.up();
 }
 
-/** The ticket's TOP strip: ordinary tabs and each group chip's segments. */
+/** The ticket's TOP strip as drawn: ordinary tabs and each group chip's one front. */
 function readSurfaceStrip(page) {
   return page.evaluate(() =>
     Array.from(
       document.querySelectorAll('[role="tablist"][aria-label="Ticket tabs"] [role="tab"]'),
     ).map((tab) => (tab.getAttribute("aria-label") ?? "").trim()),
   );
+}
+
+/**
+ * Every tab the ticket's top strip HOLDS: its ordinary tabs, then each group's
+ * members pane by pane (its popover's rows) — unlike {@link readSurfaceStrip},
+ * the same whichever member a chip happens to front.
+ */
+async function readSurfaceTabs(page) {
+  const ordinary = await page.evaluate(() =>
+    Array.from(document.querySelectorAll('[role="tablist"][aria-label="Ticket tabs"] [role="tab"]'))
+      .filter((tab) => tab.closest('[data-slot="grouped-tab-chip"]') === null)
+      .map((tab) => (tab.getAttribute("aria-label") ?? "").trim()),
+  );
+  const groups = await readGroups(page);
+  return [...ordinary, ...groups.flatMap((group) => group.rows.map((row) => row.title))];
 }
 
 /** The box of one pane cell, as the pointer sees it. */
@@ -479,7 +488,7 @@ async function main() {
           panes[0]?.label === null &&
           !panes[0]?.focused &&
           !panes[0]?.strip &&
-          (await readGroups(page)).length === 0 &&
+          (await readChips(page)).length === 0 &&
           (await hasOneTopStrip(page)),
         detail: JSON.stringify(panes),
       };
@@ -541,20 +550,16 @@ async function main() {
           "the terminal to open into pane 2",
           async () => {
             const seen = await readPanes(page);
+            if (seen.length !== 2 || seen[1]?.empty || seen[1]?.tabs.length !== 1) return null;
             const groups = await readGroups(page);
-            return seen.length === 2 &&
-              !seen[1]?.empty &&
-              seen[1]?.tabs.length === 1 &&
-              groups.length === 1 &&
-              groups[0].active &&
-              groups[0].tabs.length === 2
+            return groups.length === 1 && groups[0].active && groups[0].tabs.length === 2
               ? seen
               : null;
           },
           { timeout: 20_000 },
         );
         const terminal = panes[1].tabs[0];
-        const groupId = (await readGroups(page))[0].id;
+        const groupId = (await readChips(page))[0].id;
         const terminalScreen = page.locator(
           '[data-slot="terminal-viewport-box"]:visible .xterm-screen',
         );
@@ -604,13 +609,14 @@ async function main() {
           "the file to leave the group and fill the plane",
           async () => {
             const seen = await readPanes(page);
+            if (seen.length !== 1 || seen[0].tabs[0] !== SECOND_FILE || seen[0].label !== null) {
+              return null;
+            }
             const groups = await readGroups(page);
-            return seen.length === 1 &&
-              seen[0].tabs[0] === SECOND_FILE &&
-              seen[0].label === null &&
-              groups.length === 1 &&
+            // Not in ANY pane of the group: every member is a popover row.
+            return groups.length === 1 &&
               !groups[0].active &&
-              !groups[0].tabs.includes(SECOND_FILE)
+              !groups[0].rows.some((row) => row.title === SECOND_FILE)
               ? seen
               : null;
           },
@@ -618,10 +624,10 @@ async function main() {
         ).catch(() => null);
         const fullBox = fullWidth === null ? null : await paneBox(page, fullWidth[0].paneId);
 
-        // The chip's terminal segment brings the group back exactly. The chip is
-        // summarized while its group is off screen, so the terminal's pane is
-        // folded into +n and is chosen from the chip's menu, as a person would.
-        await selectStripTab(page, topTabAny(page, terminal));
+        // The terminal brings the group back exactly. While its group is off
+        // screen the chip shows only the first pane's front, so the terminal is
+        // chosen from the chip's popover, as a person would.
+        await selectTopTab(page, terminal);
         await waitUntil(
           "the group, its panes and its focus to return",
           async () => {
@@ -651,7 +657,7 @@ async function main() {
             (await terminalScreen.evaluate(
               (screen) => screen === window.volliSmokeTicketTerminalScreen,
             )) &&
-            (await readGroups(page))[0]?.id === groupId &&
+            (await readChips(page))[0]?.id === groupId &&
             (await hasOneTopStrip(page)),
           detail: `stacked=${JSON.stringify(stacked)} fullWidth=${JSON.stringify(fullWidth)} restored=${restored} same=${sameTerminal}`,
         };
@@ -664,7 +670,7 @@ async function main() {
       "a tab dragged to a pane's right edge lights that zone and adds a third pane",
       async () => {
         const before = await readPanes(page);
-        const groupId = (await readGroups(page))[0]?.id;
+        const groupId = (await readChips(page))[0]?.id;
         const primaryId = before[0].paneId;
         const primary = await paneBox(page, primaryId);
         // Deep into the Body pane's right band, vertically centred.
@@ -714,7 +720,7 @@ async function main() {
       "⇧⌘\\ splits the focused pane again; Close pane on the empty one closes no tab",
       async () => {
         const before = await readPanes(page);
-        const strip = await readSurfaceStrip(page);
+        const strip = await readSurfaceTabs(page);
         await page.keyboard.press("Shift+Meta+\\");
         await waitUntil(
           "focus in the new empty pane",
@@ -751,7 +757,7 @@ async function main() {
             grew &&
             closed !== null &&
             closed.every((pane, i) => pane.paneId === before[i].paneId) &&
-            JSON.stringify(await readSurfaceStrip(page)) === JSON.stringify(strip) &&
+            JSON.stringify(await readSurfaceTabs(page)) === JSON.stringify(strip) &&
             (await hasOneTopStrip(page)),
           detail: `opened=${JSON.stringify(opened)} closed=${JSON.stringify(closed)}`,
         };
@@ -805,7 +811,9 @@ async function main() {
             after[0]?.front === SECOND_FILE &&
             after[0]?.focused === true &&
             after[1]?.paneId === before[2]?.paneId &&
+            // One chip, nothing beside it, and its group down to two panes.
             (await readSurfaceStrip(page)).length === 1 &&
+            (await readGroups(page))[0]?.tabs.length === 2 &&
             (await hasOneTopStrip(page)),
           detail: `centre=${JSON.stringify(centre)} panes=${JSON.stringify(after)}`,
         };
@@ -932,7 +940,7 @@ async function main() {
             // Opened from a pane, the file never ALSO stays in the pane that
             // had focus when it opened.
             !after[0].tabs.some((tab) => tab.includes(DRAGGED_FILE)) &&
-            (await readGroups(page)).length === 1 &&
+            (await readChips(page)).length === 1 &&
             (await hasOneTopStrip(page)),
           detail: `types=${JSON.stringify(started.types)} zone=${JSON.stringify(zone)} panes=${JSON.stringify(
             after.map((pane) => pane.tabs),
@@ -941,28 +949,35 @@ async function main() {
       },
     );
 
-    // ---- 9. The chip's menu, Ungroup, and both top-strip tab edges -----------
+    // ---- 9. The chip's popover, Ungroup, and both top-strip tab edges --------
     await attempt(
       9,
-      "the chip menu lists and ungroups the group; left and right tab edges group in order; closing a tab of two dissolves",
+      "the chip popover lists and ungroups the group; left and right tab edges group in order; closing a tab of two dissolves",
       async () => {
-        const groupId = (await readGroups(page))[0]?.id;
+        const groupId = (await readChips(page))[0]?.id;
         const panes = await readPanes(page);
         const terminal = panes[1]?.tabs[0];
         if (!groupId || !terminal) return { ok: false, detail: "no group to ungroup" };
-        const menu = await readChipMenu(page, groupId);
+        // The popover lists every tab of every pane, in pane order, and marks
+        // exactly one front per pane.
+        const menu = (await readGroups(page)).find((group) => group.id === groupId)?.rows ?? [];
+        const paneTabs = panes.flatMap((pane) => pane.tabs);
         const listed =
-          JSON.stringify(menu.map((row) => row.label)) ===
-            JSON.stringify(panes.flatMap((pane) => pane.tabs)) &&
+          menu.length === paneTabs.length &&
           new Set(menu.map((row) => row.id)).size === menu.length &&
-          panes.every((pane) => pane.tabs.includes(pane.front));
-        await chipMenu(page, groupId, "Ungroup");
+          menu.every(
+            (row, i) =>
+              row.title.length > 0 &&
+              (paneTabs[i] === row.title || paneTabs[i].startsWith(`${row.title} · `)),
+          ) &&
+          menu.filter((row) => row.front).length === panes.length;
+        await ungroup(page, groupId);
         const ungrouped = await waitUntil(
           "Ungroup to leave one plane and every tab open",
           async () => {
             const strip = await readSurfaceStrip(page);
             return (await paneCount(page)) === 1 &&
-              (await readGroups(page)).length === 0 &&
+              (await readChips(page)).length === 0 &&
               [displayId, terminal, SECOND_FILE].every((tab) => strip.includes(tab)) &&
               strip.some((tab) => tab.includes(DRAGGED_FILE))
               ? strip
@@ -991,10 +1006,10 @@ async function main() {
             cells.find((cell) => cell.focused)?.tabs[0] === terminal &&
             (await hasOneTopStrip(page));
           if (edge === "left") {
-            await chipMenu(page, grouped[0].id, "Ungroup");
+            await ungroup(page, grouped[0].id);
             await waitUntil(
               "Ungroup to collapse",
-              async () => (await paneCount(page)) === 1 && (await readGroups(page)).length === 0,
+              async () => (await paneCount(page)) === 1 && (await readChips(page)).length === 0,
             );
           }
         }
@@ -1014,7 +1029,7 @@ async function main() {
           "terminal gone and group dissolved",
           async () =>
             (await paneCount(page)) === 1 &&
-            (await readGroups(page)).length === 0 &&
+            (await readChips(page)).length === 0 &&
             (await page.getByRole("tab", { name: terminal, exact: true }).count()) === 0 &&
             (await readSurfaceStrip(page)).includes(displayId),
           { timeout: 8000 },
@@ -1069,7 +1084,7 @@ async function main() {
       return {
         ok:
           JSON.stringify(after) === JSON.stringify(expected) &&
-          (await readGroups(page)).length === 0 &&
+          (await readChips(page)).length === 0 &&
           (await hasOneTopStrip(page)),
         detail: `before=${JSON.stringify(before)} after=${JSON.stringify(after)}`,
       };
@@ -1101,7 +1116,7 @@ async function main() {
           // The Board rides in the group's first pane, under its own strip.
           panes[0]?.empty === false &&
           JSON.stringify(panes[0]?.tabs) === JSON.stringify(["Board"]) &&
-          (await readGroups(page)).length === 1 &&
+          (await readChips(page)).length === 1 &&
           (await hasOneTopStrip(page, "Home tabs")),
         detail: JSON.stringify(panes),
       };
@@ -1149,7 +1164,7 @@ async function main() {
       });
       // The Board is a group tab: selecting it focuses the first pane, and
       // must leave the second pane's live terminal visible in the same group.
-      await selectStripTab(page, topTabAny(page, "Board"));
+      await selectTopTab(page, "Board");
       const primaryTookFocus = await waitUntil(
         "the Board's pane to take focus from its tab",
         async () => {
@@ -1192,7 +1207,7 @@ async function main() {
           after.find((pane) => pane.paneId === paneId)?.focused === true &&
           groups.length === 1 &&
           groups[0].tabs.length === 2 &&
-          (await readGroups(page))[0]?.id === groups[0].id &&
+          (await readChips(page))[0]?.id === groups[0].id &&
           (await screen.evaluate((node) => node === window.volliSmokeHomeTerminalScreen)) &&
           (await hasOneTopStrip(page, "Home tabs")),
         detail: JSON.stringify(after),
@@ -1205,7 +1220,7 @@ async function main() {
     // new chat used to become a full-width tab of its own, hiding the group.
     await attempt(13, "⌘T opens the new chat into the focused pane's stack", async () => {
       const before = await readPanes(page);
-      const groupId = (await readGroups(page))[0]?.id;
+      const groupId = (await readChips(page))[0]?.id;
       const terminal = before[1]?.tabs[0];
       if (before.length !== 2 || !groupId || !terminal) {
         return { ok: false, detail: `no Home group to open into: ${JSON.stringify(before)}` };

@@ -15,27 +15,65 @@
   right: 0;
 }
 
-.group-icon-stack {
+/*
+ * THE STACKED GLYPH (VC-1052) — a group chip's front glyph on a card, with up
+ * to two members' cards fanned out behind it like a deck: each one further back
+ * is smaller (scaled from its right edge, so its trailing edge and the glyph
+ * drawn there peek past the card in front), nudged up and to the right, and dimmer. The slot widens by one
+ * sliver per card so the label never sits under the deck.
+ *
+ * The deck is static: frequent strip interactions do not need motion.
+ */
+[data-slot="tab-glyph-stack"] {
+  position: relative;
+  display: flex;
+  flex-shrink: 0;
+  height: 1.25rem;
+  width: 1.25rem;
+  margin-right: 0.25rem;
+}
+[data-slot="tab-glyph-stack"][data-depth="2"] {
+  width: 1.625rem;
+}
+[data-slot="tab-glyph-stack"][data-depth="3"] {
+  width: 2rem;
+}
+[data-slot="tab-glyph-card"] {
+  --layer: 0;
+  --fan: 6px;
+  position: absolute;
+  top: 0;
+  left: 0;
   display: flex;
   align-items: center;
-  padding-right: 2px;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: var(--radius-control-small);
+  box-shadow: 0 0 0 1px var(--border);
+  transform-origin: right center;
+  transform: translate(calc(var(--layer) * var(--fan)), calc(var(--layer) * -1.5px))
+    scale(calc(1 - var(--layer) * 0.14));
 }
-.group-icon-disc {
-  display: grid;
-  place-items: center;
-  width: 20px;
-  height: 20px;
-  margin-left: -7px;
-  border-radius: 50%;
-  background: var(--tab-group-face, var(--background));
-  box-shadow: 0 0 0 1px var(--tab-group-face, var(--background));
+[data-slot="tab-glyph-card"][data-layer="0"] {
+  z-index: 3;
+  box-shadow:
+    0 0 0 1px var(--border),
+    var(--shadow-raised);
 }
-.group-icon-disc:first-child {
-  margin-left: 0;
+/* A card behind shows its glyph at its trailing edge, the part that peeks. */
+[data-slot="tab-glyph-card"][data-layer="1"],
+[data-slot="tab-glyph-card"][data-layer="2"] {
+  justify-content: flex-end;
+  padding-right: 0.125rem;
 }
-[data-slot="grouped-tab-chip"] {
-  --tab-group-face: var(--background);
+[data-slot="tab-glyph-card"][data-layer="1"] {
+  --layer: 1;
+  z-index: 2;
+  opacity: 0.85;
 }
-[data-slot="grouped-tab-chip"][data-active="true"] {
-  --tab-group-face: var(--tab-selected-face);
+[data-slot="tab-glyph-card"][data-layer="2"] {
+  --layer: 2;
+  z-index: 1;
+  opacity: 0.6;
 }
