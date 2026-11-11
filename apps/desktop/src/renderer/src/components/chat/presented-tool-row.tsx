@@ -22,6 +22,7 @@ import {
 import { isBrowserTraceAction } from "@volli/shared";
 import { useStopFollowing } from "@renderer/components/ui/ai-elements/conversation";
 import { titleWordKeys } from "@renderer/components/ui/title-reveal";
+import { Shimmer } from "@renderer/components/ui/ai-elements/shimmer";
 import { TranscriptSourceIconContext } from "./transcript-source-icons";
 import {
   BrowserCardHostContext,
@@ -371,12 +372,14 @@ export function PresentedToolRow({
   onOpenSession,
   onOpenFile,
   children,
+  progressEnabled = true,
 }: {
   part: DynamicToolUIPart;
   presentation: TranscriptToolPresentation;
   onOpenSession?(id: string): void;
   onOpenFile?(path: string): void;
   children?: React.ReactNode;
+  progressEnabled?: boolean;
 }) {
   const [open, setOpen] = React.useState(false);
   const stopFollowing = useStopFollowing();
@@ -409,12 +412,22 @@ export function PresentedToolRow({
         <ToolIdentity presentation={presentation} />
         {presentation.caption ? (
           <span className="transcript-row-caption">
-            <span className="shrink-0">{presentation.caption.verb}</span>
+            {progressEnabled && presentation.status === "running" ? (
+              <Shimmer as="span" className="shrink-0">
+                {presentation.caption.verb}
+              </Shimmer>
+            ) : (
+              <span className="shrink-0">{presentation.caption.verb}</span>
+            )}
             <DomainLabel domain={presentation.caption.domain} url={presentation.caption.url} />
           </span>
         ) : (
           <bdi dir="auto" className="min-w-0 truncate">
-            {presentation.label}
+            {progressEnabled && presentation.status === "running" ? (
+              <Shimmer as="span">{presentation.label}</Shimmer>
+            ) : (
+              presentation.label
+            )}
           </bdi>
         )}
         {presentation.meta ? (
@@ -534,9 +547,11 @@ export function PresentedToolRow({
 export function WebWorkGroup({
   rows,
   onOpenFile,
+  progressEnabled = true,
 }: {
   rows: readonly Extract<BundleRow, { kind: "tool" }>[];
   onOpenFile?(path: string): void;
+  progressEnabled?: boolean;
 }) {
   const [open, setOpen] = React.useState(false);
   const [more, setMore] = React.useState(false);
@@ -566,7 +581,11 @@ export function WebWorkGroup({
         }}
       >
         <GlobeIcon aria-hidden className="size-4 shrink-0" />
-        <span>{running ? "Searching the web" : "Searched the web"}</span>
+        {running && progressEnabled ? (
+          <Shimmer as="span">Searching the web</Shimmer>
+        ) : (
+          <span>{running ? "Searching the web" : "Searched the web"}</span>
+        )}
         {sources.length > 0 ? (
           <span>
             {sources.length} {sources.length === 1 ? "source" : "sources"}
@@ -633,6 +652,7 @@ export function WebWorkGroup({
               key={row.key}
               part={row.part}
               presentation={models[index]!}
+              progressEnabled={progressEnabled}
               onOpenFile={onOpenFile}
             />
           ))

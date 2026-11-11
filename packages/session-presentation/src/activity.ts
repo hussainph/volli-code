@@ -4,9 +4,14 @@
  * Everything here switches on `ActivityKind` from `@volli/shared`. There are no
  * harness tool names in this file and there must never be: a second adapter
  * renames every tool and the transcript still reads correctly. When a harness
- * has not stamped a descriptor yet the row degrades to the `"other"` presenter
- * with the native tool name as its verb, which is a first-class shape rather
- * than a broken one.
+ * has not stamped a descriptor yet the row degrades to the `"other"` presenter,
+ * which names the tool in readable words (`Used Linear · Create issue`) and
+ * keeps the raw name in its detail — a first-class shape rather than a broken
+ * one.
+ *
+ * Every row's verb is chosen here from its status, never in the UI: a row that
+ * is still running says so in the present tense, a failed one says it failed,
+ * and the title alone tells a screen reader what the glyph tells the eye.
  *
  * Layering: this module answers "what does this row say"; `activity-ui.tsx`
  * answers "what does it look like". Presenters are total functions of a
@@ -22,6 +27,7 @@ import {
   type ActivityKind,
 } from "@volli/shared";
 import type { DynamicToolUIPart, ReasoningUIPart, UIMessage } from "ai";
+import { humanMcpToolName, humanToolName } from "./tool-names";
 
 type MessagePart = UIMessage["parts"][number];
 
@@ -56,19 +62,13 @@ export type BundleRow =
  * The old model had four nested levels — turn fold over block over group header
  * over rows — and each level needed its own spacing rule, its own left edge and
  * its own fold state. They composed into a rhythm no single rule could fix.
- * Here depth is never indentation: a bundle's rows sit at the same left edge as
- * the summary that counts them, and the caret is the only thing that says one
- * contains the other.
+ * A bundle owns the rows behind one disclosure; its rendering and guide rail
+ * belong to the client, not this projection.
  *
  */
 export type ChatSegment =
   | { kind: "text"; part: Extract<MessagePart, { type: "text" }>; key: string }
   | { kind: "bundle"; rows: BundleRow[]; key: string };
-
-/** Outcomes a bundle must not swallow silently. */
-export function needsAttention(state: DynamicToolUIPart["state"]): boolean {
-  return state === "output-error" || state === "output-denied";
-}
 
 /**
  * Reads a descriptor, or synthesizes one from the raw part when the harness has
@@ -298,9 +298,17 @@ export function isBundleStreaming(rows: readonly BundleRow[]): boolean {
   return rows.some((row) => (row.kind === "reasoning" ? row.streaming : isRowActive(row.part)));
 }
 
-/** A failure or a denial inside the bundle, which is reason enough to open it. */
+/**
+ * A failure or denial inside the bundle. This is an outcome signal, never an
+ * instruction to open the reader's disclosure. A non-zero command counts;
+ * a search that found nothing does not.
+ */
 export function bundleNeedsAttention(rows: readonly BundleRow[]): boolean {
-  return bundleToolRows(rows).some((row) => needsAttention(row.part.state));
+  return bundleToolRows(rows).some((row) => isAlarming(describeActivity(row.part).status));
+}
+
+function isAlarming(status: ActivityStatus): boolean {
+  return status === "failed" || status === "denied";
 }
 
 /**
@@ -308,10 +316,9 @@ export function bundleNeedsAttention(rows: readonly BundleRow[]): boolean {
  * activity.ts`.
  *
  * Phrases are per kind in first-appearance order, so the sentence reads in the
- * order the work happened. A kind still in flight takes the present participle
- * and the whole phrase takes an ellipsis, which is how a live bundle reports
- * progress without expanding — the only thing on screen while the agent works,
- * so it has to carry the whole load.
+ * order the work happened. While any row is in flight every phrase takes the
+ * present participle. The client supplies the progress glyph, never an ellipsis.
+ * This is the detailed breakdown; workGist supplies the compact group title.
  *
  * Reasoning is deliberately uncounted. It is a row inside, and a header that
  * also said "thought twice" would be describing the rows rather than the work.
@@ -324,16 +331,19 @@ export function bundleSummary(rows: readonly BundleRow[]): SummarySegment[] {
 
   // A Map iterates in insertion order, and a kind is inserted the first time it
   // appears — so the Map itself is the first-appearance order the sentence needs.
-  // A legacy row whose call never produced an execution result is left out of
-  // the counts: the phrase says what happened, and what did not is confessed
-  // after it, quietly, rather than folded into a verb it never earned.
+  // Only successful or active rows earn a kind's completion/progress verb.
+  // Failed edits may have changed nothing (or only part of a file), denials
+  // never executed, and legacy not-run calls have no receipt. Count those
+  // endings separately rather than calling them completed work.
   const groups = new Map<ActivityKind, DynamicToolUIPart[]>();
   let notRun = 0;
   for (const row of tools) {
-    if (activityStatus(row.part) === "not-run") {
+    const status = describeActivity(row.part).status;
+    if (status === "not-run") {
       notRun += 1;
       continue;
     }
+    if (isAlarming(status)) continue;
     const kind = activityDescriptor(row.part).kind;
     const group = groups.get(kind);
     if (group) group.push(row.part);
@@ -342,25 +352,36 @@ export function bundleSummary(rows: readonly BundleRow[]): SummarySegment[] {
 
   const segments: SummarySegment[] = [];
   if (groups.size > 0) {
+    // One tense for the whole sentence: `Read 2 files, running 1 command…`
+    // mixed a finished clause and a live one, and read as two reports. While
+    // anything is still in flight the bundle is work in progress, so every
+    // clause is; once it settles, every clause is done.
+    const streaming = tools.some((row) => isRowActive(row.part));
     const phrase = [...groups]
-      .map(([kind, parts]) => kindPhrase(kind, parts))
+      .map(([kind, parts]) => kindPhrase(kind, parts, streaming))
       .join(", ")
       .replace(/^./, (character) => character.toUpperCase());
     // In progress is the header's spinner to say, never trailing punctuation.
     segments.push({ text: phrase, tone: "neutral" });
   }
 
-  const failed = tools.filter((row) => row.part.state === "output-error").length;
-  const denied = tools.filter((row) => row.part.state === "output-denied").length;
+  // Counted from the status each row shows, so the summary and its rows agree.
+  const statuses = tools.map((row) => describeActivity(row.part).status);
+  const failed = statuses.filter((status) => status === "failed").length;
+  const denied = statuses.filter((status) => status === "denied").length;
   if (failed > 0) segments.push({ text: `${failed} failed`, tone: "danger" });
   if (denied > 0) segments.push({ text: `${denied} denied`, tone: "danger" });
   if (notRun > 0) segments.push({ text: `${notRun} not run`, tone: "muted" });
   return segments;
 }
 
-function kindPhrase(kind: ActivityKind, parts: readonly DynamicToolUIPart[]): string {
+function kindPhrase(
+  kind: ActivityKind,
+  parts: readonly DynamicToolUIPart[],
+  streaming: boolean,
+): string {
   const phrase = KIND_PHRASES[kind];
-  const verb = parts.some(isRowActive) ? phrase.present : phrase.past;
+  const verb = streaming ? phrase.present : phrase.past;
   if (kind === "browse") return browsePhrase(verb, phrase, parts);
   if (isDurableActivity(kind) && parts.length <= NAMED_SUBJECT_LIMIT) {
     const names = parts.map(subjectName).filter((name): name is string => name !== null);
@@ -480,9 +501,19 @@ export type ActivityDetail =
   | { view: "signature"; text: string };
 
 export interface ActivityFacts {
+  /**
+   * The words before the object, in the tense the row's status earns:
+   * `Running`, `Ran`, `Failed to run`, `Denied running`. Empty only when the
+   * sentence starts with its object (`pnpm lint exited with code 1`).
+   */
   verb: string;
   /** Mono. The path, the command, the pattern. */
   object: string | null;
+  /**
+   * Words after the object, when the sentence needs them: `exited with code 1`.
+   * Absent on every row whose sentence ends with its object.
+   */
+  after?: string | null;
   /** Non-null when clicking the object should open a workspace artifact. */
   openPath: string | null;
   /**
@@ -501,6 +532,8 @@ export interface ActivityRow extends ActivityFacts {
   kind: ActivityKind;
   status: ActivityStatus;
   nativeToolName: string;
+  /** Words after the object (`exited with code 1`); null when there are none. */
+  after: string | null;
   /**
    * The shell command retained on the tool call itself, including newlines.
    *
@@ -532,6 +565,62 @@ export type ActivityParse = (context: ActivityContext) => ActivityFacts;
 const NO_META = { meta: null, metaTone: "neutral" as SummaryTone };
 
 /**
+ * One verb in the forms a row's status picks between. `base` is the bare
+ * infinitive the other sentences are built from — `Failed to run`,
+ * `Run pnpm test` while the call is still being written — so a kind names its
+ * verb once and every status reads in the same words.
+ */
+interface ActivityVerbs {
+  base: string;
+  running: string;
+  done: string;
+}
+
+/**
+ * The verb a row's status earns (shadcn Trace's convention): done work in the
+ * past (`Ran pnpm build`), work in flight in the present (`Running pnpm
+ * build`), work not started yet as the bare step (`Run pnpm build`), and
+ * the two endings that did not go well say so in words (`Failed to run …`,
+ * `Denied running …`). A legacy row that never executed claims nothing.
+ */
+function tensed(verbs: ActivityVerbs, status: ActivityStatus): string {
+  switch (status) {
+    case "pending":
+      return upperFirst(verbs.base);
+    case "running":
+      return verbs.running;
+    case "failed":
+      return `Failed to ${verbs.base}`;
+    case "denied":
+      return `Denied ${lowerFirst(verbs.running)}`;
+    case "not-run":
+      return "Not run";
+    case "done":
+      return verbs.done;
+  }
+}
+
+function upperFirst(value: string): string {
+  return value.replace(/^./, (character) => character.toUpperCase());
+}
+
+function lowerFirst(value: string): string {
+  return value.replace(/^./, (character) => character.toLowerCase());
+}
+
+const KIND_VERBS = {
+  "run-command": { base: "run", running: "Running", done: "Ran" },
+  "read-file": { base: "read", running: "Reading", done: "Read" },
+  "edit-file": { base: "edit", running: "Editing", done: "Edited" },
+  "write-file": { base: "create", running: "Creating", done: "Created" },
+  search: { base: "grep", running: "Grepping", done: "Grepped" },
+  "list-directory": { base: "list", running: "Listing", done: "Listed" },
+  "fetch-url": { base: "fetch", running: "Fetching", done: "Fetched" },
+  plan: { base: "plan", running: "Planning", done: "Planned" },
+  delegate: { base: "delegate to", running: "Delegating to", done: "Delegated to" },
+} satisfies Partial<Record<ActivityKind, ActivityVerbs>>;
+
+/**
  * Per-kind presenters. Each is a pure function of the context, so the meta
  * formula for a kind is one testable expression rather than a branch buried in
  * JSX. The right column is the whole gap between this transcript and the
@@ -539,19 +628,52 @@ const NO_META = { meta: null, metaTone: "neutral" as SummaryTone };
  */
 export const ACTIVITY_PRESENTERS: Record<ActivityKind, ActivityParse> = {
   "run-command": (context) => {
-    const exitCode = context.descriptor.outcome?.exitCode ?? null;
-    const failed = exitCode !== null && exitCode !== 0;
     // The descriptor is a durable summary; the call input is the command Pi was
     // asked to run. Prefer that source so a stale or abbreviated descriptor can
     // never hide the actual bash invocation from the person reviewing it.
-    const command = commandInput(context.input);
+    const object = commandInput(context.input) ?? context.descriptor.subject.label;
+    if (isShellStop(context.descriptor)) {
+      // A deliberate stop ends a command with a signal's exit (143), and that
+      // is what was asked for: the row says it stopped, never that it failed.
+      return {
+        verb: tensed(STOP_VERBS, context.status),
+        object,
+        openPath: null,
+        meta: durationMeta(context),
+        metaTone: "muted",
+        detail: outputDetail(context),
+      };
+    }
+    const exitCode =
+      isSettled(context.status) && context.status !== "denied" ? commandExitCode(context) : null;
+    if (exitCode !== null && isSearchMiss(object, exitCode)) {
+      // A search that found nothing exits 1, and that is an answer: the row
+      // reads as a command that ran, never as one that failed.
+      return {
+        verb: tensed(KIND_VERBS["run-command"], "done"),
+        object,
+        openPath: null,
+        meta: "no matches",
+        metaTone: "muted",
+        detail: outputDetail(context),
+      };
+    }
+    const exited = exitCode !== null && exitCode !== 0;
+    const exit = `exited with code ${exitCode}`;
     return {
-      verb: "Ran",
-      object: command ?? context.descriptor.subject.label,
+      // `pnpm lint exited with code 1` — the code is the failure, so the
+      // sentence says it rather than `Ran` beside a red number.
+      verb: exited
+        ? object === null
+          ? upperFirst(exit)
+          : ""
+        : tensed(KIND_VERBS["run-command"], context.status),
+      object,
+      after: exited && object !== null ? exit : null,
       openPath: null,
-      // The command is already the headline; the meta is the cost, or the exit.
-      meta: failed ? `exit ${exitCode}` : durationMeta(context),
-      metaTone: failed ? "danger" : "muted",
+      // The command is already the headline; the meta is the cost.
+      meta: durationMeta(context),
+      metaTone: "muted",
       detail: outputDetail(context),
     };
   },
@@ -559,7 +681,7 @@ export const ACTIVITY_PRESENTERS: Record<ActivityKind, ActivityParse> = {
   "read-file": (context) => {
     const range = context.descriptor.subject.lineRange;
     return {
-      verb: "Read",
+      verb: tensed(KIND_VERBS["read-file"], context.status),
       object: context.descriptor.subject.label,
       openPath: context.descriptor.subject.path,
       // Only a partial read has anything to confess.
@@ -570,7 +692,7 @@ export const ACTIVITY_PRESENTERS: Record<ActivityKind, ActivityParse> = {
   },
 
   "edit-file": (context) => ({
-    verb: "Edited",
+    verb: tensed(KIND_VERBS["edit-file"], context.status),
     object: context.descriptor.subject.label,
     openPath: context.descriptor.subject.path,
     // `+0 −0` on an in-flight edit is worse than no meta.
@@ -583,7 +705,7 @@ export const ACTIVITY_PRESENTERS: Record<ActivityKind, ActivityParse> = {
     const outcome = context.descriptor.outcome;
     const added = outcome?.addedLines ?? outcome?.lineCount ?? null;
     return {
-      verb: "Created",
+      verb: tensed(KIND_VERBS["write-file"], context.status),
       object: context.descriptor.subject.label,
       openPath: context.descriptor.subject.path,
       meta: isSettled(context.status) && added !== null ? `+${added}` : null,
@@ -593,7 +715,7 @@ export const ACTIVITY_PRESENTERS: Record<ActivityKind, ActivityParse> = {
   },
 
   search: (context) => ({
-    verb: "Grepped",
+    verb: tensed(KIND_VERBS.search, context.status),
     object: context.descriptor.subject.label,
     openPath: null,
     // "no matches" is an answer, not a failure — it never takes an error tone.
@@ -606,7 +728,7 @@ export const ACTIVITY_PRESENTERS: Record<ActivityKind, ActivityParse> = {
     const outcome = context.descriptor.outcome;
     const entries = outcome?.fileCount ?? outcome?.lineCount ?? null;
     return {
-      verb: "Listed",
+      verb: tensed(KIND_VERBS["list-directory"], context.status),
       object: context.descriptor.subject.label,
       openPath: null,
       meta:
@@ -624,7 +746,7 @@ export const ACTIVITY_PRESENTERS: Record<ActivityKind, ActivityParse> = {
     // none does.
     const bytes = context.descriptor.outcome?.bytes ?? null;
     return {
-      verb: "Fetched",
+      verb: tensed(KIND_VERBS["fetch-url"], context.status),
       object: context.descriptor.subject.label,
       openPath: null,
       meta: isSettled(context.status) ? (formatBytes(bytes) ?? durationMeta(context)) : null,
@@ -637,13 +759,25 @@ export const ACTIVITY_PRESENTERS: Record<ActivityKind, ActivityParse> = {
     const subject = context.descriptor.subject;
     // Two stampings share this kind. Volli's own `session_delegate` (VC-9)
     // fills `agentName` and, once the child exists, `sessionId` — so the row
-    // reads `Delegated  Token hunt` and its object opens the child Session.
+    // reads `Delegated to  Token hunt` and its object opens the child Session.
     // A harness that stamps neither names the subagent through
-    // `nativeToolName` instead (`explore  Find the streaming seam`), and its
-    // subject swaps while running as the adapter restamps the child's last line.
+    // `nativeToolName` instead (`Delegated to explore  Find the streaming
+    // seam`), and its subject swaps while running as the adapter restamps the
+    // child's last line.
     const named = subject.agentName ?? null;
+    const agent = named === null ? readableToolName(context.descriptor.nativeToolName) : null;
+    const verbs = KIND_VERBS.delegate;
     return {
-      verb: named === null ? context.descriptor.nativeToolName : "Delegated",
+      verb: tensed(
+        agent === null
+          ? verbs
+          : {
+              base: `${verbs.base} ${agent}`,
+              running: `${verbs.running} ${agent}`,
+              done: `${verbs.done} ${agent}`,
+            },
+        context.status,
+      ),
       object: named ?? subject.label,
       openPath: null,
       openSessionId: subject.sessionId ?? null,
@@ -654,7 +788,7 @@ export const ACTIVITY_PRESENTERS: Record<ActivityKind, ActivityParse> = {
   },
 
   plan: (context) => ({
-    verb: "Planned",
+    verb: tensed(KIND_VERBS.plan, context.status),
     object: context.descriptor.subject.label,
     openPath: null,
     ...NO_META,
@@ -663,15 +797,29 @@ export const ACTIVITY_PRESENTERS: Record<ActivityKind, ActivityParse> = {
 
   browse: (context) => browseFacts(context),
 
-  other: (context) => ({
-    verb: context.descriptor.nativeToolName,
-    object: context.descriptor.subject.label,
-    openPath: context.descriptor.subject.path,
-    meta: durationMeta(context),
-    metaTone: "muted",
-    // The one kind allowed to show its raw shape, and only in the detail.
-    detail: signatureDetail(context),
-  }),
+  other: (context) => {
+    // A tool this file has no words for is named in readable ones — an MCP
+    // tool by its server and tool (`Used Linear · Create issue`), anything
+    // else by its own name with the separators taken out. The raw name is
+    // never the verb; it stays in the detail, where the call's shape is.
+    const nativeToolName = context.descriptor.nativeToolName;
+    const name = readableToolName(nativeToolName);
+    const label = context.descriptor.subject.label;
+    return {
+      verb: tensed(
+        { base: `use ${name}`, running: `Using ${name}`, done: `Used ${name}` },
+        context.status,
+      ),
+      // A harness that knows no better subject repeats the tool's own name;
+      // the verb already says it, readably.
+      object: label === nativeToolName ? null : label,
+      openPath: context.descriptor.subject.path,
+      meta: durationMeta(context),
+      metaTone: "muted",
+      // The one kind allowed to show its raw shape, and only in the detail.
+      detail: signatureDetail(context),
+    };
+  },
 };
 
 export function activityContext(part: DynamicToolUIPart): ActivityContext {
@@ -714,17 +862,18 @@ export function describeActivity(part: DynamicToolUIPart): ActivityRow {
 }
 
 function buildActivityRow(part: DynamicToolUIPart): ActivityRow {
-  const context = activityContext(part);
+  const recorded = activityContext(part);
+  // The presenters see the status the row will show, so the verb and the
+  // glyph cannot disagree: a refused browse call is `Failed to click`, and a
+  // search that found nothing is not a failure.
+  const context = { ...recorded, status: presentedStatus(recorded) };
   const facts = ACTIVITY_PRESENTERS[context.descriptor.kind](context);
   const command = context.descriptor.kind === "run-command" ? facts.object : null;
   return {
     ...facts,
-    // A presenter's verb is past tense because the work happened. A legacy row
-    // whose call never executed keeps its recorded object but loses the claim:
-    // `Not run` stands where `Ran` or `Read` would have stood.
-    verb: context.status === "not-run" ? "Not run" : facts.verb,
+    after: facts.after ?? null,
     kind: context.descriptor.kind,
-    status: browseStatus(context),
+    status: context.status,
     nativeToolName: context.descriptor.nativeToolName,
     command,
     errorText: context.errorText,
@@ -760,6 +909,34 @@ const BROWSE_VERBS: Record<ActivityBrowseAction, string> = {
   find: "Searched for",
 };
 
+/**
+ * The other forms of each browser verb. The done form is `BROWSE_VERBS`, which
+ * the Browser Trace replay shares, so a finished row and its replay frame
+ * still name the call in the same words.
+ */
+const BROWSE_TENSES: Record<ActivityBrowseAction, Omit<ActivityVerbs, "done">> = {
+  open: { base: "open", running: "Opening" },
+  back: { base: "go back", running: "Going back" },
+  forward: { base: "go forward", running: "Going forward" },
+  reload: { base: "reload", running: "Reloading" },
+  click: { base: "click", running: "Clicking" },
+  type: { base: "type into", running: "Typing into" },
+  press: { base: "press", running: "Pressing" },
+  select: { base: "select in", running: "Selecting in" },
+  hover: { base: "hover", running: "Hovering" },
+  scroll: { base: "scroll", running: "Scrolling" },
+  wait: { base: "wait", running: "Waiting" },
+  read: { base: "read the page", running: "Reading page" },
+  screenshot: { base: "take a screenshot", running: "Taking a screenshot" },
+  console: { base: "read the console", running: "Reading console" },
+  tabs: { base: "list tabs", running: "Listing tabs" },
+  find: { base: "search for", running: "Searching for" },
+};
+
+function browseVerb(action: ActivityBrowseAction, status: ActivityStatus): string {
+  return tensed({ ...BROWSE_TENSES[action], done: BROWSE_VERBS[action] }, status);
+}
+
 /** Actions whose object is an element the page named, quoted as the page's words. */
 const ELEMENT_ACTIONS: ReadonlySet<ActivityBrowseAction> = new Set([
   "click",
@@ -772,23 +949,50 @@ const ELEMENT_ACTIONS: ReadonlySet<ActivityBrowseAction> = new Set([
 const PAGE_INPUT_ACTIONS: ReadonlySet<ActivityBrowseAction> = new Set(["press", "scroll"]);
 
 /**
- * What the row's glyph says (VC-238 §9). The harness calls both of these a
- * success — a refusal is a result it was handed, and a navigation onto a page
- * that fails to load still answers with a perfectly good snapshot — so
+ * The status a row shows, where the recorded one would say the wrong thing.
+ *
+ * Browse (VC-238 §9): the harness calls a refusal and a page that failed to
+ * load both a success — a refusal is a result it was handed, and a navigation
+ * onto a broken page still answers with a perfectly good snapshot — so
  * without this the row would wear a tick over the two outcomes a person most
- * needs to see. Only for `browse`, and only once the call has settled.
+ * needs to see.
+ *
+ * Commands: a known non-zero exit is a failure even when the harness handed
+ * the call back as a success, so the glyph says what the title says
+ * (`pnpm lint exited with code 1`). Two exits are not: a search that exits 1
+ * has found nothing, which Pi's bash reports as an error like any other
+ * non-zero exit — an answer, not a failure — and a background shell stopped on
+ * purpose exits with its signal's code because it was asked to.
+ *
+ * Only once the call has settled; a live row's status is always the harness's.
  */
-function browseStatus(context: ActivityContext): ActivityStatus {
+function presentedStatus(context: ActivityContext): ActivityStatus {
+  if (!isSettled(context.status) || context.status === "denied") return context.status;
   const facet = context.descriptor.browse ?? null;
-  if (facet === null || !isSettled(context.status)) return context.status;
-  return facet.refusal !== null || facet.error !== null ? "failed" : context.status;
+  if (facet !== null) {
+    return facet.refusal !== null || facet.error !== null ? "failed" : context.status;
+  }
+  if (context.descriptor.kind !== "run-command" || isShellStop(context.descriptor)) {
+    return context.status;
+  }
+  const exitCode = commandExitCode(context);
+  if (exitCode === null || exitCode === 0) return context.status;
+  const command = commandInput(context.input) ?? context.descriptor.subject.label;
+  return isSearchMiss(command, exitCode) ? "done" : "failed";
 }
 
 function browseFacts(context: ActivityContext): ActivityFacts {
   const facet = context.descriptor.browse ?? null;
   if (facet === null) {
     const page = context.descriptor.subject.label;
-    return { verb: "Browsed", object: page, openPath: null, ...NO_META, detail: null };
+    const verbs = { base: "browse", running: "Browsing", done: "Browsed" };
+    return {
+      verb: tensed(verbs, context.status),
+      object: page,
+      openPath: null,
+      ...NO_META,
+      detail: null,
+    };
   }
   const facts = browseActionFacts(context, facet);
   // A refusal outranks whatever the meta would have said: the call did not
@@ -823,7 +1027,7 @@ export function browseCaption(
 
 function browseActionFacts(context: ActivityContext, facet: ActivityBrowse): ActivityFacts {
   const page = context.descriptor.subject.label;
-  const verb = BROWSE_VERBS[facet.action];
+  const verb = browseVerb(facet.action, context.status);
   if (
     ELEMENT_ACTIONS.has(facet.action) ||
     PAGE_INPUT_ACTIONS.has(facet.action) ||
@@ -831,6 +1035,7 @@ function browseActionFacts(context: ActivityContext, facet: ActivityBrowse): Act
   ) {
     return {
       ...browseCaption(facet.action, facet.target),
+      verb,
       openPath: null,
       meta: page,
       metaTone: "muted",
@@ -876,6 +1081,95 @@ function browseActionFacts(context: ActivityContext, facet: ActivityBrowse): Act
 function quotedTarget(target: string | null): string | null {
   if (target === null) return null;
   return /^e\d+$/.test(target) ? target : `“${target}”`;
+}
+
+/**
+ * The exit code a settled command reports: the descriptor's, else the final
+ * receipt in a failed command. Pi bash appends `Command exited with code N`
+ * (`agent-runtime/src/pi/vendor/pi-harness/tools/bash.ts`). Its activity error
+ * passes through `safeStopMessage`, collapsing newlines; the descriptor summary
+ * retains the original failure text. Read that anchored receipt for failed bash
+ * only, never infer an exit from successful stdout or an arbitrary substring.
+ */
+function commandExitCode(context: ActivityContext): number | null {
+  const recorded = context.descriptor.outcome?.exitCode ?? null;
+  if (recorded !== null) return recorded;
+  // Keep the recorded failure evidence even after a search miss is presented
+  // as done; only output-error parts carry errorText in the SDK union.
+  if (context.errorText === null) return null;
+  const receipt = /(?:^|\n)Command exited with code (\d+)\s*$/;
+  const match =
+    receipt.exec(context.errorText) ??
+    (context.descriptor.nativeToolName === "bash"
+      ? receipt.exec(context.descriptor.outcome?.summary ?? "")
+      : null);
+  return match?.[1] === undefined ? null : Number(match[1]);
+}
+
+const STOP_VERBS: ActivityVerbs = { base: "stop", running: "Stopping", done: "Stopped" };
+
+/**
+ * The marker agent-runtime puts on a background-shell kill's subject
+ * (`SHELL_MARKERS` in `pi/activity.ts`): the one row that is a deliberate stop
+ * rather than a command's own ending. A read of a shell that exited with a
+ * signal's code carries no such mark, and is judged by its exit like any other.
+ */
+const SHELL_STOP_MARKER = "(background · killed)";
+
+function isShellStop(descriptor: ActivityDescriptor): boolean {
+  return descriptor.subject.label?.endsWith(SHELL_STOP_MARKER) === true;
+}
+
+/**
+ * A command whose exit status 1 means "no matches", as Codex treats them: the
+ * program word (any directory in front of it) and, for git, its subcommand.
+ */
+const SEARCH_COMMAND = /^(?:\S*\/)?(?:rg|grep|egrep|fgrep|ag|ack|git\s+grep)(?:\s|$)/;
+
+/**
+ * Whether a command's exit is a search that found nothing. The status of a
+ * chain or pipeline is its last command's, so that is the one that decides:
+ * `cd src && rg seam` missed, `rg seam | head` did not exit 1 because of rg.
+ * Leading `NAME=value` assignments are the environment, not the program.
+ */
+function isSearchMiss(command: string | null, exitCode: number): boolean {
+  if (exitCode !== 1 || command === null) return false;
+  const last = lastCommand(command);
+  return last !== null && SEARCH_COMMAND.test(last.replace(/^(?:[A-Za-z_]\w*=\S*\s+)*/, ""));
+}
+
+/**
+ * Find the final shell step without treating a regex's quoted `|` or `;` as
+ * shell syntax. Substitutions, groups, redirections and backgrounding are
+ * deliberately opaque: exit 1 there need not be a search result at all.
+ */
+function lastCommand(command: string): string | null {
+  let start = 0;
+  let quote: string | null = null;
+  let escaped = false;
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command.charAt(index);
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (character === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote !== null) {
+      if (character === quote) quote = null;
+      else if (quote === '"' && (character === "`" || command.startsWith("$(", index))) return null;
+      continue;
+    }
+    if (character === "'" || character === '"') quote = character;
+    else if (character === "|" || command.startsWith("&&", index)) {
+      if (command.startsWith("||", index) || command.startsWith("&&", index)) index += 1;
+      start = index + 1;
+    } else if (character === ";" || character === "\n") start = index + 1;
+    else if ("&()`<>#".includes(character)) return null;
+  }
+  return quote !== null || escaped ? null : command.slice(start).trim();
 }
 
 function commandInput(input: unknown): string | null {
@@ -1032,10 +1326,21 @@ function matchesDetail(context: ActivityContext): ActivityDetail | null {
   return { view: "matches", groups };
 }
 
+/**
+ * The call as it was made: the tool's raw name with its arguments, then what
+ * it returned. The raw name is here because the row's verb is the readable
+ * one — `mcp__linear__create_issue__1a2b3c4d` is what a person greps logs for.
+ */
 function signatureDetail(context: ActivityContext): ActivityDetail | null {
-  const signature = compactSignature(context.input);
+  const nativeToolName = context.descriptor.nativeToolName;
+  const args = compactSignature(context.input);
   const text = readableText(context.output);
-  if (signature === null && text === null) return null;
+  // A call with nothing to show, under a verb that already spells its name
+  // exactly, has no detail: there is nothing the row is hiding.
+  if (args === null && text === null && readableToolName(nativeToolName) === nativeToolName) {
+    return null;
+  }
+  const signature = `${nativeToolName}${args ?? "()"}`;
   return { view: "signature", text: [signature, text].filter(Boolean).join("\n") };
 }
 
@@ -1180,6 +1485,19 @@ export function reasoningStatus(
 }
 
 /* ------------------------------------------------------------------- shared */
+
+/**
+ * Share the specialized row's readable fallback. This is display only: configured
+ * MCP names still join by exact identity in `transcriptMcpNames`, and override
+ * this fallback in `presentTranscriptTool`. Never infer identity from the name.
+ */
+function readableToolName(nativeToolName: string): string {
+  if (nativeToolName.startsWith("mcp__")) {
+    const { server, tool } = humanMcpToolName(nativeToolName);
+    return `${server} · ${tool}`;
+  }
+  return humanToolName(nativeToolName).trim().toLowerCase() || nativeToolName;
+}
 
 /**
  * Conventional subject keys first, then any short string scalar. These are

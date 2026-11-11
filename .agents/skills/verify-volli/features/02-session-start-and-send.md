@@ -53,13 +53,35 @@ also proves the live media query is true. Evidence stays in `.scratch/volli-driv
 images belong on the PR, never in git. The older proof below predates the bead
 and calls its predecessor “Working”; it is not evidence for the new drawing.
 
+## Tool call rows and work groups
+
+Verified live (VC-1182, `vd-0348f5`, built `f225d36a7`), using only the scripted
+model HTTP boundary and real read/bash execution through a project chat:
+
+- Open the live group: a 1px guide rail connects its status glyph to the rows.
+  First command output opens that row with a bounded tail and elapsed timer;
+  **Move to background** remains available. Closing the row keeps it closed
+  through subsequent output and settlement.
+- Completed commands say **Ran**. The failed command says **exited with code 2**;
+  its diagnostics remain behind **Show details**, and an explicit click reveals them.
+- The settled gist keeps its label when opened. A 45-second explicit sleep loop
+  is excluded from **Worked for 3s**; the separately executed three-second check
+  contributes recorded execution time. This is not a CPU-time measurement.
+- Settings switches exercised light/dark and warm/cool canvases, with screenshots
+  in the instance's evidence directory. SQL records one `turn.started`, one
+  `turn.completed`, and five `transcript.referenced` events; `session answer`
+  confirms the final reply. Doctor reports zero guard violations; console is empty.
+- `vd-cef8fa` repeats the live output path with `--reduced-motion`; doctor confirms
+  the forced media preference. The turn was then stopped through **Stop turn**.
+  Both instances were stopped, with no instances left running.
+
 ## Failed tool disclosure
 Verified live (VC-970, `vd-de6e23`): a project chat sent through the composer, with
 only the model HTTP boundary scripted to call the real `bash` tool
 (`printf 'diagnostic line %s\\n' {1..80} >&2; exit 2`). The isolated instance used
 `--model env` with the loopback fake provider's Azure environment, not real credentials.
 
-- The failed bundle opens to a compact row with a failure glyph and **Show details**;
+- After opening the failed bundle, its compact row has a failure glyph and **Show details**;
   diagnostics do not appear beneath the closed row.
 - Click **Show details**: the command and stored error appear in monospace output
   frames. **Hide details** removes them again. This is a layout fix; the runtime's
