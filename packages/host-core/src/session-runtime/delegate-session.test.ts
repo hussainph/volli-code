@@ -271,6 +271,7 @@ function harness(
       return turn.promise;
     },
     runtime: {
+      abandonDirectStart: async () => false,
       command: async (request): Promise<SessionRuntimeCommandResult> => {
         commands.push(request);
         const sessionId = "sessionId" in request ? request.sessionId : CHILD;
@@ -753,6 +754,7 @@ describe("delegate — stopping the parent stops the child", () => {
         throw new Error("must not send kickoff");
       },
       runtime: {
+        abandonDirectStart: async () => false,
         command: async (request) => {
           throw new Error(`must not deliver ${request.commandId}`);
         },

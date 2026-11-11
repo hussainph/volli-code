@@ -1,5 +1,6 @@
 import * as React from "react";
-import { ClockIcon, ChevronRightIcon, ErrorIcon } from "@renderer/components/ui/icon";
+import { SuccessIcon, ChevronRightIcon, ErrorIcon } from "@renderer/components/ui/icon";
+import { Shimmer } from "@renderer/components/ui/ai-elements/shimmer";
 import { Popover, PopoverAnchor, PopoverContent } from "@renderer/components/ui/popover";
 import { TitleReveal } from "@renderer/components/ui/title-reveal";
 import { useStopFollowing } from "@renderer/components/ui/ai-elements/conversation";
@@ -17,14 +18,17 @@ export function WorkReceipt({
   summary,
   open,
   onToggle,
+  glyph,
+  running = false,
 }: {
   work: TranscriptWorkWindow;
   summary: readonly SummarySegment[];
   open: boolean;
   onToggle(): void;
+  glyph?: React.ReactNode;
+  running?: boolean;
 }) {
   const [preview, setPreview] = React.useState(false);
-  const [revealTarget, setRevealTarget] = React.useState<string | null>(null);
   const pointerFocus = React.useRef(false);
   const dismissed = React.useRef(false);
   const stopFollowing = useStopFollowing();
@@ -40,8 +44,10 @@ export function WorkReceipt({
     .filter(Boolean)
     .join(" · ");
   const short = workDurationLabel(work);
-  const label = open ? full : short;
+  // Opening reveals the breakdown below, never replaces the parent's gist.
+  const label = short;
   const outcomes = summary.filter((segment) => segment.tone !== "neutral");
+  const supplemental = outcomes.filter((segment) => !label.split(" · ").includes(segment.text));
   const close = () => {
     dismissed.current = true;
     setPreview(false);
@@ -79,29 +85,35 @@ export function WorkReceipt({
           onKeyDown={(event) => {
             if (event.key === "Escape") close();
           }}
-          onClick={(event) => {
+          onClick={() => {
             if (window.getSelection()?.toString()) return;
             close();
             if (!open) stopFollowing();
-            setRevealTarget(event.detail > 0 ? (open ? short : full) : null);
             onToggle();
           }}
         >
-          <span className="transcript-clock-slot">
-            <ClockIcon aria-hidden className="size-4" />
+          <span className="transcript-status-slot">
+            {glyph ??
+              (outcomes.some((outcome) => outcome.tone === "danger") ? (
+                <ErrorIcon aria-hidden className="size-3.5 text-destructive" />
+              ) : (
+                <SuccessIcon aria-hidden className="size-3.5" />
+              ))}
           </span>
-          <TitleReveal
-            text={label}
-            automatic={revealTarget === label}
-            className="min-w-0 truncate"
-          />
-          {!open && (outcomes.length > 0 || unresolved > 0) ? (
+          {running ? (
+            <Shimmer as="span" className="min-w-0 truncate">
+              {label}
+            </Shimmer>
+          ) : (
+            <TitleReveal text={label} automatic={false} className="min-w-0 truncate" />
+          )}
+          {!open && (supplemental.length > 0 || unresolved > 0) ? (
             <span className="inline-flex shrink-0 items-center gap-1 text-ui text-foreground">
               {outcomes.some((outcome) => outcome.tone === "danger") ? (
                 <ErrorIcon aria-hidden className="size-4 shrink-0 text-destructive" />
               ) : null}
               {[
-                ...outcomes.map((outcome) => outcome.text),
+                ...supplemental.map((outcome) => outcome.text),
                 ...(unresolved > 0 ? [`${unresolved} unresolved`] : []),
               ].join(" · ")}
             </span>

@@ -20,12 +20,16 @@ const workflow = parse(
 
 // Evaluate only the small condition vocabulary used by this workflow. Unknown
 // atoms fail syntax checking rather than being silently treated as truthy.
-function enabled(job, { event, dryRun, results = {}, outputs = {}, cancelled = false }) {
-  const condition = workflow.jobs[job].if
+function conditionEnabled(
+  expression,
+  { event, dryRun, requireGreen = true, results = {}, outputs = {}, cancelled = false },
+) {
+  const condition = expression
     .replaceAll("always()", "true")
     .replaceAll("cancelled()", String(cancelled))
     .replaceAll("github.event_name", JSON.stringify(event))
     .replaceAll("inputs.dry_run", String(dryRun))
+    .replaceAll("inputs.require_green", String(requireGreen))
     .replace(/needs\.([\w-]+)\.outputs\.([\w-]+)/g, (_, name, key) =>
       JSON.stringify(outputs[name]?.[key] ?? ""),
     )
@@ -34,19 +38,253 @@ function enabled(job, { event, dryRun, results = {}, outputs = {}, cancelled = f
   return Function(`"use strict"; return (${condition});`)();
 }
 
+function enabled(job, context) {
+  return conditionEnabled(workflow.jobs[job].if, context);
+}
+
+test("prepare pins the dispatch SHA and proves it before pushing a version-only bump, without tagging", (t) => {
+  const prepare = workflow.jobs.prepare;
+  const steps = prepare.steps;
+  const sourceGuard = steps.findIndex((step) => step.name === "Guard: CI is green on this commit");
+  const resolve = steps.findIndex((step) => step.id === "resolve");
+  const bump = steps.findIndex((step) => step.id === "bump");
+  assert.ok(sourceGuard >= 0 && sourceGuard < resolve && resolve < bump);
+  assert.equal(steps.find((step) => step.name === "Checkout main").with.ref, "${{ github.sha }}");
+  assert.equal(prepare.outputs.sha, "${{ steps.bump.outputs.sha }}");
+  assert.equal(prepare.outputs.tag, "${{ steps.resolve.outputs.tag }}");
+  assert.doesNotMatch(steps.map((step) => step.run ?? "").join("\n"), /\bgit tag\b/);
+
+  const root = versionFixture(t);
+  const output = join(root, "outputs");
+  const calls = join(root, "git-calls");
+  const temp = join(root, "runner-temp");
+  mkdirSync(temp);
+  // Exercise the complete workflow shell, but never commit or push the test repository.
+  const stub = `git() {
+    printf '%s\\n' "$*" >> "$CALLS"
+    case "$1" in
+      rev-parse) echo 0123456789012345678901234567890123456789 ;;
+      push) return "$PUSH_STATUS" ;;
+      diff|config|add|commit) return 0 ;;
+      *) return 99 ;;
+    esac
+  }\n`;
+  for (const pushStatus of [0, 1]) {
+    writeFileSync(output, "");
+    writeFileSync(calls, "");
+    const run = spawnSync("bash", ["-c", stub + steps[bump].run], {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        VERSION: "1.2.4-canary.1",
+        GITHUB_OUTPUT: output,
+        CALLS: calls,
+        PUSH_STATUS: String(pushStatus),
+        RUNNER_TEMP: temp,
+        RELEASE_DEPLOY_KEY: "test-key",
+        GITHUB_REPOSITORY: "owner/repo",
+      },
+    });
+    assert.equal(run.status, pushStatus, run.stdout + run.stderr);
+    const commands = readFileSync(calls, "utf8");
+    assert.match(commands, /^add package.json apps\/desktop\/package.json$/m);
+    assert.match(commands, /^commit -m chore\(release\): 1\.2\.4-canary\.1$/m);
+    assert.match(commands, /^push git@github\.com:owner\/repo\.git HEAD:refs\/heads\/main$/m);
+    assert.doesNotMatch(commands, /^tag\b/m);
+    assert.equal(
+      readFileSync(output, "utf8"),
+      pushStatus === 0 ? "sha=0123456789012345678901234567890123456789\n" : "",
+    );
+    for (const file of ["package.json", "apps/desktop/package.json"]) {
+      assert.equal(JSON.parse(readFileSync(join(root, file), "utf8")).version, "1.2.4-canary.1");
+    }
+  }
+});
+
+test("hostd-ref resolves prepare.sha or the selected immutable SHA and checks source CI for tags/dry runs", (t) => {
+  const ref = workflow.jobs["hostd-ref"];
+  assert.equal(ref.outputs.ref, "${{ steps.resolve.outputs.ref }}");
+  const resolve = ref.steps.find((step) => step.id === "resolve");
+  assert.equal(resolve.env.RELEASE_REF, "${{ needs.prepare.outputs.sha || github.sha }}");
+  const root = versionFixture(t);
+  const output = join(root, "outputs");
+  for (const sha of ["b".repeat(40), "c".repeat(40)]) {
+    writeFileSync(output, "");
+    const run = spawnSync("bash", ["-c", resolve.run], {
+      encoding: "utf8",
+      env: { ...process.env, RELEASE_REF: sha, GITHUB_OUTPUT: output },
+    });
+    assert.equal(run.status, 0, run.stdout + run.stderr);
+    assert.equal(readFileSync(output, "utf8"), `ref=${sha}\n`);
+  }
+  const guard = ref.steps.find((step) => step.name === "Guard: CI is green on this commit");
+  assert.equal(guard.env.CI_SHA, "${{ github.sha }}");
+  for (const event of ["push", "workflow_dispatch"]) {
+    for (const dryRun of [true, false]) {
+      for (const requireGreen of [true, false]) {
+        assert.equal(
+          conditionEnabled(guard.if, { event, dryRun, requireGreen }),
+          event === "push" || (dryRun && requireGreen),
+        );
+      }
+    }
+  }
+});
+
+test("extended is a blocking reusable invocation on exactly the resolved release SHA", () => {
+  const extended = workflow.jobs.extended;
+  assert.equal(extended.needs, "hostd-ref");
+  assert.equal(extended.uses, "./.github/workflows/ci-extended.yml");
+  assert.deepEqual(extended.with, { ref: "${{ needs.hostd-ref.outputs.ref }}" });
+  assert.notEqual(extended["continue-on-error"], true);
+  for (const event of ["push", "workflow_dispatch"]) {
+    for (const dryRun of [true, false]) {
+      for (const requireGreen of [true, false]) {
+        const ctx = { event, dryRun, requireGreen, results: { "hostd-ref": "success" } };
+        assert.equal(enabled("extended", ctx), event === "push" || requireGreen);
+        assert.equal(enabled("extended", { ...ctx, cancelled: true }), false);
+        for (const result of ["failure", "cancelled", "skipped"]) {
+          assert.equal(enabled("extended", { ...ctx, results: { "hostd-ref": result } }), false);
+        }
+      }
+    }
+  }
+});
+
+test("release-ready rejects missing, failed or cancelled proof except explicit dispatch bypass", () => {
+  assert.equal(workflow.on.workflow_dispatch.inputs.require_green.default, true);
+  assert.deepEqual(workflow.jobs["release-ready"].needs, ["prepare", "hostd-ref", "extended"]);
+  assert.notEqual(workflow.jobs["release-ready"]["continue-on-error"], true);
+  for (const event of ["push", "workflow_dispatch"]) {
+    for (const dryRun of [true, false]) {
+      for (const requireGreen of [true, false]) {
+        for (const result of ["success", "failure", "cancelled", "skipped"]) {
+          const ctx = {
+            event,
+            dryRun,
+            requireGreen,
+            results: { "hostd-ref": "success", extended: result },
+          };
+          const allowed =
+            result === "success" ||
+            (result === "skipped" && event === "workflow_dispatch" && !requireGreen);
+          assert.equal(enabled("release-ready", ctx), allowed, JSON.stringify(ctx));
+          assert.equal(enabled("release-ready", { ...ctx, cancelled: true }), false);
+          for (const refResult of ["failure", "cancelled", "skipped"]) {
+            assert.equal(
+              enabled("release-ready", {
+                ...ctx,
+                results: { ...ctx.results, "hostd-ref": refResult },
+              }),
+              false,
+            );
+          }
+        }
+      }
+    }
+  }
+});
+
+test("only release-ready creates a tag after proof and checks out the exact proven commit", (t) => {
+  const ready = workflow.jobs["release-ready"];
+  const checkout = ready.steps.find((step) => step.uses?.startsWith("actions/checkout@"));
+  assert.equal(checkout.with.ref, "${{ needs.hostd-ref.outputs.ref }}");
+  assert.equal(checkout.with["persist-credentials"], true);
+  const tag = ready.steps.find((step) => step.name === "Tag proven commit");
+  assert.ok(ready.steps.indexOf(checkout) < ready.steps.indexOf(tag));
+  assert.equal(tag.env.TAG, "${{ needs.prepare.outputs.tag }}");
+  for (const result of ["success", "failure", "cancelled", "skipped"]) {
+    const ctx = {
+      event: "workflow_dispatch",
+      dryRun: result !== "success",
+      results: { prepare: result },
+    };
+    assert.equal(conditionEnabled(checkout.if, ctx), result === "success");
+    assert.equal(conditionEnabled(tag.if, ctx), result === "success");
+  }
+  const root = versionFixture(t);
+  const calls = join(root, "git-calls");
+  const stub = `git() { printf '%s\\n' "$*" >> "$CALLS"; }\n`;
+  const run = spawnSync("bash", ["-c", stub + tag.run], {
+    cwd: root,
+    encoding: "utf8",
+    env: { ...process.env, TAG: "v1.2.4-canary.1", CALLS: calls },
+  });
+  assert.equal(run.status, 0, run.stdout + run.stderr);
+  assert.equal(readFileSync(calls, "utf8"), "tag v1.2.4-canary.1\npush origin v1.2.4-canary.1\n");
+  for (const [name, job] of Object.entries(workflow.jobs)) {
+    if (name === "release-ready") continue;
+    assert.doesNotMatch(
+      (job.steps ?? []).map((step) => step.run ?? "").join("\n"),
+      /^\s*git tag\b/m,
+      name,
+    );
+  }
+});
+
+test("host builders and advisory capture require successful release-ready proof", () => {
+  for (const job of ["hostd", "hostd-darwin", "runner", "canary-peer"]) {
+    assert.ok(workflow.jobs[job].needs.includes("release-ready"));
+    for (const event of ["push", "workflow_dispatch"]) {
+      for (const dryRun of [true, false]) {
+        for (const result of ["success", "failure", "cancelled", "skipped"]) {
+          const ctx = { event, dryRun, results: { "release-ready": result } };
+          assert.equal(enabled(job, ctx), result === "success", `${job}: ${result}`);
+          assert.equal(enabled(job, { ...ctx, cancelled: true }), false);
+        }
+      }
+    }
+  }
+});
+
 test("dispatch defaults to dry run and can never enter tagging or desktop signing/publishing", () => {
   assert.equal(workflow.on.workflow_dispatch.inputs.dry_run.default, true);
   const ctx = {
     event: "workflow_dispatch",
     dryRun: true,
-    results: { "hostd-assets": "success", "runner-assets": "success" },
+    results: {
+      prepare: "skipped",
+      "hostd-ref": "success",
+      extended: "success",
+      "release-ready": "success",
+      hostd: "success",
+      "hostd-darwin": "success",
+      "hostd-assets": "success",
+      runner: "success",
+      "runner-assets": "success",
+    },
   };
   assert.equal(enabled("prepare", ctx), false);
   assert.equal(enabled("release", ctx), false);
-  assert.equal(enabled("hostd-ref", ctx), true);
-  assert.equal(enabled("dry-run-desktop", ctx), true);
-  const sign = workflow.jobs["hostd-assets"].steps.find((step) => step.id === "provenance");
-  assert.equal(sign.if, "github.event_name != 'workflow_dispatch' || !inputs.dry_run");
+  for (const job of [
+    "hostd-ref",
+    "extended",
+    "release-ready",
+    "hostd",
+    "hostd-darwin",
+    "hostd-assets",
+    "runner",
+    "runner-assets",
+    "dry-run-desktop",
+  ]) {
+    assert.equal(enabled(job, ctx), true, job);
+  }
+  const tag = workflow.jobs["release-ready"].steps.find(
+    (step) => step.name === "Tag proven commit",
+  );
+  assert.equal(conditionEnabled(tag.if, ctx), false);
+  for (const job of ["hostd-assets", "runner-assets"]) {
+    const signing = workflow.jobs[job].steps.filter(
+      (step) => step.id === "provenance" || /Collect.*signature bundle/.test(step.name),
+    );
+    assert.equal(signing.length, 2);
+    for (const step of signing) {
+      assert.equal(conditionEnabled(step.if, ctx), false, step.name);
+      assert.equal(conditionEnabled(step.if, { ...ctx, dryRun: false }), true, step.name);
+    }
+  }
+  assert.equal(enabled("canary-peer-asset", ctx), false);
 });
 
 test("tag and manually dispatched releases require both architecture builds and verified pin", () => {
@@ -71,7 +309,17 @@ test("tag and manually dispatched releases require both architecture builds and 
     }
     assert.equal(enabled("release", { ...ctx, cancelled: true }), false);
   }
-  assert.deepEqual(workflow.jobs.release.needs, ["prepare", "hostd-assets", "runner-assets"]);
+  assert.deepEqual(workflow.jobs.release.needs, [
+    "prepare",
+    "hostd-ref",
+    "hostd-assets",
+    "runner-assets",
+  ]);
+  assert.deepEqual(workflow.jobs["dry-run-desktop"].needs, [
+    "hostd-ref",
+    "hostd-assets",
+    "runner-assets",
+  ]);
   assert.deepEqual(workflow.jobs.hostd.strategy.matrix.include, [
     { arch: "x64", runner: "ubuntu-24.04" },
     { arch: "arm64", runner: "ubuntu-24.04-arm" },
@@ -203,7 +451,15 @@ test("failed preparation blocks hostd/release; dry builds have read-only content
   assert.equal(enabled("release", ctx), false);
   assert.equal(enabled("hostd", { ...ctx, results: { "hostd-ref": "failure" } }), false);
   assert.equal(enabled("hostd-darwin", { ...ctx, results: { "hostd-ref": "failure" } }), false);
-  for (const job of ["hostd-ref", "hostd", "hostd-darwin", "hostd-assets", "dry-run-desktop"]) {
+  for (const job of [
+    "hostd-ref",
+    "hostd",
+    "hostd-darwin",
+    "hostd-assets",
+    "runner",
+    "runner-assets",
+    "dry-run-desktop",
+  ]) {
     assert.equal(workflow.jobs[job].permissions.contents, "read");
     const commands = workflow.jobs[job].steps.map((step) => step.run ?? "").join("\n");
     assert.doesNotMatch(commands, /\bsecurity\b|\bgit (?:tag|push)\b|gh release (?:create|upload)/);
@@ -231,6 +487,7 @@ test("desktop release and dry run compile only the public pinned account target"
 test("desktop gets the same generated pin; release cleanup keeps hostd assets and signature", () => {
   for (const job of ["release", "dry-run-desktop"]) {
     const steps = workflow.jobs[job].steps;
+    assert.equal(steps[0].with.ref, "${{ needs.hostd-ref.outputs.ref }}");
     const build = steps.find((step) => step.env?.VOLLI_HOSTD_MANIFEST);
     assert.equal(
       build.env.VOLLI_HOSTD_MANIFEST,
@@ -267,7 +524,7 @@ test("peer capture is advisory, resolves the release commit, and exercises dry r
   const attach = workflow.jobs["canary-peer-asset"];
   assert.equal(capture["continue-on-error"], true);
   assert.equal(attach["continue-on-error"], true);
-  assert.deepEqual(capture.needs, ["prepare", "hostd-ref"]);
+  assert.deepEqual(capture.needs, ["prepare", "hostd-ref", "release-ready"]);
   assert.deepEqual(attach.needs, ["canary-peer", "release"]);
   // No critical-path job may depend on either advisory job.
   for (const [name, job] of Object.entries(workflow.jobs)) {
@@ -301,7 +558,7 @@ test("peer capture is advisory, resolves the release commit, and exercises dry r
   const ctx = {
     event: "workflow_dispatch",
     dryRun: true,
-    results: { "hostd-ref": "success", release: "success" },
+    results: { "hostd-ref": "success", "release-ready": "success", release: "success" },
     outputs: { "canary-peer": { captured: "true" } },
   };
   assert.equal(enabled("canary-peer", ctx), true);
@@ -387,7 +644,7 @@ const guard = workflow.jobs.hostd.steps.find((step) => step.name === "Guard rele
 test("button bump updates root and desktop together, including a canary", (t) => {
   const root = versionFixture(t);
   const bump = workflow.jobs.prepare.steps
-    .find((step) => step.name === "Bump versions, commit, tag, push")
+    .find((step) => step.id === "bump")
     .run.split("git diff --stat")[0];
   // Execute only the manifest rewrite, never the commit/tag/push portion.
   assert.doesNotMatch(bump, /\bgit\b/);
@@ -449,61 +706,106 @@ test("manifest version validation is build-only, not pnpm dev or CI test lanes",
   }
 });
 
-test("release guard requires a green ci.yml AND ci-extended.yml run on the exact commit", () => {
-  const greenGuard = workflow.jobs.prepare.steps.find(
+test("source CI guards require a green ci.yml run on the exact SHA, not an old extended lookup", (t) => {
+  const root = versionFixture(t);
+  const calls = join(root, "gh-calls");
+  const sha = "a".repeat(40);
+  const prepareGuard = workflow.jobs.prepare.steps.find(
     (step) => step.name === "Guard: CI is green on this commit",
   );
-  assert.equal(greenGuard.if, "inputs.require_green");
-  // Stub git and gh; the conclusions per workflow come from the environment.
-  const stub = `git() { echo abc123; }
+  assert.equal(prepareGuard.if, "inputs.require_green");
+  assert.equal(
+    conditionEnabled(prepareGuard.if, { event: "workflow_dispatch", dryRun: false }),
+    true,
+  );
+  assert.equal(
+    conditionEnabled(prepareGuard.if, {
+      event: "workflow_dispatch",
+      dryRun: false,
+      requireGreen: false,
+    }),
+    false,
+  );
+  // Run the exact workflow shell. Stubs reject a wrong workflow, SHA or query;
+  // an Actions API error behaves like no completed run and must fail closed.
+  const stub = `git() { [ "$*" = "rev-parse HEAD" ] || return 98; echo "$CI_SHA"; }
   gh() {
-    case "$2" in
-      */workflows/ci.yml/runs?head_sha=abc123*) printf '%b' "$CI" ;;
-      */workflows/ci-extended.yml/runs?head_sha=abc123*) printf '%b' "$EXTENDED" ;;
-      *) return 99 ;;
-    esac
+    printf '%s\\n' "$*" >> "$CALLS"
+    [ "$1" = api ] || return 99
+    [ "$2" = "repos/owner/repo/actions/workflows/ci.yml/runs?head_sha=$CI_SHA&status=completed" ] || return 99
+    [ "$3" = -q ] && [ "$4" = '.workflow_runs[].conclusion' ] || return 99
+    [ "$API_STATUS" = 0 ] || return "$API_STATUS"
+    printf '%b' "$CI"
   }\n`;
   const cases = [
-    ["success", "success", true],
-    ["cancelled\\nsuccess", "success", true],
-    ["success", "", false],
-    ["", "success", false],
-    ["success", "cancelled", false],
-    ["failure", "success", false],
-    ["success", "failure\\ncancelled", false],
+    ["success", 0, true],
+    ["cancelled\\nsuccess", 0, true],
+    ["failure\\nsuccess", 0, true],
+    ["", 0, false],
+    ["cancelled", 0, false],
+    ["failure", 0, false],
+    ["failure\\ncancelled", 0, false],
+    ["skipped", 0, false],
+    ["not-success", 0, false],
+    ["success", 1, false],
   ];
-  for (const [ci, extended, green] of cases) {
-    const run = spawnSync("bash", ["-c", stub + greenGuard.run], {
-      encoding: "utf8",
-      env: { ...process.env, GITHUB_REPOSITORY: "owner/repo", CI: ci, EXTENDED: extended },
-    });
-    assert.equal(run.status === 0, green, `ci=${ci} extended=${extended}\n${run.stdout}`);
+  for (const job of ["prepare", "hostd-ref"]) {
+    assert.equal(workflow.jobs[job].permissions.actions, "read");
+    const greenGuard = workflow.jobs[job].steps.find(
+      (step) => step.name === "Guard: CI is green on this commit",
+    );
+    assert.doesNotMatch(greenGuard.run, /ci-extended\.yml/);
+    for (const [ci, apiStatus, green] of cases) {
+      writeFileSync(calls, "");
+      const run = spawnSync("bash", ["-c", stub + greenGuard.run], {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          GITHUB_REPOSITORY: "owner/repo",
+          CI_SHA: sha,
+          CI: ci,
+          API_STATUS: String(apiStatus),
+          CALLS: calls,
+        },
+      });
+      assert.equal(
+        run.status === 0,
+        green,
+        `${job}: ci=${ci} api=${apiStatus}\n${run.stdout}${run.stderr}`,
+      );
+      assert.equal(
+        readFileSync(calls, "utf8"),
+        `api repos/owner/repo/actions/workflows/ci.yml/runs?head_sha=${sha}&status=completed -q .workflow_runs[].conclusion\n`,
+      );
+      if (!green)
+        assert.match(run.stdout, /::error::(?:No completed ci\.yml run|ci\.yml did not succeed)/);
+    }
   }
 });
 
-test("release guard accepts extended green on an ancestor only across inert changes", () => {
+test("source CI guard never substitutes ancestor proof, even across inert changes", () => {
   const greenGuard = workflow.jobs.prepare.steps.find(
     (step) => step.name === "Guard: CI is green on this commit",
   );
-  // HEAD (head1) has ci.yml green but no extended run; base0 has extended green.
+  // An ancestor's green CI or extended run cannot replace CI on HEAD. Extended
+  // is now executed by the reusable workflow on the exact release SHA.
   const stub = `git() {
     case "$1" in
       rev-parse) echo head1 ;;
-      rev-list) printf 'head1\\nmid2\\nbase0\\n' ;;
-      diff) printf '%b' "$CHANGED" ;;
+      rev-list|diff) echo 'ancestor lookup is forbidden' >&2; return 99 ;;
     esac
   }
   gh() {
     case "$2" in
-      */workflows/ci.yml/runs?head_sha=head1*) echo success ;;
+      */workflows/ci.yml/runs?head_sha=base0*) echo success ;;
       */workflows/ci-extended.yml/runs?head_sha=base0*) echo success ;;
-      */workflows/ci-extended.yml/runs?head_sha=mid2*) echo failure ;;
       *) return 0 ;;
     esac
   }\n`;
   const cases = [
-    ["README.md\\napps/docs/src/content/x.md\\napps/website/src/pages/index.astro", true],
-    ["docs/development/ci.md", true],
+    ["README.md\\napps/docs/src/content/x.md\\napps/website/src/pages/index.astro", false],
+    ["docs/development/ci.md", false],
     ["README.md\\napps/desktop/src/main/index.ts", false],
     ["apps/desktop/e2e/volli-drive/supervisor.mjs", false],
     [".github/workflows/ci.yml", false],
@@ -524,7 +826,7 @@ test("runner builds both native architectures at the bullseye ABI baseline", () 
   const runner = workflow.jobs.runner;
   assert.deepEqual(runner.strategy.matrix.include, workflow.jobs.hostd.strategy.matrix.include);
   assert.equal(runner.if, workflow.jobs.hostd.if);
-  assert.deepEqual(runner.needs, ["prepare", "hostd-ref"]);
+  assert.deepEqual(runner.needs, ["prepare", "hostd-ref", "release-ready"]);
   assert.equal(runner.permissions.contents, "read");
   const commands = runner.steps.map((step) => step.run ?? "").join("\n");
   assert.match(commands, /runner-build\/Dockerfile/);
@@ -565,7 +867,7 @@ test("runner assets are verified and attested, and gate every publishing path", 
   const assets = workflow.jobs["runner-assets"];
   assert.deepEqual(assets.needs, ["hostd-ref", "runner"]);
   const nodeSetup = assets.steps.find((step) => step.name === "Setup pinned Node");
-  assert.equal(nodeSetup.uses, "actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38");
+  assert.equal(nodeSetup.uses, "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1");
   assert.deepEqual(nodeSetup.with, {
     "node-version-file": ".nvmrc",
     "package-manager-cache": false,
@@ -736,7 +1038,10 @@ exit "$TEST_CODE"
 });
 
 const prepareStep = (name) => workflow.jobs.prepare.steps.find((step) => step.name === name);
-const pushStep = prepareStep("Bump versions, commit, tag, push");
+const pushStep = prepareStep("Bump versions, commit, push");
+const tagStep = workflow.jobs["release-ready"].steps.find(
+  (step) => step.name === "Tag proven commit",
+);
 
 // A PATH whose git refuses to run, so a step that escapes the shell stub can
 // never touch this worktree or its remote.
@@ -786,6 +1091,7 @@ test("button bump goes to main over SSH with the deploy key; the tag stays on GI
   mkdirSync(temp);
   const log = join(root, "git.log");
   const stub = `git() {
+    if [ "$1" = rev-parse ]; then echo 0123456789012345678901234567890123456789; fi
     if [ "$1" = push ]; then
       { echo "push \${*:2}"; echo "ssh \${GIT_SSH_COMMAND:-none}"
         echo "key $(cat "$RUNNER_TEMP/release_deploy_key" 2>/dev/null || echo absent) $(stat -c %a "$RUNNER_TEMP/release_deploy_key" 2>/dev/null || stat -f %Lp "$RUNNER_TEMP/release_deploy_key" 2>/dev/null)"
@@ -793,19 +1099,36 @@ test("button bump goes to main over SSH with the deploy key; the tag stays on GI
     fi
   }\n`;
   assert.equal(pushStep.env.RELEASE_DEPLOY_KEY, "${{ secrets.RELEASE_DEPLOY_KEY }}");
+  const env = guardedEnv(root, {
+    VERSION: "1.2.4",
+    RELEASE_DEPLOY_KEY: "test-key",
+    RUNNER_TEMP: temp,
+    GITHUB_REPOSITORY: "owner/repo",
+    GIT_LOG: log,
+    GITHUB_OUTPUT: join(root, "outputs"),
+  });
   const run = spawnSync("bash", ["-c", stub + pushStep.run], {
     cwd: root,
     encoding: "utf8",
-    env: guardedEnv(root, {
-      VERSION: "1.2.4",
-      TAG: "v1.2.4",
-      RELEASE_DEPLOY_KEY: "test-key",
-      RUNNER_TEMP: temp,
-      GITHUB_REPOSITORY: "owner/repo",
-      GIT_LOG: log,
-    }),
+    env,
   });
   assert.equal(run.status, 0, run.stdout + run.stderr);
+  // Preparation pushes no tag. Tagging runs in a separate, proof-gated job
+  // without the deploy key or its SSH command in the environment.
+  assert.equal(readFileSync(log, "utf8").trim().split("\n").length, 3);
+  assert.equal(
+    readFileSync(env.GITHUB_OUTPUT, "utf8"),
+    "sha=0123456789012345678901234567890123456789\n",
+  );
+  assert.equal(spawnSync("test", ["-e", join(temp, "release_deploy_key")]).status, 1);
+  const tagEnv = { ...env, TAG: "v1.2.4" };
+  delete tagEnv.RELEASE_DEPLOY_KEY;
+  const tag = spawnSync("bash", ["-c", stub + tagStep.run], {
+    cwd: root,
+    encoding: "utf8",
+    env: tagEnv,
+  });
+  assert.equal(tag.status, 0, tag.stdout + tag.stderr);
   const lines = readFileSync(log, "utf8").trim().split("\n");
   const sshCommand =
     `ssh -i '${temp}/release_deploy_key' -o IdentitiesOnly=yes -o BatchMode=yes ` +
@@ -817,7 +1140,7 @@ test("button bump goes to main over SSH with the deploy key; the tag stays on GI
     `ssh ${sshCommand}`,
     "key test-key 600",
     // The key is gone before the GITHUB_TOKEN tag push.
-    "push origin refs/tags/v1.2.4",
+    "push origin v1.2.4",
     "ssh none",
     "key absent",
   ]);
@@ -834,7 +1157,7 @@ function realGit(cwd, ...args) {
   return result.stdout.trim();
 }
 
-test("button push over real git: lands bump and tag, or tags nothing when main moved", (t) => {
+test("button push over real git: bumps before proof, tags the proven SHA later, and rejects moved main", (t) => {
   for (const moved of [false, true]) {
     const scratch = versionFixture(t);
     const remote = join(scratch, "remote.git");
@@ -852,6 +1175,10 @@ test("button push over real git: lands bump and tag, or tags nothing when main m
     realGit(seed, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base");
     realGit(seed, "push", "-q", remote, "main");
     realGit(scratch, "clone", "-q", remote, work);
+    const dispatchSha = realGit(work, "rev-parse", "HEAD");
+    // Match checkout of github.sha, not a moving main branch. This includes
+    // main advancing while environment approval is pending.
+    realGit(work, "checkout", "-q", "--detach", dispatchSha);
     if (moved) {
       writeFileSync(join(seed, "other"), "x");
       realGit(seed, "add", "-A");
@@ -870,26 +1197,49 @@ test("button push over real git: lands bump and tag, or tags nothing when main m
         GIT_CONFIG_KEY_0: `url.file://${remote}.insteadOf`,
         GIT_CONFIG_VALUE_0: "git@github.com:owner/repo.git",
         VERSION: "1.2.4",
-        TAG: "v1.2.4",
         RELEASE_DEPLOY_KEY: "test-key",
         RUNNER_TEMP: temp,
         GITHUB_REPOSITORY: "owner/repo",
+        GITHUB_OUTPUT: join(scratch, "outputs"),
       },
     });
     const tags = realGit(remote, "tag", "--list");
+    assert.equal(tags, "", "preparation must never create a tag before proof");
     assert.equal(spawnSync("test", ["-e", join(temp, "release_deploy_key")]).status, 1);
     if (moved) {
       assert.notEqual(run.status, 0, "a moved main must fail the push");
       assert.equal(realGit(remote, "rev-parse", "main"), before);
       assert.equal(tags, "");
+      assert.throws(() => readFileSync(join(scratch, "outputs"), "utf8"), { code: "ENOENT" });
     } else {
       assert.equal(run.status, 0, run.stdout + run.stderr);
       assert.equal(realGit(remote, "log", "-1", "--format=%s", "main"), "chore(release): 1.2.4");
-      assert.equal(tags, "v1.2.4");
-      assert.equal(
-        realGit(remote, "rev-parse", "v1.2.4^{commit}"),
-        realGit(remote, "rev-parse", "main"),
-      );
+      const provenSha = realGit(remote, "rev-parse", "main");
+      assert.equal(readFileSync(join(scratch, "outputs"), "utf8"), `sha=${provenSha}\n`);
+      assert.deepEqual(realGit(work, "diff", "--name-only", dispatchSha, provenSha).split("\n"), [
+        "apps/desktop/package.json",
+        "package.json",
+      ]);
+      // Main may advance while extended proves the bump. A fresh checkout
+      // must tag the resolved SHA, not the newer branch tip.
+      realGit(seed, "fetch", "-q", remote, "main");
+      realGit(seed, "merge", "-q", "--ff-only", "FETCH_HEAD");
+      writeFileSync(join(seed, "after-proof"), "main advanced during proof");
+      realGit(seed, "add", "-A");
+      realGit(seed, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "after bump");
+      realGit(seed, "push", "-q", remote, "main");
+      assert.notEqual(realGit(remote, "rev-parse", "main"), provenSha);
+      const tagWork = join(scratch, "tag-work");
+      realGit(scratch, "clone", "-q", remote, tagWork);
+      realGit(tagWork, "checkout", "-q", "--detach", provenSha);
+      const tag = spawnSync("bash", ["-c", tagStep.run], {
+        cwd: tagWork,
+        encoding: "utf8",
+        env: { ...process.env, GIT_CEILING_DIRECTORIES: scratch, TAG: "v1.2.4" },
+      });
+      assert.equal(tag.status, 0, tag.stdout + tag.stderr);
+      assert.equal(realGit(remote, "tag", "--list"), "v1.2.4");
+      assert.equal(realGit(remote, "rev-parse", "v1.2.4^{commit}"), provenSha);
     }
   }
 });

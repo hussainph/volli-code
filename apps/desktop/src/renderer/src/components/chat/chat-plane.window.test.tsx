@@ -2556,10 +2556,12 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
       const summary = container?.querySelector(".is-assistant button[aria-expanded]");
       expect(summary).not.toBeNull();
       // In flight wears the shared spinner beside the count, never an ellipsis.
-      expect(summary?.textContent).toContain("Working");
+      expect(summary?.textContent).toContain("Using 1 tool");
       expect(summary?.textContent).not.toContain("…");
-      // The approved receipt uses a static clock, not a second live spinner.
-      expect(summary?.querySelector("svg")).not.toBeNull();
+      // The v2 gist owns the one transcript progress glyph while collapsed;
+      // its hidden child must not add another spinner.
+      expect(summary?.querySelectorAll(".animate-spin")).toHaveLength(1);
+      expect(container?.querySelectorAll(".is-assistant .animate-spin")).toHaveLength(1);
       expectActivity(status, "Running pnpm check");
 
       // The provider leaves the old thought marked streaming. Segmentation,

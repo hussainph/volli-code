@@ -17,13 +17,20 @@
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
-.transcript-clock-slot {
+.transcript-status-slot {
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  width: calc(var(--spacing) * 4);
+  width: calc(var(--spacing) * 3.5);
   height: var(--text-ui--line-height);
+}
+/* The rail starts directly below the parent's status slot. The child list
+   remains one bounded scroller; wheel input can chain to the transcript. */
+.transcript-work-rail {
+  margin-inline-start: calc(var(--spacing) * 1.75);
+  padding-inline-start: calc(var(--spacing) * 4);
+  border-inline-start: 1px solid var(--border);
 }
 .transcript-work-summary > svg {
   align-self: center;

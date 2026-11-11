@@ -3,6 +3,30 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 import { WorkReceipt } from "./work-receipt";
+import { ACTIVITY_METADATA_KEY } from "@volli/shared";
+
+const read = {
+  kind: "tool" as const,
+  key: "read",
+  part: {
+    type: "dynamic-tool" as const,
+    toolCallId: "read",
+    toolName: "read",
+    state: "output-available" as const,
+    input: { path: "DESIGN.md" },
+    output: "design",
+    toolMetadata: {
+      [ACTIVITY_METADATA_KEY]: {
+        kind: "read-file",
+        nativeToolName: "read",
+        subject: { label: "DESIGN.md", path: "DESIGN.md", lineRange: null },
+        startedAt: null,
+        endedAt: null,
+        outcome: null,
+      },
+    },
+  },
+};
 
 let container: HTMLDivElement;
 let root: Root;
@@ -11,7 +35,7 @@ function render() {
   act(() =>
     root.render(
       <WorkReceipt
-        work={{ key: "work", rows: [], startedAt: 1000, endedAt: 13000, state: "complete" }}
+        work={{ key: "work", rows: [read], startedAt: 1000, endedAt: 13000, state: "complete" }}
         summary={[{ text: "Read DESIGN.md, used 6 tools", tone: "neutral" }]}
         open={expanded}
         onToggle={() => {
@@ -56,11 +80,11 @@ it("shows a transient preview only over the collapsed receipt and never latches 
   expect(preview()).toBeNull();
   act(() => button().click());
   expect(button().getAttribute("aria-expanded")).toBe("true");
-  expect(button().textContent).toContain("Read DESIGN.md");
+  expect(button().textContent).toContain("Explored 1 file");
   pointer("pointerover");
   expect(preview()).toBeNull();
   act(() => button().click());
-  expect(button().textContent).toContain("Work details");
+  expect(button().textContent).toContain("Explored 1 file");
   expect(preview()).toBeNull();
 });
 
@@ -97,7 +121,7 @@ it("keeps unresolved activity visible in a boundary-frozen collapsed receipt and
       />,
     ),
   );
-  expect(button().textContent).toContain("Work details");
+  expect(button().textContent).toContain("Using 1 tool");
   expect(button().textContent).toContain("1 unresolved");
   expect(button().textContent).toContain("1 failed");
   act(() =>
@@ -118,7 +142,7 @@ it("keeps unresolved activity visible in a boundary-frozen collapsed receipt and
       />,
     ),
   );
-  expect(button().textContent).toContain("Work details");
+  expect(button().textContent).toContain("Used 1 tool");
   expect(button().textContent).not.toContain("unresolved");
 });
 
@@ -130,5 +154,5 @@ it("allows keyboard collapsed focus, dismisses on Escape and blur, and has no to
   act(() => button().blur());
   expect(preview()).toBeNull();
   expect(button().hasAttribute("title")).toBe(false);
-  expect(button().querySelector(".transcript-clock-slot > svg.size-4")).not.toBeNull();
+  expect(button().querySelector(".transcript-status-slot > svg.size-3\\.5")).not.toBeNull();
 });

@@ -22,7 +22,6 @@ import {
   clipListingText,
   projectSessionListing,
   SESSION_LISTING_LIMIT,
-  SESSION_LISTING_ROWS_CHUNK,
   sessionListingRowsForRoster,
   ticketSessionListing,
   type SessionListingSources,
@@ -96,7 +95,12 @@ describe("the listing's one body", () => {
 
 describe("the rows step's chunks (VC-1076)", () => {
   it("yields between chunks and builds exactly the rows one pass would", async () => {
-    const count = SESSION_LISTING_ROWS_CHUNK * 2 + 3;
+    // A small chunk keeps the fixture at eleven Sessions (VC-1184): the
+    // invariant under test is the chunking itself, not the measured
+    // production chunk, and 1,027 one-commit inserts were slow enough to
+    // time the test out on a loaded CI runner.
+    const chunk = 4;
+    const count = chunk * 2 + 3;
     for (let index = 0; index < count; index += 1) {
       insertSession(
         ctx.db,
@@ -107,9 +111,15 @@ describe("the rows step's chunks (VC-1076)", () => {
     const engine = createTestSessionEngine(ctx.db, { now: () => 500 });
     const sessions = await engine.listSessions({ projectId: PROJECT, scope: "all" });
     let yields = 0;
-    const chunked = await sessionListingRowsForRoster(ctx.db, sessions, new Set(), async () => {
-      yields += 1;
-    });
+    const chunked = await sessionListingRowsForRoster(
+      ctx.db,
+      sessions,
+      new Set(),
+      async () => {
+        yields += 1;
+      },
+      chunk,
+    );
     expect(yields).toBe(2);
     expect(chunked).toEqual(
       sessionListingRows(
@@ -127,9 +137,9 @@ describe("the rows step's chunks (VC-1076)", () => {
       unreadSince: 1_234,
     });
     // The default yield is a real macrotask turn, and changes nothing.
-    await expect(sessionListingRowsForRoster(ctx.db, sessions, new Set())).resolves.toEqual(
-      chunked,
-    );
+    await expect(
+      sessionListingRowsForRoster(ctx.db, sessions, new Set(), undefined, chunk),
+    ).resolves.toEqual(chunked);
   });
 });
 

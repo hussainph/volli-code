@@ -1464,6 +1464,32 @@ describe("ticket sessions", () => {
     }
   });
 
+  // VC-1085: the default reader counts the PTYs this manager runs, and never
+  // a terminal Session whose attachment the ledger merely still has open.
+  it("budgets a terminal against the PTYs running, not open attachments", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    // Rebuilt under the fake clock: the reader's TTL reads the clock it was built with.
+    manager = registerTerminalIpcHandlers({ ok: true, db: testDb.db }, fixtureSessionEngine, {
+      socketPath: "/profile/volli.sock",
+      binDir: "/profile/bin",
+    });
+    // A terminal the ledger still calls open, with no process behind it.
+    insertSession(testDb.db, testSession("w", null, { id: "orphaned-terminal" }));
+    const hint = () => Number.parseInt(lastSpawnEnv()["VOLLI_CONCURRENCY_HINT"] ?? "0", 10);
+    const cores = os.availableParallelism();
+
+    await createSession();
+    expect(hint()).toBe(cores);
+    vi.setSystemTime(Date.now() + 10_000);
+    await createSession();
+    // One running PTY: still every core.
+    expect(hint()).toBe(cores);
+    vi.setSystemTime(Date.now() + 10_000);
+    await createSession();
+    // Two running PTYs, the orphaned attachment not among them.
+    expect(hint()).toBe(Math.max(1, Math.floor(cores / 2)));
+  });
+
   it("leaves an exported budget variable exactly as the user set it", async () => {
     // The other direction of the same rule, and the one the suite never had:
     // a value already in the environment survives, rather than being replaced

@@ -1187,6 +1187,12 @@ export interface SessionRuntimeSpec {
   carryUnreadable?: string;
   signal?: AbortSignal;
   /**
+   * Marks the end of one of the runtime's own attach stages (VC-1072), so the
+   * host can report where a slow attach spent its time. Diagnostics only: it
+   * never throws, and calls after the attach has been reported are ignored.
+   */
+  markAttachStage?: (stage: string) => void;
+  /**
    * Ask a person about an exhausted budget or an existing confirmation.
    *
    * Optional: without a host to ask, the operation stays refused.

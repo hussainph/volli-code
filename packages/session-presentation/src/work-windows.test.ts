@@ -76,7 +76,7 @@ it("owns work before every author boundary, without empty receipts or role chang
   ]);
   expect(
     rows.filter((row) => row.kind === "work").map((row) => workDurationLabel(row.work)),
-  ).toEqual(["Work details", "Work details", "Work details"]);
+  ).toEqual(["Used 1 tool", "Used 1 tool", "Used 1 tool"]);
   expect(
     rows.flatMap((row) =>
       row.kind === "turn" ? row.messages.map((message) => [message.id, message.role]) : [],
@@ -163,11 +163,54 @@ it("does not revive historical progress, invent reasoning clocks, or draw blank 
   const live = projectWorkWindows(source, new Map(), true);
   expect(replay).toHaveLength(1);
   expect(replay[0]!.kind === "work" && replay[0]!.work.startedAt).toBeNull();
-  expect(replay[0]!.kind === "work" && workDurationLabel(replay[0]!.work)).toBe("Work details");
-  expect(live[0]!.kind === "work" && workDurationLabel(live[0]!.work)).toBe("Working");
+  expect(replay[0]!.kind === "work" && workDurationLabel(replay[0]!.work)).toBe("Used 1 tool");
+  expect(live[0]!.kind === "work" && workDurationLabel(live[0]!.work)).toBe("Used 1 tool");
 });
 
-describe("honest duration labels without suspension coverage", () => {
+it("preserves text/tool order inside one message even with a stepped-back tool clock", () => {
+  const source = projectTranscriptRows(
+    [
+      [
+        msg("same-message", "assistant", [
+          tool("a", 1000),
+          { type: "text", text: "Checking" },
+          tool("b", 500),
+          { type: "text", text: "Done" },
+        ]),
+      ],
+    ],
+    [],
+    [],
+  );
+  const rows = projectWorkWindows(source, new Map([["same-message", 3000]]), false, {
+    // Unknown newer frame: position survives without an event clock.
+    frames: [{ sessionId: "session", sequence: 1, event: null, transcript: null }],
+    activityFirstOverlaySequence: new Map(),
+  });
+  expect(rows.map((row) => row.kind)).toEqual(["work", "turn", "work", "turn"]);
+  expect(
+    rows.flatMap((row) => (row.kind === "work" ? row.work.rows.map((entry) => entry.key) : [])),
+  ).toEqual(["tool:a", "tool:b"]);
+});
+
+it("never lets a stale running overlay replace a settled result of the same call", () => {
+  const source = projectTranscriptRows(
+    [
+      [
+        msg("settled", "assistant", [tool("same", 1000)]),
+        msg("stale-overlay", "assistant", [tool("same", 1000, "input-available")]),
+      ],
+    ],
+    [],
+    [],
+  );
+  const rows = projectWorkWindows(source, new Map(), false);
+  expect(rows).toHaveLength(1);
+  expect(rows[0]!.kind === "work" && rows[0]!.work.rows).toHaveLength(1);
+  expect(rows[0]!.kind === "work" && rows[0]!.work.rows[0]!.part.state).toBe("output-available");
+});
+
+describe("never deriving execution duration from boundary clocks", () => {
   it.each([[0], [12000], [68000], [3720000]])(
     "does not call %i milliseconds of wall time active work",
     (elapsed) => {
@@ -178,9 +221,9 @@ describe("honest duration labels without suspension coverage", () => {
         endedAt: elapsed,
         state: "complete",
       };
-      expect(workDurationLabel(work)).toBe("Work details");
-      expect(workDurationLabel({ ...work, startedAt: null })).toBe("Work details");
-      expect(workDurationLabel({ ...work, endedAt: -1 })).toBe("Work details");
+      expect(workDurationLabel(work)).toBe("Thought");
+      expect(workDurationLabel({ ...work, startedAt: null })).toBe("Thought");
+      expect(workDurationLabel({ ...work, endedAt: -1 })).toBe("Thought");
     },
   );
 });

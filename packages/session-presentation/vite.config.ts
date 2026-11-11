@@ -17,6 +17,10 @@ export default defineConfig({
       // and stay outside; index.ts is re-exports only.
       include: [
         "src/activity.ts",
+        "src/tool-names.ts",
+        "src/tool-presentation.ts",
+        "src/work-gist.ts",
+        "src/work-windows.ts",
         // The Activity Island's projection contract and grammar (VC-256): when
         // there is an island at all, which clusters it draws, and the two
         // registers every announcement keeps apart. Pure precisely so the gate

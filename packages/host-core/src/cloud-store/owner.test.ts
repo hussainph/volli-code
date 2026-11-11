@@ -305,6 +305,107 @@ describe("Session owner views", () => {
     expect(f.a.projectIds()).toEqual(["p"]);
   });
 
+  // VC-1072: listing and concurrency-budget reads must share cached lightweight
+  // folds, without full getSession reads or enumerating another owner's history.
+  it.each(["local", "cloud"] as const)(
+    "point-reads only selected %s rows in scope order and shares their cached listing folds",
+    async (launch) => {
+      const f = setup();
+      const engine = launch === "local" ? f.local : f.a.engine;
+      const mine = [await f.create(engine, "mine-1"), await f.create(engine, "mine-2")];
+      const theirs = await f.create(f.b.engine, "theirs");
+      for (const { session } of [...mine, theirs]) {
+        const start = await f.raw.submit({
+          commandId: `start-${session.id}`,
+          sessionId: session.id,
+          intent: { kind: "executor.start", adapterId: "terminal", continuity: "fresh" },
+          provenance,
+        });
+        await f.raw.observe({
+          id: `open-${session.id}`,
+          kind: "attachment.opened",
+          sessionId: session.id,
+          commandId: start.command.id,
+          occurredAt: 100,
+          provenance,
+          attachment: {
+            id: `attachment-${session.id}`,
+            sessionId: session.id,
+            adapterId: "terminal",
+            venue: LOCAL_RUNNER,
+            continuity: "fresh",
+            native: { id: null, detail: null },
+            authority: null,
+          },
+        });
+      }
+      const expected = mine.toReversed().map(({ session }) => session.id);
+      const getSession = vi.spyOn(f.raw, "getSession");
+      const getListing = vi.spyOn(f.raw, "getSessionListing");
+      const listSessions = vi.spyOn(f.raw, "listSessions");
+      const listAttachedSessions = vi.spyOn(f.raw, "listAttachedSessions");
+      const countSessions = vi.spyOn(f.raw, "countSessions");
+      const changesBefore = f.db.prepare("SELECT total_changes() AS n").get();
+
+      // Neither roster is warmed through an unscoped listing first.
+      const listed = await engine.listSessions({ projectId: "p", scope: "all" });
+      const attached = await engine.listAttachedSessions();
+
+      expect(listed.map((projection) => projection.session.id)).toEqual(expected);
+      expect(attached.map((projection) => projection.session.id)).toEqual(expected);
+      expect(attached[0]).toBe(listed[0]);
+      expect(attached[1]).toBe(listed[1]);
+      expect(getListing.mock.calls).toEqual(
+        [...expected, ...expected].map((sessionId) => [{ sessionId, persistCheckpoint: false }]),
+      );
+      expect(countSessions.mock.calls).toEqual([
+        [{ projectId: "p", scope: "all" }],
+        [{ projectId: "p", scope: "all" }],
+      ]);
+      expect(getSession).not.toHaveBeenCalled();
+      expect(listSessions).not.toHaveBeenCalled();
+      expect(listAttachedSessions).not.toHaveBeenCalled();
+      expect(f.db.prepare("SELECT total_changes() AS n").get()).toEqual(changesBefore);
+    },
+  );
+
+  it("skips a selected row missing at point-read time without a full-fold fallback", async () => {
+    const f = setup();
+    const born = await f.create(f.local, "selected-before-delete");
+    // A project deletion can remove a row after scoped membership was selected.
+    const getListing = vi.spyOn(f.raw, "getSessionListing").mockResolvedValueOnce(null);
+    const getSession = vi.spyOn(f.raw, "getSession");
+    const listSessions = vi.spyOn(f.raw, "listSessions");
+
+    await expect(f.local.listSessions({ projectId: "p", scope: "all" })).resolves.toEqual([]);
+
+    expect(getListing).toHaveBeenCalledExactlyOnceWith({
+      sessionId: born.session.id,
+      persistCheckpoint: false,
+    });
+    expect(getSession).not.toHaveBeenCalled();
+    expect(listSessions).not.toHaveBeenCalled();
+  });
+
+  it("starts no counts or folds for a scope with nothing in it", async () => {
+    const f = setup();
+    await f.create(f.a.engine, "theirs");
+    const getSession = vi.spyOn(f.raw, "getSession");
+    const getListing = vi.spyOn(f.raw, "getSessionListing");
+    const countSessions = vi.spyOn(f.raw, "countSessions");
+    const listSessions = vi.spyOn(f.raw, "listSessions");
+    const listAttachedSessions = vi.spyOn(f.raw, "listAttachedSessions");
+
+    await expect(f.local.listSessions({ projectId: "p", scope: "all" })).resolves.toEqual([]);
+    await expect(f.local.listAttachedSessions()).resolves.toEqual([]);
+
+    expect(getSession).not.toHaveBeenCalled();
+    expect(getListing).not.toHaveBeenCalled();
+    expect(countSessions).not.toHaveBeenCalled();
+    expect(listSessions).not.toHaveBeenCalled();
+    expect(listAttachedSessions).not.toHaveBeenCalled();
+  });
+
   it("selects latest ticket signals and usage BEFORE aggregating, not after", async () => {
     const f = setup();
     const a = await f.create(f.a.engine, "a");

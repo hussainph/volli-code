@@ -508,8 +508,9 @@ export class PtyManager {
    * Every project's Sessions, because load is a fact about the machine: a
    * build in another project's Session competes for the same cores. Counted
    * in the same terminal/chat precedence `volli session list` shows a person,
-   * off the narrow attached-Sessions read rather than a fold of the fleet
-   * (VC-403), and shared with every other door through one reader.
+   * over the executors the host holds — its structured bindings and running
+   * PTYs, this manager's among them — rather than a fold of the fleet
+   * (VC-403, VC-1085), and shared with every other door through one reader.
    */
   private async sessionConcurrencyEnv(
     sessionId: string,

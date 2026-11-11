@@ -1115,7 +1115,12 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
    * (VC-339). Ordered like {@link listSessions} so both reads hand a caller
    * Sessions in one order.
    *
-   * This is the concurrency budget's narrowing (VC-403), and it is exact rather
+   * "Open" is durable, not live (VC-1085): a structured attachment stays open
+   * across a quit as the resumable binding the next command rehydrates, so on
+   * a long-used profile this is most of the fleet. The concurrency budget no
+   * longer reads it; it counts the executors its host holds.
+   *
+   * This was the concurrency budget's narrowing (VC-403), and it is exact rather
    * than a heuristic: a Session counts as working only if its latest terminal
    * attachment is open, or if it is a chat whose structured attachment is open
    * and mid-turn. Both require an open attachment, so a Session with none

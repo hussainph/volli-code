@@ -20,11 +20,22 @@ after main merges. `--tier boot` is a compatibility alias for `--tier core`.
 | Tokens, appearance, inheritance and persistence | canvas-theming |
 
 Other non-quarantined probes are the rest tier: `ci-extended.yml` runs it as one
-macOS job (`Smoke (rest tier)`) after every main merge, nightly, and on demand
-for any branch (`gh workflow run ci-extended.yml --ref <branch>`). It does not
-gate PRs, but the release guard requires it green on the released commit, or on a first-parent ancestor when only inert prose/website paths changed since.
-Dispatch it before merging a PR that changes a journey's area. The runner's
-`SERIAL` set runs one probe at a time after its lane's concurrent work drains.
+macOS job (`Smoke (rest tier)`) at release, on path-filtered PRs that change the
+extended lane definitions, smoke runner or older-app live harness, and on manual
+dispatch for any branch (`gh workflow run ci-extended.yml --ref <branch>`). It
+does not run after main merges or nightly and does not gate ordinary PRs.
+Dispatching a risky branch is an exception, not a routine pre-merge requirement.
+The four extended macOS lanes run in parallel; the rest tier remains one job.
+
+The release workflow runs extended on the **exact commit being shipped** and
+requires success before tagging, signing or publishing, unless the explicit
+`require_green=false` escape hatch is used. An ancestor's extended result is not
+a substitute. A red extended run at release blocks the release: track the
+regression in a ticket and fix it on its own branch, rather than re-running
+until green.
+
+The runner's `SERIAL` set runs one probe at a time after its lane's concurrent
+work drains.
 Do not quarantine a sole core journey based on historical flakes or weaken
 graceful-exit assertions.
 

@@ -1830,6 +1830,39 @@ describe("every Run door delivers its Instructions as the kickoff turn (VC-220)"
     ).toEqual({ delivered_at: null });
   });
 
+  it("says a Run's Session was stopped before it started, not that its attach failed (VC-1072)", async () => {
+    const h = harness();
+    h.attachState = "needs-recovery";
+    h.attachReceipt = {
+      id: "receipt-1",
+      commandId: "start-1",
+      status: "rejected",
+      code: "attach_cancelled",
+      detail: "attach_cancelled: the Session was stopped while it was starting.",
+      recordedAt: 10,
+      sequence: 10,
+    };
+    const automation = await savedAutomation(h);
+
+    const outcome = await h.runner.run({
+      commandId: randomUUID(),
+      target: { kind: "automation", automationId: automation.id },
+      ticketId: h.ticketId,
+      modelOverride: null,
+      attendance: "unattended",
+    });
+    await h.runner.settled();
+
+    if (!outcome.ok) throw new Error("refused");
+    expect(h.logs).toEqual([
+      {
+        msg: "automation run session was stopped before it finished starting",
+        runId: outcome.run.id,
+        reason: "it was stopped before it finished starting",
+      },
+    ]);
+  });
+
   it("names an attach that answered nothing it could quote", async () => {
     // A port is allowed to answer `needs-recovery` without a receipt — the
     // legacy/test seams do. There is still no first turn, so there is still a

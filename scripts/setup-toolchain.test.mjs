@@ -51,6 +51,24 @@ test("all Vite+ workflow sites use the shared locked bootstrap after checkout", 
   assert.equal(deferredInstalls.length, 3, `deferred installs:\n${deferredInstalls.join("\n")}`);
 });
 
+test("CodeQL init and analyze share one pin and Dependabot updates them together", () => {
+  const jobs = load(".github/workflows/codeql.yml").jobs;
+  const uses = Object.values(jobs)
+    .flatMap((job) => job.steps ?? [])
+    .map((entry) => entry.uses)
+    .filter((use) => use?.startsWith("github/codeql-action/"));
+  assert.equal(uses.length, 2);
+  assert.deepEqual(uses.map((use) => use.split("@")[0]).toSorted(), [
+    "github/codeql-action/analyze",
+    "github/codeql-action/init",
+  ]);
+  assert.match(uses[0], /@[0-9a-f]{40}$/);
+  assert.equal(uses[0].split("@")[1], uses[1].split("@")[1]);
+  const updates = load(".github/dependabot.yml").updates;
+  const actions = updates.find((update) => update["package-ecosystem"] === "github-actions");
+  assert.deepEqual(actions.groups.codeql.patterns, ["github/codeql-action*"]);
+});
+
 test("older-app uses the shared bootstrap before materializing the release", () => {
   const job = load(".github/workflows/ci-extended.yml").jobs["older-app-live"];
   const setup = job.steps.find((entry) => entry.name === "Setup Vite+");

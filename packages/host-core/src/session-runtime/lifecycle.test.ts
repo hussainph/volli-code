@@ -489,6 +489,7 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
         directory: "/w",
         lastProgressAt: 0,
         inFlightTools: [],
+        turnOpen: false,
       },
     ]);
     const conflict = Object.assign(new Error("already has a terminal receipt"), {

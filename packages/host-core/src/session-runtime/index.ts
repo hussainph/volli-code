@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
-import type { ObservabilitySink, RunnerIdentity } from "@volli/shared";
+import type { LogValue, ObservabilitySink, RunnerIdentity } from "@volli/shared";
 import {
   createSessionRuntime,
   type HostedSessionRuntime,
   mapSessionExecutorSlot,
+  type AttachTimingReport,
   type SessionExecutorSlot,
   type SessionEngine,
   type SessionLocationResolver,
@@ -15,6 +16,7 @@ import { createCheckpointFailureReporter } from "../session-control";
 import { noteAttachFailureCause } from "../session-control/session-event-log";
 import type { HostEventBus, PowerPort } from "../ports";
 import type { Logger } from "../log/logger";
+import { hostLogger } from "../log/root";
 import { correlatedExecutor } from "./correlated-executor";
 import { createSessionLocationResolver, type WorktreeSetupEnvironment } from "./location";
 import { createSqliteSessionFollowUpLedger } from "../db/session-follow-up-repo";
@@ -74,6 +76,9 @@ export interface HostSessionRuntimeOptions {
   observability?: ObservabilitySink;
 }
 
+/** Attach timing is a Session fact's companion, so it is filed beside them. */
+const attachLog = hostLogger("session");
+
 /** Composes the transport-neutral Session runtime with the desktop's durable executor. */
 export function createHostSessionRuntime(options: HostSessionRuntimeOptions): HostedSessionRuntime {
   const now = options.now ?? Date.now;
@@ -114,7 +119,30 @@ export function createHostSessionRuntime(options: HostSessionRuntimeOptions): Ho
     ids: { next: () => nextId() },
     onProjectionCheckpointFailure,
     ...(options.observability === undefined ? {} : { observability: options.observability }),
+    // Where each fresh attach spent its time, one line per attach (VC-1072).
+    onAttachTiming: (report) => attachLog.info("session attach timing", attachTimingFields(report)),
   });
+}
+
+/**
+ * One attach's timing as log fields: identifiers, an outcome and milliseconds.
+ * Each stage is the time since the one before it, keyed by name in the order
+ * the attach passed them, so a slow attach names the stage that held it.
+ */
+function attachTimingFields(report: AttachTimingReport): Record<string, LogValue> {
+  const stages: Record<string, number> = {};
+  for (const { stage, ms } of report.stages) stages[stage] = (stages[stage] ?? 0) + ms;
+  return {
+    sessionId: report.sessionId,
+    commandId: report.commandId,
+    ...(report.attachmentId === null ? {} : { attachmentId: report.attachmentId }),
+    adapterId: report.adapterId,
+    firstAttach: report.firstAttach,
+    outcome: report.outcome,
+    ...(report.code === undefined ? {} : { code: report.code }),
+    totalMs: report.totalMs,
+    stages,
+  };
 }
 
 export { correlatedExecutor } from "./correlated-executor";

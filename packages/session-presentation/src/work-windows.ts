@@ -3,6 +3,8 @@ import { activityDescriptor, activityStatus, segmentTurn, type BundleRow } from 
 import type { ChatSessionFrame, ChatTranscriptState } from "./transcript";
 import type { TranscriptRow } from "./transcript-rows";
 import { workPositionKey } from "./work-position";
+import { workGist } from "./work-gist";
+export { workGist } from "./work-gist";
 
 export type WorkTranscriptRow =
   | Exclude<TranscriptRow, { kind: "turn" }>
@@ -152,8 +154,10 @@ export function projectWorkWindows(
     const time = clock(frame.event?.occurredAt);
     if (time !== null) eventTimes.set(frame.sequence, time);
   }
-  const latest = new Map<string, Extract<BundleRow, { kind: "tool" }>["part"]>();
-  const latestSequence = new Map<string, number>();
+  const latest = new Map<
+    string,
+    { part: Extract<BundleRow, { kind: "tool" }>["part"]; sequence: number }
+  >();
   for (const row of source) {
     if (row.kind !== "turn") continue;
     for (const message of row.messages)
@@ -162,15 +166,13 @@ export function projectWorkWindows(
         const prior = latest.get(part.toolCallId);
         const live = ["running", "pending"].includes(activityStatus(part));
         const priorLive =
-          prior === undefined || ["running", "pending"].includes(activityStatus(prior));
+          prior === undefined || ["running", "pending"].includes(activityStatus(prior.part));
         const sequence = updateSequences.get(message.id) ?? 0;
         // An overlay is appended after durable results, but a stale running
         // shape is not newer than a settled result of the same call.
         if (prior && !priorLive && live) continue;
-        if (prior && priorLive === live && sequence < (latestSequence.get(part.toolCallId) ?? 0))
-          continue;
-        latest.set(part.toolCallId, part);
-        latestSequence.set(part.toolCallId, sequence);
+        if (prior && priorLive === live && sequence < prior.sequence) continue;
+        latest.set(part.toolCallId, { part, sequence });
       }
   }
   const boundaries: Boundary[] = [];
@@ -185,7 +187,8 @@ export function projectWorkWindows(
       order: order++,
       time:
         messageId === null
-          ? clock(sequence === null ? null : eventTimes.get(sequence))
+          ? // Non-message boundaries always carry their durable sequence.
+            clock(eventTimes.get(sequence!))
           : clock(messageTimes.get(messageId)),
     });
   };
@@ -234,7 +237,8 @@ export function projectWorkWindows(
         owned.add(key);
         const activity: BundleRow =
           original.kind === "tool"
-            ? { ...original, key, part: latest.get(original.part.toolCallId) ?? original.part }
+            ? // Every tool was registered in the first pass over these messages.
+              { ...original, key, part: latest.get(original.part.toolCallId)!.part }
             : { ...original, key };
         activities.push({
           row: activity,
@@ -345,11 +349,7 @@ export function projectWorkWindows(
   return result;
 }
 
+/** Compatibility entry point for receipts; both group surfaces share one gist. */
 export function workDurationLabel(work: TranscriptWorkWindow): string {
-  if (work.state === "interrupted") return "Work interrupted";
-  if (work.state === "open") return "Working";
-  // Existing presentation facts contain start/settle clocks but no complete
-  // suspension intervals. They can bound wall time, not the approved active
-  // work duration. Do not relabel elapsed/sleep/delegate time as "Worked for".
-  return "Work details";
+  return workGist(work.rows, work.state);
 }

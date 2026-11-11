@@ -37,13 +37,15 @@ releases or desktop signing credentials:
 gh workflow run release.yml --ref <branch> -f dry_run=true
 ```
 
-The dry-run builds all four tarballs, verifies their checksums, generates the
-pin, and builds the desktop with it. It uploads `hostd-linux-x64`,
+With the default `require_green=true`, the dry-run first requires a successful
+`ci.yml` run on the selected SHA and calls CI extended on that exact SHA. Only
+after extended succeeds does it build all four tarballs, verify their checksums,
+generate the pin, and build the desktop with it. It uploads `hostd-linux-x64`,
 `hostd-linux-arm64`, `hostd-darwin-arm64`, `hostd-darwin-x64`,
 `hostd-release-assets` and `desktop-hostd-manifest` workflow artifacts.
 `hostd-assets` runs only when both the Linux and the macOS builds succeed.
-`prepare` (bump/tag/push), the macOS release job, and provenance signing are
-skipped. No local Docker, signing or keychain commands are needed.
+`prepare` (bump/push), tagging, the macOS release job, and provenance signing
+are skipped. No local Docker, signing or keychain commands are needed.
 
 **A real button release requires `dry_run=false`**: uncheck `dry_run` in the
 Actions form. Only an authorized maintainer may invoke the publishing path or push a release
@@ -54,7 +56,14 @@ gh workflow run release.yml --ref main -f bump=patch -f dry_run=false
 ```
 
 The button's `prepare` job writes the resolved version into both root and
-desktop `package.json` files in the same commit before tagging. **Every release
+desktop `package.json` files in the same commit and pushes it to main. The
+existing `ci.yml` guard checks the source commit before this version-only bump;
+CI extended then runs on the exact bumped SHA. `release-ready` tags that SHA
+only after extended succeeds, before any artifact signing or publication. A red
+extended run can leave the version commit on main, but creates no tag or release.
+`require_green=false` is the explicit dispatch escape hatch for both CI checks.
+Tag-triggered releases also run extended on their exact SHA before signing or
+publication. **Every release
 starts as a draft**, invisible to updater clients while building and uploading.
 The single desktop publisher uploads the complete Mac + hostd + runner asset
 set after signing, notarization and stapling. It validates the feed's version,
@@ -91,8 +100,9 @@ The tag is still pushed with `GITHUB_TOKEN`. The ruleset targets only the
 default branch, so the tag needs no bypass, and a tag pushed with
 `GITHUB_TOKEN` does not start the workflow's own tag path; a deploy-key tag
 push would, and would publish the release twice. The deploy-key push to `main`
-does start `ci.yml`, `ci-extended.yml` and `codeql.yml` on the release commit,
-as a merge does (and cancels an older in-progress `ci.yml` push run on `main`).
+does start `ci.yml` and `codeql.yml` on the release commit, as a merge does.
+CI extended has no main-push trigger: release calls it directly and waits for
+success. The tag is pushed by `release-ready`, not by `prepare`.
 
 That key can bypass every rule on `main`, so it lives in a `release`
 environment that only `main` may deploy from, never in repository secrets that

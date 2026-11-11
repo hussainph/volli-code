@@ -35,6 +35,7 @@ import { runAutomaticBackupWorker, type AutomaticBackupRequest } from "./backup/
 import { createHostMaintenance, type HostMaintenanceOptions } from "./maintenance-services";
 import { createHostRuntimeServices } from "./runtime-services";
 import { createSessionExecutorSlot } from "@volli/session-engine";
+import { captureHostLog } from "./testing/log";
 
 /**
  * Each mock below passes through to the real module and only RECORDS: the
@@ -395,6 +396,72 @@ describe("createHostCore", () => {
       console.mockRestore();
     }
   });
+  it("logs where each fresh attach spent its time, one line per attach (VC-1072)", async () => {
+    const ports = sessionPorts();
+    const core = live(createHostCore(ports, headlessOptions(dataDir())));
+    opened.push(core);
+    const project = testProject();
+    insertProject(core.database.db, project);
+    const log = captureHostLog("info");
+    const runtime = createHostSessionRuntime({
+      db: core.database.db,
+      events: ports.events,
+      log: ports.log,
+      dataDir: core.dataDir,
+      transcriptDirectory: join(core.dataDir, "transcripts"),
+      sessionEngine: core.sessionEngine,
+      executors: createSessionExecutorSlot({
+        id: "test",
+        durableIdNamespace: "test",
+        adapterVersion: "1",
+        runtime: { path: "test", version: "1", fingerprint: "test" },
+        attach: vi.fn(async (spec) => {
+          spec.markStage?.("runtime-context");
+          throw new Error("executor offline");
+        }),
+      }),
+    });
+    try {
+      const { sessionId } = await runtime.command({
+        commandId: "create",
+        command: {
+          kind: "session.create",
+          projectId: project.id,
+          ticketId: null,
+          role: "project",
+          parentSessionId: null,
+          title: null,
+        },
+      });
+      await runtime.command({
+        commandId: "attach",
+        sessionId,
+        command: { kind: "adapter.attach", continuity: "fresh" },
+      });
+
+      const lines = log.of("session").filter(({ msg }) => msg === "session attach timing");
+      expect(lines).toEqual([
+        expect.objectContaining({
+          sessionId,
+          commandId: "attach",
+          adapterId: "test",
+          firstAttach: true,
+          outcome: "failed",
+          code: "attach_failed",
+          totalMs: expect.any(Number),
+          stages: {
+            submitted: expect.any(Number),
+            "location-prepared": expect.any(Number),
+            "runtime-context": expect.any(Number),
+          },
+        }),
+      ]);
+      expect(lines[0]).toHaveProperty("attachmentId");
+    } finally {
+      log.restore();
+      await runtime.close();
+    }
+  });
   it("owns the secret store and lazily constructs one terminal manager from options", async () => {
     const root = dataDir();
     const codec = {
@@ -414,11 +481,16 @@ describe("createHostCore", () => {
         { ...headlessOptions(root), secretKey: codec, terminal },
       ),
     );
+    // Asking who has a running PTY composes no manager (VC-1085).
+    expect(core.liveTerminalSessionIds?.()).toEqual(new Set());
+    expect(terminal).not.toHaveBeenCalled();
     const terminals = core.terminals;
     if (terminals.kind !== "available") throw new Error("Expected terminal capability.");
     const manager = terminals.manager;
     expect(core.terminals).toEqual({ kind: "available", manager });
     expect(terminal).toHaveBeenCalledOnce();
+    vi.spyOn(manager, "liveSessionIds").mockReturnValue(new Set(["running"]));
+    expect(core.liveTerminalSessionIds?.()).toEqual(new Set(["running"]));
     core.secretStore.put({ name: "TOKEN", value: "fixture", scope: "always" });
     expect(core.secretStore.list()).toHaveLength(1);
     const adopted = live(

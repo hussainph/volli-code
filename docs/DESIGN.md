@@ -175,10 +175,13 @@ context actions, add and Workspace switching intact.
 
 Tabs follow Rex: wide capsules on a neutral glass track, a lighter filled selected
 capsule, leading identity, title alone and close; Board is icon-only. A grouped
-chip's hover card shows its existing items as two-line rows, with existing liveness
-at the trailing edge. Its context menu, pane selection, dragging, rename, close and
-ungroup behaviour are unchanged. Tab selection has no transition. Pointer opens
-and closes cascade actual widths on the shared critical spring, never scale text.
+chip draws the focused member (or the first pane's front when off screen), with up to
+three fanned glyph cards and no count. Hover, click on the stack or shown chip,
+keyboard and right-click reveal the same member list in the shared glass popover.
+Existing provider artwork, liveness, member actions, close and Ungroup stay reachable;
+hover never takes focus. Pane selection and dragging remain unchanged. Tab selection
+has no transition. Pointer opens and closes cascade actual widths on the shared
+critical spring, never scale text.
 After a pointer close the remaining widths hold until exit or one second idle;
 window/pane resizing, keyboard operations and reduced motion are immediate. One `+`
 inside the trough opens the anchored Chat / Terminal / Browser chooser; the inspector

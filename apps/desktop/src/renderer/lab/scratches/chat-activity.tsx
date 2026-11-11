@@ -244,9 +244,11 @@ const KIND_ROWS: Record<ActivityKind, DynamicToolUIPart> = {
       },
     }),
   ),
+  // An MCP tool under the provider-safe name Volli registers it as
+  // (`mcpProviderToolName`): the row spells it `Used Linear · create issue`.
   other: tool(
     descriptor("other", {
-      nativeToolName: "linear_create_issue",
+      nativeToolName: "mcp__linear__create_issue__1a2b3c4d",
       subject: { label: "VC-12 chat seam", path: null, lineRange: null },
     }),
     { input: { title: "VC-12 chat seam", teamId: "VC", labels: ["chat", "ui"] } },

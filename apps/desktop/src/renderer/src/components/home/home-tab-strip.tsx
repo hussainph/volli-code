@@ -289,7 +289,12 @@ function homeTabMenuLabel(
   providers: ReadonlyMap<string, string | null>,
 ): TabMenuLabel {
   if (tab.kind === "board") return { label: "Board", icon: BoardIcon };
-  if (tab.kind === "terminal") return { label: tab.tab.title, icon: TerminalIcon };
+  if (tab.kind === "terminal") {
+    // The same reading the terminal tab's own dot makes; a parked tab's moon
+    // has no dot, so its word is said here instead.
+    const state = terminalTabState(tab.tab, useSessionsStore.getState().parkState);
+    return { label: tab.tab.title, icon: TerminalIcon, status: terminalTabDot(state) ?? "parked" };
+  }
   if (tab.kind === "chat") {
     return {
       label: tab.title,

@@ -70,7 +70,12 @@
 
 import { shortSessionId } from "@volli/shared";
 import type { CommandReceipt, SessionListingProjection } from "@volli/shared";
-import type { SessionEngine, SessionRuntime, StopSessionOutcome } from "@volli/session-engine";
+import type {
+  HostedSessionRuntime,
+  SessionEngine,
+  SessionRuntime,
+  StopSessionOutcome,
+} from "@volli/session-engine";
 import { stopResolvedSession, SuperviseSessionError } from "@volli/session-engine";
 export { stopSessionById, SuperviseSessionError } from "@volli/session-engine";
 export type {
@@ -84,7 +89,8 @@ import { latestStructuredAttachment, terminalSessionRecord } from "../session-co
 /** What the operations need. Narrow on purpose; everything is per-call. */
 export interface SuperviseSessionPorts {
   sessionEngine: Pick<SessionEngine, "listSessions" | "submit">;
-  runtime: Pick<SessionRuntime, "command">;
+  /** `abandonDirectStart` too: a child still starting is stopped, not opened over its stop (VC-1072). */
+  runtime: Pick<SessionRuntime, "command"> & Pick<HostedSessionRuntime, "abandonDirectStart">;
 }
 
 export interface SuperviseTargetInput {

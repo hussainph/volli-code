@@ -1504,7 +1504,8 @@ describe("Sessions", () => {
     ]);
   });
 
-  describe("a start whose attach outlasted its admission bound (VC-1099)", () => {
+  describe("a start whose attach outlasted the legacy admission bound (VC-1099)", () => {
+    const code = "queue_admission_timeout";
     it("retries the attach once, under a command derived from the start's", async () => {
       const commands: SessionRuntimeCommandRequest[] = [];
       const { sessions: door } = sessions({
@@ -1550,7 +1551,7 @@ describe("Sessions", () => {
 
       expect(started).toMatchObject({
         state: "needs-recovery",
-        receipt: { status: "rejected", code: "queue_admission_timeout" },
+        receipt: { status: "rejected", code },
       });
       const attaches = commands
         .filter(({ command }) => command.kind === "adapter.attach")
@@ -1583,6 +1584,31 @@ describe("Sessions", () => {
       });
       expect(commands.at(-1)?.commandId).toBe("operation-silent:start");
     });
+  });
+
+  it("requires explicit recovery after the generous direct attach ceiling", async () => {
+    const commands: SessionRuntimeCommandRequest[] = [];
+    const { sessions: door } = sessions({
+      commands,
+      runtime: {
+        command: async (request) => {
+          commands.push(request);
+          const rejected = result(request, "rejected");
+          return request.command.kind === "adapter.attach"
+            ? { ...rejected, receipt: { ...rejected.receipt!, code: "attach_timeout" } }
+            : result(request);
+        },
+      },
+    });
+    expect(await door.start(startInput("operation-direct-timeout"))).toMatchObject({
+      state: "needs-recovery",
+      receipt: { status: "rejected", code: "attach_timeout" },
+    });
+    expect(commands.map(({ commandId }) => commandId)).toEqual([
+      "operation-direct-timeout:create",
+      "operation-direct-timeout:model",
+      "operation-direct-timeout:start",
+    ]);
   });
 
   it("replays the same operation through stable idempotency keys", async () => {

@@ -1,17 +1,13 @@
 /**
  * Chat activity presentation.
  *
- * One left edge. Every line in the transcript — the bundle summary, the rows it
- * counts, reasoning, an expanded payload — starts at the same x, and depth is
- * never spelled as indentation. Containment is said by the caret and by
- * adjacency; a row's disclosure opens *in line*, so opening something makes the
- * list longer rather than making it a tree. Nothing here is bordered: this file
- * draws only process you audit, and the one object you act on — the card under
- * a gated call — is the interaction itself, mounted by the caller.
+ * An opened group hangs its rows from a single guide rail beneath the parent
+ * status glyph. Row payloads stay inline, capped, and reader-owned; failures
+ * never open a group or a payload on arrival.
  *
  * Every row is the same primitive — `‹glyph› ‹Verb› ‹object›` left, `‹meta›`
  * right — and all variance lives in the per-kind presenters in `activity.ts`.
- * Two click targets: the row expands its detail, the mono object opens the real
+ * Two click targets: the row expands its detail, the object opens the real
  * artifact.
  */
 import {
@@ -47,6 +43,7 @@ import {
   presentTranscriptTool,
   activityStatus,
   bundleSummary,
+  workDurationLabel,
   compactSignature,
   describeActivity,
   isBundleStreaming,
@@ -70,6 +67,8 @@ import {
 } from "@renderer/components/browser/browser-tab-card";
 import { Button } from "@renderer/components/ui/button";
 import { Spinner } from "@renderer/components/ui/spinner";
+import { Shimmer } from "@renderer/components/ui/ai-elements/shimmer";
+import { useLiveCommand } from "./live-command";
 import { languageForPath } from "@renderer/editor/document-identity";
 import { normalizeChatToolPath } from "@renderer/lib/chat-open-target";
 import { cn } from "@renderer/lib/utils";
@@ -226,8 +225,12 @@ const ROW_FOCUSABLE = "focus-visible:ring-1 focus-visible:ring-ring";
  * is the real focusable control that owns the caret. Three honest tab stops per
  * row — disclosure, object, Copy — in place of one that lied about the other two.
  */
-function useRowToggle(expandable: boolean) {
-  const [open, setOpen] = React.useState(false);
+function useRowToggle(expandable: boolean, automaticOpen = false) {
+  // Null follows first live output. Once the reader acts, later chunks and
+  // settlement cannot override that decision. Unattended live output folds
+  // away at settlement, including failure, like every other stored result.
+  const [userOpen, setUserOpen] = React.useState<boolean | null>(null);
+  const open = userOpen ?? automaticOpen;
   const stopFollowing = useStopFollowing();
   const toggle = () => {
     if (hasTextSelection() || !expandable) return;
@@ -235,7 +238,7 @@ function useRowToggle(expandable: boolean) {
     // must not chase it — see {@link useStopFollowing}. Only on the way open:
     // collapsing shrinks the column back and re-attaches on its own.
     if (!open) stopFollowing();
-    setOpen(!open);
+    setUserOpen(!open);
   };
   /** The row shell, for the pointer only. It carries no role: it holds controls. */
   return { open, toggle, rowProps: { onClick: toggle } };
@@ -329,16 +332,10 @@ const KIND_ICONS: Record<ActivityKind, Icon> = {
   other: ToolsIcon,
 };
 
-/**
- * Every transcript line fills the same 14px glyph column — never reserves it
- * empty. Folded headers used to skip it while reasoning took one slot and tool
- * rows took two, so three kinds of line started their text at 0, 20 and 40px.
- * A bundle header left blank there read as a hole in the column, so it gets the
- * wrench: one universal mark for "this stands for tools", the same way each row
- * below it carries the mark for its own kind.
- */
-function BundleGlyph() {
-  return <ToolsIcon aria-hidden className={GLYPH_CLASS} />;
+/** Group glyphs report state, not the kind of tool hidden behind the fold. */
+function BundleGlyph({ danger }: { danger: boolean }) {
+  const Icon = danger ? ErrorIcon : SuccessIcon;
+  return <Icon aria-hidden className={cn(GLYPH_CLASS, danger && "text-destructive")} />;
 }
 
 const GLYPH_CLASS = "size-3.5 shrink-0 text-muted-foreground";
@@ -444,7 +441,7 @@ function ObjectText({ value }: { value: string }) {
   if (!directory) return <>{value}</>;
   return (
     <>
-      <span className="text-muted-foreground/70">{directory}</span>
+      <span className="text-muted-foreground">{directory}</span>
       {basename}
     </>
   );
@@ -467,6 +464,7 @@ export const ToolRow = React.memo(function ToolRow(props: {
   className?: string;
 }) {
   const context = React.useContext(TranscriptToolContext);
+  const progressEnabled = React.useContext(ActivityProgressContext);
   const presentation = presentTranscriptTool(props.part, context);
   const images =
     presentation?.category === "code"
@@ -478,6 +476,7 @@ export const ToolRow = React.memo(function ToolRow(props: {
         <PresentedToolRow
           part={props.part}
           presentation={presentation}
+          progressEnabled={progressEnabled}
           onOpenSession={props.onOpenSession}
           onOpenFile={props.onOpenFile}
         >
@@ -526,7 +525,13 @@ const ToolRowContent = React.memo(function ToolRowContent({
     row.command !== null ||
     card !== null ||
     imageContent !== null;
-  const { open, toggle, rowProps } = useRowToggle(expandable);
+  const progressEnabled = React.useContext(ActivityProgressContext);
+  const live = useLiveCommand(part, progressEnabled);
+  const { open, toggle, rowProps } = useRowToggle(
+    expandable,
+    live.tail !== null && live.elapsed !== null,
+  );
+  const meta = live.elapsed ?? row.meta;
 
   return (
     <div className={cn("group/row not-prose", className)}>
@@ -534,12 +539,21 @@ const ToolRowContent = React.memo(function ToolRowContent({
         {/* A refused call and a page that would not load are both successes to
             the harness; `describeActivity` is what makes the glyph disagree. */}
         <RowGlyph kind={row.kind} status={row.status} />
-        <span className="shrink-0">
-          {row.kind === "run-command" && row.status === "running" ? "Running" : row.verb}
-        </span>
+        {/* The verb already carries the status in words (`Running`, `Failed
+            to read`), so the row's text alone is its accessible state. */}
+        {row.verb ? (
+          progressEnabled && row.status === "running" ? (
+            <Shimmer as="span" className="shrink-0">
+              {row.verb}
+            </Shimmer>
+          ) : (
+            <span className="shrink-0">{row.verb}</span>
+          )
+        ) : null}
         {row.object ? (
           <RowObject row={row} onOpenFile={onOpenFile} onOpenSession={onOpenSession} />
         ) : null}
+        {row.after ? <span className="shrink-0">{row.after}</span> : null}
         <RowDisclosure open={open} expandable={expandable} onToggle={toggle} />
         <RowActions row={row} />
         {movedBashReceipt(part) ? (
@@ -548,12 +562,12 @@ const ToolRowContent = React.memo(function ToolRowContent({
         {row.kind === "run-command" && row.status === "running" ? (
           <RunningBashControl key={part.toolCallId} part={part} />
         ) : null}
-        {row.meta ? (
+        {meta ? (
           <span
-            className={cn("shrink-0 font-mono tabular-nums", TONE_CLASS[row.metaTone])}
+            className={cn("shrink-0 tabular-nums", TONE_CLASS[row.metaTone])}
             // Numerals are tabular so live counters do not jitter.
           >
-            {row.meta}
+            {meta}
           </span>
         ) : null}
       </div>
@@ -567,7 +581,13 @@ const ToolRowContent = React.memo(function ToolRowContent({
           <ToolDetail
             kind={row.kind}
             command={imageContent === null ? row.command : null}
-            detail={imageContent === null ? row.detail : null}
+            detail={
+              imageContent === null
+                ? live.tail !== null && live.elapsed !== null
+                  ? { view: "output", text: live.tail }
+                  : row.detail
+                : null
+            }
             errorText={errorText}
             openPath={row.openPath}
           />
@@ -613,7 +633,7 @@ function movedBashReceipt(part: DynamicToolUIPart): boolean {
 }
 
 const OBJECT_LINK_CLASS =
-  "min-w-0 truncate rounded-sm font-mono text-ui text-foreground underline decoration-transparent decoration-dotted underline-offset-[3px] transition-colors hover:decoration-primary hover:text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
+  "min-w-0 truncate rounded-sm text-ui text-foreground underline decoration-transparent decoration-dotted underline-offset-[3px] transition-colors hover:decoration-primary hover:text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
 
 /**
  * Volli's words for a refusal, for the card: the second line of the tool's own
@@ -659,9 +679,14 @@ function RowObject({
   }
   if (!openPath || !onOpenFile) {
     return (
-      <code className="min-w-0 truncate font-mono text-ui text-foreground">
-        <ObjectText value={object} />
-      </code>
+      <span
+        className={cn(
+          "min-w-0 truncate text-ui text-foreground",
+          row.kind === "run-command" && "font-mono",
+        )}
+      >
+        {row.kind === "run-command" ? object : <ObjectText value={object} />}
+      </span>
     );
   }
   return (
@@ -1107,11 +1132,9 @@ function useVisibleBundleProgress(
 /**
  * Everything the agent did between two things it said, behind one line.
  *
- * At rest this is a single row — `Read 4 files, ran 3 commands, edited
- * activity.ts` — and that row carries the whole load while the turn is live,
- * ticking its counts in place rather than expanding. Opening it reveals the rows
- * *at the same left edge*: no indent, no rule, no second column. The list simply
- * got longer, and the caret is what says why.
+ * The parent keeps its gist and status when opened. The breakdown and child
+ * rows hang from one 1px guide rail beneath its icon, so containment survives
+ * long output without adding a second card or a stack of nested borders.
  *
  * Disclosure state belongs to the reader, including on failure and replay.
  * A pending approval never reaches here; it left the bundle
@@ -1136,16 +1159,18 @@ export const ActivityBundle = React.memo(
     // arriving failure must not reveal output, move focus or change the fold.
     const [open, setOpen] = React.useState(false);
     const summary = React.useMemo(() => {
-      const segments = bundleSummary(rows);
-      const local = rows.flatMap((row) =>
-        row.kind === "tool" && !["failed", "denied"].includes(activityStatus(row.part))
-          ? [presentTranscriptTool(row.part)?.status]
+      // Count every rendered outcome once, including failures carried inside a
+      // successful tool envelope. Do not add two independent `1 failed` badges.
+      const segments = bundleSummary(rows).filter((segment) => segment.tone !== "danger");
+      const statuses = rows.flatMap((row) =>
+        row.kind === "tool"
+          ? [presentTranscriptTool(row.part)?.status ?? describeActivity(row.part).status]
           : [],
       );
-      const failed = local.filter((status) => status === "failed").length;
-      const blocked = local.filter((status) => status === "denied").length;
+      const failed = statuses.filter((status) => status === "failed").length;
+      const denied = statuses.filter((status) => status === "denied").length;
       if (failed > 0) segments.push({ text: `${failed} failed`, tone: "danger" });
-      if (blocked > 0) segments.push({ text: `${blocked} blocked`, tone: "danger" });
+      if (denied > 0) segments.push({ text: `${denied} denied`, tone: "danger" });
       return segments;
     }, [rows]);
     const thoughts = React.useMemo(
@@ -1175,7 +1200,8 @@ export const ActivityBundle = React.memo(
     const groupedWebKeys = new Set(
       [...webGroups.values()].flatMap((group) => group.slice(1).map((row) => row.key)),
     );
-    const streaming = progressEnabled && isBundleStreaming(rows);
+    const unresolved = isBundleStreaming(rows);
+    const streaming = progressEnabled && unresolved;
     const viewport = React.useRef<HTMLDivElement>(null);
     const indicatorKeys = JSON.stringify(
       rows
@@ -1191,13 +1217,39 @@ export const ActivityBundle = React.memo(
     // Only an explicit expansion detaches the reader from the live tail.
     const stopFollowing = useStopFollowing();
 
+    const gist = workDurationLabel(
+      work ?? {
+        key: "bundle",
+        rows,
+        startedAt: null,
+        endedAt: null,
+        state: streaming ? "open" : "complete",
+      },
+    );
+    const supplemental = summary.filter(
+      (segment) => segment.tone !== "neutral" && !gist.split(" · ").includes(segment.text),
+    );
+    const glyph = unresolved ? (
+      streaming && (!open || !rowProgressVisible) ? (
+        <ProgressGlyph />
+      ) : (
+        <PendingIcon aria-hidden className={GLYPH_CLASS} />
+      )
+    ) : (
+      <BundleGlyph danger={summary.some((segment) => segment.tone === "danger")} />
+    );
+
     const list = (
       <ActivityProgressContext.Provider value={progressEnabled}>
         <div className="space-y-1">
           {rows.map((row) =>
             webGroups.has(row.key) ? (
               <Disclosure key={row.key} open={summary.length === 0 || open}>
-                <WebWorkGroup rows={webGroups.get(row.key)!} onOpenFile={onOpenFile} />
+                <WebWorkGroup
+                  rows={webGroups.get(row.key)!}
+                  onOpenFile={onOpenFile}
+                  progressEnabled={progressEnabled}
+                />
               </Disclosure>
             ) : groupedWebKeys.has(row.key) ? null : row.kind === "reasoning" ? (
               row.key === firstThought?.key ? (
@@ -1232,7 +1284,14 @@ export const ActivityBundle = React.memo(
     return (
       <div className="not-prose">
         {work ? (
-          <WorkReceipt work={work} summary={summary} open={open} onToggle={toggle} />
+          <WorkReceipt
+            work={work}
+            summary={summary}
+            open={open}
+            onToggle={toggle}
+            glyph={glyph}
+            running={streaming}
+          />
         ) : (
           <button
             type="button"
@@ -1241,19 +1300,30 @@ export const ActivityBundle = React.memo(
             data-slot="activity-bundle-header"
             className={cn(ROW_CLASS, ROW_INTERACTIVE, ROW_FOCUSABLE)}
           >
-            {streaming && (!open || !rowProgressVisible) ? <ProgressGlyph /> : <BundleGlyph />}
+            {glyph}
             {/* A closed bundle must not hide its live thought behind a finished
               tool summary. Open, the thought already has its own visible row. */}
             {!open && liveThought?.kind === "reasoning" ? (
               <>
-                <span className="min-w-0 truncate">{thinkingLabel(thoughts, true)}</span>
+                <Shimmer as="span" className="min-w-0 truncate">
+                  {thinkingLabel(thoughts, true)}
+                </Shimmer>
                 {/* A live thought must not hide a failed, denied or unexecuted call. */}
                 <span className="shrink-0">
                   <Summary segments={summary.filter((segment) => segment.tone !== "neutral")} />
                 </span>
               </>
             ) : (
-              <Summary segments={summary} />
+              <>
+                {streaming ? (
+                  <Shimmer as="span" className="min-w-0 truncate">
+                    {gist}
+                  </Shimmer>
+                ) : (
+                  <span className="min-w-0 truncate">{gist}</span>
+                )}
+                {!open && supplemental.length > 0 ? <Summary segments={supplemental} /> : null}
+              </>
             )}
             <Caret open={open} pinned />
           </button>
@@ -1268,7 +1338,7 @@ export const ActivityBundle = React.memo(
         <div
           ref={viewport}
           data-slot="activity-bundle-viewport"
-          className={cn(open && BUNDLE_CAP, open && "overflow-auto")}
+          className={cn(open && BUNDLE_CAP, open && "transcript-work-rail overflow-auto")}
         >
           {list}
         </div>
@@ -1409,10 +1479,7 @@ export function AttentionReceipt({ part }: { part: DynamicToolUIPart }) {
   const approved = row.status !== "denied";
   return (
     <div className="not-prose flex min-w-0 items-center gap-1 text-ui text-muted-foreground">
-      {/* Outline, even for the denial. The row this receipt hangs under already
-          carries the filled destructive Prohibit that says the call was refused;
-          the receipt is the settled record of what you did about it, and a
-          second filled mark on the same fact is the same bit twice. */}
+      {/* The receipt records the reader's decision; state remains on the row. */}
       {approved ? (
         <SuccessIcon aria-hidden className="size-3.5 shrink-0 text-primary" />
       ) : (
@@ -1420,7 +1487,14 @@ export function AttentionReceipt({ part }: { part: DynamicToolUIPart }) {
       )}
       <span className="shrink-0">You {approved ? "allowed" : "denied"}</span>
       {row.object ? (
-        <code className="min-w-0 truncate font-mono text-ui text-foreground">{row.object}</code>
+        <span
+          className={cn(
+            "min-w-0 truncate text-ui text-foreground",
+            row.kind === "run-command" && "font-mono",
+          )}
+        >
+          {row.kind === "run-command" ? row.object : <ObjectText value={row.object} />}
+        </span>
       ) : null}
       <span className="shrink-0">this time</span>
     </div>

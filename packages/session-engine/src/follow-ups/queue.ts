@@ -16,7 +16,14 @@ import {
   type StoredSessionFollowUp,
 } from "../session-follow-ups";
 import { canonicalJson } from "../transcript-artifacts";
-import { NativeAttachmentError, type NativeHarnessAdapter } from "../native-adapter";
+import type { NativeHarnessAdapter } from "../native-adapter";
+import {
+  isAttachWaitTimeout,
+  isAttachWaitTimeoutDetail,
+  QUEUE_ADMISSION_TIMEOUT_MS,
+  queueAdmissionTimeoutError,
+  withCeiling,
+} from "../ceiling";
 import {
   SessionRuntimeConflictError,
   SessionRuntimeCommandConflictError,
@@ -69,6 +76,15 @@ interface FollowUpHost {
   publishEvents(events: readonly SessionEvent[]): Promise<void>;
   publishQueue(emission: SessionStreamQueue): Promise<void>;
   reportFailure(input: SessionMessageDeliveryFailure): Promise<void>;
+}
+
+/**
+ * Whether a command id is in the host-owned follow-up namespace: the queue's
+ * own delivery, its attach, or a cold binding's recovery. Every other id is a
+ * direct door's — a person or a Run waiting on it.
+ */
+export function isQueueCommand(commandId: string): boolean {
+  return commandId.startsWith("follow-up:");
 }
 
 export class FollowUpQueue {
@@ -404,25 +420,12 @@ export class FollowUpQueue {
     stage: string,
     onTimeout?: () => void,
   ): Promise<T> {
-    if (!commandId.startsWith("follow-up:")) return operation;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => {
-        onTimeout?.();
-        reject(
-          new NativeAttachmentError(
-            `queue_admission_timeout: ${stage} did not finish. Check the transcript before retrying.`,
-            "queue_admission_timeout",
-            "adapter_unrecoverable",
-          ),
-        );
-      }, this.ports.followUpAdmissionTimeoutMs ?? 30_000);
+    if (!isQueueCommand(commandId)) return operation;
+    return withCeiling(operation, {
+      ms: this.ports.followUpAdmissionTimeoutMs ?? QUEUE_ADMISSION_TIMEOUT_MS,
+      timeout: () => queueAdmissionTimeoutError(stage),
+      ...(onTimeout === undefined ? {} : { abandon: onTimeout }),
     });
-    try {
-      return await Promise.race([operation, timeout]);
-    } finally {
-      clearTimeout(timer);
-    }
   }
 
   async #drain(sessionId: string): Promise<void> {
@@ -671,7 +674,7 @@ export class FollowUpQueue {
       } catch (error) {
         // An executor that cannot answer is no evidence either way.
         await this.failure(error);
-        if (error instanceof NativeAttachmentError && error.code === "queue_admission_timeout") {
+        if (isAttachWaitTimeout(error)) {
           current = await this.host.requireSession(sessionId);
           await this.#settleFromEvidence(sessionId, entry, prior, current, error.message);
           return;
@@ -704,7 +707,7 @@ export class FollowUpQueue {
       const receipt = projection.receipts.findLast(({ commandId }) => commandId === command.id);
       const detail =
         timeoutDetail ??
-        (receipt?.status === "unreconciled" && receipt.detail?.includes("queue_admission_timeout")
+        (receipt?.status === "unreconciled" && isAttachWaitTimeoutDetail(receipt.detail)
           ? receipt.detail
           : undefined);
       throw new FollowUpAmbiguousError(

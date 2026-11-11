@@ -2054,10 +2054,20 @@ describe("listAttachedSessions (VC-403)", () => {
     // the entire fleet give the same number, because every Session the narrow
     // read omits contributes zero. If this ever parts, the budget is fast and
     // wrong, which is worse than slow and right.
-    const narrow = workingSessionCount({ projections: await control.listAttachedSessions() });
-    const whole = workingSessionCount({
-      projections: await control.listSessions({ projectId, scope: "all" }),
+    // Every Session's executor held, so only the durable rule decides
+    // (the budget itself counts only live executors, VC-1085).
+    const fleet = await control.listSessions({ projectId, scope: "all" });
+    const held = {
+      terminalSessionIds: new Set(fleet.map((projection) => projection.session.id)),
+      boundAttachmentIds: new Set(
+        fleet.flatMap((projection) => projection.attachments.map(({ id }) => id)),
+      ),
+    };
+    const narrow = workingSessionCount({
+      projections: await control.listAttachedSessions(),
+      live: held,
     });
+    const whole = workingSessionCount({ projections: fleet, live: held });
 
     expect(narrow).toBe(whole);
     // Not vacuously equal at zero: the live terminal is counted, the exited one

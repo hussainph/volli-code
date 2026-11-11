@@ -149,6 +149,7 @@ import {
 import type {
   SessionAnswer,
   SessionEngine,
+  HostedSessionRuntime,
   SessionRuntime,
   SessionTranscriptArtifact,
 } from "@volli/session-engine";
@@ -178,7 +179,8 @@ export interface DelegateSessionPorts {
   /** Delivers the kickoff turn, with the ids this module derives. */
   submitSessionMessage: NonNullable<StartSessionPorts["submitSessionMessage"]>;
   /** The child's and parent's durable streams, and the parent's ledger to notify into. */
-  runtime: Pick<SessionRuntime, "command" | "subscribe" | "projection">;
+  runtime: Pick<SessionRuntime, "command" | "subscribe" | "projection"> &
+    Pick<HostedSessionRuntime, "abandonDirectStart">;
   /**
    * What a stop needs (VC-86's operation, reused with the parent as actor),
    * plus the ledger read recovery makes.

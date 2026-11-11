@@ -13,6 +13,8 @@ import {
   readWebOutcome,
 } from "./tool-envelopes";
 import { readBrowserOutcome } from "./browser-outcomes";
+import { humanMcpToolName } from "./tool-names";
+export { humanToolName } from "./tool-names";
 
 export interface TranscriptSource {
   url: string;
@@ -98,42 +100,6 @@ function host(url: string): string | null {
     return null;
   }
 }
-/** Preserve the legacy first nonempty server/tool split without backtracking.
- * Dot captures reject all line terminators. The hash check scans only eight
- * characters, and stripping it must leave a nonempty tool. */
-function legacyMcpName(name: string): { server: string; tool: string } | null {
-  const end = name.length;
-  for (let index = 5; index < end; index += 1) {
-    const code = name.charCodeAt(index);
-    if (code === 10 || code === 13 || code === 0x2028 || code === 0x2029) return null;
-  }
-  // Start after at least one server character, including overlapping `__`.
-  const delimiter = name.indexOf("__", 6);
-  const toolStart = delimiter + 2;
-  if (delimiter < 0 || toolStart >= end) return null;
-  let toolEnd = end;
-  const suffix = end - 10;
-  if (suffix > toolStart && name.startsWith("__", suffix)) {
-    let hex = true;
-    for (let index = end - 8; index < end; index += 1) {
-      const code = name.charCodeAt(index);
-      if (!((code >= 48 && code <= 57) || (code >= 97 && code <= 102))) {
-        hex = false;
-        break;
-      }
-    }
-    if (hex) toolEnd = suffix;
-  }
-  return { server: name.slice(5, delimiter), tool: name.slice(toolStart, toolEnd) };
-}
-
-export function humanToolName(value: string): string {
-  return value
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .replace(/[_-]+/g, " ")
-    .replace(/^./, (letter) => letter.toUpperCase())
-    .replace(/\b(api|url|sql)\b/gi, (word) => word.toUpperCase());
-}
 function sourcesFrom(body: string): TranscriptSource[] | null {
   if (body === "") return [];
   const lines = body.split("\n");
@@ -206,17 +172,21 @@ export function presentTranscriptTool(
     return {
       ...base,
       category: "web",
-      status: failed ? status : (outcome?.status ?? status),
+      status: failed || running ? status : (outcome?.status ?? status),
       label:
-        failed || outcome?.status === "failed"
-          ? "Web search failed"
-          : outcome?.status === "denied"
-            ? "Search blocked"
+        status === "denied"
+          ? "Search blocked"
+          : failed
+            ? "Web search failed"
             : running
               ? "Searching the web"
-              : parsedSources !== null
-                ? "Searched the web"
-                : "Search result unavailable",
+              : outcome?.status === "failed"
+                ? "Web search failed"
+                : outcome?.status === "denied"
+                  ? "Search blocked"
+                  : parsedSources !== null
+                    ? "Searched the web"
+                    : "Search result unavailable",
       meta: zero
         ? "No results"
         : parsedSources !== null
@@ -304,16 +274,18 @@ export function presentTranscriptTool(
     return {
       ...base,
       category: "web",
-      status: failed ? status : localStatus,
+      status: failed || running ? status : localStatus,
       label: running
         ? `Opening ${object}`
-        : failed || allUnavailable
-          ? `Couldn't open ${object}`
-          : sources.length > 0
-            ? reading.length > 1
-              ? `Opened ${sources.length} of ${reading.length} pages`
-              : `Opened ${object}`
-            : `Page result unavailable`,
+        : status === "denied" || localStatus === "denied"
+          ? `Denied opening ${object}`
+          : failed || allUnavailable
+            ? `Couldn't open ${object}`
+            : sources.length > 0
+              ? reading.length > 1
+                ? `Opened ${sources.length} of ${reading.length} pages`
+                : `Opened ${object}`
+              : `Page result unavailable`,
       identity: reading.length === 1 ? domain : null,
       originUrl: reading.length === 1 ? reading[0] : null,
       meta: !allUnavailable && outcomes.length > 0 ? `${outcomes.length} unavailable` : null,
@@ -410,24 +382,29 @@ export function presentTranscriptTool(
       picture: browse?.picture ?? null,
       tabId: browse?.tabId ?? null,
       savedOutputs: read?.savedPath ? [{ path: read.savedPath }] : [],
-      label: failed
-        ? name === "browser_snapshot" || name === "browser_find" || name === "browser_console"
-          ? "Page read failed"
-          : "Browser action failed"
-        : held
-          ? "Tab in use"
-          : unavailable
-            ? "Page no longer available"
-            : localStatus === "denied"
-              ? "Action blocked"
-              : browse?.error
-                ? "Page unavailable"
-                : running
-                  ? `${verb[0]} ${object ?? ""}`.trim()
-                  : action === "tabs" && counted !== null
-                    ? `Listed ${counted} ${counted === 1 ? "tab" : "tabs"}`
-                    : (outcome?.label ??
-                      (known ? `${verb[1]} ${object ?? ""}`.trim() : "Browser result unavailable")),
+      label:
+        status === "denied"
+          ? "Action blocked"
+          : failed
+            ? name === "browser_snapshot" || name === "browser_find" || name === "browser_console"
+              ? "Page read failed"
+              : "Browser action failed"
+            : held
+              ? "Tab in use"
+              : unavailable
+                ? "Page no longer available"
+                : localStatus === "denied"
+                  ? "Action blocked"
+                  : browse?.error
+                    ? "Page unavailable"
+                    : running
+                      ? `${verb[0]} ${object ?? ""}`.trim()
+                      : action === "tabs" && counted !== null
+                        ? `Listed ${counted} ${counted === 1 ? "tab" : "tabs"}`
+                        : (outcome?.label ??
+                          (known
+                            ? `${verb[1]} ${object ?? ""}`.trim()
+                            : "Browser result unavailable")),
       meta:
         action === "find" && counted !== null
           ? `${counted} ${counted === 1 ? "match" : "matches"}`
@@ -450,6 +427,12 @@ export function presentTranscriptTool(
   }
   if (["session_delegate", "session_start", "session_send", "watch"].includes(name)) {
     if (name === "watch") {
+      if (failed)
+        return {
+          ...base,
+          category: "session",
+          label: status === "denied" ? "Watch denied" : "Watch failed",
+        };
       const action = details?.action;
       const armed =
         (action === "watch" || action === "unwatch") &&
@@ -459,7 +442,7 @@ export function presentTranscriptTool(
         return {
           ...base,
           category: "session",
-          label: failed ? "Watch failed" : running ? "Starting watch" : "Watch result unavailable",
+          label: running ? "Starting watch" : "Watch result unavailable",
         };
       const sessions = (details.sessions as string[]).map(
         (id) => context.sessionNames?.get(id) ?? "Unavailable session",
@@ -492,9 +475,11 @@ export function presentTranscriptTool(
       return {
         ...base,
         category: "session",
-        label: unchanged
-          ? label
-          : `${label} ${targets.length === 1 ? targets[0] : `${targets.length} targets`}`,
+        label: running
+          ? "Starting watch"
+          : unchanged
+            ? label
+            : `${label} ${targets.length === 1 ? targets[0] : `${targets.length} targets`}`,
         meta: action === "unwatch" && ended !== null ? `${ended} ended` : null,
       };
     }
@@ -546,9 +531,13 @@ export function presentTranscriptTool(
           : "Sent to"
         : name === "session_start"
           ? "Started"
-          : "Delegated";
+          : "Delegated to";
     const waiting =
-      name === "session_send" ? "Sending to" : name === "session_start" ? "Starting" : "Delegating";
+      name === "session_send"
+        ? "Sending to"
+        : name === "session_start"
+          ? "Starting"
+          : "Delegating to";
     const task = str(input?.task) ?? str(input?.message);
     if (task)
       sections.push({
@@ -571,7 +560,7 @@ export function presentTranscriptTool(
     return {
       ...base,
       category: "session",
-      label: `${failed ? (name === "session_delegate" ? "Couldn't delegate" : name === "session_start" ? "Couldn't start" : "Couldn't send to") : running ? waiting : accepted ? verb : "Requested"} ${title}`,
+      label: `${status === "denied" ? (name === "session_delegate" ? "Denied delegating to" : name === "session_start" ? "Denied starting" : "Denied sending to") : failed ? (name === "session_delegate" ? "Failed to delegate to" : name === "session_start" ? "Failed to start" : "Failed to send to") : running ? waiting : accepted ? verb : "Requested"} ${title}`,
       identity: title,
       sessionId,
       relations: sessionRelations(sessionId, context),
@@ -602,18 +591,23 @@ export function presentTranscriptTool(
     return {
       ...base,
       category: "code",
-      label: failed ? "Code failed" : running ? "Running code" : "Ran code",
+      label:
+        status === "denied"
+          ? "Code denied"
+          : failed
+            ? "Code failed"
+            : running
+              ? "Running code"
+              : "Ran code",
       meta: succeeded === null ? null : `${succeeded} calls completed`,
     };
   }
   if (name.startsWith("mcp__")) {
     const mapped = context.mcpNames?.get(name);
-    const legacy = legacyMcpName(name);
-    const server = mapped?.server ?? (legacy ? humanToolName(legacy.server) : "MCP server");
+    const legacy = humanMcpToolName(name);
+    const server = mapped?.server ?? legacy.server;
     const title =
-      str(part.title) && part.title !== name
-        ? part.title
-        : (mapped?.tool ?? (legacy ? humanToolName(legacy.tool) : "Tool"));
+      str(part.title) && part.title !== name ? part.title : (mapped?.tool ?? legacy.tool);
     if (input) sections.push({ label: "Arguments", text: JSON.stringify(input, null, 2) });
     // MCP bodies are never passed through a Volli framing scrubber.
     const warning =
@@ -628,7 +622,7 @@ export function presentTranscriptTool(
       label: `${server} · ${title}`,
       identity: server,
       originUrl: mapped?.url ?? null,
-      meta: running ? "Running" : failed ? "Failed" : "Done",
+      meta: running ? "Running" : status === "denied" ? "Denied" : failed ? "Failed" : "Done",
     };
   }
   return null;

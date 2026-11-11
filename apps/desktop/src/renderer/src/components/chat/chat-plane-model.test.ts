@@ -887,6 +887,23 @@ describe("sessionBlocker", () => {
     expect(acted).toEqual(["retryRuntime"]);
   });
 
+  it("says a start that ran out of time timed out, and retries the start (VC-1072)", () => {
+    const acted: string[] = [];
+    const acts: SessionBlockerActs = { ...ACTS, retryRuntime: () => acted.push("retryRuntime") };
+    const detail =
+      "attach_timeout: executor attach did not finish within 180 s. Nothing was sent, and Retry starts it again.";
+    const blocker = sessionBlocker(raised(attention("adapter_unrecoverable", detail)), acts, false);
+
+    expect(blocker).toMatchObject({
+      message: "Start timed out",
+      detail,
+      tone: "error",
+      action: { label: "Retry" },
+    });
+    blocker?.action?.act();
+    expect(acted).toEqual(["retryRuntime"]);
+  });
+
   describe("a run stopped on a spent allowance", () => {
     const NOW = Date.UTC(2026, 8, 10, 1, 0);
     const RESET = NOW + 3 * 60 * 60_000;
