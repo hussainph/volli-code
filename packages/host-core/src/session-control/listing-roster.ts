@@ -52,15 +52,18 @@ export async function sessionListingRowsForRoster(
   sessions: readonly SessionListingProjection[],
   liveAttachmentIds: ReadonlySet<string>,
   yieldToHost: () => Promise<void> = yieldToMainProcess,
+  /** At least 1. The constant is production's measured answer; the seam keeps a
+   * three-chunk roster testable without a 1,000-Session fixture (VC-1184). */
+  chunkSize: number = SESSION_LISTING_ROWS_CHUNK,
 ): Promise<SessionListingRow[]> {
   const rows: SessionListingRow[] = [];
-  for (let from = 0; from < sessions.length; from += SESSION_LISTING_ROWS_CHUNK) {
+  for (let from = 0; from < sessions.length; from += chunkSize) {
     // Between chunks, never before the first: a one-chunk roster costs what
     // it always did.
     if (from > 0) await yieldToHost();
     // Each chunk is timed (VC-1090): it runs after the door's await, outside its span.
     const built = withMainSpan(LISTING_ROWS, () => {
-      const chunk = sessions.slice(from, from + SESSION_LISTING_ROWS_CHUNK);
+      const chunk = sessions.slice(from, from + chunkSize);
       const provenanceOf = readSessionProvenances(
         db,
         chunk.map((session) => ({
