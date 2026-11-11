@@ -26,22 +26,56 @@ import { availableParallelism } from "node:os";
 import { VOLLI_CONCURRENCY_HINT_ENV, concurrencyBudget, concurrencyBudgetEnv } from "@volli/shared";
 import type { SessionListingProjection } from "@volli/shared";
 
-import { chatSessionRecord, terminalSessionRecord } from "./session-control";
+import {
+  chatSessionRecord,
+  latestStructuredAttachment,
+  terminalSessionRecord,
+} from "./session-control";
 
-/** What counting the fleet needs: the projections, and whose start this is. */
+/**
+ * What this process is running right now, from its own process-local maps
+ * (VC-1085) — never from the ledger's open attachments.
+ *
+ * Not the same thing as an open attachment, and deliberately so. A durable
+ * structured attachment stays open across a quit as the RESUMABLE binding the
+ * next command rehydrates (`#rehydrateBinding`, boot recovery's module doc,
+ * `chatSessionRecord`'s `executorBound`). A profile that has used Volli for
+ * months holds thousands of them with nothing running, so "open" alone would
+ * count — and fold — every chat anyone ever had.
+ */
+export interface LiveExecutors {
+  /**
+   * The chats that may be working: a binding this process holds with a turn
+   * open, or a turn start it has accepted and not yet seen open. A held
+   * binding outlives its turn — nothing releases an idle one before quit — so
+   * the set of bindings grows with how long the app has been open; this set
+   * is bounded by what is actually running.
+   */
+  readonly turnSessionIds: ReadonlySet<string>;
+  /**
+   * Every structured attachment whose binding this process holds, matched
+   * against a Session's latest structured attachment exactly as the listing
+   * rows match it (`sessionListingRow`'s `executorBound`).
+   */
+  readonly boundAttachmentIds: ReadonlySet<string>;
+  /** The Sessions whose PTY is running: terminals are live while their shell is. */
+  readonly terminalSessionIds: ReadonlySet<string>;
+}
+
+/** What counting the fleet needs: the projections, who is live, and whose start this is. */
 export interface WorkingSessionsInput {
   /**
-   * The Sessions that could be working, as `volli session list` reads them.
+   * The Sessions that could be working, folded as `volli session list` folds
+   * them. Only the candidates {@link LiveExecutors} names are ever read, but
+   * passing more is still correct: {@link live} decides who may count, and a
+   * projection whose executor is not held here contributes zero.
    *
    * ALL projects, because load is a fact about the machine: a build in another
-   * project's Session competes for exactly the same cores. Not all SESSIONS,
-   * though (VC-403): `sessionEngine.listAttachedSessions()` hands over only
-   * the Sessions holding an open attachment, because a Session with none
-   * cannot satisfy either half of the precedence below. Passing the whole
-   * fleet here is still correct and the count is the same — the narrowing
-   * removes a provably-zero set, never a working Session.
+   * project's Session competes for exactly the same cores.
    */
   projections: readonly SessionListingProjection[];
+  /** The executors this process holds, which a Session must have to count (VC-1085). */
+  live: Pick<LiveExecutors, "boundAttachmentIds" | "terminalSessionIds">;
   /**
    * The Session being started, excluded from its own count. Its record may
    * already exist by the time its environment is assembled, and counting it
@@ -54,25 +88,29 @@ export interface WorkingSessionsInput {
 /**
  * How many OTHER Sessions are working, in the same terms the Session listing
  * uses — the terminal/chat precedence included, so this cannot drift from what
- * `volli session list` shows a person.
+ * `volli session list` shows a person — over the executors this process holds.
  *
  * A live terminal Session counts as working whether or not a command is
  * running in it this second. That is deliberate and it is the conservative
  * direction: a shell sitting at a prompt is one keystroke from a build, and a
  * budget that only reacted after the load arrived would hand out the whole
  * machine to everyone in the quiet moment before three test runs start.
- * Structured Sessions have a real activity state and are counted on it.
+ * Structured Sessions have a real activity state and are counted on it, with
+ * the binding fact the listing rows use.
  */
 export function workingSessionCount(input: WorkingSessionsInput): number {
   let working = 0;
   for (const projection of input.projections) {
-    if (projection.session.id === input.excludeSessionId) continue;
+    const sessionId = projection.session.id;
+    if (sessionId === input.excludeSessionId) continue;
     const terminal = terminalSessionRecord(projection);
     if (terminal !== null) {
-      if (terminal.endedAt === null) working += 1;
+      if (input.live.terminalSessionIds.has(sessionId) && terminal.endedAt === null) working += 1;
       continue;
     }
-    if (chatSessionRecord(projection).activity === "working") working += 1;
+    const structured = latestStructuredAttachment(projection.attachments);
+    const bound = structured !== null && input.live.boundAttachmentIds.has(structured.id);
+    if (chatSessionRecord(projection, bound).activity === "working") working += 1;
   }
   return working;
 }
@@ -109,26 +147,28 @@ export function sessionConcurrencyEnv(input: SessionConcurrencyEnvInput): Record
   return concurrencyBudgetEnv(budget, userEnvironment);
 }
 
-/** The one read a Session start makes to count who is working. */
+/** What a Session start reads to count who is working. */
 export interface SessionConcurrencyPorts {
   /**
-   * Every Session holding an open attachment, across every project, folded.
+   * What this process is running right now — the runtime's bindings and turn
+   * starts and the terminal supervisor's PTYs. Cheap and synchronous: all of
+   * it is process-local maps (VC-1085).
    *
-   * ONE read, not a walk of the fleet (VC-403). The budget needs a count in
-   * the terminal/chat precedence the listing uses, and both halves of that
-   * precedence require an open attachment — so the Session Engine narrows to
-   * the Sessions that could possibly be working and folds only those. See
-   * `SessionLedgerTransaction.listAttachedSessions` for why the ones it drops
-   * provably cannot be working.
-   *
-   * ALL projects, because load is a fact about the machine: a build in another
-   * project's Session competes for exactly the same cores.
+   * Only its candidates — the chats with a turn open or accepted, and the
+   * running terminals — are folded, and the fold still decides. An idle chat
+   * is never folded, however many this process holds: the read is the size of
+   * what is running, not of what has attached since launch.
    */
-  listAttachedSessions(): Promise<readonly SessionListingProjection[]>;
+  liveExecutors(): LiveExecutors;
+  /** One candidate Session, folded through the ordinary projection path; `null` when it is gone. */
+  getSessionListing(query: { sessionId: string }): Promise<SessionListingProjection | null>;
 }
 
 /** A Session start's per-call input to a reader — everything but the fleet itself. */
-export type SessionConcurrencyEnvReaderInput = Omit<SessionConcurrencyEnvInput, "projections">;
+export type SessionConcurrencyEnvReaderInput = Omit<
+  SessionConcurrencyEnvInput,
+  "projections" | "live"
+>;
 
 /** What one call into a reader answers: this Session start's budget variables. */
 export type SessionConcurrencyEnvReader = (
@@ -143,10 +183,10 @@ export interface SessionConcurrencyEnvReaderOptions {
    * burst of Session starts into one read, short enough that a budget handed
    * out a few seconds ago is still describing the same machine.
    *
-   * The cache is now a burst collapser rather than the fix: the read beneath
-   * it is bounded by how many Sessions are attached, so a cold call is cheap
-   * on its own and a Session that starts after a quiet minute no longer waits
-   * on the fleet.
+   * The cache is a burst collapser rather than the fix: the read beneath it
+   * folds only the Sessions running something right now, so a cold call is cheap on
+   * its own and a Session that starts after a quiet minute, or first after a
+   * launch, never waits on the fleet (VC-1085).
    */
   ttlMs?: number;
   /** The clock, injectable so tests drive the TTL rather than sleeping. */
@@ -194,17 +234,17 @@ export function createSessionConcurrencyEnvReader(
   const ttlMs = options.ttlMs ?? DEFAULT_CONCURRENCY_ENV_TTL_MS;
   const now = options.now ?? Date.now;
 
-  let cached: { projections: readonly SessionListingProjection[]; expiresAt: number } | null = null;
-  let inFlight: Promise<readonly SessionListingProjection[]> | null = null;
+  let cached: (LiveFleet & { expiresAt: number }) | null = null;
+  let inFlight: Promise<LiveFleet> | null = null;
 
-  const read = (): Promise<readonly SessionListingProjection[]> => {
+  const read = (): Promise<LiveFleet> => {
     if (cached !== null && cached.expiresAt > now()) {
-      return Promise.resolve(cached.projections);
+      return Promise.resolve(cached);
     }
     if (inFlight !== null) return inFlight;
-    const started = ports.listAttachedSessions().then((projections) => {
-      cached = { projections, expiresAt: now() + ttlMs };
-      return projections;
+    const started = readLiveFleet(ports).then((fleet) => {
+      cached = { ...fleet, expiresAt: now() + ttlMs };
+      return fleet;
     });
     inFlight = started;
     // Cleared on both settlements: a throw must not leave a stale in-flight
@@ -219,10 +259,33 @@ export function createSessionConcurrencyEnvReader(
 
   return async (input) => {
     try {
-      const projections = await read();
-      return sessionConcurrencyEnv({ ...input, projections });
+      const fleet = await read();
+      return sessionConcurrencyEnv({ ...input, ...fleet });
     } catch {
       return {};
     }
   };
+}
+
+/** One read of who is live, and the candidates' folds. */
+interface LiveFleet {
+  readonly live: LiveExecutors;
+  readonly projections: readonly SessionListingProjection[];
+}
+
+/**
+ * The live executors, then each candidate folded — one at a time, because the
+ * folds are synchronous work on the host's event loop and a handful of them
+ * gains nothing from being interleaved. A candidate that is gone by the time
+ * it is read (a binding released between the two) simply drops out.
+ */
+async function readLiveFleet(ports: SessionConcurrencyPorts): Promise<LiveFleet> {
+  const live = ports.liveExecutors();
+  const candidates = new Set([...live.turnSessionIds, ...live.terminalSessionIds]);
+  const projections: SessionListingProjection[] = [];
+  for (const sessionId of candidates) {
+    const projection = await ports.getSessionListing({ sessionId });
+    if (projection !== null) projections.push(projection);
+  }
+  return { live, projections };
 }

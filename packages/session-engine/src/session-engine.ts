@@ -182,7 +182,11 @@ export interface SessionEngine {
   /**
    * Every Session holding an open attachment, across every project, folded.
    *
-   * The concurrency budget's read (VC-403). `listSessions` folds a project's
+   * Not a liveness read (VC-1085): a structured attachment stays open across a
+   * quit as the resumable binding the next command rehydrates, so this is
+   * every chat that could resume, not every executor that is running. The
+   * concurrency budget, its first caller (VC-403), now counts the executors
+   * its host holds instead. `listSessions` folds a project's
    * whole roster to answer how many Sessions are working, which on a machine
    * with a long history is thousands of folds for a number bounded by how many
    * things are actually attached. This folds the narrowed set the ledger

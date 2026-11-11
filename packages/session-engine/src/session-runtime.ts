@@ -708,6 +708,13 @@ export interface OpenNativeBinding {
    * the same reason as {@link lastProgressAt}: a `started` is never durable.
    */
   inFlightTools: readonly SessionInFlightTool[];
+  /**
+   * Whether this binding has a turn open: true from its `turn.started` until
+   * that turn completes or is interrupted. Process-local, like the two above —
+   * the binding's own reading, which a host counting what is RUNNING here
+   * (the concurrency budget, VC-1085) can ask without folding a Session.
+   */
+  turnOpen: boolean;
 }
 
 /** The host-owned runtime plus the live local bindings only its process can know about. */
@@ -1259,13 +1266,16 @@ class DefaultSessionRuntime implements SessionRuntime {
   }
 
   openNativeBindings(): readonly OpenNativeBinding[] {
-    return [...this.#bindings.values()].map(({ spec, lastProgressAt, inFlightTools }) => ({
-      sessionId: spec.sessionId,
-      directory: spec.directory,
-      attachmentId: spec.attachmentId,
-      lastProgressAt,
-      inFlightTools,
-    }));
+    return [...this.#bindings.values()].map(
+      ({ spec, lastProgressAt, inFlightTools, turnOpen }) => ({
+        sessionId: spec.sessionId,
+        directory: spec.directory,
+        attachmentId: spec.attachmentId,
+        lastProgressAt,
+        inFlightTools,
+        turnOpen: turnOpen === true,
+      }),
+    );
   }
 
   async reportMessageDeliveryFailure(input: SessionMessageDeliveryFailure): Promise<void> {
