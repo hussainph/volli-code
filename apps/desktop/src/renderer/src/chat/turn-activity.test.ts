@@ -359,7 +359,11 @@ describe("current activity selection", () => {
       priority: true,
     });
     state.status = { key: "fault", label: "Needs attention", detail: "Run stopped" };
-    expect(selectTurnActivity("s", state)?.announcement).toBe("Needs attention: Run stopped");
+    expect(selectTurnActivity("s", state)).toMatchObject({
+      word: "Needs attention",
+      payload: null,
+      announcement: "Needs attention: Run stopped",
+    });
   });
   it("ignores failed local sends and keeps completed background calls out of turn presence", () => {
     const state = {
@@ -384,6 +388,23 @@ describe("current activity selection", () => {
       announcement: "Running",
     });
     expect(selected(command).word).toBe("Committing");
+    for (const name of ["browser_screenshot", "browser_navigate"]) {
+      const part = streaming(tool(name), {});
+      part.toolMetadata = {
+        [ACTIVITY_METADATA_KEY]: {
+          kind: "browse",
+          nativeToolName: name,
+          browse: {
+            action: name === "browser_screenshot" ? "screenshot" : "open",
+            url: "https://partial",
+          },
+        },
+      };
+      expect(selected(part).payload).toBeNull();
+      const available = tool(name);
+      available.toolMetadata = part.toolMetadata;
+      expect(selected(available).payload).toBe("https://partial");
+    }
   });
   it("escalates only command/reasoning without losing the full announcement", () => {
     const run = selected(tool("bash", { command: "long command" }));

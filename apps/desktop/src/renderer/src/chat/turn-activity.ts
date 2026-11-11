@@ -226,6 +226,7 @@ function toolEvent(part: DynamicToolUIPart, key: string): ActivityEvent {
   const streaming = part.state === "input-streaming";
   const input = streaming ? {} : record(part.input);
   const subject = streaming ? undefined : descriptor?.subject;
+  const browse = streaming ? undefined : descriptor?.browse;
   const path = subject?.path ?? text(input.path) ?? text(input.file_path) ?? subject?.label ?? null;
   // File activities name the file, not its entire worktree path; the transcript owns full paths.
   const basename = path?.split(/[/\\]/u).findLast((segment) => segment.length > 0) ?? path;
@@ -253,10 +254,10 @@ function toolEvent(part: DynamicToolUIPart, key: string): ActivityEvent {
     return event("web", text(input.query) ?? text(input.url) ?? subject?.label ?? null);
   }
   if (nativeName === "browser_screenshot" || descriptor?.browse?.action === "screenshot") {
-    return event("shot", descriptor?.browse?.url ?? text(input.url));
+    return event("shot", browse?.url ?? text(input.url));
   }
   if (nativeName.startsWith("browser_") || descriptor?.kind === "browse") {
-    return event("browser", descriptor?.browse?.url ?? text(input.url));
+    return event("browser", browse?.url ?? text(input.url));
   }
   if (nativeName === "session_delegate" || descriptor?.kind === "delegate") {
     return event("delegate", subject?.agentName ?? text(input.title) ?? subject?.label ?? null);
@@ -348,7 +349,9 @@ export function selectTurnActivity(
     key: `${sessionId}:status:${key}`,
     activity: "status",
     word: label,
-    payload: detail ?? null,
+    // Recovery controls and the full cause remain in the existing blocker.
+    // Keep the bead a concise state label, not a second clipped error report.
+    payload: null,
     waiting: true,
     priority: true,
     announcement: detail ? `${label}: ${detail}` : label,
