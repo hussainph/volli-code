@@ -2239,7 +2239,7 @@ function ChatPlaneContent({
                         {liveCompaction ? (
                           <CompactionProgress compaction={liveCompaction} announce={false} />
                         ) : null}
-                        {turnRunning ? <TurnRunningMark /> : null}
+                        {turnRunning || turnActivity !== null ? <TurnRunningMark /> : null}
                         {pendingMessages
                           .filter(
                             (message) => !message.deliveryAccepted || message.delivery === "queue",

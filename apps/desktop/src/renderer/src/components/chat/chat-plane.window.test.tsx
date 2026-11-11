@@ -1279,7 +1279,7 @@ describe("a chat plane holding a long transcript", () => {
         expect(slice.lifecycle).not.toBe("working");
         expect(activityStatus()?.textContent).toContain("Needs attention:");
         expect(container?.querySelector(".liquid-island-shimmer")).toBeNull();
-        expect(turnClearance()).toBeNull();
+        expect(turnClearance()).not.toBeNull();
         expect(container?.textContent).toContain("The runtime stopped unexpectedly");
         expect(
           [...container!.querySelectorAll("button")].filter(
@@ -2192,7 +2192,7 @@ describe("VC-758 visible timeline regressions", () => {
     expect(container!.querySelector(".is-user")).toBeNull();
     expect(activityStatus()?.textContent).toBe("Needs attention: Attachment failed");
     expect(container?.querySelector(".liquid-island-shimmer")).toBeNull();
-    expect(turnClearance()).toBeNull();
+    expect(turnClearance()).not.toBeNull();
   });
 
   it("removes delayed sending state on acceptance and keeps the same quiet bubble through durable handoff", async () => {
