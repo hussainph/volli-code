@@ -30,7 +30,7 @@
  *
  * MANUALLY-RUN (needs a display + the built app); NOT wired into `vp test`.
  */
-import { promises as fs } from "node:fs";
+import { constants, promises as fs } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -127,15 +127,22 @@ async function main() {
       "SOCKET3",
       "generated executable shim sets ELECTRON_RUN_AS_NODE and execs",
       async () => {
-        const stat = await fs.lstat(shimPath);
-        const executable = (stat.mode & 0o111) !== 0;
-        const contents = await fs.readFile(shimPath, "utf8");
-        const runAsNode = contents.includes("ELECTRON_RUN_AS_NODE");
-        const exec = contents.includes("exec");
-        return {
-          ok: executable && runAsNode && exec,
-          detail: `executable=${executable} bakesRunAsNode=${runAsNode} exec=${exec}`,
-        };
+        // Inspect and read the same opened file even if its pathname is
+        // replaced between operations. Do not follow a substituted symlink.
+        const shim = await fs.open(shimPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+        try {
+          const stat = await shim.stat();
+          const executable = stat.isFile() && (stat.mode & 0o111) !== 0;
+          const contents = await shim.readFile("utf8");
+          const runAsNode = contents.includes("ELECTRON_RUN_AS_NODE");
+          const exec = contents.includes("exec");
+          return {
+            ok: executable && runAsNode && exec,
+            detail: `executable=${executable} bakesRunAsNode=${runAsNode} exec=${exec}`,
+          };
+        } finally {
+          await shim.close();
+        }
       },
     );
 
