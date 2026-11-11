@@ -1248,10 +1248,13 @@ async function main() {
           after.length === 2 &&
           after[1]?.focused === true &&
           after[1]?.front === "Chat" &&
+          JSON.stringify(after[1]?.tabs) === JSON.stringify([terminal, "Chat"]) &&
           groups.length === 1 &&
           groups[0].id === groupId &&
           groups[0].active &&
-          JSON.stringify(groups[0].tabs) === JSON.stringify(["Board", terminal, "Chat"]) &&
+          JSON.stringify(groups[0].tabs) === JSON.stringify(["Board", "Chat"]) &&
+          JSON.stringify(groups[0].rows.map((row) => row.title)) ===
+            JSON.stringify(["Board", terminal, "Chat"]) &&
           (await hasOneTopStrip(page, "Home tabs")),
         detail: `panes=${JSON.stringify(after)} groups=${JSON.stringify(groups)}`,
       };
