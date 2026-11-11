@@ -2481,6 +2481,69 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
     expect(clearance?.textContent).toBe("");
   }
 
+  it("matches the composer steering intent before its host command resolves", async () => {
+    const store = chatStore([], { lifecycle: "working", turnActive: true });
+    store.setState(({ sessions }) => ({
+      sessions: {
+        ...sessions,
+        [SESSION]: {
+          ...sessions[SESSION]!,
+          projection: {
+            ...sessions[SESSION]!.projection!,
+            turnActive: true,
+            modelSelection: DEFAULT_SELECTION,
+          },
+          queue: [{ id: "follow-up", text: "Next", queueState: "queued" }],
+        },
+      },
+    }));
+    const deferred = Promise.withResolvers<unknown>();
+    const submit = vi.fn(() => deferred.promise);
+    getOrCreateChatClient(SESSION, {
+      rpc: {
+        session: {
+          command: { mutate: submit },
+          projection: {
+            query: async () => ({
+              projection: {
+                ...store.getState().sessions[SESSION]!.projection!,
+                queue: [],
+                queueRevision: 1,
+              },
+            }),
+          },
+        },
+      } as unknown as ChatSessionRpc,
+      store,
+      scheduler: { schedule: () => () => undefined },
+      newCommandId: () => "steer-command",
+      createSession: async () => {
+        throw new Error("not under test");
+      },
+      attachSession: async () => {
+        throw new Error("not under test");
+      },
+      notify: () => undefined,
+      renameSession: () => undefined,
+    });
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    const status = activityStatus();
+    expect(status?.textContent).toBe("Message queued");
+    await act(async () =>
+      container!
+        .querySelector<HTMLButtonElement>('[aria-label="Steer queued message: Next"]')!
+        .click(),
+    );
+    expect(submit).toHaveBeenCalledOnce();
+    expect(status?.textContent).toBe("Sends after this step");
+    expect(container?.querySelector('[data-slot="queue-status"]')?.textContent).toBe(
+      "Sends after this step",
+    );
+    await act(async () =>
+      deferred.resolve({ sessionId: SESSION, receipt: { status: "accepted" } }),
+    );
+  });
+
   it("routes queue, steering and approval through the same factual status region", async () => {
     const store = chatStore([], { lifecycle: "working", turnActive: true });
     await mountPlane(store, modelClient(DEFAULT_SELECTION));
@@ -2956,8 +3019,8 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
     expect(container?.querySelector('[data-slot="message-delivery"]')?.textContent).toBe("Queuing");
   });
 
-  it.each(["reasoning", "text", "tool"] as const)(
-    "pauses island activity during a transport retry with stale %s output and restores it on recovery",
+  it.each(["reasoning", "text", "tool", "rate_limited"] as const)(
+    "pauses island activity during retry/backoff with stale %s output and restores it on recovery",
     async (kind) => {
       vi.useFakeTimers();
       const store = chatStore([]);
@@ -2972,24 +3035,33 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
               state: "input-available",
               input: {},
             }
-          : { type: kind, text: "Partial output", state: "streaming" };
+          : {
+              type: kind === "rate_limited" ? "reasoning" : kind,
+              text: "Partial output",
+              state: "streaming",
+            };
       await ingest(store, [], [overlay(1, liveAssistantMessage([part]))]);
       const status = activityStatus()!;
       const clearance = turnClearance();
       const announcement =
         kind === "tool" ? "Reading" : kind === "text" ? "Writing a reply" : "Reasoning";
       expectActivity(status, announcement);
+      const pausedLabel = kind === "rate_limited" ? "Rate limited" : "Reconnecting";
       const setRetry = async (retrying: boolean) => {
         await act(async () =>
           store.setState((state) => {
             const slice = state.sessions[SESSION]!;
-            const notice = {
+            const transportNotice = {
               id: "retry",
               attachmentId: null,
               kind: "transport_retrying" as const,
               detail: "Waiting for the network",
               diagnostic: null,
             };
+            const notice =
+              kind === "rate_limited"
+                ? { ...transportNotice, kind: "rate_limited" as const, retryAt: null }
+                : transportNotice;
             return {
               sessions: {
                 ...state.sessions,
@@ -3009,16 +3081,16 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
         );
       };
       await setRetry(true);
-      expect(container?.textContent).toContain("Reconnecting");
+      expect(container?.textContent).toContain(pausedLabel);
       expect(activityStatus()).toBe(status);
-      expectActivity(status, "Reconnecting"); // Last-known output is not presented as live work.
+      expectActivity(status, pausedLabel); // Last-known output is not presented as live work.
       expect(turnClearance()).toBe(clearance);
       expect(store.getState().sessions[SESSION]!.transcript.overlay.size).toBe(1);
       expect(container?.querySelector(".is-assistant")).not.toBeNull();
       await advanceProgressTime(299);
-      expectActivity(status, "Reconnecting");
+      expectActivity(status, pausedLabel);
       await advanceProgressTime(1);
-      expectActivity(status, "Reconnecting");
+      expectActivity(status, pausedLabel);
       expect(container?.querySelectorAll(".is-assistant .animate-spin")).toHaveLength(0);
       await setRetry(false);
       expectActivity(status, announcement);

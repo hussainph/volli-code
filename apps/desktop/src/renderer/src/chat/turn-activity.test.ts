@@ -339,6 +339,9 @@ describe("current activity selection", () => {
       word: "Message queued",
       priority: true,
     });
+    state.steeringIds = new Set(["follow-up"]);
+    expect(selectTurnActivity("s", state)?.word).toBe("Sends after this step");
+    state.steeringIds = new Set();
     state.queue = [{ id: "one" }, { id: "two" }];
     expect(selectTurnActivity("s", state)?.word).toBe("2 messages queued");
     state.queue = [...state.queue, { id: "steer", afterCurrentStep: true }];

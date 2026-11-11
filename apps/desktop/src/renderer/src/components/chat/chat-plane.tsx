@@ -1904,7 +1904,9 @@ function ChatPlaneContent({
   const progressPaused =
     session.sessionError !== null ||
     projection?.attention.active.some((attention) =>
-      ["transport_retrying", "input_required", "permission_required"].includes(attention.kind),
+      ["transport_retrying", "rate_limited", "input_required", "permission_required"].includes(
+        attention.kind,
+      ),
     ) === true;
   const transcriptFrames = useStore(
     sessionsStore,
@@ -2124,6 +2126,7 @@ function ChatPlaneContent({
           }
         : null,
     queue: strip,
+    steeringIds: pendingSteerIds,
   });
   const pendingMessages = held.filter(
     (message) =>

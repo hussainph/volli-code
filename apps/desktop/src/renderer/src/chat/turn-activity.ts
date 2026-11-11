@@ -63,6 +63,8 @@ export interface TurnActivityInput {
   status?: { key: string; label: string; detail?: string } | null;
   /** The existing composer strip, excluding failed local sends and opening sends. */
   queue?: readonly { id: string; afterCurrentStep?: true; localUnsent?: true }[];
+  /** The same in-flight steering intent already displayed by the composer chip. */
+  steeringIds?: ReadonlySet<string>;
 }
 
 interface ActivityEvent {
@@ -374,7 +376,9 @@ export function selectTurnActivity(
     };
   }
   const queue = input.queue?.filter((entry) => !entry.localUnsent) ?? [];
-  const steering = queue.find((entry) => entry.afterCurrentStep);
+  const steering = queue.find(
+    (entry) => entry.afterCurrentStep || input.steeringIds?.has(entry.id),
+  );
   if (steering) return factual(`steer:${steering.id}`, "Sends after this step");
   if (queue.length > 0)
     return factual(
