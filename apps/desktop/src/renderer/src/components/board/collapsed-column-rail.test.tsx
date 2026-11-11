@@ -11,9 +11,9 @@
  * the pointer: ⌥ opened nothing, the hint never appeared, `Move only` could not
  * be aimed at, and the release started the armed countdown anyway.
  *
- * The picker's own arithmetic is unit-tested in `drag-picker-model.ts` and its
- * real ⌥ is driven in `e2e/automations-picker-smoke.mjs`. What only a rendered
- * pill can hold is what those two both trust: that the hit test
+ * The picker's own arithmetic is unit-tested in `drag-picker-model.test.ts`.
+ * This component test does not prove native modifier/pointer delivery. What a
+ * rendered pill can hold is that the hit test
  * `board.tsx#pointerLanding` performs — `closest("[data-board-column]")` from
  * whatever is under the pointer — answers with this pill's status, for the pill
  * itself AND for every row of the panel floating over it. So that exact

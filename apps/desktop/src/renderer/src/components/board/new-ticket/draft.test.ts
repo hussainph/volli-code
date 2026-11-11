@@ -49,6 +49,30 @@ describe("saveDraft/loadDraft", () => {
     expect(loadDraft(storage)).toEqual(draft());
   });
 
+  it("keeps the latest revision after restore and does not resurrect a consumed draft", () => {
+    const storage = fakeStorage();
+    const original = draft({ baseBranch: "origin/main", attachments: [blobView()] });
+    saveDraft(original, storage);
+    expect(loadDraft(storage)).toEqual(original);
+
+    const revision = {
+      ...original,
+      projectId: "p2",
+      title: "Edited after reopening",
+      body: "The latest body\nwith its last line intact.",
+      labels: ["review", "urgent"],
+      usesWorktree: false,
+      baseBranch: null,
+    };
+    saveDraft(revision, storage);
+    expect(loadDraft(storage)).toEqual(revision);
+
+    clearDraft(storage);
+    saveDraft(draft({ projectId: "p2", title: "", body: "", labels: [] }), storage);
+    expect(loadDraft(storage)).toBeNull();
+    expect(storage.map.size).toBe(0);
+  });
+
   it("treats a content-empty draft as a discard: the stored slot is removed", () => {
     const storage = fakeStorage();
     saveDraft(draft(), storage);

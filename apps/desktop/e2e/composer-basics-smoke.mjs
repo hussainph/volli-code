@@ -31,7 +31,8 @@
  * SQLite DB + isolated profile (shared machinery in ./lib/smoke-kit.mjs) and
  * asserts the create flows: open, breadcrumb, project retarget, plain Create,
  * Create-more, ⌘+Enter, "c" hotkey, Escape, and screenshot drag-and-drop without
- * leaving Monaco's dotted drop caret behind.
+ * leaving Monaco's dotted drop caret behind. Before any project seeding or
+ * dialogs, it also checks the deployed Session RPC bridge and router refusals.
  *
  *   Run:
  *     pnpm run build                                  # dist/ + dist-electron/
@@ -152,6 +153,60 @@ async function main() {
     await assertProfileIsolated(app, userDataDir);
     const page = await app.firstWindow();
     await page.waitForLoadState("domcontentloaded");
+
+    // Exercise the installed preload → main router in the fresh first window,
+    // before seedProjects reloads the renderer or any composer dialog opens.
+    await attempt("RPC1", "the preload exposes Session RPC request/onEvent/cancel", async () => {
+      const shape = await page.evaluate(() => {
+        const door = window.api?.sessionRpc;
+        return door === undefined
+          ? null
+          : Object.fromEntries(
+              ["request", "onEvent", "cancel"].map((name) => [name, typeof door[name]]),
+            );
+      });
+      return {
+        ok:
+          shape !== null &&
+          ["request", "onEvent", "cancel"].every((name) => shape[name] === "function"),
+        detail: shape === null ? "window.api.sessionRpc is missing" : JSON.stringify(shape),
+      };
+    });
+
+    await attempt(
+      "RPC2",
+      "session.snapshot empty session id reaches the router: BAD_REQUEST",
+      async () => {
+        const reply = await page.evaluate(() =>
+          window.api.sessionRpc.request({
+            path: "session.snapshot",
+            type: "query",
+            input: { sessionId: "" },
+          }),
+        );
+        return {
+          ok: reply.ok === false && reply.error.code === "BAD_REQUEST",
+          detail: JSON.stringify(reply).slice(0, 200),
+        };
+      },
+    );
+
+    await attempt(
+      "RPC3",
+      "withheld labDiagnostics.list returns the exact NOT_FOUND refusal",
+      async () => {
+        const reply = await page.evaluate(() =>
+          window.api.sessionRpc.request({ path: "labDiagnostics.list", type: "query", input: {} }),
+        );
+        return {
+          ok:
+            reply.ok === false &&
+            reply.error.code === "NOT_FOUND" &&
+            reply.error.message === 'No "query"-procedure on path "labDiagnostics.list"',
+          detail: JSON.stringify(reply).slice(0, 200),
+        };
+      },
+    );
     await sleep(1000);
 
     // Seed two real git-repo projects, then reload → import into SQLite.

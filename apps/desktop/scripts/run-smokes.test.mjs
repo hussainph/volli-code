@@ -242,7 +242,15 @@ test("core, rest and quarantine selections partition runnable probes without ove
   assert.ok(core.includes("database-recovery-smoke.mjs"));
   assert.ok(core.includes("canvas-theming-smoke.mjs"));
   assert.ok(core.includes("agent-cli-roundtrip-smoke.mjs"));
-  assert.ok(core.includes("session-rpc-transport-smoke.mjs"));
+  assert.deepEqual(core, [
+    "agent-cli-roundtrip-smoke.mjs",
+    "board-smoke.mjs",
+    "canvas-theming-smoke.mjs",
+    "composer-basics-smoke.mjs",
+    "database-recovery-smoke.mjs",
+    "terminal-smoke.mjs",
+    "worktree-smoke.mjs",
+  ]);
   assert.ok(rest.includes("vc418-contrast-smoke.mjs"), "cheap contrast repair stays gating");
   const shards = [1, 2, 3].flatMap((index) =>
     selectSmokes(parseArgs(["--tier", "rest", "--shard", `${index}/3`])),

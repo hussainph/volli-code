@@ -421,6 +421,23 @@ describe("dragPickerRelease", () => {
     });
   });
 
+  it("keeps Move only as the sole landing when an open picker enters an empty column", () => {
+    const empty = run([
+      start,
+      over("doing", true),
+      { kind: "digit", digit: 3 },
+      over("backlog", true),
+      { kind: "digit", digit: 1 },
+    ]);
+    expect(empty.picker).toEqual({ status: "backlog", index: null });
+    expect(showsChooseHint(empty, columns)).toBe(false);
+    expect(dragPickerRelease(empty, "doing")).toEqual({
+      status: "backlog",
+      choice: { kind: "move-only" },
+    });
+    expect(dragPickerReducer(empty, { kind: "drag-end" }, columns)).toEqual(IDLE_DRAG_PICKER);
+  });
+
   it("carries a bare-digit choice made for the column released over", () => {
     const state = run([start, over("doing"), { kind: "digit", digit: 2 }]);
     expect(dragPickerRelease(state, "doing")).toEqual({
