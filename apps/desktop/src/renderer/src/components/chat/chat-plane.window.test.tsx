@@ -1277,9 +1277,9 @@ describe("a chat plane holding a long transcript", () => {
         expect(slice.transcript.turnActive).toBe(false);
         expect(slice.transcript.turnEpoch).toBe(epoch + 1);
         expect(slice.lifecycle).not.toBe("working");
-        expect(activityStatus()?.textContent).toContain("Needs attention:");
+        expect(activityStatus()?.textContent).toBe("");
         expect(container?.querySelector(".liquid-island-shimmer")).toBeNull();
-        expect(turnClearance()).not.toBeNull();
+        expect(turnClearance()).toBeNull();
         expect(container?.textContent).toContain("The runtime stopped unexpectedly");
         expect(
           [...container!.querySelectorAll("button")].filter(
@@ -2343,6 +2343,130 @@ describe("VC-758 visible timeline regressions", () => {
     expect(container?.querySelector("[data-island-verb]")?.textContent).toBe("On it");
   });
 
+  it.each(["attention", "sessionError"] as const)(
+    "retires the last tab's island and clearance without hiding %s recovery or remounting its polite region",
+    async (source) => {
+      vi.useFakeTimers();
+      const store = chatStore(transcript(1), {
+        lifecycle: "error",
+        sessionError: source === "sessionError" ? "Model request failed" : null,
+      });
+      const notice = {
+        id: "auth-failure",
+        attachmentId: null,
+        kind: "auth_required" as const,
+        resetsAt: null,
+        detail: "Model request failed",
+        diagnostic: null,
+      };
+      if (source === "attention") {
+        store.setState(({ sessions }) => ({
+          sessions: {
+            ...sessions,
+            [SESSION]: {
+              ...sessions[SESSION]!,
+              projection: {
+                ...sessions[SESSION]!.projection!,
+                attention: { active: [notice], primary: notice },
+              },
+            },
+          },
+        }));
+      }
+      const tab = (tabId: string, ownerSessionId = SESSION) => ({
+        tabId,
+        projectId: PROJECT,
+        ticketId: null,
+        createdBy: "session" as const,
+        ownerSessionId,
+        presentation: "headless" as const,
+        url: "https://example.com/",
+        title: "Example",
+        loading: false,
+        error: null,
+        canGoBack: false,
+        canGoForward: false,
+        generation: 1,
+        heldBy: null,
+      });
+      const other = tab("other", "another-session");
+      const registry = (ids: string[]) =>
+        useBrowserTabsStore.setState({
+          byId: Object.fromEntries(
+            [...ids.map((id) => tab(id)), other].map((one) => [one.tabId, one]),
+          ),
+        });
+      registry(["one", "two"]);
+      await mountPlane(store);
+      const status = activityStatus()!;
+      const recovery = container!.querySelector('[data-slot="session-blocker"]');
+      expect(recovery).not.toBeNull();
+      expect(status.getAttribute("aria-live")).toBe("polite");
+      expect(status.getAttribute("aria-atomic")).toBe("true");
+
+      for (const ids of [["one", "two"], ["one"]]) {
+        await act(async () => registry(ids));
+        expect(activityStatus()).toBe(status);
+        expect(status.textContent).toContain("Needs attention:");
+        expect(container!.querySelector('[data-island-cluster="tabs"]')?.textContent).toContain(
+          String(ids.length),
+        );
+        expect(turnClearance()).not.toBeNull();
+      }
+      await act(async () => registry([]));
+      await advanceProgressTime(1_200);
+      await advanceProgressTime(200);
+      expectNoActivity();
+      expect(activityStatus()).toBe(status);
+      expect(container!.querySelector("[data-activity-island]")).toBeNull();
+      expect(container!.querySelector('[data-slot="chat-composer-dock"] .mb-2')).toBeNull();
+      expect(turnClearance()).toBeNull();
+      expect(container!.querySelector('[data-slot="session-blocker"]')).toBe(recovery);
+      expect(useBrowserTabsStore.getState().byId["other"]).toEqual(other);
+
+      await act(async () => registry(["restored"]));
+      expect(activityStatus()).toBe(status);
+      expect(status.textContent).toContain("Needs attention:");
+      expect(turnClearance()).not.toBeNull();
+    },
+  );
+
+  it.each(["transport_retrying", "rate_limited"] as const)(
+    "keeps an ongoing %s wait on the island without a turn or clusters",
+    async (kind) => {
+      const store = chatStore(transcript(1));
+      const notice = {
+        id: "ongoing-wait",
+        attachmentId: null,
+        kind,
+        retryAt: null,
+        resetsAt: null,
+        detail: "Waiting for the provider",
+        diagnostic: null,
+      };
+      store.setState(({ sessions }) => ({
+        sessions: {
+          ...sessions,
+          [SESSION]: {
+            ...sessions[SESSION]!,
+            projection: {
+              ...sessions[SESSION]!.projection!,
+              attention: { active: [notice], primary: notice },
+            },
+          },
+        },
+      }));
+      await mountPlane(store);
+      expect(activityStatus()?.textContent).toBe(
+        kind === "transport_retrying" ? "Reconnecting" : "Rate limited",
+      );
+      expect(container!.querySelector("[data-activity-island]")).not.toBeNull();
+      expect(container!.querySelector("[data-island-cluster]")).toBeNull();
+      expect(turnClearance()).not.toBeNull();
+      expect(container!.querySelector(".liquid-island-shimmer")).toBeNull();
+    },
+  );
+
   it("shows the failure in the timeline with one recovery", async () => {
     const store = chatStore(transcript(1), {
       lifecycle: "error",
@@ -2353,13 +2477,11 @@ describe("VC-758 visible timeline regressions", () => {
     expect(row).not.toBeNull();
     expect(row?.closest('[data-slot="chat-composer-dock"]')).toBeNull();
     expect(row?.textContent).toContain("Retry");
-    expect(turnClearance()).not.toBeNull();
+    expectNoActivity();
+    expect(turnClearance()).toBeNull();
     expect(
       container?.querySelectorAll("[data-turn-bead-clearance], [data-recovery-bead-clearance]"),
-    ).toHaveLength(1);
-    expect(
-      row!.compareDocumentPosition(turnClearance()!) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
+    ).toHaveLength(0);
   });
 });
 
