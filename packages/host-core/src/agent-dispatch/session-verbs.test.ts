@@ -1406,6 +1406,19 @@ describe("session peek runtime facts (VC-758)", () => {
     },
   );
 
+  it("names a start that ran out of time as one, not as a stopped runtime (VC-1072)", async () => {
+    const f = fixture();
+    const id = await f.create("timed-out", DAY);
+    await f.active(id, 2 * DAY);
+    const detail = "attach_timeout: executor attach did not finish within 180 s.";
+    await raise(f, id, "adapter_unrecoverable", detail);
+    expect((await peek(f, id))["attention"]).toEqual({
+      message: "Start timed out",
+      recovery: "Retry",
+      detail,
+    });
+  });
+
   it("offers Resume on a turn a lost process cut short while its attachment is idle (VC-450)", async () => {
     const f = fixture();
     const id = await f.create("lost", DAY);

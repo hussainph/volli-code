@@ -24,6 +24,7 @@ import type {
 import {
   attentionResumeAt,
   findComposerVerb,
+  isAttachTimeoutAttention,
   isProcessLossWarning,
   REASONING_LEVELS,
   revealedSessionAttention,
@@ -879,6 +880,9 @@ function providerRecovery(input: {
  *   limit gets one because the wait is the whole fix; the provider's own time is
  *   shown when it sent one, and an absent one stays absent rather than becoming
  *   a guess.
+ * - **Retry of the start** — `adapter_unrecoverable` whose detail reports an
+ *   attach that ran out of time (`isAttachTimeoutAttention`, VC-1072): headed
+ *   "Start timed out", because nothing stopped and the start is what to retry.
  * - **Retry of the run** — `adapter_unrecoverable`. The kind is named for having
  *   no *automatic* recovery, and by the time it is raised the runtime has spent
  *   every attempt it makes on its own; the run itself is still there to try
@@ -966,7 +970,16 @@ function attentionBlocker(
     case "partial_turn_interrupted":
       return interruptedTurnBlocker(attention, retryRuntime, turn);
     case "adapter_unrecoverable":
-      return stoppedRunBlocker(attention, retryRuntime, resume, dismissKey, dismissAttention);
+      // An attach that did not finish in time is persisted under this kind, so
+      // every older build clears it on its next attach (VC-1072). Nothing
+      // stopped: it says so, and Retry starts it again.
+      return isAttachTimeoutAttention(attention)
+        ? errorBlocker(
+            { message: "Start timed out", detail, action: retryRuntime },
+            dismissKey,
+            dismissAttention,
+          )
+        : stoppedRunBlocker(attention, retryRuntime, resume, dismissKey, dismissAttention);
     case "input_required":
       return { message: "Waiting for an answer", detail, tone: "waiting", action: null };
     case "permission_required":

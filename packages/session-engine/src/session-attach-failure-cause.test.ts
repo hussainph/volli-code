@@ -54,6 +54,7 @@ function fixture(
     clock,
     ids: { next: (kind) => `${kind}-${++sequence}` },
     followUpAdmissionTimeoutMs: BOUND_MS,
+    directAttachTimeoutMs: BOUND_MS,
     firstAttachPreparationTimeoutMs: BOUND_MS,
     locations: {
       resolve: async () => ({ directory: "/fake", venue: { id: "local", kind: "local" } }),
@@ -90,7 +91,7 @@ function fixture(
     );
     return { sessionId, attached, failed };
   };
-  return { runtime, causes, start };
+  return { engine, runtime, causes, start };
 }
 
 function handle(released?: () => void): BindingHandle {
@@ -108,7 +109,9 @@ function handle(released?: () => void): BindingHandle {
 }
 
 describe("an attach failure's cause (VC-1099)", () => {
-  it("names the executor attach that outlasted its bound, and releases the late binding", async () => {
+  it("names the direct executor attach that outlasted its ceiling, and releases the late binding", async () => {
+    const commandId = "start";
+    const code = "attach_timeout";
     const late = Promise.withResolvers<void>();
     const released = Promise.withResolvers<void>();
     const f = fixture({
@@ -118,16 +121,16 @@ describe("an attach failure's cause (VC-1099)", () => {
       },
     });
 
-    const { attached, failed, sessionId } = await f.start();
+    const { attached, failed, sessionId } = await f.start(commandId);
 
-    expect(attached.receipt).toMatchObject({ status: "rejected", code: "queue_admission_timeout" });
+    expect(attached.receipt).toMatchObject({ status: "rejected", code });
     expect(f.causes).toEqual([
       {
         sessionId,
-        commandId: "start",
+        commandId,
         attachmentId: failed[0]!.attachment.id,
         phase: "executor-attach",
-        code: "queue_admission_timeout",
+        code,
         errorName: "NativeAttachmentError",
         timedOut: true,
         phaseMs: expect.any(Number),
@@ -174,7 +177,7 @@ describe("an attach failure's cause (VC-1099)", () => {
     await f.runtime.close();
   });
 
-  it("names a later attach's preparation that outlasted the admission bound as a timeout", async () => {
+  it("names a later direct attach's preparation that outlasted its ceiling as a timeout", async () => {
     let prepares = 0;
     const f = fixture({
       prepare: () => (++prepares === 1 ? Promise.resolve() : new Promise<void>(() => undefined)),
@@ -202,6 +205,29 @@ describe("an attach failure's cause (VC-1099)", () => {
         timedOut: true,
       },
     ]);
+    await f.runtime.close();
+  });
+
+  it("does not diagnose a person's cancelled start as an attach failure", async () => {
+    const attaching = Promise.withResolvers<void>();
+    const late = Promise.withResolvers<BindingHandle>();
+    const released = Promise.withResolvers<void>();
+    const f = fixture({
+      attach: () => {
+        attaching.resolve();
+        return late.promise;
+      },
+    });
+    const starting = f.start();
+    await attaching.promise;
+    const [session] = await f.engine.listSessions({ projectId: "project", scope: "all" });
+    expect(await f.runtime.abandonDirectStart(session!.session.id)).toBe(true);
+    const { attached, failed } = await starting;
+    expect(attached.receipt).toMatchObject({ status: "rejected", code: "attach_cancelled" });
+    expect(failed).toHaveLength(1);
+    expect(f.causes).toEqual([]);
+    late.resolve(handle(released.resolve));
+    await released.promise;
     await f.runtime.close();
   });
 

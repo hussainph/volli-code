@@ -4818,6 +4818,44 @@ describe("listSessions over a project roster (VC-388)", () => {
   );
 
   /**
+   * The budget read's working set is a roster too (VC-1072). Every Session
+   * start reads every Session holding an open attachment, across every
+   * project, and a profile with history holds thousands of them. Sized only to
+   * the project rosters a listing happened to count, the cache kept the floor
+   * and each budget read re-folded all but 256 of them on the host's event
+   * loop: seconds at every Session start.
+   */
+  it(
+    "keeps every attached Session folded across repeat budget reads",
+    { timeout: 30_000 },
+    async () => {
+      const { plane, folded } = foldWatchingComposition();
+      // Past the floor by more than the hot checkpoints hold (VC-1076), so the
+      // rows a floor-sized cache would evict are not all answered from them.
+      const attachedCount = SESSION_LISTING_CACHE_LIMIT + HOT_CHECKPOINT_LIMIT + 1;
+      for (let index = 0; index < attachedCount; index += 1) {
+        const { session } = await plane.createSession(
+          createRequest(`command-attached-over-floor-${index}`),
+        );
+        await plane.observe({
+          id: `attached-over-floor-${index}-opened`,
+          sessionId: session.id,
+          occurredAt: 1,
+          provenance: adapterProvenance,
+          kind: "attachment.opened",
+          attachment: attachment(session.id, `attachment-over-floor-${index}`),
+        });
+      }
+
+      await expect(plane.listAttachedSessions()).resolves.toHaveLength(attachedCount);
+
+      folded.length = 0;
+      await expect(plane.listAttachedSessions()).resolves.toHaveLength(attachedCount);
+      expect(folded).toEqual([]);
+    },
+  );
+
+  /**
    * The bound, which is the half of a cache that has to be proved rather than
    * observed: a memo that never evicts also answers every assertion about hits
    * and misses, and only grows. When a listed roster shrinks, the next listing

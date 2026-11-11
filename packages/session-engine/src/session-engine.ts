@@ -326,6 +326,15 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
    */
   const rosterSizes = new Map<string, number>();
   /**
+   * How many Sessions the latest {@link SessionEngine.listAttachedSessions}
+   * folded (VC-1072): the other working set the cache serves. A raw attached
+   * listing need not first count any project's roster, so retain that set even
+   * when nobody has listed its projects. Scoped host readers already size the
+   * same cache through metadata counts before their point reads.
+   */
+  let attachedRoster = 0;
+
+  /**
    * The decoded checkpoint of each Session a fact was recently recorded for,
    * advanced past that fact (VC-1076). Insertion-ordered, so the first key is
    * the least recently written Session. See {@link HotCheckpoint}.
@@ -438,22 +447,22 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
    * re-folds only its overflow on the next visit, not the whole roster.
    *
    * The limit is the sum of every project's latest `all` count (from a
-   * listing or a metadata-only count before scoped point reads), so it is
-   * never below the roster that listings walk, and nothing live is evicted
-   * once every project has been listed whole. The cache stays resident
+   * listing or a metadata-only count before scoped point reads) and the
+   * latest attached-Session count, so it is never below either working set.
+   * A Session counted in both only loosens the bound. The cache stays resident
    * between listings with one frozen row per listed Session, so its memory
    * grows with the roster and not with how often the roster is listed.
    *
    * Sessions are never deleted one by one. They go only with their project,
    * and nothing lists a deleted project again, so that project's count and
    * rows stay until the host restarts. The cache therefore holds at most one
-   * row for each Session that belonged to a listed project at some point
+   * row for each Session that belonged to a counted project or attached set
    * since the host started, or the floor, whichever is larger.
    */
   const evictListingFolds = (): void => {
     let rosters = 0;
     for (const size of rosterSizes.values()) rosters += size;
-    const limit = Math.max(SESSION_LISTING_CACHE_LIMIT, rosters);
+    const limit = Math.max(SESSION_LISTING_CACHE_LIMIT, rosters + attachedRoster);
     for (const oldest of listingFolds.keys()) {
       if (listingFolds.size <= limit) break;
       listingFolds.delete(oldest);
@@ -1208,6 +1217,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
       const rows = await ports.ledger.transaction((transaction) =>
         transaction.listAttachedSessions(),
       );
+      attachedRoster = rows.length;
       const projections: SessionListingProjection[] = [];
       for (let from = 0; from < rows.length; from += SESSION_LISTING_FOLD_CHUNK) {
         if (from > 0) await yieldToHost();
