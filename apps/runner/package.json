@@ -31,7 +31,7 @@
     "@volli/agent-runtime": "workspace:*",
     "@volli/host-core": "workspace:*",
     "@volli/shared": "workspace:*",
-    "convex": "1.48.0",
+    "convex": "1.49.0",
     "typescript": "catalog:",
     "vite-plus": "catalog:"
   }

@@ -23,7 +23,7 @@
   },
   "dependencies": {
     "@volli/shared": "workspace:*",
-    "convex": "1.48.0"
+    "convex": "1.49.0"
   },
   "devDependencies": {
     "@types/node": "catalog:",
