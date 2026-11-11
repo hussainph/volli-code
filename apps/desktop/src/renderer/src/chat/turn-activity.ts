@@ -30,11 +30,13 @@ export type TurnActivityKind = keyof typeof TURN_ACTIVITY_POOLS;
 export interface TurnActivity {
   /** Stable activity identity, not a streaming-frame or word identity. */
   key: string;
-  activity: TurnActivityKind;
+  activity: TurnActivityKind | "busy" | "status";
   word: string;
   preposition?: string;
   payload: string | null;
   waiting: boolean;
+  /** Factual state takes precedence over transient island receipts. */
+  priority?: boolean;
   /** Semantic category, not the rotating synonym. Never truncate the accessible announcement. */
   announcement: string;
 }
@@ -47,13 +49,22 @@ export interface TurnActivityInput {
   projection: {
     turnActive: boolean;
     interactions: {
-      active: readonly Pick<
+      active: readonly (Pick<
         SessionPresentationProjection["interactions"]["active"][number],
         "id" | "kind"
-      >[];
+      > &
+        Partial<
+          Pick<SessionPresentationProjection["interactions"]["active"][number], "title" | "prompts">
+        >)[];
     };
   } | null;
   liveCompaction: Pick<LiveTranscriptCompaction, "throughSequence"> | null;
+  /** Already resolved by the plane's existing blocker/recovery presentation. */
+  status?: { key: string; label: string; detail?: string } | null;
+  /** The existing composer strip, excluding failed local sends and opening sends. */
+  queue?: readonly { id: string; afterCurrentStep?: true; localUnsent?: true }[];
+  /** The same in-flight steering intent already displayed by the composer chip. */
+  steeringIds?: ReadonlySet<string>;
 }
 
 interface ActivityEvent {
@@ -212,8 +223,12 @@ function classifyCommand(command: string): Pick<ActivityEvent, "activity" | "wor
 function toolEvent(part: DynamicToolUIPart, key: string): ActivityEvent {
   const descriptor = readActivityDescriptor(part.toolMetadata);
   const nativeName = descriptor?.nativeToolName ?? part.toolName;
-  const input = record(part.input);
-  const subject = descriptor?.subject;
+  // Partial arguments are not an observed command/path yet. In particular, a
+  // streamed `git` prefix must not claim a commit before its operation arrives.
+  const streaming = part.state === "input-streaming";
+  const input = streaming ? {} : record(part.input);
+  const subject = streaming ? undefined : descriptor?.subject;
+  const browse = streaming ? undefined : descriptor?.browse;
   const path = subject?.path ?? text(input.path) ?? text(input.file_path) ?? subject?.label ?? null;
   // File activities name the file, not its entire worktree path; the transcript owns full paths.
   const basename = path?.split(/[/\\]/u).findLast((segment) => segment.length > 0) ?? path;
@@ -241,10 +256,10 @@ function toolEvent(part: DynamicToolUIPart, key: string): ActivityEvent {
     return event("web", text(input.query) ?? text(input.url) ?? subject?.label ?? null);
   }
   if (nativeName === "browser_screenshot" || descriptor?.browse?.action === "screenshot") {
-    return event("shot", descriptor?.browse?.url ?? text(input.url));
+    return event("shot", browse?.url ?? text(input.url));
   }
   if (nativeName.startsWith("browser_") || descriptor?.kind === "browse") {
-    return event("browser", descriptor?.browse?.url ?? text(input.url));
+    return event("browser", browse?.url ?? text(input.url));
   }
   if (nativeName === "session_delegate" || descriptor?.kind === "delegate") {
     return event("delegate", subject?.agentName ?? text(input.title) ?? subject?.label ?? null);
@@ -306,6 +321,7 @@ function present(event: ActivityEvent, word: string): TurnActivity {
     ...(preposition ? { preposition } : {}),
     payload: event.payload,
     waiting: event.activity === "askUser",
+    ...(event.activity === "askUser" ? { priority: true } : {}),
     announcement: [
       ANNOUNCEMENT[event.activity],
       event.payload
@@ -331,11 +347,43 @@ export function selectTurnActivity(
   sessionId: string,
   input: TurnActivityInput,
 ): TurnActivity | null {
+  const factual = (key: string, label: string, detail?: string): TurnActivity => ({
+    key: `${sessionId}:status:${key}`,
+    activity: "status",
+    word: label,
+    // Recovery controls and the full cause remain in the existing blocker.
+    // Keep the bead a concise state label, not a second clipped error report.
+    payload: null,
+    waiting: true,
+    priority: true,
+    announcement: detail ? `${label}: ${detail}` : label,
+  });
+  if (input.status) {
+    const { key, label, detail } = input.status;
+    return factual(key, label, detail);
+  }
   const interaction = input.projection?.interactions.active[0];
-  if (interaction)
-    return present(
-      { key: `${sessionId}:ask:${interaction.id}`, activity: "askUser", payload: null },
-      TURN_ACTIVITY_POOLS.askUser[0],
+  if (interaction) {
+    const waiting = factual(
+      `ask:${interaction.id}`,
+      interaction.kind === "permission" ? "Waiting for approval" : "Waiting for you",
+    );
+    const count = interaction.prompts?.length ?? 0;
+    const request = count > 1 ? `${count} questions` : interaction.title;
+    return {
+      ...waiting,
+      announcement: request ? `${waiting.word}: ${request}` : waiting.announcement,
+    };
+  }
+  const queue = input.queue?.filter((entry) => !entry.localUnsent) ?? [];
+  const steering = queue.find(
+    (entry) => entry.afterCurrentStep || input.steeringIds?.has(entry.id),
+  );
+  if (steering) return factual(`steer:${steering.id}`, "Sends after this step");
+  if (queue.length > 0)
+    return factual(
+      "queued",
+      queue.length === 1 ? "Message queued" : `${queue.length} messages queued`,
     );
   if (input.liveCompaction)
     return present(
@@ -364,12 +412,10 @@ export function selectTurnActivity(
   const activeTools = new Map<string, TurnActivity>();
   const settledCalls = new Set<string>();
   let tail: TurnActivity | null = null;
-  let lastKey = boundary;
   for (const message of input.messages.slice(start)) {
     if (message.role !== "assistant") continue;
     for (const [index, part] of message.parts.entries()) {
       const key = `${sessionId}:${message.id}:${index}`;
-      lastKey = key;
       tail = null;
       if (part.type === "dynamic-tool") {
         const event = toolEvent(
@@ -398,14 +444,22 @@ export function selectTurnActivity(
       }
     }
   }
-  return (
-    [...activeTools.values()].at(-1) ??
-    tail ??
-    present(
-      { key: `${sessionId}:reason:${lastKey}`, activity: "reason", payload: null },
-      TURN_ACTIVITY_POOLS.reason[0],
-    )
-  );
+  const observed = [...activeTools.values()].at(-1) ?? tail;
+  if (observed) {
+    if (observed.activity === "askUser")
+      return { ...observed, word: "Waiting for you", announcement: "Waiting for you" };
+    return observed;
+  }
+  // Generic busy says nothing about private reasoning or specific work.
+  // One voice for the whole episode, never a hash-selected word lottery.
+  return {
+    key: `${sessionId}:busy:${boundary}`,
+    activity: "busy",
+    word: "On it",
+    payload: null,
+    waiting: false,
+    announcement: "Working",
+  };
 }
 
 /** Read the same committed boundary the transcript already consumes, including remote stops. */

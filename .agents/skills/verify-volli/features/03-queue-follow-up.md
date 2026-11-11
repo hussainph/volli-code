@@ -2,6 +2,7 @@
 
 ## Sub-features
 - While a turn is live, the submit button becomes **Queue**. ↵ queues, ⌘↵ steers, and ⌫ on an empty box takes back the newest queued message (composer-ui.tsx:22-25).
+- The island says **Message queued** (or the actual count) while an accepted follow-up waits. Steering changes that factual label to **Sends after this step**. A person-wait, approval, reconnect or failure outranks the queue caption; background cluster controls remain available. These states are still text, not a shimmer or progress estimate.
 - Each queued row is a group `Queued message: <text>` with three direct controls: **Steer queued message: …**, **Remove queued message: …**, and the pencil **Edit queued message: …**. The ownership status sits beneath the message text (`composer-ui.tsx`).
 - Since VC-675 the **host** owns the queue. It is durable in `session_follow_up_queue`. At each idle boundary the host releases *one* entry, as an ordinary `message.submit` (session-engine/src/session-runtime.ts:2117-2141).
 

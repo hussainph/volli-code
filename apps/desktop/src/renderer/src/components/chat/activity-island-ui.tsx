@@ -1341,10 +1341,12 @@ export function ActivityIsland({
 
   const clustersVisible = feel.grammar !== "now-only";
   /** clusters-now sends the channel to the drop; now-only keeps it inline. */
-  const drop = feel.grammar === "clusters-now" ? flash : null;
+  // A receipt may briefly replace a work verb, never a factual wait or fault.
+  const visibleFlash = activity?.priority ? null : flash;
+  const drop = feel.grammar === "clusters-now" ? visibleFlash : null;
   const inlineSummary = feel.grammar === "now-only" ? summaryLine(model) : null;
-  const inlineFlash = feel.grammar === "now-only" ? flash : null;
-  const inlineKey = flash ? `flash-${flash.id}` : `summary-${inlineSummary ?? ""}`;
+  const inlineFlash = feel.grammar === "now-only" ? visibleFlash : null;
+  const inlineKey = visibleFlash ? `flash-${visibleFlash.id}` : `summary-${inlineSummary ?? ""}`;
   const inlineVisible = inlineFlash !== null || (inlineSummary ?? "") !== "";
 
   const coordination = useHoverCoordination();
@@ -1389,7 +1391,7 @@ export function ActivityIsland({
           <div className="flex justify-center" ref={centerRef}>
             {/* Semantic activity, not synonym churn or percent ticks. This region
                 survives the whole turn, including word-fit and flash transitions. */}
-            <span role="status" className="sr-only">
+            <span role="status" aria-live="polite" aria-atomic="true" className="sr-only">
               {activity?.announcement ?? (hasClusters && drop ? flashLine(drop) : "")}
             </span>
             <AnimatePresence initial={false}>

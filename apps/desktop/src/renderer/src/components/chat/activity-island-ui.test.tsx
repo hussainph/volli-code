@@ -284,10 +284,10 @@ describe("the hanging turn", () => {
     await render(EMPTY_ACTIVITY_ISLAND, actionsSpy(), FEEL, thinking);
     expect(island()).not.toBeNull();
     expect(container?.querySelector('[data-liquid-island="pill"]')).not.toBeNull();
-    expect(container?.querySelector("[data-island-verb]")?.textContent).toBe("Mulling");
+    expect(container?.querySelector("[data-island-verb]")?.textContent).toBe("On it");
     expect(container?.querySelectorAll('[role="status"]')).toHaveLength(1);
-    expect(container?.querySelector('[role="status"]')?.textContent).toBe("Reasoning");
-    expect(container?.textContent).not.toContain("Working");
+    expect(container?.querySelector('[role="status"]')?.textContent).toBe("Working");
+    expect(container?.querySelector("[data-island-verb]")?.textContent).not.toContain("Working");
   });
 
   it("uses explicit binary luminance masks, not theme-dependent colour ink", async () => {
@@ -330,8 +330,38 @@ describe("the hanging turn", () => {
     });
     expect(container?.querySelector("[data-island-flash]")).toBeNull();
     expect(container?.querySelector("[data-liquid-island]")).toBe(material);
-    expect(container?.querySelector("[data-island-verb]")?.textContent).toBe("Mulling");
-    expect(container?.querySelector('[role="status"]')?.textContent).toBe("Reasoning");
+    expect(container?.querySelector("[data-island-verb]")?.textContent).toBe("On it");
+    expect(container?.querySelector('[role="status"]')?.textContent).toBe("Working");
+  });
+
+  it("never covers a factual state with a background receipt, and keeps one polite region", async () => {
+    const model = {
+      ...EMPTY_ACTIVITY_ISLAND,
+      tabs: [tab()],
+      flash: { id: "background", event: "Opened", payload: "example.com" },
+    };
+    const status = selectTurnActivity("s", {
+      messages: [],
+      working: false,
+      turnActive: false,
+      projection: null,
+      liveCompaction: null,
+      status: { key: "retry", label: "Reconnecting" },
+    })!;
+    await render(model, actionsSpy(), FEEL, status);
+    expect(container?.querySelector("[data-island-flash]")).toBeNull();
+    expect(container?.querySelector("[data-island-verb]")?.textContent).toBe("Reconnecting");
+    expect(container?.querySelector(".liquid-island-shimmer")).toBeNull();
+    const region = container?.querySelector('[role="status"]');
+    expect(region?.getAttribute("aria-live")).toBe("polite");
+    expect(region?.getAttribute("aria-atomic")).toBe("true");
+    await render(model, actionsSpy(), FEEL, {
+      ...status,
+      key: "another-retry",
+      word: "Reconnecting",
+    });
+    expect(container?.querySelector('[role="status"]')).toBe(region);
+    expect(region?.textContent).toBe("Reconnecting");
   });
 
   it("ends the turn immediately even while a flash is held", async () => {

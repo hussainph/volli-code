@@ -70,6 +70,17 @@ describe("a compaction in progress", () => {
     expect(html).not.toContain('data-slot="separator"');
   });
 
+  it("defers its live announcement to the island when mounted in ChatPlane", () => {
+    const html = renderToStaticMarkup(
+      <CompactionProgress
+        compaction={{ throughSequence: 12, reason: "manual" }}
+        announce={false}
+      />,
+    );
+    expect(html).toContain("Compacting context");
+    expect(html).not.toContain('role="status"');
+  });
+
   // The whole point of carrying `reason` to the view: a stall nobody asked for
   // has to read differently from the one they just typed `/compact` for.
   it.each(["threshold", "overflow"] as const)("says a %s compaction started itself", (reason) => {

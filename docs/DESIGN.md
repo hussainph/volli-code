@@ -370,13 +370,18 @@ instantly and crossfades the pill/island pictures instead of morphing.
 
 One life-sign per tier includes the turn: shimmer only on the muted verb, never
 on the shape or bold payload. A tool-call id stably chooses one activity-specific
-word; repeated picks advance within that pool. Idless events use its first word.
-A flash swells the same bead and returns to the verb, with one `mode="wait"`
-text channel. Words wait until their resized bead fits. Payloads truncate in the
-middle within 250px; typography stays on `text-ui`. Waiting for the person uses
-still foreground ink. Only a command's Run activity or reasoning escalates once,
-after 20 seconds of observed dwell. A persistent status region announces the
-semantic activity and full payload, not synonym changes, shimmer or layout ticks.
+word; repeated picks advance within that pool. Idless observed activities use its
+first word. Generic busy before any signal or between activities says “On it”;
+it never claims reasoning or escalates with elapsed time. Factual recovery,
+approval, person-wait and queued/steered states outrank activity verbs and flashes,
+using still foreground ink. Background clusters retain their independent controls.
+A flash otherwise swells the same bead and returns to the verb, with one
+`mode="wait"` text channel. Words wait until their resized bead fits. Payloads
+truncate in the middle within 250px; typography stays on `text-ui`. Only an
+observed command's Run activity or actual reasoning escalates once, after 20
+seconds of observed dwell. One persistent polite, atomic status region announces
+semantic activity and full available payload, not partial argument tokens,
+synonym changes, shimmer or layout ticks. Completion clears its text quietly.
 
 ## Copy and feedback
 
