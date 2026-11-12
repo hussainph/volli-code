@@ -35,7 +35,8 @@
  */
 
 import { describe, expect, it } from "vite-plus/test";
-import type { SessionEvent, SessionProjection } from "@volli/shared";
+import type { CommandReceipt, SessionEvent, SessionProjection } from "@volli/shared";
+import { ATTACH_CANCELLED_CODE } from "@volli/session-engine";
 import type {
   SessionRuntimeCommandRequest,
   SessionRuntimeCommandResult,
@@ -189,6 +190,8 @@ function harness(
     staleParent?: boolean;
     /** How the child's first attach settles; ready unless a test says otherwise. */
     attach?: "ready" | "needs-recovery";
+    /** The receipt the child's start answers with; none unless a test says so. */
+    startReceipt?: CommandReceipt | null;
   } = {},
 ) {
   let children = 0;
@@ -252,7 +255,7 @@ function harness(
         return {
           sessionId,
           state: options.attach ?? "ready",
-          receipt: null,
+          receipt: options.startReceipt ?? null,
           throughSequence: 3,
           model: { providerId: "openai-codex", modelId: "gpt-5.6-sol", reasoningLevel: "low" },
         };
@@ -1659,6 +1662,60 @@ describe("rearm — a child a person resumes reports again (VC-457)", () => {
     expect(h.parentCommands()).toEqual([]);
     await completeChildTurn(h, CHILD, { from: 5 });
     expect(noticeText(h.commands, `${PARENT}:tc-1`)).toMatch(/completed its task/);
+  });
+});
+
+describe("a child whose first attach failed says why (VC-780)", () => {
+  const receipt = { id: "receipt-1", commandId: "start-1", recordedAt: 10, sequence: 10 };
+  const refusal =
+    "Couldn't prepare the worktree at /w/VC-1 — A worktree already exists at /w/VC-1 on branch volli/VC-2-other; this ticket's branch is volli/VC-1-ship-cli.";
+
+  it("carries a rejected attach's own diagnosis", async () => {
+    const h = harness({
+      attach: "needs-recovery",
+      startReceipt: {
+        ...receipt,
+        status: "rejected",
+        code: "location_unavailable",
+        detail: refusal,
+      },
+    });
+
+    const result = await h.delegate();
+
+    expect(result).toMatchObject({
+      state: "needs-recovery",
+      attachFailure: refusal,
+      taskHeld: true,
+    });
+    expect(result).not.toHaveProperty("stopped");
+  });
+
+  it("names an attach that reported no receipt as that", async () => {
+    const h = harness({ attach: "needs-recovery" });
+
+    const result = await h.delegate();
+
+    expect(result).toMatchObject({
+      state: "needs-recovery",
+      attachFailure: "the attach reported no receipt",
+    });
+  });
+
+  it("marks a child a stop reached before it finished starting", async () => {
+    const h = harness({
+      attach: "needs-recovery",
+      startReceipt: {
+        ...receipt,
+        status: "rejected",
+        code: ATTACH_CANCELLED_CODE,
+        detail: "Stopped before it finished starting.",
+      },
+    });
+
+    const result = await h.delegate();
+
+    expect(result).toMatchObject({ state: "needs-recovery", stopped: true });
   });
 });
 

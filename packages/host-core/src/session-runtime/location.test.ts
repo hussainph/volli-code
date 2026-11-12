@@ -522,6 +522,74 @@ describe("desktop Session location resolver", () => {
     );
   });
 
+  describe("a subagent (VC-1015)", () => {
+    function world() {
+      testDb = openTestDb();
+      const root = scratch();
+      const worktreePath = join(root, "VC-3-doing");
+      mkdirSync(worktreePath);
+      const project = testProject({ id: "project-1", path: join(root, "main") });
+      const ticket = testTicket(project.id, { id: "ticket-1", worktreePath, usesWorktree: true });
+      insertProject(testDb.db, project);
+      insertTicket(testDb.db, ticket);
+      ensureWorktree.mockResolvedValue({
+        ok: true,
+        value: {
+          identity: { worktreePath, branch: "volli/VC-3-doing", baseBranch: "main" },
+          created: false,
+          restamped: false,
+        },
+      });
+      return {
+        worktreePath,
+        resolver: createSessionLocationResolver(testDb.db, ports, options),
+        child: {
+          ...ticketSession(project.id, ticket.id),
+          id: "child",
+          role: "subagent" as const,
+          parentSessionId: "ticket-session",
+        },
+      };
+    }
+
+    it("stands in its parent's directory without asking git about the Ticket's branch", async () => {
+      const { worktreePath, resolver, child } = world();
+
+      await expect(
+        resolver.prepare(child, { parentDirectory: worktreePath }),
+      ).resolves.toMatchObject({ directory: worktreePath });
+      expect(ensureWorktree).not.toHaveBeenCalled();
+    });
+
+    it("takes the ordinary preparation when its parent's directory is gone", async () => {
+      const { worktreePath, resolver, child } = world();
+
+      await expect(
+        resolver.prepare(child, { parentDirectory: join(worktreePath, "gone") }),
+      ).resolves.toMatchObject({ directory: worktreePath });
+      expect(ensureWorktree).toHaveBeenCalledTimes(1);
+    });
+
+    it("never lets a root Session skip the Ticket's preparation", async () => {
+      const { worktreePath, resolver, child } = world();
+
+      await resolver.prepare(
+        { ...child, role: "ticket", parentSessionId: null },
+        { parentDirectory: worktreePath },
+      );
+      expect(ensureWorktree).toHaveBeenCalledTimes(1);
+    });
+
+    it("still refuses for a parent whose project was removed", async () => {
+      const { worktreePath, resolver, child } = world();
+      detachProject(testDb!.db, "project-1", 1);
+
+      await expect(resolver.prepare(child, { parentDirectory: worktreePath })).rejects.toThrow(
+        "project was removed",
+      );
+    });
+  });
+
   // A Board Session runs in the project root, which no pipeline materializes.
   it("refuses a project root that is gone instead of pretending it is there", async () => {
     testDb = openTestDb();

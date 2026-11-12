@@ -26,8 +26,10 @@ import {
   findComposerVerb,
   isAttachTimeoutAttention,
   isProcessLossWarning,
+  isWorktreePreparationAttention,
   REASONING_LEVELS,
   revealedSessionAttention,
+  WORKTREE_PREPARATION_FAILED,
   type ComposerVerb,
 } from "@volli/shared";
 import type { UIMessage } from "ai";
@@ -550,9 +552,6 @@ export interface SessionBlockerActs {
   fixSetup(): void;
 }
 
-/** How a start that failed preparing its worktree words it (`session-runtime/location.ts`). */
-const WORKTREE_PREPARATION_FAILED = "Couldn't prepare the worktree";
-
 /**
  * How the setup's own refusals continue that sentence
  * (`worktree/setup-exec.ts`): the run that just failed, or the gate an
@@ -875,6 +874,10 @@ function providerRecovery(input: {
  *
  * - **Open settings** — Pi auth/configuration recovery sends you to Model
  *   Access, where signing in now happens, without a competing Retry.
+ * - **Retry of the start** — `configuration_invalid` whose detail reports a
+ *   worktree that could not be prepared (`isWorktreePreparationAttention`,
+ *   VC-1015): headed "Worktree unavailable", because nothing in Settings fixes
+ *   a checkout, and the detail names what to do there before the Retry.
  * - **Retry** — `adapter_disconnected` and `rate_limited`. The first is a
  *   connection to re-establish, which is exactly what `recover` does. A rate
  *   limit gets one because the wait is the whole fix; the provider's own time is
@@ -929,6 +932,13 @@ function attentionBlocker(
         dismiss: dismissAttention,
       });
     case "configuration_invalid":
+      if (isWorktreePreparationAttention(attention)) {
+        return errorBlocker(
+          { message: "Worktree unavailable", detail, action: retryRuntime },
+          dismissKey,
+          dismissAttention,
+        );
+      }
       return providerRecovery({
         message: "Configuration invalid",
         detail,

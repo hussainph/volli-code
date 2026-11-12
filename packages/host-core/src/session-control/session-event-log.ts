@@ -18,7 +18,8 @@
  * 4. none. A fact is never filed under a trace it cannot be joined to.
  *
  * Identifiers, kinds and counts only: never a title, a message, a transcript
- * reference's content or a reason a person typed.
+ * reference's content or a reason a person typed. The one sentence carried is
+ * a failed worktree preparation's own refusal (VC-1015), which Volli wrote.
  */
 import type { SessionEvent } from "@volli/shared";
 import type { SessionAttachFailureCause } from "@volli/session-engine";
@@ -93,6 +94,13 @@ export function logSessionEvents(events: readonly SessionEvent[]): void {
         fields["timedOut"] = cause.timedOut;
         fields["phaseMs"] = cause.phaseMs;
         fields["elapsedMs"] = cause.elapsedMs;
+        // What the preparation refused, in Volli's own words (VC-1015): a
+        // worktree on another branch, a setup that failed, a project that was
+        // removed. The `code` alone reads the same for all of them. Only this
+        // phase: an executor's failure may quote a provider's answer.
+        if (cause.phase === "workspace-preparation" && event.payload.failure.detail !== null) {
+          fields["detail"] = event.payload.failure.detail;
+        }
       }
     }
     const commandId = typeof fields["commandId"] === "string" ? fields["commandId"] : undefined;

@@ -226,6 +226,32 @@ describe("a Session's committed facts as log lines (VC-699)", () => {
     expect(JSON.stringify(records)).not.toContain("/private/path");
   });
 
+  it("files a failed worktree preparation's own refusal on its line (VC-1015)", () => {
+    const records = capture("info");
+    const refusal =
+      "Couldn't prepare the worktree at /w/VC-1 — A worktree already exists at /w/VC-1 on branch volli/VC-2-other; this ticket's branch is volli/VC-1-ship.";
+    noteAttachFailureCause(cause("a-1"));
+
+    logSessionEvents([
+      event(
+        1,
+        {
+          kind: "attachment.failed",
+          attachment: { id: "a-1" },
+          failure: { code: "location_unavailable", detail: refusal, diagnostic: null },
+        },
+        { commandId: "op:start" },
+      ),
+    ]);
+
+    expect(records[0]).toMatchObject({
+      msg: "session attachment.failed",
+      code: "location_unavailable",
+      phase: "workspace-preparation",
+      detail: refusal,
+    });
+  });
+
   it("forgets the oldest cause whose fact never committed", () => {
     const records = capture("info");
     noteAttachFailureCause(cause("oldest"));

@@ -86,7 +86,7 @@ import type { Watches } from "./watches";
 import type { AutomationRunRequest, RunAutomationOutcome } from "./automations/run";
 import { StructuredSessionsError } from "./session-runtime/sessions";
 import { DelegateSessionError } from "./session-runtime/delegate-session";
-import type { Delegations } from "./session-runtime/delegate-session";
+import type { DelegateSessionOutcome, Delegations } from "./session-runtime/delegate-session";
 import type {
   TicketSessionDelegation,
   TicketSessionDelegationClaims,
@@ -842,6 +842,27 @@ async function runAutomationTool(
 }
 
 /**
+ * What a parent reads when its subagent's attach did not finish: the attach's
+ * own diagnosis, never a bare "needs recovery" (VC-780, as VC-659 did for
+ * `session_start`). The parent is usually the one placed to fix what refused
+ * it. A stop that reached the child first is what someone asked for, and is
+ * said as that (VC-1072). `details.state` stays `needs-recovery`: the words
+ * change, the registry's shape does not.
+ */
+function delegateAttachFailureText(
+  outcome: Extract<DelegateSessionOutcome, { state: "needs-recovery" }>,
+): string {
+  if (outcome.stopped === true) {
+    return outcome.taskHeld
+      ? "It was stopped before it finished starting, so the task is held as its first message: it is sent when the Session is started again, and its notice arrives in this Session when it has run."
+      : "It was stopped before it finished starting, and the task could not be held for it: nothing was sent, and no notice will arrive.";
+  }
+  return outcome.taskHeld
+    ? `It was created but its attachment failed, so the task is held as its first message: ${outcome.attachFailure}\nOnce that is resolved, a person can retry it from the app; the retry sends the task, and its notice arrives in this Session when it has run.`
+    : `It was created but its attachment failed, so the task was not sent: ${outcome.attachFailure}\nThe task could not be held for a retry, so no notice will arrive.`;
+}
+
+/**
  * Hand one task to a new Subagent Session and return at once (VC-9).
  *
  * The door's whole job is the same as the start tool's: read the fields,
@@ -907,9 +928,7 @@ async function delegateSessionTool(
         `Model: ${outcome.model.providerId}/${outcome.model.modelId} at reasoning ${outcome.model.reasoningLevel}.`,
         outcome.state === "running"
           ? `It is attached and working on the task in this Session's working directory, with no time limit. Keep working, or end your turn: when it finishes, a notice from Volli arrives in this Session carrying its final message, read mid-turn or opening a new turn. Do not poll for it; \`volli session peek ${outcome.handle}\` can look in on it meanwhile.`
-          : outcome.taskHeld
-            ? "It was created but its attachment needs recovery, so the task is held as its first message: it is sent when a person retries the Session from the app, and its notice arrives in this Session when it has run."
-            : "It was created but its attachment needs recovery, and the task could not be held for it: nothing was sent, and no notice will arrive.",
+          : delegateAttachFailureText(outcome),
       ].join("\n"),
     };
   } catch (error) {

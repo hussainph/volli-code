@@ -1,12 +1,17 @@
 import { existsSync } from "node:fs";
 
 import type Database from "better-sqlite3";
-import type { SessionLocation, SessionLocationResolver } from "@volli/session-engine";
+import type {
+  SessionLocation,
+  SessionLocationResolver,
+  SessionPrepareContext,
+} from "@volli/session-engine";
 import {
   displayTicketId,
   harnessAdapters,
   LOCAL_RUNNER,
   scrubInheritedSessionEnv,
+  WORKTREE_PREPARATION_FAILED,
 } from "@volli/shared";
 import type { Session, RunnerIdentity } from "@volli/shared";
 
@@ -123,9 +128,24 @@ export function createSessionLocationResolver(
     return { project, ticket };
   };
 
-  const prepare = async (session: Session): Promise<SessionLocation> => {
+  const prepare = async (
+    session: Session,
+    context?: SessionPrepareContext,
+  ): Promise<SessionLocation> => {
     const { project, ticket } = site(session);
     if (!isProjectAttached(db, project.id)) throw new Error(PROJECT_REMOVED_REFUSAL);
+    // A subagent runs where its parent runs (VC-1015): the directory the
+    // parent is bound to, on whatever branch is checked out there now. It is
+    // not the Ticket's worktree to re-prepare — `ensure` would refuse a
+    // parent that has switched branches, and every delegate it made would
+    // fail to start. A parent whose directory is gone is a parent whose own
+    // next turn re-prepares it (`reaffirm` → `prepare`), so the child takes
+    // that same ordinary path rather than a directory that is not there.
+    const parentDirectory = session.role === "subagent" ? context?.parentDirectory : undefined;
+    if (parentDirectory !== undefined) {
+      const shared = await withStartLease(parentDirectory, async () => existsSync(parentDirectory));
+      if (shared) return { directory: parentDirectory, venue };
+    }
     if (ticket === null || !ticket.usesWorktree) {
       return withStartLease(project.path, async () => ({ directory: project.path, venue }));
     }
@@ -139,7 +159,7 @@ export function createSessionLocationResolver(
         // The path is the whole diagnosis when it is a stale stamp pointing at a
         // checkout somebody deleted, so it is named whenever the ticket has one.
         const at = ticket.worktreePath === null ? "" : ` at ${ticket.worktreePath}`;
-        throw new Error(`Couldn't prepare the worktree${at} — ${outcome.error}`);
+        throw new Error(`${WORKTREE_PREPARATION_FAILED}${at} — ${outcome.error}`);
       }
       const { identity, created, restamped } = outcome.value;
       if (identity.worktreePath === null) throw new Error("Worktree path was not resolved");
@@ -183,7 +203,7 @@ export function createSessionLocationResolver(
       });
       if (setup.kind === "failed") {
         throw new Error(
-          `Couldn't prepare the worktree at ${identity.worktreePath} — ${setup.message}`,
+          `${WORKTREE_PREPARATION_FAILED} at ${identity.worktreePath} — ${setup.message}`,
         );
       }
       // The first start since this runner started or woke brings the working

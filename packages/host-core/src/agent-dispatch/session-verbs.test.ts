@@ -1419,6 +1419,20 @@ describe("session peek runtime facts (VC-758)", () => {
     });
   });
 
+  it("names a worktree that could not be prepared as that, not as Settings to fix (VC-1015)", async () => {
+    const f = fixture();
+    const id = await f.create("worktree", DAY);
+    await f.active(id, 2 * DAY);
+    const detail =
+      "Couldn't prepare the worktree at /w/VC-1 — A worktree already exists at /w/VC-1 on branch volli/VC-2-other; this ticket's branch is volli/VC-1-ship.";
+    await raise(f, id, "configuration_invalid", detail);
+    expect((await peek(f, id))["attention"]).toEqual({
+      message: "Worktree unavailable",
+      recovery: "Retry",
+      detail,
+    });
+  });
+
   it("offers Resume on a turn a lost process cut short while its attachment is idle (VC-450)", async () => {
     const f = fixture();
     const id = await f.create("lost", DAY);

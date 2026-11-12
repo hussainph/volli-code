@@ -277,6 +277,39 @@ function committedComposition(
   };
 }
 
+/** A host that remembers what each prepare was told, and binds the parent at `/w/parent`. */
+function recordingLocations() {
+  const prepared: { role: string; context: unknown }[] = [];
+  const locations: SessionLocationResolver = {
+    resolve: async () => ({ directory: "/projects/fake", venue }),
+    prepare: async (session, context) => {
+      prepared.push({ role: session.role, context });
+      return { directory: session.role === "subagent" ? "/w/child" : "/w/parent", venue };
+    },
+    reaffirm: stillThere,
+  };
+  return { prepared, locations };
+}
+
+async function attachChild(runtime: SessionRuntime, parentSessionId: string) {
+  const created = await runtime.command({
+    commandId: "command-create-child",
+    command: {
+      kind: "session.create",
+      projectId: "project-1",
+      ticketId: null,
+      role: "subagent",
+      parentSessionId,
+      title: "Helper",
+    },
+  });
+  await runtime.command({
+    commandId: "command-attach-child",
+    sessionId: created.sessionId,
+    command: { kind: "adapter.attach", continuity: "fresh" },
+  });
+}
+
 async function createAndAttach(runtime: SessionRuntime) {
   const created = await runtime.command({
     commandId: "command-create",
@@ -2038,6 +2071,102 @@ describe("SessionRuntime native adapter contract", () => {
     expect(projection.attachments[0]?.native?.detail).toMatchObject({
       kind: "volli.native-binding.v1",
       directory: "/w/VC-12",
+    });
+  });
+
+  describe("a subagent is prepared where its parent is bound (VC-1015)", () => {
+    it("hands the host the parent's live directory, and nothing for a root Session", async () => {
+      const { prepared, locations } = recordingLocations();
+      const { runtime } = composition({ locations });
+      const parent = await createAndAttach(runtime);
+
+      await attachChild(runtime, parent);
+
+      expect(prepared).toEqual([
+        { role: "project", context: undefined },
+        { role: "subagent", context: { parentDirectory: "/w/parent" } },
+      ]);
+    });
+
+    it("hands nothing for a parent never bound or not there, so the host prepares as ever", async () => {
+      const { prepared, locations } = recordingLocations();
+      const { runtime } = composition({ locations });
+      const parent = await runtime.command({
+        commandId: "command-create",
+        command: {
+          kind: "session.create",
+          projectId: "project-1",
+          ticketId: null,
+          role: "project",
+          parentSessionId: null,
+          title: "Never attached",
+        },
+      });
+
+      await attachChild(runtime, parent.sessionId);
+
+      expect(prepared).toEqual([{ role: "subagent", context: undefined }]);
+    });
+
+    it("prepares as ever when the parent cannot be read", async () => {
+      const { prepared, locations } = recordingLocations();
+      const first = composition({ locations });
+      const parent = await createAndAttach(first.runtime);
+      const unreadable: SessionEngine = {
+        ...first.engine,
+        getSession: async (query) => {
+          if (query.sessionId === parent) throw new Error("ledger read failed");
+          return first.engine.getSession(query);
+        },
+      };
+      const second = composition({
+        engine: unreadable,
+        locations,
+        committed: false,
+        runtimeIdPrefix: "second",
+      });
+
+      await attachChild(second.runtime, parent);
+
+      expect(prepared.at(-1)).toEqual({ role: "subagent", context: undefined });
+    });
+
+    it("reads the parent's recorded binding when this runtime holds none of it", async () => {
+      const { prepared, locations } = recordingLocations();
+      const first = composition({ locations });
+      const parent = await createAndAttach(first.runtime);
+      // A second runtime over the same ledger: the parent's binding is not in
+      // its memory, only in the parent's history.
+      const second = composition({
+        engine: first.engine,
+        locations,
+        committed: false,
+        runtimeIdPrefix: "second",
+      });
+      // Another Session it does hold is not the parent, whatever it is bound to.
+      const other = await second.runtime.command({
+        commandId: "command-create-other",
+        command: {
+          kind: "session.create",
+          projectId: "project-1",
+          ticketId: null,
+          role: "project",
+          parentSessionId: null,
+          title: "Unrelated",
+        },
+      });
+      await second.runtime.command({
+        commandId: "command-attach-other",
+        sessionId: other.sessionId,
+        command: { kind: "adapter.attach", continuity: "fresh" },
+      });
+
+      await attachChild(second.runtime, parent);
+
+      expect(prepared.at(-1)).toEqual({
+        role: "subagent",
+        context: { parentDirectory: "/w/parent" },
+      });
     });
   });
 
