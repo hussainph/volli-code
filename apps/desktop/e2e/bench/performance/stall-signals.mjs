@@ -72,6 +72,13 @@ export function readMainStall(record) {
   if (durationMs === null || !Number.isFinite(at)) return null;
   const attribution = text(record.attribution, "unknown");
   const unattributed = attribution === "unattributed";
+  // What the window cost (VC-1103): main's CPU, the process's page-ins and
+  // preemptions. Kept when the line has them; older builds' lines do not.
+  const cost = {};
+  for (const field of ["cpuMs", "majorFaults", "involuntarySwitches"]) {
+    const value = finite(record[field]);
+    if (value !== null) cost[field] = value;
+  }
   return {
     at,
     durationMs,
@@ -80,9 +87,11 @@ export function readMainStall(record) {
     // names only a hint (`lastOperation`), which is never claimed as the cause.
     door: unattributed ? "unattributed" : text(record.door, attribution),
     operation: unattributed ? "unattributed" : text(record.operation, "unknown"),
-    ...(unattributed && typeof record.lastOperation === "string"
+    // An off-CPU wait carries the same hint: "after app-state-set" is checkable.
+    ...((unattributed || attribution === "off-cpu") && typeof record.lastOperation === "string"
       ? { lastOperation: record.lastOperation }
       : {}),
+    ...cost,
   };
 }
 
