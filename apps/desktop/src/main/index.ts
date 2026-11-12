@@ -492,6 +492,8 @@ const worktreeLog = hostLogger("worktree");
  * window factory exists; until then a second launch has nothing to open.
  */
 let revealWindowForLaunch: (() => void) | null = null;
+/** How long an upgrade runs before its window opens (VC-1105). */
+const UPDATING_WINDOW_DELAY_MS = 400;
 /** The schema-upgrade window (VC-1105), while a launch has one up. */
 let updatingWindow: { close(): void } | null = null;
 function closeUpdatingWindow(): void {
@@ -1121,14 +1123,21 @@ const appStartup = app.whenReady().then(async () => {
   let databaseUpgrade: Awaited<ReturnType<typeof runDatabaseUpgradeWorker>> = null;
   if (upgrade !== null) {
     log.info("database upgrade started", upgrade);
-    updatingWindow = openUpdatingWindow({
-      devRendererUrl: isDev ? process.env["ELECTRON_RENDERER_URL"] : undefined,
-      policy: nativeWindowPolicy,
+    const running = runDatabaseUpgradeWorker(join(__dirname, "database-upgrade-worker.cjs"), {
+      dbPath,
+      logLevel: hostLogLevel(),
+      dev: isDev,
     });
-    databaseUpgrade = await runDatabaseUpgradeWorker(
-      join(__dirname, "database-upgrade-worker.cjs"),
-      { dbPath, logLevel: hostLogLevel(), dev: isDev },
-    );
+    // A small profile upgrades in well under a second: no window flashes up
+    // for it. One still running after this long gets the window.
+    const showUpdating = setTimeout(() => {
+      updatingWindow = openUpdatingWindow({
+        devRendererUrl: isDev ? process.env["ELECTRON_RENDERER_URL"] : undefined,
+        policy: nativeWindowPolicy,
+      });
+    }, UPDATING_WINDOW_DELAY_MS);
+    databaseUpgrade = await running;
+    clearTimeout(showUpdating);
     log.info("database upgrade finished", {
       ...upgrade,
       outcome: databaseUpgrade === null ? "no-answer" : databaseUpgrade.ok ? "upgraded" : "refused",
