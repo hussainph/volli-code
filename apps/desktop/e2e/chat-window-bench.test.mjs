@@ -103,6 +103,28 @@ test("diagram settings are explicit, normalized and arm-bound; source comparison
     assert.throws(() => benchSettings(input));
 });
 
+test("island A/B arm is explicit, validated and applied before the stream", async () => {
+  assert.equal(benchSettings().island, "on");
+  assert.equal(parseBenchArgs(["--arm", "stream", "--island", "hidden"]).settings.island, "hidden");
+  assert.throws(() => benchSettings({ island: "frozen" }));
+  const expressions = [];
+  await measureChatWindow({
+    settings: benchSettings({ arm: "stream", island: "shimmer-off", streamSamples: 1 }),
+    pause: async () => {},
+    rendererRssMb: async () => 123,
+    contents: {
+      async executeJavaScript(expression) {
+        expressions.push(expression);
+        if (expression.includes("uncaught")) return [];
+        return 1;
+      },
+    },
+  });
+  const arm = expressions.indexOf('window.chatBench.islandArm("shimmer-off")');
+  assert.ok(arm >= 0);
+  assert.ok(arm < expressions.findIndex((expression) => expression.includes("streamAndScroll")));
+});
+
 test("cadence overlay is read-only, scoped, exact and refuses missing/changed production wiring", () => {
   const id = "/snapshot/apps/desktop/src/renderer/src/components/ui/ai-elements/pele-diagram.tsx";
   const source = "const SAMPLE_MS = 100;\nexport const probe = SAMPLE_MS;";

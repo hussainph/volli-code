@@ -13,6 +13,7 @@ export async function measureChatWindow({ contents, rendererRssMb, settings, pau
     streamSteps: STREAM_STEPS,
     streamTokenRate: STREAM_TOKEN_RATE,
     streamContent: STREAM_CONTENT,
+    island: ISLAND,
     draftPlanes: DRAFT_PLANES,
     draftBallast: DRAFT_BALLAST,
     draftKeys: DRAFT_KEYS,
@@ -72,6 +73,7 @@ export async function measureChatWindow({ contents, rendererRssMb, settings, pau
   }
   /** The VC-338 steps: mount, scroll, stream, and many planes at once. */
   async function transcriptArm() {
+    await run(`window.chatBench.islandArm(${JSON.stringify(ISLAND)})`);
     // Every Session's transcript is in the store and no plane is drawn: the
     // floor every later step is measured against.
     report.steps.push(await sample("seeded, no plane"));
@@ -214,6 +216,7 @@ export async function measureChatWindow({ contents, rendererRssMb, settings, pau
     if (ARM === "draft") await draftArm();
     else if (ARM === "reveal") await revealArm();
     else if (ARM === "stream") {
+      await run(`window.chatBench.islandArm(${JSON.stringify(ISLAND)})`);
       await run("window.chatBench.show(1)");
       await streamSamples();
     } else await transcriptArm();

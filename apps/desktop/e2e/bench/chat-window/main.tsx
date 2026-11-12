@@ -517,6 +517,9 @@ async function streamAndScroll(
     if (visible) liveDiagramSources.add(sourceLabels);
     return { svgs: 1, visible, labels: (sourceLabels.match(/Output /g) ?? []).length };
   };
+  let islandDrawnSteps = 0;
+  let islandShimmerSteps = 0;
+  const islandCaptions = new Set<string>();
   let liveCodeBlocks = 0;
   let liveHighlightedCodeBlocks = 0;
   let liveHighlightedTokens = 0;
@@ -580,6 +583,10 @@ async function streamAndScroll(
         maxDiagramLabels = Math.max(maxDiagramLabels, diagram.labels);
       }
     }
+    const island = islandState();
+    islandDrawnSteps += Number(island.drawn);
+    islandShimmerSteps += Number(island.shimmer);
+    if (island.caption) islandCaptions.add(island.caption);
     const code = codeState();
     liveCodeBlocks = Math.max(liveCodeBlocks, code.blocks);
     liveHighlightedCodeBlocks = Math.max(liveHighlightedCodeBlocks, code.highlighted);
@@ -670,6 +677,11 @@ async function streamAndScroll(
       : {}),
     steps,
     tokenRate,
+    island: {
+      drawnSteps: islandDrawnSteps,
+      shimmerSteps: islandShimmerSteps,
+      captions: [...islandCaptions],
+    },
     streamedTokens: priorTokenCount,
     streamedWhileWorking,
     streamedWhileTurnActive,
@@ -1144,6 +1156,27 @@ interface ChatBench {
   stopReveal(): Promise<unknown>;
   collect(): void;
   uncaught(): { message: string; stack: string | null }[];
+  islandArm(arm: string): void;
+}
+
+/** Page-only CSS for each island A/B arm; `on` is the product as shipped. */
+const ISLAND_ARM_CSS: Record<string, string> = {
+  on: "",
+  hidden: "[data-activity-island] { display: none !important; }",
+  "shimmer-off":
+    ".liquid-island-shimmer .liquid-island-word { animation: none !important; background: none !important; color: var(--muted-foreground) !important; }",
+  "filters-off": ".liquid-island-material { filter: none !important; }",
+};
+
+/** What the island drew in one sample: proof the arm streamed with a live turn island. */
+function islandState(): { caption: string | null; shimmer: boolean; drawn: boolean } {
+  const label = document.querySelector<HTMLElement>("[data-activity-island] .liquid-island-label");
+  return {
+    caption: label?.textContent ?? null,
+    shimmer: document.querySelector(".liquid-island-shimmer") !== null,
+    drawn:
+      label !== null && label.getClientRects().length > 0 && label.style.visibility === "visible",
+  };
 }
 
 let sessionIds: string[] = [];
@@ -1210,6 +1243,14 @@ const bench: ChatBench = {
   },
   uncaught() {
     return uncaught;
+  },
+  islandArm(arm) {
+    const css = ISLAND_ARM_CSS[arm];
+    if (css === undefined) throw new Error(`unknown island arm ${arm}`);
+    const style = document.createElement("style");
+    style.dataset.benchIslandArm = arm;
+    style.textContent = css;
+    document.head.append(style);
   },
 };
 
