@@ -5,7 +5,7 @@
  * verb's background-position shimmer; `filters-off` drops the material's two
  * drop-shadow filters.
  */
-export const ISLAND_ARMS = ["on", "hidden", "shimmer-off", "filters-off"];
+const ISLAND_ARMS = ["on", "hidden", "shimmer-off", "filters-off"];
 
 /** The same normalized recipe is sent to each fresh guarded instance. */
 const defaults = {
