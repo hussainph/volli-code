@@ -66,6 +66,7 @@ import {
   recordedRunnerId,
 } from "./lib/cloud-acceptance.mjs";
 import { seedFixture } from "./lib/fixtures.mjs";
+import { isUpdatingPage, seedDatabase, seedDatabaseProblems } from "./lib/seed-database.mjs";
 import { serve } from "./lib/protocol.mjs";
 import { quitNativeWindow, reopenNativeWindow } from "./lib/native-window-lifecycle.mjs";
 import { settingsNative } from "./lib/settings-native.mjs";
@@ -705,6 +706,15 @@ async function boot() {
     ...(cloud ? cloudElectronEnv(cloud, spec.cloud.subject, spec.cloud.email) : {}),
     ...(spec.deployment ? deploymentElectronEnv(spec.deployment) : {}),
   };
+  if (spec.database) {
+    // A real-sized profile to upgrade (VC-1105): cloned in before the first
+    // launch, so the app's own open is what upgrades it.
+    const problems = await seedDatabaseProblems(spec.database);
+    if (problems.length > 0) throw new Error(problems.join("; "));
+    await seedDatabase(spec.database, L.dbPath);
+    mark("databaseSeeded");
+    slog(`database seeded from ${spec.database}`);
+  }
   mark("launchStart");
   launchEnv = extraEnv;
   const { page, live, record } = await startElectron(extraEnv);
@@ -816,7 +826,7 @@ async function startElectron(extraEnv) {
     }
   });
   app.on("window", wireWindow);
-  const page = await app.firstWindow();
+  const page = await firstAppWindow();
   mainPage = page;
   wireWindow(page);
   await page.waitForLoadState("domcontentloaded");
@@ -842,6 +852,51 @@ async function startElectron(extraEnv) {
   if (spec.reducedMotion === true && !(await motionPreference()).matches)
     throw new Error("forced reduced motion is not active in the live renderer");
   return { page, live, record };
+}
+
+/**
+ * The app's own first window. A launch that upgrades its database shows the
+ * upgrade window first (VC-1105): that one is captured as evidence, with when
+ * it appeared and closed, and never driven.
+ */
+async function firstAppWindow() {
+  const seen = new Set();
+  for (;;) {
+    for (const page of app.windows()) {
+      if (seen.has(page)) continue;
+      try {
+        await page.waitForLoadState("domcontentloaded");
+      } catch {
+        seen.add(page);
+        continue;
+      }
+      if (!isUpdatingPage(page.url())) return page;
+      seen.add(page);
+      await captureUpdatingWindow(page);
+    }
+    await app.waitForEvent("window", { timeout: 240_000 });
+  }
+}
+
+async function captureUpdatingWindow(page) {
+  mark("updatingWindowShown");
+  page.once("close", () => {
+    mark("updatingWindowClosed");
+    transcript({ cmd: "updating-window", event: "closed" });
+  });
+  try {
+    await page.getByRole("status").waitFor({ timeout: 10_000 });
+    const path = join(L.screenshotsDir, "000-updating-window.png");
+    await page.screenshot({ path });
+    transcript({
+      cmd: "updating-window",
+      event: "shown",
+      path,
+      text: await page.innerText("body"),
+    });
+  } catch (error) {
+    transcript({ cmd: "updating-window", event: "capture-failed", error: String(error) });
+  }
 }
 
 /**

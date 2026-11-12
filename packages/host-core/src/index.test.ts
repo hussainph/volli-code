@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -20,6 +20,7 @@ import type {
 } from "./index";
 import Database from "better-sqlite3";
 import { SCHEMA_HEAD } from "./db/migrations";
+import { checkedDatabaseFile } from "./db/database-file";
 import { MIN_READER_VERSION_KEY } from "./db/schema-compatibility";
 import { insertProject } from "./db/projects-repo";
 import { testProject } from "./db/test-helpers";
@@ -635,6 +636,52 @@ describe("createHostCore", () => {
       detail: expect.stringContaining("damaged header"),
     });
   });
+
+  it("takes an upgrade worker's refusal as its own, without opening the database again (VC-1105)", () => {
+    const root = dataDir();
+    const log = { error: vi.fn() };
+    const core = compose(
+      { log },
+      {
+        ...headlessOptions(root),
+        databaseUpgrade: {
+          ok: false,
+          failure: { kind: "other" },
+          message: "Database failed to open: the migration failed",
+          logLine: "the migration failed",
+        },
+      },
+    );
+    expect(core.database).toEqual({
+      ok: false,
+      error: "Database failed to open: the migration failed",
+    });
+    expect(degraded(core).databaseFailure).toEqual({ kind: "other" });
+    expect(log.error).toHaveBeenCalledWith("failed to open database", {
+      detail: "the migration failed",
+    });
+    // Not opened here: no file was created, no lock taken.
+    expect(existsSync(join(root, "volli.db"))).toBe(false);
+    expect(existsSync(join(root, "volli.db.open-lock"))).toBe(false);
+  });
+
+  it.each(["pinned", "unpinned"] as const)(
+    "opens after an upgrade worker answered with the %s file it closed (VC-1105)",
+    async (pin) => {
+      const root = dataDir();
+      const seed = live(compose({ log: { error: vi.fn() } }, headlessOptions(root)));
+      await seed.stop("seeded");
+      const checked = pin === "pinned" ? checkedDatabaseFile(seed.dbPath) : null;
+      if (pin === "pinned") expect(checked).not.toBeNull();
+      const core = live(
+        compose(
+          { log: { error: vi.fn() } },
+          { ...headlessOptions(root), databaseUpgrade: { ok: true, checked } },
+        ),
+      );
+      expect(core.database.db.pragma("user_version", { simple: true })).toBe(SCHEMA_HEAD);
+    },
+  );
 
   it("refuses client capabilities readably without a client, and hands a client's through", async () => {
     const headless = live(compose({ log: { error: vi.fn() } }, headlessOptions(dataDir())));

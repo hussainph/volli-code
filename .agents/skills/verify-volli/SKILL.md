@@ -25,7 +25,11 @@ volli-drive launch --fake-script replies.json  # scripted tool-enabled fake turn
 volli-drive launch --fake-script replies.json --fake-tool-free-text "Board demo"
         # same, but tool-free requests (auto-title) answer with that text instead of the echo
 volli-drive launch --reduced-motion     # force reduced motion for this isolated Electron only
+volli-drive launch --fixture empty --database /abs/path/volli.db.backup-v68
+        # start on a clone of a closed database (a safety copy) to replay its schema upgrade
 ```
+
+`--database` clones (`cp -c`) a closed, checkpointed database into the instance before Electron starts; a file with WAL frames beside it (a live profile) is refused. A launch that upgrades shows the "Updating your data" window first: the supervisor never drives it, saves `screenshots/000-updating-window.png`, and records `updatingWindowShown`/`updatingWindowClosed` in the launch timings. A clone of a real profile holds private data: keep the evidence local and never attach screenshots of the app's own window from it.
 
 `launch` builds first if the bundle is missing or predates the guard (`--no-build` refuses instead), then prints the instance id (`vd-xxxxxx`), the evidence dir, timings, memory and the guard status. 10–16 s to ready on an M-series Mac. Fixture `basic`: project **Drive Project** (prefix `DRV`), tickets DRV-1 (Todo), DRV-2 (Backlog), DRV-3 (Doing), DRV-4 (Needs Review), fake model pinned for `global` and `ticket` purposes.
 
