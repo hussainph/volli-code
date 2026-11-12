@@ -297,6 +297,18 @@ describe("LiquidIslandShell caption fit", () => {
     expect(drawn.opacity).toBe(0);
   });
 
+  it("requests no frame once settled, nor for a re-render with the same words", () => {
+    render(running("Running", LONG));
+    step(2000);
+    expect(frames.size).toBe(0);
+    // A streamed chunk: a new activity object carrying the same words.
+    render(running("Running", LONG));
+    render({ ...running("Running", LONG), announcement: "Running something else" });
+    expect(frames.size).toBe(0);
+    render(running("Running", "pwd"));
+    expect(frames.size).toBe(1);
+  });
+
   it("never shows a caption wider than the bead while it moves", () => {
     render(running("Running", null));
     step(2000);

@@ -157,24 +157,47 @@ export function LiquidIslandShell({
   const measure = React.useRef<HTMLSpanElement>(null);
   const maskId = React.useId().replaceAll(":", "");
   const previousPicture = React.useRef<HTMLDivElement | null>(null);
+  // Keyed on the words, not the objects: a streamed chunk hands the island a
+  // new `activity` object with the same words, and that must not re-measure,
+  // re-render the caption or wake the draw loop.
+  const flashId = flash?.id;
+  const flashEvent = flash?.event;
+  const flashPayload = flash?.payload;
+  const activityKey = activity?.key;
+  const activityWord = activity?.word;
+  const activityPreposition = activity?.preposition;
+  const activityPayload = activity?.payload;
+  const activityWaiting = activity?.waiting;
   const current = React.useMemo<BeadContent | null>(
     () =>
-      flash
+      flashId !== undefined
         ? {
-            key: `flash-${flash.id}`,
-            word: flash.event,
-            payload: flash.payload.replace(/\s+/gu, " ").trim(),
+            key: `flash-${flashId}`,
+            word: flashEvent ?? "",
+            payload: (flashPayload ?? "").replace(/\s+/gu, " ").trim(),
             waiting: false,
             flash: true,
           }
-        : activity
+        : activityKey !== undefined
           ? {
-              ...activity,
-              payload: activity.payload?.replace(/\s+/gu, " ").trim() ?? null,
+              key: activityKey,
+              word: activityWord ?? "",
+              ...(activityPreposition ? { preposition: activityPreposition } : {}),
+              payload: activityPayload?.replace(/\s+/gu, " ").trim() ?? null,
+              waiting: activityWaiting ?? false,
               flash: false,
             }
           : null,
-    [activity, flash],
+    [
+      flashId,
+      flashEvent,
+      flashPayload,
+      activityKey,
+      activityWord,
+      activityPreposition,
+      activityPayload,
+      activityWaiting,
+    ],
   );
   // An exiting turn keeps its last words, but not its shimmer. This is only
   // ephemeral drawing state; a new event always replaces it immediately.
@@ -305,7 +328,7 @@ export function LiquidIslandShell({
     shownTextWidth: shown?.fitted.textWidth ?? null,
   });
   React.useLayoutEffect(() => {
-    inputs.current = {
+    const next = {
       active: activity !== null || flash !== null,
       populated,
       exitKind,
@@ -314,12 +337,18 @@ export function LiquidIslandShell({
       content,
       shownTextWidth: shown?.fitted.textWidth ?? null,
     };
+    const prior = inputs.current;
+    inputs.current = next;
+    // Only a changed input can move the drawing; a render that changed
+    // nothing the drawing reads (a streamed chunk) requests no frame.
+    if ((Object.keys(next) as (keyof typeof next)[]).every((key) => next[key] === prior[key]))
+      return;
     // A new caption may commit after this frame's draw. Gate it against the
     // bead already on screen now, so no painted frame shows it uncontained.
     const s = drawing.current!;
-    if (label.current)
+    if (label.current && next.shownTextWidth !== prior.shownTextWidth)
       label.current.style.opacity = String(
-        s.drawnPresence * captionFit(s.drawnWidth, inputs.current.shownTextWidth),
+        s.drawnPresence * captionFit(s.drawnWidth, next.shownTextWidth),
       );
     wake.current?.();
   });
