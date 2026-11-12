@@ -67,8 +67,8 @@ export function onPreferenceValueAccepted(listener: (key: string) => void): () =
  *
  * `base` → `next` is the change, merged field by field
  * ({@link mergePreferenceSnapshot}). A `held` delta is a refused write: it
- * stays visible and rides the next edit to this key, but nothing re-sends it
- * on its own.
+ * stays visible and rides the next write to this key, but nothing re-sends it
+ * on its own, and a peer's later accepted change to one of its fields wins.
  */
 interface LocalDelta {
   base: string | undefined;
@@ -86,6 +86,56 @@ function recordLocalEdit(key: string, base: string | undefined, next: string, he
       ? { base, next, held }
       : { base: earlier.base, next: mergePreferenceSnapshot(earlier.next, base, next), held },
   );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+const sameJson = (left: unknown, right: unknown): boolean =>
+  JSON.stringify(left) === JSON.stringify(right);
+
+/**
+ * The refused edit (`base` → `next`) minus every field a peer has changed
+ * since (`base` → `accepted`), applied to `accepted`: a peer's later accepted
+ * change to the same field wins over an edit main never took.
+ */
+function withoutSuperseded(base: unknown, next: unknown, accepted: unknown): unknown {
+  if (sameJson(base, next)) return accepted;
+  if (sameJson(base, accepted)) return next;
+  if (!isRecord(base) || !isRecord(next) || !isRecord(accepted)) return accepted;
+  const merged: Record<string, unknown> = {};
+  for (const key of new Set([...Object.keys(accepted), ...Object.keys(next)])) {
+    const value = withoutSuperseded(base[key], next[key], accepted[key]);
+    if (value === undefined) continue;
+    // JSON keys are data, including __proto__; never invoke a prototype setter.
+    Object.defineProperty(merged, key, {
+      value,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  return merged;
+}
+
+/**
+ * Rebases a refused edit onto a peer's accepted value, dropping what that
+ * value superseded. A cleared row or an edit with no baseline to compare
+ * against is superseded whole.
+ */
+function rebaseHeldDelta(key: string, delta: LocalDelta, accepted: string): void {
+  let next: string | undefined;
+  if (accepted !== "" && delta.base !== undefined && delta.base !== "" && delta.next !== "") {
+    try {
+      next = JSON.stringify(
+        withoutSuperseded(JSON.parse(delta.base), JSON.parse(delta.next), JSON.parse(accepted)),
+      );
+    } catch {
+      next = undefined;
+    }
+  }
+  if (next === undefined || next === accepted) localDeltas.delete(key);
+  else localDeltas.set(key, { base: accepted, next, held: true });
 }
 
 /** The renderer's view: the accepted value with this window's unaccepted edits on top. */
@@ -326,6 +376,9 @@ export function acceptAppStateValue(key: string, value: string): boolean {
   if (pendingWrites.has(key) || writesInFlight.has(key)) return false;
   if (isSharedPreference(key)) {
     sharedPreferenceValues.set(key, value);
+    // Only a refused edit can be waiting here; the peer's newer value wins.
+    const held = localDeltas.get(key);
+    if (held !== undefined) rebaseHeldDelta(key, held, value);
     showSharedPreference(key, value);
   } else if (value === "") cache.delete(key);
   else cache.set(key, value);

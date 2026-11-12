@@ -678,6 +678,15 @@ describe("shared preferences in separate windows", () => {
     expect(appStateStorage.getItem("volli:ui")).toBeNull();
   });
 
+  it("lets a peer's value replace a refused edit it cannot compare field by field", async () => {
+    seedAppStateCache({ "volli:ui": base });
+    setMock.mockResolvedValue({ ok: false, error: "database locked" });
+    appStateStorage.setItem("volli:ui", "legacy");
+    await expect(flushPendingAppStateKey("volli:ui")).resolves.toBe(false);
+    expect(acceptAppStateValue("volli:ui", accepted)).toBe(true);
+    expect(appStateStorage.getItem("volli:ui")).toBe(accepted);
+  });
+
   it("adopts accepted preference removals and non-snapshot appearance values without echoing them", () => {
     seedAppStateCache({ "volli:ui": base, appearance: "dark" });
     expect(acceptAppStateValue("volli:ui", "")).toBe(true);
@@ -976,6 +985,50 @@ describe("two windows racing one shared preference through main", () => {
     expect(authoritative()).toEqual({ sidebarWidth: 310, costVisible: false, uiScale: 1.25 });
     await expectConverged();
     expect(vi.mocked(toast.error)).toHaveBeenCalledOnce();
+  });
+
+  it("lets a peer's later accepted change supersede a refused edit to the same field", async () => {
+    const { a, b } = await open({
+      sidebarWidth: 300,
+      costVisible: true,
+      uiScale: 1,
+      collapsed: { notes: true, chat: true },
+    });
+    // Flips notes and removes chat inside the record.
+    await send(a, { sidebarWidth: 310, costVisible: false, collapsed: { notes: false } });
+    await deliver(a, "refuse");
+    await peer(b, { sidebarWidth: 420, collapsed: { notes: true, chat: true, board: true } });
+    // The peer's width and new key win; refused edits it left alone stay.
+    expect(a.prefs()).toEqual({
+      sidebarWidth: 420,
+      costVisible: false,
+      uiScale: 1,
+      collapsed: { notes: false, board: true },
+    });
+    await send(a, { uiScale: 1.25 });
+    await deliver(a);
+    expect(authoritative()).toEqual({
+      sidebarWidth: 420,
+      costVisible: false,
+      uiScale: 1.25,
+      collapsed: { notes: false, board: true },
+    });
+    await expectConverged();
+  });
+
+  it("drops a refused edit a peer has fully superseded, or cleared", async () => {
+    const { a, b } = await open({ sidebarWidth: 300, costVisible: true });
+    await send(a, { sidebarWidth: 310 });
+    await deliver(a, "refuse");
+    await peer(b, { sidebarWidth: 420 });
+    expect(a.prefs()).toEqual({ sidebarWidth: 420, costVisible: true });
+    await expect(a.storage.flushPendingAppStateKey(KEY)).resolves.toBe(false);
+    await expectConverged();
+    await send(a, { costVisible: false });
+    await deliver(a, "refuse");
+    stored = "";
+    broadcast(b, "");
+    expect(a.storage.appStateStorage.getItem(KEY)).toBeNull();
   });
 
   it("carries a refused write into the write already queued behind it", async () => {
