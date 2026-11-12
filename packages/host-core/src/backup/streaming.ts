@@ -139,7 +139,8 @@ const MAX_REPORTED_PROBLEMS = 100;
 const SCRATCH_COMMIT_INTERVAL = 4_096;
 
 const SHA256_HEX = /^[a-f0-9]{64}$/;
-const TRANSCRIPT_PREFIX_LENGTH = "sha256:".length;
+const TRANSCRIPT_ID_PREFIX = "sha256:";
+const TRANSCRIPT_PREFIX_LENGTH = TRANSCRIPT_ID_PREFIX.length;
 
 /** The columns a transcript reference can hide in, per table. */
 const TRANSCRIPT_COLUMNS: Readonly<Record<string, readonly string[]>> = {
@@ -320,6 +321,7 @@ async function writeBundleArchive(
     scratch.exec(WRITER_INVENTORY_SCHEMA);
     scratch.exec("BEGIN");
     const data = await measureDataDocument(context);
+    scratch.settleTranscriptReferences();
     scratch.insertManifestEntry({ path: DATA_PATH, kind: "data", ...data });
     await measureBlobArtifacts(context);
     await measureTranscriptArtifacts(context);
@@ -691,6 +693,16 @@ function verificationError(problems: readonly BackupProblem[]): BackupBundleErro
 /* Scratch SQLite                                                            */
 /* ------------------------------------------------------------------------- */
 
+/*
+ * Keys that arrive in sorted order (archive paths, manifest paths, blob
+ * hashes) go straight into their keyed tables: each insert appends to the
+ * same few pages. Keys that arrive in document order (transcript ids, record
+ * keys) are digests and UUIDs, so inserting them into a B-tree touches a
+ * random leaf every row. Under the 2 MB cache each such insert writes back a
+ * whole page; on a 700,000-transcript profile that was about 15 GB of writes
+ * per verification for a scratch file of 1.5 GB. Those keys are appended to a
+ * plain log table instead, and keyed once, in sorted order, after the scan.
+ */
 const WRITER_INVENTORY_SCHEMA = `
 CREATE TABLE manifest_entries (
   seq        INTEGER PRIMARY KEY,
@@ -699,6 +711,7 @@ CREATE TABLE manifest_entries (
   size_bytes INTEGER NOT NULL,
   sha256     TEXT NOT NULL
 );
+CREATE TABLE transcript_ref_log (id TEXT NOT NULL);
 CREATE TABLE transcript_refs (id TEXT PRIMARY KEY) WITHOUT ROWID;
 `;
 
@@ -717,12 +730,12 @@ CREATE TABLE manifest_entries (
 );
 CREATE TABLE archive_paths (path TEXT PRIMARY KEY) WITHOUT ROWID;
 CREATE TABLE blob_refs (hash TEXT PRIMARY KEY) WITHOUT ROWID;
+CREATE TABLE transcript_ref_log (id TEXT NOT NULL);
 CREATE TABLE transcript_refs (id TEXT PRIMARY KEY) WITHOUT ROWID;
 CREATE TABLE link_targets (
   fk  TEXT NOT NULL,
-  key TEXT NOT NULL,
-  PRIMARY KEY (fk, key)
-) WITHOUT ROWID;
+  key TEXT NOT NULL
+);
 CREATE TABLE link_refs (
   fk        TEXT NOT NULL,
   row_index INTEGER NOT NULL,
@@ -737,9 +750,18 @@ CREATE TABLE project_ids (seq INTEGER PRIMARY KEY, id TEXT NOT NULL, name TEXT N
  *
  * The page cache is deliberately tiny (2 MB): the point is that a million
  * transcript ids, a manifest of a hundred thousand entries and an index of
- * every archive path cost disk, not RSS. `journal_mode = OFF` and
- * `synchronous = OFF` are safe because nothing here needs durability — a crash
- * loses a backup attempt, not data.
+ * every archive path cost disk, not RSS. `synchronous = OFF` is safe because
+ * nothing here needs durability — a crash loses a backup attempt, not data.
+ *
+ * The rollback journal is kept in memory. better-sqlite3 opens connections in
+ * SQLite's defensive mode, which silently refuses `journal_mode = OFF`, so this
+ * file used to run with an on-disk DELETE journal: every commit re-copied each
+ * page it touched into a journal file and deleted it again. MEMORY writes no
+ * journal file and, unlike OFF, keeps statement and transaction rollback
+ * correct (a duplicate manifest path is a caught constraint failure). The
+ * journal holds only pages that existed when the transaction began and were
+ * changed in it, so the commit interval bounds it; with sorted and appended
+ * inserts it is a handful of pages.
  */
 class ScratchDatabase {
   readonly db: Database.Database;
@@ -750,7 +772,13 @@ class ScratchDatabase {
   constructor(path: string) {
     this.#path = path;
     this.db = new Database(path);
-    this.db.pragma("journal_mode = OFF");
+    const journalMode: unknown = this.db.pragma("journal_mode = MEMORY", { simple: true });
+    // SQLite answers a refused mode with the one still in force; a scratch
+    // file that would journal to disk is a bug, not a fallback.
+    if (journalMode !== "memory") {
+      this.db.close();
+      throw new Error(`Scratch database journal mode is ${String(journalMode)}, not memory.`);
+    }
     this.db.pragma("synchronous = OFF");
     this.db.pragma("cache_size = -2048");
     this.db.pragma("temp_store = FILE");
@@ -813,8 +841,17 @@ class ScratchDatabase {
   }
 
   insertTranscriptReference(id: string): void {
-    this.#write(() =>
-      this.#statement("INSERT OR IGNORE INTO transcript_refs (id) VALUES (?)").run(id),
+    this.#write(() => this.#statement("INSERT INTO transcript_ref_log (id) VALUES (?)").run(id));
+  }
+
+  /**
+   * Keys the logged transcript references: one sorted, de-duplicated insert
+   * into `transcript_refs`, then the log is emptied. Every read of
+   * `transcript_refs` comes after this. Idempotent.
+   */
+  settleTranscriptReferences(): void {
+    this.db.exec(
+      "INSERT OR IGNORE INTO transcript_refs (id) SELECT id FROM transcript_ref_log ORDER BY id; DELETE FROM transcript_ref_log;",
     );
   }
 
@@ -845,9 +882,7 @@ class ScratchDatabase {
   }
 
   insertTranscriptRef(id: string): void {
-    this.#write(() =>
-      this.#statement("INSERT OR IGNORE INTO transcript_refs (id) VALUES (?)").run(id),
-    );
+    this.insertTranscriptReference(id);
   }
 
   insertLinkRef(fk: string, rowIndex: number, key: string): void {
@@ -862,7 +897,7 @@ class ScratchDatabase {
 
   insertLinkTarget(fk: string, key: string): void {
     this.#write(() =>
-      this.#statement("INSERT OR IGNORE INTO link_targets (fk, key) VALUES (?, ?)").run(fk, key),
+      this.#statement("INSERT INTO link_targets (fk, key) VALUES (?, ?)").run(fk, key),
     );
   }
 
@@ -1006,12 +1041,22 @@ class ScratchDatabase {
     );
   }
 
+  // The stray checks probe the reference table once per manifest entry. The
+  // first conjunct is the reference's key written as a plain column equality,
+  // so SQLite seeks its primary key; the second is the exact match. Without
+  // the first, an expression over the reference column scans the whole table
+  // for every entry: quadratic, hours of CPU for a profile with 700,000
+  // transcripts.
   *strayBlobArtifacts(): Generator<string> {
     yield* this.#strings(
       `SELECT path FROM manifest_entries m
        WHERE m.kind = 'blob'
-         AND NOT EXISTS (SELECT 1 FROM blob_refs b WHERE m.path = ? || b.hash)
+         AND NOT EXISTS (
+           SELECT 1 FROM blob_refs b
+           WHERE b.hash = substr(m.path, length(?) + 1) AND m.path = ? || b.hash
+         )
        ORDER BY path`,
+      BLOB_PREFIX,
       BLOB_PREFIX,
     );
   }
@@ -1034,9 +1079,16 @@ class ScratchDatabase {
       `SELECT path FROM manifest_entries m
        WHERE m.kind = 'transcript'
          AND NOT EXISTS (
-           SELECT 1 FROM transcript_refs t WHERE m.path = ? || substr(t.id, ?) || '.json'
+           SELECT 1 FROM transcript_refs t
+           WHERE t.id = ? || substr(m.path, length(?) + 1, length(m.path) - length(?) - 5)
+             AND m.path = ? || substr(t.id, ?) || '.json'
          )
        ORDER BY path`,
+      // Every stored id matches TRANSCRIPT_ID (`sha256:<hex>`): both writers
+      // insert only what walkTranscriptReferences accepted.
+      TRANSCRIPT_ID_PREFIX,
+      TRANSCRIPT_PREFIX,
+      TRANSCRIPT_PREFIX,
       TRANSCRIPT_PREFIX,
       TRANSCRIPT_PREFIX_LENGTH + 1,
     );
@@ -2273,10 +2325,14 @@ async function concludeVerification(
     // dataShapeProblems already refused this; kept for the type narrowing.
     return fail([shapeProblem("Data document has no integer schemaVersion.")]);
   }
-  // The link index is built once, after every row has been inserted: an index
-  // maintained during millions of inserts costs more than one pass over the
-  // finished table.
+  // The link indexes and the transcript reference set are built once, after
+  // every row has been inserted: an index maintained during millions of
+  // inserts in document order costs more than one sorted pass over the
+  // finished table (see WRITER_INVENTORY_SCHEMA). A target logged twice is
+  // harmless: the link check only asks whether one exists.
   scratch.exec("CREATE INDEX IF NOT EXISTS link_refs_fk ON link_refs (fk, row_index)");
+  scratch.exec("CREATE INDEX IF NOT EXISTS link_targets_fk_key ON link_targets (fk, key)");
+  scratch.settleTranscriptReferences();
   const fields = outcome.manifestFields;
   const problems: BackupProblem[] = [];
   if (state.schemaVersion !== fields.schemaVersion) {
