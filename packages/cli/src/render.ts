@@ -236,7 +236,7 @@ const TICKET_EVENT_INLINE_FIELDS: Readonly<Record<string, readonly string[]>> = 
   pr_opened: ["url"],
   pr_merged: ["url"],
   worktree_reclaimed: ["branch", "daysInDone"],
-  worktree_trimmed: ["entries", "bytes", "kept"],
+  worktree_trimmed: ["entries", "bytes", "kept", "trigger"],
   attachment_added: ["attachmentId"],
   attachment_removed: ["attachmentId"],
   session_started: [],

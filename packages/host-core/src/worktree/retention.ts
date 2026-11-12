@@ -20,9 +20,11 @@ import { existsSync } from "node:fs";
 import type Database from "better-sqlite3";
 import {
   computeWorktreeReclaim,
+  decideTrimFinish,
   type TicketEventActor,
   type TicketEventPayload,
   type TicketStatus,
+  type TrimFinishHistoryEntry,
 } from "@volli/shared";
 
 import { projectFreeze } from "../cloud-move/freeze";
@@ -312,9 +314,48 @@ export type TrimFinishOutcome =
 const TRIM_SKIP = (reason: string): TrimFinishOutcome => ({ kind: "skipped", reason });
 
 /**
+ * The ticket's `pr_merged` and `status_changed` events, oldest first — all the
+ * finish rule ({@link decideTrimFinish}) reads of its history. Read only when a
+ * merge is what would finish the ticket. `null` when a row does not parse: a
+ * lost move or merge record could turn a reactivated ticket back into a
+ * finished one, so corrupt history refuses the trim rather than guessing.
+ */
+function trimFinishHistory(
+  db: Database.Database,
+  ticketId: string,
+): TrimFinishHistoryEntry[] | null {
+  const rows = prepared<[string], { payload: string }>(
+    db,
+    `SELECT payload FROM ticket_events
+       WHERE ticket_id = ? AND kind IN ('pr_merged', 'status_changed')
+       ORDER BY created_at ASC, rowid ASC`,
+  ).all(ticketId);
+  const history: TrimFinishHistoryEntry[] = [];
+  for (const row of rows) {
+    let payload: TicketEventPayload;
+    try {
+      payload = JSON.parse(row.payload) as TicketEventPayload;
+    } catch {
+      return null;
+    }
+    if (payload.kind === "pr_merged") history.push({ kind: "pr_merged", url: payload.url });
+    else if (payload.kind === "status_changed") {
+      history.push({ kind: "status_changed", to: payload.to });
+    }
+  }
+  return history;
+}
+
+/**
  * The retention rule the ticket's own footprint earns (VC-340): once a ticket is
  * FINISHED — Done, archived, or its PR merged — its worktree gives up everything
  * git ignores and keeps everything else.
+ *
+ * What counts as finished is {@link decideTrimFinish}'s answer (VC-1156): a
+ * ticket moved to any column but Done after its PR merged is being worked
+ * again, and the old merge no longer finishes it. Done, an archive, or a PR
+ * merging after the move does. `mergedPrUrl` is the PR the caller observed
+ * merged; the event the trim writes names the finish it acted on.
  *
  * This is a smaller act than {@link reclaimIfStale} and deliberately runs much
  * sooner. The reclaim waits out the whole retention window because it takes the
@@ -331,7 +372,7 @@ const TRIM_SKIP = (reason: string): TrimFinishOutcome => ({ kind: "skipped", rea
 export async function trimFinishedWorktree(
   deps: TrimFinishPorts,
   ticketId: string,
-  opts: { prMerged?: boolean } = {},
+  opts: { mergedPrUrl?: string } = {},
 ): Promise<TrimFinishOutcome> {
   const db = deps.worktree.db;
   const ticket = getTicketRow(db, ticketId);
@@ -342,9 +383,15 @@ export async function trimFinishedWorktree(
   if (!existsSync(ticket.worktree_path)) return TRIM_SKIP("worktree already missing");
   if (ticket.retention_keep !== 0) return TRIM_SKIP("kept");
 
-  const finished =
-    ticket.status === "done" || ticket.archived_at !== null || opts.prMerged === true;
-  if (!finished) return TRIM_SKIP("not finished");
+  const mergedPrUrl = opts.mergedPrUrl ?? null;
+  const archived = ticket.archived_at !== null;
+  const status = ticket.status as TicketStatus;
+  // Only a merge consults history; Done and archived answer without it.
+  const history =
+    archived || status === "done" || mergedPrUrl === null ? [] : trimFinishHistory(db, ticketId);
+  if (history === null) return TRIM_SKIP("unreadable ticket history");
+  const finish = decideTrimFinish({ status, archived, mergedPrUrl, history });
+  if (!finish.finished) return TRIM_SKIP(finish.reason);
 
   const settings = getTrimSettings(db);
   // Opt-out, read at the moment of the act rather than cached: a person who
@@ -373,6 +420,7 @@ export async function trimFinishedWorktree(
       entries: trimmed.value.removed.length,
       bytes: trimmed.value.totalBytes,
       kept: trimmed.value.kept.length,
+      trigger: finish.trigger,
     },
     deps.now(),
     AUTOMATION_ACTOR,

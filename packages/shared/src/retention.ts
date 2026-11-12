@@ -7,6 +7,7 @@
  * need no changes.
  */
 import type { TicketStatus } from "./ticket";
+import type { WorktreeTrimTrigger } from "./ticket-events";
 
 /** Why a ticket is archive-ready — drives the retention prompt's copy. */
 export type RetentionReason = "pr-merged" | "ttl-expired";
@@ -122,4 +123,67 @@ export function computeWorktreeReclaim(input: WorktreeReclaimInput): {
   if (input.doneEntryAt === null) return { reclaim: false, reason: null };
   const stale = input.now - input.doneEntryAt >= input.ttlMs;
   return stale ? { reclaim: true, reason: "ttl-expired" } : { reclaim: false, reason: null };
+}
+
+// ---- trim on finish (VC-340, VC-1156) --------------------------------------
+
+/** The two facts from a ticket's history the trim's finish rule reads. */
+export type TrimFinishHistoryEntry =
+  | { kind: "pr_merged"; url: string }
+  | { kind: "status_changed"; to: TicketStatus };
+
+/** The inputs {@link decideTrimFinish} is a pure function of. */
+export interface TrimFinishInput {
+  status: TicketStatus;
+  archived: boolean;
+  /**
+   * The PR the caller observed merged for this ticket right now — the
+   * ticket's current PR — or `null` when it observed no merge.
+   */
+  mergedPrUrl: string | null;
+  /** The ticket's `pr_merged` and `status_changed` events, oldest first. */
+  history: readonly TrimFinishHistoryEntry[];
+}
+
+/** Whether the ticket is finished for the trim, and which finish says so. */
+export type TrimFinishVerdict =
+  | { finished: true; trigger: WorktreeTrimTrigger }
+  | { finished: false; reason: "not finished" | "moved since the merge" };
+
+/**
+ * Whether a ticket is FINISHED in the sense the ignored-artifact trim acts on
+ * (VC-340), with the owner's ruling on reactivation applied (VC-1156): an
+ * explicit move wins over a merged-PR observation.
+ *
+ *  - Archived, or in Done: finished. A move into Done is itself the explicit
+ *    finish, whatever PR history the ticket has — so a reactivated ticket moved
+ *    back to Done by hand, with no new PR, is finished again.
+ *  - Otherwise only a merged PR can finish it, and only if no column move is
+ *    recorded AFTER that PR's merge record. A move after the merge — out of Done,
+ *    or from Needs Review back to Doing, to any column but Done — says the work
+ *    continues, and the old merge no longer speaks for the worktree.
+ *  - A merge the caller observes that has no record yet (its first observation,
+ *    or a later PR on the same ticket) is newer than every recorded move, so it
+ *    finishes the ticket: a new PR merging after a reactivation is finished
+ *    again.
+ *
+ * Every column change is a deliberate move today (VC-629), so the rule does
+ * not ask who moved the ticket; were automation ever to move one, counting it
+ * here only ever keeps more, never removes more.
+ */
+export function decideTrimFinish(input: TrimFinishInput): TrimFinishVerdict {
+  if (input.archived) return { finished: true, trigger: { kind: "archived" } };
+  if (input.status === "done") return { finished: true, trigger: { kind: "done" } };
+  const url = input.mergedPrUrl;
+  if (url === null) return { finished: false, reason: "not finished" };
+  // The EARLIEST record of this PR merging: a duplicate record is not a new
+  // merge, and dating from the first one only ever keeps more.
+  const recorded = input.history.findIndex(
+    (entry) => entry.kind === "pr_merged" && entry.url === url,
+  );
+  const movedSince =
+    recorded !== -1 &&
+    input.history.slice(recorded + 1).some((entry) => entry.kind === "status_changed");
+  if (movedSince) return { finished: false, reason: "moved since the merge" };
+  return { finished: true, trigger: { kind: "pr_merged", url } };
 }

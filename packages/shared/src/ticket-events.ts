@@ -171,9 +171,17 @@ export type TicketEventPayload =
    * `entries` is how many ignored paths were removed and `bytes` their apparent
    * size; `kept` is how many ignored paths were KEPT (preserved configuration,
    * nested git repositories), because that number is the difference between a
-   * trim and a blind `git clean -fdX`.
+   * trim and a blind `git clean -fdX`. `trigger` (VC-1156) is the finish that
+   * earned it, so a trim can be attributed from the event alone; events written
+   * before it existed have none, and readers must tolerate its absence.
    */
-  | { kind: "worktree_trimmed"; entries: number; bytes: number; kept: number }
+  | {
+      kind: "worktree_trimmed";
+      entries: number;
+      bytes: number;
+      kept: number;
+      trigger?: WorktreeTrimTrigger;
+    }
   | { kind: "attachment_added"; attachmentId: string; label: string }
   | { kind: "attachment_removed"; attachmentId: string; label: string }
   | { kind: "session_started"; sessionId: string; origin?: SessionOrigin }
@@ -183,6 +191,17 @@ export type TicketEventPayload =
       attachmentId: string;
       origin: SessionOrigin | null;
     };
+
+/**
+ * Which finish a `worktree_trimmed` event acted on (VC-1156): the ticket sat in
+ * Done, was archived, or the watch observed this PR merged with no column move
+ * recorded after it. Additive and optional on the event; a reader that meets a
+ * `kind` it does not know shows the trim without a reason.
+ */
+export type WorktreeTrimTrigger =
+  | { kind: "done" }
+  | { kind: "archived" }
+  | { kind: "pr_merged"; url: string };
 
 /**
  * The `ensure`-pipeline stage a `worktree_failed` event aborted at

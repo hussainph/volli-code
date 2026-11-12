@@ -649,8 +649,12 @@ export async function pollRetention(
     woken: options.woken ?? new Set(),
   };
   const now = deps.now();
-  /** Tickets this cycle knows merged — finished, whatever column they are in. */
-  const mergedThisCycle = new Set<string>();
+  /**
+   * Tickets this cycle knows merged, with the PR it saw merge. A merge finishes
+   * a ticket in any column unless it was moved after the merge (VC-1156); the
+   * trim pass asks that with the url in hand.
+   */
+  const mergedThisCycle = new Map<string, string>();
   /** Every candidate this cycle saw; a schedule for anything else is dropped. */
   const seen = new Set<string>();
   const reads = cycleReads(deps.db);
@@ -806,7 +810,7 @@ export async function pollRetention(
           // Known merged means the one-shot event exists, which is exactly
           // what the dedup below would have found.
           store.notifiedMerged.add(ticket.id);
-          mergedThisCycle.add(ticket.id);
+          mergedThisCycle.set(ticket.id, prUrl);
         }
         if (await reclaim(ticket, terminal.prState)) noteChange(ticket, "worktree");
         continue;
@@ -900,9 +904,10 @@ export async function pollRetention(
         store.reads.delete(ticket.id);
       }
 
-      // A merge is a finish wherever the card happens to sit, so the trim pass
-      // below is told about it — `listTrimCandidates` only knows Done/archived.
-      if (observation.prState === "merged") mergedThisCycle.add(ticket.id);
+      // A merge can finish a ticket wherever the card happens to sit, so the
+      // trim pass below is told about it — `listTrimCandidates` only knows
+      // Done/archived. Whether it does is the finish rule's call (VC-1156).
+      if (observation.prState === "merged") mergedThisCycle.set(ticket.id, prUrl);
 
       // (4) RECLAIM — the duration gate (VC-113). Runs LAST, after the PR state
       // this cycle observed is known, because "is a PR still open on it?" is
@@ -954,7 +959,7 @@ export async function pollRetention(
 async function runTrimPass(
   deps: RetentionPollPorts,
   store: RetentionStore,
-  mergedThisCycle: ReadonlySet<string>,
+  mergedThisCycle: ReadonlyMap<string, string>,
   now: number,
   cadence: RetentionCadence,
 ): Promise<{ trimmed: Pick<TicketRow, "id" | "project_id">[]; checks: number }> {
@@ -963,7 +968,7 @@ async function runTrimPass(
   const rows = new Map<string, TicketRow | undefined>(
     listTrimCandidates(deps.db).map((ticket) => [ticket.id, ticket]),
   );
-  for (const ticketId of mergedThisCycle) {
+  for (const ticketId of mergedThisCycle.keys()) {
     if (!rows.has(ticketId)) rows.set(ticketId, getTicketRow(deps.db, ticketId));
   }
   for (const ticketId of store.trims.keys()) {
@@ -976,19 +981,25 @@ async function runTrimPass(
   let checks = 0;
   for (const [ticketId, row] of rows) {
     try {
-      const prMerged = mergedThisCycle.has(ticketId);
+      const mergedPrUrl = mergedThisCycle.get(ticketId);
       // The memo (VC-686): an unchanged ticket this pass already answered is
       // not asked again until its recheck. A changed row is a new question.
       const key =
         row === undefined
           ? null
-          : [ticketFingerprint(row), row.retention_keep, prMerged, settings].join("\u0000");
+          : [ticketFingerprint(row), row.retention_keep, mergedPrUrl ?? "", settings].join(
+              "\u0000",
+            );
       const memo = store.trims.get(ticketId);
       if (key !== null && memo !== undefined && memo.key === key && now < memo.recheckAt) {
         continue;
       }
       checks += 1;
-      const outcome = await trimFinishedWorktree(trim, ticketId, { prMerged });
+      const outcome = await trimFinishedWorktree(
+        trim,
+        ticketId,
+        mergedPrUrl === undefined ? {} : { mergedPrUrl },
+      );
       // Trimmed, or nothing left to trim, holds for hours; a refusal (busy,
       // tracked changes, a failed git, a missing folder) is asked again once
       // the quiet ceiling passes, so it costs one check per ceiling rather

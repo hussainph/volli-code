@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { computeArchiveReadiness, computeWorktreeReclaim } from "./retention";
+import { computeArchiveReadiness, computeWorktreeReclaim, decideTrimFinish } from "./retention";
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -225,5 +225,149 @@ describe("computeWorktreeReclaim", () => {
       reclaim: false,
       reason: null,
     });
+  });
+});
+
+describe("decideTrimFinish (VC-340, VC-1156)", () => {
+  const OLD = "https://x/pull/1";
+  const NEW = "https://x/pull/2";
+  const base = { status: "needs_review" as const, archived: false, mergedPrUrl: null, history: [] };
+
+  it("finishes an archived ticket, in any column", () => {
+    expect(decideTrimFinish({ ...base, status: "doing", archived: true })).toEqual({
+      finished: true,
+      trigger: { kind: "archived" },
+    });
+  });
+
+  it("finishes a Done ticket with no PR at all", () => {
+    expect(decideTrimFinish({ ...base, status: "done" })).toEqual({
+      finished: true,
+      trigger: { kind: "done" },
+    });
+  });
+
+  it("does not finish an unmerged ticket outside Done", () => {
+    expect(decideTrimFinish(base)).toEqual({ finished: false, reason: "not finished" });
+  });
+
+  it("finishes a merged ticket never moved after its merge (unchanged from VC-340)", () => {
+    expect(
+      decideTrimFinish({
+        ...base,
+        mergedPrUrl: OLD,
+        history: [
+          { kind: "status_changed", to: "doing" },
+          { kind: "status_changed", to: "needs_review" },
+          { kind: "pr_merged", url: OLD },
+        ],
+      }),
+    ).toEqual({ finished: true, trigger: { kind: "pr_merged", url: OLD } });
+  });
+
+  it("finishes on a merge observed before its record lands", () => {
+    expect(
+      decideTrimFinish({
+        ...base,
+        mergedPrUrl: OLD,
+        history: [{ kind: "status_changed", to: "needs_review" }],
+      }),
+    ).toEqual({ finished: true, trigger: { kind: "pr_merged", url: OLD } });
+  });
+
+  it.each(["backlog", "todo", "doing", "needs_review"] as const)(
+    "does not finish a ticket moved to %s after its merge, while that merge is the latest",
+    (to) => {
+      expect(
+        decideTrimFinish({
+          ...base,
+          status: to,
+          mergedPrUrl: OLD,
+          history: [
+            { kind: "pr_merged", url: OLD },
+            { kind: "status_changed", to: "done" },
+            { kind: "status_changed", to },
+          ],
+        }),
+      ).toEqual({ finished: false, reason: "moved since the merge" });
+    },
+  );
+
+  it("does not finish the VC-1150 sequence: merged in review, then moved to Doing", () => {
+    expect(
+      decideTrimFinish({
+        ...base,
+        status: "doing",
+        mergedPrUrl: OLD,
+        history: [
+          { kind: "status_changed", to: "needs_review" },
+          { kind: "pr_merged", url: OLD },
+          { kind: "status_changed", to: "doing" },
+        ],
+      }),
+    ).toEqual({ finished: false, reason: "moved since the merge" });
+  });
+
+  it("dates a duplicated merge record from its first appearance", () => {
+    expect(
+      decideTrimFinish({
+        ...base,
+        status: "doing",
+        mergedPrUrl: OLD,
+        history: [
+          { kind: "pr_merged", url: OLD },
+          { kind: "status_changed", to: "doing" },
+          { kind: "pr_merged", url: OLD },
+        ],
+      }),
+    ).toEqual({ finished: false, reason: "moved since the merge" });
+  });
+
+  it("finishes again when a new PR merges after the reactivation, recorded or not", () => {
+    const history = [
+      { kind: "pr_merged", url: OLD },
+      { kind: "status_changed", to: "doing" },
+    ] as const;
+    const finished = { finished: true, trigger: { kind: "pr_merged", url: NEW } };
+    expect(
+      decideTrimFinish({ ...base, status: "doing", mergedPrUrl: NEW, history: [...history] }),
+    ).toEqual(finished);
+    expect(
+      decideTrimFinish({
+        ...base,
+        status: "doing",
+        mergedPrUrl: NEW,
+        history: [...history, { kind: "pr_merged", url: NEW }],
+      }),
+    ).toEqual(finished);
+  });
+
+  it("does not finish on a new PR's merge recorded before a later move", () => {
+    expect(
+      decideTrimFinish({
+        ...base,
+        status: "doing",
+        mergedPrUrl: NEW,
+        history: [
+          { kind: "pr_merged", url: NEW },
+          { kind: "status_changed", to: "doing" },
+        ],
+      }),
+    ).toEqual({ finished: false, reason: "moved since the merge" });
+  });
+
+  it("finishes a reactivated ticket moved back to Done by hand, with no new PR", () => {
+    expect(
+      decideTrimFinish({
+        ...base,
+        status: "done",
+        mergedPrUrl: OLD,
+        history: [
+          { kind: "pr_merged", url: OLD },
+          { kind: "status_changed", to: "doing" },
+          { kind: "status_changed", to: "done" },
+        ],
+      }),
+    ).toEqual({ finished: true, trigger: { kind: "done" } });
   });
 });
