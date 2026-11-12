@@ -1458,6 +1458,16 @@ class DefaultSessionRuntime implements SessionRuntime {
     // while both remain in the ledger and on screen. Unlike a message, a
     // compaction holds this tail for its whole run, because it is not finished
     // when it starts and there is no earlier moment that is safe.
+    //
+    // `executor.retry` waits behind this tail but never sets it, on purpose.
+    // Its dispatch answers when the retried run ENDS, so a tail held for it
+    // would park a message for the whole retried turn instead of letting it
+    // join, and park a compaction or model switch until after the turn instead
+    // of refusing it, which is not what either meets during any other live
+    // turn. The span that needs covering is from the retry's decision to run
+    // until Pi owns the run, which the engine cannot see; the attachment holds
+    // itself busy across exactly that span (VC-810), and also across the
+    // automatic retries that never pass through here.
     const isFollowUp =
       request.command.kind === "message.cancel" ||
       request.command.kind === "message.edit" ||
