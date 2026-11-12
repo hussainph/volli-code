@@ -185,7 +185,8 @@ export type BoardEventPayload =
       detail: string | null;
     }
   | { kind: "pr_opened"; url: string }
-  | { kind: "pr_merged"; url: string }
+  /** `mergedAt`: GitHub's merge time in epoch ms (VC-1156); absent on older events. */
+  | { kind: "pr_merged"; url: string; mergedAt?: number }
   | { kind: "attachment_added"; attachmentId: string; label: string }
   | { kind: "attachment_removed"; attachmentId: string; label: string }
   | { kind: "session_started"; sessionId: SessionId; origin?: SessionOrigin }

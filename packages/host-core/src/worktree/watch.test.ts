@@ -1513,9 +1513,10 @@ describe("pollRetention — a reactivated merged ticket is not trimmed (VC-1156)
     prState: "MERGED" | "OPEN" = "MERGED",
     store = createRetentionStore(),
     now = 5000,
+    mergedAt: string | null = "2026-11-08T00:00:00Z",
   ): Promise<{ calls: number; notified: number }> {
     const { run, calls } = scriptedNet(() =>
-      prView(prState === "MERGED" ? { state: "MERGED", mergedAt: "2026-11-08T00:00:00Z" } : {}),
+      prView(prState === "MERGED" ? { state: "MERGED", mergedAt } : {}),
     );
     let notified = 0;
     await pollRetention(
@@ -1614,7 +1615,7 @@ describe("pollRetention — a reactivated merged ticket is not trimmed (VC-1156)
         .filter((payload) => payload.kind === "pr_merged"),
     ).toEqual([
       { kind: "pr_merged", url: OLD_PR },
-      { kind: "pr_merged", url: NEW_PR },
+      { kind: "pr_merged", url: NEW_PR, mergedAt: Date.parse("2026-11-08T00:00:00Z") },
     ]);
     expect(trims()).toHaveLength(1);
 
@@ -1674,6 +1675,45 @@ describe("pollRetention — a reactivated merged ticket is not trimmed (VC-1156)
     expect(trims()).toEqual([
       expect.objectContaining({ trigger: { kind: "pr_merged", url: OLD_PR } }),
     ]);
+  });
+
+  it("keeps a ticket moved back to work after the merge but before the watch saw it", async () => {
+    const wt = workingWorktree();
+    seed("needs_review", wt);
+    const t0 = Date.parse("2026-11-08T11:00:00Z");
+    // The merge happens at T0 unseen; the Board moves the ticket back at T1;
+    // the watch, backed off, reads the merge at T2 and records it then.
+    move("needs_review", "doing", t0 + 60_000);
+
+    await poll("MERGED", createRetentionStore(), t0 + 600_000, "2026-11-08T11:00:00Z");
+
+    expect(intact(wt)).toBe(true);
+    expect(trims()).toEqual([]);
+    expect(
+      listTicketEvents(ctx.db, "t1")
+        .map((event) => event.payload)
+        .filter((payload) => payload.kind === "pr_merged"),
+    ).toEqual([{ kind: "pr_merged", url: OLD_PR, mergedAt: t0 }]);
+    // A restart answers from the stored record, and its merge time still holds.
+    await poll("MERGED", createRetentionStore(), t0 + 700_000);
+    expect(intact(wt)).toBe(true);
+  });
+
+  it("dates a merge read without a merge time by order alone", async () => {
+    const wt = workingWorktree();
+    seed("needs_review", wt);
+    move("needs_review", "doing", 3);
+
+    await poll("MERGED", createRetentionStore(), 5000, null);
+
+    expect(trims()).toEqual([
+      expect.objectContaining({ trigger: { kind: "pr_merged", url: OLD_PR } }),
+    ]);
+    expect(
+      listTicketEvents(ctx.db, "t1")
+        .map((event) => event.payload)
+        .filter((payload) => payload.kind === "pr_merged"),
+    ).toEqual([{ kind: "pr_merged", url: OLD_PR }]);
   });
 
   it("trims a ticket whose merge is observed for the first time this cycle", async () => {

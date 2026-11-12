@@ -159,7 +159,13 @@ export type TicketEventPayload =
   | { kind: "worktree_failed"; stage: WorktreeFailureStage; stderr: string }
   | { kind: "worktree_committed"; message: string }
   | { kind: "pr_opened"; url: string }
-  | { kind: "pr_merged"; url: string }
+  /**
+   * `mergedAt` (VC-1156) is GitHub's merge time in epoch ms, when the read
+   * that saw the merge carried one: the record itself is dated when the watch
+   * SAW the merge, which can be long after it happened. Optional, and absent on
+   * every record written before it existed; readers must tolerate that.
+   */
+  | { kind: "pr_merged"; url: string; mergedAt?: number }
   /**
    * The retention watch reclaimed the worktree directory (VC-113). `branch` is
    * what survived it — the checkout can be put back on that branch at any time,

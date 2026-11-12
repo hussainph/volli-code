@@ -127,10 +127,25 @@ export function computeWorktreeReclaim(input: WorktreeReclaimInput): {
 
 // ---- trim on finish (VC-340, VC-1156) --------------------------------------
 
-/** The two facts from a ticket's history the trim's finish rule reads. */
+/**
+ * The two facts from a ticket's history the trim's finish rule reads. `at` is
+ * when the event was recorded (epoch ms, this machine's clock); a merge record's
+ * `mergedAt` is when GitHub says the PR merged, when the record carries it.
+ */
 export type TrimFinishHistoryEntry =
-  | { kind: "pr_merged"; url: string }
-  | { kind: "status_changed"; to: TicketStatus };
+  | { kind: "pr_merged"; url: string; at: number; mergedAt?: number }
+  | { kind: "status_changed"; to: TicketStatus; at: number };
+
+/**
+ * How far BEFORE GitHub's merge time a column move may be recorded and still
+ * count as after the merge (VC-1156). The move is dated by this machine's clock
+ * and the merge by GitHub's, and the two drift; a minute covers ordinary clock
+ * difference with room to spare. It leans toward keeping on purpose — a move
+ * that might have come after the merge is treated as having done so — while
+ * staying far shorter than the usual gap between moving a ticket to review and
+ * its PR merging, so a ticket that genuinely finished by merging still trims.
+ */
+export const MERGE_CLOCK_MARGIN_MS = 60_000;
 
 /** The inputs {@link decideTrimFinish} is a pure function of. */
 export interface TrimFinishInput {
@@ -158,10 +173,16 @@ export type TrimFinishVerdict =
  *  - Archived, or in Done: finished. A move into Done is itself the explicit
  *    finish, whatever PR history the ticket has — so a reactivated ticket moved
  *    back to Done by hand, with no new PR, is finished again.
- *  - Otherwise only a merged PR can finish it, and only if no column move is
- *    recorded AFTER that PR's merge record. A move after the merge — out of Done,
- *    or from Needs Review back to Doing, to any column but Done — says the work
- *    continues, and the old merge no longer speaks for the worktree.
+ *  - Otherwise only a merged PR can finish it, and only if no column move came
+ *    after the merge. A move after the merge — out of Done, or from Needs
+ *    Review back to Doing, to any column but Done — says the work continues,
+ *    and the old merge no longer speaks for the worktree. A move counts as
+ *    after the merge when it is recorded after the PR's merge record, OR when
+ *    that record carries GitHub's merge time and the move is dated at or after
+ *    it, less {@link MERGE_CLOCK_MARGIN_MS}. The second test is what catches a
+ *    ticket moved back to work between the merge and the watch seeing it: the
+ *    watch backs off and `gh` fails, so that gap is not small. A record with no
+ *    merge time falls back to order alone.
  *  - A merge the caller observes that has no record yet (its first observation,
  *    or a later PR on the same ticket) is newer than every recorded move, so it
  *    finishes the ticket: a new PR merging after a reactivation is finished
@@ -181,9 +202,19 @@ export function decideTrimFinish(input: TrimFinishInput): TrimFinishVerdict {
   const recorded = input.history.findIndex(
     (entry) => entry.kind === "pr_merged" && entry.url === url,
   );
-  const movedSince =
-    recorded !== -1 &&
-    input.history.slice(recorded + 1).some((entry) => entry.kind === "status_changed");
-  if (movedSince) return { finished: false, reason: "moved since the merge" };
+  if (recorded !== -1) {
+    // The earliest merge time any record of this PR carries, for the same reason.
+    let mergedAt: number | null = null;
+    for (const entry of input.history) {
+      if (entry.kind !== "pr_merged" || entry.url !== url || entry.mergedAt === undefined) continue;
+      if (mergedAt === null || entry.mergedAt < mergedAt) mergedAt = entry.mergedAt;
+    }
+    const movedSince = input.history.some(
+      (entry, index) =>
+        entry.kind === "status_changed" &&
+        (index > recorded || (mergedAt !== null && entry.at >= mergedAt - MERGE_CLOCK_MARGIN_MS)),
+    );
+    if (movedSince) return { finished: false, reason: "moved since the merge" };
+  }
   return { finished: true, trigger: { kind: "pr_merged", url } };
 }

@@ -324,9 +324,9 @@ function trimFinishHistory(
   db: Database.Database,
   ticketId: string,
 ): TrimFinishHistoryEntry[] | null {
-  const rows = prepared<[string], { payload: string }>(
+  const rows = prepared<[string], { payload: string; created_at: number }>(
     db,
-    `SELECT payload FROM ticket_events
+    `SELECT payload, created_at FROM ticket_events
        WHERE ticket_id = ? AND kind IN ('pr_merged', 'status_changed')
        ORDER BY created_at ASC, rowid ASC`,
   ).all(ticketId);
@@ -338,9 +338,18 @@ function trimFinishHistory(
     } catch {
       return null;
     }
-    if (payload.kind === "pr_merged") history.push({ kind: "pr_merged", url: payload.url });
-    else if (payload.kind === "status_changed") {
-      history.push({ kind: "status_changed", to: payload.to });
+    const at = row.created_at;
+    if (payload.kind === "pr_merged") {
+      // Optional and newer than many records (VC-1156): a merge time that is
+      // absent leaves the record to be dated by its order alone.
+      const mergedAt = payload.mergedAt;
+      history.push(
+        typeof mergedAt === "number" && Number.isFinite(mergedAt)
+          ? { kind: "pr_merged", url: payload.url, at, mergedAt }
+          : { kind: "pr_merged", url: payload.url, at },
+      );
+    } else if (payload.kind === "status_changed") {
+      history.push({ kind: "status_changed", to: payload.to, at });
     }
   }
   return history;

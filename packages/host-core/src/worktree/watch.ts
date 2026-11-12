@@ -875,10 +875,17 @@ export async function pollRetention(
       if (status.value.state === "merged" && store.notifiedMerged.get(ticket.id) !== prUrl) {
         if (!hasPrMergedEventFor(deps.db, ticket.id, prUrl)) {
           const firstMerge = !hasPrMergedEvent(deps.db, ticket.id);
+          // GitHub's merge time rides on the record (VC-1156): the record is
+          // dated when the watch saw the merge, and a move made in between
+          // must still read as after it.
+          const mergedAt =
+            status.value.mergedAt === null ? Number.NaN : Date.parse(status.value.mergedAt);
           recordTicketEvent(
             deps.db,
             ticket.id,
-            { kind: "pr_merged", url: prUrl },
+            Number.isFinite(mergedAt)
+              ? { kind: "pr_merged", url: prUrl, mergedAt }
+              : { kind: "pr_merged", url: prUrl },
             deps.now(),
             AUTOMATION_ACTOR,
           );
