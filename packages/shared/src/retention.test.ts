@@ -323,7 +323,7 @@ describe("decideTrimFinish (VC-340, VC-1156)", () => {
     ).toEqual({ finished: false, reason: "moved since the merge" });
   });
 
-  it("finishes again when a new PR merges after the reactivation, recorded or not", () => {
+  it("finishes again when a new PR merges after the reactivation, before and after its record lands", () => {
     const history = [
       { kind: "pr_merged", url: OLD },
       { kind: "status_changed", to: "doing" },

@@ -217,21 +217,21 @@ interface ReadSchedule {
 
 /** The trim backfill's memo for one ticket (VC-686). */
 interface TrimMemo {
-  /** The ticket row, Keep pin, merge flag and trim settings the last check answered. */
+  /** The ticket row, Keep pin, merged PR and trim settings the last check answered. */
   key: string;
   recheckAt: number;
 }
 
 /**
  * The watch's module-resident transient state. `observations` holds the last
- * poll's PR read per ticket; `notifiedMerged` dedups the one-shot merge event +
- * notification; `dismissed` is the launch-scoped prompt suppression; `reads`
+ * poll's PR read per ticket; `notifiedMerged` holds, per ticket, the PR whose
+ * merge record has landed (the dedup for the merge event and notification); `dismissed` is the launch-scoped prompt suppression; `reads`
  * and `trims` are the per-ticket cadence (VC-686). All rebuilt from scratch on
  * launch — nothing here is persisted.
  */
 export interface RetentionStore {
   observations: Map<string, RetentionObservation>;
-  notifiedMerged: Set<string>;
+  notifiedMerged: Map<string, string>;
   dismissed: Set<string>;
   reads: Map<string, ReadSchedule>;
   trims: Map<string, TrimMemo>;
@@ -248,7 +248,7 @@ export interface RetentionStore {
 export function createRetentionStore(): RetentionStore {
   return {
     observations: new Map(),
-    notifiedMerged: new Set(),
+    notifiedMerged: new Map(),
     dismissed: new Set(),
     reads: new Map(),
     trims: new Map(),
@@ -457,7 +457,7 @@ function knownTerminalObservation(
   const last = store.observations.get(ticketId);
   if (last !== undefined && last.prUrl === prUrl) {
     if (last.prState === "closed") return last;
-    if (last.prState === "merged" && store.notifiedMerged.has(ticketId)) return last;
+    if (last.prState === "merged" && store.notifiedMerged.get(ticketId) === prUrl) return last;
   }
   if (hasPrMergedEventFor(deps.db, ticketId, prUrl)) {
     return { prUrl, prState: "merged", hasConflicts: false, checks: [] };
@@ -809,7 +809,7 @@ export async function pollRetention(
         if (terminal.prState === "merged") {
           // Known merged means the one-shot event exists, which is exactly
           // what the dedup below would have found.
-          store.notifiedMerged.add(ticket.id);
+          store.notifiedMerged.set(ticket.id, prUrl);
           mergedThisCycle.set(ticket.id, prUrl);
         }
         if (await reclaim(ticket, terminal.prState)) noteChange(ticket, "worktree");
@@ -822,7 +822,8 @@ export async function pollRetention(
       // merge whose one-shot write failed is never left waiting: it is read
       // again so the write is retried.
       const last = store.observations.get(ticket.id);
-      const mergeOwed = last?.prState === "merged" && !store.notifiedMerged.has(ticket.id);
+      const mergeOwed =
+        last?.prState === "merged" && store.notifiedMerged.get(ticket.id) !== last.prUrl;
       if (!due && !mergeOwed) {
         if (last !== undefined && last.prUrl === prUrl) {
           if (await reclaim(ticket, last.prState)) noteChange(ticket, "worktree");
@@ -866,8 +867,14 @@ export async function pollRetention(
       // already exist) — never before — so a throw here (e.g. SQLITE_BUSY)
       // lands in this ticket's catch below and the ticket retries next poll
       // instead of being suppressed until an app restart.
-      if (status.value.state === "merged" && !store.notifiedMerged.has(ticket.id)) {
-        if (!hasPrMergedEvent(deps.db, ticket.id)) {
+      //
+      // The record is per PR (VC-1156): a later PR on the same ticket that
+      // merges gets its own, because a move after THAT merge is what the trim's
+      // finish rule dates a reactivation against. The notification stays one
+      // per ticket, as it always was.
+      if (status.value.state === "merged" && store.notifiedMerged.get(ticket.id) !== prUrl) {
+        if (!hasPrMergedEventFor(deps.db, ticket.id, prUrl)) {
+          const firstMerge = !hasPrMergedEvent(deps.db, ticket.id);
           recordTicketEvent(
             deps.db,
             ticket.id,
@@ -875,17 +882,18 @@ export async function pollRetention(
             deps.now(),
             AUTOMATION_ACTOR,
           );
-          deps.notify({
-            producer: "pull-request-merged",
-            title: "Pull request merged",
-            body: ticket.title,
-            // The completion `finished` actually governs, and a click opens
-            // the ticket it merged for.
-            target: { kind: "ticket", projectId: ticket.project_id, ticketId: ticket.id },
-          });
+          if (firstMerge)
+            deps.notify({
+              producer: "pull-request-merged",
+              title: "Pull request merged",
+              body: ticket.title,
+              // The completion `finished` actually governs, and a click opens
+              // the ticket it merged for.
+              target: { kind: "ticket", projectId: ticket.project_id, ticketId: ticket.id },
+            });
           noteChange(ticket, "retention");
         }
-        store.notifiedMerged.add(ticket.id);
+        store.notifiedMerged.set(ticket.id, prUrl);
       }
 
       // Scheduled only now (VC-686): a merge write that threw above leaves the

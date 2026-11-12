@@ -58,8 +58,10 @@ export const TICKET_EVENT_KINDS = [
   "pr_opened",
   // Retention merge-watch (CONCEPT #16, issue #76): the background poll's FIRST
   // observation that the ticket's PR merged. Written with an `automation` actor
-  // (no session — the system-level watch), exactly once per branch (a dedup set
-  // guards re-firing), and paired with the single native "PR merged" notification.
+  // (no session — the system-level watch), exactly once per PR url (a dedup set
+  // guards re-firing; a later PR on the same ticket gets its own record, VC-1156),
+  // and the ticket's first is paired with the single native "PR merged"
+  // notification.
   "pr_merged",
   // Retention reclaim (VC-113): the background watch removed a Done ticket's
   // worktree DIRECTORY after it sat clean and finished for the whole retention

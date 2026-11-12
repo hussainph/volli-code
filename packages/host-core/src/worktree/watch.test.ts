@@ -1447,6 +1447,14 @@ function intact(wt: string): boolean {
   );
 }
 
+/** Puts fresh working material back, as a reactivated ticket's session would. */
+function rework(wt: string): void {
+  mkdirSync(join(wt, "node_modules"), { recursive: true });
+  writeFileSync(join(wt, "node_modules", "index.js"), "1\n");
+  mkdirSync(join(wt, ".scratch", "VC-1"), { recursive: true });
+  writeFileSync(join(wt, ".scratch", "VC-1", "receipt.json"), "{}\n");
+}
+
 // VC-1156: a merged PR is an observation; a move is intent, and intent wins. A
 // ticket moved back to work after its PR merged keeps everything in its
 // worktree — ignored dependencies and scratch material included — until it is
@@ -1501,24 +1509,32 @@ describe("pollRetention — a reactivated merged ticket is not trimmed (VC-1156)
     recordTicketEvent(ctx.db, "t1", { kind: "status_changed", from, to }, at, { kind: "user" });
   }
 
-  async function poll(prState: "MERGED" | "OPEN" = "MERGED"): Promise<void> {
-    const { run } = scriptedNet(() =>
+  async function poll(
+    prState: "MERGED" | "OPEN" = "MERGED",
+    store = createRetentionStore(),
+    now = 5000,
+  ): Promise<{ calls: number; notified: number }> {
+    const { run, calls } = scriptedNet(() =>
       prView(prState === "MERGED" ? { state: "MERGED", mergedAt: "2026-11-08T00:00:00Z" } : {}),
     );
+    let notified = 0;
     await pollRetention(
       {
         db: ctx.db,
         net: run,
-        now: () => 5000,
-        notify: () => {},
+        now: () => now,
+        notify: () => {
+          notified += 1;
+        },
         trim: {
           worktree: { db: ctx.db, gitAsync: runGitCapturingAsync, blobsRoot: "unused" },
-          now: () => 5000,
+          now: () => now,
           busySites: async () => [],
         },
       },
-      createRetentionStore(),
+      store,
     );
+    return { calls: calls.length, notified };
   }
 
   function trims() {
@@ -1577,9 +1593,58 @@ describe("pollRetention — a reactivated merged ticket is not trimmed (VC-1156)
     merged(OLD_PR, 2);
     move("needs_review", "doing", 3);
 
-    await poll("OPEN");
+    expect((await poll("OPEN")).calls).toBe(1);
 
     expect(intact(wt)).toBe(true);
+  });
+
+  it("records a later PR's merge, then protects a second reactivation, within one launch and after a restart", async () => {
+    const wt = workingWorktree();
+    seed("doing", wt, NEW_PR);
+    merged(OLD_PR, 2);
+    move("needs_review", "doing", 3);
+    const store = createRetentionStore();
+
+    // The second PR merges: recorded on its own, finished again, trimmed — and
+    // no second notification, as before.
+    expect((await poll("MERGED", store, 4)).notified).toBe(0);
+    expect(
+      listTicketEvents(ctx.db, "t1")
+        .map((event) => event.payload)
+        .filter((payload) => payload.kind === "pr_merged"),
+    ).toEqual([
+      { kind: "pr_merged", url: OLD_PR },
+      { kind: "pr_merged", url: NEW_PR },
+    ]);
+    expect(trims()).toHaveLength(1);
+
+    // Reactivated again, and the session rebuilds its material.
+    move("needs_review", "doing", 5);
+    rework(wt);
+
+    // Same launch: the remembered merge answers, without a gh read.
+    expect((await poll("MERGED", store, 6)).calls).toBe(0);
+    expect(intact(wt)).toBe(true);
+    // A restart: the durable record answers, without a gh read.
+    expect((await poll("MERGED", createRetentionStore(), 7)).calls).toBe(0);
+    expect(intact(wt)).toBe(true);
+    expect(trims()).toHaveLength(1);
+  });
+
+  it("protects a reactivation within the launch that trimmed the merge", async () => {
+    const wt = workingWorktree();
+    seed("needs_review", wt);
+    const store = createRetentionStore();
+
+    expect((await poll("MERGED", store, 2)).notified).toBe(1);
+    expect(trims()).toHaveLength(1);
+    move("needs_review", "doing", 3);
+    rework(wt);
+
+    await poll("MERGED", store, 4);
+
+    expect(intact(wt)).toBe(true);
+    expect(trims()).toHaveLength(1);
   });
 
   it("trims a reactivated ticket moved to Done by hand, with no new PR, and says so", async () => {
