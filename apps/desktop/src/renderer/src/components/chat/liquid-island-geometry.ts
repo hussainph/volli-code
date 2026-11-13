@@ -106,3 +106,16 @@ export function liquidIslandGeometry(s: LiquidGeometry) {
     clusterOpacity: clamp(cluster * 2 - 1, 0, 1),
   };
 }
+
+/**
+ * How far the drawn bead rises above the island's 32px layout box (VC-1210).
+ * Layout only sees the box; the bead on the rim is drawn above it, into the
+ * band a neighbour above the composer must keep clear. Below a quarter
+ * presence the rise eases to nothing, so the last of a draining bead does not
+ * drop that neighbour in one step; the neighbour's own clear band is wider
+ * than the bead's rise at that presence, so the two still never meet.
+ */
+export function liquidIslandRise(top: number, presence: number, hidden: boolean): number {
+  if (hidden) return 0;
+  return Math.max(0, -top) * clamp(presence * 4, 0, 1);
+}

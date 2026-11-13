@@ -15,7 +15,8 @@
  * expression, which is why the notice is here. Changed: shared semantic icons,
  * `@renderer/*` imports, the scroll-chaining bridge below, both
  * `StickToBottom` props forced to `instant` where upstream animates, and
- * `ConversationEmptyState` reduced to its shell (no default title or copy).
+ * `ConversationEmptyState` reduced to its shell (no default title or copy),
+ * and `ConversationContent`'s masked viewport, reachable through `viewportRef`.
  *
  * Apache-2.0 §4(b) requires a modified file to say so. See `./PROVENANCE.md`.
  */
@@ -24,7 +25,7 @@ import { ArrowDownIcon } from "@renderer/components/ui/icon";
 
 import { Button } from "@renderer/components/ui/button";
 import { cn } from "@renderer/lib/utils";
-import type { ComponentProps, ReactNode } from "react";
+import type { ComponentProps, ReactNode, Ref } from "react";
 import {
   createContext,
   useCallback,
@@ -232,10 +233,18 @@ function ConversationBridge({ children }: { children: ReactNode }) {
   );
 }
 
-export type ConversationContentProps = ComponentProps<typeof StickToBottom.Content>;
+export type ConversationContentProps = ComponentProps<typeof StickToBottom.Content> & {
+  /** The masked, non-scrolling viewport around the content. */
+  viewportRef?: Ref<HTMLDivElement>;
+};
 
-export const ConversationContent = ({ className, ...props }: ConversationContentProps) => (
+export const ConversationContent = ({
+  className,
+  viewportRef,
+  ...props
+}: ConversationContentProps) => (
   <div
+    ref={viewportRef}
     data-conversation-viewport=""
     className="h-full overflow-hidden [contain:layout_paint] isolate"
   >

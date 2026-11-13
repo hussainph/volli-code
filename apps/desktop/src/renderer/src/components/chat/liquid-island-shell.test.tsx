@@ -15,6 +15,7 @@ import type { IslandFlash } from "@volli/session-presentation";
 
 import type { TurnActivity } from "@renderer/chat/turn-activity";
 import { LiquidIslandShell } from "./liquid-island-shell";
+import { createIslandClearance, type IslandClearance } from "./island-clearance";
 
 const CHAR = 7;
 let root: Root | null = null;
@@ -119,7 +120,13 @@ function render(
     flash = null,
     populated = true,
     reduce = false,
-  }: { flash?: IslandFlash | null; populated?: boolean; reduce?: boolean } = {},
+    clearance,
+  }: {
+    flash?: IslandFlash | null;
+    populated?: boolean;
+    reduce?: boolean;
+    clearance?: IslandClearance;
+  } = {},
 ) {
   act(() =>
     root!.render(
@@ -129,6 +136,7 @@ function render(
         populated={populated}
         exitKind="done"
         reduce={reduce}
+        clearance={clearance}
       >
         {populated ? <span>0/5</span> : null}
       </LiquidIslandShell>,
@@ -322,5 +330,49 @@ describe("LiquidIslandShell caption fit", () => {
       step(16);
       expectFits();
     }
+  });
+});
+
+function published() {
+  const clearance = createIslandClearance();
+  const button = document.createElement("button");
+  clearance.attach(button);
+  return {
+    clearance,
+    rise: () => Number.parseFloat(button.style.getPropertyValue("--island-clearance")),
+  };
+}
+
+describe("LiquidIslandShell clearance (VC-1210)", () => {
+  it("publishes the bead's rise on the rim, and drains it with the turn", () => {
+    const { clearance, rise } = published();
+    render(running("Running", "pwd"), { clearance });
+    step(2000);
+    expect(rise()).toBe(30);
+    render(null, { clearance });
+    step(2000);
+    expect(rise()).toBe(0);
+  });
+
+  it("publishes nothing for a lone pill, and lets go when the island leaves", () => {
+    const { clearance, rise } = published();
+    render(running("Running", "pwd"), { populated: false, clearance });
+    step(2000);
+    expect(rise()).toBe(0);
+    render(running("Running", "pwd"), { clearance });
+    step(2000);
+    expect(rise()).toBe(30);
+    act(() => root!.render(null));
+    expect(rise()).toBe(0);
+  });
+
+  it("moves the clearance without reading layout beyond the island's own measurements", () => {
+    const { clearance } = published();
+    render(running("Running", "pwd"), { clearance });
+    const reads = vi.mocked(HTMLElement.prototype.getBoundingClientRect);
+    reads.mockClear();
+    step(500);
+    for (const call of reads.mock.contexts)
+      expect((call as HTMLElement).classList.contains("liquid-island-clusters")).toBe(true);
   });
 });

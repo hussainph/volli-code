@@ -108,6 +108,7 @@ import { useTurnActivity } from "@renderer/chat/use-turn-activity";
 import { selectTurnExitKind } from "@renderer/chat/turn-activity";
 import { useChatBrowserTabs } from "@renderer/chat/use-island-tabs";
 import { ActivityIsland } from "@renderer/components/chat/activity-island-ui";
+import { createIslandClearance } from "@renderer/components/chat/island-clearance";
 import { ActivityBundle } from "@renderer/components/chat/activity-ui";
 import { copyText, COPY_FEEDBACK_MS } from "./transcript-copy";
 import {
@@ -525,6 +526,9 @@ function ChatPlaneContent({
   const [dismissedBlockerKey, setDismissedBlockerKey] = React.useState<string | null>(null);
   const setSettingsOpen = useUiStore((state) => state.setSettingsOpen);
   const composerHeight = useMeasuredHeight<HTMLDivElement>();
+  // The island's bead rises above its box, into the band the jump-to-latest
+  // button takes; the island publishes that rise onto the button and its band.
+  const [islandClearance] = React.useState(createIslandClearance);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const steeringQueued = React.useRef(new Set<string>());
   const [pendingSteerIds, setPendingSteerIds] = React.useState<ReadonlySet<string>>(new Set());
@@ -2210,6 +2214,7 @@ function ChatPlaneContent({
               it, with enough left that the last line lands on clean background
               rather than inside the fade. */}
                   <ConversationContent
+                    viewportRef={islandClearance.attach}
                     className={
                       quietEmpty
                         ? "chat-quiet-content h-full"
@@ -2288,9 +2293,15 @@ function ChatPlaneContent({
                   </ConversationContent>
                   {/* The bounded viewport owns the scroll-edge mask. While
                     detached, it reserves a text-free band for the latest button
-                    above the composer. Empty transcripts never get the button. */}
+                    above the composer. Empty transcripts never get the button.
+                    The composer's height already holds the island's box; the
+                    clearance adds the bead drawn above it, so the button rides
+                    over the island instead of under it (VC-1210). */}
                   {messages.length > 0 ? (
-                    <ConversationScrollButton className="bottom-[calc(var(--composer-height)+0.75rem)] glass-control shadow-glass-small" />
+                    <ConversationScrollButton
+                      ref={islandClearance.attach}
+                      className="bottom-[calc(var(--composer-height)+var(--island-clearance,0px)+0.75rem)] glass-control shadow-glass-small"
+                    />
                   ) : null}
                 </Conversation>
               </RunningBashProvider>
@@ -2332,6 +2343,7 @@ function ChatPlaneContent({
             actions={island.actions}
             activity={turnActivity}
             exitKind={turnExitKind === "abort" ? "abort" : committedExitKind}
+            clearance={islandClearance}
             className="pointer-events-auto mb-2"
           />
           {/* Overlay on the composer, never in its place. Ask-user cards

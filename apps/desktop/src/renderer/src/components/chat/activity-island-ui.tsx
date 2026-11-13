@@ -128,6 +128,7 @@ import { cn } from "@renderer/lib/utils";
 import { GLASS_MOTION } from "@renderer/lib/glass-motion";
 import type { TurnActivity } from "@renderer/chat/turn-activity";
 import { LiquidIslandShell, LIQUID_SPRING, useLingeringTurn } from "./liquid-island-shell";
+import type { IslandClearance } from "./island-clearance";
 
 /* ------------------------------------------------------------------ motion */
 
@@ -1320,6 +1321,8 @@ export interface ActivityIslandProps {
    * to model. Use margin rather than padding: it is the pill's own box.
    */
   className?: string;
+  /** Where the bead's rise above the island is published (VC-1210). */
+  clearance?: IslandClearance;
 }
 
 export function ActivityIsland({
@@ -1327,6 +1330,7 @@ export function ActivityIsland({
   actions,
   feel: feelOverride,
   className,
+  clearance,
   activity = null,
   exitKind = "done",
 }: ActivityIslandProps) {
@@ -1430,6 +1434,7 @@ export function ActivityIsland({
                     populated={clusters.length > 0 || inlineVisible}
                     exitKind={exitKind}
                     reduce={reduce}
+                    clearance={clearance}
                   >
                     {/* Dividers travel WITH their cluster — each keyed wrapper
                       carries its own leading rule, so membership changes stay

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
-import { capsulePath, liquidIslandGeometry, type LiquidGeometry } from "./liquid-island-geometry";
+import {
+  capsulePath,
+  liquidIslandGeometry,
+  liquidIslandRise,
+  type LiquidGeometry,
+} from "./liquid-island-geometry";
 
 const resting: LiquidGeometry = {
   islandWidth: 176,
@@ -101,5 +106,32 @@ describe("the sessile bead's drawn union", () => {
         }
       }
     }
+  });
+});
+
+describe("the bead's rise above the island box (VC-1210)", () => {
+  // The jump-to-latest button keeps a 12px band over the island box; the rise
+  // is what it adds while the bead is drawn above that box.
+  const BAND = 12;
+
+  it("is the bead's full height and gap on the rim, and nothing for a lone pill", () => {
+    const rim = liquidIslandGeometry(resting);
+    expect(liquidIslandRise(rim.top, 1, false)).toBeCloseTo(30, 5);
+    const alone = liquidIslandGeometry({ ...resting, cluster: 0 });
+    expect(liquidIslandRise(alone.top, 1, false)).toBe(0);
+    expect(liquidIslandRise(rim.top, 1, true)).toBe(0);
+  });
+
+  it("follows a draining bead down without a final step, and never under the band", () => {
+    let previous = Infinity;
+    for (let i = 20; i >= 0; i -= 1) {
+      const presence = i / 20;
+      const g = liquidIslandGeometry({ ...resting, presence });
+      const rise = liquidIslandRise(g.top, presence, false);
+      expect(rise).toBeLessThanOrEqual(previous);
+      expect(Math.max(0, -g.top) - rise).toBeLessThan(BAND);
+      previous = rise;
+    }
+    expect(previous).toBe(0);
   });
 });
