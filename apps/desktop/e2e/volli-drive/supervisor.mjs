@@ -954,16 +954,28 @@ async function captureUpdatingWindow(page) {
  * profile, database, harness keys and environment, and proves the guard
  * again. The drive socket, fake provider and evidence carry on.
  */
-async function restart(reason, { local = false } = {}) {
-  if (!local) requireCloudLaunch();
+async function restart(reason) {
+  requireCloudLaunch();
+  // Through the Tray's Quit Volli, as a person would (a cloud launch stays
+  // resident on an ordinary quit), proven from the exact child handle.
+  return restartElectron(reason, async () => await closeCloudInstance());
+}
+
+/**
+ * A routine relaunch of a local instance (VC-1203): the app's ordinary quit,
+ * then the same restart on the same profile and database.
+ */
+async function relaunch() {
+  if (spec.cloud || spec.deployment) throw new Error("relaunch is local; use restart");
+  return restartElectron("relaunch", closeLocalInstance);
+}
+
+async function restartElectron(reason, closeInstance) {
   if (restarting) throw new Error("a restart is already running");
   restarting = true;
   const started = performance.now();
   try {
-    // Through the Tray's Quit Volli, as a person would (a cloud launch stays
-    // resident on an ordinary quit), proven from the exact child handle. A
-    // local instance quits through the app's ordinary quit.
-    const { trayQuit, close } = local ? await closeLocalInstance() : await closeCloudInstance();
+    const { trayQuit, close } = await closeInstance();
     const unclean = cleanQuitProblems(close);
     if (unclean.length > 0) {
       throw new Error(
@@ -1223,10 +1235,7 @@ async function handle(cmd, args) {
     case "restart":
       return restart(String(args.reason ?? "requested"));
     case "relaunch":
-      // A local instance quit and launched again on the same profile and
-      // database: a routine relaunch, as measured for VC-1203.
-      if (spec.cloud || spec.deployment) throw new Error("relaunch is local; use restart");
-      return restart("relaunch", { local: true });
+      return relaunch();
     case "restore-restart":
       return restoreRestart(args);
     case "runner-power": {
