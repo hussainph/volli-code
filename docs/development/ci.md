@@ -137,7 +137,37 @@ runner. The job has no steps and no log, and its annotations say "The job was
 not acquired by Runner of type hosted even after multiple attempts". GitHub
 gives up after 15 to 35 minutes. This has hit the macOS lane while GitHub
 reported limited macOS arm64 capacity. No step ran, so the result says nothing
-about the commit: re-run that job.
+about the commit.
+
+**`CI re-request`** (`ci-rerun-abandoned.yml`) handles it. When a `ci.yml`
+run completes, it re-runs that run's failed jobs once, but only if all of
+these hold:
+
+- the run is attempt 1 and still on attempt 1;
+- it concluded `failure`, not `cancelled`;
+- at least one job never started: `cancelled`, no runner (`runner_id` 0 or
+  empty, empty runner name) and zero steps;
+- every other job that did not pass is `CI gate` and the gate ran;
+- outside push runs, no newer `ci.yml` run exists for the same event, branch
+  and head repository, because a re-run would cancel the newer PR run.
+
+If any other job failed, timed out or was cancelled after it ran, nothing is
+re-requested and the run stays red for a person. The re-run executes the same
+commit and the gate judges every lane again, so it cannot hide a result. It
+applies to PR (fork PRs included), main-push, scheduled and dispatched runs.
+The release guard is unchanged: it still needs a `success` conclusion on the
+shipped commit, and a run that went green on its second attempt has one. If
+the second attempt is not acquired either, the run stays red: re-run it by
+hand, or wait for the next run.
+
+The predicate is `scripts/ci-rerun-abandoned.mjs`, tested against recorded
+run payloads. It reads only GitHub's run and job records, never logs,
+artifacts or code from the run. Its `Decide` job (`actions: read`,
+`contents: read`) checks out that one script from the default branch. A
+separate job holds `actions: write`, runs no repository code and makes the
+re-run call. Dispatching the workflow with a `run_id` reports the decision for
+any past run without re-running it. A `workflow_run` workflow only runs from
+the default branch, so a change to it takes effect only after it merges.
 
 For a focused local capture, set `VOLLI_TEST_DIAGNOSTICS` to an absolute
 workspace-local directory under `.tmp/` and append

@@ -637,6 +637,7 @@ test("a lane GitHub never assigned a runner fails the gate and says it never sta
   assert.notEqual(outcome.status, 0);
   assert.match(outcome.stdout, /Smoke \(core e2e\) is 'abandoned', expected 'success'/u);
   assert.match(outcome.stdout, /Smoke \(core e2e\) never started: GitHub assigned it no runner/u);
+  assert.match(outcome.stdout, /CI re-request workflow re-runs it once by itself/u);
   const failed = runGate({ ...env, SMOKE_BOOT: "failure" });
   assert.doesNotMatch(failed.stdout, /never started/u);
 });

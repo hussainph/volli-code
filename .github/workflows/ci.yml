@@ -385,7 +385,7 @@ jobs:
         run: |
           node scripts/check-host-electron-imports.mjs --self-test
           node scripts/check-host-electron-imports.mjs
-          node --test scripts/ci-host-lane.test.mjs
+          node --test scripts/ci-host-lane.test.mjs scripts/ci-rerun-abandoned.test.mjs
           node --test apps/desktop/scripts/test-sequencer.test.mjs scripts/setup-toolchain.test.mjs scripts/host-test-diagnostics.test.mjs scripts/worker-node-archive.test.mjs scripts/ci-runner-health.test.mjs
 
       # The encoded design system (the tokens ARE the spec, not a document).
@@ -1327,8 +1327,9 @@ jobs:
               echo "::error::$1 is '$2', expected '$3'"
               # GitHub's own result for a job no runner ever picked up: no
               # step ran, so it says nothing about this commit (VC-1209).
+              # ci-rerun-abandoned.yml re-requests such a run once (VC-1221).
               if [[ "$2" == "abandoned" ]]; then
-                echo "::error::$1 never started: GitHub assigned it no runner (its job annotations say so). Re-run that job."
+                echo "::error::$1 never started: GitHub assigned it no runner (its job annotations say so). When nothing else failed, the CI re-request workflow re-runs it once by itself; otherwise re-run that job."
               fi
               status=1
             fi
