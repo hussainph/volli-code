@@ -115,10 +115,6 @@ const DENY = new Map([
     "global-artifacts-smoke.mjs",
     "CI: checks 4/6 — create-artifact completion and post-relaunch tab restore",
   ],
-  [
-    "menu-scroll-smoke.mjs",
-    "CI: the New-ticket composer does not close, so it intercepts the board dblclick",
-  ],
 
   // ---- QUARANTINE: already failing against main -------------------------
   //
