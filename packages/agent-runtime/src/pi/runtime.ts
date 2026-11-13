@@ -100,6 +100,7 @@ import {
   type CompactionOutcome,
   type ConversationReader,
 } from "./compaction";
+import { THRESHOLD_COMPACTION_FAILURE_CAP, thresholdCompactionAllowed } from "./compaction-backoff";
 import { createContextTokenProjector } from "./token-counting";
 import {
   ABANDONED_QUESTION_RESULT,
@@ -2364,6 +2365,29 @@ async function attachSession(
      */
     let overflowRecoveryUsed = false;
     /**
+     * This run's failed threshold compactions, and the context the threshold
+     * check measured at the last of them (VC-1206).
+     *
+     * What {@link thresholdCompactionAllowed} decides from: a failure is tried
+     * again only once the context has grown by another `keepRecentTokens`, and
+     * not at all after three. "A run" is the Turn the overflow budget belongs
+     * to: it starts when a Turn starts for its own reason and a Turn resumed in
+     * place carries on spending it. The one difference from that budget is
+     * where a prompt's run begins: at its own delivery, before the idle
+     * compaction that message pays for, so that attempt counts against the run
+     * it opens rather than the one before it — see `agent_start`.
+     *
+     * Any successful compaction clears it, whatever asked for it. Held in this
+     * attachment only: a reattach starts clean, so nothing durable can leave a
+     * Session with threshold compaction silently switched off.
+     */
+    let thresholdFailures = 0;
+    let thresholdFailedAt: number | undefined;
+    const resetThresholdBackoff = (): void => {
+      thresholdFailures = 0;
+      thresholdFailedAt = undefined;
+    };
+    /**
      * Whether this turn has already dropped the conversation's reasoning.
      *
      * The same shape as the overflow budget, for the same reason: a turn the
@@ -3370,6 +3394,9 @@ async function attachSession(
           const announcements = agent.state.messages.slice(messageCount);
           agent.state.messages = withSystemHead(head, [...outcome.messages, ...announcements]);
           nativeCompactionState = providerCompactionFromDetails(outcome.entry.details);
+          // Whatever asked for it: a summary that worked says the summarizer
+          // works, and the mark measured a context this one replaced.
+          resetThresholdBackoff();
         }
         // Recorded before the compaction fact, so a crash between the two
         // loses the summary rather than the bill: the summary is recoverable
@@ -3426,12 +3453,27 @@ async function attachSession(
       }
     };
 
+    /** One failed threshold attempt, measured as the check measured it (VC-1206). */
+    const countThresholdFailure = (occupied: number, signal: AbortSignal | undefined): void => {
+      if (signal?.aborted) return;
+      thresholdFailures += 1;
+      thresholdFailedAt = occupied;
+    };
+
     /**
      * Make room before a request, using the last provider measurement plus the
      * unmeasured suffix (including an incoming user message or tool results).
      * The idle path holds the context rewrite lock; the tool-loop path runs at
      * Pi's prepareNextTurn boundary, where no provider request is in flight.
      * Maintenance failures are durable notices, not rejected user messages.
+     *
+     * Those two are every place a threshold compaction starts, and both come
+     * through here, so the backoff after a failure ({@link
+     * thresholdCompactionAllowed}) is applied once, after the threshold check
+     * and to the same measure it compared. A held-back attempt is not an
+     * attempt: no summary request, no notice, no usage. An attempt that
+     * failed is counted unless the person stopped it — a Stop ends the run
+     * the count belongs to, and is not the summarizer failing.
      */
     const compactBeforeTurn = async (
       additional: readonly AgentMessage[] = [],
@@ -3442,6 +3484,9 @@ async function attachSession(
       // whole history — there is no reason to pay it for an answer already known.
       const contextWindow = contextWindowOf(agent.state.model);
       if (contextWindow === undefined) return false;
+      // Set once the backoff has let an attempt start, so a throw from inside
+      // it is counted and one from the policy read before it is not.
+      let attemptedAt: number | undefined;
       try {
         const settings = compactionSettings();
         if (!settings.enabled) return false;
@@ -3458,10 +3503,23 @@ async function attachSession(
           agent.state.model,
         );
         if (!compactionDue(occupied, contextWindow, thresholdSettings)) return false;
+        if (
+          !thresholdCompactionAllowed({
+            occupied,
+            failedAt: thresholdFailedAt,
+            failures: thresholdFailures,
+            step: settings.keepRecentTokens,
+            cap: THRESHOLD_COMPACTION_FAILURE_CAP,
+          })
+        )
+          return false;
+        attemptedAt = occupied;
         const path = await conversationBranch();
         const outcome = await compactContext({ reason: "threshold", path, signal });
+        if (outcome.kind === "failed") countThresholdFailure(occupied, signal);
         return outcome.kind === "compacted";
       } catch (error) {
+        if (attemptedAt !== undefined) countThresholdFailure(attemptedAt, signal);
         // Reported through the channel a refused summary already uses. If THIS
         // throws the sidecar itself is unwritable, which is not a maintenance
         // failure to absorb — it is the attachment's own durability gone, and it
@@ -3620,6 +3678,11 @@ async function attachSession(
           autoRetryWaitedMs = 0;
           overflowRecoveryUsed = false;
           reasoningRecoveryUsed = false;
+          // A prompt's run was opened at its delivery, ahead of the idle
+          // compaction it paid for (see {@link thresholdFailures}); every other
+          // Turn that starts for its own reason — a retry, a late follow-up —
+          // opens its run here.
+          if (pendingRunDelivery?.delivery !== "prompt") resetThresholdBackoff();
           await commitObservation(
             await persistObservation({ kind: "turn", state: "started", turnId }),
           );
@@ -3985,6 +4048,11 @@ async function attachSession(
           return { kind: "delivered", delivery, ...acceptanceTime(commandId) };
         }
         consumeRunFailure();
+        // This message opens a run, and the idle compaction below is that run's
+        // first chance to make room — so the run's backoff starts here, not at
+        // `agent_start`, and an attempt this message pays for is counted
+        // against the run it opens.
+        resetThresholdBackoff();
         // Before the message is composed, not after: compaction can change what
         // the context holds, and the Brief is prepended on an empty one. Held
         // as a rewrite so an explicit `/compact` arriving meanwhile is refused
