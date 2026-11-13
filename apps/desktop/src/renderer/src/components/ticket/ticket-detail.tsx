@@ -1685,7 +1685,6 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
               onSelectTab={setActiveTab}
               onReorderTabs={(movedId, ids) => reorderInPane(SPLIT_VIEW_ROOT_PANE_ID, movedId, ids)}
               onPinFileTab={(relPath) => pinTicketFile(projectId, ticket.id, relPath)}
-              onTakeOutTab={ungroupLocalTab}
               onHideBrowser={hideBrowser}
               onCloseTab={closeTab}
               onRenameSessionTab={renameSessionTab}
@@ -1728,11 +1727,6 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
                     onHideBrowser={hideBrowser}
                     onCloseTab={closeTab}
                     onRenameSessionTab={renameSessionTab}
-                    onTakeOut={
-                      pane.activeTabId === null
-                        ? undefined
-                        : () => ungroupLocalTab(pane.activeTabId!)
-                    }
                   />
                 )
               }

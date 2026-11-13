@@ -38,7 +38,7 @@ import {
   SunIcon,
   TerminalIcon,
   CloseIcon,
-  ExternalIcon,
+  UnlinkIcon,
   MinusIcon,
 } from "@renderer/components/ui/icon";
 
@@ -54,10 +54,15 @@ import { projectChatProviders, ticketChatProviders } from "@renderer/lib/session
 import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
 import { providerIdentityOf, providerLabelOf } from "@renderer/components/models/model-identity";
 import { useModelCatalogue } from "@renderer/lib/use-model-catalogue";
-import { TabContextActions, type TabAction } from "@renderer/components/ui/tab-actions";
+import {
+  TabActionsContext,
+  TabContextActions,
+  type TabAction,
+} from "@renderer/components/ui/tab-actions";
 import { hidesToIsland, useBrowserTabsStore } from "@renderer/stores/browser-tabs";
 import { browserTabAddress } from "@renderer/chat/use-island-tabs";
 import {
+  focusTakenOutTab,
   GroupedTabList,
   groupTabItems,
   type TabGroup,
@@ -228,6 +233,10 @@ export interface TicketTabListProps {
   shownGroupId?: string | null;
   /** Dissolve a group from its chip's menu; every tab stays open. */
   onUngroup?(groupId: string): void;
+  /**
+   * Take one tab out of its group, open and full width (VC-1017). Offered on a
+   * PANE strip only, in the tab's own menu — see the Home strip's twin.
+   */
   onTakeOutTab?(tabId: string): void;
   onHideBrowser?(tab: TicketTabDescriptor): void;
   /** The ticket's owning project, used to resolve file tabs in main. */
@@ -318,6 +327,7 @@ function TicketTab({
   // way, and one `session.retitle` moves it — the consumer routes by tab id
   // (chat ids are `chat:`-prefixed) to the store that holds that title.
   const sessionTab = tab.kind === "session" || tab.kind === "chat";
+  const stripActions = React.useContext(TabActionsContext);
   const renamable = sessionTab && launchStore() !== "cloud";
   const closable = isClosableTicketTab(tab.kind);
   const preview = tab.preview === true;
@@ -480,9 +490,16 @@ function TicketTab({
 
   // Session and chat tabs rename; File tabs hold the external-app/Finder
   // submenu, the two Copy Path items and Word Wrap whether pinned or previewed;
-  // preview tabs additionally get Keep Open. Doc and Diff tabs still have
-  // nothing to offer.
-  if (!menu || (!sessionTab && fileTarget === null && !(preview && onPin !== undefined))) {
+  // preview tabs additionally get Keep Open. Any tab carries the strip's own
+  // actions (Take out of group, Hide to Island), as Home's tabs do (VC-1017);
+  // a Doc or Diff tab with none of them has nothing to offer.
+  if (
+    !menu ||
+    (!sessionTab &&
+      fileTarget === null &&
+      !(preview && onPin !== undefined) &&
+      stripActions.length === 0)
+  ) {
     return inner;
   }
 
@@ -615,21 +632,14 @@ export function TicketTabStrip({
 
 /**
  * A pane's strip. The session-start control and rail toggle stay at the top
- * strip's right edge rather than following any pane; a group pane's own
- * trailing edge carries only the way out of the group
- * ({@link PaneTakeOutButton}).
+ * strip's right edge rather than following any pane; a pane strip's trailing
+ * edge carries none. The way out of the group is each tab's own menu
+ * (`onTakeOutTab`).
  */
-export function TicketPaneTabStrip({
-  label,
-  onTakeOut,
-  ...list
-}: TicketTabListProps & { label: string; onTakeOut?: () => void }) {
+export function TicketPaneTabStrip({ label, ...list }: TicketTabListProps & { label: string }) {
   return (
     <TabStrip label={label} reorder={reorderFor(list)}>
-      <TicketTabList
-        {...list}
-        onTakeOutTab={list.onTakeOutTab ?? (onTakeOut ? () => onTakeOut() : undefined)}
-      />
+      <TicketTabList {...list} />
     </TabStrip>
   );
 }
@@ -736,15 +746,14 @@ function TicketTabList({
       onClose={onCloseTab}
       actionsFor={(tab) => {
         const actions: TabAction[] = [];
-        if (
-          onTakeOutTab &&
-          (groups === undefined ||
-            groups.some((group) => group.panes.some((pane) => pane.tabIds.includes(tab.id))))
-        )
+        if (onTakeOutTab && groups === undefined)
           actions.push({
             label: "Take out of group",
-            icon: ExternalIcon,
-            run: () => onTakeOutTab(tab.id),
+            icon: UnlinkIcon,
+            run: (_pointer, trigger) => {
+              focusTakenOutTab(trigger ?? null, tab.id);
+              onTakeOutTab(tab.id);
+            },
           });
         const browser = tab.browserTabId
           ? useBrowserTabsStore.getState().byId[tab.browserTabId]

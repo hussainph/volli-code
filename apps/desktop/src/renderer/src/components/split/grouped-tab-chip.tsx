@@ -56,6 +56,26 @@ type StripItem<T> =
     };
 
 /**
+ * Focus follows a tab taken out of its group (VC-1017). The menu that asked
+ * for it lived on the pane strip the tab just left, so its trigger unmounts
+ * and Radix's focus return has nowhere to go but the document body. Instead
+ * focus lands on the tab itself, now selected on its surface's top strip.
+ *
+ * Call it BEFORE the move, while `trigger` is still in its surface: the
+ * surface is found from it then, and the tab after the move has committed.
+ * Without a trigger (the right-click path) the whole document is searched for
+ * the selected tab of that id.
+ */
+export function focusTakenOutTab(trigger: HTMLElement | null, tabId: string): void {
+  const surface = trigger?.closest("[data-split-area]") ?? document;
+  const selector = `[data-strip-tab-id="${CSS.escape(tabId)}"] [role="tab"][aria-selected="true"]`;
+  window.setTimeout(() => {
+    const scope = surface instanceof Element && !surface.isConnected ? document : surface;
+    scope.querySelector<HTMLElement>(selector)?.focus();
+  }, 0);
+}
+
+/**
  * The top strip's items: an ordinary tab is itself; a group is ONE chip, placed
  * where the earliest of its tabs sits. A group's other tabs never also appear
  * as top-level tabs, and a group none of whose tabs is live draws nothing.

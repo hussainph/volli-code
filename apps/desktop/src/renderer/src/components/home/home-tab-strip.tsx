@@ -15,7 +15,7 @@ import {
   SunIcon,
   TerminalIcon,
   CloseIcon,
-  ExternalIcon,
+  UnlinkIcon,
   MinusIcon,
   CloseSquareIcon,
 } from "@renderer/components/ui/icon";
@@ -34,6 +34,7 @@ import { providerIdentityOf, providerLabelOf } from "@renderer/components/models
 import { useModelCatalogue } from "@renderer/lib/use-model-catalogue";
 import { TabContextActions, type TabAction } from "@renderer/components/ui/tab-actions";
 import {
+  focusTakenOutTab,
   GroupedTabList,
   groupTabItems,
   type TabGroup,
@@ -133,6 +134,12 @@ export interface HomeTabListProps {
   shownGroupId?: string | null;
   /** Dissolve a group from its chip's menu; every tab stays open. */
   onUngroup?(groupId: string): void;
+  /**
+   * Take one tab out of its group, open and full width (VC-1017). Offered on a
+   * PANE strip only, in the tab's own menu: the tab inside the group is the
+   * thing it acts on. The top strip's chip leaves the group only as a whole,
+   * through Ungroup.
+   */
   onTakeOutTab?(tabId: string): void;
   onHideBrowser?(tabId: string): void;
   /**
@@ -247,20 +254,13 @@ export function HomeTabStrip({
 
 /**
  * A pane's strip. The surface's controls stay on the top strip's trailing
- * edge, whichever pane is focused; a group pane's own trailing edge carries
- * only the way out of the group ({@link PaneTakeOutButton}).
+ * edge, whichever pane is focused; a pane strip's trailing edge carries none.
+ * The way out of the group is each tab's own menu (`onTakeOutTab`).
  */
-export function HomePaneTabStrip({
-  label,
-  onTakeOut,
-  ...list
-}: HomeTabListProps & { label: string; onTakeOut?: () => void }) {
+export function HomePaneTabStrip({ label, ...list }: HomeTabListProps & { label: string }) {
   return (
     <TabStrip variant="folder" label={label} reorder={reorderFor(list)}>
-      <HomeTabList
-        {...list}
-        onTakeOutTab={list.onTakeOutTab ?? (onTakeOut ? () => onTakeOut() : undefined)}
-      />
+      <HomeTabList {...list} />
     </TabStrip>
   );
 }
@@ -367,15 +367,14 @@ function HomeTabList({
       onClose={onClose}
       actionsFor={(tab) => {
         const actions: TabAction[] = [];
-        if (
-          onTakeOutTab &&
-          (groups === undefined ||
-            groups.some((group) => group.panes.some((pane) => pane.tabIds.includes(tab.id))))
-        )
+        if (onTakeOutTab && groups === undefined)
           actions.push({
             label: "Take out of group",
-            icon: ExternalIcon,
-            run: () => onTakeOutTab(tab.id),
+            icon: UnlinkIcon,
+            run: (_pointer, trigger) => {
+              focusTakenOutTab(trigger ?? null, tab.id);
+              onTakeOutTab(tab.id);
+            },
           });
         const browser =
           tab.kind === "browser" ? useBrowserTabsStore.getState().byId[tab.tabId] : undefined;
