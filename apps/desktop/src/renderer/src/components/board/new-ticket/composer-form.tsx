@@ -436,9 +436,9 @@ export function ComposerForm({
   );
 
   return (
-    // `min-w-0`, and it is load-bearing rather than defensive. This is a GRID
+    // `min-w-0`, and it is load-bearing rather than defensive. This was a GRID
     // item (DialogContent), and a grid item's automatic minimum size is its
-    // content's — so the column widens to whatever the widest child insists on
+    // content's — so the column widened to whatever the widest child insists on
     // instead of to the dialog's own `max-w-*`. Monaco is a child that insists:
     // it lays itself out to explicit pixel widths and only re-measures when its
     // host element resizes. That made Collapse a deadlock, which is exactly how
@@ -465,9 +465,16 @@ export function ComposerForm({
       // because Monaco treats a dropped file as text to insert and would
       // otherwise write the path into the body instead of attaching it.
       {...fileAttachHandlers((picked) => void attachFiles(picked))}
-      className="@container/composer flex min-w-0 flex-col"
+      //
+      // `min-h-0` is the same rule on the other axis, now that DialogContent is
+      // a flex column capped at min(80svh, 40rem). Without it this column's
+      // automatic minimum height is its content's, so a long body made the
+      // composer taller than the dialog and the dialog clipped the footer
+      // (VC-1216). With it the column takes the dialog's height and the body
+      // in the middle band below gives up the difference.
+      className="@container/composer flex min-h-0 min-w-0 flex-col"
     >
-      <div className="px-6 pt-4 pb-2">
+      <div className="shrink-0 px-6 pt-4 pb-2">
         <ComposerBreadcrumb
           projects={projects}
           target={target}
@@ -478,7 +485,12 @@ export function ComposerForm({
         />
       </div>
 
-      <div className="flex min-w-0 flex-col gap-2 px-6 pt-4 pb-4">
+      {/* The one band that yields when the dialog runs out of height. The
+          breadcrumb and the footer are fixed; inside the band only the body
+          shrinks (title, chips and attachments are `shrink-0`), down to its
+          min-height. Below that the band itself scrolls, so the Create buttons
+          stay in view at every window height (VC-1216). */}
+      <div className="flex min-h-0 min-w-0 flex-col overflow-y-auto overscroll-contain px-6 pt-4">
         <input
           ref={titleRef}
           autoFocus
@@ -496,7 +508,7 @@ export function ComposerForm({
           }}
           placeholder="Ticket title"
           aria-label="Ticket title"
-          className="w-full border-none bg-transparent text-heading font-medium text-foreground outline-none placeholder:text-muted-foreground"
+          className="mb-2 w-full shrink-0 border-none bg-transparent text-heading font-medium text-foreground outline-none placeholder:text-muted-foreground"
         />
         <DraftDocumentEditor
           ref={editorRef}
@@ -517,48 +529,50 @@ export function ComposerForm({
           ariaLabel="Ticket description"
           fileRefs={fileRefs}
           // Bounded growth: the body grows with what you type and then scrolls
-          // inside itself rather than pushing the footer off the dialog.
+          // inside itself rather than pushing the footer off the dialog. The
+          // viewport cap is the body's preferred ceiling; the real limit is the
+          // room the dialog has left, which flex hands it as a shrink.
           className={cn(expanded ? "max-h-[50vh] min-h-[280px]" : "max-h-[40vh] min-h-[140px]")}
         />
-      </div>
 
-      <div className="px-6 pb-4">
-        <ComposerChips
-          projectId={target.id}
-          status={status}
-          onStatusChange={setStatus}
-          priority={priority}
-          onPriorityChange={setPriority}
-          labels={labels}
-          onLabelsChange={setLabels}
-          createMore={createMore}
-          onCreateMoreChange={setCreateMore}
-          branch={{
-            state: branchState,
-            baseBranch,
-            onBaseBranchChange: setChosenBase,
-            usesWorktree,
-            onUsesWorktreeChange: setUsesWorktree,
-          }}
-        />
-      </div>
+        <div className="shrink-0 py-4">
+          <ComposerChips
+            projectId={target.id}
+            status={status}
+            onStatusChange={setStatus}
+            priority={priority}
+            onPriorityChange={setPriority}
+            labels={labels}
+            onLabelsChange={setLabels}
+            createMore={createMore}
+            onCreateMoreChange={setCreateMore}
+            branch={{
+              state: branchState,
+              baseBranch,
+              onBaseBranchChange: setChosenBase,
+              usesWorktree,
+              onUsesWorktreeChange: setUsesWorktree,
+            }}
+          />
+        </div>
 
-      {/* `py-2`, not `pt-2`: the strip is a band between two hairlines and it
+        {/* `py-2`, not `pt-2`: the strip is a band between two hairlines and it
           has to pay the same inset on both of them. With no bottom inset the
           64px tiles sat ON the tray's top edge — the row of thumbnails and the
           row of controls read as one crowded object, and the strip's own top
           air made the imbalance plain (VC-382). 8px is the ladder's default
           inset and it also clears the remove badge, which overhangs its tile
           by 6px. */}
-      <AttachmentStrip
-        attachments={attachments}
-        presentation="composer"
-        onRemove={(attachment) => void removeAttachment(attachment)}
-        className="border-t border-border px-6 py-2"
-      />
+        <AttachmentStrip
+          attachments={attachments}
+          presentation="composer"
+          onRemove={(attachment) => void removeAttachment(attachment)}
+          className="-mx-6 shrink-0 border-t border-border px-6 py-2"
+        />
+      </div>
 
-      <ReadOnlyNote projectId={target.id} className="px-6 pt-4" />
-      <div className="prompt-toolbar px-6 py-4">
+      <ReadOnlyNote projectId={target.id} className="shrink-0 px-6 pt-4" />
+      <div className="prompt-toolbar shrink-0 px-6 py-4">
         <ComposerFooter
           projectId={target.id}
           onAttachFiles={(picked) => void attachFiles(picked)}

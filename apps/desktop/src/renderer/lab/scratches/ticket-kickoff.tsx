@@ -38,6 +38,13 @@
  * host could not shrink, and the host could not shrink because the editor was
  * holding it open. Type a paragraph first so the wrap has something to show.
  *
+ * **Paste a long body, then change the window height.** The footer stays
+ * inside the dialog at every height. The body grows to 40vh, or to whatever
+ * room the dialog's min(80svh, 40rem) cap leaves it, whichever is smaller, and
+ * scrolls inside itself. Under about 450px the body is at its floor and the band
+ * between breadcrumb and footer scrolls instead. Above about 1040px a long body
+ * used to push the Create buttons out of the dialog (VC-1216).
+ *
  * The board behind it is the real one, and the toggle empties it: an empty
  * board offers one line and one button rather than five collapsed column pills
  * (VC-42 audit F6).
