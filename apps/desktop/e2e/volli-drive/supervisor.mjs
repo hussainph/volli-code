@@ -66,7 +66,12 @@ import {
   recordedRunnerId,
 } from "./lib/cloud-acceptance.mjs";
 import { seedFixture } from "./lib/fixtures.mjs";
-import { isUpdatingPage, seedDatabase, seedDatabaseProblems } from "./lib/seed-database.mjs";
+import {
+  isCheckingPage,
+  isUpdatingPage,
+  seedDatabase,
+  seedDatabaseProblems,
+} from "./lib/seed-database.mjs";
 import { serve } from "./lib/protocol.mjs";
 import { quitNativeWindow, reopenNativeWindow } from "./lib/native-window-lifecycle.mjs";
 import { settingsNative } from "./lib/settings-native.mjs";
@@ -857,7 +862,9 @@ async function startElectron(extraEnv) {
 /**
  * The app's own first window. A launch that upgrades its database shows the
  * upgrade window first (VC-1105): that one is captured as evidence, with when
- * it appeared and closed, and never driven.
+ * it appeared and closed, and never driven. A long routine check opens the
+ * app's window on its check page (VC-1203): captured the same way, and the
+ * window is the app's once the app has loaded into it.
  */
 async function firstAppWindow() {
   const seen = new Set();
@@ -866,6 +873,14 @@ async function firstAppWindow() {
       if (seen.has(page)) continue;
       try {
         await page.waitForLoadState("domcontentloaded");
+        if (isCheckingPage(page.url())) {
+          await captureCheckingWindow(page);
+          await page.waitForURL((url) => !isCheckingPage(url.href), {
+            waitUntil: "domcontentloaded",
+            timeout: 240_000,
+          });
+          mark("checkingWindowLoadedApp");
+        }
       } catch {
         seen.add(page);
         continue;
@@ -875,6 +890,38 @@ async function firstAppWindow() {
       await captureUpdatingWindow(page);
     }
     await app.waitForEvent("window", { timeout: 240_000 });
+  }
+}
+
+async function captureCheckingWindow(page) {
+  mark("checkingWindowShown");
+  try {
+    await page.getByRole("status").waitFor({ timeout: 10_000 });
+    const path = join(L.screenshotsDir, "000-checking-window.png");
+    await page.screenshot({ path });
+    // The native edge it was built with: what the window paints around and
+    // under the page, which a page screenshot does not show.
+    const native = await app.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows().find((candidate) =>
+        candidate.webContents.getURL().includes("work=check"),
+      );
+      return window === undefined
+        ? null
+        : {
+            background: window.getBackgroundColor(),
+            bounds: window.getBounds(),
+            mediaSourceId: window.getMediaSourceId(),
+          };
+    });
+    transcript({
+      cmd: "checking-window",
+      event: "shown",
+      path,
+      text: await page.innerText("body"),
+      native,
+    });
+  } catch (error) {
+    transcript({ cmd: "checking-window", event: "capture-failed", error: String(error) });
   }
 }
 
@@ -907,15 +954,16 @@ async function captureUpdatingWindow(page) {
  * profile, database, harness keys and environment, and proves the guard
  * again. The drive socket, fake provider and evidence carry on.
  */
-async function restart(reason) {
-  requireCloudLaunch();
+async function restart(reason, { local = false } = {}) {
+  if (!local) requireCloudLaunch();
   if (restarting) throw new Error("a restart is already running");
   restarting = true;
   const started = performance.now();
   try {
     // Through the Tray's Quit Volli, as a person would (a cloud launch stays
-    // resident on an ordinary quit), proven from the exact child handle.
-    const { trayQuit, close } = await closeCloudInstance();
+    // resident on an ordinary quit), proven from the exact child handle. A
+    // local instance quits through the app's ordinary quit.
+    const { trayQuit, close } = local ? await closeLocalInstance() : await closeCloudInstance();
     const unclean = cleanQuitProblems(close);
     if (unclean.length > 0) {
       throw new Error(
@@ -947,14 +995,23 @@ async function restart(reason) {
     electronExit = null;
     mainPage = null;
     current = { generation: ++generation, window: null, refs: new Set() };
+    // This launch's own window marks, from its start (VC-1203).
+    for (const key of ["checkingWindowShown", "checkingWindowLoadedApp", "firstWindow"])
+      delete timings[key];
+    const launchStart = Math.round(performance.now() - t0);
     const { live } = await startElectron(launchEnv);
     await waitUntil("the app's agent socket", () => pathExists(L.appSocket), { timeout: 30_000 });
     restarts += 1;
     const ms = Math.round(performance.now() - started);
+    const windows = Object.fromEntries(
+      ["checkingWindowShown", "checkingWindowLoadedApp", "firstWindow"]
+        .filter((key) => timings[key] !== undefined)
+        .map((key) => [key, timings[key] - launchStart]),
+    );
     slog(`restart ${restarts} (${reason}): pid ${electronPid}, guard re-verified`);
-    transcript({ cmd: "restart", reason, restarts, electronPid, ms, close: close.kind });
+    transcript({ cmd: "restart", reason, restarts, electronPid, ms, close: close.kind, windows });
     await recordMembers();
-    return { restarts, electronPid, ms, guard: Object.keys(live.trapped).length };
+    return { restarts, electronPid, ms, windows, guard: Object.keys(live.trapped).length };
   } finally {
     restarting = false;
   }
@@ -1165,6 +1222,11 @@ async function handle(cmd, args) {
     }
     case "restart":
       return restart(String(args.reason ?? "requested"));
+    case "relaunch":
+      // A local instance quit and launched again on the same profile and
+      // database: a routine relaunch, as measured for VC-1203.
+      if (spec.cloud || spec.deployment) throw new Error("relaunch is local; use restart");
+      return restart("relaunch", { local: true });
     case "restore-restart":
       return restoreRestart(args);
     case "runner-power": {
@@ -1276,6 +1338,24 @@ async function cloudTrayQuit() {
  * still running is closed the bounded way, while Playwright can reach it. A
  * missing or mismatched handle throws: never read as a clean quit.
  */
+/** A local instance's ordinary quit, proven from the exact child handle. */
+async function closeLocalInstance() {
+  const child = electronChild;
+  const pid = electronPid;
+  let close = observedChildExit(child, pid);
+  if (close === null) {
+    try {
+      // A large profile's ordinary quit (host stop, WAL checkpoint) can take
+      // seconds; it is given them before any signal.
+      close = await closeAppBounded(app, { closeGraceMs: 30_000 });
+    } catch (error) {
+      close = observedChildExit(child, pid);
+      if (close === null) throw error;
+    }
+  }
+  return { trayQuit: null, close };
+}
+
 async function closeCloudInstance() {
   requireCloudLaunch();
   const child = electronChild;

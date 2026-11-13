@@ -112,6 +112,11 @@ export interface ThemeIpcHooks {
    * regardless of, the hint's persistent write.
    */
   onPlaneBackgroundChanged?(color: string, sender: WebContents): void;
+  /**
+   * The workbench's hint was stored: the next launch's first paint. Called
+   * after the row is written, never for Settings' previews.
+   */
+  onFirstPaintStored?(hint: FirstPaintHint): void;
 }
 
 /** The desktop surfaces {@link desktopThemeHooks} repaints, as ports. */
@@ -266,6 +271,7 @@ export function registerThemeIpcHandlers(
       const plane = input.planeBackground;
       if (plane !== undefined && isHexColor(plane)) hooks.onPlaneBackgroundChanged?.(plane, sender);
       setFirstPaintHint(db, hint, deps.now());
+      hooks.onFirstPaintStored?.(hint);
       hooks.onFirstPaintChanged?.(hint, sender);
       return { ok: true };
     },

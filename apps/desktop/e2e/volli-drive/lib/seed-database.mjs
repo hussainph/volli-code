@@ -52,7 +52,22 @@ export async function seedDatabase(source, target, platform = process.platform) 
 /** The schema-upgrade window's page: shown before the app's own window, never driven. */
 export function isUpdatingPage(url) {
   try {
-    return new URL(url).pathname === "/updating.html";
+    const parsed = new URL(url);
+    return parsed.pathname === "/updating.html" && parsed.searchParams.get("work") !== "check";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A routine launch's database check, on the app's own window (VC-1203): the
+ * same page with `work=check`. The window becomes the app's once the app has
+ * loaded into it.
+ */
+export function isCheckingPage(url) {
+  try {
+    const parsed = new URL(url);
+    return parsed.pathname === "/updating.html" && parsed.searchParams.get("work") === "check";
   } catch {
     return false;
   }

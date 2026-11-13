@@ -11,11 +11,17 @@
  * whole upgrade, and the host opens the database only after the worker has
  * closed it.
  *
+ * Every launch with a large database comes through here (VC-1203), not only
+ * one that upgrades: a routine open's preflight `quick_check` reads every
+ * page, which is seconds of main on a large profile (`databaseStartupWork`). With nothing pending the
+ * worker's open migrates nothing, so it is that check, the same one, every
+ * launch, on another thread.
+ *
  * The worker's answer is one of three:
  *
- * - **Upgraded**, with the identity of the file it closed. The host's own
- *   open then skips the routine quick check while the file is still exactly
- *   that one: the worker just asked it.
+ * - **Opened**, upgraded if it was older, with the identity of the file it
+ *   closed. The host's own open then skips the routine quick check while the
+ *   file is still exactly that one: the worker just asked it.
  * - **Refused**, already classified and worded here (an error object does not
  *   cross a thread). The host goes degraded with it and does not try again on
  *   its own thread, which would repeat a long refusal there.

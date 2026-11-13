@@ -5,15 +5,32 @@
  * host's own open skip the quick check the worker just ran.
  */
 import Database from "better-sqlite3";
-import { copyFileSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  copyFileSync,
+  mkdtempSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+  writeSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { captureHostLog, type CapturedHostLog } from "../testing/log";
 import { recoveryPendingPath } from "./recovery-pending";
-import { checkedDatabaseFile, openVolliDb, pendingDatabaseUpgrade } from "./database-file";
-import { runDatabaseUpgradeWorker } from "./database-upgrade";
+import {
+  checkedDatabaseFile,
+  databaseStartupWork,
+  openVolliDb,
+  pendingDatabaseUpgrade,
+  ROUTINE_CHECK_OFF_MAIN_BYTES,
+} from "./database-file";
+import { prepareDbOpenFailure, runDatabaseUpgradeWorker } from "./database-upgrade";
 import type { FileCloneDeps } from "./file-clone";
 import { migrate, SCHEMA_HEAD } from "./migrations";
 import { MIN_READER_VERSION_KEY } from "./schema-compatibility";
@@ -74,6 +91,90 @@ describe("pendingDatabaseUpgrade", () => {
     const fresh = join(dir!, "fresh.db");
     new Database(fresh).close();
     expect(pendingDatabaseUpgrade(fresh)).toBeNull();
+  });
+});
+
+describe("databaseStartupWork", () => {
+  it("sends every upgrade and every large database to the worker, and leaves the rest to the host", () => {
+    const dbPath = olderDatabase();
+    expect(databaseStartupWork(dbPath)).toEqual({
+      kind: "upgrade",
+      fromVersion: FROM,
+      toVersion: SCHEMA_HEAD,
+    });
+    openVolliDb(dbPath).close();
+    // Nothing to migrate is still the routine check, on every launch, off
+    // main from the size where it can take long; below it, on main as before.
+    const bytes = statSync(dbPath).size;
+    expect(databaseStartupWork(dbPath, bytes)).toEqual({ kind: "check", bytes });
+    expect(databaseStartupWork(dbPath, bytes + 1)).toBeNull();
+    expect(databaseStartupWork(dbPath)).toBeNull();
+    expect(ROUTINE_CHECK_OFF_MAIN_BYTES).toBeGreaterThan(bytes);
+    // A WAL's frames are read by the check too.
+    writeFileSync(`${dbPath}-wal`, Buffer.alloc(8));
+    expect(databaseStartupWork(dbPath, bytes + 8)).toEqual({ kind: "check", bytes: bytes + 8 });
+    rmSync(`${dbPath}-wal`);
+    writeFileSync(recoveryPendingPath(dbPath), "{}");
+    expect(databaseStartupWork(dbPath, 0)).toBeNull();
+    rmSync(recoveryPendingPath(dbPath));
+    expect(databaseStartupWork(join(dir!, "missing.db"), 0)).toBeNull();
+    const damaged = join(dir!, "damaged.db");
+    writeFileSync(damaged, "not a database, and long enough to have a header to read....");
+    expect(databaseStartupWork(damaged, 0)).toBeNull();
+  });
+});
+
+/** Overwrites one page of a closed database in the middle of `app_state`'s table b-tree. */
+function damageAppStatePage(dbPath: string): void {
+  const db = new Database(dbPath);
+  const insert = db.prepare("INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, 1)");
+  db.transaction(() => {
+    for (let i = 0; i < 400; i++) insert.run(`filler-${i}`, "x".repeat(200));
+  })();
+  const { rootpage } = db
+    .prepare("SELECT rootpage FROM sqlite_schema WHERE name = 'app_state'")
+    .get() as { rootpage: number };
+  const pageSize = db.pragma("page_size", { simple: true }) as number;
+  db.pragma("wal_checkpoint(TRUNCATE)");
+  db.close();
+  const fd = openSync(dbPath, "r+");
+  try {
+    writeSync(fd, Buffer.alloc(pageSize, 0xa5), 0, pageSize, (rootpage - 1) * pageSize);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+describe("a routine launch's check in the worker (VC-1203)", () => {
+  it("hands back a clean file's identity, so the host's open does not ask again", async () => {
+    const dbPath = olderDatabase();
+    openVolliDb(dbPath).close();
+    const outcome = await upgrade(dbPath);
+    expect(outcome).toEqual({ ok: true, checked: checkedDatabaseFile(dbPath) });
+    if (outcome?.ok !== true || outcome.checked === null) throw new Error("no handoff");
+    const count = quickChecks();
+    openVolliDb(dbPath, { checked: outcome.checked }).close();
+    expect(count()).toBe(0);
+  });
+
+  it("refuses a damaged file exactly as the host's own open does, leaving it as it was", async () => {
+    const dbPath = olderDatabase();
+    openVolliDb(dbPath).close();
+    damageAppStatePage(dbPath);
+    const before = readFileSync(dbPath);
+
+    const outcome = await upgrade(dbPath);
+    let onMain: unknown;
+    try {
+      openVolliDb(dbPath).close();
+    } catch (error) {
+      onMain = error;
+    }
+    expect(onMain).toBeInstanceOf(Error);
+    expect(outcome).toEqual({ ok: false, ...prepareDbOpenFailure(onMain, false) });
+    // A damaged b-tree page: the quick check refuses it (here SQLite throws first).
+    expect(outcome?.ok === false && outcome.message).toMatch(/malformed|integrity check/);
+    expect(readFileSync(dbPath).equals(before)).toBe(true);
   });
 });
 

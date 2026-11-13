@@ -611,7 +611,23 @@ until its remaining desktop dependencies move.
   again; an upgrade hands back the closed file's identity, and while the file
   is still exactly that one the host's own open skips the quick check the
   worker just ran. A worker that gives no answer leaves the host to open the
-  file itself, as before. The safety copy is `cp -c` on macOS
+  file itself, as before.
+- **Every launch's check runs there too (VC-1203).** The routine open's
+  preflight `quick_check` reads every page: seconds of main on a large
+  profile. `databaseStartupWork` (header bytes and sizes only) sends every
+  database of 16 MiB or more (with its WAL) through the same worker, not only
+  one that upgrades: with nothing pending the worker's open is that check,
+  unchanged, every launch. A smaller file is checked on main as before: it
+  takes milliseconds there, less than starting the worker, and no window
+  flashes up for it. Its
+  answer is used exactly as an upgrade's is: a clean file's identity lets the
+  host's open skip asking again, a refusal goes straight to the degraded host
+  and its recovery screen, no answer means the host opens on its own thread.
+  No file yet, a pending swap and an unreadable header also stay with the
+  host's own open, which answers each of them at once. Quitting during the check
+  closes the windows at once; the process ends when the check's read does
+  (a native SQLite call cannot be interrupted), and the check's handle is
+  read-only, so the file is left as it was. The safety copy is `cp -c` on macOS
   (`src/db/file-clone.ts`): an APFS clone, taken after the checkpoint while
   the open lock is held, restamped with the time it was taken, and still
   verified before it is published; Node's `COPYFILE_FICLONE` never clones on

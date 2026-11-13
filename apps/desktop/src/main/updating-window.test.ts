@@ -88,11 +88,16 @@ beforeEach(() => {
 
 describe("updatingPageUrl", () => {
   it("names the mode on the bundle's page, or the dev server's", () => {
-    expect(updatingPageUrl("dark", undefined)).toBe(
-      "volli-app://bundle/updating.html?appearance=dark",
+    const dark = { appearance: "dark", background: "#45291e" } as const;
+    const light = { appearance: "light", background: "#f6d4c6" } as const;
+    expect(updatingPageUrl(dark, undefined)).toBe(
+      "volli-app://bundle/updating.html?appearance=dark&background=%2345291e",
     );
-    expect(updatingPageUrl("light", "http://localhost:5173/")).toBe(
-      "http://localhost:5173/updating.html?appearance=light",
+    expect(updatingPageUrl(light, "http://localhost:5173/")).toBe(
+      "http://localhost:5173/updating.html?appearance=light&background=%23f6d4c6",
+    );
+    expect(updatingPageUrl(light, undefined, "check")).toBe(
+      "volli-app://bundle/updating.html?appearance=light&background=%23f6d4c6&work=check",
     );
   });
 });
@@ -102,7 +107,12 @@ describe("openUpdatingWindow", () => {
     theme.shouldUseDarkColors = false;
     openUpdatingWindow({ devRendererUrl: undefined, policy });
     const [window] = windows;
-    expect(window?.url).toBe("volli-app://bundle/updating.html?appearance=light");
+    // The page paints the window's own edge: the default canvas, as a first-ever launch does.
+    const url = new URL(window?.url ?? "");
+    expect(window?.url?.split("?")[0]).toBe("volli-app://bundle/updating.html");
+    expect(url.searchParams.get("appearance")).toBe("light");
+    expect(url.searchParams.get("background")).toBe(window?.options["backgroundColor"]);
+    expect(url.searchParams.has("work")).toBe(false);
     expect(window?.options).toMatchObject({
       show: false,
       resizable: false,
