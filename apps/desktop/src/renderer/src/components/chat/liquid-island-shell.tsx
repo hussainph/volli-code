@@ -2,7 +2,8 @@ import * as React from "react";
 import { motion } from "motion/react";
 import { middleTruncatePayload, type TurnActivity } from "@renderer/chat/turn-activity";
 import type { IslandFlash } from "@volli/session-presentation";
-import { liquidIslandGeometry } from "./liquid-island-geometry";
+import { liquidIslandGeometry, liquidIslandRise } from "./liquid-island-geometry";
+import type { IslandClearance } from "./island-clearance";
 import { GLASS_MOTION } from "@renderer/lib/glass-motion";
 import "./liquid-island.css";
 
@@ -135,6 +136,7 @@ export function LiquidIslandShell({
   populated,
   exitKind,
   reduce,
+  clearance,
   children,
 }: {
   activity: TurnActivity | null;
@@ -142,6 +144,8 @@ export function LiquidIslandShell({
   populated: boolean;
   exitKind: "done" | "abort";
   reduce: boolean;
+  /** Where the bead's rise above this box is published, for the jump-to-latest button. */
+  clearance?: IslandClearance | undefined;
   children: React.ReactNode;
 }) {
   const root = React.useRef<HTMLDivElement>(null);
@@ -157,6 +161,15 @@ export function LiquidIslandShell({
   const measure = React.useRef<HTMLSpanElement>(null);
   const maskId = React.useId().replaceAll(":", "");
   const previousPicture = React.useRef<HTMLDivElement | null>(null);
+  // Read by the draw loop, which outlives any one render's props.
+  const clearanceSink = React.useRef(clearance);
+  const rise = React.useRef(0);
+  React.useLayoutEffect(() => {
+    clearanceSink.current = clearance;
+    clearance?.publish(rise.current);
+    // An island that leaves takes its bead with it.
+    return () => clearance?.publish(0);
+  }, [clearance]);
   // Keyed on the words, not the objects: a streamed chunk hands the island a
   // new `activity` object with the same words, and that must not re-measure,
   // re-render the caption or wake the draw loop.
@@ -459,7 +472,7 @@ export function LiquidIslandShell({
         s.presence.snap(0);
         if (input.populated && !input.reduce) s.gulp.velocity += 1.1;
       }
-      const g = liquidIslandGeometry({
+      const shape = {
         islandWidth: s.island.x,
         cluster: s.cluster.x,
         width: s.width.x,
@@ -472,7 +485,14 @@ export function LiquidIslandShell({
         squash: s.width.velocity * 0.0011,
         gulp: s.gulp.x,
         reduce: input.reduce,
-      });
+      };
+      const g = liquidIslandGeometry(shape);
+      rise.current = liquidIslandRise(
+        shape,
+        s.mode === "pinching" || s.mode === "detached",
+        s.mode === "hidden",
+      );
+      clearanceSink.current?.publish(rise.current);
       const standaloneFade = input.reduce
         ? Math.min(1, s.presence.x)
         : s.fade * (s.cluster.x < 0.01 ? Math.min(1, s.presence.x) : 1);

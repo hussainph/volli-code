@@ -3619,7 +3619,16 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   mask-composite: add;
 }
 .chat-transcript:has([data-slot="conversation-scroll-button"]) [data-conversation-viewport] {
-  --scroll-edge-clearance: 48px;
+  --scroll-edge-clearance: calc(48px + var(--island-clearance));
+}
+/* The Activity Island's bead, drawn above its layout box (VC-1210). The island
+ * writes it on the jump-to-latest button and its clear band, which both rise
+ * over the bead. Non-inheriting, so the per-frame write restyles those two
+ * elements and never the transcript inside the band's viewport. */
+@property --island-clearance {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
 }
 
 /* Mirrored peeks: small spatial cue, fixed material, no width or filter tween. */

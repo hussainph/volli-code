@@ -356,6 +356,8 @@ The current turn lives on the island, not in a transcript “Working” line. Wi
 clusters it is one plain pill. Clusters grow beneath it before concave fillets
 form a sessile bead on the rim; emptying reverses the same path. A wide bead may
 overhang a narrow island. The former transcript row reserves 40px of clearance.
+The jump-to-latest button and its clear band ride above the bead, following its
+drawn rise rather than the island's layout box.
 With neither clusters nor a turn, there is no island.
 
 The shell is a drawn union in `--card`, outlined in `--border`, with a shadow
