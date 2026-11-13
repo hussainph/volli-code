@@ -10,11 +10,12 @@ sha256sum -c "${archives[0]}.sha256"
 unpacked=$(mktemp -d)
 data=$(mktemp -d)
 install_home=$(mktemp -d)
+probe=$(mktemp -d)
 log=$(mktemp)
 pid=
 cleanup() {
   if [[ -n "$pid" ]]; then kill -TERM "$pid" 2>/dev/null || true; wait "$pid" || true; fi
-  rm -rf "$unpacked" "$data" "$install_home" "$log"
+  rm -rf "$unpacked" "$data" "$install_home" "$probe" "$log"
 }
 trap cleanup EXIT
 tar -xzf "${archives[0]}" -C "$unpacked"
@@ -26,6 +27,18 @@ export PATH=/usr/bin:/bin
 "$root/bin/node" "$root/lib/probe-codemode.mjs"
 expected_version=$("$root/bin/node" -e 'console.log(require(process.argv[1]).version)' "$root/MANIFEST.json")
 test "$("$root/bin/volli-runner" version)" = "$expected_version"
+# nodejs/node#66366 (wasm-code-gc-workaround.ts): the runner's Node must start
+# with --no-wasm-code-gc. Check the launcher, then the process it starts.
+grep -Fq -- ' --no-wasm-code-gc ' "$root/bin/volli-runner" || {
+  echo 'bin/volli-runner does not start Node with --no-wasm-code-gc' >&2; exit 1;
+}
+printf '%s\n' 'require("node:fs").writeFileSync(process.env.EXECARGV_OUT, JSON.stringify(process.execArgv));' >"$probe/execargv.cjs"
+EXECARGV_OUT="$probe/execargv.json" NODE_OPTIONS="--require=$probe/execargv.cjs" \
+  "$root/bin/volli-runner" version >/dev/null
+"$root/bin/node" -e '
+  const argv = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  if (!argv.includes("--no-wasm-code-gc")) throw new Error("runner execArgv lacks --no-wasm-code-gc: " + JSON.stringify(argv));
+  console.log("runner execArgv: " + JSON.stringify(argv));' "$probe/execargv.json"
 status_code=0
 "$root/bin/volli-runner" status --data-dir "$data" || status_code=$?
 test "$status_code" -eq 3
@@ -68,6 +81,10 @@ for _ in $(seq 1 20); do
   fi
   sleep 0.2
 done
+# The serving process too: the launcher execs Node, so this PID is the runner's.
+tr '\0' '\n' <"/proc/$pid/cmdline" | grep -Fxq -- --no-wasm-code-gc || {
+  echo 'the serving runner was not started with --no-wasm-code-gc' >&2; exit 1;
+}
 kill -TERM "$pid"
 code=0
 wait "$pid" || code=$?
