@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { isUpdatingPage, seedDatabase, seedDatabaseProblems } from "./seed-database.mjs";
+import {
+  isCheckingPage,
+  isUpdatingPage,
+  seedDatabase,
+  seedDatabaseProblems,
+} from "./seed-database.mjs";
 
 const HEADER = Buffer.concat([Buffer.from("SQLite format 3\0", "latin1"), Buffer.alloc(84)]);
 
@@ -36,10 +41,16 @@ test("a closed database seeds an instance; anything else is refused", async () =
   }
 });
 
-test("only the upgrade page is the upgrade page", () => {
+test("only the upgrade page is the upgrade page, and the check page the check's", () => {
   assert.equal(isUpdatingPage("volli-app://bundle/updating.html?appearance=dark"), true);
   assert.equal(isUpdatingPage("http://localhost:5173/updating.html"), true);
   assert.equal(isUpdatingPage("volli-app://bundle/index.html"), false);
   assert.equal(isUpdatingPage("about:blank"), false);
   assert.equal(isUpdatingPage("not a url"), false);
+  const checking = "volli-app://bundle/updating.html?appearance=dark&work=check";
+  assert.equal(isUpdatingPage(checking), false);
+  assert.equal(isCheckingPage(checking), true);
+  assert.equal(isCheckingPage("volli-app://bundle/updating.html?appearance=dark"), false);
+  assert.equal(isCheckingPage("volli-app://bundle/index.html"), false);
+  assert.equal(isCheckingPage("not a url"), false);
 });

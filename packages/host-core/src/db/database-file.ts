@@ -368,6 +368,43 @@ export function pendingDatabaseUpgrade(
 }
 
 /**
+ * The size from which a routine launch's check leaves main (VC-1203). The
+ * quick check reads every page; below this it takes milliseconds on main
+ * (about 200 ms at the slowest rate measured, a cold read under heavy swap),
+ * less than starting the worker costs, and a window must not flash up for it.
+ */
+export const ROUTINE_CHECK_OFF_MAIN_BYTES = 16 * 1024 * 1024;
+
+/**
+ * What a launch's database worker does before the host opens `dbPath`
+ * (VC-1203): `upgrade` for a file {@link pendingDatabaseUpgrade} names, `check`
+ * for any other existing file of at least {@link ROUTINE_CHECK_OFF_MAIN_BYTES}
+ * (with its WAL), whose open still runs the full preflight. Reads the header
+ * bytes and sizes only. `null` (a small file, no file yet, a pending swap, an
+ * unreadable header) is left to the host's own open, which runs the same
+ * check, or answers each of the others at once.
+ */
+export function databaseStartupWork(
+  dbPath: string,
+  offMainFromBytes: number = ROUTINE_CHECK_OFF_MAIN_BYTES,
+):
+  | { readonly kind: "upgrade"; readonly fromVersion: number; readonly toVersion: number }
+  | { readonly kind: "check"; readonly bytes: number }
+  | null {
+  const upgrade = pendingDatabaseUpgrade(dbPath);
+  if (upgrade !== null) return { kind: "upgrade", ...upgrade };
+  try {
+    if (!exists(dbPath) || hasPendingDatabaseRecovery(dbPath)) return null;
+    assertDatabaseHeader(dbPath);
+    const bytes =
+      lstatSync(dbPath).size + (lstatSync(`${dbPath}-wal`, { throwIfNoEntry: false })?.size ?? 0);
+    return bytes >= offMainFromBytes ? { kind: "check", bytes } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Compares the file's applied-migration history with this build's lock
  * (VC-633) and logs one named line when another lineage migrated it. Never
  * refuses and never throws: a diverged file still opens (see

@@ -422,9 +422,29 @@ export async function assertProfileIsolated(app, userDataDir) {
 const BUILT_RENDERER_ENTRY_URL = "volli-app://bundle/index.html";
 
 /**
+ * The page a launch shows while its database work runs off main: `upgrade` in
+ * its own small window (VC-1105), `check` in the app's window, which then
+ * loads the app in its place (VC-1203). `null` for any other page.
+ *
+ * @param {string} url
+ * @returns {"upgrade" | "check" | null}
+ */
+export function databaseWaitPage(url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.pathname !== "/updating.html") return null;
+  return parsed.searchParams.get("work") === "check" ? "check" : "upgrade";
+}
+
+/**
  * The app's own first window. A launch that upgrades an older database may
  * show the "Updating your data" window first (VC-1105); it is skipped, never
- * driven.
+ * driven. A long routine check opens the app's window on its check page
+ * (VC-1203); that window is the app's once the app has loaded into it.
  *
  * @param {import("playwright-core").ElectronApplication} app
  * @param {{ timeout?: number }} [options]
@@ -440,11 +460,17 @@ export async function firstAppWindow(app, { timeout = 15000 } = {}) {
         await page.waitForLoadState("domcontentloaded", {
           timeout: Math.max(1, deadline - Date.now()),
         });
+        if (databaseWaitPage(page.url()) === "check") {
+          await page.waitForURL((url) => databaseWaitPage(url.href) === null, {
+            waitUntil: "domcontentloaded",
+            timeout: Math.max(1, deadline - Date.now()),
+          });
+        }
       } catch {
         skipped.add(page);
         continue;
       }
-      if (new URL(page.url()).pathname !== "/updating.html") return page;
+      if (databaseWaitPage(page.url()) === null) return page;
       skipped.add(page);
     }
     await app.waitForEvent("window", { timeout: Math.max(1, deadline - Date.now()) });

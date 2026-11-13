@@ -13,6 +13,7 @@ import { BrowserWindow, nativeTheme } from "electron";
 import { revealWindow, type quietWindowPolicy } from "@volli/host-core/maintenance";
 
 import { PACKAGED_RENDERER_UPDATING_URL } from "./app-protocol";
+import type { FirstPaintHint } from "../ipc/contract";
 import { resolveFirstPaint } from "./window-theme";
 
 export interface UpdatingWindowOptions {
@@ -21,17 +22,26 @@ export interface UpdatingWindowOptions {
   readonly policy: ReturnType<typeof quietWindowPolicy>;
 }
 
-/** The page URL for a mode: the dev server's in a dev run, the bundle's otherwise. */
+/**
+ * The page URL for a first paint: the dev server's in a dev run, the bundle's
+ * otherwise. The page paints the window's own background itself: a
+ * transparent page shows Chromium's default canvas for its mode, not the
+ * window's. `check` is a routine launch's database check in the app's own
+ * window (VC-1203); the upgrade window names no work.
+ */
 export function updatingPageUrl(
-  appearance: "light" | "dark",
+  paint: FirstPaintHint,
   devRendererUrl: string | undefined,
+  work: "upgrade" | "check" = "upgrade",
 ): string {
   const url = new URL(
     devRendererUrl === undefined
       ? PACKAGED_RENDERER_UPDATING_URL
       : new URL("/updating.html", devRendererUrl).toString(),
   );
-  url.searchParams.set("appearance", appearance);
+  url.searchParams.set("appearance", paint.appearance);
+  url.searchParams.set("background", paint.background);
+  if (work === "check") url.searchParams.set("work", "check");
   return url.toString();
 }
 
@@ -72,7 +82,7 @@ export function openUpdatingWindow(options: UpdatingWindowOptions): { close(): v
   window.once("ready-to-show", () => {
     if (!window.isDestroyed()) revealWindow(window, options.policy);
   });
-  void window.loadURL(updatingPageUrl(paint.appearance, options.devRendererUrl));
+  void window.loadURL(updatingPageUrl(paint, options.devRendererUrl));
   return {
     close: () => {
       if (!window.isDestroyed()) window.destroy();

@@ -1,11 +1,13 @@
 <!doctype html>
 <!--
-  The schema-upgrade window (VC-1105): what a launch shows while the database
-  an older build wrote is upgraded off main. It opens before the database can
-  be read, so it has no bridge and no stored theme: main names the light/dark
-  mode in the query (the system's, as on a first-ever launch) and paints the
-  window edge with the default canvas. It shares the app's tokens and fonts by
-  being a third entry in the same build.
+  What a launch shows while its database work runs off main: the small window
+  of a schema upgrade (VC-1105), or the app's own window during a routine
+  check, until the app loads in its place (VC-1203). It opens before the
+  database can be read, so it uses no bridge and no stored theme: main names
+  the light/dark mode in the query (the upgrade window takes the system's, as
+  on a first-ever launch; the app window the mode it was built with) and paints
+  the window edge. It shares the app's tokens and fonts by being a third entry
+  in the same build.
 
   The CSP is the app's minus everything this page does not do: no workers, no
   images, no connections.

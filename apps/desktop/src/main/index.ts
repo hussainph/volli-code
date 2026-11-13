@@ -88,7 +88,13 @@ import {
   updateInstallQuitInFlight,
 } from "./quit-gate";
 import { isInternalNavigationTarget } from "./navigation";
-import { openUpdatingWindow } from "./updating-window";
+import { openUpdatingWindow, updatingPageUrl } from "./updating-window";
+import { holdDatabaseCheckForSmoke, smokeDatabaseCheckOffMainBytes } from "./database-check-smoke";
+import {
+  firstPaintMirrorPath,
+  firstPaintMirrorWriter,
+  readFirstPaintMirror,
+} from "./first-paint-mirror";
 import { onRawIpc } from "./raw-ipc";
 import { currentRendererId } from "./renderer-call";
 import {
@@ -106,7 +112,8 @@ import {
   handoffInterruptedBackupRestore,
   cancelScheduledBackupRestore,
   runRestoreWorker,
-  pendingDatabaseUpgrade,
+  databaseStartupWork,
+  ROUTINE_CHECK_OFF_MAIN_BYTES,
   runDatabaseUpgradeWorker,
   startOrphanScan,
   createLoginPathBootstrap,
@@ -492,14 +499,23 @@ const worktreeLog = hostLogger("worktree");
  * window factory exists; until then a second launch has nothing to open.
  */
 let revealWindowForLaunch: (() => void) | null = null;
-/** How long an upgrade runs before its window opens (VC-1105). */
-const UPDATING_WINDOW_DELAY_MS = 400;
+/**
+ * How long a launch's database work runs before a window says so (VC-1105,
+ * VC-1203). A small profile's check or upgrade is done well before this, and
+ * nothing flashes up for it.
+ */
+const DATABASE_WAIT_WINDOW_DELAY_MS = 400;
 /** The schema-upgrade window (VC-1105), while a launch has one up. */
 let updatingWindow: { close(): void } | null = null;
 function closeUpdatingWindow(): void {
   updatingWindow?.close();
   updatingWindow = null;
 }
+/**
+ * The app's own window, opened while a routine launch's database check is
+ * still running (VC-1203), until the app loads into it.
+ */
+let checkingWindow: BrowserWindow | null = null;
 if (ownsAppProfile) {
   app.on("second-instance", () => {
     answerSecondInstance(mainWindows()[0], {
@@ -616,10 +632,31 @@ interface CreateWindowOptions {
   readonly revealOnReady?: boolean;
   readonly role?: "main" | "settings";
   readonly bounds?: Partial<Electron.Rectangle>;
+  /**
+   * `check`: the database check's page, until {@link loadAppPage} loads the
+   * app in its place (VC-1203). The app's page otherwise.
+   */
+  readonly page?: "app" | "check";
+}
+
+/**
+ * Loads the app's renderer: in dev, scripts/dev.mjs injects
+ * ELECTRON_RENDERER_URL and runs the Vite dev server there for HMR. Otherwise
+ * the built renderer, through the secure, app-owned origin (including local
+ * packaged-runtime smoke launches). DevTools is not auto-opened — toggle it
+ * with ⌥⌘I when needed.
+ */
+function loadAppPage(window: BrowserWindow, settings: boolean): void {
+  if (isDev && process.env["ELECTRON_RENDERER_URL"]) {
+    void window.loadURL(`${process.env["ELECTRON_RENDERER_URL"]}${settings ? "#settings" : ""}`);
+  } else {
+    void window.loadURL(`${PACKAGED_RENDERER_ENTRY_URL}${settings ? "#settings" : ""}`);
+  }
 }
 
 function createWindow(
-  ptyManager: PtyManager,
+  /** The terminals, once they exist: a window opened before the host has none (VC-1203). */
+  terminals: () => PtyManager | undefined,
   firstPaint: FirstPaintHint,
   options: CreateWindowOptions = {},
 ): BrowserWindow {
@@ -727,7 +764,7 @@ function createWindow(
       names: unsaved,
       skipConfirm: process.env["VOLLI_SKIP_CLOSE_CONFIRM"] === "1",
     });
-    const busy = ptyManager.busySessions(clientEventSink(mainWindow.webContents));
+    const busy = terminals()?.busySessions(clientEventSink(mainWindow.webContents)) ?? [];
     if (unsavedStep === "quit" && busy.length === 0) return;
 
     // Something is at stake, so hold the close while the questions are asked;
@@ -794,14 +831,17 @@ function createWindow(
     openExternal(target);
   });
 
-  // In dev, scripts/dev.mjs injects ELECTRON_RENDERER_URL and runs the Vite dev
-  // server there for HMR. Otherwise load the built renderer through the secure,
-  // app-owned origin (including local packaged-runtime smoke launches).
-  // DevTools is not auto-opened — toggle it with ⌥⌘I when needed.
-  if (isDev && process.env["ELECTRON_RENDERER_URL"]) {
-    mainWindow.loadURL(`${process.env["ELECTRON_RENDERER_URL"]}${settings ? "#settings" : ""}`);
+  if (options.page === "check") {
+    // The paint this window was built with, so the page and the app after it agree.
+    void mainWindow.loadURL(
+      updatingPageUrl(
+        firstPaint,
+        isDev ? process.env["ELECTRON_RENDERER_URL"] : undefined,
+        "check",
+      ),
+    );
   } else {
-    mainWindow.loadURL(`${PACKAGED_RENDERER_ENTRY_URL}${settings ? "#settings" : ""}`);
+    loadAppPage(mainWindow, settings);
   }
   return mainWindow;
 }
@@ -1115,32 +1155,72 @@ const appStartup = app.whenReady().then(async () => {
     // The same http(s)-only gate as the window's own links: a host names the page.
     openExternal: (url) => openExternal(url),
   });
-  // A database an older build wrote is upgraded before anything opens it
-  // (VC-1105): in a worker, holding the open lock, while this window says so.
+  // An older database, or any large one, is opened in a worker before anything
+  // here opens it (VC-1105, VC-1203): the same open, holding the open lock,
+  // with the same checks. An older one is upgraded there; a large one gets the
+  // routine quick check, which reads every page and is seconds on a large
+  // profile. A small one is checked on main by the host's own open, as before.
   // Main stays responsive throughout, and nothing here reads or writes the
-  // database until the worker has closed it.
-  const upgrade = pendingDatabaseUpgrade(dbPath);
+  // database until the worker has closed it. Work still running after a beat
+  // gets a window: an upgrade its small one, a routine check the app's own.
+  const startupWork = databaseStartupWork(
+    dbPath,
+    smokeDatabaseCheckOffMainBytes(process.env) ?? ROUTINE_CHECK_OFF_MAIN_BYTES,
+  );
   let databaseUpgrade: Awaited<ReturnType<typeof runDatabaseUpgradeWorker>> = null;
-  if (upgrade !== null) {
-    log.info("database upgrade started", upgrade);
+  if (startupWork !== null) {
+    const { kind, ...versions } = startupWork;
+    const started = performance.now();
+    log.info(kind === "upgrade" ? "database upgrade started" : "database check started", versions);
     const running = runDatabaseUpgradeWorker(join(__dirname, "database-upgrade-worker.cjs"), {
       dbPath,
       logLevel: hostLogLevel(),
       dev: isDev,
     });
-    // A small profile upgrades in well under a second: no window flashes up
-    // for it. One still running after this long gets the window.
-    const showUpdating = setTimeout(() => {
-      updatingWindow = openUpdatingWindow({
-        devRendererUrl: isDev ? process.env["ELECTRON_RENDERER_URL"] : undefined,
-        policy: nativeWindowPolicy,
-      });
-    }, UPDATING_WINDOW_DELAY_MS);
+    // A login launch may be headed for the menu bar, which cannot be known
+    // until the database is open: it gets no window early.
+    const mayEnterMenuBar = launchedIntoMenuBar({
+      cloud: true,
+      platform: process.platform,
+      argv: process.argv,
+      openedAtLogin: app.getLoginItemSettings().wasOpenedAtLogin,
+    });
+    const showWaiting = setTimeout(() => {
+      const devRendererUrl = isDev ? process.env["ELECTRON_RENDERER_URL"] : undefined;
+      if (kind === "upgrade") {
+        updatingWindow = openUpdatingWindow({ devRendererUrl, policy: nativeWindowPolicy });
+      } else if (!mayEnterMenuBar) {
+        // Painted from the file beside the database, never the database
+        // itself: the look the app will open in (first-paint-mirror.ts).
+        checkingWindow = createWindow(
+          () => ptyManagerRef,
+          resolveFirstPaint({
+            ...readFirstPaintMirror(firstPaintMirrorPath(dbPath)),
+            systemPrefersDark: nativeTheme.shouldUseDarkColors,
+          }),
+          { page: "check" },
+        );
+      } else {
+        return;
+      }
+      log.info("database wait window opened", { work: kind });
+    }, DATABASE_WAIT_WINDOW_DELAY_MS);
     databaseUpgrade = await running;
-    clearTimeout(showUpdating);
-    log.info("database upgrade finished", {
-      ...upgrade,
-      outcome: databaseUpgrade === null ? "no-answer" : databaseUpgrade.ok ? "upgraded" : "refused",
+    // A smoke may hold the launch here, after the answer, to watch the wait
+    // window (database-check-smoke.ts); inert unless it asked.
+    await holdDatabaseCheckForSmoke(process.env);
+    clearTimeout(showWaiting);
+    log.info(kind === "upgrade" ? "database upgrade finished" : "database check finished", {
+      ...versions,
+      outcome:
+        databaseUpgrade === null
+          ? "no-answer"
+          : databaseUpgrade.ok
+            ? kind === "upgrade"
+              ? "upgraded"
+              : "clean"
+            : "refused",
+      durationMs: Math.round(performance.now() - started),
     });
   }
   const hostCore = createHostCore(hostPorts, {
@@ -2395,10 +2475,25 @@ const appStartup = app.whenReady().then(async () => {
   // it actually painted rather than re-deriving them and hoping the two agree.
   // Browser Tab planes composite above the renderer, so its theme cannot show
   // through them; their app-owned states repaint to the plane rung (VC-302).
+  const firstPaintMirror = firstPaintMirrorWriter(firstPaintMirrorPath(dbPath), (error) =>
+    log.warn("couldn't save the first paint beside the database", { error }),
+  );
   registerThemeIpcHandlers(
     dbHandle,
     { fs: fsDeps, now: Date.now, appearance: currentAppearance },
-    desktopThemeHooks({ windows: () => BrowserWindow.getAllWindows(), browserTabs }),
+    {
+      ...desktopThemeHooks({ windows: () => BrowserWindow.getAllWindows(), browserTabs }),
+      // The next launch's window may open before the database can be read
+      // (VC-1203): it is painted from this copy of the first paint's inputs.
+      onFirstPaintStored: (hint) => {
+        if (!dbHandle.ok) return;
+        void firstPaintMirror.write({
+          hint,
+          canvas: getGlobalCanvas(dbHandle.db),
+          appearance: getGlobalAppearance(dbHandle.db),
+        });
+      },
+    },
   );
   const automationExecution =
     runtimeAutomations.kind === "live" ? runtimeAutomations.execution : { kind: "idle" as const };
@@ -2678,8 +2773,8 @@ const appStartup = app.whenReady().then(async () => {
   );
   const pendingWorkspaceNavigation = new Map<number, WorkspaceWindowNavigation>();
   const workspaceRendererReady = new Set<number>();
-  const createOwnedWindow = (options: CreateWindowOptions = {}): BrowserWindow => {
-    const window = createWindow(ptyManager, currentFirstPaint(), options);
+  /** Binds an app window to this host's Browser Tabs, notifications and navigation. */
+  const ownWindow = (window: BrowserWindow): BrowserWindow => {
     // Browser Tabs are live machine resources, not durable documents. Once the
     // app window that can place them closes, keeping invisible remote pages
     // running would leave network/timers with no reachable owner.
@@ -2722,6 +2817,20 @@ const appStartup = app.whenReady().then(async () => {
     });
     return window;
   };
+  const createOwnedWindow = (options: CreateWindowOptions = {}): BrowserWindow =>
+    ownWindow(createWindow(() => ptyManager, currentFirstPaint(), options));
+  /**
+   * The window a routine launch opened during its database check (VC-1203)
+   * becomes the app's: owned like any other, its edge repainted from the
+   * database, and the app loaded in place of the check's page. Its renderer
+   * loads only now, after every handler above, exactly as a new window's does.
+   */
+  const adoptCheckingWindow = (window: BrowserWindow): BrowserWindow => {
+    ownWindow(window);
+    window.setBackgroundColor(currentFirstPaint().background);
+    loadAppPage(window, false);
+    return window;
+  };
   // Settings has no parent: it is movable between displays and never blocks the workbench.
   const settingsFramePath = join(app.getPath("userData"), "settings-window-frame.json");
   let settingsNavigation: SettingsWindowNavigation | null = null;
@@ -2758,7 +2867,7 @@ const appStartup = app.whenReady().then(async () => {
             systemPrefersDark: nativeTheme.shouldUseDarkColors,
           })
         : currentFirstPaint();
-      const window = createWindow(ptyManager, paint, {
+      const window = createWindow(() => ptyManager, paint, {
         role: "settings",
         revealOnReady: false,
         bounds,
@@ -2877,7 +2986,14 @@ const appStartup = app.whenReady().then(async () => {
     argv: process.argv,
     openedAtLogin: app.getLoginItemSettings().wasOpenedAtLogin,
   });
-  const mainWindow = createOwnedWindow({ revealOnReady: !startInMenuBar });
+  // The person may have closed the check's window: the app opens a new one.
+  const waiting = checkingWindow?.isDestroyed() === false ? checkingWindow : null;
+  checkingWindow = null;
+  if (waiting !== null && startInMenuBar) waiting.destroy();
+  const mainWindow =
+    waiting !== null && !startInMenuBar
+      ? adoptCheckingWindow(waiting)
+      : createOwnedWindow({ revealOnReady: !startInMenuBar });
   // The upgrade window gives way to the app's own, once that has painted.
   if (startInMenuBar) closeUpdatingWindow();
   else mainWindow.once("ready-to-show", closeUpdatingWindow);
@@ -3777,8 +3893,11 @@ const appStartup = app.whenReady().then(async () => {
   app.on("activate", () => appWindows.activated(menuBar));
 });
 void appStartup.catch((error: unknown) => {
-  // A boot that stopped part way must not leave the upgrade window claiming work.
+  // A boot that stopped part way must not leave the upgrade window, or the
+  // check's, claiming work.
   closeUpdatingWindow();
+  if (checkingWindow?.isDestroyed() === false) checkingWindow.destroy();
+  checkingWindow = null;
   if (error instanceof SessionRuntimeClosingError) return;
   log.error("failed to finish app startup", { error });
 });

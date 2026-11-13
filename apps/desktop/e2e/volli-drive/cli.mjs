@@ -85,6 +85,8 @@ const HELP = `volli-drive — drive an isolated, keychain-free live Volli build
   restore-restart <id> --gen N --ref eN
                                    click Restart and restore; supervise its local relaunch
   restart <id>                     supervised cloud restart on the same isolated profile
+  relaunch <id>                    quit a local instance and launch it again on the same
+                                   profile and database (a routine relaunch)
   list [--json]                    instances on this machine (max 3 live)
   doctor [<id>] [--json]           no id: is the build about to launch guarded? (static)
                                    with id: up? right build? guard active? isolated?
@@ -712,6 +714,9 @@ async function main() {
       break;
     case "restart":
       out(JSON.stringify(await call(id, "restart", {}, 120_000)));
+      break;
+    case "relaunch":
+      out(JSON.stringify(await call(id, "relaunch", {}, 300_000)));
       break;
     case "windows":
       for (const w of await call(id, "windows")) out(`${w.name}  "${w.title}"  ${w.url}`);
