@@ -34,6 +34,13 @@ names, never content:
 - `gc/<kind>` for a block mostly spent in garbage collection, and
   `off-cpu/wait` for one in which main's own thread barely ran: a blocking
   call, or a machine too busy to schedule it. Neither is code a span can name.
+  The `main stall` log line (not the store row) says which: every line carries
+  main's own `cpuMs` for the window since the previous tick, and the
+  process's `majorFaults` (page-ins: memory pressure, or SQLite's mmap reading
+  cold pages) and `involuntarySwitches` (preemptions: a busy machine). Off the
+  CPU with neither is a blocking call. On a door or span line `cpuMs` bounds the
+  span's own CPU from above, so a span far longer than its `cpuMs` waited in a
+  syscall (an fsync, a WAL checkpoint, a lock).
 - `unattributed/unattributed` for main lag nothing explains. Its `hint` is
   the last door call or span before it: where to start looking, never a claim.
 - `renderer/<operation>` for a window, with the interaction `label`
