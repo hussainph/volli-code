@@ -26,11 +26,30 @@ export const MENU_SURFACE =
   "z-50 min-w-[8rem] max-w-[calc(100vw-2rem)] rounded-menu border border-border bg-popover text-ui text-foreground shadow-overlay";
 
 /**
- * The 4px the rows sit inside. Separate from {@link MENU_SURFACE} because the
- * select surface puts it on the scroll viewport instead — its scroll buttons
- * are siblings of the rows, not part of the padded column.
+ * The 4px the rows sit inside. Separate from {@link MENU_SURFACE} because it
+ * belongs to the scroller, never the box: menus take it through
+ * {@link MENU_VIEWPORT}, and the select surface puts it on Radix's viewport,
+ * whose scroll buttons are siblings of the rows, not part of the padded column.
  */
 export const MENU_SURFACE_PAD = "p-1";
+
+/**
+ * A Radix menu box never scrolls itself; its rows scroll in
+ * {@link MENU_VIEWPORT} inside it. The box carries the glass, and the glass's
+ * rim is an absolutely placed `::after` — painted on a scroller, it is
+ * scrolled content and leaves with the first rows (VC-1222). `overflow-clip`
+ * rather than `overflow-hidden`: a clipped box is not a scroll container, so
+ * no focus or scroll-into-view can ever move it, and it still trims the rows
+ * to the rounded corners. The select surface needs neither: Radix's own
+ * viewport is its scroller.
+ */
+export const MENU_SURFACE_FRAME = "flex flex-col overflow-clip";
+
+/** The one element that scrolls in a menu: the padded column of rows. */
+export const MENU_VIEWPORT = cn(
+  "min-h-0 overflow-x-hidden overflow-y-auto overscroll-contain",
+  MENU_SURFACE_PAD,
+);
 
 /**
  * The half of the open/close every menu surface can always run: the keyframe

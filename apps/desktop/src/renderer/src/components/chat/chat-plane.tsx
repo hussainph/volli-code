@@ -2671,7 +2671,7 @@ export function SessionBlocker({ blocker }: { blocker: SessionBlockerState }) {
       <DropdownMenuTrigger asChild>
         <Button size="sm">{blocker.signInMenu.label}</Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="max-h-72 overflow-y-auto">
+      <DropdownMenuContent align="end" className="max-h-72">
         {blocker.signInMenu.options.map((option) => (
           <DropdownMenuItem key={option.id} onSelect={() => blocker.signInMenu?.choose(option.id)}>
             {option.label}

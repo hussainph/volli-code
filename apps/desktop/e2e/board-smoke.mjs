@@ -1013,7 +1013,9 @@ async function main() {
       await sleep(300);
       const moveTo = page.getByRole("menuitem", { name: "Move to", exact: true });
       const priority = page.getByRole("menuitem", { name: "Priority", exact: true });
-      const rootItems = page.locator('[data-slot="context-menu-content"] > [role="menuitem"]');
+      const rootItems = page.locator(
+        '[data-slot="context-menu-content"] > [data-slot="context-menu-viewport"] > [role="menuitem"]',
+      );
       const rootCount = await rootItems.count();
       const rootRowsWithIcons = await rootItems.evaluateAll(
         (items) => items.filter((item) => item.querySelector(":scope > svg") !== null).length,
@@ -1022,7 +1024,7 @@ async function main() {
       await moveTo.hover();
       await page.getByRole("menuitem", { name: "Todo", exact: true }).waitFor();
       const moveItems = page.locator(
-        '[data-slot="context-menu-sub-content"]:visible > [role="menuitem"]',
+        '[data-slot="context-menu-sub-content"]:visible > [data-slot="context-menu-viewport"] > [role="menuitem"]',
       );
       const moveCount = await moveItems.count();
       const moveRowsWithIcons = await moveItems.evaluateAll(
@@ -1036,7 +1038,7 @@ async function main() {
       await priority.hover();
       await page.getByRole("menuitem", { name: "Low", exact: true }).waitFor();
       const priorityItems = page.locator(
-        '[data-slot="context-menu-sub-content"]:visible > [role="menuitem"]',
+        '[data-slot="context-menu-sub-content"]:visible > [data-slot="context-menu-viewport"] > [role="menuitem"]',
       );
       const priorityCount = await priorityItems.count();
       const priorityRowsWithIcons = await priorityItems.evaluateAll(

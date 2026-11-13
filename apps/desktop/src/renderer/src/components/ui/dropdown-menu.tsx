@@ -21,7 +21,8 @@ import {
   MENU_SHORTCUT,
   MENU_SURFACE,
   MENU_SURFACE_MOTION,
-  MENU_SURFACE_PAD,
+  MENU_SURFACE_FRAME,
+  MENU_VIEWPORT,
 } from "@renderer/components/ui/menu-classes";
 
 function DropdownMenu({ ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
@@ -53,6 +54,7 @@ function DropdownMenuTrigger({
 
 function DropdownMenuContent({
   className,
+  children,
   sideOffset = 4,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Content>) {
@@ -66,14 +68,18 @@ function DropdownMenuContent({
           className={cn(
             MENU_SURFACE,
             "material-floating",
-            MENU_SURFACE_PAD,
+            MENU_SURFACE_FRAME,
             MENU_SURFACE_MOTION,
-            "max-h-[min(var(--radix-dropdown-menu-content-available-height),20rem)] origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto overscroll-contain",
+            "max-h-[min(var(--radix-dropdown-menu-content-available-height),20rem)] origin-(--radix-dropdown-menu-content-transform-origin)",
             className,
           )}
           {...props}
           {...motion}
-        />
+        >
+          <div data-slot="dropdown-menu-viewport" className={MENU_VIEWPORT}>
+            {children}
+          </div>
+        </DropdownMenuPrimitive.Content>
       </GlassSurface>
     </DropdownMenuPrimitive.Portal>
   );
@@ -218,6 +224,7 @@ function DropdownMenuSubTrigger({
 /** Portaled for the reason `ContextMenuSubContent` is: a parent float clips it. */
 function DropdownMenuSubContent({
   className,
+  children,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.SubContent>) {
   const motion = useMotionOriginProps("dropdown-menu", props, false, true);
@@ -229,14 +236,18 @@ function DropdownMenuSubContent({
           className={cn(
             MENU_SURFACE,
             "material-floating",
-            MENU_SURFACE_PAD,
+            MENU_SURFACE_FRAME,
             MENU_SURFACE_MOTION,
-            "max-h-[min(var(--radix-dropdown-menu-content-available-height),20rem)] origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto overscroll-contain",
+            "max-h-[min(var(--radix-dropdown-menu-content-available-height),20rem)] origin-(--radix-dropdown-menu-content-transform-origin)",
             className,
           )}
           {...props}
           {...motion}
-        />
+        >
+          <div data-slot="dropdown-menu-viewport" className={MENU_VIEWPORT}>
+            {children}
+          </div>
+        </DropdownMenuPrimitive.SubContent>
       </GlassSurface>
     </DropdownMenuPrimitive.Portal>
   );

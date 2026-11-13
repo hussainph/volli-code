@@ -225,7 +225,10 @@ async function main() {
     await sleep(400);
     await page.getByRole("menuitem", { name: /Labels/ }).hover();
     await sleep(500);
-    const sub = page.locator('[data-slot="context-menu-sub-content"]').first();
+    // The box never scrolls; its viewport does (VC-1222).
+    const sub = page
+      .locator('[data-slot="context-menu-sub-content"] > [data-slot="context-menu-viewport"]')
+      .first();
     const subGeometry = await sub.evaluate((el) => {
       const r = el.getBoundingClientRect();
       return {
