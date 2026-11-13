@@ -7,7 +7,8 @@
  * database (`user_version` starts at `0`) skips the backup step — there is
  * nothing to protect yet. After success, an existing database may be compacted
  * before exact-name retention deletes older migration copies while preserving
- * the new rollback point.
+ * the new rollback point. Retention checks every older copy in full; the new
+ * one it re-checks only if it is no longer the file the publish verified.
  *
  * A database NEWER than this build is not migrated at all: `openVolliDb`
  * checks it first (`schema-compatibility.ts`), and this runner finds nothing
@@ -43,6 +44,7 @@ import { compactNativeObservationEventId } from "@volli/shared/native-observatio
 import type Database from "better-sqlite3";
 import { logMigrationBackupRetention, pruneMigrationBackups } from "./backup-retention";
 import { assertDatabaseIntegrity } from "./backup-integrity";
+import type { CheckedDatabaseFile } from "./checked-file";
 import { MIGRATION_RECOVERY_ACTION, publishRollbackPoint } from "./database-file";
 import type { FileCloneDeps } from "./file-clone";
 import { timeStep, type UpgradeTimings } from "./upgrade-timings";
@@ -3463,6 +3465,8 @@ export function migrate(
 
   // Only an already-populated database needs a safety copy — a fresh
   // `user_version = 0` db has nothing pre-migration to protect.
+  // The identity of the safety copy this upgrade verified, for retention below.
+  let verifiedCopy: CheckedDatabaseFile | null = null;
   if (currentVersion > 0) {
     // Before anything is written: the safety copy and the rewrite after it
     // need about twice the database free, and running out halfway names
@@ -3479,10 +3483,10 @@ export function migrate(
     }
     // The rollback point is a published database file: durable, verified,
     // and never torn behind the migration it protects (VC-628).
-    publishRollbackPoint(db, dbPath, currentVersion, {
+    verifiedCopy = publishRollbackPoint(db, dbPath, currentVersion, {
       ...(options.timings === undefined ? {} : { timings: options.timings }),
       ...(options.fileClone === undefined ? {} : { fileClone: options.fileClone }),
-    });
+    }).verified;
   }
 
   const applyPendingMigrations = db.transaction(() => {
@@ -3530,10 +3534,12 @@ export function migrate(
 
   // Retention is deliberately last, after the transaction committed, its
   // foreign-key check passed, and compaction returned (including a reported
-  // failure). Fresh databases made no copy, so they do not participate.
+  // failure). Fresh databases made no copy, so they do not participate. The
+  // copy published above is not read again while it is the file it verified;
+  // every older copy is checked in full (VC-1204).
   if (currentVersion > 0) {
     const retentionReport = timeStep(options.timings, "retention", () =>
-      pruneMigrationBackups(dbPath, currentVersion),
+      pruneMigrationBackups(dbPath, currentVersion, undefined, verifiedCopy),
     );
     logMigrationBackupRetention(retentionReport);
   }

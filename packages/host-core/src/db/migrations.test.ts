@@ -981,6 +981,7 @@ describe("migrate — backup integrity", () => {
             if (path === backupPath) throw new Error("transient verification failure");
             verifyMigrationBackup(path);
           },
+          isVerifiedFile: () => false,
           quarantineFile: (path, destination) => {
             if (path === (failure === "base" ? backupPath : `${backupPath}-wal`))
               throw new Error("rename denied");
@@ -1066,6 +1067,9 @@ describe("migrate — backup integrity", () => {
     migrate(db, dbPath);
     db.close();
     const backupPath = `${dbPath}.backup-v55`;
+    // Retention no longer re-reads the copy it just published (VC-1204). A
+    // read-only check of it, as any later retention runs, leaves its sidecars.
+    verifyMigrationBackup(backupPath);
     expect(existsSync(`${backupPath}-wal`)).toBe(true);
     expect(existsSync(`${backupPath}-shm`)).toBe(true);
     copyFileSync(backupPath, dbPath);

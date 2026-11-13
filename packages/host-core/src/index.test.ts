@@ -20,7 +20,7 @@ import type {
 } from "./index";
 import Database from "better-sqlite3";
 import { SCHEMA_HEAD } from "./db/migrations";
-import { checkedDatabaseFile } from "./db/database-file";
+import { checkedDatabaseFile } from "./db/checked-file";
 import { MIN_READER_VERSION_KEY } from "./db/schema-compatibility";
 import { insertProject } from "./db/projects-repo";
 import { testProject } from "./db/test-helpers";

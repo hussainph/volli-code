@@ -5,6 +5,7 @@ import { basename, dirname, join } from "node:path";
 import type { Logger } from "../log/logger";
 import { hostLogger } from "../log/root";
 import { verifyMigrationBackup } from "./backup-integrity";
+import { isCheckedDatabaseFile, type CheckedDatabaseFile } from "./checked-file";
 
 const log = hostLogger("backup-retention");
 
@@ -37,6 +38,8 @@ export interface BackupRetentionFs {
   readFileInfo(path: string): BackupRetentionFileInfo;
   removeFile(path: string): void;
   verifyIntegrity(path: string): void;
+  /** Whether `path` is still exactly the file `verified` describes; throws when unreadable. */
+  isVerifiedFile(path: string, verified: CheckedDatabaseFile): boolean;
   quarantineFile(path: string, destination: string): void;
 }
 
@@ -48,6 +51,7 @@ const nodeFs: BackupRetentionFs = {
   },
   removeFile: (path) => unlinkSync(path),
   verifyIntegrity: verifyMigrationBackup,
+  isVerifiedFile: isCheckedDatabaseFile,
   quarantineFile: (path, destination) => renameSync(path, destination),
 };
 
@@ -85,10 +89,18 @@ function reportEntry(
   return { name: candidate.name, sizeBytes: sizeOf(candidate, fs) };
 }
 
+/**
+ * `verifiedCurrent` is the identity of this run's safety copy as the upgrade
+ * that published it verified it, in this same run (`publishRollbackPoint`).
+ * While the copy is still exactly that file its integrity check is not
+ * repeated; any difference, or an identity that cannot be read, checks it in
+ * full. Older copies are always checked in full.
+ */
 export function pruneMigrationBackups(
   dbPath: string,
   currentVersion: number,
   fs: BackupRetentionFs = nodeFs,
+  verifiedCurrent: CheckedDatabaseFile | null = null,
 ): BackupRetentionReport {
   const report: BackupRetentionReport = { kept: [], removed: [], quarantined: [], failed: [] };
   const directory = dirname(dbPath);
@@ -144,11 +156,19 @@ export function pruneMigrationBackups(
   }
 
   const unsafeNames = new Set<string>();
+  const unchangedSinceVerified = (candidate: MigrationBackupCandidate): boolean => {
+    if (verifiedCurrent === null || candidate !== currentBackup) return false;
+    try {
+      return fs.isVerifiedFile(candidate.path, verifiedCurrent);
+    } catch {
+      return false;
+    }
+  };
   const verify = (candidate: MigrationBackupCandidate): boolean => {
     try {
       const info = fs.readFileInfo(candidate.path);
       if (!info.isFile) throw new Error("safety copy is not a regular file");
-      fs.verifyIntegrity(candidate.path);
+      if (!unchangedSinceVerified(candidate)) fs.verifyIntegrity(candidate.path);
       return true;
     } catch (error) {
       report.failed.push({

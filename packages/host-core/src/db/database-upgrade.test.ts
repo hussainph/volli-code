@@ -23,8 +23,8 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { captureHostLog, type CapturedHostLog } from "../testing/log";
 import { recoveryPendingPath } from "./recovery-pending";
+import { checkedDatabaseFile } from "./checked-file";
 import {
-  checkedDatabaseFile,
   databaseStartupWork,
   openVolliDb,
   pendingDatabaseUpgrade,
