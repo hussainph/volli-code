@@ -225,15 +225,46 @@ async function volliLocalStorageKeys(page) {
   });
 }
 
-/** Drag from `sourceBox`'s centre to `target`, with enough travel for dnd-kit's PointerSensor (distance 4) to activate and dragOver to fire on the target. */
+/**
+ * Drag from `sourceBox`'s centre to `target`, with enough travel for dnd-kit's PointerSensor (distance 4) to activate and dragOver to fire on the target.
+ * Returns where the lifted card was drawn just before release, so a step can assert it stayed under the pointer.
+ */
 async function drag(page, sourceBox, target) {
   await page.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2);
   await page.mouse.down();
   await page.mouse.move(sourceBox.x + sourceBox.width / 2 + 30, sourceBox.y + 40, { steps: 8 });
   await page.mouse.move(target.x, target.y, { steps: 20 });
   await sleep(250);
+  const held = await liftedCardUnderPointer(page, target);
   await page.mouse.up();
   await waitForDragSettled(page);
+  return held;
+}
+
+/**
+ * Whether the drag preview's on-screen box contains the pointer (VC-1213). The
+ * preview is dnd-kit's `position: fixed` wrapper; inside any contained,
+ * transformed or zoomed ancestor its viewport pixels are re-based, and the card
+ * lands away from the hand by that ancestor's origin.
+ */
+async function liftedCardUnderPointer(page, pointer) {
+  const box = await page.evaluate(() => {
+    const wrapper = document.querySelector("[data-ticket-drag-preview]")?.parentElement;
+    if (!wrapper) return null;
+    const r = wrapper.getBoundingClientRect();
+    return { x: r.x, y: r.y, width: r.width, height: r.height };
+  });
+  const ok =
+    box !== null &&
+    box.width > 0 &&
+    pointer.x >= box.x &&
+    pointer.x <= box.x + box.width &&
+    pointer.y >= box.y &&
+    pointer.y <= box.y + box.height;
+  const at = box
+    ? `${Math.round(box.x)},${Math.round(box.y)} ${Math.round(box.width)}x${Math.round(box.height)}`
+    : "none";
+  return { ok, detail: `pointer=${Math.round(pointer.x)},${Math.round(pointer.y)} preview=${at}` };
 }
 
 /**
@@ -703,7 +734,7 @@ async function main() {
     // === 8. Cross-column drag: Backlog's first card into Doing's body =======
     await attempt(
       8,
-      "Cross-column drag: first Backlog card into Doing decrements/increments counts",
+      "Cross-column drag: the lifted card stays under the pointer; first Backlog card into Doing decrements/increments counts",
       async () => {
         const before = {
           backlog: await columnCount(page, "Backlog"),
@@ -716,17 +747,24 @@ async function main() {
           .boundingBox();
         const doingHeaderBox = await columnHeaderBox(page, "Doing");
         if (!cardBox || !doingHeaderBox) throw new Error("card or Doing header not found");
-        await drag(page, cardBox, { x: doingHeaderBox.x + 20, y: doingHeaderBox.y + 120 });
+        const held = await drag(page, cardBox, {
+          x: doingHeaderBox.x + 20,
+          y: doingHeaderBox.y + 120,
+        });
         const after = {
           backlog: await waitForColumnCount(page, "Backlog"),
           doing: await waitForColumnCount(page, "Doing"),
         };
         const ok =
+          held.ok &&
           before.backlog !== null &&
           before.doing !== null &&
           after.backlog === before.backlog - 1 &&
           after.doing === before.doing + 1;
-        return { ok, detail: `before=${JSON.stringify(before)} after=${JSON.stringify(after)}` };
+        return {
+          ok,
+          detail: `${held.detail} before=${JSON.stringify(before)} after=${JSON.stringify(after)}`,
+        };
       },
     );
 
