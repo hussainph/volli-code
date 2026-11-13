@@ -401,5 +401,9 @@ export function useIslandTabs(
     [api, flash, hostOf, openBrowserBeside, openTrace, rawTabs, request],
   );
 
-  return React.useMemo(() => ({ model: { tabs }, actions }), [tabs, actions]);
+  // The model keeps its identity while the tabs do, whatever the verbs do: a
+  // mount that hands a fresh callback each render (the peek's `onOpenSession`)
+  // must not make the island read as new content (VC-1215).
+  const model = React.useMemo(() => ({ tabs }), [tabs]);
+  return React.useMemo(() => ({ model, actions }), [model, actions]);
 }

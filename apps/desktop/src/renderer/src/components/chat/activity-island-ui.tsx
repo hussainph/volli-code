@@ -1363,6 +1363,20 @@ export function ActivityIsland({
   const centerRef = React.useRef<HTMLDivElement>(null);
   const columnWidth = useIslandColumnWidth(centerRef);
 
+  // What may move a cluster inside the pill: the island's own content, never
+  // its surroundings (VC-1215). A `layout` element snapshots its page position
+  // on every render it takes part in, so a pane drag that re-renders the plane
+  // each frame (a split divider, the details rail) read as every cluster
+  // moving by the pane's step, and each one sprang after the pane from where it
+  // had been while the drawn outline followed at once — icons flying outside
+  // it. Tied to this value, a cluster measures only when the content that
+  // places it changes. The feel is the caller's override, not the resolved
+  // copy, which is a new object on every render.
+  const clusterLayout = React.useMemo(
+    () => [model, feelOverride, reduce] as const,
+    [model, feelOverride, reduce],
+  );
+
   const clusterProps = { feel, reduce, columnWidth };
   const clusterNode = (cluster: IslandCluster): React.ReactNode => {
     switch (cluster) {
@@ -1448,6 +1462,7 @@ export function ActivityIsland({
                           <motion.span
                             key={cluster}
                             layout
+                            layoutDependency={clusterLayout}
                             className="flex shrink-0 items-center gap-2"
                             {...clusterPresence(reduce)}
                           >
