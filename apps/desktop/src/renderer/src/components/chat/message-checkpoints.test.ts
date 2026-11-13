@@ -233,6 +233,14 @@ describe("snippets", () => {
 });
 
 describe("cost per streamed update", () => {
+  it("cuts a fresh snippet for a new message object, even under the same id", () => {
+    const [before] = messageCheckpoints([user("edited", text("First words"))]);
+    const [after] = messageCheckpoints([user("edited", text("Second words"))]);
+    expect(before!.prompt).toBe("First words");
+    expect(after!.prompt).toBe("Second words");
+    expect(after!.label).toBe("Second words");
+  });
+
   it("cuts each message's snippet once, however often the rows are re-read", () => {
     let reads = 0;
     const parts: UIMessage["parts"] = [text("A long ask")];

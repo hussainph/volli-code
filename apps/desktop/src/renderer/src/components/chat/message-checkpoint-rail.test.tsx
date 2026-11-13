@@ -179,6 +179,26 @@ describe("MessageCheckpointRail", () => {
     expect(card()).not.toBeNull();
   });
 
+  it("previews a chosen mark again once the pointer leaves it and comes back", () => {
+    const jump = vi.fn();
+    navigator.attach(jump);
+    render(THREE);
+    const [mark, other] = [marks()[1]!, marks()[2]!];
+    over(mark);
+    act(() => vi.advanceTimersByTime(200));
+    expect(card()).not.toBeNull();
+    act(() => mark.click());
+    act(() => vi.advanceTimersByTime(500));
+    expect(card()).toBeNull();
+
+    out(mark, other);
+    act(() => vi.advanceTimersByTime(500));
+    out(other, mark);
+    over(mark);
+    act(() => vi.advanceTimersByTime(200));
+    expect(card()?.textContent).toBe("Ask b");
+  });
+
   it("closes the card when the rail loses its box (the pane narrowed)", () => {
     render(THREE);
     act(() => marks()[1]!.focus());

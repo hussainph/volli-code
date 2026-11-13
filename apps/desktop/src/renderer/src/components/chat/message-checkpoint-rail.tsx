@@ -63,7 +63,8 @@ export const MessageCheckpointRail = React.memo(function MessageCheckpointRail({
   React.useEffect(() => () => window.clearTimeout(timer.current), []);
   // The mark just chosen. Its card stays shut until the pointer or focus
   // leaves it: Radix queues its own open on focus (a zero-delay timer), and a
-  // press can land before that timer does.
+  // press can land before that timer does. The leaving is heard on the mark
+  // itself (`leaveMark`): Radix reports no close for a card already shut.
   const chosen = React.useRef<string | null>(null);
   const setOpen = React.useCallback((id: string, open: boolean, now = false) => {
     if (chosen.current === id) {
@@ -108,6 +109,9 @@ export const MessageCheckpointRail = React.memo(function MessageCheckpointRail({
     },
     [setOpen],
   );
+  const leaveMark = React.useCallback((id: string) => {
+    if (chosen.current === id) chosen.current = null;
+  }, []);
 
   // Keep the current mark inside a rail that scrolls (a long chat). Read only
   // when the current mark changes, never per frame.
@@ -213,6 +217,7 @@ export const MessageCheckpointRail = React.memo(function MessageCheckpointRail({
             open={checkpoint.id === preview}
             onOpenChange={setOpen}
             onFocusMark={focusMark}
+            onLeaveMark={leaveMark}
             onJump={jump}
             readReply={readReply}
           />
@@ -229,6 +234,7 @@ const CheckpointMark = React.memo(function CheckpointMark({
   open,
   onOpenChange,
   onFocusMark,
+  onLeaveMark,
   onJump,
   readReply,
 }: {
@@ -238,6 +244,8 @@ const CheckpointMark = React.memo(function CheckpointMark({
   open: boolean;
   onOpenChange(id: string, open: boolean): void;
   onFocusMark(id: string): void;
+  /** The pointer or focus left the mark. */
+  onLeaveMark(id: string): void;
   onJump(id: string): void;
   readReply(id: string): string | null;
 }) {
@@ -263,6 +271,8 @@ const CheckpointMark = React.memo(function CheckpointMark({
             aria-describedby={reply === null ? undefined : replyId}
             tabIndex={tabStop ? 0 : -1}
             onFocus={() => onFocusMark(id)}
+            onBlur={() => onLeaveMark(id)}
+            onPointerLeave={() => onLeaveMark(id)}
             onClick={() => onJump(id)}
           >
             <span aria-hidden className="message-checkpoint-line" />

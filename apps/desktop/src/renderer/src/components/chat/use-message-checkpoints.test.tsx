@@ -78,13 +78,14 @@ describe("useCheckpointNavigation", () => {
     expect(anchorAt).toHaveBeenCalledWith("u1");
     expect(control.stopFollowing).toHaveBeenCalled();
 
-    // The commit that mounts it: one search, and the message is not drawn.
+    // The commit that mounts it: the landing's one search (the message is not
+    // drawn), and the observer's, for a new set of mounted messages.
     render("s1", 1);
-    expect(searches).toHaveBeenCalledTimes(1);
+    expect(searches).toHaveBeenCalledTimes(2);
     // Streamed commits after it search for nothing.
     render("s1", 1);
     render("s1", 1);
-    expect(searches).toHaveBeenCalledTimes(1);
+    expect(searches).toHaveBeenCalledTimes(2);
   });
 
   it("drops a pending jump when the plane switches Session in place", () => {
@@ -130,5 +131,73 @@ describe("useCheckpointNavigation", () => {
     render("s2", 0);
     act(() => notePinned(true));
     expect(navigator.current()).toBe("u9");
+  });
+
+  describe("with an IntersectionObserver", () => {
+    /** Observers the hook built, each reporting when the test says. */
+    const observers: { targets: Element[]; report(ids: readonly string[]): void }[] = [];
+    beforeEach(() => {
+      observers.length = 0;
+      vi.stubGlobal(
+        "IntersectionObserver",
+        class {
+          targets: Element[] = [];
+          constructor(callback: IntersectionObserverCallback) {
+            const targets = this.targets;
+            observers.push({
+              targets,
+              report: (ids) =>
+                callback(
+                  targets.map(
+                    (target) =>
+                      ({
+                        target,
+                        isIntersecting: ids.includes(
+                          (target as HTMLElement).dataset["messageCheckpoint"]!,
+                        ),
+                      }) as IntersectionObserverEntry,
+                  ),
+                  {} as IntersectionObserver,
+                ),
+            });
+          }
+          observe(target: Element) {
+            this.targets.push(target);
+          }
+          disconnect() {}
+        },
+      );
+    });
+
+    it("keeps the last answer while a rebuilt observer has not reported yet", () => {
+      for (const index of [3, 5, 7]) drawn(`u${index}`, () => 0);
+      render("s1", 0);
+      act(() => notePinned(false));
+      act(() => observers[0]!.report(["u3", "u5"]));
+      expect(navigator.current()).toBe("u5");
+
+      // A page leaves the window: a new observer, no report yet. An empty
+      // answer here would light u1, the message above the new window.
+      render("s1", 2);
+      expect(observers).toHaveLength(2);
+      expect(navigator.current()).toBe("u5");
+
+      act(() => observers[1]!.report(["u3"]));
+      expect(navigator.current()).toBe("u3");
+    });
+
+    it("drops the last answer at once when the window holds no message to observe", () => {
+      for (const index of [3, 5]) drawn(`u${index}`, () => 0);
+      render("s1", 0);
+      act(() => notePinned(false));
+      act(() => observers[0]!.report(["u3", "u5"]));
+      expect(navigator.current()).toBe("u5");
+
+      // A window holding only agent rows: nothing is observed, nothing will report.
+      scroller.replaceChildren();
+      render("s1", 10);
+      expect(observers).toHaveLength(1);
+      expect(navigator.current()).toBe("u9");
+    });
   });
 });

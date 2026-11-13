@@ -229,7 +229,13 @@ export function useCheckpointNavigation(input: {
   );
   React.useEffect(() => {
     const scroller = control.scroller();
-    if (scroller === null || typeof IntersectionObserver === "undefined") {
+    const nodes =
+      scroller === null
+        ? []
+        : [...scroller.querySelectorAll<HTMLElement>("[data-message-checkpoint]")];
+    // Nothing to observe means nothing will ever report: a window holding no
+    // message of the person's has none above the line, and says so now.
+    if (scroller === null || nodes.length === 0 || typeof IntersectionObserver === "undefined") {
       aboveLine.current = new Set();
       publish();
       return;
@@ -253,8 +259,7 @@ export function useCheckpointNavigation(input: {
       },
       { root: scroller, rootMargin: READING_LINE },
     );
-    for (const node of scroller.querySelectorAll<HTMLElement>("[data-message-checkpoint]"))
-      observer.observe(node);
+    for (const node of nodes) observer.observe(node);
     return () => observer.disconnect();
   }, [control, mountedKey, publish]);
 

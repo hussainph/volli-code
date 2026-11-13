@@ -13,7 +13,8 @@
  *   ?real            each reply is a real Session's shape: tool calls with output,
  *                    markdown and a distinct code block, so nothing is cached
  *   ?cloud           a cloud launch, for the team row in the plane's corner
- *                    (no backend: the row shows a failed read and Retry)
+ *                    (no backend: the row shows a failed read and Retry;
+ *                    ?cloud=long makes that reason 300 characters)
  */
 import {
   ACTIVITY_METADATA_KEY,
@@ -251,7 +252,16 @@ export function seed() {
       deployment: "local",
     });
   // The team row at its tallest: a failed read shows its reason and Retry.
-  if (params.has("cloud")) useCloudTeamStore.setState({ readError: "Team unavailable" });
+  // `?cloud=long`: a backend refusal at its 300-character cap, to see it wrap.
+  if (params.has("cloud"))
+    useCloudTeamStore.setState({
+      readError:
+        params.get("cloud") === "long"
+          ? "The workspace member directory could not be read because the backend refused the request: "
+              .repeat(4)
+              .slice(0, 300)
+          : "Team unavailable",
+    });
   const messages = transcriptFor();
   const sessions = Object.fromEntries(
     SESSIONS.map((id) => {
