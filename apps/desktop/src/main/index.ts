@@ -88,6 +88,7 @@ import {
   updateInstallQuitInFlight,
 } from "./quit-gate";
 import { isInternalNavigationTarget } from "./navigation";
+import { openUpdatingWindow } from "./updating-window";
 import { onRawIpc } from "./raw-ipc";
 import { currentRendererId } from "./renderer-call";
 import {
@@ -105,6 +106,8 @@ import {
   handoffInterruptedBackupRestore,
   cancelScheduledBackupRestore,
   runRestoreWorker,
+  pendingDatabaseUpgrade,
+  runDatabaseUpgradeWorker,
   startOrphanScan,
   createLoginPathBootstrap,
   ADOPTION_PROBE,
@@ -368,7 +371,7 @@ import {
   type CursorOverlay,
 } from "./browser/cursor-overlay";
 import { closeHeadlessTabsOnTicketArchive } from "./browser/lifecycle";
-import { hostLogger } from "@volli/host-core/log";
+import { hostLogger, hostLogLevel } from "@volli/host-core/log";
 import { exitAfterLogFlush, logPowerTransitions, startDesktopLog } from "./log/desktop-log";
 import { startDesktopPerfStore } from "./log/perf-store";
 import { registerRendererLogForwarding } from "./log/renderer-log";
@@ -489,6 +492,14 @@ const worktreeLog = hostLogger("worktree");
  * window factory exists; until then a second launch has nothing to open.
  */
 let revealWindowForLaunch: (() => void) | null = null;
+/** How long an upgrade runs before its window opens (VC-1105). */
+const UPDATING_WINDOW_DELAY_MS = 400;
+/** The schema-upgrade window (VC-1105), while a launch has one up. */
+let updatingWindow: { close(): void } | null = null;
+function closeUpdatingWindow(): void {
+  updatingWindow?.close();
+  updatingWindow = null;
+}
 if (ownsAppProfile) {
   app.on("second-instance", () => {
     answerSecondInstance(mainWindows()[0], {
@@ -1104,6 +1115,34 @@ const appStartup = app.whenReady().then(async () => {
     // The same http(s)-only gate as the window's own links: a host names the page.
     openExternal: (url) => openExternal(url),
   });
+  // A database an older build wrote is upgraded before anything opens it
+  // (VC-1105): in a worker, holding the open lock, while this window says so.
+  // Main stays responsive throughout, and nothing here reads or writes the
+  // database until the worker has closed it.
+  const upgrade = pendingDatabaseUpgrade(dbPath);
+  let databaseUpgrade: Awaited<ReturnType<typeof runDatabaseUpgradeWorker>> = null;
+  if (upgrade !== null) {
+    log.info("database upgrade started", upgrade);
+    const running = runDatabaseUpgradeWorker(join(__dirname, "database-upgrade-worker.cjs"), {
+      dbPath,
+      logLevel: hostLogLevel(),
+      dev: isDev,
+    });
+    // A small profile upgrades in well under a second: no window flashes up
+    // for it. One still running after this long gets the window.
+    const showUpdating = setTimeout(() => {
+      updatingWindow = openUpdatingWindow({
+        devRendererUrl: isDev ? process.env["ELECTRON_RENDERER_URL"] : undefined,
+        policy: nativeWindowPolicy,
+      });
+    }, UPDATING_WINDOW_DELAY_MS);
+    databaseUpgrade = await running;
+    clearTimeout(showUpdating);
+    log.info("database upgrade finished", {
+      ...upgrade,
+      outcome: databaseUpgrade === null ? "no-answer" : databaseUpgrade.ok ? "upgraded" : "refused",
+    });
+  }
   const hostCore = createHostCore(hostPorts, {
     dataDir: app.getPath("userData"),
     stopPolicy: "desktop-quit",
@@ -1124,6 +1163,7 @@ const appStartup = app.whenReady().then(async () => {
     sourceIconWorker: join(__dirname, "source-icon-worker.cjs"),
     usageReportWorker: join(__dirname, "usage-report-worker.cjs"),
     devDiagnostics: isDev,
+    ...(databaseUpgrade === null ? {} : { databaseUpgrade }),
     secretKey: harnessPorts?.secretKey ?? keychainSecretCodec(keychainUse.keychain),
     webKeySealing: {
       keyring: credentialKeyring,
@@ -2838,6 +2878,9 @@ const appStartup = app.whenReady().then(async () => {
     openedAtLogin: app.getLoginItemSettings().wasOpenedAtLogin,
   });
   const mainWindow = createOwnedWindow({ revealOnReady: !startInMenuBar });
+  // The upgrade window gives way to the app's own, once that has painted.
+  if (startInMenuBar) closeUpdatingWindow();
+  else mainWindow.once("ready-to-show", closeUpdatingWindow);
   const transcriptRepackAbort = new AbortController();
   runnerEdge.bind({ repack: transcriptRepackAbort });
   mainWindow.webContents.once("did-finish-load", () => {
@@ -3734,6 +3777,8 @@ const appStartup = app.whenReady().then(async () => {
   app.on("activate", () => appWindows.activated(menuBar));
 });
 void appStartup.catch((error: unknown) => {
+  // A boot that stopped part way must not leave the upgrade window claiming work.
+  closeUpdatingWindow();
   if (error instanceof SessionRuntimeClosingError) return;
   log.error("failed to finish app startup", { error });
 });

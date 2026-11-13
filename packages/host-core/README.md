@@ -598,6 +598,25 @@ until its remaining desktop dependencies move.
   startup and a restore's staging handle both set; with file-backed temp
   storage VACUUM needs a third copy on disk. A box's rollback is to that safety copy:
   [hostd README](../../apps/hostd/README.md#upgrading-and-rolling-back).
+- **The upgrade runs off the serving thread (VC-1105).** On a multi-gigabyte
+  profile an upgrade is a minute of synchronous SQLite: integrity checks,
+  the safety copy, the migrations, ANALYZE and retention. Desktop asks
+  `pendingDatabaseUpgrade` (header bytes only) before composing the host and,
+  when it answers, runs the same `openVolliDb` in a worker thread
+  (`src/db/database-upgrade.ts`) while its "Updating your data" window is up;
+  nothing else opens the file until the worker has closed it. The worker's log
+  lines land in the host log with `thread: "database-upgrade"`, and the open
+  logs one `database upgraded` line with milliseconds per step. A refusal
+  comes back classified, so `createHostCore` goes degraded without trying
+  again; an upgrade hands back the closed file's identity, and while the file
+  is still exactly that one the host's own open skips the quick check the
+  worker just ran. A worker that gives no answer leaves the host to open the
+  file itself, as before. The safety copy is `cp -c` on macOS
+  (`src/db/file-clone.ts`): an APFS clone, taken after the checkpoint while
+  the open lock is held, restamped with the time it was taken, and still
+  verified before it is published; Node's `COPYFILE_FICLONE` never clones on
+  macOS. Where the volume cannot clone, and on Linux without reflinks, it is
+  the same full copy as before. Names, location and format are unchanged.
 - **N-1 compatibility (VC-633).** CI's `N-1 compatibility` lanes run a
   previous build, from its own shipped sources, against a profile this build
   migrated to head (`src/db/n1-compatibility.test.ts`, driven by

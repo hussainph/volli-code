@@ -859,14 +859,17 @@ export default defineConfig(({ mode, command }) => ({
     // Absolute — `outDir` otherwise resolves relative to `root` (src/renderer).
     outDir: fileURLToPath(new URL("./dist", import.meta.url)),
     emptyOutDir: true,
-    // Two pages, one build: the app, and the Session cursor overlay (VC-239)
-    // main places over a Browser Tab. A second ENTRY rather than a second
-    // build so the overlay shares the app's tokens and components by
-    // construction; it is served from the same volli-app://bundle/ root.
+    // Pages of one build: the app, the Session cursor overlay (VC-239)
+    // main places over a Browser Tab, and the schema-upgrade window. Further
+    // ENTRIES rather than further builds so each shares the app's tokens and
+    // components by construction; all are served from the same
+    // volli-app://bundle/ root.
     rollupOptions: {
       input: {
         index: fileURLToPath(new URL("./src/renderer/index.html", import.meta.url)),
         cursor: fileURLToPath(new URL("./src/renderer/cursor.html", import.meta.url)),
+        // The schema-upgrade window (VC-1105), shown while the database is upgraded off main.
+        updating: fileURLToPath(new URL("./src/renderer/updating.html", import.meta.url)),
       },
     },
     // STATIC ASSETS (established with the grain tile; PR 5's curated canvas
@@ -905,6 +908,8 @@ export default defineConfig(({ mode, command }) => ({
         main: "src/main/index.ts",
         "automatic-backup-worker": "src/main/automatic-backup-worker.ts",
         "restore-worker": "src/main/restore-worker.ts",
+        // The schema upgrade (VC-1105): migrations run here, never on main.
+        "database-upgrade-worker": "src/main/database-upgrade-worker.ts",
         "migration-export-worker": "src/main/cloud-move/export-worker.ts",
         // web_fetch's HTML extraction (jsdom → Readability → Turndown), so a
         // large page is parsed off the thread that serves the app.

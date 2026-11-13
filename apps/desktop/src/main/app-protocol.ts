@@ -7,6 +7,8 @@ export const PACKAGED_RENDERER_ORIGIN = `${PACKAGED_RENDERER_SCHEME}://${PACKAGE
 export const PACKAGED_RENDERER_ENTRY_URL = `${PACKAGED_RENDERER_ORIGIN}/index.html`;
 /** The Session cursor overlay page (VC-239), the build's second entry, on the same origin. */
 export const PACKAGED_RENDERER_CURSOR_URL = `${PACKAGED_RENDERER_ORIGIN}/cursor.html`;
+/** The schema-upgrade window's page (VC-1105), the build's third entry, on the same origin. */
+export const PACKAGED_RENDERER_UPDATING_URL = `${PACKAGED_RENDERER_ORIGIN}/updating.html`;
 
 /**
  * Resolves one app-protocol request to a renderer asset.

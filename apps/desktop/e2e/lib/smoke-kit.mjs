@@ -422,6 +422,36 @@ export async function assertProfileIsolated(app, userDataDir) {
 const BUILT_RENDERER_ENTRY_URL = "volli-app://bundle/index.html";
 
 /**
+ * The app's own first window. A launch that upgrades an older database may
+ * show the "Updating your data" window first (VC-1105); it is skipped, never
+ * driven.
+ *
+ * @param {import("playwright-core").ElectronApplication} app
+ * @param {{ timeout?: number }} [options]
+ * @returns {Promise<import("playwright-core").Page>}
+ */
+export async function firstAppWindow(app, { timeout = 15000 } = {}) {
+  const deadline = Date.now() + timeout;
+  const skipped = new Set();
+  for (;;) {
+    for (const page of app.windows()) {
+      if (skipped.has(page)) continue;
+      try {
+        await page.waitForLoadState("domcontentloaded", {
+          timeout: Math.max(1, deadline - Date.now()),
+        });
+      } catch {
+        skipped.add(page);
+        continue;
+      }
+      if (new URL(page.url()).pathname !== "/updating.html") return page;
+      skipped.add(page);
+    }
+    await app.waitForEvent("window", { timeout: Math.max(1, deadline - Date.now()) });
+  }
+}
+
+/**
  * Assert the launched main window loaded the built renderer rather than an
  * inherited Vite dev-server URL. Call after the window reaches DOMContentLoaded.
  *

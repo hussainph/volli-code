@@ -1,0 +1,26 @@
+<!doctype html>
+<!--
+  The schema-upgrade window (VC-1105): what a launch shows while the database
+  an older build wrote is upgraded off main. It opens before the database can
+  be read, so it has no bridge and no stored theme: main names the light/dark
+  mode in the query (the system's, as on a first-ever launch) and paints the
+  window edge with the default canvas. It shares the app's tokens and fonts by
+  being a third entry in the same build.
+
+  The CSP is the app's minus everything this page does not do: no workers, no
+  images, no connections.
+-->
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Volli Code</title>
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; form-action 'none'"
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/updating/main.tsx"></script>
+  </body>
+</html>

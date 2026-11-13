@@ -44,6 +44,8 @@ import type Database from "better-sqlite3";
 import { logMigrationBackupRetention, pruneMigrationBackups } from "./backup-retention";
 import { assertDatabaseIntegrity } from "./backup-integrity";
 import { MIGRATION_RECOVERY_ACTION, publishRollbackPoint } from "./database-file";
+import type { FileCloneDeps } from "./file-clone";
+import { timeStep, type UpgradeTimings } from "./upgrade-timings";
 import {
   compactMigrationDatabase,
   logMigrationCompaction,
@@ -3426,6 +3428,10 @@ export interface MigrateOptions {
    * WAL byte-identical. The runner does not measure a second time.
    */
   diskChecked?: boolean;
+  /** Filled with each step's milliseconds, for the caller's upgrade log line (VC-1105). */
+  timings?: UpgradeTimings;
+  /** Tests only: how the safety copy is made (`file-clone.ts`). */
+  fileClone?: FileCloneDeps;
 }
 
 /**
@@ -3464,7 +3470,7 @@ export function migrate(
     // measurement that worked and shows too little room refuses.
     if (options.diskChecked !== true) assertMigrationDiskSpace(dbPath, options.disk);
     try {
-      assertDatabaseIntegrity(db);
+      timeStep(options.timings, "source-check", () => assertDatabaseIntegrity(db));
     } catch (error) {
       throw new Error(
         `Migration refused: source database failed integrity verification. ${recovery}`,
@@ -3473,7 +3479,10 @@ export function migrate(
     }
     // The rollback point is a published database file: durable, verified,
     // and never torn behind the migration it protects (VC-628).
-    publishRollbackPoint(db, dbPath, currentVersion);
+    publishRollbackPoint(db, dbPath, currentVersion, {
+      ...(options.timings === undefined ? {} : { timings: options.timings }),
+      ...(options.fileClone === undefined ? {} : { fileClone: options.fileClone }),
+    });
   }
 
   const applyPendingMigrations = db.transaction(() => {
@@ -3507,7 +3516,7 @@ export function migrate(
       );
     }
   });
-  applyPendingMigrations();
+  timeStep(options.timings, "migrations", applyPendingMigrations);
 
   // VACUUM cannot run inside the all-or-nothing migration transaction. Keep
   // the starting version check here as well: a batch that began at version 0
@@ -3516,14 +3525,16 @@ export function migrate(
   const compactionReport =
     currentVersion === 0
       ? skippedMigrationCompaction(dbPath, "fresh database")
-      : compactMigrationDatabase(db, dbPath);
+      : timeStep(options.timings, "compaction", () => compactMigrationDatabase(db, dbPath));
   logMigrationCompaction(compactionReport);
 
   // Retention is deliberately last, after the transaction committed, its
   // foreign-key check passed, and compaction returned (including a reported
   // failure). Fresh databases made no copy, so they do not participate.
   if (currentVersion > 0) {
-    const retentionReport = pruneMigrationBackups(dbPath, currentVersion);
+    const retentionReport = timeStep(options.timings, "retention", () =>
+      pruneMigrationBackups(dbPath, currentVersion),
+    );
     logMigrationBackupRetention(retentionReport);
   }
   return true;

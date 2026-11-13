@@ -26,12 +26,12 @@ import {
   type MaintenanceProcessReaders,
 } from "./maintenance-services";
 import type { RetentionReclaimSeams } from "./retention-runtime";
+import type { DbOpenFailure } from "./db-open-failure";
 import {
-  classifyDbOpenFailure,
-  dbOpenFailureLogLine,
-  describeDbOpenFailure,
-  type DbOpenFailure,
-} from "./db-open-failure";
+  prepareDbOpenFailure,
+  type DatabaseUpgradeOutcome,
+  type PreparedDbOpenFailure,
+} from "./db/database-upgrade";
 import {
   createHostSessionServices,
   type HostSessionPorts,
@@ -89,6 +89,13 @@ export interface HostCoreOptions {
   readonly backups?: BackupPlatform;
   readonly onTransactionViolation: TransactionViolationHandler;
   readonly devDiagnostics: boolean;
+  /**
+   * What a schema upgrade the host ran off this thread answered before
+   * composing it (`runDatabaseUpgradeWorker`, VC-1105). A refusal goes
+   * straight to the degraded host; an upgrade lets the open skip the quick
+   * check the worker just ran. Absent, the open does everything itself.
+   */
+  readonly databaseUpgrade?: DatabaseUpgradeOutcome;
   readonly processReaders: MaintenanceProcessReaders;
   readonly reclaim?: RetentionReclaimSeams;
   /** Lazy so model/catalog construction keeps the host's former boot point. */
@@ -186,13 +193,8 @@ export function defaultDatabasePath(dataDir: string): string {
 export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): HostCore {
   const dbPath = options.databasePath ?? defaultDatabasePath(options.dataDir);
   let db: Database.Database;
-  try {
-    mkdirSync(dirname(dbPath), { recursive: true });
-    db = openVolliDb(dbPath, { onTransactionViolation: options.onTransactionViolation });
-  } catch (error) {
-    const failure = classifyDbOpenFailure(error);
-    const message = describeDbOpenFailure(error, { dev: options.devDiagnostics });
-    ports.log.error("failed to open database", { detail: dbOpenFailureLogLine(error) });
+  const degraded = ({ failure, message, logLine }: PreparedDbOpenFailure): DegradedHostCore => {
+    ports.log.error("failed to open database", { detail: logLine });
     const owner = lifecycleOwner(ports, {}, options.stopPolicy);
     return {
       kind: "degraded",
@@ -203,6 +205,17 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
       databaseFailure: failure,
       ...owner,
     };
+  };
+  const upgrade = options.databaseUpgrade;
+  if (upgrade?.ok === false) return degraded(upgrade);
+  try {
+    mkdirSync(dirname(dbPath), { recursive: true });
+    db = openVolliDb(dbPath, {
+      onTransactionViolation: options.onTransactionViolation,
+      ...(upgrade?.checked == null ? {} : { checked: upgrade.checked }),
+    });
+  } catch (error) {
+    return degraded(prepareDbOpenFailure(error, options.devDiagnostics));
   }
   const stopUsageReader =
     options.usageReportWorker === undefined

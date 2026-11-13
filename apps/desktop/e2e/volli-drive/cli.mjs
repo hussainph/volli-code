@@ -40,6 +40,7 @@ import {
   supervisorEnv,
 } from "./lib/core.mjs";
 import { request } from "./lib/protocol.mjs";
+import { seedDatabaseProblems } from "./lib/seed-database.mjs";
 import { readDeployment } from "./lib/deployment.mjs";
 import { assertAcceptanceRunner, acceptanceTarballs } from "./lib/remote-acceptance.mjs";
 import {
@@ -55,6 +56,9 @@ const HELP = `volli-drive — drive an isolated, keychain-free live Volli build
 
   launch [--fixture basic|empty|move|empty-pane-left|empty-pane-right] [--model fake|env] [--idle-min 20]
          [--reduced-motion]       emulate browser prefers-reduced-motion: reduce
+         [--database /abs/file.db] start on a clone of a closed database (a
+                                   safety copy), to replay its schema upgrade;
+                                   the upgrade window is captured as evidence
          [--fake-script file.json] deterministic fake-provider reply sequence
          [--fake-tool-free-text t] tool-free requests (auto-title) answer t while
                                    a script runs, instead of the echo; needs --fake-script
@@ -200,6 +204,12 @@ async function launch(flags) {
   if (flags.reducedMotion !== undefined && flags.reducedMotion !== true)
     fail("--reduced-motion is a boolean flag; omit it to use the system preference");
   const deployment = await readDeployment(flags, REPO);
+  let database;
+  if (flags.database !== undefined) {
+    database = String(flags.database);
+    const problems = await seedDatabaseProblems(database);
+    if (problems.length > 0) fail(problems.join("; "));
+  }
   const fixture = flags.fixture ?? "basic";
   const model = flags.model ?? "fake";
   const build = flags.build ?? "dev";
@@ -289,6 +299,7 @@ async function launch(flags) {
     build,
     appBinary: null,
     reducedMotion: flags.reducedMotion === true,
+    ...(database === undefined ? {} : { database }),
     remoteAcceptance,
     ...(fakeScript === undefined ? {} : { fakeScript }),
     ...(fakeToolFreeText === undefined ? {} : { fakeToolFreeText }),
