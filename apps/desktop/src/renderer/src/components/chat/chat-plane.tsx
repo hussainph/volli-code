@@ -2097,6 +2097,8 @@ function ChatPlaneContent({
     readReply: readCheckpointReply,
     navigator: checkpointNavigator,
   } = useMessageCheckpoints(rows);
+  // What "Scroll to latest" runs first while a far jump's rows are held back.
+  const dropHeldRows = React.useRef<(() => void) | null>(null);
   // Identity, not an index. A boundary between the turns means a turn's place in
   // `rows` is no longer its place in `turns` — and the last ROW can be a
   // boundary, which would leave the turn still being written with nothing
@@ -2264,6 +2266,7 @@ function ChatPlaneContent({
                         liveTurn={liveTurn}
                         historyBefore={session.historyBefore}
                         onLoadOlder={controller.loadOlder}
+                        dropHeld={dropHeldRows}
                         {...(onOpenSession === undefined ? {} : { onOpenSession })}
                       >
                         {/* Accepted words already belong above Working, even while
@@ -2321,6 +2324,7 @@ function ChatPlaneContent({
                   {messages.length > 0 ? (
                     <ConversationScrollButton
                       ref={islandClearance.attach}
+                      onClickCapture={() => dropHeldRows.current?.()}
                       className="bottom-[calc(var(--composer-height)+var(--island-clearance,0px)+0.75rem)] glass-control shadow-glass-small"
                     />
                   ) : null}
@@ -2833,26 +2837,42 @@ const PINNED_SLACK_PX = 8;
 const EARLIER_PREFETCH = "400px 0px 0px 0px";
 
 /**
- * How far below the viewport the held rows' spacer mounts the next step at
- * once instead of waiting for idle time (VC-1226). A screen: a fling covers
- * several hundred pixels in the time one step takes, and a step reaches
- * thousands of pixels further.
+ * How far from the viewport, above or below, the held rows' spacer mounts the
+ * next step at once instead of waiting for idle time (VC-1226). A screen: a
+ * fling covers several hundred pixels in the time one step takes, and a step
+ * reaches thousands of pixels further.
  */
-const HELD_PREFETCH = "0px 0px 100% 0px";
+const HELD_PREFETCH = "100% 0px 100% 0px";
 
 /**
- * The height the spacer gives each held row, in pixels: about the mean of a
- * real Session's rows (170 with tool calls and code blocks, 145 without, measured
- * over 300 exchanges). Only the scrollbar reads it, and only until the rows are
- * mounted.
+ * The height the spacer gives each held row, in pixels. Deliberately below
+ * any row's real height (one line of text and the 16px gap between rows is
+ * already more), so that a fill step only ever makes the column TALLER. A step
+ * that shrank it would read to `use-stick-to-bottom` as a collapse and lock a
+ * reader within its 70px of the end back onto following, which the
+ * transcript's own 8px bottom would not agree with. Taller is also what the
+ * browser's scroll anchoring keeps a reader below the hold in place through.
+ * The cost is a scrollbar that underestimates the held rows until they mount,
+ * about two seconds after a far jump.
  */
-const HELD_ROW_PX = 160;
+const HELD_ROW_PX = 24;
 
 /**
  * The longest a fill step waits for idle time before it runs anyway, in
  * milliseconds. A streaming reply keeps the main thread busy but rarely full.
  */
 const FILL_TIMEOUT_MS = 200;
+
+/**
+ * How close to the end `use-stick-to-bottom` counts as at the bottom (its
+ * `STICK_TO_BOTTOM_OFFSET_PX`). Any change to the column above a reader that
+ * close (a fill step, or the browser's scroll anchoring answering one) puts
+ * them back on following, though the transcript's own bottom is 8px. So the
+ * fill waits while the reader is there, and looks again after
+ * {@link FILL_PAUSE_MS}.
+ */
+const FOLLOW_ZONE_PX = 70;
+const FILL_PAUSE_MS = 250;
 
 /** Runs `step` when the main thread is next idle, or after the timeout. Returns the cancel. */
 function whenIdle(step: () => void): () => void {
@@ -2958,6 +2978,7 @@ function ChatTranscript({
   historyBefore,
   onLoadOlder,
   onOpenSession,
+  dropHeld,
   children,
 }: {
   sessionId: string;
@@ -2974,6 +2995,11 @@ function ChatTranscript({
   /** Reads the next window of history above the rows. */
   onLoadOlder(): Promise<boolean>;
   onOpenSession?(sessionId: string): void;
+  /**
+   * Where this transcript leaves, while a far jump's rows are held back, what
+   * "Scroll to latest" calls before it scrolls (VC-1226).
+   */
+  dropHeld?: React.RefObject<(() => void) | null>;
   /** The live tail's own marks — compaction progress, the working mark. */
   children?: React.ReactNode;
 }) {
@@ -3221,59 +3247,73 @@ function ChatTranscript({
     anchorAt,
   });
 
-  // The held rows, filled in behind the reader a page at a time (VC-1226).
-  // Rows mounted where the spacer starts cannot move a reader above it, which
-  // is where a jump leaves them, so nothing is measured for them: a scroll the
-  // compositor makes between a measure and its commit would otherwise be put
-  // back. A reader below the hold's start (one who jumped into the tail, or
-  // dragged there) has the step's rows grow above them, so their place is
-  // written down and put back once the rows are drawn, as a page above them
-  // does. The place is tied to the step's own keys, so a commit that lands
-  // first (a streamed token) does not use it up and a jump in between never
-  // receives it. The last step closes the hold to an empty range rather than
-  // `null`, for the same reason.
+  // The held rows, filled in behind the reader a page at a time (VC-1226),
+  // from the end of the hold nearer the reader (`fillHeld`). Nothing here
+  // measures or restores the reader's place: rows mounted below a reader
+  // cannot move them, and for a reader below the hold the browser's own
+  // scroll anchoring keeps what they are reading still while rows grow above
+  // it. A place written down in the step's callback would be stale by the
+  // commit, 20-100ms later, and putting it back would undo the reader's own
+  // scroll in between. The spacer opts out of anchoring so it is never the
+  // node kept still. Each step only grows the column (`HELD_ROW_PX`).
   const heldNode = React.useRef<HTMLDivElement>(null);
-  const fillPlace = React.useRef<{ geometry: PrependGeometry; keys: HeldKeys } | null>(null);
-  const fillStep = React.useRef<() => void>(() => {});
+  // A step answers whether it ran; it waits, mounting nothing, while the
+  // reader is within the library's following zone of the end.
+  const fillStep = React.useRef<() => boolean>(() => true);
   React.useLayoutEffect(() => {
     fillStep.current = () => {
-      if (held === null || heldKeys === null) return;
-      const next = fillHeld(held);
-      const row = next === null ? undefined : rows[next.start];
-      const keys = { ...heldKeys, from: row === undefined ? heldKeys.to : transcriptRowKey(row) };
+      if (held === null || heldKeys === null) return true;
       const scroller = control.scroller();
       const spacer = heldNode.current;
-      const below =
-        scroller !== null &&
-        spacer !== null &&
-        spacer.getBoundingClientRect().top < scroller.getBoundingClientRect().top;
-      const geometry = below ? measurePrepend(scroller) : null;
-      // A reader looking at the spacer alone has no place to keep.
-      fillPlace.current =
-        geometry === null || geometry.anchors.length === 0 ? null : { geometry, keys };
-      setHeldKeys(keys);
+      let fromEnd = false;
+      if (scroller !== null && spacer !== null) {
+        const toEnd = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+        if (scroller.clientHeight > 0 && toEnd <= FOLLOW_ZONE_PX) return false;
+        const hole = spacer.getBoundingClientRect();
+        const view = scroller.getBoundingClientRect();
+        fromEnd = hole.top + hole.bottom < view.top + view.bottom;
+      }
+      const next = fillHeld(held, fromEnd);
+      const row = next === null ? undefined : rows[fromEnd ? next.end : next.start];
+      // The last step closes the hold to an empty range on its own key.
+      const edge = row === undefined ? null : transcriptRowKey(row);
+      setHeldKeys(
+        fromEnd
+          ? { ...heldKeys, to: edge ?? heldKeys.from }
+          : { ...heldKeys, from: edge ?? heldKeys.to },
+      );
+      return true;
     };
   });
+  // A host page still on its way keeps the reader's place it wrote down; a
+  // step that mounted rows since is measured into it again, so the page lands
+  // against the column as it is now rather than as it was before the step.
   React.useLayoutEffect(() => {
-    const place = fillPlace.current;
-    if (place === null) return;
-    fillPlace.current = null;
+    const pending = prepend.current;
     const scroller = control.scroller();
-    if (place.keys === heldKeys && scroller !== null) restorePrepend(scroller, place.geometry);
-  }, [control, heldKeys]);
+    if (pending === null || pending.cursor === null || scroller === null) return;
+    prepend.current = { geometry: measurePrepend(scroller), cursor: pending.cursor };
+  }, [control, heldFrom, heldTo]);
   // Idle time first, a timeout behind it. The spacer coming within a screen
-  // of the viewport takes the step now: a reader scrolling down meets rows.
+  // of the viewport, from above or below, takes the step now: a reader
+  // scrolling toward it meets rows.
   // Rescheduled per step, and gone with the hold, the plane's effects (a
   // hidden or unmounted plane) or the Session.
   React.useEffect(() => {
     if (heldFrom < 0) return;
     let done = false;
+    let cancel = () => {};
     const step = () => {
       if (done) return;
-      done = true;
-      fillStep.current();
+      if (fillStep.current()) {
+        done = true;
+        return;
+      }
+      cancel();
+      const pause = setTimeout(step, FILL_PAUSE_MS);
+      cancel = () => clearTimeout(pause);
     };
-    const cancel = whenIdle(step);
+    cancel = whenIdle(step);
     const node = heldNode.current;
     const scroller = control.scroller();
     const observer =
@@ -3298,6 +3338,28 @@ function ChatTranscript({
   // is what retires revealed pages: `escaped` is set the moment the reader
   // leaves the bottom, so pressing "Show earlier" while already pinned (a
   // transcript shorter than its viewport) is never undone by the press itself.
+  // Back at the bottom: the revealed pages go, the sentinel is out of reach
+  // again (disarming it is what stops the pages about to be dropped from
+  // being paged straight back in), and what is recorded is the transcript as
+  // it will be mounted next time rather than as it was.
+  const retireWindow = React.useCallback(() => {
+    setArmed(false);
+    rememberTranscriptView(sessionId, { anchorKey: null, offset: null });
+    setAnchorKey(null);
+    setHeldKeys(null);
+  }, [sessionId]);
+  // "Scroll to latest" pressed while rows are held back retires the window
+  // first, as arriving at the bottom would, so the scroll that follows runs
+  // over the tail alone. Scrolling across the hold would have the fill swap
+  // rows in under it, and a spring that sees content above it change height
+  // stops short of the end.
+  React.useLayoutEffect(() => {
+    if (dropHeld === undefined || heldFrom < 0) return;
+    dropHeld.current = retireWindow;
+    return () => {
+      dropHeld.current = null;
+    };
+  }, [dropHeld, heldFrom, retireWindow]);
   const anchorRef = React.useRef(anchorKey);
   React.useLayoutEffect(() => {
     anchorRef.current = anchorKey;
@@ -3336,14 +3398,7 @@ function ChatTranscript({
         return;
       }
       escaped.value = false;
-      // Back at the bottom: the revealed pages go, the sentinel is out of reach
-      // again (disarming it is what stops the pages about to be dropped from
-      // being paged straight back in), and what is recorded is the transcript as
-      // it will be mounted next time rather than as it was.
-      setArmed(false);
-      rememberTranscriptView(sessionId, { anchorKey: null, offset: null });
-      setAnchorKey(null);
-      setHeldKeys(null);
+      retireWindow();
     };
     const onScroll = () => {
       // One read per frame: a wheel gesture fires scroll events faster than
@@ -3356,7 +3411,7 @@ function ChatTranscript({
       scroller.removeEventListener("scroll", onScroll);
       if (frame !== 0) cancelAnimationFrame(frame);
     };
-  }, [control, notePinned, sessionId]);
+  }, [control, notePinned, retireWindow, sessionId]);
 
   // The offset the reader left, put back. Twice, deliberately: the library
   // scrolls to the bottom from its own ResizeObserver, which fires after this
@@ -3453,7 +3508,7 @@ function ChatTranscript({
               ref={heldNode}
               aria-hidden
               data-transcript-held={heldTo - heldFrom}
-              style={{ height: (heldTo - heldFrom) * HELD_ROW_PX }}
+              style={{ height: (heldTo - heldFrom) * HELD_ROW_PX, overflowAnchor: "none" }}
             />
           ),
           heldFrom - shown.start,

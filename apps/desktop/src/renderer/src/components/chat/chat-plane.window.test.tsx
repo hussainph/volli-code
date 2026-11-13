@@ -1691,6 +1691,9 @@ describe("a far jump lands first and fills in behind (VC-1226)", () => {
     const latest = container?.querySelector('[aria-label="Scroll to latest"]');
     if (latest == null) throw new Error("expected Scroll to latest while reading");
     click(latest);
+    // The window goes before the scroll does, so the scroll runs over the tail.
+    expect(spacer()).toBeNull();
+    expect(turnRows()).toBe(TRANSCRIPT_TAIL_ROWS);
     // The library scrolls on its next frames, to one pixel short of its maximum.
     await waitFor(() => scroller.scrollTop > 40_000 - 600 - 8);
     await scrollTo(scroller, scroller.scrollTop);
@@ -1698,6 +1701,56 @@ describe("a far jump lands first and fills in behind (VC-1226)", () => {
     expect(spacer()).toBeNull();
     expect(turnRows()).toBe(TRANSCRIPT_TAIL_ROWS);
     expect(mark(TURNS - 1)?.getAttribute("aria-current")).toBe("location");
+  });
+
+  it("fills from the bottom of the hold for a reader below it", async () => {
+    await mountPlane(chatStore(transcript(TURNS)));
+    jump(0);
+    // The spacer wholly above the viewport: the reader is in the tail.
+    const native = Element.prototype.getBoundingClientRect;
+    Element.prototype.getBoundingClientRect = function (this: Element) {
+      if (this instanceof HTMLElement && this.dataset["transcriptHeld"] !== undefined)
+        return { top: -5000, bottom: -1000 } as DOMRect;
+      if (this instanceof HTMLElement && this.dataset["conversationScroller"] !== undefined)
+        return { top: 0, bottom: 600 } as DOMRect;
+      return native.call(this);
+    };
+    try {
+      await fillTick();
+    } finally {
+      Element.prototype.getBoundingClientRect = native;
+    }
+    const tailStart = TURNS - TRANSCRIPT_TAIL_ROWS;
+    expect(shows(tailStart - 1)).toBe(true);
+    expect(shows(tailStart - TRANSCRIPT_PAGE_ROWS)).toBe(true);
+    expect(shows(tailStart - TRANSCRIPT_PAGE_ROWS - 1)).toBe(false);
+    expect(shows(TRANSCRIPT_PAGE_ROWS)).toBe(false);
+    expect(mountedTurns()[0]).toBe(0);
+  });
+
+  it("mounts the window whole when a held row's key is retired", async () => {
+    const store = chatStore(transcript(TURNS));
+    await mountPlane(store);
+    jump(0);
+    expect(spacer()).not.toBeNull();
+    // A compaction or a regenerated row takes the row the hold starts at.
+    const retired = transcript(TURNS).filter(({ id }) => id !== `u${TRANSCRIPT_PAGE_ROWS}`);
+    await act(async () => {
+      store.setState(
+        (state) =>
+          ({
+            sessions: {
+              ...state.sessions,
+              [SESSION]: {
+                ...state.sessions[SESSION],
+                transcript: { ...EMPTY_TRANSCRIPT, durableMessages: retired, messages: retired },
+              },
+            },
+          }) as never,
+      );
+    });
+    expect(spacer()).toBeNull();
+    expect(turnRows()).toBe(TURNS - 1);
   });
 
   it("stops filling when the plane switches Session in place", async () => {

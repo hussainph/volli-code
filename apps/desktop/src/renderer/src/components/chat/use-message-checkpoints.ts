@@ -83,6 +83,15 @@ function messageNode(scroller: HTMLElement, id: string): HTMLElement | null {
   return null;
 }
 
+/** The message of the last checkpoint row before `end`, or `null`. */
+function lastCheckpointBefore(rows: readonly WorkTranscriptRow[], end: number): string | null {
+  for (let index = Math.min(end, rows.length) - 1; index >= 0; index -= 1) {
+    const row = rows[index]!;
+    if (row.kind === "turn" && isCheckpointRow(row)) return row.messages[0]!.id;
+  }
+  return null;
+}
+
 const rowIndex = (rows: readonly WorkTranscriptRow[], id: string) =>
   rows.findIndex((row) => row.kind === "turn" && row.messages[0]?.id === id);
 
@@ -119,6 +128,9 @@ export function useCheckpointNavigation(input: {
   const atBottom = React.useRef(true);
   // Mounted messages above the reading line, as the observer last reported.
   const aboveLine = React.useRef<ReadonlySet<string>>(new Set());
+  // Whether the spacer standing in for a far jump's held rows (VC-1226) has
+  // reached the reading line, as the same observer last reported.
+  const pastHold = React.useRef(false);
   // A jump's message stays current until the READER moves it: a message near
   // the end cannot reach the reading line, and a page the window then mounts
   // above it moves the scroll offset without moving the message on screen.
@@ -141,22 +153,16 @@ export function useCheckpointNavigation(input: {
       }
       hold.current = null;
     }
-    const { rows: all, start: first, checkpoints: list } = latest.current;
-    // The exchange the mounted window begins inside, when its message is above it.
-    let before: string | null = null;
-    for (let index = Math.min(first, all.length) - 1; index >= 0; index -= 1) {
-      const row = all[index]!;
-      if (row.kind === "turn" && isCheckpointRow(row)) {
-        before = row.messages[0]!.id;
-        break;
-      }
-    }
+    const { rows: all, start: first, unmounted: holding, checkpoints: list } = latest.current;
     navigator.publish(
       currentCheckpoint({
         checkpoints: list,
         above: aboveLine.current,
-        before,
+        // The exchange the mounted window begins inside, when its message is above it.
+        before: lastCheckpointBefore(all, first),
         pinned: atBottom.current,
+        // Past the start of the held rows, the exchange they end inside.
+        held: holding !== null && pastHold.current ? lastCheckpointBefore(all, holding.end) : null,
       }),
     );
   }, [control, navigator]);
@@ -238,6 +244,7 @@ export function useCheckpointNavigation(input: {
       scroller === null
         ? []
         : [...scroller.querySelectorAll<HTMLElement>("[data-message-checkpoint]")];
+    const spacer = scroller?.querySelector<HTMLElement>("[data-transcript-held]") ?? null;
     // Nothing to observe means nothing will ever report: a window holding no
     // message of the person's has none above the line, and says so now.
     if (scroller === null || nodes.length === 0 || typeof IntersectionObserver === "undefined") {
@@ -252,8 +259,16 @@ export function useCheckpointNavigation(input: {
     let above: Set<string> | null = null;
     const observer = new IntersectionObserver(
       (entries) => {
-        above ??= new Set();
+        if (above === null) {
+          above = new Set();
+          // The spacer reports in this same first batch, when there is one.
+          pastHold.current = false;
+        }
         for (const entry of entries) {
+          if (entry.target === spacer) {
+            pastHold.current = entry.isIntersecting;
+            continue;
+          }
           const id = (entry.target as HTMLElement).dataset["messageCheckpoint"];
           if (id === undefined) continue;
           if (entry.isIntersecting) above.add(id);
@@ -265,6 +280,7 @@ export function useCheckpointNavigation(input: {
       { root: scroller, rootMargin: READING_LINE },
     );
     for (const node of nodes) observer.observe(node);
+    if (spacer !== null) observer.observe(spacer);
     return () => observer.disconnect();
   }, [control, mountedKey, publish]);
 

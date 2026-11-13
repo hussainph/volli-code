@@ -191,6 +191,85 @@ describe("currentCheckpoint", () => {
     );
   });
 
+  describe("past the start of rows held back after a far jump (VC-1226)", () => {
+    // "a" was landed on, "b" is held back, "c" is mounted below the hold.
+    it("is the last held message, not the last one mounted above the hold", () => {
+      expect(
+        currentCheckpoint({
+          checkpoints,
+          above: new Set(["a"]),
+          before: null,
+          pinned: false,
+          held: "b",
+        }),
+      ).toBe("b");
+    });
+
+    it("is a message below the hold once it crosses the line", () => {
+      expect(
+        currentCheckpoint({
+          checkpoints,
+          above: new Set(["a", "c"]),
+          before: null,
+          pinned: false,
+          held: "b",
+        }),
+      ).toBe("c");
+    });
+
+    it("keeps the mounted message when the hold holds none of the person's", () => {
+      // The last checkpoint before the hold's end is then the landed one.
+      expect(
+        currentCheckpoint({
+          checkpoints,
+          above: new Set(["a"]),
+          before: null,
+          pinned: false,
+          held: "a",
+        }),
+      ).toBe("a");
+    });
+
+    it("is the held message with nothing mounted above the line", () => {
+      expect(
+        currentCheckpoint({
+          checkpoints,
+          above: new Set(),
+          before: null,
+          pinned: false,
+          held: "b",
+        }),
+      ).toBe("b");
+    });
+
+    it("ignores a held message that is no longer a checkpoint", () => {
+      expect(
+        currentCheckpoint({
+          checkpoints,
+          above: new Set(["a"]),
+          before: null,
+          pinned: false,
+          held: "gone",
+        }),
+      ).toBe("a");
+      expect(
+        currentCheckpoint({
+          checkpoints,
+          above: new Set(),
+          before: null,
+          pinned: false,
+          held: "gone",
+        }),
+      ).toBe("a");
+    });
+
+    it("still answers the latest exchange while pinned", () => {
+      expect(
+        currentCheckpoint({ checkpoints, above: new Set(), before: null, pinned: true, held: "b" }),
+      ).toBe("c");
+    });
+  });
+
   it("is nothing without checkpoints", () => {
     expect(
       currentCheckpoint({ checkpoints: [], above: new Set(), before: null, pinned: true }),

@@ -78,10 +78,16 @@ describe("rows a far jump holds back (VC-1226)", () => {
     expect(landingHeld(1110, shown, 40)).toBeNull();
   });
 
-  it("fills a page at a time and closes on the mounted rows", () => {
-    expect(fillHeld({ start: 40, end: 1140 }, 40)).toEqual({ start: 80, end: 1140 });
-    expect(fillHeld({ start: 1100, end: 1140 }, 40)).toBeNull();
-    expect(fillHeld({ start: 1110, end: 1140 }, 40)).toBeNull();
+  it("fills a page at a time from the top and closes on the mounted rows", () => {
+    expect(fillHeld({ start: 40, end: 1140 }, false, 40)).toEqual({ start: 80, end: 1140 });
+    expect(fillHeld({ start: 1100, end: 1140 }, false, 40)).toBeNull();
+    expect(fillHeld({ start: 1110, end: 1140 }, false, 40)).toBeNull();
+  });
+
+  it("fills from the bottom for a reader below the hold", () => {
+    expect(fillHeld({ start: 40, end: 1140 }, true, 40)).toEqual({ start: 40, end: 1100 });
+    expect(fillHeld({ start: 40, end: 80 }, true, 40)).toBeNull();
+    expect(fillHeld({ start: 40, end: 70 }, true, 40)).toBeNull();
   });
 
   it("lands and fills a page at a time by default", () => {
@@ -91,7 +97,10 @@ describe("rows a far jump holds back (VC-1226)", () => {
       start: TRANSCRIPT_LANDING_ROWS,
       end: 1140,
     });
-    expect(fillHeld({ start: 0, end: 1140 })).toEqual({ start: TRANSCRIPT_FILL_ROWS, end: 1140 });
+    expect(fillHeld({ start: 0, end: 1140 }, false)).toEqual({
+      start: TRANSCRIPT_FILL_ROWS,
+      end: 1140,
+    });
   });
 });
 

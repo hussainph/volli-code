@@ -149,10 +149,21 @@ export function landingHeld(
   return start < end ? { start, end } : null;
 }
 
-/** The held rows after one fill step: `null` once the step reaches the mounted rows below. */
-export function fillHeld(held: HeldRows, step: number = TRANSCRIPT_FILL_ROWS): HeldRows | null {
-  const start = held.start + step;
-  return start < held.end ? { start, end: held.end } : null;
+/**
+ * The held rows after one fill step: `null` once the step meets the mounted
+ * rows on its far side. A step fills from the end nearer the reader: from the
+ * top when they are above the hold (where a jump leaves them), from the bottom
+ * when they are below it, so a reader scrolling up out of the tail meets rows
+ * rather than the spacer.
+ */
+export function fillHeld(
+  held: HeldRows,
+  fromEnd: boolean,
+  step: number = TRANSCRIPT_FILL_ROWS,
+): HeldRows | null {
+  const start = fromEnd ? held.start : held.start + step;
+  const end = fromEnd ? held.end - step : held.end;
+  return start < end ? { start, end } : null;
 }
 
 /* ------------------------------------------------------------- the remount */
