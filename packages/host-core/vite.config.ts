@@ -1,12 +1,15 @@
 import "vite-plus/test/config";
 import { defineConfig } from "vite-plus";
 
+import { TEST_WORKER_NODE_FLAGS } from "../../vitest.node-flags";
 import { SHARED_MACHINE_TEST_WORKERS } from "../../vitest.workers";
 
 export default defineConfig({
   test: {
     // One `vp test` invocation's share of a shared machine (VC-339).
     ...SHARED_MACHINE_TEST_WORKERS,
+    // Node 24's Wasm wrapper double free killed forks mid-shard (VC-1209).
+    ...TEST_WORKER_NODE_FLAGS,
     // Plain Node: this package runs in the Linux host lane, never in Electron.
     environment: "node",
     setupFiles: process.env["VOLLI_TEST_DIAGNOSTICS"] ? ["./src/test-diagnostics-setup.ts"] : [],

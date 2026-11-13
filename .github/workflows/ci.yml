@@ -386,7 +386,7 @@ jobs:
           node scripts/check-host-electron-imports.mjs --self-test
           node scripts/check-host-electron-imports.mjs
           node --test scripts/ci-host-lane.test.mjs
-          node --test apps/desktop/scripts/test-sequencer.test.mjs scripts/setup-toolchain.test.mjs scripts/host-test-diagnostics.test.mjs scripts/worker-node-archive.test.mjs
+          node --test apps/desktop/scripts/test-sequencer.test.mjs scripts/setup-toolchain.test.mjs scripts/host-test-diagnostics.test.mjs scripts/worker-node-archive.test.mjs scripts/ci-runner-health.test.mjs
 
       # The encoded design system (the tokens ARE the spec, not a document).
       # `vp check` is fmt + lint. These source-specific guards run separately
@@ -590,6 +590,10 @@ jobs:
         run: |
           mkdir -p "$VOLLI_TEST_DIAGNOSTICS"
           set -o pipefail
+          # The VM's own load beside the suite: tells a stalled runner from a stalled test.
+          bash ../../scripts/ci-runner-health.sh "$VOLLI_TEST_DIAGNOSTICS" >/dev/null 2>&1 &
+          health=$!
+          trap 'kill "$health" 2>/dev/null || true' EXIT
           vp test run \
             --shard=${{ matrix.shard }}/${{ strategy.job-total }} \
             --maxWorkers=$(nproc) \
@@ -835,6 +839,10 @@ jobs:
         run: |
           mkdir -p "$VOLLI_TEST_DIAGNOSTICS"
           set -o pipefail
+          # The VM's own load beside the suite: tells a stalled runner from a stalled test.
+          bash ../../scripts/ci-runner-health.sh "$VOLLI_TEST_DIAGNOSTICS" >/dev/null 2>&1 &
+          health=$!
+          trap 'kill "$health" 2>/dev/null || true' EXIT
           vp test run \
             --shard=${{ matrix.shard }}/${{ strategy.job-total }} \
             --maxWorkers=$(nproc) \
@@ -1317,6 +1325,11 @@ jobs:
               echo "ok    $1: $2"
             else
               echo "::error::$1 is '$2', expected '$3'"
+              # GitHub's own result for a job no runner ever picked up: no
+              # step ran, so it says nothing about this commit (VC-1209).
+              if [[ "$2" == "abandoned" ]]; then
+                echo "::error::$1 never started: GitHub assigned it no runner (its job annotations say so). Re-run that job."
+              fi
               status=1
             fi
           }

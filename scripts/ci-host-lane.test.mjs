@@ -8,6 +8,8 @@ import { fileURLToPath } from "node:url";
 
 import { parse } from "yaml";
 
+import { testWorkerExecArgv } from "../vitest.node-flags.ts";
+
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const workflow = parse(readFileSync(join(root, ".github/workflows/ci.yml"), "utf8"));
 const jobs = workflow.jobs;
@@ -112,7 +114,15 @@ test("gate accepts only success or the precise conditional skip", () => {
     assert.equal(green.status, 0, green.stdout + green.stderr);
     for (const job of jobs.gate.needs) {
       const variable = resultVariable(job);
-      for (const state of ["success", "failure", "cancelled", "skipped", "", "unknown"]) {
+      for (const state of [
+        "success",
+        "failure",
+        "cancelled",
+        "abandoned",
+        "skipped",
+        "",
+        "unknown",
+      ]) {
         const outcome = runGate({ ...env, [variable]: state });
         assert.equal(
           outcome.status === 0,
@@ -619,6 +629,50 @@ test("desktop shards use the same bounded worker diagnostics without altering co
   const config = readFileSync(join(root, "apps/desktop/vite.config.ts"), "utf8");
   assert.ok(config.includes('setupFiles: [...diagnosticSetup, "test-setup.ts"]'));
   assert.ok(config.includes('setupFiles: [...diagnosticSetup, "src/main/test-setup.ts"]'));
+});
+
+test("a lane GitHub never assigned a runner fails the gate and says it never started", () => {
+  const env = results("true", "true", n1All, "push");
+  const outcome = runGate({ ...env, SMOKE_BOOT: "abandoned" });
+  assert.notEqual(outcome.status, 0);
+  assert.match(outcome.stdout, /Smoke \(core e2e\) is 'abandoned', expected 'success'/u);
+  assert.match(outcome.stdout, /Smoke \(core e2e\) never started: GitHub assigned it no runner/u);
+  const failed = runGate({ ...env, SMOKE_BOOT: "failure" });
+  assert.doesNotMatch(failed.stdout, /never started/u);
+});
+
+test("both shard lanes sample runner health beside the suite and keep it with the diagnostics", () => {
+  for (const [job, dir] of [
+    ["test-desktop", ".tmp/desktop-diagnostics/"],
+    ["test-host-core", ".tmp/host-core-diagnostics/"],
+  ]) {
+    const steps = jobs[job].steps;
+    const shard = steps.find((step) => step.name.startsWith("Run shard "));
+    const sampler = shard.run.indexOf(
+      'bash ../../scripts/ci-runner-health.sh "$VOLLI_TEST_DIAGNOSTICS" >/dev/null 2>&1 &',
+    );
+    assert.ok(sampler >= 0, `${job} starts no sampler`);
+    assert.ok(sampler < shard.run.indexOf("vp test run"), `${job} samples after the suite starts`);
+    assert.match(shard.run, /trap 'kill "\$health" 2>\/dev\/null \|\| true' EXIT/u);
+    const upload = steps.find((step) => step.name.endsWith("worker diagnostics"));
+    assert.equal(upload.with.path, dir);
+    assert.equal(upload.if, "always()");
+  }
+});
+
+test("Node 24 test forks run without Wasm code GC, in every project that saw the abort", () => {
+  // nodejs/node#66366: the flag is for V8 13.6 (all of Node 24) and nothing else.
+  assert.deepEqual(testWorkerExecArgv("24.22.1"), ["--no-wasm-code-gc"]);
+  assert.deepEqual(testWorkerExecArgv("22.23.0"), []);
+  assert.deepEqual(testWorkerExecArgv("26.10.0"), []);
+  assert.deepEqual(testWorkerExecArgv("240.1.0"), []);
+  const host = readFileSync(join(root, "packages/host-core/vite.config.ts"), "utf8");
+  assert.equal(host.match(/\.\.\.TEST_WORKER_NODE_FLAGS,/gu)?.length, 1);
+  // Top level (which `renderer` extends) and `main`, which extends nothing.
+  const desktop = readFileSync(join(root, "apps/desktop/vite.config.ts"), "utf8");
+  assert.equal(desktop.match(/\.\.\.TEST_WORKER_NODE_FLAGS,/gu)?.length, 2);
+  const main = desktop.slice(desktop.indexOf('name: "main"'));
+  assert.ok(main.indexOf("...TEST_WORKER_NODE_FLAGS,") < main.indexOf("coverage: {"));
 });
 
 test("symbolization runs in the existing Linux job without consuming diagnostic or test failures", () => {

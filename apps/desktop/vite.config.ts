@@ -9,6 +9,7 @@ import type { PackUserConfig } from "vite-plus/pack";
 
 import { RENDERER_DEV_PORT } from "./scripts/dev-constants.mjs";
 import DesktopTestSequencer from "./scripts/test-sequencer";
+import { TEST_WORKER_NODE_FLAGS } from "../../vitest.node-flags";
 import { SHARED_MACHINE_TEST_WORKERS } from "../../vitest.workers";
 import { rendererConnectSources, withConnectSources } from "./src/main/renderer-csp";
 import { packagedCloudConfig } from "./src/main/deployment-config";
@@ -188,6 +189,9 @@ export default defineConfig(({ mode, command }) => ({
     // once at the top level rather than per project: the worker pool is global
     // to the invocation, and both projects below draw from it.
     ...SHARED_MACHINE_TEST_WORKERS,
+    // Node 24's Wasm wrapper double free killed forks mid-shard (VC-1209).
+    // `renderer` inherits this; `main` states it again below.
+    ...TEST_WORKER_NODE_FLAGS,
     sequence: { sequencer: DesktopTestSequencer },
     projects: [
       // Inherits root src/renderer, plugins, @renderer alias — existing store
@@ -230,6 +234,7 @@ export default defineConfig(({ mode, command }) => ({
           // (VC-339). Both projects say the same thing; the flag then
           // governs the pool they share.
           ...SHARED_MACHINE_TEST_WORKERS,
+          ...TEST_WORKER_NODE_FLAGS,
         },
       },
     ],

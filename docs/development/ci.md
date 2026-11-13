@@ -111,6 +111,34 @@ cause attribution. A diagnostic failure keeps the job red while still allowing
 the real coverage step to run and report its own result. The pin is specific
 to those retained frames, not a promise that addresses survive a Node update.
 
+**Known cause of the fork exits.** On Node 24 every retained "Worker exited
+unexpectedly" in these lanes has been V8's `Check failed: jit_page.has_value()`
+(SIGTRAP in the child's parent record). Its frames run from
+`Runtime_TierUpWasmToJSWrapper` through `WasmImportWrapperCache::Free` to
+`ThreadIsolation::UnregisterWasmAllocation`. That is nodejs/node#66366: V8 13.6
+can free a shared Wasm import wrapper twice when Wasm code GC races a thread
+that is adding it to its ref scope. The backport, nodejs/node#66376, is in no
+24.x release yet. Desktop and host-core forks therefore run with
+`--no-wasm-code-gc` on Node 24 (`vitest.node-flags.ts`), which removes the race.
+Remove the flag when `.nvmrc` moves to a Node with the backport. Another
+package whose forks abort the same way spreads `TEST_WORKER_NODE_FLAGS` the same
+way.
+
+**Runner health.** Each shard also writes `runner-health.log` into its
+diagnostics artifact (`scripts/ci-runner-health.sh`): every 5 s, the CPU split
+including steal and I/O wait, runnable and blocked tasks, available memory and
+`/proc/pressure` averages. A stall that shows steal, I/O wait or pressure is the
+VM. A stall on an idle machine is the test. A degraded runner also shows before
+any test runs: compare the job's `Checkout` and `Setup Vite+` durations with
+other jobs in the same workflow run.
+
+**`abandoned`.** `CI gate` prints this when GitHub never assigned a lane a
+runner. The job has no steps and no log, and its annotations say "The job was
+not acquired by Runner of type hosted even after multiple attempts". GitHub
+gives up after 15 to 35 minutes. This has hit the macOS lane while GitHub
+reported limited macOS arm64 capacity. No step ran, so the result says nothing
+about the commit: re-run that job.
+
 For a focused local capture, set `VOLLI_TEST_DIAGNOSTICS` to an absolute
 workspace-local directory under `.tmp/` and append
 `--require="<workspace>/scripts/host-test-diagnostics.cjs"` to `NODE_OPTIONS`,
