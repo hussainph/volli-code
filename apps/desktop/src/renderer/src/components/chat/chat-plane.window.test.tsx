@@ -1461,6 +1461,77 @@ describe("a chat plane holding a long transcript", () => {
   });
 });
 
+describe("the checkpoint rail beside a long transcript (VC-1211)", () => {
+  const rail = () => container?.querySelector('nav[aria-label="Messages"]') ?? null;
+  const mark = (index: number) =>
+    container?.querySelector<HTMLButtonElement>(`[data-checkpoint-mark="u${index}"]`) ?? null;
+
+  it("marks every message the plane holds, not only the mounted tail", async () => {
+    await mountPlane(chatStore(transcript(TURNS)));
+
+    expect(turnRows()).toBe(TRANSCRIPT_TAIL_ROWS);
+    expect(rail()?.querySelectorAll("[data-checkpoint-mark]")).toHaveLength(TURNS);
+    // Outside the transcript's log, so a new mark is never read out as conversation.
+    expect(rail()?.closest('[role="log"]')).toBeNull();
+  });
+
+  it("is absent for a single message", async () => {
+    await mountPlane(chatStore(transcript(1)));
+
+    expect(turnRows()).toBe(1);
+    expect(rail()).toBeNull();
+  });
+
+  it("mounts a message above the window when its mark is chosen, through the window's own anchor", async () => {
+    await mountPlane(chatStore(transcript(TURNS)));
+    expect(shows(0)).toBe(false);
+
+    const first = mark(0);
+    if (first === null) throw new Error("expected a mark for the first message");
+    click(first);
+
+    expect(shows(0)).toBe(true);
+    expect(turnRows()).toBe(TURNS);
+    expect(readTranscriptView(SESSION)?.anchorKey).toBe("u0");
+    expect(first.getAttribute("aria-current")).toBe("location");
+  });
+
+  it("leaves the window alone for a message already mounted", async () => {
+    await mountPlane(chatStore(transcript(TURNS)));
+
+    const inTail = mark(TURNS - 3);
+    if (inTail === null) throw new Error("expected a mark in the tail");
+    click(inTail);
+
+    expect(turnRows()).toBe(TRANSCRIPT_TAIL_ROWS);
+    expect(inTail.getAttribute("aria-current")).toBe("location");
+  });
+
+  it("adds a mark when the person sends another message", async () => {
+    const store = chatStore(transcript(3));
+    await mountPlane(store);
+    expect(rail()?.querySelectorAll("[data-checkpoint-mark]")).toHaveLength(3);
+
+    const grown = transcript(4);
+    await act(async () => {
+      store.setState(
+        (state) =>
+          ({
+            sessions: {
+              ...state.sessions,
+              [SESSION]: {
+                ...state.sessions[SESSION],
+                transcript: { ...EMPTY_TRANSCRIPT, durableMessages: grown, messages: grown },
+              },
+            },
+          }) as never,
+      );
+    });
+
+    expect(rail()?.querySelectorAll("[data-checkpoint-mark]")).toHaveLength(4);
+  });
+});
+
 describe("a chat plane holding only the host's newest window (VC-315)", () => {
   /** Turn `index` as a durable frame at sequence `index + 1`. */
   const turnFrame = (index: number): ChatSessionFrame =>

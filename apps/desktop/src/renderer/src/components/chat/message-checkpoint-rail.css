@@ -1,0 +1,95 @@
+/*
+ * The checkpoint rail (VC-1211): a column of marks in the transcript's empty
+ * left margin, between the plane's top and the composer dock.
+ *
+ * WHEN IT SHOWS. Only where the margin can hold it clear of the text. The
+ * queried container is the chat plane itself (`[container-type:size]` on its
+ * root, the rail's parent), so the width is the pane's, not the window's: a
+ * split pane or an open inspector hides it on its own.
+ *
+ * The threshold, from the transcript's geometry: the scrollbar lane takes
+ * 10px (`--scrollbar-size`), the column (`--container-transcript`, 648px) is
+ * centred in what is left, and its 24px gutters put the text 600px wide. The
+ * text's left edge is therefore (W - 610) / 2. The rail ends 32px from the
+ * pane's edge (8px inset + 24px marks), and wants at least 16px of paper
+ * before the text: (W - 610) / 2 >= 48, so W >= 706px. 720px leaves
+ * 23px at the threshold. Narrower than that the rail is `display: none` —
+ * hidden, not squeezed, so it never draws over a line of text.
+ */
+.message-checkpoints {
+  position: absolute;
+  z-index: 10;
+  top: calc(var(--spacing) * 4);
+  bottom: calc(var(--composer-height, 0px) + var(--spacing) * 4);
+  left: calc(var(--spacing) * 2);
+  display: none;
+  flex-direction: column;
+  justify-content: center;
+  pointer-events: none;
+}
+@container (width >= 720px) {
+  .message-checkpoints {
+    display: flex;
+  }
+}
+
+/* A long chat scrolls inside its band rather than outgrowing the pane. */
+.message-checkpoint-list {
+  --cut-top: 0px;
+  --cut-bottom: 0px;
+  position: relative;
+  display: flex;
+  max-height: 100%;
+  flex-direction: column;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  pointer-events: auto;
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    black var(--cut-top),
+    black calc(100% - var(--cut-bottom)),
+    transparent 100%
+  );
+}
+.message-checkpoint-list::-webkit-scrollbar {
+  display: none;
+}
+.message-checkpoint-list[data-cut-top] {
+  --cut-top: calc(var(--spacing) * 4);
+}
+.message-checkpoint-list[data-cut-bottom] {
+  --cut-bottom: calc(var(--spacing) * 4);
+}
+
+/* The hit area is the whole 24 x 8px slot; the drawing is a 2px line in it. */
+.message-checkpoint {
+  display: flex;
+  width: calc(var(--spacing) * 6);
+  height: calc(var(--spacing) * 2);
+  flex-shrink: 0;
+  align-items: center;
+  padding-inline-start: var(--spacing);
+  border-radius: var(--radius-sm);
+  outline: none;
+}
+.message-checkpoint:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -1px;
+}
+.message-checkpoint-line {
+  width: calc(var(--spacing) * 2);
+  height: calc(var(--spacing) * 0.5);
+  border-radius: 9999px;
+  background: var(--tertiary-foreground);
+}
+.message-checkpoint:hover .message-checkpoint-line,
+.message-checkpoint[data-previewed] .message-checkpoint-line {
+  width: calc(var(--spacing) * 3);
+  background: var(--muted-foreground);
+}
+.message-checkpoint[aria-current] .message-checkpoint-line {
+  width: calc(var(--spacing) * 4);
+  background: var(--foreground);
+}
