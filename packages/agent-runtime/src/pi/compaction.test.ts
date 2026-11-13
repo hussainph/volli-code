@@ -871,6 +871,53 @@ describe("compactSession", () => {
     if (outcome.kind !== "failed") return;
     expect(outcome.message).toContain("Summarization failed");
     expect(await sidecar.findEntries(undefined, piContext())).toEqual([]);
+    // The errored reply was still billed for its prompt, so the bill survives
+    // the failure (VC-805).
+    expect(outcome.usage).toEqual({
+      cause: "compaction",
+      providerId: PROVIDER_ID,
+      modelId: MODEL_ID,
+      inputTokens: 100,
+      outputTokens: 20,
+      cacheReadTokens: 5,
+      cacheWriteTokens: 7,
+      costUsd: 0.003,
+      costBasis: "catalog-estimate",
+    });
+  });
+
+  it("bills a split turn's history summary when its prefix summary fails (VC-805)", async () => {
+    const sidecar = await memorySession();
+    // History succeeds; the prefix request errors after being billed.
+    const models = scriptedModels(["## Goal\nthe history"]);
+    const model = models.getModel(PROVIDER_ID, MODEL_ID)!;
+    // The cut lands on the long reply inside the second turn, so the turn is split.
+    const path = [
+      messageEntry(user("the original request")),
+      messageEntry(assistant("an early answer")),
+      messageEntry(user("the current request")),
+      messageEntry(assistant("x".repeat(90_000))),
+      messageEntry(assistant("the recent answer")),
+    ];
+
+    const outcome = await compactSession({ sidecar, path, models, model, settings });
+
+    expect(outcome.kind).toBe("failed");
+    if (outcome.kind !== "failed") return;
+    expect(outcome.message).toContain("Turn prefix summarization failed");
+    expect(await sidecar.findEntries(undefined, piContext())).toEqual([]);
+    // Both requests, once each: the history summary and the failed prefix.
+    expect(outcome.usage).toEqual({
+      cause: "compaction",
+      providerId: PROVIDER_ID,
+      modelId: MODEL_ID,
+      inputTokens: 200,
+      outputTokens: 40,
+      cacheReadTokens: 10,
+      cacheWriteTokens: 14,
+      costUsd: 0.006,
+      costBasis: "catalog-estimate",
+    });
   });
 
   it.each([

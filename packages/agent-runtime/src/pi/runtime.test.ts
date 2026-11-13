@@ -446,6 +446,19 @@ function settlesHolding(text: string, tokens: number): ScriptStep {
   };
 }
 
+/**
+ * A long tool-calling reply that fills the window from INSIDE the turn, so a
+ * threshold compaction before the next round cuts the turn and splits it.
+ */
+function longToolRound(label: string): ScriptStep {
+  return (emit) => {
+    emit.occupies(200_000);
+    emit.text(`${label} round notes `.repeat(6_000));
+    emit.toolCall("read", { path: "MARKER.txt" });
+    emit.finish();
+  };
+}
+
 /** What one provider call was made with. */
 interface ProviderCall {
   model: string;
@@ -8162,6 +8175,133 @@ describe("compacting a context that reached its reserve", () => {
     await handle.close();
   });
 
+  it("records the split turn's billed history summary when its prefix summary fails (VC-805)", async () => {
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, settles("old answer")),
+          recording(calls, (emit) => {
+            // A long reply INSIDE the turn: the cut lands on it, so the turn
+            // is split and compaction sends two summary requests.
+            emit.occupies(200_000);
+            emit.text("long working notes ".repeat(6_000));
+            emit.toolCall("read", { path: "MARKER.txt" });
+            emit.finish();
+          }),
+          recording(calls, settles("## Goal\nthe history summary")),
+          recording(calls, (emit) => emit.fail("prefix summary rate limited")),
+          recording(calls, settles("finished the same turn")),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember this");
+    await handle.submitUserMessage("read the marker");
+
+    expect(calls).toHaveLength(5);
+    expect(calls[2]?.messages).toContain("old answer");
+    // The second request is the split turn's prefix summary: the turn's own
+    // opening, up to the long reply the cut kept.
+    expect(calls[3]?.messages).toContain("PREFIX of a turn");
+    expect(calls[3]?.messages).toContain("read the marker");
+    expect(compactionEntries(handle.recovery!.sessionFilePath)).toEqual([]);
+    expect(compactions(attachment.observations)).toEqual([
+      expect.objectContaining({
+        state: "failed",
+        reason: "threshold",
+        message: expect.stringContaining("Turn prefix summarization failed"),
+      }),
+    ]);
+    // Both summary requests were billed; the failure records them once.
+    const billed = attachment.observations.filter(
+      (observation): observation is Extract<RuntimeObservation, { kind: "usage" }> =>
+        observation.kind === "usage" && observation.usage.cause === "compaction",
+    );
+    expect(billed).toEqual([
+      expect.objectContaining({
+        kind: "usage",
+        turnId: null,
+        usage: expect.objectContaining({ cause: "compaction", inputTokens: 200, outputTokens: 40 }),
+      }),
+    ]);
+    // No compaction entry exists to name it after, so it is named by a fresh
+    // id held in its own recovery marker...
+    const [failedBill] = billed;
+    expect(failedBill?.entryId).toMatch(/^[0-9a-f-]{36}$/u);
+    const recovery = handle.recovery!;
+    await handle.close();
+    // ...which a reattach replays verbatim, so the real translator names the
+    // same `usage.recorded` fact twice and the ledger keeps one bill.
+    const replay = await runtime.startSession({ ...attachment.spec, recovery });
+    const replayed = (await replay.reconcile(null)).observations.filter(
+      (observation) => observation.kind === "usage" && observation.usage.cause === "compaction",
+    );
+    expect(replayed).toEqual(billed);
+    await replay.close();
+    const { RuntimeObservationTranslator } =
+      await import("../../../session-engine/src/observation-translation");
+    const translate = (observation: RuntimeObservation) =>
+      new RuntimeObservationTranslator({
+        namespace: "pi",
+        sessionId: attachment.spec.identity.sessionId,
+        attachmentId: attachment.spec.identity.attachmentId,
+        now: () => 0,
+      }).replay(observation);
+    const live = translate(failedBill!);
+    expect(live).toEqual([
+      expect.objectContaining({
+        id: `pi:usage:${failedBill!.entryId}`,
+        kind: "usage.recorded",
+        turnId: null,
+        usage: failedBill!.usage,
+      }),
+    ]);
+    expect(translate(replayed[0]!)).toEqual(live);
+  });
+
+  it("bills a failed compaction and the success that follows it once each (VC-805)", async () => {
+    const attachment = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          settles("old answer"),
+          longToolRound("first"),
+          settles("## Goal\nthe first history"),
+          (emit) => emit.fail("prefix summary rate limited"),
+          longToolRound("second"),
+          settles("## Goal\nthe second history"),
+          settles("## Original Request\nthe prefix"),
+          settles("finished the same turn"),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember this");
+    await handle.submitUserMessage("read the marker");
+
+    const [failed, compacted] = compactions(attachment.observations);
+    expect(failed).toMatchObject({ state: "failed", reason: "threshold" });
+    expect(compacted).toMatchObject({ state: "compacted", reason: "threshold" });
+    const entryId = (compacted as Extract<CompactionObservation, { state: "compacted" }>).entryId;
+    // Two requests each: the success carries nothing of the failure before it,
+    // and keeps the entry-named id it always had.
+    const billed = attachment.observations.filter(
+      (observation): observation is Extract<RuntimeObservation, { kind: "usage" }> =>
+        observation.kind === "usage" && observation.usage.cause === "compaction",
+    );
+    expect(billed.map(({ usage }) => [usage.inputTokens, usage.outputTokens])).toEqual([
+      [200, 40],
+      [200, 40],
+    ]);
+    expect(billed[0]?.entryId).not.toBe(entryId);
+    expect(billed[1]?.entryId).toBe(entryId);
+    await handle.close();
+  });
+
   it("caps output against the model-aware size of unmeasured input", async () => {
     const attachment = fixture();
     const script = scriptedStream([settles("answer")]);
@@ -8602,6 +8742,19 @@ describe("compacting a context that reached its reserve", () => {
         recoveryCursor: expect.any(String),
       },
     ]);
+    // The errored summary was billed for its prompt before it failed, so its
+    // usage is recorded once, as compaction spend (VC-805).
+    expect(
+      attachment.observations.filter(
+        (observation) => observation.kind === "usage" && observation.usage.cause === "compaction",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        kind: "usage",
+        turnId: null,
+        usage: expect.objectContaining({ cause: "compaction", inputTokens: 100, outputTokens: 20 }),
+      }),
+    ]);
     await handle.close();
   });
 
@@ -8746,10 +8899,12 @@ describe("provider-native context persistence", () => {
         expect(attachment.observations).toContainEqual(
           expect.objectContaining({
             kind: "usage",
+            // A failed fallback adds the local summary's own billed prompt
+            // (100 in, 20 out) to the native attempt's (VC-805).
             usage: expect.objectContaining({
               cause: "compaction",
-              inputTokens: 1000,
-              outputTokens: 50,
+              inputTokens: success ? 1000 : 1100,
+              outputTokens: success ? 50 : 70,
             }),
           }),
         );
