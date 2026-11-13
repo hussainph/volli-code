@@ -45,8 +45,10 @@ export function registerSharedPreferenceDefaults<State>(store: {
   );
 }
 
-// Only shared presentation preferences suppress identical writes. Drafts retain
-// their explicit durability/acknowledgement semantics, even for identical bytes.
+/**
+ * Last value main accepted per shared preference: the boot seed, a write
+ * acknowledgement, or a peer window's broadcast. Never contains local intent.
+ */
 const sharedPreferenceValues = new Map<string, string>();
 const preferenceListeners = new Set<(key: string) => void>();
 /** Accepted merged preferences repaint their writer as well as other windows. */
@@ -55,6 +57,94 @@ export function onPreferenceValueAccepted(listener: (key: string) => void): () =
   return () => {
     preferenceListeners.delete(listener);
   };
+}
+
+/**
+ * This window's shared-preference edits that main has not accepted, kept apart
+ * from the cached snapshot (VC-1164). The cache is always the accepted value
+ * with these applied, so an acknowledgement or broadcast that brings a peer's
+ * change can never be mistaken for local intent and written back.
+ *
+ * `base` → `next` is the change, merged field by field
+ * ({@link mergePreferenceSnapshot}). A `held` delta is a refused write: it
+ * stays visible and rides the next write to this key, but nothing re-sends it
+ * on its own, and a peer's later accepted change to one of its fields wins.
+ */
+interface LocalDelta {
+  base: string | undefined;
+  next: string;
+  held: boolean;
+}
+const localDeltas = new Map<string, LocalDelta>();
+
+/** Appends one edit (the snapshot `base` became `next`) to the key's local delta. */
+function recordLocalEdit(key: string, base: string | undefined, next: string, held = false): void {
+  const earlier = localDeltas.get(key);
+  localDeltas.set(
+    key,
+    earlier === undefined
+      ? { base, next, held }
+      : { base: earlier.base, next: mergePreferenceSnapshot(earlier.next, base, next), held },
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+const sameJson = (left: unknown, right: unknown): boolean =>
+  JSON.stringify(left) === JSON.stringify(right);
+
+/**
+ * The refused edit (`base` → `next`) minus every field a peer has changed
+ * since (`base` → `accepted`), applied to `accepted`: a peer's later accepted
+ * change to the same field wins over an edit main never took.
+ */
+function withoutSuperseded(base: unknown, next: unknown, accepted: unknown): unknown {
+  if (sameJson(base, next)) return accepted;
+  if (sameJson(base, accepted)) return next;
+  if (!isRecord(base) || !isRecord(next) || !isRecord(accepted)) return accepted;
+  const merged: Record<string, unknown> = {};
+  for (const key of new Set([...Object.keys(accepted), ...Object.keys(next)])) {
+    const value = withoutSuperseded(base[key], next[key], accepted[key]);
+    if (value === undefined) continue;
+    // JSON keys are data, including __proto__; never invoke a prototype setter.
+    Object.defineProperty(merged, key, {
+      value,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  return merged;
+}
+
+/**
+ * Rebases a refused edit onto a peer's accepted value, dropping what that
+ * value superseded. A cleared row or an edit with no baseline to compare
+ * against is superseded whole.
+ */
+function rebaseHeldDelta(key: string, delta: LocalDelta, accepted: string): void {
+  let next: string | undefined;
+  if (accepted !== "" && delta.base !== undefined && delta.base !== "" && delta.next !== "") {
+    try {
+      next = JSON.stringify(
+        withoutSuperseded(JSON.parse(delta.base), JSON.parse(delta.next), JSON.parse(accepted)),
+      );
+    } catch {
+      next = undefined;
+    }
+  }
+  if (next === undefined || next === accepted) localDeltas.delete(key);
+  else localDeltas.set(key, { base: accepted, next, held: true });
+}
+
+/** The renderer's view: the accepted value with this window's unaccepted edits on top. */
+function showSharedPreference(key: string, accepted: string): void {
+  const delta = localDeltas.get(key);
+  const view =
+    delta === undefined ? accepted : mergePreferenceSnapshot(accepted, delta.base, delta.next);
+  if (view === "") cache.delete(key);
+  else cache.set(key, view);
 }
 
 /**
@@ -73,39 +163,76 @@ export function seedAppStateCache(entries: Record<string, string>): void {
   }
 }
 
-/** Writes through to main and reports whether SQLite acknowledged the value. */
+/** One bridge write: the full value, and for a shared preference the snapshot it changes. */
+interface Outgoing {
+  value: string;
+  baseValue?: string;
+  failureVerb: string;
+}
+
+/**
+ * Writes through to main and reports whether SQLite acknowledged the value,
+ * with the merged snapshot main accepted for a shared preference. A failure
+ * is surfaced here, once per write.
+ */
 async function persist(
   key: string,
-  value: string,
-  failureVerb: string,
-  baseValue?: string,
-): Promise<boolean> {
+  { value, baseValue, failureVerb }: Outgoing,
+): Promise<{ ok: boolean; accepted?: string }> {
   try {
     const result =
       isSharedPreference(key) && baseValue !== undefined && value !== ""
         ? await window.api.appState.set(key, value, baseValue)
         : await window.api.appState.set(key, value);
     if (result.ok) {
-      if (isSharedPreference(key) && result.value !== undefined) {
-        const accepted = result.value;
-        // Main merged an independent edit from another window. Retain any
-        // newer local intent while adopting that authoritative snapshot.
-        cache.set(key, mergePreferenceSnapshot(accepted, value, cache.get(key) ?? value));
-        const pending = pendingWrites.get(key);
-        if (pending !== undefined) {
-          pending.value = mergePreferenceSnapshot(accepted, value, pending.value);
-          pending.baseValue = mergePreferenceSnapshot(accepted, value, pending.baseValue ?? value);
-        }
-        for (const listener of preferenceListeners) listener(key);
-      }
-      return true;
+      return { ok: true, accepted: result.value };
     } else {
       toastError(`Couldn't ${failureVerb} "${key}": ${result.error}`);
     }
   } catch (error: unknown) {
     toastError(`Couldn't ${failureVerb} "${key}": ${errorMessage(error)}`);
   }
-  return false;
+  return { ok: false };
+}
+
+/**
+ * Takes the key's local delta for sending, rebased onto main's last accepted
+ * value. It runs when the write actually leaves, never when it was scheduled,
+ * so a write queued behind an acknowledgement carries only this window's
+ * edits relative to everything that acknowledgement brought in.
+ */
+function takeSharedPreferenceWrite(key: string): Outgoing | undefined {
+  const delta = localDeltas.get(key);
+  if (delta === undefined || delta.held) return undefined;
+  localDeltas.delete(key);
+  const accepted = sharedPreferenceValues.get(key);
+  const value = cache.get(key) ?? "";
+  return {
+    value,
+    // An absent or cleared row's baseline is the store's registered defaults.
+    baseValue: accepted === undefined || accepted === "" ? preferenceDefaults.get(key) : accepted,
+    failureVerb: value === "" ? "clear" : "save",
+  };
+}
+
+function settleSharedPreferenceWrite(
+  key: string,
+  sent: Outgoing,
+  result: { ok: boolean; accepted?: string },
+): void {
+  if (!result.ok) {
+    // Keep the refused edit visible and ahead of any newer one; it leaves
+    // again only with the next write to this key.
+    const later = localDeltas.get(key);
+    localDeltas.set(key, { base: sent.baseValue, next: sent.value, held: true });
+    if (later !== undefined) recordLocalEdit(key, later.base, later.next, later.held);
+    return;
+  }
+  // Without a baseline main stores the value as sent and returns nothing.
+  sharedPreferenceValues.set(key, result.accepted ?? sent.value);
+  if (result.accepted === undefined) return;
+  showSharedPreference(key, result.accepted);
+  for (const listener of preferenceListeners) listener(key);
 }
 
 /**
@@ -119,8 +246,8 @@ async function persist(
 const PERSIST_DEBOUNCE_MS = 200;
 
 interface PendingWrite {
+  /** The value to send; a shared preference sends its local delta instead. */
   value: string;
-  baseValue?: string;
   failureVerb: string;
   timer: ReturnType<typeof setTimeout>;
 }
@@ -133,26 +260,26 @@ const acknowledgedValues = new Map<string, string>();
  * Serializes writes to one key, so an older bridge call can never settle after
  * and overwrite a value whose durability a caller already observed.
  */
-function persistInOrder(
-  key: string,
-  value: string,
-  failureVerb: string,
-  baseValue?: string,
-): Promise<boolean> {
+function persistInOrder(key: string, pending: PendingWrite): Promise<boolean> {
   acknowledgedValues.delete(key);
+  const shared = isSharedPreference(key);
+  const send = async (): Promise<boolean> => {
+    if (!shared) return (await persist(key, pending)).ok;
+    const sent = takeSharedPreferenceWrite(key);
+    // An earlier write already took this intent; it is durable unless refused.
+    if (sent === undefined) return !localDeltas.has(key);
+    const result = await persist(key, sent);
+    settleSharedPreferenceWrite(key, sent, result);
+    return result.ok;
+  };
   const previous = writesInFlight.get(key);
-  const write =
-    previous === undefined
-      ? persist(key, value, failureVerb, baseValue)
-      : previous.then(() => persist(key, value, failureVerb, baseValue));
+  const write = previous === undefined ? send() : previous.then(send);
   writesInFlight.set(key, write);
   void write.then((ok) => {
     if (writesInFlight.get(key) !== write) return;
     writesInFlight.delete(key);
-    if (ok && !pendingWrites.has(key)) {
-      const accepted = isSharedPreference(key) ? (cache.get(key) ?? value) : value;
-      acknowledgedValues.set(key, accepted);
-      if (isSharedPreference(key)) sharedPreferenceValues.set(key, accepted);
+    if (ok && !pendingWrites.has(key) && !localDeltas.has(key)) {
+      acknowledgedValues.set(key, shared ? (cache.get(key) ?? "") : pending.value);
     }
   });
   return write;
@@ -164,31 +291,22 @@ function persistDebounced(
   failureVerb: string,
   baseValue?: string,
 ): void {
-  // Zustand persist runs on transient navigation too. An unchanged preference
-  // must not overwrite another window's newer accepted value.
-  if (
-    failureVerb === "save" &&
-    isSharedPreference(key) &&
-    (sharedPreferenceValues.get(key) ?? preferenceDefaults.get(key)) === value &&
-    !pendingWrites.has(key) &&
-    !writesInFlight.has(key)
-  )
-    return;
+  if (isSharedPreference(key)) {
+    // Zustand persist runs on transient navigation too. A snapshot this
+    // window already shows is no new intent, and must neither overwrite
+    // another window's newer accepted value nor re-send a refused edit.
+    if (failureVerb === "save" && value === baseValue) return;
+    recordLocalEdit(key, baseValue, value);
+  }
   acknowledgedValues.delete(key);
   const existing = pendingWrites.get(key);
   if (existing !== undefined) clearTimeout(existing.timer);
   const timer = setTimeout(() => {
     const pending = pendingWrites.get(key);
     pendingWrites.delete(key);
-    if (pending !== undefined)
-      void persistInOrder(key, pending.value, pending.failureVerb, pending.baseValue);
+    if (pending !== undefined) void persistInOrder(key, pending);
   }, PERSIST_DEBOUNCE_MS);
-  pendingWrites.set(key, {
-    value,
-    baseValue: existing === undefined ? baseValue : existing.baseValue,
-    failureVerb,
-    timer,
-  });
+  pendingWrites.set(key, { value, failureVerb, timer });
 }
 
 /**
@@ -202,7 +320,7 @@ function persistDebounced(
 export function flushPendingAppState(): void {
   for (const [key, pending] of pendingWrites) {
     clearTimeout(pending.timer);
-    void persistInOrder(key, pending.value, pending.failureVerb, pending.baseValue);
+    void persistInOrder(key, pending);
   }
   pendingWrites.clear();
 }
@@ -219,7 +337,7 @@ export function flushPendingAppStateKey(key: string): Promise<boolean> {
   if (pending !== undefined) {
     clearTimeout(pending.timer);
     pendingWrites.delete(key);
-    return persistInOrder(key, pending.value, pending.failureVerb, pending.baseValue);
+    return persistInOrder(key, pending);
   }
   return (
     writesInFlight.get(key) ??
@@ -249,12 +367,21 @@ export async function flushAllPendingAppState(): Promise<boolean> {
   return ok;
 }
 
-/** Accept another window's committed preference, but never clobber local pending intent. */
+/**
+ * Accept another window's committed preference, but never clobber local
+ * pending intent: while a write is pending or in flight its acknowledgement
+ * brings main's merged value instead. A refused (held) edit stays applied.
+ */
 export function acceptAppStateValue(key: string, value: string): boolean {
   if (pendingWrites.has(key) || writesInFlight.has(key)) return false;
-  if (value === "") cache.delete(key);
+  if (isSharedPreference(key)) {
+    sharedPreferenceValues.set(key, value);
+    // Only a refused edit can be waiting here; the peer's newer value wins.
+    const held = localDeltas.get(key);
+    if (held !== undefined) rebaseHeldDelta(key, held, value);
+    showSharedPreference(key, value);
+  } else if (value === "") cache.delete(key);
   else cache.set(key, value);
-  if (isSharedPreference(key)) sharedPreferenceValues.set(key, value);
   return true;
 }
 
