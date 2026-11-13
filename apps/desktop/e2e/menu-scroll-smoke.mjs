@@ -18,14 +18,25 @@
  *   2. Wheel-up over the same list scrolls back up (a claim that only worked
  *      one direction would pass check 1 and still be broken).
  *   3. The ticket detail rail's label picker (NO dialog underneath) still
- *      scrolls — the claim must not have regressed the unlocked case.
+ *      scrolls — the claim must not have regressed the unlocked case. The
+ *      rail's Add picker lists only labels NOT yet on the ticket, so this
+ *      check opens a second, unlabelled ticket: on the labelled one the list
+ *      is empty and a wheel over it proves nothing (VC-1225).
  *   4. The board card context menu's Labels submenu still scrolls — the menu
  *      family keeps its own lock and must stay untouched by the fix.
+ *   5. Wheeling far past the end of the rail's list leaves it at its end and
+ *      moves nothing behind the popover: neither the document (where a
+ *      portalled popover's scroll chain ends) nor any other scroller.
+ *   6. The keyboard still brings the highlighted row into view: with the list
+ *      left at its end and the pointer moved off it, Home highlights the
+ *      first row and the list scrolls back up to show it.
  *
- * This is a MANUALLY-RUN smoke (needs a display + the built app); it is NOT
- * wired into `vp test`.
+ * 5 and 6 run on the rail's picker, so they print between 3 and 4.
  *
- *   Run:
+ * Needs a display + the built app; it is NOT wired into `vp test`. The smoke
+ * runner picks it up by glob (rest tier, `ci-extended.yml`).
+ *
+ *   Run by hand:
  *     pnpm run build                        # produce dist/ + dist-electron/
  *     node apps/desktop/e2e/menu-scroll-smoke.mjs
  *
@@ -73,7 +84,28 @@ function readList(page) {
       scrollTop: list.scrollTop,
       scrollHeight: list.scrollHeight,
       clientHeight: list.clientHeight,
+      items: list.querySelectorAll('[data-slot="command-item"]').length,
     };
+  });
+}
+
+/**
+ * The scrollTop of every element outside the open popover that can scroll,
+ * plus the document's, in a stable document order.
+ */
+function readScrollersBehindPopover(page) {
+  return page.evaluate(() => {
+    const popover = document
+      .querySelector('[data-slot="command-list"]')
+      ?.closest("[data-radix-popper-content-wrapper]");
+    const tops = [document.scrollingElement?.scrollTop ?? 0];
+    for (const el of document.querySelectorAll("*")) {
+      if (popover?.contains(el)) continue;
+      if (el.scrollHeight <= el.clientHeight) continue;
+      const overflowY = getComputedStyle(el).overflowY;
+      if (overflowY === "auto" || overflowY === "scroll") tops.push(el.scrollTop);
+    }
+    return tops;
   });
 }
 
@@ -112,7 +144,8 @@ async function main() {
     await goToBoard(page);
 
     // One ticket carrying LABEL_COUNT labels — the picker's vocabulary comes
-    // from the project's labels plus what tickets use.
+    // from the project's labels plus what tickets use — and one carrying none,
+    // for the rail's Add picker, which offers only what is not yet applied.
     const seeded = await page.evaluate(async (labelCount) => {
       const boot = await window.api.data.bootstrap();
       if (!boot.ok) return { ok: false, error: `bootstrap: ${boot.error}` };
@@ -131,6 +164,13 @@ async function main() {
       );
       const set = await window.api.tickets.setLabels({ ticketId: res.ticket.id, labels });
       if (!set.ok) return { ok: false, error: `setLabels: ${set.error}` };
+      const bare = await window.api.tickets.create({
+        projectId: project.id,
+        status: "todo",
+        title: "Unlabelled scroll ticket",
+        priority: "medium",
+      });
+      if (!bare.ok) return { ok: false, error: `create unlabelled: ${bare.error}` };
       return { ok: true };
     }, LABEL_COUNT);
     if (!seeded.ok) throw new Error(seeded.error);
@@ -198,7 +238,11 @@ async function main() {
     if (!composerClosed) throw new Error("New-ticket composer never closed after 10 Escapes");
 
     // === 3. The rail's label picker, with NO dialog underneath =============
-    await page.locator("article").filter({ visible: true }).first().dblclick();
+    await page
+      .locator("article")
+      .filter({ visible: true, hasText: "Unlabelled scroll ticket" })
+      .first()
+      .dblclick();
     await sleep(1200);
     await page.getByRole("button", { name: "Add label", exact: true }).first().click();
     await sleep(400);
@@ -210,18 +254,73 @@ async function main() {
       async () => {
         if (geometry === null)
           return { ok: false, detail: "no [data-slot=command-list] on screen" };
+        if (geometry.scrollHeight <= geometry.clientHeight)
+          return {
+            ok: false,
+            detail: `list does not overflow (${geometry.scrollHeight}x${geometry.clientHeight}, ${geometry.items} items)`,
+          };
         await wheelOverList(page, geometry, 320);
         const after = (await readList(page))?.scrollTop ?? 0;
         return { ok: after > 0, detail: `scrollTop ${geometry.scrollTop} -> ${after}` };
       },
     );
 
+    await attempt(
+      5,
+      "wheel past the end of the rail's list stops there and does not scroll the page behind",
+      async () => {
+        if (geometry === null)
+          return { ok: false, detail: "no [data-slot=command-list] on screen" };
+        const behindBefore = await readScrollersBehindPopover(page);
+        for (let notch = 0; notch < 8; notch += 1) await wheelOverList(page, geometry, 640);
+        const list = await readList(page);
+        const behindAfter = await readScrollersBehindPopover(page);
+        const atEnd = list !== null && list.scrollTop + list.clientHeight >= list.scrollHeight - 1;
+        const moved = behindAfter.filter((top, index) => top !== behindBefore[index]).length;
+        return {
+          ok: atEnd && behindBefore.length === behindAfter.length && moved === 0,
+          detail: `list ${list?.scrollTop}+${list?.clientHeight}/${list?.scrollHeight}; ${moved} of ${behindBefore.length} scroller(s) behind moved`,
+        };
+      },
+    );
+
+    await attempt(6, "Home scrolls the rail list back to its highlighted first row", async () => {
+      // The wheel left the list at its end. Move the pointer off the list
+      // first: cmdk highlights the row under a moving pointer, which would
+      // hand this check a row that is already in view.
+      if (geometry === null) return { ok: false, detail: "no [data-slot=command-list] on screen" };
+      await page.mouse.move(geometry.x + geometry.width + 200, geometry.y);
+      await page.keyboard.press("Home");
+      await sleep(300);
+      const seen = await page.evaluate(() => {
+        const list = document.querySelector('[data-slot="command-list"]');
+        const row = list?.querySelector('[data-slot="command-item"][data-selected="true"]');
+        if (!list || !row) return null;
+        const box = list.getBoundingClientRect();
+        const r = row.getBoundingClientRect();
+        return {
+          name: row.textContent,
+          inView: r.top >= box.top - 1 && r.bottom <= box.bottom + 1,
+          scrollTop: list.scrollTop,
+        };
+      });
+      if (seen === null) return { ok: false, detail: "no highlighted row in the list" };
+      return {
+        ok: seen.inView && seen.name === "label-01",
+        detail: `highlight ${seen.name}, in view: ${seen.inView}, scrollTop ${seen.scrollTop}`,
+      };
+    });
+
     await page.keyboard.press("Escape");
     await sleep(300);
     await goToBoard(page);
 
     // === 4. The context menu's Labels submenu (own scroll lock) ============
-    await page.locator("article").filter({ visible: true }).first().click({ button: "right" });
+    await page
+      .locator("article")
+      .filter({ visible: true, hasText: "Scroll smoke ticket" })
+      .first()
+      .click({ button: "right" });
     await sleep(400);
     await page.getByRole("menuitem", { name: /Labels/ }).hover();
     await sleep(500);
