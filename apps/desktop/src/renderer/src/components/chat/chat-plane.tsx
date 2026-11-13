@@ -176,9 +176,12 @@ import { GuardedResponse } from "@renderer/components/chat/markdown-boundary";
 import { useDelayedPresence } from "@renderer/components/chat/use-delayed-presence";
 import { SecretCards } from "@renderer/components/chat/secret-card";
 import {
+  fillHeld,
+  landingHeld,
   readTranscriptView,
   rememberTranscriptView,
   TRANSCRIPT_PAGE_ROWS,
+  TRANSCRIPT_TAIL_ROWS,
   transcriptWindow,
 } from "@renderer/components/chat/transcript-window";
 import { HostNoticeRow } from "@renderer/components/chat/host-notice-ui";
@@ -2830,6 +2833,48 @@ const PINNED_SLACK_PX = 8;
 const EARLIER_PREFETCH = "400px 0px 0px 0px";
 
 /**
+ * How far below the viewport the held rows' spacer mounts the next step at
+ * once instead of waiting for idle time (VC-1226). A screen: a fling covers
+ * several hundred pixels in the time one step takes, and a step reaches
+ * thousands of pixels further.
+ */
+const HELD_PREFETCH = "0px 0px 100% 0px";
+
+/**
+ * The height the spacer gives each held row, in pixels: about the mean of a
+ * real Session's rows (170 with tool calls and code blocks, 145 without, measured
+ * over 300 exchanges). Only the scrollbar reads it, and only until the rows are
+ * mounted.
+ */
+const HELD_ROW_PX = 160;
+
+/**
+ * The longest a fill step waits for idle time before it runs anyway, in
+ * milliseconds. A streaming reply keeps the main thread busy but rarely full.
+ */
+const FILL_TIMEOUT_MS = 200;
+
+/** Runs `step` when the main thread is next idle, or after the timeout. Returns the cancel. */
+function whenIdle(step: () => void): () => void {
+  if (typeof requestIdleCallback === "function") {
+    const handle = requestIdleCallback(step, { timeout: FILL_TIMEOUT_MS });
+    return () => cancelIdleCallback(handle);
+  }
+  const handle = setTimeout(step, 0);
+  return () => clearTimeout(handle);
+}
+
+/** Held rows by key, so they keep meaning the same rows while rows arrive. */
+interface HeldKeys {
+  /** The Session they were held in: an in-place switch forgets them. */
+  sessionId: string;
+  /** The first held row. */
+  from: string;
+  /** The first row mounted again below them. */
+  to: string;
+}
+
+/**
  * The transcript, windowed (VC-338).
  *
  * WHY NOT A VIRTUALIZER. The scroller here is not ours: `Conversation` hands it
@@ -2890,6 +2935,18 @@ const EARLIER_PREFETCH = "400px 0px 0px 0px";
  * mark above the window moves the same anchor "Show earlier" moves, so the
  * jump mounts nothing the reader could not have scrolled to, and the rows it
  * mounts are dropped again the same way once the reader returns to the bottom.
+ *
+ * AND IT LANDS FIRST (VC-1226). Mounting everything from a far mark to the
+ * end in one commit took 0.7s on a 300-exchange chat. So a far jump mounts its
+ * message and one page under it, and HOLDS BACK the rows between that page and
+ * the rows already mounted below, which stay mounted (`landingHeld`). One
+ * empty spacer stands in for the held rows. They are filled in a page at a
+ * time in idle time, and at once when the spacer comes within a screen of the
+ * viewport, so a reader scrolling down meets rows, not the spacer. Each step
+ * keeps the reader's place the way a page above them does. The rows below
+ * the hold run to the true end, so the bottom, "Scroll to latest", following
+ * a reply and new rows arriving all work as they do without a hold. Returning
+ * to the bottom drops the hold with the rest of the window.
  */
 function ChatTranscript({
   sessionId,
@@ -2934,8 +2991,32 @@ function ChatTranscript({
     () => (anchorKey === null ? -1 : transcriptRowIndex(rows, anchorKey)),
     [anchorKey, rows],
   );
-  const shown = transcriptWindow(rows.length, anchor);
-  const mounted = React.useMemo(() => rows.slice(shown.start), [rows, shown.start]);
+  // The rows a far jump is still filling in behind (VC-1226). Never restored
+  // from a saved view: a remount mounts its window whole.
+  const [heldKeys, setHeldKeys] = React.useState<HeldKeys | null>(null);
+  // A retired key answers -1, which the window reads as nothing held.
+  const shown = transcriptWindow(
+    rows.length,
+    anchor,
+    TRANSCRIPT_TAIL_ROWS,
+    TRANSCRIPT_PAGE_ROWS,
+    heldKeys === null || heldKeys.sessionId !== sessionId
+      ? null
+      : {
+          start: transcriptRowIndex(rows, heldKeys.from),
+          end: transcriptRowIndex(rows, heldKeys.to),
+        },
+  );
+  const held = shown.held;
+  const heldFrom = held === null ? -1 : held.start;
+  const heldTo = held === null ? -1 : held.end;
+  const mounted = React.useMemo(
+    () =>
+      heldFrom < 0
+        ? rows.slice(shown.start)
+        : [...rows.slice(shown.start, heldFrom), ...rows.slice(heldTo)],
+    [rows, shown.start, heldFrom, heldTo],
+  );
   const rowKeys = React.useRef<ReadonlyMap<string, string>>(new Map());
   const mountedKeys = React.useMemo(() => {
     const keyed = stableRowKeys(mounted, rowKeys.current);
@@ -3105,12 +3186,28 @@ function ChatTranscript({
   // The checkpoint rail (VC-1211): this transcript tells it where the reader
   // is and takes its jumps. A jump above the window moves the same anchor
   // "Show earlier" moves; `notePinned` rides the scroll read below.
+  // A far jump lands with the rows between it and the mounted rows below held
+  // back (VC-1226); a near one mounts them, as "Show earlier" does.
+  const shownNow = React.useRef({ rows, start: shown.start, held });
+  React.useLayoutEffect(() => {
+    shownNow.current = { rows, start: shown.start, held };
+  });
   const anchorAt = React.useCallback(
     (id: string) => {
+      const { rows: all, start, held: holding } = shownNow.current;
+      const target = transcriptRowIndex(all, id);
+      const next = target < 0 ? null : landingHeld(target, { start, held: holding });
+      const from = next === null ? undefined : all[next.start];
+      const to = next === null ? undefined : all[next.end];
       record(id);
       setAnchorKey(id);
+      setHeldKeys(
+        from === undefined || to === undefined
+          ? null
+          : { sessionId, from: transcriptRowKey(from), to: transcriptRowKey(to) },
+      );
     },
-    [record],
+    [record, sessionId],
   );
   const notePinned = useCheckpointNavigation({
     sessionId,
@@ -3120,8 +3217,81 @@ function ChatTranscript({
     checkpoints,
     mounted,
     start: shown.start,
+    held,
     anchorAt,
   });
+
+  // The held rows, filled in behind the reader a page at a time (VC-1226).
+  // Rows mounted where the spacer starts cannot move a reader above it, which
+  // is where a jump leaves them, so nothing is measured for them: a scroll the
+  // compositor makes between a measure and its commit would otherwise be put
+  // back. A reader below the hold's start (one who jumped into the tail, or
+  // dragged there) has the step's rows grow above them, so their place is
+  // written down and put back once the rows are drawn, as a page above them
+  // does. The place is tied to the step's own keys, so a commit that lands
+  // first (a streamed token) does not use it up and a jump in between never
+  // receives it. The last step closes the hold to an empty range rather than
+  // `null`, for the same reason.
+  const heldNode = React.useRef<HTMLDivElement>(null);
+  const fillPlace = React.useRef<{ geometry: PrependGeometry; keys: HeldKeys } | null>(null);
+  const fillStep = React.useRef<() => void>(() => {});
+  React.useLayoutEffect(() => {
+    fillStep.current = () => {
+      if (held === null || heldKeys === null) return;
+      const next = fillHeld(held);
+      const row = next === null ? undefined : rows[next.start];
+      const keys = { ...heldKeys, from: row === undefined ? heldKeys.to : transcriptRowKey(row) };
+      const scroller = control.scroller();
+      const spacer = heldNode.current;
+      const below =
+        scroller !== null &&
+        spacer !== null &&
+        spacer.getBoundingClientRect().top < scroller.getBoundingClientRect().top;
+      const geometry = below ? measurePrepend(scroller) : null;
+      // A reader looking at the spacer alone has no place to keep.
+      fillPlace.current =
+        geometry === null || geometry.anchors.length === 0 ? null : { geometry, keys };
+      setHeldKeys(keys);
+    };
+  });
+  React.useLayoutEffect(() => {
+    const place = fillPlace.current;
+    if (place === null) return;
+    fillPlace.current = null;
+    const scroller = control.scroller();
+    if (place.keys === heldKeys && scroller !== null) restorePrepend(scroller, place.geometry);
+  }, [control, heldKeys]);
+  // Idle time first, a timeout behind it. The spacer coming within a screen
+  // of the viewport takes the step now: a reader scrolling down meets rows.
+  // Rescheduled per step, and gone with the hold, the plane's effects (a
+  // hidden or unmounted plane) or the Session.
+  React.useEffect(() => {
+    if (heldFrom < 0) return;
+    let done = false;
+    const step = () => {
+      if (done) return;
+      done = true;
+      fillStep.current();
+    };
+    const cancel = whenIdle(step);
+    const node = heldNode.current;
+    const scroller = control.scroller();
+    const observer =
+      node === null || scroller === null || typeof IntersectionObserver === "undefined"
+        ? null
+        : new IntersectionObserver(
+            (entries) => {
+              if (entries.some((entry) => entry.isIntersecting)) step();
+            },
+            { root: scroller, rootMargin: HELD_PREFETCH },
+          );
+    if (observer !== null && node !== null) observer.observe(node);
+    return () => {
+      done = true;
+      cancel();
+      observer?.disconnect();
+    };
+  }, [control, heldFrom, heldTo]);
 
   // Where the reader is, recorded as they move so a tab switch has an answer
   // without the unmount having to read the DOM on its way out. The same listener
@@ -3173,6 +3343,7 @@ function ChatTranscript({
       setArmed(false);
       rememberTranscriptView(sessionId, { anchorKey: null, offset: null });
       setAnchorKey(null);
+      setHeldKeys(null);
     };
     const onScroll = () => {
       // One read per frame: a wheel gesture fires scroll events faster than
@@ -3222,8 +3393,11 @@ function ChatTranscript({
                   presentation?.originUrl,
                 ];
                 return urls.flatMap((url) => {
+                  // Most tools have no origin. Skipped before parsing: a throw
+                  // per tool per render was a fifth of a far jump's fill (VC-1226).
+                  if (!url) return [];
                   try {
-                    const parsed = new URL(url ?? "");
+                    const parsed = new URL(url);
                     return ["http:", "https:"].includes(parsed.protocol) ? [parsed.origin] : [];
                   } catch {
                     return [];
@@ -3255,27 +3429,53 @@ function ChatTranscript({
             </Button>
           </div>
         ) : null}
-        {mounted.map((row, index) => (
-          <ChatTranscriptRow
-            key={mountedKeys[index]}
-            row={row}
-            context={context}
-            live={
-              liveTurn !== null &&
-              (row.kind === "work"
-                ? row.work.state === "open"
-                : row.kind === "turn" &&
-                  row.messages.some((message) =>
-                    liveTurn.some((source) => source.id === message.id),
-                  ))
-            }
-            {...(onOpenSession === undefined ? {} : { onOpenSession })}
-          />
-        ))}
+        {withHeldSpacer(
+          mounted.map((row, index) => (
+            <ChatTranscriptRow
+              key={mountedKeys[index]}
+              row={row}
+              context={context}
+              live={
+                liveTurn !== null &&
+                (row.kind === "work"
+                  ? row.work.state === "open"
+                  : row.kind === "turn" &&
+                    row.messages.some((message) =>
+                      liveTurn.some((source) => source.id === message.id),
+                    ))
+              }
+              {...(onOpenSession === undefined ? {} : { onOpenSession })}
+            />
+          )),
+          heldFrom < 0 ? null : (
+            <div
+              key="transcript-held"
+              ref={heldNode}
+              aria-hidden
+              data-transcript-held={heldTo - heldFrom}
+              style={{ height: (heldTo - heldFrom) * HELD_ROW_PX }}
+            />
+          ),
+          heldFrom - shown.start,
+        )}
         {children}
       </ContentColumn>
     </TranscriptSourceIcons>
   );
+}
+
+/**
+ * The mounted rows with the held rows' spacer in their place. One keyed list,
+ * not two lists around it: a row that moved from one list to the other would
+ * remount, losing its open disclosures, when the hold closes.
+ */
+function withHeldSpacer(
+  rows: React.ReactElement[],
+  spacer: React.ReactElement | null,
+  at: number,
+): React.ReactElement[] {
+  if (spacer !== null) rows.splice(at, 0, spacer);
+  return rows;
 }
 
 /** Where the reader's visible anchors were, and the scroller's size, before a prepend. */

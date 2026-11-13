@@ -1491,8 +1491,10 @@ describe("the checkpoint rail beside a long transcript (VC-1211)", () => {
     click(first);
 
     expect(shows(0)).toBe(true);
-    expect(turnRows()).toBe(TURNS);
     expect(readTranscriptView(SESSION)?.anchorKey).toBe("u0");
+    expect(first.getAttribute("aria-current")).toBe("location");
+    // Landed first, filled in behind (VC-1226): the window still reaches every row.
+    await waitFor(() => turnRows() === TURNS);
     expect(first.getAttribute("aria-current")).toBe("location");
   });
 
@@ -1529,6 +1531,214 @@ describe("the checkpoint rail beside a long transcript (VC-1211)", () => {
     });
 
     expect(rail()?.querySelectorAll("[data-checkpoint-mark]")).toHaveLength(4);
+  });
+});
+
+/** One fill step: jsdom has no idle callback, so the fill falls back to a timeout. */
+const fillTick = () =>
+  act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+/** The reader at `top`, as the transcript's next scroll read sees them. */
+async function scrollTo(scroller: HTMLElement, top: number) {
+  await act(async () => {
+    scroller.scrollTop = top;
+    scroller.dispatchEvent(new Event("scroll"));
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
+  });
+}
+
+describe("a far jump lands first and fills in behind (VC-1226)", () => {
+  const mark = (index: number) =>
+    container?.querySelector<HTMLButtonElement>(`[data-checkpoint-mark="u${index}"]`) ?? null;
+  const spacer = () => container?.querySelector<HTMLElement>("[data-transcript-held]") ?? null;
+  const jump = (index: number) => {
+    const target = mark(index);
+    if (target === null) throw new Error(`expected a mark for message ${index}`);
+    click(target);
+  };
+  /** The turn numbers mounted, in document order. */
+  const mountedTurns = () =>
+    [...(container?.querySelectorAll(".is-user") ?? [])].map((node) =>
+      Number(/turn number (\d+)/.exec(node.textContent ?? "")?.[1] ?? -1),
+    );
+  const grow = async (store: ReturnType<typeof chatStore>, count: number) => {
+    const grown = transcript(count);
+    await act(async () => {
+      store.setState(
+        (state) =>
+          ({
+            sessions: {
+              ...state.sessions,
+              [SESSION]: {
+                ...state.sessions[SESSION],
+                transcript: { ...EMPTY_TRANSCRIPT, durableMessages: grown, messages: grown },
+              },
+            },
+          }) as never,
+      );
+    });
+  };
+  /** A scroller with a height, so the transcript's scroll read has a bottom to find. */
+  const geometry = () => {
+    const scroller = container!.querySelector<HTMLElement>("[data-conversation-scroller]")!;
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 40_000 });
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 600 });
+    return scroller;
+  };
+
+  it("mounts the message and one page under it, keeping the true end mounted below the held rows", async () => {
+    await mountPlane(chatStore(transcript(TURNS)));
+    jump(0);
+
+    expect(turnRows()).toBe(TRANSCRIPT_PAGE_ROWS + TRANSCRIPT_TAIL_ROWS);
+    const turns = mountedTurns();
+    expect(turns.slice(0, TRANSCRIPT_PAGE_ROWS)).toEqual(
+      Array.from({ length: TRANSCRIPT_PAGE_ROWS }, (_value, index) => index),
+    );
+    // The last mounted row is the last row of the conversation.
+    expect(turns.at(-1)).toBe(TURNS - 1);
+    expect(spacer()?.dataset["transcriptHeld"]).toBe(
+      String(TURNS - TRANSCRIPT_TAIL_ROWS - TRANSCRIPT_PAGE_ROWS),
+    );
+    expect(spacer()?.getAttribute("aria-hidden")).toBe("true");
+    expect(mark(0)?.getAttribute("aria-current")).toBe("location");
+  });
+
+  it("fills the held rows in a page at a time without moving the window's first row", async () => {
+    await mountPlane(chatStore(transcript(TURNS)));
+    jump(0);
+
+    const counts = [turnRows()];
+    for (let step = 0; step < 20 && spacer() !== null; step += 1) {
+      await fillTick();
+      counts.push(turnRows());
+      expect(mountedTurns()[0]).toBe(0);
+      expect(mark(0)?.getAttribute("aria-current")).toBe("location");
+    }
+    expect(spacer()).toBeNull();
+    expect(turnRows()).toBe(TURNS);
+    expect(mountedTurns()).toEqual(Array.from({ length: TURNS }, (_value, index) => index));
+    // Never more than a page per step.
+    for (let index = 1; index < counts.length; index += 1)
+      expect(counts[index]! - counts[index - 1]!).toBeLessThanOrEqual(TRANSCRIPT_PAGE_ROWS);
+  });
+
+  it("mounts a near message outright, as Show earlier would", async () => {
+    await mountPlane(chatStore(transcript(TURNS)));
+    jump(TURNS - TRANSCRIPT_TAIL_ROWS - 10);
+
+    expect(spacer()).toBeNull();
+    expect(turnRows()).toBe(TRANSCRIPT_TAIL_ROWS + 10);
+  });
+
+  it("puts messages that arrive during the fill at the true end, after the held rows", async () => {
+    const store = chatStore(transcript(TURNS));
+    await mountPlane(store);
+    jump(0);
+    await grow(store, TURNS + 2);
+
+    const held = spacer();
+    const arrived = [...container!.querySelectorAll(".is-user")].at(-1);
+    expect(arrived?.textContent).toContain(`turn number ${TURNS + 1}`);
+    // Below the held rows, not under the landed page.
+    expect(
+      held !== null &&
+        arrived !== undefined &&
+        (held.compareDocumentPosition(arrived) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+    ).toBe(true);
+
+    await waitFor(() => spacer() === null);
+    expect(mountedTurns()).toEqual(Array.from({ length: TURNS + 2 }, (_value, index) => index));
+  });
+
+  it("re-anchors on a message still held back", async () => {
+    await mountPlane(chatStore(transcript(TURNS)));
+    jump(0);
+    jump(200);
+
+    expect(mountedTurns()[0]).toBe(200);
+    expect(shows(199)).toBe(false);
+    expect(spacer()?.dataset["transcriptHeld"]).toBe(
+      String(TURNS - TRANSCRIPT_TAIL_ROWS - 200 - TRANSCRIPT_PAGE_ROWS),
+    );
+    expect(mark(200)?.getAttribute("aria-current")).toBe("location");
+  });
+
+  it("drops the hold with the rest of the window when the reader returns to the bottom", async () => {
+    await mountPlane(chatStore(transcript(TURNS)));
+    const scroller = geometry();
+    jump(0);
+    await scrollTo(scroller, 100);
+    expect(spacer()).not.toBeNull();
+
+    await scrollTo(scroller, 40_000 - 600);
+    expect(spacer()).toBeNull();
+    expect(turnRows()).toBe(TRANSCRIPT_TAIL_ROWS);
+    expect(mountedTurns().at(-1)).toBe(TURNS - 1);
+    // Nothing left to fill.
+    await fillTick();
+    expect(turnRows()).toBe(TRANSCRIPT_TAIL_ROWS);
+  });
+
+  it("goes to the true end from Scroll to latest during a fill", async () => {
+    await mountPlane(chatStore(transcript(TURNS)));
+    const scroller = geometry();
+    jump(0);
+    await scrollTo(scroller, 100);
+
+    const latest = container?.querySelector('[aria-label="Scroll to latest"]');
+    if (latest == null) throw new Error("expected Scroll to latest while reading");
+    click(latest);
+    // The library scrolls on its next frames, to one pixel short of its maximum.
+    await waitFor(() => scroller.scrollTop > 40_000 - 600 - 8);
+    await scrollTo(scroller, scroller.scrollTop);
+
+    expect(spacer()).toBeNull();
+    expect(turnRows()).toBe(TRANSCRIPT_TAIL_ROWS);
+    expect(mark(TURNS - 1)?.getAttribute("aria-current")).toBe("location");
+  });
+
+  it("stops filling when the plane switches Session in place", async () => {
+    const store = chatStore(transcript(TURNS));
+    const other = transcript(TURNS).map((message) =>
+      Object.assign(message, { id: `v${message.id}` }),
+    );
+    store.setState(
+      (state) =>
+        ({
+          sessions: {
+            ...state.sessions,
+            s2: {
+              ...state.sessions[SESSION],
+              transcript: { ...EMPTY_TRANSCRIPT, durableMessages: other, messages: other },
+            },
+          },
+        }) as never,
+    );
+    await mountPlane(store);
+    jump(0);
+    expect(spacer()).not.toBeNull();
+
+    await mountPlane(store, undefined, "s2");
+    expect(spacer()).toBeNull();
+    expect(turnRows()).toBe(TRANSCRIPT_TAIL_ROWS);
+    await fillTick();
+    await fillTick();
+    expect(spacer()).toBeNull();
+    expect(turnRows()).toBe(TRANSCRIPT_TAIL_ROWS);
+  });
+
+  it("stops filling when the plane unmounts", async () => {
+    const errors = vi.spyOn(console, "error");
+    await mountPlane(chatStore(transcript(TURNS)));
+    jump(0);
+    await unmountPlane();
+    await fillTick();
+    await fillTick();
+    expect(turnRows()).toBe(0);
+    expect(errors).not.toHaveBeenCalled();
   });
 });
 

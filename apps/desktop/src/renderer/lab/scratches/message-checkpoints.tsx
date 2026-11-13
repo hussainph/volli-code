@@ -10,6 +10,8 @@
  *   ?width=<px>      the plane's width, to find where the rail hides
  *   ?short           every exchange is one line each way
  *   ?stream          with ?running, a word lands in the live reply every 50ms
+ *   ?grow            another exchange lands at the end every second, for a
+ *                    far jump's fill (VC-1226) to meet new rows
  *   ?real            each reply is a real Session's shape: tool calls with output,
  *                    markdown and a distinct code block, so nothing is cached
  *   ?cloud           a cloud launch, for the team row in the plane's corner
@@ -43,13 +45,14 @@ import {
 
 export const title = "Chat · message checkpoints";
 export const note =
-  "Simulated wiring · production ChatPlane over a seeded long transcript; ?n= ?running ?split ?width= ?short";
+  "Simulated wiring · production ChatPlane over a seeded long transcript; ?n= ?running ?split ?width= ?short ?grow";
 export const viewport = "window" as const;
 
 const params = new URLSearchParams(window.location.search);
 const EXCHANGES = Math.max(0, Number(params.get("n") ?? 40) || 0);
 const RUNNING = params.has("running");
 const STREAM = RUNNING && params.has("stream");
+const GROW = params.has("grow");
 const SPLIT = params.has("split");
 const SHORT = params.has("short");
 const REAL = params.has("real");
@@ -348,8 +351,36 @@ function useStream() {
   }, []);
 }
 
+/** Simulated wiring: a new exchange is a store write, as a durable frame batch is. */
+function useGrow() {
+  React.useEffect(() => {
+    if (!GROW) return;
+    let next = EXCHANGES;
+    const timer = window.setInterval(() => {
+      const added = exchange(next);
+      next += 1;
+      store.setState(({ sessions }) => ({
+        sessions: Object.fromEntries(
+          Object.entries(sessions).map(([id, session]) => {
+            const messages = [...session.transcript.messages, ...added];
+            return [
+              id,
+              {
+                ...session,
+                transcript: { ...session.transcript, messages, durableMessages: messages },
+              },
+            ];
+          }),
+        ),
+      }));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+}
+
 export default function MessageCheckpointsScratch() {
   useStream();
+  useGrow();
   return (
     <TooltipProvider>
       <ModelAccessProvider client={client}>

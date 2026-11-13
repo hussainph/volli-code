@@ -92,7 +92,8 @@ const rowIndex = (rows: readonly WorkTranscriptRow[], id: string) =>
  * read calls with each answer to "is the reader at the bottom?".
  *
  * `anchorAt` moves the transcript's window anchor — the one "Show earlier"
- * moves — so a message above the window is mounted by the window's own rule.
+ * moves — so a message above the window, or among the rows a far jump is
+ * still filling in (`held`, VC-1226), is mounted by the window's own rule.
  */
 export function useCheckpointNavigation(input: {
   sessionId: string;
@@ -103,13 +104,16 @@ export function useCheckpointNavigation(input: {
   mounted: readonly WorkTranscriptRow[];
   /** The first mounted row's index in `rows`. */
   start: number;
+  /** Rows inside the window that are not mounted yet, `[start, end)`, or `null`. */
+  held: { readonly start: number; readonly end: number } | null;
   anchorAt(id: string): void;
 }): (pinned: boolean) => void {
   const { sessionId, navigator, control, rows, checkpoints, mounted, start, anchorAt } = input;
-  const latest = React.useRef({ rows, start, checkpoints, anchorAt });
+  const unmounted = input.held;
+  const latest = React.useRef({ rows, start, unmounted, checkpoints, anchorAt });
   React.useLayoutEffect(() => {
-    latest.current = { rows, start, checkpoints, anchorAt };
-  }, [rows, start, checkpoints, anchorAt]);
+    latest.current = { rows, start, unmounted, checkpoints, anchorAt };
+  }, [rows, start, unmounted, checkpoints, anchorAt]);
 
   // Pinned to the bottom means the latest exchange, wherever its message sits.
   const atBottom = React.useRef(true);
@@ -191,11 +195,12 @@ export function useCheckpointNavigation(input: {
   React.useLayoutEffect(
     () =>
       navigator.attach((id) => {
-        const { rows: all, start: first, anchorAt: anchor } = latest.current;
+        const { rows: all, start: first, unmounted: holding, anchorAt: anchor } = latest.current;
         const index = rowIndex(all, id);
         pending.current = null;
         if (index < 0) return;
-        if (index >= first) {
+        const inHold = holding !== null && index >= holding.start && index < holding.end;
+        if (index >= first && !inHold) {
           land(id);
           return;
         }
