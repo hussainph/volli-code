@@ -815,11 +815,14 @@ const BUDGET = 60_000;
 
 describe("a card flipping between itself and the column holding it", () => {
   it(
-    "keeps the same full ticket preview behind the expanded automation choices",
+    "draws the preview at the document root and hides it while the automation choices are open",
     async () => {
       const grip = await pickUp();
       const preview = document.querySelector<HTMLElement>("[data-ticket-drag-preview]");
       expect(preview).not.toBeNull();
+      // dnd-kit's wrapper is `position: fixed` in viewport pixels; any
+      // contained, transformed or zoomed ancestor would re-base it (VC-1213).
+      expect(preview?.parentElement?.parentElement).toBe(document.body);
       const contents = preview?.textContent;
       await move(grip.card);
       await press("keydown", { key: "Alt", altKey: true });
@@ -827,10 +830,11 @@ describe("a card flipping between itself and the column holding it", () => {
       expect(grown("doing")).toBe(true);
       expect(document.querySelector("[data-ticket-drag-preview]")).toBe(preview);
       expect(preview?.textContent).toBe(contents);
-      expect(preview?.className).toContain("opacity-30");
-      expect(preview?.parentElement?.style.zIndex).toBe("10");
+      expect(preview?.className).toContain("opacity-0");
       await press("keyup", { key: "Alt", altKey: false });
-      expect(preview?.className).not.toContain("opacity-30");
+      // Back the moment the picker closes, the same node, still in the air.
+      expect(document.querySelector("[data-ticket-drag-preview]")).toBe(preview);
+      expect(preview?.className).not.toContain("opacity-0");
       await endDrag();
     },
     BUDGET,

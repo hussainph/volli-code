@@ -1,6 +1,7 @@
 import { GLASS_MOTION, cssTimeMs, springEasing } from "@renderer/lib/glass-motion";
 import { useBoardMotionVisibility } from "@renderer/hooks/use-motion-visibility";
 import * as React from "react";
+import { createPortal } from "react-dom";
 import {
   closestCorners,
   DndContext,
@@ -96,6 +97,7 @@ import {
 } from "@renderer/stores/automations";
 import { useBoardStore } from "@renderer/stores/board";
 import { DEFAULT_PROJECT_UI, useProjectUiStore, type BoardView } from "@renderer/stores/project-ui";
+import { useUiStore } from "@renderer/stores/ui";
 
 /**
  * Everything alive only while a card is mid-drag. The ticket snapshot and
@@ -482,6 +484,7 @@ export const Board = React.memo(function Board({
   }, [selectedIds]);
   const [expandedEmptyStatus, setExpandedEmptyStatus] = React.useState<TicketStatus | null>(null);
   const reducedMotion = useReducedMotion();
+  const uiScale = useUiStore((state) => state.uiScale);
   // One policy for both views, not a monitor and preference subscription per card.
   const instantSort = reducedMotion || drag === null || drag.keyboard;
   React.useEffect(() => {
@@ -1275,58 +1278,76 @@ export const Board = React.memo(function Board({
                 )}
               </div>
             )}
-            <DragOverlay
-              // Keep the full card behind the landing panel rather than
-              // replacing it with a tiny id label while the person is aiming.
-              zIndex={isPickerOpen(picker) ? 10 : 999}
-              // The lifted card is a PICTURE, never a surface: dnd-kit's own
-              // wrapper is a fixed, card-sized box at `z-index: 999` that
-              // follows the pointer exactly, so without this it is the topmost
-              // thing under the hand at every moment of the drag. When the
-              // picker's hit test (`pointerLanding`) read only the topmost
-              // thing, that answered "no column, no row" for any aim that ended
-              // INSIDE the lifted card's own outline — most of them. It now
-              // looks through to the first hit inside a column (VC-451), which
-              // would skip the overlay anyway; this keeps the picture out of
-              // the hit-test stack altogether, so nothing reading it — the
-              // picker or anything later — can mistake the card for a surface.
-              // A row aimed at and not taken is the one failure this gesture
-              // cannot have: the release would run the column's default
-              // instead of what the hand was pointing at.
-              className="pointer-events-none"
-              transition={instantSort ? "" : undefined}
-              dropAnimation={
-                // A picked release lands where the PICKER says, which is not
-                // necessarily where the card is: animating the card into the
-                // slot it was hovering would draw the wrong landing.
-                reducedMotion ||
-                releaseInstant.current ||
-                drag?.keyboard ||
-                isPickerOpen(picker) ||
-                (drag?.ticketIds.length ?? 0) > 1
-                  ? null
-                  : dropMotion
-              }
-            >
-              {drag ? (
-                <div
-                  data-ticket-drag-preview
-                  ref={(node) => {
-                    dropOverlayRef.current = node?.parentElement ?? null;
-                  }}
-                  className={isPickerOpen(picker) ? "opacity-30" : undefined}
-                >
-                  <DragOverlayBody
-                    activeTicket={drag.activeTicket}
-                    tickets={drag.selectedTickets}
-                    ticketPrefix={ticketPrefix}
-                    projectLabels={projectLabels}
-                    listView={boardView === "list"}
-                    reducedMotion={reducedMotion || drag.keyboard}
-                  />
-                </div>
-              ) : null}
-            </DragOverlay>
+            {/* The lifted card is drawn at the document root. dnd-kit positions
+                its wrapper with `position: fixed` in viewport pixels, but every
+                ancestor here that sets `contain` (the content surface's
+                `contain: layout paint`, the pane row's `contain-layout`) becomes
+                the containing block for fixed descendants, so in place the card
+                landed offset by that ancestor's origin — the sidebar's width to
+                the right and the chrome band's height down (VC-1213). The pane
+                row's UI zoom would scale that position too. Under `<body>` the
+                wrapper's viewport pixels are the screen's, and React context
+                still reaches it through the portal. */}
+            {createPortal(
+              <DragOverlay
+                // The lifted card is a PICTURE, never a surface: dnd-kit's own
+                // wrapper is a fixed, card-sized box at `z-index: 999` that
+                // follows the pointer exactly, so without this it is the topmost
+                // thing under the hand at every moment of the drag. When the
+                // picker's hit test (`pointerLanding`) read only the topmost
+                // thing, that answered "no column, no row" for any aim that ended
+                // INSIDE the lifted card's own outline — most of them. It now
+                // looks through to the first hit inside a column (VC-451), which
+                // would skip the overlay anyway; this keeps the picture out of
+                // the hit-test stack altogether, so nothing reading it — the
+                // picker or anything later — can mistake the card for a surface.
+                // A row aimed at and not taken is the one failure this gesture
+                // cannot have: the release would run the column's default
+                // instead of what the hand was pointing at.
+                className="pointer-events-none"
+                transition={instantSort ? "" : undefined}
+                dropAnimation={
+                  // A picked release lands where the PICKER says, which is not
+                  // necessarily where the card is: animating the card into the
+                  // slot it was hovering would draw the wrong landing.
+                  reducedMotion ||
+                  releaseInstant.current ||
+                  drag?.keyboard ||
+                  isPickerOpen(picker) ||
+                  (drag?.ticketIds.length ?? 0) > 1
+                    ? null
+                    : dropMotion
+                }
+              >
+                {drag ? (
+                  <div
+                    data-ticket-drag-preview
+                    ref={(node) => {
+                      dropOverlayRef.current = node?.parentElement ?? null;
+                    }}
+                    // Hidden, not unmounted, while the picker is open: the card
+                    // sits under the pointer, which is on the row being read. It
+                    // keeps tracking the pointer, so it comes back in place the
+                    // moment the picker closes with the drag still live.
+                    className={isPickerOpen(picker) ? "opacity-0" : undefined}
+                    // Outside the zoomed pane row, so the picture carries the UI
+                    // scale itself; dnd-kit already sizes the wrapper from the
+                    // card's on-screen rect.
+                    style={{ zoom: uiScale } as React.CSSProperties}
+                  >
+                    <DragOverlayBody
+                      activeTicket={drag.activeTicket}
+                      tickets={drag.selectedTickets}
+                      ticketPrefix={ticketPrefix}
+                      projectLabels={projectLabels}
+                      listView={boardView === "list"}
+                      reducedMotion={reducedMotion || drag.keyboard}
+                    />
+                  </div>
+                ) : null}
+              </DragOverlay>,
+              document.body,
+            )}
             {/* "⌥ to choose" — the mid-drag affordance (VC-132, VC-112). Three
                 words, near bottom-centre, and only while the fact it teaches is
                 actionable (see `showsChooseHint`). Bottom-centre rather than at
