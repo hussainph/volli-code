@@ -11,7 +11,12 @@ import { ContextMenuItem } from "./context-menu";
 export interface TabAction {
   label: string;
   icon: IconComponent;
-  run(pointer?: boolean): void;
+  /**
+   * `pointer` says whether a pointer chose it; `trigger` is the tab's menu
+   * button when the dropdown ran it (none from the right-click menu), for an
+   * action that moves the tab and must place focus after it.
+   */
+  run(pointer?: boolean, trigger?: HTMLElement | null): void;
   destructive?: boolean;
 }
 export const TabActionsContext = React.createContext<readonly TabAction[]>([]);
@@ -46,6 +51,7 @@ export function TabActionDropdown({
 }) {
   const [open, setOpen] = React.useState(false);
   const pointer = React.useRef(false);
+  const trigger = React.useRef<HTMLButtonElement>(null);
   const changeOpen = React.useCallback(
     (next: boolean) => {
       setOpen(next);
@@ -58,6 +64,7 @@ export function TabActionDropdown({
     <DropdownMenu open={open} onOpenChange={changeOpen}>
       <DropdownMenuTrigger asChild>
         <button
+          ref={trigger}
           type="button"
           data-slot="tab-menu"
           aria-label={`Actions for ${label}`}
@@ -89,7 +96,7 @@ export function TabActionDropdown({
           <DropdownMenuItem
             key={action.label}
             variant={action.destructive ? "destructive" : "default"}
-            onSelect={() => action.run(pointer.current)}
+            onSelect={() => action.run(pointer.current, trigger.current)}
           >
             <action.icon className="size-4" />
             {action.label}
