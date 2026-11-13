@@ -2443,8 +2443,16 @@ async function attachSession(
      * Released only after `continue()` has been called, and Pi sets
      * `isStreaming` synchronously inside that call, so there is no moment at
      * which neither this nor `isStreaming` holds.
+     *
+     * `stopped` is a Stop (or a close) that landed inside the span, when there
+     * was no run yet for `agent.abort()` to reach (VC-1199). The retry reads it
+     * once its refresh answers and, instead of starting the run, settles the
+     * turn the way that Stop would have settled the run, all before letting
+     * go — so a message waiting on {@link runOpening} opens a turn of its own
+     * after the stopped one, and a Stop waiting on it answers on the settled
+     * turn.
      */
-    let openingRun = false;
+    let openingRun: { stopped: boolean } | undefined;
     let runOpening: Promise<void> = Promise.resolve();
     /**
      * Set only while a backoff or a network wait is being waited out; see
@@ -2919,6 +2927,9 @@ async function attachSession(
     // is why one flag answers for all three downstream.
     interruptTurn = () => {
       interrupting = true;
+      // A retry still opening its run has nothing for `abort` to reach; it
+      // reads this when its refresh answers and never starts the run (VC-1199).
+      if (openingRun !== undefined) openingRun.stopped = true;
       cancelBackoff?.();
       agent.abort();
     };
@@ -3062,45 +3073,109 @@ async function attachSession(
     };
 
     /**
-     * Run the failed attempt again without re-delivering anything the user said:
-     * the assistant message Pi settled as a failure is dropped, and the run
-     * continues from the user or tool-result message it answered.
+     * What the ledger records when a run opens: a Turn starting for its own
+     * reason gets a fresh id and fresh budgets and says it started, a resumed
+     * attempt carries on the Turn it belongs to, and the Command that opened
+     * the run is durably accepted into it.
+     *
+     * Pi's `agent_start` is the one place a run opens. The other caller is a
+     * retry a Stop reached before Pi ran it (VC-1199), which records exactly
+     * the opening a Stop one moment later would have found.
      */
-    const retryFailedTurn = async (commandId: string | null): Promise<DeliveryOutcome> => {
-      // Claimed before the first await and held until Pi owns the run — see
-      // {@link openingRun}. Both callers have just found Pi idle: `retry()`
-      // checked, and the drain runs between runs.
-      const opened = Promise.withResolvers<void>();
-      openingRun = true;
-      runOpening = opened.promise;
-      let opening: { run: Promise<void> } | undefined;
-      try {
-        opening = await openRetriedRun(commandId);
-      } finally {
-        openingRun = false;
-        opened.resolve();
+    const recordTurnStart = async (): Promise<void> => {
+      // A resumed attempt is the same turn continuing, so it neither starts one
+      // nor refreshes the budget it is spending.
+      const resumed = resumingTurn;
+      resumingTurn = false;
+      if (!resumed) {
+        turnId = randomUUID();
+        autoRetryAttempts = 0;
+        autoRetryWaitedMs = 0;
+        overflowRecoveryUsed = false;
+        reasoningRecoveryUsed = false;
+        // A prompt's run was opened at its delivery, ahead of the idle
+        // compaction it paid for (see {@link thresholdFailures}); every other
+        // Turn that starts for its own reason — a retry, a late follow-up —
+        // opens its run here.
+        if (pendingRunDelivery?.delivery !== "prompt") resetThresholdBackoff();
+        await commitObservation(
+          await persistObservation({ kind: "turn", state: "started", turnId }),
+        );
       }
-      if (opening === undefined) {
-        return {
-          kind: "rejected",
-          reason: "retry-unavailable",
-          message: "There is no failed Pi turn to retry.",
-        };
+      const delivery = pendingRunDelivery;
+      pendingRunDelivery = undefined;
+      if (await persistAcceptedDelivery(delivery, turnId)) {
+        if (delivery?.operation === "message.submit") {
+          acceptedUserMessages.add(delivery.message);
+        }
       }
-      await opening.run;
-      return { kind: "delivered", delivery: "retry" };
     };
 
     /**
+     * Run the failed attempt again without re-delivering anything the user said:
+     * the assistant message Pi settled as a failure is dropped, and the run
+     * continues from the user or tool-result message it answered.
+     *
+     * `stopped` is whether a Stop already landed after the decision to retry
+     * and before this call — which only the automatic drain can say: a manual
+     * retry decides and claims in the same synchronous step.
+     */
+    const retryFailedTurn = async (
+      commandId: string | null,
+      stopped: boolean,
+    ): Promise<DeliveryOutcome> => {
+      // Claimed before the first await and held until Pi owns the run, or until
+      // a Stop has been settled — see {@link openingRun}. Both callers have just
+      // found Pi idle: `retry()` checked, and the drain runs between runs.
+      const opened = Promise.withResolvers<void>();
+      const opening = { stopped };
+      openingRun = opening;
+      runOpening = opened.promise;
+      let outcome: RetryOpening;
+      try {
+        outcome = await openRetriedRun(commandId, opening);
+      } finally {
+        openingRun = undefined;
+        opened.resolve();
+      }
+      switch (outcome.kind) {
+        case "unavailable":
+          return {
+            kind: "rejected",
+            reason: "retry-unavailable",
+            message: "There is no failed Pi turn to retry.",
+          };
+        case "closed":
+          return { kind: "rejected", reason: "closed", message: "This attachment is closed." };
+        case "stopped":
+          return { kind: "delivered", delivery: "retry" };
+        case "run":
+          await outcome.run;
+          return { kind: "delivered", delivery: "retry" };
+      }
+    };
+
+    /**
+     * How a retry's opening ended: the run Pi now owns, boxed and unawaited so
+     * the caller lets go of {@link openingRun} once Pi holds `isStreaming`
+     * rather than once the run is over; no failed turn to retry; a Stop
+     * settled in place of the run; or an attachment closed under it.
+     */
+    type RetryOpening =
+      | { kind: "run"; run: Promise<void> }
+      | { kind: "unavailable" }
+      | { kind: "stopped" }
+      | { kind: "closed" };
+
+    /**
      * Everything a retry does before Pi owns its run, ending in the call that
-     * hands it over: the started run, or `undefined` when there is no failed
-     * turn to retry. The run comes back boxed and unawaited, so the caller lets
-     * go of {@link openingRun} once Pi holds `isStreaming` rather than once the
-     * run is over.
+     * hands it over — or, when a Stop reached it first, in settling the turn
+     * the way that Stop would have settled the run (VC-1199).
      */
     const openRetriedRun = async (
       commandId: string | null,
-    ): Promise<{ run: Promise<void> } | undefined> => {
+      opening: { stopped: boolean },
+    ): Promise<RetryOpening> => {
       const messages = [...agent.state.messages];
       // A turn cut short with a tool in flight — a lost process, or a Stop
       // partway through a batch, once a reattach drops the aborted reply — can
@@ -3113,19 +3188,51 @@ async function attachSession(
         agent.state.messages = [...messages];
       }
       const tail = messages.at(-1);
+      // Where the failed reply sat, so a Stop can put it back: at most one.
+      const droppedAt = messages.length - 1;
+      const dropped: AgentMessage[] = [];
       if (tail?.role === "assistant" && hasFailedStopReason(tail as AssistantMessage)) {
-        messages.pop();
+        dropped.push(messages.pop()!);
         agent.state.messages = messages;
       } else if (tail?.role !== "user" && tail?.role !== "toolResult") {
-        return undefined;
+        return { kind: "unavailable" };
       }
       pendingRunDelivery = {
         commandId,
         operation: "executor.retry" as const,
         delivery: "retry" as const,
       };
-      await refreshTools(turnRefreshTrigger());
-      return { run: agent.continue() };
+      // A refresh that answers after the attachment closed refuses with the
+      // closed sentence. Closing is a Stop (see {@link interruptTurn}), and it
+      // is settled below with the others rather than thrown at the caller.
+      await refreshTools(turnRefreshTrigger()).catch((error: unknown) => {
+        if (!closed) throw error;
+      });
+      if (!opening.stopped) return { kind: "run", run: agent.continue() };
+      // Stopped before Pi ran anything, so there is no run to abort: the run is
+      // simply never started. The failed reply goes back where it was — after
+      // it, the refresh may have appended announcements, which the ledger
+      // already holds in that order — so the next retry finds it to drop, and
+      // the context is the one the ledger rebuilds.
+      const live = [...agent.state.messages];
+      live.splice(droppedAt, 0, ...dropped);
+      agent.state.messages = live;
+      // A closing attachment opens nothing; it only ends what is already open.
+      if ((closed || cancelled) && !resumingTurn) {
+        pendingRunDelivery = undefined;
+        return { kind: "closed" };
+      }
+      // The ledger a Stop during the run would have left: the retry accepted
+      // into the turn it opened (or the resumed turn carrying on), and that
+      // turn interrupted — the bottom of `agent_end` for a stopped run, less the
+      // aborted reply no request produced. Its Attention stays, as it does
+      // after any stopped retry, for the next retry to clear.
+      await recordTurnStart();
+      await clearTransportNotice();
+      await commitObservation(
+        await persistObservation({ kind: "turn", state: "interrupted", turnId }),
+      );
+      return { kind: "stopped" };
     };
 
     /**
@@ -3146,7 +3253,10 @@ async function attachSession(
       while (autoRetryPending) {
         autoRetryPending = false;
         resumingTurn = true;
-        await retryFailedTurn(null);
+        // `agent_end` decided to resume only while nothing had interrupted the
+        // turn, and only `interruptTurn` sets it again before the next run
+        // opens: so a set flag here is a Stop that landed after the decision.
+        await retryFailedTurn(null, interrupting);
       }
     };
 
@@ -3665,35 +3775,10 @@ async function attachSession(
     unsubscribe = subscribe(async (event, runSignal) => {
       if (event.type === "agent_start") {
         acceptingSteer = true;
-        // A resumed attempt is the same turn continuing, so it neither starts one
-        // nor refreshes the budget it is spending.
-        const resumed = resumingTurn;
-        resumingTurn = false;
         failure = undefined;
         interrupting = false;
         activityByToolCallId.clear();
-        if (!resumed) {
-          turnId = randomUUID();
-          autoRetryAttempts = 0;
-          autoRetryWaitedMs = 0;
-          overflowRecoveryUsed = false;
-          reasoningRecoveryUsed = false;
-          // A prompt's run was opened at its delivery, ahead of the idle
-          // compaction it paid for (see {@link thresholdFailures}); every other
-          // Turn that starts for its own reason — a retry, a late follow-up —
-          // opens its run here.
-          if (pendingRunDelivery?.delivery !== "prompt") resetThresholdBackoff();
-          await commitObservation(
-            await persistObservation({ kind: "turn", state: "started", turnId }),
-          );
-        }
-        const delivery = pendingRunDelivery;
-        pendingRunDelivery = undefined;
-        if (await persistAcceptedDelivery(delivery, turnId)) {
-          if (delivery?.operation === "message.submit") {
-            acceptedUserMessages.add(delivery.message);
-          }
-        }
+        await recordTurnStart();
         // Last, and only here: a `settle: "opened"` caller is released once the
         // turn's own start is committed and its Command is durably accepted
         // (VC-324). Everything it was promised has happened; the run has not
@@ -4266,7 +4351,7 @@ async function attachSession(
           };
         }
         observationDelivery.consumeFailure();
-        const outcome = await retryFailedTurn(commandId ?? null);
+        const outcome = await retryFailedTurn(commandId ?? null, false);
         await settleRun();
         const failed = observationDelivery.consumeFailure();
         if (failed !== undefined) throw failed;
@@ -4357,6 +4442,10 @@ async function attachSession(
 
       async interrupt(): Promise<void> {
         interruptTurn();
+        // A retry still opening its run answers this Stop by never starting it.
+        // Waited for that settle and no further: once it lets go, a message
+        // that was waiting may open a run of its own, which this Stop predates.
+        if (openingRun !== undefined) return runOpening;
         await agent.waitForIdle();
       },
 
@@ -4369,6 +4458,9 @@ async function attachSession(
         autoRetryPending = false;
         spec.signal?.removeEventListener("abort", onAbort);
         interruptTurn();
+        // A retry opening its run settles what it opened before the
+        // attachment says it closed (VC-1199).
+        await runOpening;
         await agent.waitForIdle();
         await detachedRunSettled;
         await refreshTail;
