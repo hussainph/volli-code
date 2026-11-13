@@ -8,6 +8,7 @@ import type { SessionObservation } from "@volli/shared";
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject } from "../db/test-helpers";
 import type { TestDb } from "../db/test-helpers";
+import { withTransaction } from "../db/transaction-gate";
 import { createTestSessionEngine } from "../testing/session-engine";
 import {
   BACKFILL_FOLD_PAGE,
@@ -141,7 +142,22 @@ describe("backfillProjectionCheckpoints (VC-1076)", () => {
       native: null,
     });
     const facts = BACKFILL_FOLD_PAGE * 2 + 17;
-    for (let index = 0; index < facts; index += 1) await engine.observe(fact(index));
+    // One commit, not one per fact (VC-1171): the temp-file fixture runs a
+    // rollback journal at synchronous=FULL, so 529 autocommit observations
+    // were 529 journal fsyncs — ~90% of this test, against ~5 ms for the
+    // paged fold under test — which a loaded CI runner stretched past the
+    // 5 s budget. `observe` enters its ledger transaction synchronously, so
+    // each nests as a savepoint here; the log the pass reads is the same.
+    const recorded: Promise<unknown>[] = [];
+    withTransaction(ctx.db, () => {
+      for (let index = 0; index < facts; index += 1) recorded.push(engine.observe(fact(index)));
+    });
+    await Promise.all(recorded);
+    expect(
+      await createSqliteSessionLedger(ctx.db).transaction(
+        (transaction) => transaction.listProjectionEvents({ sessionId }).length,
+      ),
+    ).toBeGreaterThan(BACKFILL_FOLD_PAGE * 2);
     ctx.db.prepare("DELETE FROM session_projection_checkpoints").run();
 
     let clock = 0;
@@ -159,8 +175,10 @@ describe("backfillProjectionCheckpoints (VC-1076)", () => {
     });
 
     expect(result).toEqual({ candidates: 1, refreshed: 1 });
-    // One turn between each pair of pages, then the slice's own turn.
-    expect(yields).toBeGreaterThanOrEqual(3);
+    // Every clock read is a whole slice later, so the count is exact: one
+    // turn between each pair of the three pages, then one after the Session
+    // and one after the candidate page. A single-transaction fold makes two.
+    expect(yields).toBe(4);
     const ledger = createSqliteSessionLedger(ctx.db);
     const [stored, whole] = await ledger.transaction((transaction) => {
       const session = transaction.getSession(sessionId)!;
