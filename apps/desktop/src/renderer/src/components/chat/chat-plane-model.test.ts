@@ -534,9 +534,10 @@ describe("sessionBlocker", () => {
         ACTS,
         false,
       );
+      // Without a setup read, it is the worktree row every preparation failure gets.
       expect(plain).toMatchObject({
-        message: "Configuration invalid",
-        action: { label: "Open settings" },
+        message: "Worktree unavailable",
+        action: { label: "Retry" },
       });
       expect(plain?.tertiaryAction).toBeUndefined();
       expect(
@@ -875,6 +876,28 @@ describe("sessionBlocker", () => {
     });
     blocker?.action?.act();
     expect(acted).toEqual(["retryRuntime"]);
+  });
+
+  it("says a worktree that could not be prepared is unavailable, and retries the start (VC-1015)", () => {
+    const acted: string[] = [];
+    const acts: SessionBlockerActs = { ...ACTS, retryRuntime: () => acted.push("retryRuntime") };
+    const detail =
+      "Couldn't prepare the worktree at /w/VC-1 — A worktree already exists at /w/VC-1 on branch volli/VC-2-other; this ticket's branch is volli/VC-1-ship.";
+    const blocker = sessionBlocker(raised(attention("configuration_invalid", detail)), acts, false);
+
+    expect(blocker).toMatchObject({
+      message: "Worktree unavailable",
+      detail,
+      tone: "error",
+      action: { label: "Retry" },
+      dismiss: { label: "Dismiss" },
+    });
+    blocker?.action?.act();
+    expect(acted).toEqual(["retryRuntime"]);
+    // Any other configuration failure is still Settings' to fix.
+    expect(
+      sessionBlocker(raised(attention("configuration_invalid", "Bad model")), ACTS, false),
+    ).toMatchObject({ message: "Configuration invalid", action: { label: "Open settings" } });
   });
 
   it("says a start that ran out of time timed out, and retries the start (VC-1072)", () => {

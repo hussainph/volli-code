@@ -109,6 +109,19 @@ export interface SessionLocation {
   venue: RunnerIdentity;
 }
 
+/** What an attach knows about where a Session should stand, beyond its record. */
+export interface SessionPrepareContext {
+  /**
+   * For a Subagent Session (VC-1015): the directory its parent is bound to
+   * now. A subagent shares its parent's working directory, as it stands — on
+   * whatever branch the parent has checked out there — so a host attaches it
+   * there rather than re-preparing the Ticket's worktree, whose branch check
+   * would refuse a parent that has since switched branches. Absent for every
+   * other Role, and for a subagent whose parent has never been bound.
+   */
+  parentDirectory?: string;
+}
+
 export interface SessionLocationResolver {
   /** Where the Session runs as the record stands. A read — the directory may not exist yet. */
   resolve(session: Session): Promise<SessionLocation>;
@@ -120,8 +133,11 @@ export interface SessionLocationResolver {
    * attach needs it: every later command reuses the directory its binding
    * already holds. A host that cannot produce the directory throws rather than
    * substituting one, so the attach fails instead of binding somewhere else.
+   *
+   * `context` carries what the runtime knows that the Session record does not.
+   * A host that ignores it prepares exactly as before.
    */
-  prepare(session: Session): Promise<SessionLocation>;
+  prepare(session: Session, context?: SessionPrepareContext): Promise<SessionLocation>;
   /**
    * The directory a binding already holds, still there — put back if it is not.
    *
@@ -1987,6 +2003,27 @@ class DefaultSessionRuntime implements SessionRuntime {
     }
   }
 
+  /**
+   * Where a Subagent Session's parent is bound (VC-1015), or null for any other
+   * Role or a parent never bound. The parent's live binding when it has one —
+   * a delegating parent is mid-turn, so it does — and otherwise the directory
+   * its newest bound attachment recorded. A record this build cannot read
+   * throws, and the caller takes that as no answer, never a failed attach: the
+   * host then prepares as it always has.
+   */
+  async #parentDirectory(session: Session): Promise<string | null> {
+    // `??`: Sessions written before the field existed carry no parent.
+    const parentId = session.parentSessionId ?? null;
+    if (session.role !== "subagent" || parentId === null) return null;
+    for (const binding of this.#bindings.values()) {
+      if (binding.attachment.sessionId === parentId) return binding.spec.directory;
+    }
+    const parent = await this.ports.engine.getSession({ sessionId: parentId });
+    const bound = parent?.attachments.findLast(({ native }) => native !== null);
+    // Unreadable, it throws, and the attach's own catch makes it no answer.
+    return bound === undefined ? null : unwrapNativeBinding(bound.native).directory;
+  }
+
   async #attachStaged(
     request: AttachCommandRequest,
     projection: SessionProjection,
@@ -2047,7 +2084,15 @@ class DefaultSessionRuntime implements SessionRuntime {
 
     let site: SessionLocation;
     try {
-      const preparing = this.ports.locations.prepare(projection.session);
+      const preparing = this.#parentDirectory(projection.session)
+        // An unreadable parent is no answer: the host prepares as it always has.
+        .catch(() => null)
+        .then((parentDirectory) =>
+          this.ports.locations.prepare(
+            projection.session,
+            parentDirectory === null ? undefined : { parentDirectory },
+          ),
+        );
       site =
         stopped === undefined
           ? await this.#followUps.admissionWait(

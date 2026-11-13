@@ -1,5 +1,5 @@
 /** Machine-only environment preparation for a cloud Working copy. No board writes. */
-import { displayTicketId } from "@volli/shared";
+import { displayTicketId, WORKTREE_PREPARATION_FAILED } from "@volli/shared";
 
 import type { PowerPort } from "../ports/power";
 import { runGitCapturingAsync } from "../worktree/git";
@@ -56,7 +56,7 @@ export function createCloudEnvironmentPreparation(
       reportFailure: (ticketId) => setPhase(ticketId, "failed", deps.onPhase),
     });
     if (setup.kind === "failed") {
-      throw new Error(`Couldn't prepare the worktree at ${directory} — ${setup.message}`);
+      throw new Error(`${WORKTREE_PREPARATION_FAILED} at ${directory} — ${setup.message}`);
     }
     if (options.power !== undefined) watchRunnerWakes(options.power);
     // Resume failures are recorded warnings, not setup gates.

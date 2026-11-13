@@ -140,6 +140,7 @@ export * from "./quota-reset";
 export * from "./restart-resume";
 export * from "./scheduled-resume";
 export * from "./attach-timeout";
+export * from "./worktree-preparation";
 export * from "./performance-observer";
 export * from "./session-usage";
 export * from "./session-usage-report";
