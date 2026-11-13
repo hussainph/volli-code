@@ -5,13 +5,11 @@ import { cn } from "@renderer/lib/utils";
 
 /**
  * Compact group header: names a group the user scans or folds (rail sections,
- * menu and palette groups). A page or pane title is `as="h2"` instead.
+ * picker groups). A page or pane title is `as="h2"` instead. Menu and palette
+ * group headers are not on this rung: `MENU_LABEL` sets them below the rows
+ * they name (VC-1212).
  */
 export const SECTION_HEADING = "text-ui font-semibold text-foreground";
-
-/** cmdk owns its heading element. Keep this selector recipe in sync above. */
-export const SECTION_HEADING_CMDK =
-  "[&_[cmdk-group-heading]]:text-ui [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:text-foreground";
 
 export function SectionHeading({
   as = "h2",

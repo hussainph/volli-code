@@ -188,7 +188,7 @@ it("changes mode without submitting, then commits the selected saved automation"
   await act(async () => root.render(<Harness />));
   await openMenu();
   expect(radio("Start chat").getAttribute("aria-checked")).toBe("true");
-  expect(document.body.textContent).toContain("Todo · this column");
+  expect(document.body.textContent).toContain("TodoThis ticket");
   expect(document.body.textContent).toContain("Doing");
   await act(async () => radio("Implement").click());
   expect(submit).not.toHaveBeenCalled();
@@ -226,7 +226,7 @@ it("wraps long automation names within their column group and keeps the saved ch
   expect(label.classList.contains("break-words")).toBe(true);
   expect(label.classList.contains("truncate")).toBe(false);
   expect(item.closest('[data-slot="dropdown-menu-group"]')?.textContent).toContain(
-    "Todo · this column",
+    "TodoThis ticket",
   );
   expect(item.className).not.toMatch(/\bh-\d/);
   await act(async () => item.click());
@@ -235,6 +235,45 @@ it("wraps long automation names within their column group and keeps the saved ch
     projectId: "p1",
     automationId: "long",
   });
+});
+
+it("heads each column as a named group, never as a row the keyboard stops on", async () => {
+  // VC-1212: a column heading read as one more choice. It is a label, not an
+  // item: announced as its group's name, skipped by the arrow keys, set off
+  // from the column before it, and there is no second heading above them.
+  await act(async () => root.render(<ComposerFooter {...props} />));
+  await openMenu();
+  const groups = [...document.querySelectorAll<HTMLElement>('[data-slot="dropdown-menu-group"]')];
+  expect(groups.map((group) => group.getAttribute("role"))).toEqual(["group", "group"]);
+  const names = groups.map(
+    (group) => document.getElementById(group.getAttribute("aria-labelledby")!)?.textContent,
+  );
+  expect(names).toEqual(["TodoThis ticket", "Doing"]);
+  for (const group of groups) {
+    const heading = group.querySelector<HTMLElement>('[data-slot="dropdown-menu-label"]')!;
+    expect(heading.getAttribute("role")).toBeNull();
+    expect(heading.hasAttribute("tabindex")).toBe(false);
+  }
+  expect(groups[1]!.previousElementSibling?.getAttribute("role")).toBe("separator");
+  expect(document.body.textContent).not.toContain("Run automation");
+
+  // Radix moves roving focus on the next task, so each step waits one out.
+  const visited: string[] = [document.activeElement?.textContent ?? ""];
+  for (let step = 0; step < 3; step += 1) {
+    await act(async () => {
+      document.activeElement!.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+      );
+      await new Promise((settle) => setTimeout(settle, 0));
+    });
+    visited.push(document.activeElement?.textContent ?? "");
+  }
+  expect(visited).toEqual([
+    "Start chat",
+    "TriageManual only",
+    "ImplementManual only",
+    "ImplementManual only",
+  ]);
 });
 
 it("can browse launch modes while the title is empty, but cannot commit either way", async () => {

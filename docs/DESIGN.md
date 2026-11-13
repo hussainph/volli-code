@@ -245,7 +245,7 @@ monospace; terminals retain the person's Ghostty font.
 
 | Rung | Utility | Size / line height | Job |
 |---|---|---|---|
-| Label | `text-label` | 11 / 16px | Compact metadata, not section eyebrows |
+| Label | `text-label` | 11 / 16px | Compact metadata and menu group headers, not section eyebrows |
 | UI | `text-ui` | 13 / 20px | Controls, lists, menu rows |
 | Body | `text-sm` | 14 / 20px | Prose, inputs, comments |
 | Heading | `text-heading` | 18 / 26px | Reading headings |
@@ -253,6 +253,8 @@ monospace; terminals retain the person's Ghostty font.
 
 No sixth 12px rung and no arbitrary `text-[Npx]`. Use regular for reading, medium for controls,
 semibold for titles. Section names use sentence-case `SectionHeading`, not tracked uppercase.
+Menu and palette group headers (`MENU_LABEL`) sit a rung below their rows: sentence case,
+semibold, secondary ink, no tracking, and never focusable, so a header never reads as a choice.
 
 Hugeicons free Stroke Rounded (MIT) is the symbol baseline, behind the semantic
 `components/ui/icon.tsx` seam. Import a concept (`SearchIcon`, `BoardIcon`) or use
