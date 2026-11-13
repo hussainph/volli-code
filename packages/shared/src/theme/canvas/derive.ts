@@ -193,7 +193,7 @@ export const SETTINGS_ACCENT_CANVAS: Canvas = {
 };
 
 /** The accent-derived tokens Settings takes from {@link SETTINGS_ACCENT_CANVAS}. */
-export const SETTINGS_ACCENT_TOKEN_NAMES = [
+const SETTINGS_ACCENT_TOKEN_NAMES = [
   "--accent",
   "--primary",
   "--primary-foreground",
