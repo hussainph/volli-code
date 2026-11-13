@@ -109,27 +109,53 @@ describe("the sessile bead's drawn union", () => {
   });
 });
 
+/** How far the bead is actually drawn above the island box, wobble included. */
+const drawnRise = (s: LiquidGeometry) => Math.max(0, -liquidIslandGeometry(s).top);
+
 describe("the bead's rise above the island box (VC-1210)", () => {
   // The jump-to-latest button keeps a 12px band over the island box; the rise
   // is what it adds while the bead is drawn above that box.
   const BAND = 12;
 
   it("is the bead's full height and gap on the rim, and nothing for a lone pill", () => {
-    const rim = liquidIslandGeometry(resting);
-    expect(liquidIslandRise(rim.top, 1, false)).toBeCloseTo(30, 5);
-    const alone = liquidIslandGeometry({ ...resting, cluster: 0 });
-    expect(liquidIslandRise(alone.top, 1, false)).toBe(0);
-    expect(liquidIslandRise(rim.top, 1, true)).toBe(0);
+    expect(liquidIslandRise(resting, false, false)).toBeCloseTo(30, 5);
+    expect(liquidIslandRise({ ...resting, cluster: 0 }, false, false)).toBe(0);
+    expect(liquidIslandRise(resting, false, true)).toBe(0);
+  });
+
+  it("ignores the wobble, which never closes the band", () => {
+    for (const squash of [-0.14, -0.07, 0.07, 0.14]) {
+      for (const stretch of [0, 6]) {
+        for (const gulp of [0, 0.3]) {
+          const wobbling = { ...resting, squash, stretch, gulp };
+          expect(liquidIslandRise(wobbling, false, false)).toBe(
+            liquidIslandRise(resting, false, false),
+          );
+          const intrusion = drawnRise(wobbling) - liquidIslandRise(wobbling, false, false);
+          expect(intrusion).toBeLessThan(BAND - 4);
+        }
+      }
+    }
+  });
+
+  it("follows a pinching exit's thread up, so the departing bead stays clear", () => {
+    for (let i = 0; i <= 10; i += 1) {
+      const pinching = { ...resting, stretch: (i / 10) ** 2 * 110, pinch: (i / 10) ** 2 };
+      expect(drawnRise(pinching) - liquidIslandRise(pinching, true, false)).toBeLessThan(BAND);
+    }
+    const thread = { ...resting, stretch: 110, pinch: 1 };
+    expect(liquidIslandRise(thread, true, false)).toBeGreaterThan(
+      liquidIslandRise(thread, false, false),
+    );
   });
 
   it("follows a draining bead down without a final step, and never under the band", () => {
     let previous = Infinity;
     for (let i = 20; i >= 0; i -= 1) {
-      const presence = i / 20;
-      const g = liquidIslandGeometry({ ...resting, presence });
-      const rise = liquidIslandRise(g.top, presence, false);
+      const draining = { ...resting, presence: i / 20 };
+      const rise = liquidIslandRise(draining, false, false);
       expect(rise).toBeLessThanOrEqual(previous);
-      expect(Math.max(0, -g.top) - rise).toBeLessThan(BAND);
+      expect(drawnRise(draining) - rise).toBeLessThan(BAND);
       previous = rise;
     }
     expect(previous).toBe(0);

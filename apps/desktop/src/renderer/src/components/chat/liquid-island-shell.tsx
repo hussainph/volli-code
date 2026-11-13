@@ -472,7 +472,7 @@ export function LiquidIslandShell({
         s.presence.snap(0);
         if (input.populated && !input.reduce) s.gulp.velocity += 1.1;
       }
-      const g = liquidIslandGeometry({
+      const shape = {
         islandWidth: s.island.x,
         cluster: s.cluster.x,
         width: s.width.x,
@@ -485,8 +485,13 @@ export function LiquidIslandShell({
         squash: s.width.velocity * 0.0011,
         gulp: s.gulp.x,
         reduce: input.reduce,
-      });
-      rise.current = liquidIslandRise(g.top, s.presence.x, s.mode === "hidden");
+      };
+      const g = liquidIslandGeometry(shape);
+      rise.current = liquidIslandRise(
+        shape,
+        s.mode === "pinching" || s.mode === "detached",
+        s.mode === "hidden",
+      );
       clearanceSink.current?.publish(rise.current);
       const standaloneFade = input.reduce
         ? Math.min(1, s.presence.x)

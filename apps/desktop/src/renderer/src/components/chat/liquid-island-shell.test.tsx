@@ -366,6 +366,24 @@ describe("LiquidIslandShell clearance (VC-1210)", () => {
     expect(rise()).toBe(0);
   });
 
+  it("holds still while the bead wobbles to a new caption", () => {
+    const { clearance, rise } = published();
+    render(running("Running", "pwd"), { clearance });
+    step(2000);
+    const settled = rise();
+    for (const [word, payload, key] of [
+      ["Reading", LONG, "call-2"],
+      ["Running", "ls", "call-3"],
+      ["Searching", "a much longer payload than before", "call-4"],
+    ] as const) {
+      render(running(word, payload, key), { clearance });
+      for (let i = 0; i < 60; i++) {
+        step(16);
+        expect(rise()).toBe(settled);
+      }
+    }
+  });
+
   it("moves the clearance without reading layout beyond the island's own measurements", () => {
     const { clearance } = published();
     render(running("Running", "pwd"), { clearance });

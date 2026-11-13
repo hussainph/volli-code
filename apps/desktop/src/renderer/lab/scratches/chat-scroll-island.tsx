@@ -1,7 +1,8 @@
 /** VC-1210: the jump-to-latest button and the Activity Island in the production ChatPlane.
  * ?island=turn|shells|shells-turn|plan-turn|shells-long-turn picks what the island holds;
  * ?split=1 draws two planes side by side. "Toggle turn" starts or ends the turn in
- * place, so the bead's rise and the button can be watched moving together. The transcript is long enough to scroll,
+ * place, and "Next caption" hands the running turn a new call, so the bead's rise
+ * and the button can be watched moving together. The transcript is long enough to scroll,
  * so scrolling up shows the button over whatever the island draws.
  * No runtime or provider connection; these screenshots prove presentation only.
  */
@@ -124,11 +125,14 @@ function history(): UIMessage[] {
   return messages;
 }
 
-const command = longCaption
-  ? "pnpm --filter @volli/desktop exec vitest run src/renderer/src/components/chat/liquid-island-shell.test.tsx --reporter=verbose"
-  : "pnpm run check:release";
+const LONG_COMMAND =
+  "pnpm --filter @volli/desktop exec vitest run src/renderer/src/components/chat/liquid-island-shell.test.tsx --reporter=verbose";
+/** What "Next caption" cycles through: short to long, long to short. */
+const CAPTIONS = ["pnpm run check:release", LONG_COMMAND, "ls", "git status --short"];
+let caption = longCaption ? 1 : 0;
 
 function runningTool(): UIMessage {
+  const command = CAPTIONS[caption]!;
   return {
     id: "live-reply",
     role: "assistant",
@@ -136,7 +140,7 @@ function runningTool(): UIMessage {
       {
         type: "dynamic-tool",
         toolName: "bash",
-        toolCallId: "bash-fixture",
+        toolCallId: `bash-fixture-${caption}`,
         state: "input-available",
         input: { command },
         toolMetadata: {
@@ -287,6 +291,24 @@ function toggleTurn() {
   });
 }
 
+/** Simulated wiring: a new running call, so the bead takes a new caption. */
+function nextCaption() {
+  caption = (caption + 1) % CAPTIONS.length;
+  store.setState(({ sessions }) => {
+    const next = { ...sessions };
+    for (const id of SESSIONS) {
+      const current = next[id];
+      if (!current?.transcript.turnActive) continue;
+      const messages = [...current.transcript.messages.slice(0, -1), runningTool()];
+      next[id] = {
+        ...current,
+        transcript: { ...current.transcript, messages, durableMessages: messages },
+      };
+    }
+    return { sessions: next };
+  });
+}
+
 export default function ChatScrollIslandScratch() {
   return (
     <TooltipProvider>
@@ -295,6 +317,9 @@ export default function ChatScrollIslandScratch() {
           <aside className="absolute top-4 left-2 z-10 text-ui text-muted-foreground">
             <button type="button" data-lab-toggle-turn="" onClick={toggleTurn}>
               Toggle turn
+            </button>{" "}
+            <button type="button" data-lab-next-caption="" onClick={nextCaption}>
+              Next caption
             </button>
           </aside>
           {(split ? SESSIONS : SESSIONS.slice(0, 1)).map((sessionId, index) => (
