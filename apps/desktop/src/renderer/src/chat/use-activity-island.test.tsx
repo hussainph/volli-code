@@ -25,7 +25,11 @@ import {
   EMPTY_PROJECT_SESSION_ROWS,
   useProjectSessionsStore,
 } from "@renderer/stores/project-sessions";
-import { useActivityIsland, type ActivityIslandBinding } from "./use-activity-island";
+import {
+  useActivityIsland,
+  type ActivityIslandBinding,
+  type ActivityIslandDeps,
+} from "./use-activity-island";
 import { useClosingBrowserTabIds } from "./use-island-tabs-close";
 
 vi.mock("@renderer/lib/toast", () => ({ toastError: vi.fn() }));
@@ -371,5 +375,99 @@ describe("useActivityIsland", () => {
     });
     expect(probe.latest().model).toBe(before.model);
     expect(probe.latest().actions).toBe(before.actions);
+  });
+});
+
+describe("the model across a re-render of the plane (VC-1215)", () => {
+  // The island's clusters measure their layout only when this object changes,
+  // so a pane drag — which re-renders the plane every frame with every store
+  // unchanged — must hand back the same one, or the clusters spring after the
+  // pane outside the outline.
+  function populate(): ReturnType<typeof chatStore> {
+    registry([tab({ tabId: "one" })]);
+    shells([shell({ shellId: "sh-1" })]);
+    useProjectSessionsStore.setState({
+      byProject: {
+        [PROJECT]: {
+          ...EMPTY_PROJECT_SESSION_ROWS,
+          chat: [
+            {
+              sessionId: "child",
+              title: "Grep the tests",
+              projectId: PROJECT,
+              ticketId: null,
+              createdAt: 0,
+              adapterId: "pi",
+              live: true,
+              activity: "working",
+              waitingOn: null,
+              outcome: null,
+              lastActivityAt: 0,
+              bornTicketless: true,
+              role: "subagent",
+              parentSessionId: SESSION,
+              model: { providerId: "anthropic", modelId: "haiku-4.5", reasoningLevel: "low" },
+            },
+          ],
+        },
+      },
+    });
+    return chatStore([todoCall([{ content: "Read", status: "in_progress" }])]);
+  }
+
+  /** Renders the hook as the plane does: a fresh deps object on every render. */
+  async function plane(store: ReturnType<typeof chatStore>, fresh: () => ActivityIslandDeps) {
+    const seen: ActivityIslandBinding[] = [];
+    function Plane() {
+      seen.push(useActivityIsland(SESSION, PROJECT, { store, ...fresh() }));
+      return null;
+    }
+    const render = async () => {
+      await act(async () => {
+        root?.render(<Plane />);
+      });
+    };
+    await render();
+    return { render, latest: () => seen.at(-1)! };
+  }
+
+  it("keeps the model and the verbs when the plane re-renders with stable doors", async () => {
+    const store = populate();
+    const doors = {
+      openShellOutput: vi.fn(),
+      peekSession: vi.fn(),
+      openSession: vi.fn(),
+      openTrace: vi.fn(),
+      openBrowserBeside: vi.fn(async () => {}),
+    };
+    const probe = await plane(store, () => ({ ...doors }));
+    const before = probe.latest();
+    expect(before.model.tabs).toHaveLength(1);
+    expect(before.model.agents).toHaveLength(1);
+    expect(before.model.plan).not.toBeNull();
+    expect(before.model.shells).toHaveLength(1);
+
+    await probe.render();
+    await probe.render();
+    expect(probe.latest().model).toBe(before.model);
+    expect(probe.latest().actions).toBe(before.actions);
+  });
+
+  it("keeps the model when a mount hands fresh callbacks every render", async () => {
+    // The peek passes `onOpenSession` as an inline arrow; new verbs must not
+    // read as new content.
+    const store = populate();
+    const probe = await plane(store, () => ({
+      openShellOutput: () => {},
+      peekSession: () => {},
+      openSession: () => {},
+      openTrace: () => {},
+      openBrowserBeside: async () => {},
+    }));
+    const before = probe.latest();
+
+    await probe.render();
+    expect(probe.latest().actions).not.toBe(before.actions);
+    expect(probe.latest().model).toBe(before.model);
   });
 });
