@@ -90,6 +90,15 @@ Existing controls and output remain: `--arm transcript` (default), `draft`,
 key/click-to-paint distributions, and streaming raw samples. `--arm stream`
 is the existing stream+scroll probe without the other transcript steps.
 
+Every stream sample runs with a working, active Turn, so the activity island is
+live and each sample reports `island.drawnSteps`, `shimmerSteps` and the captions
+it drew. `--island on|hidden|shimmer-off|filters-off` (default `on`) is the
+island's A/B: page CSS only, never product code. `hidden` takes the island out
+of paint, `shimmer-off` stops the verb's shimmer and `filters-off` drops the
+material's drop shadows. Compare arms with `--skip-build` on one build and the
+same trace mode, and repeat each: run-to-run spread on a loaded machine is
+larger than most single-arm differences.
+
 `--phases` (or `--draft-trace`, `--reveal-trace`, `--stream-trace <file>`) captures
 raw Chromium lanes and adds machine-readable `report.phases`: exclusive **script,
 style/layout, paint, main-thread composite preparation** milliseconds, clipped to

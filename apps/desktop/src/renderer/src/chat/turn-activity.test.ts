@@ -442,4 +442,16 @@ describe("middle-truncated payloads", () => {
     expect(middleTruncatePayload("abc", 1)).toBe("…");
     expect(middleTruncatePayload("😀😀😀😀😀", 3)).toBe("😀…😀");
   });
+  it("measures a long payload logarithmically, not once per character", () => {
+    const payload = `cat > /tmp/big.ts <<'EOF' ${"x".repeat(12_000)} EOF`;
+    let measured = 0;
+    const result = middleTruncatePayload(payload, 40, (value) => {
+      measured += 1;
+      return Array.from(value).length;
+    });
+    expect(Array.from(result)).toHaveLength(40);
+    expect(result.startsWith("cat > /tmp/big")).toBe(true);
+    expect(result.endsWith("x EOF")).toBe(true);
+    expect(measured).toBeLessThanOrEqual(20);
+  });
 });

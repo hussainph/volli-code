@@ -1,5 +1,5 @@
 import * as React from "react";
-import { AnimatePresence, motion } from "motion/react";
+import { motion } from "motion/react";
 import { middleTruncatePayload, type TurnActivity } from "@renderer/chat/turn-activity";
 import type { IslandFlash } from "@volli/session-presentation";
 import { liquidIslandGeometry } from "./liquid-island-geometry";
@@ -49,6 +49,72 @@ interface BeadContent {
   flash: boolean;
 }
 
+/** One caption as measured: the text the bead must hold, never another's. */
+interface FittedCaption {
+  signature: string;
+  payload: string | null;
+  /** The caption's own width; the bead adds its padding. */
+  textWidth: number;
+  width: number;
+  /** False when measured outside layout (a hidden pane); measured again once laid out. */
+  laidOut: boolean;
+}
+
+/** A caption on screen: its words and the measurement taken for exactly those words. */
+interface ShownCaption {
+  content: BeadContent;
+  fitted: FittedCaption;
+}
+
+const CAPTION_BUDGET = 226;
+const BEAD_PADDING = 24;
+
+const captionSignature = (content: BeadContent) =>
+  JSON.stringify([content.key, content.word, content.preposition, content.payload, content.flash]);
+
+/** Crossfades happen between verbs; a payload under the same verb updates in place. */
+const captionIdentity = (content: BeadContent) => `${content.key}-${content.word}`;
+
+/** How much of a caption may show in a bead this wide: none until the bead holds it. */
+const captionFit = (beadWidth: number, textWidth: number | null) =>
+  textWidth === null ? 0 : Math.max(0, Math.min(1, (beadWidth - textWidth - 4) / 8));
+
+const separatorFor = (content: BeadContent) =>
+  content.payload
+    ? content.flash
+      ? " · "
+      : ` ${content.preposition ? `${content.preposition} ` : ""}`
+    : "";
+
+/**
+ * Fit one caption in the hidden measuring line. The line's text is written
+ * here and only here — React renders it empty — and widths are layout widths
+ * (`offsetWidth`), so a transformed ancestor such as the island's entrance
+ * scale cannot shrink the measurement.
+ */
+function fitCaption(node: HTMLElement, content: BeadContent): FittedCaption {
+  const [word, separator, pay] = Array.from(node.children) as HTMLElement[];
+  word!.textContent = content.word;
+  separator!.textContent = separatorFor(content);
+  pay!.textContent = "";
+  let payload = content.payload || null;
+  if (payload) {
+    payload = middleTruncatePayload(payload, CAPTION_BUDGET, (candidate) => {
+      pay!.textContent = candidate;
+      return node.offsetWidth;
+    });
+    pay!.textContent = payload;
+  }
+  const textWidth = node.offsetWidth;
+  return {
+    signature: captionSignature(content),
+    payload,
+    textWidth,
+    width: Math.min(250, Math.max(54, textWidth + BEAD_PADDING)),
+    laidOut: node.getClientRects().length > 0,
+  };
+}
+
 /** Keep the shell mounted long enough to drain, or draw and snap the syrup thread. */
 export function useLingeringTurn(active: boolean): boolean {
   const [lingering, setLingering] = React.useState(active);
@@ -91,24 +157,47 @@ export function LiquidIslandShell({
   const measure = React.useRef<HTMLSpanElement>(null);
   const maskId = React.useId().replaceAll(":", "");
   const previousPicture = React.useRef<HTMLDivElement | null>(null);
+  // Keyed on the words, not the objects: a streamed chunk hands the island a
+  // new `activity` object with the same words, and that must not re-measure,
+  // re-render the caption or wake the draw loop.
+  const flashId = flash?.id;
+  const flashEvent = flash?.event;
+  const flashPayload = flash?.payload;
+  const activityKey = activity?.key;
+  const activityWord = activity?.word;
+  const activityPreposition = activity?.preposition;
+  const activityPayload = activity?.payload;
+  const activityWaiting = activity?.waiting;
   const current = React.useMemo<BeadContent | null>(
     () =>
-      flash
+      flashId !== undefined
         ? {
-            key: `flash-${flash.id}`,
-            word: flash.event,
-            payload: flash.payload.replace(/\s+/gu, " ").trim(),
+            key: `flash-${flashId}`,
+            word: flashEvent ?? "",
+            payload: (flashPayload ?? "").replace(/\s+/gu, " ").trim(),
             waiting: false,
             flash: true,
           }
-        : activity
+        : activityKey !== undefined
           ? {
-              ...activity,
-              payload: activity.payload?.replace(/\s+/gu, " ").trim() ?? null,
+              key: activityKey,
+              word: activityWord ?? "",
+              ...(activityPreposition ? { preposition: activityPreposition } : {}),
+              payload: activityPayload?.replace(/\s+/gu, " ").trim() ?? null,
+              waiting: activityWaiting ?? false,
               flash: false,
             }
           : null,
-    [activity, flash],
+    [
+      flashId,
+      flashEvent,
+      flashPayload,
+      activityKey,
+      activityWord,
+      activityPreposition,
+      activityPayload,
+      activityWaiting,
+    ],
   );
   // An exiting turn keeps its last words, but not its shimmer. This is only
   // ephemeral drawing state; a new event always replaces it immediately.
@@ -117,39 +206,83 @@ export function LiquidIslandShell({
     if (current) setLast(current);
   }, [current]);
   const content = current ?? last;
-  const [fitted, setFitted] = React.useState<{
-    key: string;
-    payload: string | null;
-    width: number;
-  } | null>(null);
-
-  const measuredContent = React.useRef<string | null>(null);
+  const signature = content ? captionSignature(content) : null;
+  const [fitted, setFitted] = React.useState<FittedCaption | null>(null);
+  const latestContent = React.useRef(content);
+  const latestFitted = React.useRef(fitted);
+  const refit = React.useCallback(() => {
+    const node = measure.current;
+    const next = latestContent.current;
+    if (!node || !next) return;
+    const caption = fitCaption(node, next);
+    latestFitted.current = caption;
+    setFitted((prior) =>
+      prior &&
+      prior.signature === caption.signature &&
+      prior.payload === caption.payload &&
+      prior.textWidth === caption.textWidth &&
+      prior.laidOut === caption.laidOut
+        ? prior
+        : caption,
+    );
+  }, []);
+  React.useLayoutEffect(() => {
+    latestContent.current = content;
+    if (signature !== null && latestFitted.current?.signature !== signature) refit();
+  }, [content, signature, refit]);
+  // Measured again when the line itself changes size without new words: a
+  // hidden pane laid out at last, or the face swapping in after a font load.
   React.useLayoutEffect(() => {
     const node = measure.current;
-    if (!node || !content) return;
-    const signature = JSON.stringify([
-      content.key,
-      content.word,
-      content.preposition,
-      content.payload,
-    ]);
-    if (measuredContent.current === signature) return;
-    measuredContent.current = signature;
-    const pay = node.querySelector<HTMLElement>("[data-measure-payload]");
-    let payload = content.payload;
-    if (pay && payload) {
-      payload = middleTruncatePayload(payload, 226, (candidate) => {
-        pay.textContent = candidate;
-        return node.getBoundingClientRect().width;
-      });
-      pay.textContent = payload;
-    }
-    setFitted({
-      key: content.key,
-      payload,
-      width: Math.min(250, Math.max(54, node.getBoundingClientRect().width + 24)),
+    if (!node || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      const prior = latestFitted.current;
+      if (prior && (!prior.laidOut || node.offsetWidth !== prior.textWidth)) refit();
     });
-  }, [content]);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [refit]);
+
+  // The caption on screen. It changes verb only after the previous one has
+  // faded out (or at once, the first time), and it always carries the
+  // measurement taken for its own words. The fade's completion swaps it, and a
+  // timer backs that up: an exit that never reports completion (as Motion's
+  // `AnimatePresence mode="wait"` did when a verb changed within a frame of
+  // the next caption mounting) must not freeze the caption for the turn.
+  const fade = reduce ? GLASS_MOTION.menuOutSeconds : GLASS_MOTION.inspectorLabelSeconds;
+  const target = React.useMemo<ShownCaption | null>(
+    () => (content && fitted && fitted.signature === signature ? { content, fitted } : null),
+    [content, fitted, signature],
+  );
+  const [shown, setShown] = React.useState<ShownCaption | null>(null);
+  const [leaving, setLeaving] = React.useState(false);
+  const latestTarget = React.useRef(target);
+  // A caption present when the shell mounts appears with it, as the shell does.
+  const [quietFirstCaption, setQuietFirstCaption] = React.useState(content !== null);
+  React.useLayoutEffect(() => {
+    latestTarget.current = target;
+    if (!target) return;
+    if (!shown || captionIdentity(shown.content) === captionIdentity(target.content)) {
+      if (shown?.content !== target.content || shown.fitted !== target.fitted) setShown(target);
+      setLeaving(false);
+    } else setLeaving(true);
+  }, [target, shown]);
+  const leavingNow = React.useRef(leaving);
+  const finishLeaving = React.useCallback(() => {
+    if (!leavingNow.current) return;
+    leavingNow.current = false;
+    if (latestTarget.current) setShown(latestTarget.current);
+    setLeaving(false);
+    setQuietFirstCaption(false);
+  }, []);
+  React.useLayoutEffect(() => {
+    leavingNow.current = leaving;
+  }, [leaving]);
+  React.useEffect(() => {
+    if (!leaving) return;
+    const timer = window.setTimeout(finishLeaving, fade * 1000 + 50);
+    return () => window.clearTimeout(timer);
+  }, [leaving, fade, finishLeaving]);
 
   const drawing = React.useRef<{
     presence: Spring;
@@ -163,6 +296,9 @@ export function LiquidIslandShell({
     fade: number;
     previousKey: string | null;
     active: boolean;
+    /** The bead width and caption presence last drawn, for gating a caption between frames. */
+    drawnWidth: number;
+    drawnPresence: number;
   } | null>(null);
   if (drawing.current === null)
     drawing.current = {
@@ -177,6 +313,8 @@ export function LiquidIslandShell({
       fade: 1,
       previousKey: null,
       active: false,
+      drawnWidth: 0,
+      drawnPresence: 0,
     };
   const beadActive = activity !== null || flash !== null;
   const wake = React.useRef<(() => void) | null>(null);
@@ -187,16 +325,31 @@ export function LiquidIslandShell({
     reduce,
     fitted,
     content,
+    shownTextWidth: shown?.fitted.textWidth ?? null,
   });
   React.useLayoutEffect(() => {
-    inputs.current = {
+    const next = {
       active: activity !== null || flash !== null,
       populated,
       exitKind,
       reduce,
       fitted,
       content,
+      shownTextWidth: shown?.fitted.textWidth ?? null,
     };
+    const prior = inputs.current;
+    inputs.current = next;
+    // Only a changed input can move the drawing; a render that changed
+    // nothing the drawing reads (a streamed chunk) requests no frame.
+    if ((Object.keys(next) as (keyof typeof next)[]).every((key) => next[key] === prior[key]))
+      return;
+    // A new caption may commit after this frame's draw. Gate it against the
+    // bead already on screen now, so no painted frame shows it uncontained.
+    const s = drawing.current!;
+    if (label.current && next.shownTextWidth !== prior.shownTextWidth)
+      label.current.style.opacity = String(
+        s.drawnPresence * captionFit(s.drawnWidth, next.shownTextWidth),
+      );
     wake.current?.();
   });
 
@@ -345,16 +498,16 @@ export function LiquidIslandShell({
         root.current.style.width = `${Math.max(0, s.island.x * Math.min(1, s.cluster.x) + g.width * (1 - Math.min(1, s.cluster.x)))}px`;
       if (clusters.current) clusters.current.style.opacity = String(g.clusterOpacity);
       if (label.current) {
-        const fit = input.reduce
-          ? 1
-          : Math.max(0, Math.min(1, (g.width - (nextWidth - 24) - 4) / 8));
+        // Gate on the caption actually drawn, not the one the bead is heading
+        // for: a caption shows only while the bead holds it.
+        s.drawnWidth = g.width;
+        s.drawnPresence = Math.max(0, Math.min(1, (s.presence.x - 0.55) / 0.45)) * standaloneFade;
+        const fit = captionFit(g.width, input.shownTextWidth);
         Object.assign(label.current.style, {
           width: `${g.width}px`,
           height: `${g.height}px`,
           top: `${g.top}px`,
-          opacity: String(
-            Math.max(0, Math.min(1, (s.presence.x - 0.55) / 0.45)) * standaloneFade * fit,
-          ),
+          opacity: String(s.drawnPresence * fit),
           visibility: s.mode === "hidden" ? "hidden" : "visible",
         });
       }
@@ -389,23 +542,6 @@ export function LiquidIslandShell({
     };
   }, []);
 
-  const payload = fitted && fitted.key === content?.key ? fitted.payload : content?.payload;
-  const words = (measuring: boolean) =>
-    content ? (
-      <>
-        <span className="liquid-island-word">{content.word}</span>
-        {content.payload ? (
-          <>
-            <span>
-              {content.flash ? " · " : ` ${content.preposition ? `${content.preposition} ` : ""}`}
-            </span>
-            <strong data-measure-payload={measuring ? "" : undefined}>
-              {measuring ? content.payload : payload}
-            </strong>
-          </>
-        ) : null}
-      </>
-    ) : null;
   return (
     <div
       ref={root}
@@ -481,31 +617,36 @@ export function LiquidIslandShell({
         data-island-verb={activity ? "" : undefined}
         data-island-flash={flash ? "" : undefined}
       >
-        <AnimatePresence initial={false} mode="wait">
-          {content ? (
-            <motion.span
-              key={`${content.key}-${content.word}`}
-              className={
-                content.waiting
-                  ? "liquid-island-waiting"
-                  : activity && !content.flash && !reduce
-                    ? "liquid-island-shimmer"
-                    : undefined
-              }
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{
-                duration: reduce ? GLASS_MOTION.menuOutSeconds : GLASS_MOTION.inspectorLabelSeconds,
-              }}
-            >
-              {words(false)}
-            </motion.span>
-          ) : null}
-        </AnimatePresence>
+        {shown ? (
+          <motion.span
+            key={captionIdentity(shown.content)}
+            className={
+              shown.content.waiting
+                ? "liquid-island-waiting"
+                : activity && !shown.content.flash && !reduce
+                  ? "liquid-island-shimmer"
+                  : undefined
+            }
+            initial={quietFirstCaption ? false : { opacity: 0 }}
+            animate={{ opacity: leaving ? 0 : 1 }}
+            transition={{ duration: fade }}
+            onAnimationComplete={leaving ? finishLeaving : undefined}
+          >
+            <span className="liquid-island-word">{shown.content.word}</span>
+            {shown.fitted.payload ? (
+              <>
+                <span>{separatorFor(shown.content)}</span>
+                <strong>{shown.fitted.payload}</strong>
+              </>
+            ) : null}
+          </motion.span>
+        ) : null}
       </div>
+      {/* Written only by `fitCaption`; React keeps these three nodes empty. */}
       <span ref={measure} aria-hidden className="liquid-island-measure text-ui">
-        {words(true)}
+        <span className="liquid-island-word" />
+        <span />
+        <strong />
       </span>
     </div>
   );
