@@ -15,16 +15,22 @@
  * Electron child by pid AND start time, that child's process group and its
  * descendants — never anything matched by name or path.
  */
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, createReadStream, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 
+import { spawn } from "node:child_process";
 import {
+  APP_DIR,
+  ELECTRON,
   assertProfileIsolated,
   closeAppBounded,
   launch,
+  launchEnvFor,
   pathExists,
+  smokeExecutableFor,
   waitUntil,
   writeFakeLoginShell,
 } from "../lib/smoke-kit.mjs";
@@ -55,6 +61,7 @@ import {
   CLOUD_LAUNCH_KEY,
   CLOUD_RUNNER_KEY,
   cleanQuitProblems,
+  immediateQuit,
   cloudElectronEnv,
   cloudFixtureFromSupervisorEnv,
   completeDevSignIn,
@@ -794,7 +801,13 @@ async function boot() {
  * live process; the first launch and every supervised restart come through
  * here, with the same environment, profile, database and harness directory.
  */
-async function startElectron(extraEnv) {
+/**
+ * Launches Electron. With `databasePage` (VC-1208's quit-during-launch) it
+ * returns as soon as the launch shows that database page (`check` or
+ * `upgrade`), undriven and before the guard is proved; the launch after it
+ * proves the guard as every launch does.
+ */
+async function startElectron(extraEnv, { databasePage } = {}) {
   // Quit evidence belongs to one launch, never the process that replaces it.
   lastTrayQuit = null;
   lastCloudClose = null;
@@ -830,6 +843,15 @@ async function startElectron(extraEnv) {
       ).then(() => process.exit(1));
     }
   });
+  if (databasePage !== undefined) {
+    const shown = await app.firstWindow({ timeout: 240_000 });
+    await shown.waitForURL(
+      (url) => (databasePage === "check" ? isCheckingPage(url.href) : isUpdatingPage(url.href)),
+      { timeout: 240_000 },
+    );
+    await shown.getByRole("status").waitFor({ timeout: 30_000 });
+    return { page: shown, live: null, record: null };
+  }
   app.on("window", wireWindow);
   const page = await firstAppWindow();
   mainPage = page;
@@ -970,13 +992,185 @@ async function relaunch() {
   return restartElectron("relaunch", closeLocalInstance);
 }
 
+/**
+ * VC-1208: a relaunch that quits while the launch's database work runs, then
+ * launches again normally. `work` is the page to quit on: `check` (a routine
+ * launch's check) or `upgrade` (`database`, an absolute path to a closed
+ * older copy, is cloned in first so the launch has one to run). With
+ * `secondLaunch`, a second Electron starts on the same profile while an
+ * upgrade's quit waits, and the waiting window must come forward.
+ *
+ * The quitting launch is never driven and its guard is not re-proved: it is
+ * the same bundle and environment, and quits on the database page. The
+ * launch after it is the ordinary one, guard and all.
+ */
+async function quitDuringLaunch(args) {
+  const work = args.work === "upgrade" ? "upgrade" : "check";
+  if (spec.cloud || spec.deployment) throw new Error("quit-during-launch is local");
+  if (restarting) throw new Error("a restart is already running");
+  restarting = true;
+  try {
+    const logFrom = mainLogSize();
+    const { close } = await closeLocalInstance();
+    if (!immediateQuit(close, mainLogSince(logFrom)) && cleanQuitProblems(close).length > 0)
+      throw new Error(`Electron did not quit cleanly first: ${JSON.stringify(close)}`);
+    await waitUntil(
+      "the quit Electron's processes to exit",
+      async () => (await owned()).length === 0,
+      {
+        timeout: 10_000,
+        interval: 200,
+      },
+    );
+    await fs.rm(L.appSocket, { force: true });
+    if (work === "upgrade") {
+      const problems = await seedDatabaseProblems(args.database);
+      if (problems.length > 0) throw new Error(problems.join("; "));
+      for (const suffix of ["", "-wal", "-shm"])
+        await fs.rm(`${L.dbPath}${suffix}`, { force: true });
+      await seedDatabase(args.database, L.dbPath);
+    }
+    // The closed database file before the launch, to compare after its exit.
+    const dbBefore = work === "check" ? await databaseFileState(L.dbPath) : null;
+    electronExit = null;
+    mainPage = null;
+    const launchStarted = performance.now();
+    const { page } = await startElectron(launchEnv, { databasePage: work });
+    const exited = new Promise((done) =>
+      electronChild.once("exit", (code, signal) => done({ code, signal })),
+    );
+    const windowMs = Math.round(performance.now() - launchStarted);
+    const quitLogFrom = mainLogSize();
+    const asked = performance.now();
+    // The process may be gone before Playwright hears back: that is the answer, not a fault.
+    await app
+      .evaluate(({ app: electronApp }) => setTimeout(() => electronApp.quit(), 0))
+      .catch((error) => slog(`quit asked; no reply (${error.message})`));
+    let second = null;
+    if (work === "upgrade") {
+      await page
+        .getByRole("status")
+        .getByText("Updating your data before quitting", { exact: true })
+        .waitFor({ timeout: 30_000 });
+      await page
+        .screenshot({ path: join(L.screenshotsDir, "000-quit-waits-for-upgrade.png") })
+        .catch((error) => slog(`quit-wait screenshot failed (${error.message})`));
+      if (args.secondLaunch === true) second = await secondLaunchDuringWait();
+    }
+    const exit = await exited;
+    const quitMs = Math.round(performance.now() - asked);
+    const dbAfter = work === "check" ? await databaseFileState(L.dbPath) : null;
+    const log = mainLogSince(quitLogFrom);
+    const mode = /\[quit\] exit call \{[^}]*mode: '(\w+)'/s.exec(log)?.[1] ?? null;
+    const database =
+      dbBefore === null
+        ? null
+        : {
+            before: dbBefore,
+            after: dbAfter,
+            unchanged: JSON.stringify(dbBefore) === JSON.stringify(dbAfter),
+          };
+    transcript({ cmd: "quit-during-launch", work, windowMs, quitMs, exit, mode, second, database });
+    slog(
+      `quit during ${work}: process gone ${quitMs} ms after the quit (${mode ?? "no exit line"})`,
+    );
+    // The launch after it: the ordinary one, guard re-proved.
+    electronExit = null;
+    mainPage = null;
+    current = { generation: ++generation, window: null, refs: new Set() };
+    for (const key of ["checkingWindowShown", "checkingWindowLoadedApp", "firstWindow"])
+      delete timings[key];
+    await fs.rm(L.appSocket, { force: true });
+    const { live } = await startElectron(launchEnv);
+    await waitUntil("the app's agent socket", () => pathExists(L.appSocket), { timeout: 30_000 });
+    restarts += 1;
+    await recordMembers();
+    return {
+      work,
+      windowMs,
+      quitMs,
+      exit,
+      mode,
+      second,
+      database,
+      guard: Object.keys(live.trapped).length,
+    };
+  } finally {
+    restarting = false;
+  }
+}
+
+/** A database file's digest, size and stamp, and its WAL's size. */
+async function databaseFileState(path) {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(path)) hash.update(chunk);
+  const info = await fs.stat(path);
+  const wal = await fs.stat(`${path}-wal`).catch(() => null);
+  return {
+    sha256: hash.digest("hex"),
+    size: info.size,
+    mtimeMs: info.mtimeMs,
+    walBytes: wal?.size ?? 0,
+  };
+}
+
+/** A second launch on this profile while the quit waits: the waiting window must come forward. */
+async function secondLaunchDuringWait() {
+  const id = await app.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0];
+    window?.hide();
+    return window?.id ?? null;
+  });
+  const environment = launchEnvFor(L.dbPath, launchEnv);
+  const started = performance.now();
+  const child = spawn(
+    smokeExecutableFor(ELECTRON, L.userDataDir, { environment }),
+    [APP_DIR, `--user-data-dir=${L.userDataDir}`, "--use-mock-keychain", "--password-store=basic"],
+    { env: environment, stdio: "ignore" },
+  );
+  const exited = new Promise((done) => child.once("exit", (code) => done(code)));
+  await waitUntil(
+    "the waiting window shown again",
+    () =>
+      app.evaluate(
+        ({ BrowserWindow }, windowId) => BrowserWindow.fromId(windowId)?.isVisible() === true,
+        id,
+      ),
+    { timeout: 60_000, interval: 100 },
+  );
+  const shownMs = Math.round(performance.now() - started);
+  const code = await exited;
+  return { shownMs, exitCode: code };
+}
+
+/** The Electron main log's size now, to read only what a quit writes after it. */
+function mainLogSize() {
+  try {
+    return readFileSync(L.mainLog).length;
+  } catch {
+    return 0;
+  }
+}
+
+function mainLogSince(offset) {
+  try {
+    return readFileSync(L.mainLog).subarray(offset).toString("utf8");
+  } catch {
+    return "";
+  }
+}
+
 async function restartElectron(reason, closeInstance) {
   if (restarting) throw new Error("a restart is already running");
   restarting = true;
   const started = performance.now();
   try {
+    const logFrom = mainLogSize();
     const { trayQuit, close } = await closeInstance();
-    const unclean = cleanQuitProblems(close);
+    const quitMs = Math.round(performance.now() - started);
+    // The app may end itself at once when only read-only workers are left (VC-1208).
+    const immediate = immediateQuit(close, mainLogSince(logFrom));
+    const unclean = immediate ? [] : cleanQuitProblems(close);
     if (unclean.length > 0) {
       throw new Error(
         `Electron did not quit cleanly before the restart (${unclean.join("; ")}): ${JSON.stringify({ close, trayQuit })}`,
@@ -1021,9 +1215,26 @@ async function restartElectron(reason, closeInstance) {
         .map((key) => [key, timings[key] - launchStart]),
     );
     slog(`restart ${restarts} (${reason}): pid ${electronPid}, guard re-verified`);
-    transcript({ cmd: "restart", reason, restarts, electronPid, ms, close: close.kind, windows });
+    transcript({
+      cmd: "restart",
+      reason,
+      restarts,
+      electronPid,
+      ms,
+      quitMs,
+      close: immediate ? "immediate" : close.kind,
+      windows,
+    });
     await recordMembers();
-    return { restarts, electronPid, ms, windows, guard: Object.keys(live.trapped).length };
+    return {
+      restarts,
+      electronPid,
+      ms,
+      quitMs,
+      close: immediate ? "immediate" : close.kind,
+      windows,
+      guard: Object.keys(live.trapped).length,
+    };
   } finally {
     restarting = false;
   }
@@ -1236,6 +1447,8 @@ async function handle(cmd, args) {
       return restart(String(args.reason ?? "requested"));
     case "relaunch":
       return relaunch();
+    case "quit-during-launch":
+      return quitDuringLaunch(args);
     case "restore-restart":
       return restoreRestart(args);
     case "runner-power": {

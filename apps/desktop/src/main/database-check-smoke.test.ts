@@ -4,6 +4,8 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   holdDatabaseCheckForSmoke,
   smokeDatabaseCheckOffMainBytes,
+  smokeDatabaseWorkerHoldRows,
+  smokeDatabaseWorkerHoldUntil,
   type DatabaseCheckSmokeGlobal,
 } from "./database-check-smoke";
 
@@ -22,6 +24,36 @@ describe("smokeDatabaseCheckOffMainBytes", () => {
     expect(smokeDatabaseCheckOffMainBytes({ VOLLI_SMOKE_DATABASE_CHECK_OFF_MAIN_BYTES: "0" })).toBe(
       0,
     );
+  });
+});
+
+describe("smokeDatabaseWorkerHoldRows", () => {
+  it("holds nothing unless a whole number is set", () => {
+    expect(smokeDatabaseWorkerHoldRows({})).toBeUndefined();
+    expect(
+      smokeDatabaseWorkerHoldRows({ VOLLI_SMOKE_DATABASE_WORKER_HOLD_ROWS: "" }),
+    ).toBeUndefined();
+    expect(
+      smokeDatabaseWorkerHoldRows({ VOLLI_SMOKE_DATABASE_WORKER_HOLD_ROWS: "2e9" }),
+    ).toBeUndefined();
+    expect(
+      smokeDatabaseWorkerHoldRows({ VOLLI_SMOKE_DATABASE_WORKER_HOLD_ROWS: "2000000000" }),
+    ).toBe(2_000_000_000);
+  });
+});
+
+describe("smokeDatabaseWorkerHoldUntil", () => {
+  it("holds nothing unless an absolute path is set", () => {
+    expect(smokeDatabaseWorkerHoldUntil({})).toBeUndefined();
+    expect(
+      smokeDatabaseWorkerHoldUntil({ VOLLI_SMOKE_DATABASE_WORKER_HOLD_UNTIL: "" }),
+    ).toBeUndefined();
+    expect(
+      smokeDatabaseWorkerHoldUntil({ VOLLI_SMOKE_DATABASE_WORKER_HOLD_UNTIL: "relative/file" }),
+    ).toBeUndefined();
+    expect(
+      smokeDatabaseWorkerHoldUntil({ VOLLI_SMOKE_DATABASE_WORKER_HOLD_UNTIL: "/tmp/release" }),
+    ).toBe("/tmp/release");
   });
 });
 

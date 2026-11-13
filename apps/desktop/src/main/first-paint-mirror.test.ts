@@ -92,6 +92,15 @@ describe("firstPaintMirrorWriter", () => {
     expect(readFileSync(path, "utf8")).toBe(before);
   });
 
+  it("settles once every write handed to it has landed, for an exit that cannot wait on Node", async () => {
+    const path = mirrorPath();
+    const writer = firstPaintMirrorWriter(path, () => {});
+    await writer.settled();
+    void writer.write(stored);
+    await writer.settled();
+    expect(readFirstPaintMirror(path)).toEqual(stored);
+  });
+
   it("does not rewrite what an earlier launch left, and reports a failed write", async () => {
     const path = mirrorPath();
     await firstPaintMirrorWriter(path, () => {}).write(stored);

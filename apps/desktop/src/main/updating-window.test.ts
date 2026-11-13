@@ -76,7 +76,7 @@ vi.mock("electron", () => {
   return { BrowserWindow, nativeTheme: theme };
 });
 
-const { openUpdatingWindow, updatingPageUrl } = await import("./updating-window");
+const { launchWindowPage, openUpdatingWindow, updatingPageUrl } = await import("./updating-window");
 const { quietWindowPolicy } = await import("@volli/host-core/maintenance");
 
 const policy = quietWindowPolicy({}, process.platform);
@@ -99,6 +99,18 @@ describe("updatingPageUrl", () => {
     expect(updatingPageUrl(light, undefined, "check")).toBe(
       "volli-app://bundle/updating.html?appearance=light&background=%23f6d4c6&work=check",
     );
+    expect(updatingPageUrl(light, undefined, "upgrade", "quit")).toBe(
+      "volli-app://bundle/updating.html?appearance=light&background=%23f6d4c6&then=quit",
+    );
+  });
+});
+
+describe("launchWindowPage", () => {
+  it("names the upgrade's page, the check's, and anything else as the app's", () => {
+    expect(launchWindowPage("volli-app://bundle/updating.html?appearance=dark")).toBe("upgrade");
+    expect(launchWindowPage("http://localhost:5173/updating.html?work=check")).toBe("check");
+    expect(launchWindowPage("volli-app://bundle/index.html")).toBe("app");
+    expect(launchWindowPage("")).toBe("app");
   });
 });
 
@@ -141,5 +153,31 @@ describe("openUpdatingWindow", () => {
     // A window already gone is not shown.
     window?.handlers.get("ready-to-show")?.();
     expect(window?.shown).toBe(1);
+  });
+
+  it("says a quit waits for the upgrade, and comes forward when asked (VC-1208)", () => {
+    const updating = openUpdatingWindow({ devRendererUrl: undefined, policy });
+    const [window] = windows;
+    expect(new URL(window?.url ?? "").searchParams.has("then")).toBe(false);
+    updating.reveal();
+    expect(window?.shown).toBe(1);
+    updating.quitting();
+    expect(new URL(window?.url ?? "").searchParams.get("then")).toBe("quit");
+    expect(window?.shown).toBe(2);
+    // Closed by the person, not by the launch: a waiting quit opens it again.
+    window!.destroyed = true;
+    updating.reveal();
+    expect(window?.shown).toBe(2);
+    updating.quitting();
+    expect(windows).toHaveLength(2);
+    expect(new URL(windows[1]?.url ?? "").searchParams.get("then")).toBe("quit");
+    // Closed by the launch: nothing reopens it.
+    updating.close();
+    updating.quitting();
+    expect(windows).toHaveLength(2);
+
+    // A quit asked before the window opened opens it saying so.
+    openUpdatingWindow({ devRendererUrl: undefined, policy, quitPending: true });
+    expect(new URL(windows[2]?.url ?? "").searchParams.get("then")).toBe("quit");
   });
 });

@@ -17,6 +17,7 @@ import { basename, dirname, join } from "node:path";
 import { setTimeout as delay, setImmediate as yieldNow } from "node:timers/promises";
 import Database from "better-sqlite3";
 import { platform, totalmem } from "node:os";
+import { declareWorkerExitKind } from "@volli/shared";
 import { parseFreePercentage } from "../process/memory-pressure";
 import { runInventoryTool } from "../process/inventory";
 import { profileMaintenanceActive, profileOwnerAlive } from "./profile-maintenance";
@@ -71,6 +72,12 @@ export function runAutomaticBackupWorker(
       ...(execArgv ? { execArgv } : {}),
       resourceLimits: { maxOldGenerationSizeMb: 192 },
     });
+    // The daily backup reads the live database only through the read-only
+    // connection in `createAutomaticBackup`; it writes its own work directory
+    // and archive, which the next run reclaims. A quit may end the process
+    // under it (VC-1208). A move's backup belongs to the move's own flow and
+    // stays undeclared, so a quit waits for it.
+    if (request.move === undefined) declareWorkerExitKind(worker, "automatic-backup");
     let result: BackupWorkerResult | undefined;
     let failure: Error | undefined;
     let terminateTimer: ReturnType<typeof setTimeout> | undefined;

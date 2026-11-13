@@ -79,6 +79,11 @@ export interface DesktopRunnerEdgePorts<T extends QuitTerminals> {
     quitAccepted(): void;
     quitRefused(): void;
   };
+  /** The quit's timeline in the log (VC-1208): accepted, then drained. */
+  timeline?: {
+    accepted(): void;
+    drained(deadlineExpired: boolean): void;
+  };
 }
 
 /** What boot binds as it builds each gate's subject. Binding again replaces. */
@@ -210,6 +215,7 @@ export function createDesktopRunnerEdge<T extends QuitTerminals>(
     });
   };
 
+  let deadlineExpired = false;
   return {
     installQuitHold: () =>
       registerAcceptedQuitCoordinator({
@@ -227,17 +233,19 @@ export function createDesktopRunnerEdge<T extends QuitTerminals>(
         shutdownAgentSocket: async () => {},
         prepareQuit,
         stopBackgroundWork: ports.stopBackgroundWork,
-        onShutdownDeadline: (deadlineMs) =>
+        onShutdownDeadline: (deadlineMs) => {
+          deadlineExpired = true;
           ports.host.warnIfFollowUpCleanCloseSkipped(
             `quit: shutdown deadline expired after ${deadlineMs}ms`,
-          ),
+          );
+        },
         reportFailure: (error) => log.error("failed to coordinate app shutdown", { error }),
-        ...(ports.relaunch === undefined
-          ? {}
-          : {
-              onQuitAccepted: ports.relaunch.quitAccepted,
-              onQuitRefused: ports.relaunch.quitRefused,
-            }),
+        onQuitAccepted: () => {
+          ports.timeline?.accepted();
+          ports.relaunch?.quitAccepted();
+        },
+        ...(ports.relaunch === undefined ? {} : { onQuitRefused: ports.relaunch.quitRefused }),
+        onDrained: () => ports.timeline?.drained(deadlineExpired),
       }),
     stopProducers: () => {
       hostClosing = true;

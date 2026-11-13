@@ -7,9 +7,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import {
   CHECKING_LABEL,
   UPDATING_LABEL,
+  UPDATING_THEN_QUIT_LABEL,
   UpdatingPage,
   updatingAppearance,
   updatingBackground,
+  updatingThenQuit,
   updatingWork,
 } from "./page";
 
@@ -34,6 +36,12 @@ describe("UpdatingPage", () => {
     expect(host.querySelectorAll("button, a, input")).toHaveLength(0);
   });
 
+  it("says the quit waits for the upgrade, still with nothing to press (VC-1208)", () => {
+    act(() => root.render(<UpdatingPage thenQuit />));
+    expect(host.querySelector('[role="status"]')?.textContent).toBe(UPDATING_THEN_QUIT_LABEL);
+    expect(host.querySelectorAll("button, a, input")).toHaveLength(0);
+  });
+
   it("says checking, not updating, for a routine launch's check", () => {
     act(() => root.render(<UpdatingPage work="check" />));
     expect(host.querySelector('[role="status"]')?.textContent).toBe(CHECKING_LABEL);
@@ -48,6 +56,14 @@ describe("updatingBackground", () => {
     expect(updatingBackground("?background=%23fff")).toBeNull();
     expect(updatingBackground("?background=url(x)")).toBeNull();
     expect(updatingBackground("")).toBeNull();
+  });
+});
+
+describe("updatingThenQuit", () => {
+  it("is true only when main names a waiting quit", () => {
+    expect(updatingThenQuit("?appearance=dark&then=quit")).toBe(true);
+    expect(updatingThenQuit("?then=restart")).toBe(false);
+    expect(updatingThenQuit("")).toBe(false);
   });
 });
 

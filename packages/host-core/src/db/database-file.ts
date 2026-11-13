@@ -444,6 +444,12 @@ export function openVolliDb(
      * still exactly that file, the routine quick check is not repeated.
      */
     checked?: CheckedDatabaseFile;
+    /**
+     * Called once the read-only preflight is done, before the open's first
+     * write of any kind (a removed safety copy, the writable handle, a
+     * migration). A throw ends the open there, with nothing written (VC-1208).
+     */
+    beforeFirstWrite?: () => void;
   } = {},
 ): Database.Database {
   const busyTimeoutMs = options.busyTimeoutMs ?? 5000;
@@ -482,6 +488,8 @@ export function openVolliDb(
         `The local database is missing, but an unpublished safety copy of it was kept: ${abandoned.join(", ")}. Nothing was created. Recover the database from that copy before starting Volli again.`,
       );
     }
+    // Everything above reads; everything below may write.
+    options.beforeFirstWrite?.();
     if (fullyClean === true) {
       // The live database exists and passes a full integrity check: the
       // pending copies are redundant now, and never recovery candidates.
