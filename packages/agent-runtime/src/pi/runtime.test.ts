@@ -450,9 +450,9 @@ function settlesHolding(text: string, tokens: number): ScriptStep {
  * A long tool-calling reply that fills the window from INSIDE the turn, so a
  * threshold compaction before the next round cuts the turn and splits it.
  */
-function longToolRound(label: string): ScriptStep {
+function longToolRound(label: string, tokens = 200_000): ScriptStep {
   return (emit) => {
-    emit.occupies(200_000);
+    emit.occupies(tokens);
     emit.text(`${label} round notes `.repeat(6_000));
     emit.toolCall("read", { path: "MARKER.txt" });
     emit.finish();
@@ -8272,7 +8272,9 @@ describe("compacting a context that reached its reserve", () => {
           longToolRound("first"),
           settles("## Goal\nthe first history"),
           (emit) => emit.fail("prefix summary rate limited"),
-          longToolRound("second"),
+          // Grown by another keepRecentTokens, so the failure is tried again
+          // at this round rather than held back (VC-1206).
+          longToolRound("second", 220_000),
           settles("## Goal\nthe second history"),
           settles("## Original Request\nthe prefix"),
           settles("finished the same turn"),
@@ -9259,6 +9261,402 @@ describe("provider-native context persistence", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+/** Summary requests made after each of the first `rounds` turn requests (VC-1206). */
+function perRound(summaries: readonly { afterRound: number }[], rounds: number): number[] {
+  return Array.from(
+    { length: rounds },
+    (_, index) => summaries.filter(({ afterRound }) => afterRound === index + 1).length,
+  );
+}
+
+function compactionBills(observations: RuntimeObservation[]) {
+  return observations.filter(
+    (observation): observation is Extract<RuntimeObservation, { kind: "usage" }> =>
+      observation.kind === "usage" && observation.usage.cause === "compaction",
+  );
+}
+
+describe("backing off a failing threshold compaction (VC-1206)", () => {
+  /** How a provider refuses a payload larger than the model can hold. */
+  const REFUSED = "maximum context length exceeded: 310000 tokens";
+
+  /**
+   * What the summary requests made after a round meet. `refuses-prefix` is
+   * VC-805's storm: the turn is split, the history summary is bought and the
+   * prefix summary is refused, so every failed attempt costs two requests.
+   * `fails` refuses every request, however the attempt is cut.
+   */
+  type Fate = "refuses-prefix" | "fails" | "succeeds" | "halts";
+
+  interface SummaryRequest {
+    /** The turn requests answered before this summary request was made. */
+    afterRound: number;
+    request: "history" | "prefix";
+  }
+
+  /**
+   * One Session's provider: turn requests answered by `turns` in order, and
+   * every summary request answered by the fate the round before it declared,
+   * so a script states the turn and stays indifferent to how many summary
+   * requests an attempt makes.
+   */
+  function provider(turns: ((setFate: (fate: Fate) => void) => ScriptStep)[]): {
+    stream: StreamFn;
+    summaries: SummaryRequest[];
+    summarizing: Promise<void>;
+  } {
+    const summaries: SummaryRequest[] = [];
+    const halted = Promise.withResolvers<void>();
+    let fate: Fate = "fails";
+    const setFate = (next: Fate) => {
+      fate = next;
+    };
+    let round = 0;
+    const step: ScriptStep = async (emit, context, signal, model, reasoning) => {
+      const messages = JSON.stringify(context.messages);
+      if (messages.includes("<conversation>")) {
+        const request = messages.includes("PREFIX of a turn") ? "prefix" : "history";
+        summaries.push({ afterRound: round, request });
+        if (fate === "halts")
+          return haltOnAbort("", () => halted.resolve())(emit, context, signal, model, reasoning);
+        if (fate === "fails" || (fate === "refuses-prefix" && request === "prefix"))
+          return emit.fail("summary rate limited");
+        emit.text(`## Goal\nthe ${request} summary`);
+        return emit.finish();
+      }
+      const next = turns[round++];
+      if (next === undefined) throw new Error(`no turn step for round ${round}`);
+      return next(setFate)(emit, context, signal, model, reasoning);
+    };
+    return {
+      stream: scriptedStream(Array.from({ length: 200 }, () => step)),
+      summaries,
+      summarizing: halted.promise,
+    };
+  }
+
+  /**
+   * A tool round whose reply leaves the model holding `tokens`, long enough
+   * that a compaction before the next round splits the turn. `fate` is what
+   * the compaction it triggers meets.
+   */
+  const round =
+    (tokens: number, fate: Fate = "fails") =>
+    (setFate: (fate: Fate) => void): ScriptStep =>
+    (emit) => {
+      setFate(fate);
+      emit.occupies(tokens);
+      emit.text("working notes ".repeat(7_000));
+      emit.toolCall("read", { path: "MARKER.txt" });
+      emit.finish();
+    };
+  const reply =
+    (text: string, tokens?: number, fate: Fate = "fails") =>
+    (setFate: (fate: Fate) => void): ScriptStep => {
+      setFate(fate);
+      return tokens === undefined ? settles(text) : settlesHolding(text, tokens);
+    };
+  const refusedForLength =
+    (fate: Fate) =>
+    (setFate: (fate: Fate) => void): ScriptStep =>
+    (emit) => {
+      setFate(fate);
+      emit.fail(REFUSED);
+    };
+
+  const failedThreshold = expect.objectContaining({ state: "failed", reason: "threshold" });
+
+  it("buys one failed summary, not one per tool round, while the context does not grow", async () => {
+    const attachment = fixture();
+    const { stream, summaries } = provider([
+      reply("old answer"),
+      round(200_000, "refuses-prefix"),
+      round(200_000, "refuses-prefix"),
+      round(200_000, "refuses-prefix"),
+      reply("finished the turn"),
+    ]);
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(stream),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember this");
+    await handle.submitUserMessage("read the marker");
+
+    // Before VC-1206 this was [2, 2, 2]: three failed compactions and six
+    // summary requests, the history summary bought again at every round.
+    expect(perRound(summaries, 5)).toEqual([0, 2, 0, 0, 0]);
+    expect(compactions(attachment.observations)).toEqual([failedThreshold]);
+    // The one real attempt still records what it was billed (VC-805); the
+    // skipped ones record nothing.
+    expect(compactionBills(attachment.observations)).toHaveLength(1);
+    expect(settledTexts(attachment.observations).at(-1)).toBe("finished the turn");
+    await handle.close();
+  });
+
+  it("tries again once the context has grown by another keepRecentTokens", async () => {
+    const attachment = fixture();
+    const { stream, summaries } = provider([
+      reply("old answer"),
+      round(200_000, "refuses-prefix"),
+      round(210_000, "refuses-prefix"),
+      // One token short of the step: the suffix each round adds is the same
+      // tool result, so the measure moves exactly as the reply's does.
+      round(219_999, "refuses-prefix"),
+      round(220_000, "refuses-prefix"),
+      reply("finished the turn"),
+    ]);
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(stream),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember this");
+    await handle.submitUserMessage("read the marker");
+
+    expect(perRound(summaries, 6)).toEqual([0, 2, 0, 0, 2, 0]);
+    expect(compactions(attachment.observations)).toEqual([failedThreshold, failedThreshold]);
+    expect(compactionBills(attachment.observations)).toHaveLength(2);
+    await handle.close();
+  });
+
+  it("stops after three failures in a run and leaves the overflow to its own recovery", async () => {
+    const attachment = fixture();
+    const { stream, summaries } = provider([
+      reply("old answer"),
+      round(200_000),
+      round(220_000),
+      round(240_000),
+      // Grown far past the step, but the run has spent its three attempts.
+      round(300_000),
+      round(320_000),
+      refusedForLength("succeeds"),
+      reply("finished after recovering"),
+    ]);
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(stream),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember this");
+    await handle.submitUserMessage("read the marker");
+
+    const overflowSummaries = summaries.filter(({ afterRound }) => afterRound === 7);
+    expect(perRound(summaries, 6)).toEqual([0, 1, 1, 1, 0, 0]);
+    expect(overflowSummaries.length).toBeGreaterThan(0);
+    expect(compactions(attachment.observations)).toEqual([
+      failedThreshold,
+      failedThreshold,
+      failedThreshold,
+      expect.objectContaining({ state: "compacted", reason: "overflow" }),
+    ]);
+    expect(settledTexts(attachment.observations).at(-1)).toBe("finished after recovering");
+    expect(attentions(attachment.observations)).toEqual([]);
+    await handle.close();
+  });
+
+  it("starts the count and the mark again after a success", async () => {
+    const attachment = fixture();
+    const { stream, summaries } = provider([
+      reply("old answer"),
+      round(200_000),
+      round(220_000, "succeeds"),
+      // Measured afresh on the compacted context: below the old mark, and
+      // attempted anyway, because the mark went with the failures.
+      round(150_000),
+      round(170_000),
+      // A third failure since the success; before it the count would have
+      // stood at four.
+      round(190_000),
+      round(210_000),
+      reply("finished the turn"),
+    ]);
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(stream),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember this");
+    await handle.submitUserMessage("read the marker");
+
+    expect(perRound(summaries, 7).map((count) => count > 0)).toEqual([
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+    ]);
+    expect(compactions(attachment.observations)).toEqual([
+      failedThreshold,
+      expect.objectContaining({ state: "compacted", reason: "threshold" }),
+      failedThreshold,
+      failedThreshold,
+      failedThreshold,
+    ]);
+    await handle.close();
+  });
+
+  it("never holds back a manual compaction, and a new run starts clean", async () => {
+    const attachment = fixture();
+    const { stream, summaries } = provider([
+      reply("old answer"),
+      round(200_000),
+      round(220_000),
+      round(240_000),
+      round(300_000),
+      // Ends the run at the cap, holding a context that is still over the
+      // threshold when the next message arrives.
+      reply("finished the first turn", 300_000),
+      // The second run's first attempt is the idle one its own message pays
+      // for; the round after it has not grown by the step, the next has.
+      round(310_000),
+      round(320_000),
+      reply("finished the second turn"),
+    ]);
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(stream),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember this");
+    await handle.submitUserMessage("read the marker");
+    expect(compactions(attachment.observations)).toHaveLength(3);
+
+    // At the cap and between runs, `/compact` still runs, failing or not.
+    const beforeManual = summaries.length;
+    await expect(handle.compact()).resolves.toMatchObject({
+      kind: "rejected",
+      reason: "summary-failed",
+    });
+    expect(summaries.length).toBeGreaterThan(beforeManual);
+    expect(compactions(attachment.observations).at(-1)).toMatchObject({
+      state: "failed",
+      reason: "manual",
+    });
+
+    const beforeSecondRun = summaries.length;
+    await handle.submitUserMessage("carry on");
+    const secondRun = summaries.slice(beforeSecondRun);
+    // The idle attempt before round 6, then nothing at round 7 (10k of
+    // growth), then the attempt at round 8 (20k).
+    expect([...new Set(secondRun.map(({ afterRound }) => afterRound))]).toEqual([6, 8]);
+    expect(compactions(attachment.observations).slice(4)).toEqual([
+      failedThreshold,
+      failedThreshold,
+    ]);
+    await handle.close();
+  });
+
+  it("lets a manual compaction succeed at the cap", async () => {
+    const attachment = fixture();
+    const { stream } = provider([
+      reply("old answer"),
+      round(200_000),
+      round(220_000),
+      round(240_000),
+      reply("finished the turn", undefined, "succeeds"),
+    ]);
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(stream),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember this");
+    await handle.submitUserMessage("read the marker");
+
+    await expect(handle.compact()).resolves.toEqual({ kind: "compacted" });
+    expect(compactions(attachment.observations)).toEqual([
+      failedThreshold,
+      failedThreshold,
+      failedThreshold,
+      expect.objectContaining({ state: "compacted", reason: "manual" }),
+    ]);
+    await handle.close();
+  });
+
+  it("counts an attempt that throws after it was decided on", async () => {
+    // The policy is read once to decide and again inside the attempt; this one
+    // breaks on the second read of the first attempt only.
+    const attachment = fixture();
+    let reads: number | undefined;
+    const { stream, summaries } = provider([
+      reply("old answer"),
+      (setFate) => {
+        reads = 0;
+        return round(200_000)(setFate);
+      },
+      round(210_000),
+      round(220_000, "succeeds"),
+      reply("finished the turn"),
+    ]);
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(stream),
+      compactionPolicy: () => {
+        if (reads !== undefined && ++reads === 2) throw new Error("the policy store is unreadable");
+        return { autoCompaction: true };
+      },
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember this");
+    await handle.submitUserMessage("read the marker");
+
+    // No summary request was made for the throw, and none at the round that
+    // grew less than the step after it.
+    expect(perRound(summaries, 5).map((count) => count > 0)).toEqual([
+      false,
+      false,
+      false,
+      true,
+      false,
+    ]);
+    expect(compactions(attachment.observations)).toEqual([
+      expect.objectContaining({
+        state: "failed",
+        reason: "threshold",
+        message: "the policy store is unreadable",
+      }),
+      expect.objectContaining({ state: "compacted", reason: "threshold" }),
+    ]);
+    await handle.close();
+  });
+
+  it("ends the run at a threshold summary the person stopped, without counting it", async () => {
+    // A Stop is not the summarizer failing, so it is not counted; and it ends
+    // the run the count belongs to, so the next run starts clean either way.
+    const attachment = fixture();
+    const { stream, summarizing } = provider([
+      reply("old answer"),
+      round(200_000, "halts"),
+      round(200_000),
+      reply("finished the turn"),
+    ]);
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(stream),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember this");
+    const delivery = handle.submitUserMessage("read the marker");
+    await summarizing;
+    await handle.interrupt();
+    await delivery;
+
+    // The stopped summary is reported as the attempt it was, and the turn it
+    // belonged to ends there.
+    expect(compactions(attachment.observations)).toEqual([failedThreshold]);
+    expect(kinds(attachment.observations).filter((kind) => kind.startsWith("turn:"))).toEqual([
+      "turn:started",
+      "turn:completed",
+      "turn:started",
+      "turn:interrupted",
+    ]);
+    await handle.close();
   });
 });
 
