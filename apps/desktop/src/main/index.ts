@@ -89,6 +89,7 @@ import {
 } from "./quit-gate";
 import { isInternalNavigationTarget } from "./navigation";
 import { openUpdatingWindow, updatingPageUrl } from "./updating-window";
+import { holdDatabaseCheckForSmoke, smokeDatabaseCheckOffMainBytes } from "./database-check-smoke";
 import {
   firstPaintMirrorPath,
   firstPaintMirrorWriter,
@@ -112,6 +113,7 @@ import {
   cancelScheduledBackupRestore,
   runRestoreWorker,
   databaseStartupWork,
+  ROUTINE_CHECK_OFF_MAIN_BYTES,
   runDatabaseUpgradeWorker,
   startOrphanScan,
   createLoginPathBootstrap,
@@ -1161,7 +1163,10 @@ const appStartup = app.whenReady().then(async () => {
   // Main stays responsive throughout, and nothing here reads or writes the
   // database until the worker has closed it. Work still running after a beat
   // gets a window: an upgrade its small one, a routine check the app's own.
-  const startupWork = databaseStartupWork(dbPath);
+  const startupWork = databaseStartupWork(
+    dbPath,
+    smokeDatabaseCheckOffMainBytes(process.env) ?? ROUTINE_CHECK_OFF_MAIN_BYTES,
+  );
   let databaseUpgrade: Awaited<ReturnType<typeof runDatabaseUpgradeWorker>> = null;
   if (startupWork !== null) {
     const { kind, ...versions } = startupWork;
@@ -1201,6 +1206,9 @@ const appStartup = app.whenReady().then(async () => {
       log.info("database wait window opened", { work: kind });
     }, DATABASE_WAIT_WINDOW_DELAY_MS);
     databaseUpgrade = await running;
+    // A smoke may hold the launch here, after the answer, to watch the wait
+    // window (database-check-smoke.ts); inert unless it asked.
+    await holdDatabaseCheckForSmoke(process.env);
     clearTimeout(showWaiting);
     log.info(kind === "upgrade" ? "database upgrade finished" : "database check finished", {
       ...versions,

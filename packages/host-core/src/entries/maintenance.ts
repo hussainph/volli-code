@@ -45,7 +45,7 @@ export { withProfileMaintenance } from "../backup/profile-maintenance";
 
 export { ProfileRestoreService } from "../backup/restore-service";
 export { runRestoreWorker, serveRestoreWorker } from "../backup/restore-worker";
-export { databaseStartupWork } from "../db/database-file";
+export { databaseStartupWork, ROUTINE_CHECK_OFF_MAIN_BYTES } from "../db/database-file";
 export { runDatabaseUpgradeWorker, serveDatabaseUpgradeWorker } from "../db/database-upgrade";
 export {
   hasScheduledBackupRestore,
