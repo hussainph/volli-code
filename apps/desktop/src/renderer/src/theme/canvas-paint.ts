@@ -413,9 +413,7 @@ export function paintCanvas(
  * authored. The canvas half is the grey canvas's own derivation with only its
  * accent-coloured members taken from the accent canvas.
  */
-function deriveSettingsPaint(
-  resolved: ResolvedAppearance,
-): ReturnType<typeof deriveCanvasPaint> {
+function deriveSettingsPaint(resolved: ResolvedAppearance): ReturnType<typeof deriveCanvasPaint> {
   const { canvasTokens } = deriveCanvasPaint(SETTINGS_CANVAS, resolved);
   const tokens = deriveSettingsTokens(resolved);
   const accent = SETTINGS_ACCENT_CANVAS.stops[0].hex;
