@@ -43,6 +43,17 @@ function text(value) {
   return typeof value === "string" ? value.slice(0, 1024) : undefined;
 }
 
+// A failed test's own phase trace (VC-1220): the first lines, each bounded,
+// strings only. The suite orders them most important first and keeps them to
+// fixture phases, bound reads and error names, never messages or payloads.
+function traceLines(value) {
+  if (!Array.isArray(value)) return undefined;
+  return value
+    .slice(0, 400)
+    .filter((line) => typeof line === "string")
+    .map((line) => line.slice(0, 256));
+}
+
 function install(root) {
   mkdirSync(root, { recursive: true });
   const output = join(root, `events-${process.pid}-${threadId}.jsonl`);
@@ -67,6 +78,7 @@ function install(root) {
     "restore-crash-terminated",
     "restore-crash-cleanup",
     "restore-cancel-request",
+    "test-trace",
   ]);
   function record(event, fields = {}) {
     if (!append) return;
@@ -128,8 +140,9 @@ function install(root) {
     const workerThreadId = Number.isInteger(message.workerThreadId)
       ? message.workerThreadId
       : undefined;
+    const trace = event === "test-trace" ? traceLines(message.trace) : undefined;
     if (event === "test-start") active.set(id, { id, file, name });
-    record(event, { id, file, name, workerThreadId });
+    record(event, { id, file, name, workerThreadId, trace });
     if (event === "test-finished") active.delete(id);
   });
   let childSequence = 0;
