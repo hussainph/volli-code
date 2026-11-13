@@ -51,6 +51,11 @@ import {
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { verifyMigrationBackup } from "./backup-integrity";
+import {
+  checkedDatabaseFile,
+  isCheckedDatabaseFile,
+  type CheckedDatabaseFile,
+} from "./checked-file";
 import { assertMigrationDiskSpace } from "./disk-preflight";
 import { cloneOrCopyFile, type FileCloneDeps } from "./file-clone";
 import { timeStep, type UpgradeTimings } from "./upgrade-timings";
@@ -304,46 +309,6 @@ function preflight(
   } finally {
     check.close();
   }
-}
-
-/**
- * The live file as a finished upgrade closed it (VC-1105): which inode, how
- * big, when it last changed. Nanosecond strings, so the handoff crosses a
- * worker boundary intact.
- */
-export interface CheckedDatabaseFile {
-  readonly dev: string;
-  readonly ino: string;
-  readonly size: string;
-  readonly mtimeNs: string;
-  readonly ctimeNs: string;
-}
-
-/** The identity of a closed, checkpointed database file; `null` when it has a WAL with frames. */
-export function checkedDatabaseFile(dbPath: string): CheckedDatabaseFile | null {
-  const wal = lstatSync(`${dbPath}-wal`, { throwIfNoEntry: false });
-  if (wal !== undefined && wal.size > 0) return null;
-  const info = lstatSync(dbPath, { bigint: true });
-  if (!info.isFile()) return null;
-  return {
-    dev: info.dev.toString(),
-    ino: info.ino.toString(),
-    size: info.size.toString(),
-    mtimeNs: info.mtimeNs.toString(),
-    ctimeNs: info.ctimeNs.toString(),
-  };
-}
-
-function isCheckedDatabaseFile(dbPath: string, checked: CheckedDatabaseFile): boolean {
-  const now = checkedDatabaseFile(dbPath);
-  return (
-    now !== null &&
-    now.dev === checked.dev &&
-    now.ino === checked.ino &&
-    now.size === checked.size &&
-    now.mtimeNs === checked.mtimeNs &&
-    now.ctimeNs === checked.ctimeNs
-  );
 }
 
 /**
@@ -823,9 +788,20 @@ function keepingAbandonedCopies(error: unknown, abandoned: readonly string[]): u
 export const MIGRATION_RECOVERY_ACTION =
   "Recovery action: quit Volli and restore the newest integrity-checked clean backup before retrying the upgrade.";
 
+/** A published migration safety copy, and the identity of the file that was verified. */
+export interface PublishedRollbackPoint {
+  readonly path: string;
+  /**
+   * The copy as this function left it, after verification and publication;
+   * `null` when it could not be read. Retention in the same upgrade skips
+   * re-checking the copy while it is still exactly this file (VC-1204).
+   */
+  readonly verified: CheckedDatabaseFile | null;
+}
+
 /**
  * Publishes `<dbPath>.backup-v<version>`: a verified, durable copy of the
- * database as it is before a migration runs, and returns its path.
+ * database as it is before a migration runs, and returns it.
  *
  * Checkpoints first, so the base file alone is the whole database, then
  * copies it to a unique staged name, verifies the copy, fsyncs it, sets any
@@ -843,7 +819,7 @@ export function publishRollbackPoint(
     timings?: UpgradeTimings;
     fileClone?: FileCloneDeps;
   } = {},
-): string {
+): PublishedRollbackPoint {
   const faults = options.faults ?? noFaults;
   const timings = options.timings;
   const recovery = MIGRATION_RECOVERY_ACTION;
@@ -929,7 +905,22 @@ export function publishRollbackPoint(
       action: "preserved",
       name: preserved.path,
     });
-  return backupPath;
+  return { path: backupPath, verified: verifiedIdentity(backupPath) };
+}
+
+/**
+ * The identity of the copy just verified, read only now: the rename that
+ * published it changes its ctime (APFS). Since the verifying connection
+ * closed, this function has only removed that connection's own empty
+ * sidecars, fsynced the file and renamed it, under the caller's open lock;
+ * none of that writes its bytes. `null` (check again) when it cannot be read.
+ */
+function verifiedIdentity(backupPath: string): CheckedDatabaseFile | null {
+  try {
+    return checkedDatabaseFile(backupPath);
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------

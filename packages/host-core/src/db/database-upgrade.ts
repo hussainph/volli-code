@@ -42,7 +42,8 @@ import {
   type DbOpenFailure,
 } from "../db-open-failure";
 import { hostLogger, installHostLog } from "../log/root";
-import { checkedDatabaseFile, openVolliDb, type CheckedDatabaseFile } from "./database-file";
+import { checkedDatabaseFile, type CheckedDatabaseFile } from "./checked-file";
+import { openVolliDb } from "./database-file";
 import { logTransactionViolation } from "./transaction-gate";
 
 export interface DatabaseUpgradeRequest {
