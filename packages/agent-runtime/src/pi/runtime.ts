@@ -2404,6 +2404,25 @@ async function attachSession(
     let contextRewrite: Promise<void> = Promise.resolve();
     let rewritingContext = false;
     /**
+     * Whether a retry has decided to run while Pi does not own the run yet, and
+     * what to wait for (VC-810).
+     *
+     * A retry finds Pi idle, then refreshes the Session's tools — a host round
+     * trip — before `continue()` sets `isStreaming`. Across that span the
+     * attachment is running in everything but Pi's own flag, so each door
+     * answers as it does during a live turn: a compaction, a model switch and
+     * a second retry refuse with their "while Pi is running" answer, and a
+     * delivery waits, then joins the run Pi now owns. Kept apart from
+     * {@link contextRewrite} because those doors word a summary in progress
+     * differently from a turn about to be sent.
+     *
+     * Released only after `continue()` has been called, and Pi sets
+     * `isStreaming` synchronously inside that call, so there is no moment at
+     * which neither this nor `isStreaming` holds.
+     */
+    let openingRun = false;
+    let runOpening: Promise<void> = Promise.resolve();
+    /**
      * Set only while a backoff or a network wait is being waited out; see
      * {@link interruptTurn}.
      */
@@ -3024,6 +3043,40 @@ async function attachSession(
      * continues from the user or tool-result message it answered.
      */
     const retryFailedTurn = async (commandId: string | null): Promise<DeliveryOutcome> => {
+      // Claimed before the first await and held until Pi owns the run — see
+      // {@link openingRun}. Both callers have just found Pi idle: `retry()`
+      // checked, and the drain runs between runs.
+      const opened = Promise.withResolvers<void>();
+      openingRun = true;
+      runOpening = opened.promise;
+      let opening: { run: Promise<void> } | undefined;
+      try {
+        opening = await openRetriedRun(commandId);
+      } finally {
+        openingRun = false;
+        opened.resolve();
+      }
+      if (opening === undefined) {
+        return {
+          kind: "rejected",
+          reason: "retry-unavailable",
+          message: "There is no failed Pi turn to retry.",
+        };
+      }
+      await opening.run;
+      return { kind: "delivered", delivery: "retry" };
+    };
+
+    /**
+     * Everything a retry does before Pi owns its run, ending in the call that
+     * hands it over: the started run, or `undefined` when there is no failed
+     * turn to retry. The run comes back boxed and unawaited, so the caller lets
+     * go of {@link openingRun} once Pi holds `isStreaming` rather than once the
+     * run is over.
+     */
+    const openRetriedRun = async (
+      commandId: string | null,
+    ): Promise<{ run: Promise<void> } | undefined> => {
       const messages = [...agent.state.messages];
       // A turn cut short with a tool in flight — a lost process, or a Stop
       // partway through a batch, once a reattach drops the aborted reply — can
@@ -3040,11 +3093,7 @@ async function attachSession(
         messages.pop();
         agent.state.messages = messages;
       } else if (tail?.role !== "user" && tail?.role !== "toolResult") {
-        return {
-          kind: "rejected",
-          reason: "retry-unavailable",
-          message: "There is no failed Pi turn to retry.",
-        };
+        return undefined;
       }
       pendingRunDelivery = {
         commandId,
@@ -3052,8 +3101,7 @@ async function attachSession(
         delivery: "retry" as const,
       };
       await refreshTools(turnRefreshTrigger());
-      await agent.continue();
-      return { kind: "delivered", delivery: "retry" };
+      return { run: agent.continue() };
     };
 
     /**
@@ -3307,9 +3355,12 @@ async function attachSession(
           // {@link contextRewrite} across both, the manual path holds it and
           // refuses rather than waits, and the overflow path runs inside its own
           // run's `agent_end`, where every other caller has already been turned
-          // away. Take that away and a turn started mid-summary is one this line
-          // overwrites — its message and its reply gone from the model's context
-          // while both remain in the ledger and on screen.
+          // away. Nothing starts a turn under that hold: a message waits it out
+          // and a retry is refused. Nor can the hold begin while a retry is
+          // opening its run, which counts as Pi running — see {@link
+          // openingRun} (VC-810). Take that away and a turn started mid-summary
+          // is one this line overwrites — its message and its reply gone from
+          // the model's context while both remain in the ledger and on screen.
           //
           // Already whole: the summary, the restored resources and the kept
           // turns without their reasoning, all read off the entry just written
@@ -3862,6 +3913,12 @@ async function attachSession(
         // someone their message. Every question below is asked after it,
         // because the answers can change while it is held.
         await contextRewrite;
+        // A retry that has decided to run is a live turn in all but Pi's flag
+        // — see {@link openingRun}. Waited out like the rewrite, so the checks
+        // below find the run streaming and this message joins it, rather than
+        // racing it to `prompt` and losing to Pi's "already processing".
+        // eslint-disable-next-line no-unmodified-loop-condition -- a retry sets it across the await
+        while (openingRun) await runOpening;
         if (closed || cancelled) {
           return { kind: "rejected", reason: "closed", message: "This attachment is closed." };
         }
@@ -4016,7 +4073,7 @@ async function attachSession(
         if (closed || cancelled) {
           return { kind: "rejected", reason: "closed", message: "This attachment is closed." };
         }
-        if (agent.state.isStreaming) {
+        if (agent.state.isStreaming || openingRun) {
           return {
             kind: "rejected",
             reason: "busy-unsupported",
@@ -4054,13 +4111,20 @@ async function attachSession(
             message: "The selected reasoning level is not supported by this model.",
           };
         }
-        // Availability can resolve asynchronously. Recheck the idle boundary
-        // immediately before changing the pair so neither half is applied to
-        // a turn that started while credentials were being inspected.
+        // Opaque state is model-bound. Reconstruct from durable original history
+        // on a model switch rather than pretending its placeholder is a summary.
+        // The new pair's own resolved route decides: the same catalog model
+        // reached through OAuth or an endpoint override cannot replay a
+        // checkpoint the metered public API minted (VC-331).
+        const selectedRoute = await nativeCompactionAvailable(selected, models, spec.signal);
+        // Availability and the route both resolve asynchronously. Recheck the
+        // idle boundary after the last of them, immediately before claiming the
+        // context, so neither half of the pair is applied to a turn that
+        // started — or a retry that began opening one (VC-810) — meanwhile.
         if (closed || cancelled) {
           return { kind: "rejected", reason: "closed", message: "This attachment is closed." };
         }
-        if (agent.state.isStreaming) {
+        if (agent.state.isStreaming || openingRun) {
           return {
             kind: "rejected",
             reason: "busy-unsupported",
@@ -4073,12 +4137,6 @@ async function attachSession(
             reason: "busy-unsupported",
             message: "The context is being compacted.",
           };
-        // Opaque state is model-bound. Reconstruct from durable original history
-        // on a model switch rather than pretending its placeholder is a summary.
-        // The new pair's own resolved route decides: the same catalog model
-        // reached through OAuth or an endpoint override cannot replay a
-        // checkpoint the metered public API minted (VC-331).
-        const selectedRoute = await nativeCompactionAvailable(selected, models, spec.signal);
         const refreshTrigger =
           selected.provider === agent.state.model.provider &&
           selected.id === agent.state.model.id &&
@@ -4119,11 +4177,24 @@ async function attachSession(
         if (closed || cancelled) {
           return { kind: "rejected", reason: "closed", message: "This attachment is closed." };
         }
-        if (agent.state.isStreaming) {
+        // Asked synchronously, the way `compact` asks, and before anything is
+        // dropped from the context: a refused retry leaves its failed reply
+        // where it was, for the next retry to take. A retry already opening its
+        // run is Pi running (see {@link openingRun}). A context being rewritten
+        // refuses it the way it refuses a compaction or a model switch: a
+        // retry is a command its caller can repeat, not a message to keep.
+        if (agent.state.isStreaming || openingRun) {
           return {
             kind: "rejected",
             reason: "busy-unsupported",
             message: "Pi is already running.",
+          };
+        }
+        if (rewritingContext) {
+          return {
+            kind: "rejected",
+            reason: "busy-unsupported",
+            message: "The context is being compacted.",
           };
         }
         observationDelivery.consumeFailure();
@@ -4177,7 +4248,7 @@ async function attachSession(
         // One refusal, two sentences. A person told "while Pi is running" about
         // a Session that is plainly idle would go looking for a turn that is not
         // there; the wait they are actually in is a summary, and it ends.
-        if (agent.state.isStreaming) {
+        if (agent.state.isStreaming || openingRun) {
           return {
             kind: "rejected",
             reason: "busy-unsupported",
