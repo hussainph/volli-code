@@ -68,6 +68,11 @@ The preload writes synchronous JSONL by PID and thread id, independently of
 Vitest's buffered output:
 
 - `test-start` / `test-finished` identify the test active through teardown.
+- `test-trace` is a failed test's own phase trace, published by suites that keep
+  one (today `crash-recovery.integration.test.ts`, VC-1220): the awaits still
+  pending when it failed, then its newest marks. At most 400 lines of 256
+  characters, strings only; the suite keeps them to step names, bound reads,
+  error names and timings, never messages or payloads.
 - `child-exit` records the child's PID, raw exit code and signal in its surviving
   parent. Match that PID to the child's event file; nearby suite output is not
   attribution. A parent-local `childId` also correlates spawn failures where no

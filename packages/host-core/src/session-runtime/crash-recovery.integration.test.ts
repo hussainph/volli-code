@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
+import { channel } from "node:diagnostics_channel";
 import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
@@ -34,10 +35,195 @@ import { resumeRecoveredTurns } from "./restart-resume";
 import { createPiNativeAdapter } from "./pi-adapter";
 import { createFileTranscriptArtifactStore } from "./transcript-artifacts";
 
+/**
+ * What this file's fixture was doing when a test failed (VC-1220).
+ *
+ * Two tests here each timed out once in CI at Vitest's 5 s, and the CI
+ * diagnostics could say which test was running but not what it was awaiting.
+ * So every fixture step, every call into the runtime and the engine, every
+ * executor call and every read of the admission bound is marked here, and a
+ * failed test prints the marks with the awaits still pending at the moment it
+ * failed. With the CI diagnostics preload listening
+ * (`scripts/host-test-diagnostics.cjs`), the same lines go into the shard's
+ * retained artifact. Marks carry names, error names and codes and timings, never
+ * an error message or a payload.
+ */
+class FixtureTrace {
+  static readonly LIMIT = 2_000;
+  readonly #origin = performance.now();
+  readonly #lines: string[] = [];
+  readonly #pending = new Map<number, { label: string; at: number }>();
+  #dropped = 0;
+  #next = 0;
+  /** When the first report printed; a later one adds only what began since. */
+  #reportedAt: number | null = null;
+  /** Fixture state worth printing beside the marks. */
+  context: () => string[] = () => [];
+
+  #now(): number {
+    return Math.round(performance.now() - this.#origin);
+  }
+
+  mark(text: string): void {
+    if (this.#lines.length === FixtureTrace.LIMIT) {
+      this.#lines.shift();
+      this.#dropped += 1;
+    }
+    this.#lines.push(`+${this.#now()} ms ${text}`);
+  }
+
+  /**
+   * Runs `work` as one named await: pending from the call until it settles.
+   * `work` starts synchronously, so wrapping a call never reorders it against
+   * the runtime's own synchronous steps (the bound reads below depend on that).
+   */
+  call<T>(label: string, work: () => T): T {
+    const id = ++this.#next;
+    const at = this.#now();
+    this.#pending.set(id, { label, at });
+    this.mark(`> ${label}`);
+    const settle = (outcome: string) => {
+      this.#pending.delete(id);
+      this.mark(`< ${label} ${outcome} (${this.#now() - at} ms)`);
+    };
+    let result: T;
+    try {
+      result = work();
+    } catch (error) {
+      settle(`threw ${errorName(error)}`);
+      throw error;
+    }
+    // Vitest's `expect.poll` answers a thenable, not a Promise.
+    if (typeof (result as { then?: unknown } | null)?.then !== "function") {
+      settle("returned");
+      return result;
+    }
+    return Promise.resolve(result).then(
+      (value: unknown) => {
+        settle("settled");
+        return value;
+      },
+      (error: unknown) => {
+        settle(`threw ${errorName(error)}`);
+        throw error;
+      },
+    ) as T;
+  }
+
+  /**
+   * Prints the trace and the awaits pending at the moment of failure, and
+   * publishes them to CI diagnostics. A second report, after cleanup, prints
+   * only what cleanup itself is still awaiting.
+   */
+  report(task: { id: string; name: string; file: { filepath: string } }, moment: string): void {
+    const now = this.#now();
+    const since = this.#reportedAt;
+    const pending = [...this.#pending.values()].filter(({ at }) => since === null || at >= since);
+    if (since !== null && pending.length === 0) return;
+    this.#reportedAt = now;
+    const head = [
+      `${moment} at +${now} ms.`,
+      pending.length === 0
+        ? "Nothing the fixture traced was pending."
+        : "Still pending, oldest (outermost) first:",
+      ...pending.map(({ label, at }) => `  ${label} (since +${at} ms)`),
+      ...(since === null ? this.context() : []),
+    ];
+    const marks = since === null ? this.#lines.map((line) => `  ${line}`) : [];
+    const dropped = this.#dropped;
+    console.error(
+      [
+        `[crash-recovery trace] ${task.name}`,
+        ...head,
+        ...(since === null ? [`Trace${dropped === 0 ? "" : `, oldest ${dropped} dropped`}:`] : []),
+        ...marks,
+      ].join("\n"),
+    );
+    // The preload keeps the first lines it is given: the pending awaits, then
+    // the newest marks that fit.
+    if (testDiagnostics.hasSubscribers) {
+      const room = Math.max(0, TRACE_PUBLISHED_LINES - head.length - 1);
+      const kept = room === 0 ? [] : marks.slice(-room);
+      testDiagnostics.publish({
+        event: "test-trace",
+        id: task.id,
+        file: task.file.filepath,
+        name: task.name,
+        trace: [
+          ...head,
+          ...(since === null ? [`Trace, newest ${kept.length} of ${dropped + marks.length}:`] : []),
+          ...kept,
+        ],
+      });
+    }
+  }
+}
+
+const testDiagnostics = channel("volli.test");
+/** What `scripts/host-test-diagnostics.cjs` retains of one trace. */
+const TRACE_PUBLISHED_LINES = 400;
+
+function errorName(error: unknown): string {
+  if (!(error instanceof Error)) return typeof error;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" ? `${error.name}[${code}]` : error.name;
+}
+
+/** The nearest frames that are not this file: who read a bound. */
+function callSite(): string {
+  const sites: string[] = [];
+  for (const frame of (new Error().stack ?? "").split("\n").slice(1)) {
+    const match = /at (?:async )?(?:(\S+) \()?(?:.*[\\/])?([^\\/:]+):(\d+):\d+\)?$/.exec(
+      frame.trim(),
+    );
+    if (!match || match[2]!.endsWith(".integration.test.ts")) continue;
+    sites.push(`${match[1] ?? "<anonymous>"} ${match[2]}:${match[3]}`);
+    if (sites.length === 2) break;
+  }
+  return sites.join(" < ");
+}
+
+/** `target`, with every method call it answers traced as one await. */
+function traced<T extends object>(name: string, target: T): T {
+  return new Proxy(target, {
+    get(object, property) {
+      const value: unknown = Reflect.get(object, property, object);
+      if (typeof value !== "function" || typeof property !== "string") return value;
+      return (...args: unknown[]) =>
+        trace.call(`${name}.${property}${callDetail(args[0])}`, () =>
+          (value as (...input: unknown[]) => unknown).apply(object, args),
+        );
+    },
+  });
+}
+
+/** The kind of a command or event, which is what tells two calls apart. */
+function callDetail(input: unknown): string {
+  if (typeof input !== "object" || input === null) return "";
+  const { command, kind } = input as {
+    command?: { kind?: unknown; delivery?: unknown };
+    kind?: unknown;
+  };
+  if (typeof command?.kind === "string")
+    return `(${command.kind}${typeof command.delivery === "string" ? `/${command.delivery}` : ""})`;
+  return typeof kind === "string" ? `(${kind})` : "";
+}
+
+let trace = new FixtureTrace();
 let db: TestDb | undefined;
 let clock = 10_000;
 const hosts = new Set<ReturnType<typeof createSessionRuntime>>();
-afterEach(async () => {
+beforeEach(({ onTestFailed }) => {
+  trace = new FixtureTrace();
+  const current = trace;
+  // After cleanup: reports what a hung cleanup is still awaiting, or a
+  // failure that happened in cleanup itself.
+  onTestFailed(({ task }) => current.report(task, "Failed after cleanup"));
+});
+afterEach(async ({ task }) => {
+  // Before cleanup, which can settle the very await a timed-out test was on.
+  if (task.result?.state === "fail") trace.report(task, "Failed");
+  trace.mark("cleanup");
   for (const host of hosts) await host.close();
   hosts.clear();
   db?.cleanup();
@@ -51,7 +237,11 @@ const provenance = { source: { kind: "system" as const, id: "test", detail: null
 // executor stages) and every cold binding rebuild, not only queued messages.
 // A short wall-clock bound on all of them made a merely slow real Pi attach
 // under CI load a false `rejected` (VC-778). Genuine work keeps the production
-// bound; only a stage this fixture deliberately stalls gets the short one.
+// bound; only the wait on a stage this fixture deliberately stalls gets the
+// short one. Entering a gate arms it for the one wait the runtime arms in the
+// same synchronous step. Every stage after that keeps the production bound,
+// so a later stage slowed by machine load cannot time out in the stalled
+// stage's place and name the wrong stage (VC-1220).
 const PRODUCTION_ADMISSION_BOUND_MS = 30_000;
 const STALLED_STAGE_BOUND_MS = 50;
 
@@ -69,6 +259,7 @@ function fixture() {
     { text: "The next message opened a new turn." },
   ];
   const script = scriptedProvider(replies);
+  trace.context = () => [`Provider requests: ${script.requests.length}`];
   const venue = { id: "local", kind: "local" as const };
   const artifacts = createFileTranscriptArtifactStore(join(root, "transcripts"));
 
@@ -86,8 +277,11 @@ function fixture() {
       admissionGate: Promise<void> | null;
       /** Real delay before every attach, to model a slow but healthy executor. */
       attachDelayMs: number;
-      /** Set synchronously on entering a gate, before the runtime arms its timer. */
-      stalled: boolean;
+      /**
+       * The gate entered in this synchronous step. Set on entering it, before
+       * the runtime arms its timer, and spent by that one bound read.
+       */
+      shortBound: "attach" | "admission" | null;
       /**
        * A command whose acceptance every reconcile contradicts with a refusal,
        * after its replay, so the reconcile fails on its receipts.
@@ -100,7 +294,7 @@ function fixture() {
       attachGate: null,
       admissionGate: null,
       attachDelayMs: 0,
-      stalled: false,
+      shortBound: null,
       contradictAcceptance: null,
       reconcileFailure: null,
     };
@@ -124,44 +318,70 @@ function fixture() {
         promptResources: [],
       }),
     });
+    const enterGate = (gate: "attach" | "admission", stalled: Promise<void>) => {
+      control.shortBound = gate;
+      // Nothing read it in the step that entered the gate: no wait of the
+      // runtime's is on this gate, so no later one may take its bound.
+      queueMicrotask(() => {
+        if (control.shortBound !== gate) return;
+        control.shortBound = null;
+        trace.mark(`${gate} gate's short bound expired unread`);
+      });
+      return trace.call(`${gate} gate (stalled by the test)`, () => stalled);
+    };
     const host = createSessionRuntime({
       engine,
       executors: createSessionExecutorSlot({
         ...adapter,
-        attach: async (spec, sink) => {
-          attachSpecs.push(spec);
-          if (control.attachGate) {
-            control.stalled = true;
-            await control.attachGate;
-          }
-          if (control.attachDelayMs > 0)
-            await new Promise((resolve) => setTimeout(resolve, control.attachDelayMs));
-          if (control.attachFailure) throw control.attachFailure;
-          const binding = await adapter.attach(spec, sink);
-          const reconcile = binding.reconcile.bind(binding);
-          binding.reconcile = async (cursor) => {
-            if (control.reconcileFailure) throw control.reconcileFailure;
-            const reconciliation = await reconcile(cursor);
-            const commandId = control.contradictAcceptance;
-            if (commandId === null) return reconciliation;
-            return {
-              ...reconciliation,
-              receipts: [
-                ...reconciliation.receipts,
-                { commandId, status: "rejected", code: "contradicted", detail: null, native: null },
-              ],
-            };
-          };
-          const dispatch = binding.dispatch.bind(binding);
-          binding.dispatch = async (command) => {
-            if (command.kind === "message.submit" && control.admissionGate) {
-              control.stalled = true;
-              await control.admissionGate;
-            }
-            return dispatch(command);
-          };
-          return binding;
-        },
+        attach: (spec, sink) =>
+          trace.call(`executor.attach(${spec.continuity})`, async () => {
+            attachSpecs.push(spec);
+            if (control.attachGate) await enterGate("attach", control.attachGate);
+            const delay = control.attachDelayMs;
+            if (delay > 0)
+              await trace.call(
+                `attach delay ${delay} ms`,
+                () => new Promise((resolve) => setTimeout(resolve, delay)),
+              );
+            if (control.attachFailure) throw control.attachFailure;
+            const binding = await trace.call("pi.attach", () => adapter.attach(spec, sink));
+            const reconcile = binding.reconcile.bind(binding);
+            binding.reconcile = (cursor) =>
+              trace.call("binding.reconcile", async (): ReturnType<typeof reconcile> => {
+                if (control.reconcileFailure) throw control.reconcileFailure;
+                const reconciliation = await reconcile(cursor);
+                const commandId = control.contradictAcceptance;
+                if (commandId === null) return reconciliation;
+                return {
+                  ...reconciliation,
+                  receipts: [
+                    ...reconciliation.receipts,
+                    {
+                      commandId,
+                      status: "rejected",
+                      code: "contradicted",
+                      detail: null,
+                      native: null,
+                    },
+                  ],
+                };
+              });
+            const dispatch = binding.dispatch.bind(binding);
+            binding.dispatch = (command) =>
+              trace.call(`binding.dispatch(${command.kind})`, async () => {
+                if (command.kind === "message.submit" && control.admissionGate)
+                  await enterGate("admission", control.admissionGate);
+                return dispatch(command);
+              });
+            const release = binding.release.bind(binding);
+            binding.release = (reason) =>
+              trace.call(`binding.release(${reason})`, () => release(reason));
+            const withdraw = binding.withdrawInteraction?.bind(binding);
+            if (withdraw)
+              binding.withdrawInteraction = (interactionId) =>
+                trace.call("binding.withdrawInteraction", () => withdraw(interactionId));
+            return binding;
+          }),
       }),
       followUps: createSqliteSessionFollowUpLedger(database.db),
       // Explicit recovery wakes exercise retry; no background backoff races.
@@ -169,7 +389,13 @@ function fixture() {
       // Read when each bounded stage arms its timer, which is after the
       // wrappers above have entered (and flagged) any gate synchronously.
       get followUpAdmissionTimeoutMs() {
-        return control.stalled ? STALLED_STAGE_BOUND_MS : PRODUCTION_ADMISSION_BOUND_MS;
+        const gate = control.shortBound;
+        control.shortBound = null;
+        const bound = gate === null ? PRODUCTION_ADMISSION_BOUND_MS : STALLED_STAGE_BOUND_MS;
+        trace.mark(
+          `admission bound ${bound} ms${gate === null ? "" : ` (${gate} gate)`} read by ${callSite()}`,
+        );
+        return bound;
       },
       onFollowUpFailure: (error) => {
         failures.push(error);
@@ -183,11 +409,14 @@ function fixture() {
       clock: { now: () => clock++ },
       ids: { next: (kind) => `runtime-${kind}-${clock++}` },
     });
-    hosts.add(host);
-    return { engine, host, attachSpecs, failures, control };
+    const traceHost = traced("host", host);
+    hosts.add(traceHost);
+    trace.mark("launched");
+    return { engine: traced("engine", engine), host: traceHost, attachSpecs, failures, control };
   }
 
   async function restart(prior: ReturnType<typeof launch>, crash = false) {
+    trace.mark(crash ? "restart after a crash" : "restart");
     // Freeze the bytes that survived the process, then dispose live resources.
     // Restoring those bytes excludes graceful-shutdown cancellations and tool
     // results: a relaunch must recover the lost promise, not our close().
@@ -213,6 +442,7 @@ function fixture() {
     }
     database.db = openRawDb(database.dbPath);
     database.db.pragma("foreign_keys = ON");
+    trace.mark("database reopened");
     return launch();
   }
 
@@ -222,21 +452,25 @@ function fixture() {
     onFailure?: (failure: BootRecoveryFailure) => void,
   ) {
     const errors: unknown[] = [];
-    const closed = await closeStaleAttachments({
-      engine: createBootRecoveryEngine({ db: database.db, engine: current.engine }),
-      reconcile: (input) => current.host.reconcile(input),
-      // The lifecycle's own reading of a live binding.
-      holdsBinding: (attachmentId) =>
-        current.host.openNativeBindings().some((binding) => binding.attachmentId === attachmentId),
-      ...(onFailure === undefined ? {} : { onFailure }),
-      projectIds: ["project"],
-      newId: () => `boot-${clock++}`,
-      now: () => clock++,
-      onError: (_id, error) => {
-        errors.push(error);
-      },
-      ...(onRecovered === undefined ? {} : { onRecovered }),
-    });
+    const closed = await trace.call("boot recovery", () =>
+      closeStaleAttachments({
+        engine: createBootRecoveryEngine({ db: database.db, engine: current.engine }),
+        reconcile: (input) => current.host.reconcile(input),
+        // The lifecycle's own reading of a live binding.
+        holdsBinding: (attachmentId) =>
+          current.host
+            .openNativeBindings()
+            .some((binding) => binding.attachmentId === attachmentId),
+        ...(onFailure === undefined ? {} : { onFailure }),
+        projectIds: ["project"],
+        newId: () => `boot-${clock++}`,
+        now: () => clock++,
+        onError: (_id, error) => {
+          errors.push(error);
+        },
+        ...(onRecovered === undefined ? {} : { onRecovered }),
+      }),
+    );
     return { closed, errors };
   }
 
@@ -299,11 +533,13 @@ async function start(f: Host, settledPrefix = false) {
     },
   });
   expect(result.receipt?.status, JSON.stringify(result.receipt)).toBe("accepted");
-  await expect
-    .poll(
-      async () => (await f.host.projection({ sessionId })).projection.interactions.active.length,
-    )
-    .toBe(1);
+  await trace.call("poll for the open ask", () =>
+    expect
+      .poll(
+        async () => (await f.host.projection({ sessionId })).projection.interactions.active.length,
+      )
+      .toBe(1),
+  );
   const projection = (await f.host.projection({ sessionId })).projection;
   expect(projection.turnActive).toBe(true);
   return {
@@ -694,9 +930,11 @@ describe("crash recovery through the durable Pi binding (VC-753)", () => {
       interactionId: interaction.id,
       reason: "withdrawn",
     });
-    await expect
-      .poll(async () => (await f.host.projection({ sessionId })).projection.turnActive)
-      .toBe(false);
+    await trace.call("poll for the turn's end", () =>
+      expect
+        .poll(async () => (await f.host.projection({ sessionId })).projection.turnActive)
+        .toBe(false),
+    );
     const current = await f.restart(f);
     await raise(
       current,
@@ -736,9 +974,11 @@ describe("crash recovery through the durable Pi binding (VC-753)", () => {
       interactionId: interaction.id,
       reason: "withdrawn",
     });
-    await expect
-      .poll(async () => (await f.host.projection({ sessionId })).projection.turnActive)
-      .toBe(false);
+    await trace.call("poll for the turn's end", () =>
+      expect
+        .poll(async () => (await f.host.projection({ sessionId })).projection.turnActive)
+        .toBe(false),
+    );
     const current = await f.restart(f);
     // A closed interrupted binding needs a fresh context-replay attach.
     const attachmentId = (await current.host.projection({ sessionId })).projection.liveExecutor!.id;
@@ -817,9 +1057,11 @@ describe("crash recovery through the durable Pi binding (VC-753)", () => {
         interactionId: interaction.id,
         reason: "withdrawn",
       });
-      await expect
-        .poll(async () => (await f.host.projection({ sessionId })).projection.turnActive)
-        .toBe(false);
+      await trace.call("poll for the turn's end", () =>
+        expect
+          .poll(async () => (await f.host.projection({ sessionId })).projection.turnActive)
+          .toBe(false),
+      );
       const current = await f.restart(f);
       if (stage === "attach") {
         await current.engine.observe({
@@ -856,7 +1098,7 @@ describe("crash recovery through the durable Pi binding (VC-753)", () => {
         gate.reject(new Error("Stalled fixture transport ended"));
         current.control.attachGate = null;
         current.control.admissionGate = null;
-        current.control.stalled = false;
+        current.control.shortBound = null;
       }
       const relaunched = await f.restart(current);
       const projection = (await relaunched.host.projection({ sessionId })).projection;
