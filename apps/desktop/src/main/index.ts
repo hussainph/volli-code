@@ -35,6 +35,7 @@ import {
   makeAgentError,
   memoizedPathExists,
   resolveShell,
+  settingsWindowBackground,
   ticketBranchName,
   NEW_TICKET_DRAFT_APP_STATE_KEY,
   OperationUnavailableError,
@@ -624,8 +625,9 @@ function createWindow(
           ...SETTINGS_WINDOW_SIZE,
           ...options.bounds,
           title: "Settings",
-          vibrancy: "sidebar" as const,
-          visualEffectState: "followWindow" as const,
+          // A plain, opaque native pane (VC-1228). No `vibrancy`: the page
+          // paints every pixel, so the material was never seen, and Chromium's
+          // backdrop-filter misrenders over a vibrant window (electron#44720).
           fullscreenable: false,
         }
       : {}),
@@ -647,7 +649,9 @@ function createWindow(
     // painted) — prevents the white flash before first paint, and keeps the
     // window edge from flashing the OLD palette during a resize after a canvas
     // change.
-    backgroundColor: firstPaint.background,
+    backgroundColor: settings
+      ? settingsWindowBackground(firstPaint.appearance)
+      : firstPaint.background,
     webPreferences: {
       preload: join(__dirname, "preload.cjs"),
       // Two facts the renderer needs before it can run a line of its own: the

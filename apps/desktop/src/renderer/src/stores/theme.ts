@@ -62,6 +62,7 @@ import type {
 import { create } from "zustand";
 
 import { toastError } from "@renderer/lib/toast";
+import { isSettingsWindow } from "@renderer/lib/window-role";
 import {
   resolveActiveTheme,
   resolveThemeSurface,
@@ -70,6 +71,7 @@ import {
 } from "@renderer/theme/apply";
 import {
   paintCanvas,
+  paintSettingsCanvas,
   systemPrefersDark,
   type PaintCanvasOptions,
 } from "@renderer/theme/canvas-paint";
@@ -200,8 +202,9 @@ const defaultDeps: ThemeStoreDeps = {
   },
   // Point-free on purpose. An arrow re-listing the parameters is how the
   // `transient` flag came to be silently dropped here: a shorter function is
-  // assignable to a longer signature, so the mistake typechecks.
-  paintCanvas,
+  // assignable to a longer signature, so the mistake typechecks. The Settings
+  // window paints its plain system canvas instead (VC-1228).
+  paintCanvas: isSettingsWindow() ? paintSettingsCanvas : paintCanvas,
   refreshEditorTheme: (themeId) => refreshMonacoEditorTheme(themeId),
   beginScopeRepaint,
   systemPrefersDark: () => systemPrefersDark(),

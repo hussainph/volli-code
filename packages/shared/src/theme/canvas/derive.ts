@@ -163,3 +163,60 @@ export function deriveLabelInk(tokens: ThemeTokens, _resolved: ResolvedAppearanc
 export function windowBackground(canvas: Canvas | null, resolved: ResolvedAppearance): string {
   return baseFillHex(canvas ?? DEFAULT_CANVAS, resolved);
 }
+
+/**
+ * Settings' plain canvas (VC-1228). The Settings window is a native-style
+ * pane, the one deliberate exception to "every surface wears the canvas": it
+ * paints system greys in the resolved appearance, never the authored gradient.
+ * One achromatic stop (macOS systemGray) at zero vibrancy and grain runs through
+ * the same pipeline as any canvas, so its tokens stay generated, never authored.
+ * Never stored and never offered as a user canvas.
+ */
+export const SETTINGS_CANVAS: Canvas = {
+  stops: [{ hex: "#8e8e93", x: 0.5, y: 0.5 }],
+  primaryIndex: 0,
+  vibrancy: 0,
+  grain: 0,
+};
+
+/**
+ * The accent Settings wears over those greys: the system blue, solved by the
+ * same pipeline. A canvas's first stop is both its accent and its neutral
+ * tint, so the accent comes from this second canvas and the greys from the
+ * first; a grey accent left an on switch reading as off.
+ */
+export const SETTINGS_ACCENT_CANVAS: Canvas = {
+  stops: [{ hex: "#007aff", x: 0.5, y: 0.5 }],
+  primaryIndex: 0,
+  vibrancy: 0,
+  grain: 0,
+};
+
+/** The accent-derived tokens Settings takes from {@link SETTINGS_ACCENT_CANVAS}. */
+export const SETTINGS_ACCENT_TOKEN_NAMES = [
+  "--accent",
+  "--primary",
+  "--primary-foreground",
+  "--primary-text",
+] as const satisfies readonly (keyof ThemeTokens)[];
+
+/** Settings' token set: system greys with the system accent; the ring re-solved over both. */
+export function deriveSettingsTokens(resolved: ResolvedAppearance): ThemeTokens {
+  const tokens = deriveCanvasTokens(SETTINGS_CANVAS, resolved);
+  const accent = deriveCanvasTokens(SETTINGS_ACCENT_CANVAS, resolved);
+  for (const name of SETTINGS_ACCENT_TOKEN_NAMES) tokens[name] = accent[name];
+  tokens["--ring"] = focusRing(
+    tokens["--primary-text"],
+    [
+      ...readingBackings(SETTINGS_CANVAS, resolved, tokens),
+      compositeHex(SETTINGS_ACCENT_CANVAS.stops[0].hex, 0.18, tokens["--background"]),
+    ],
+    resolved,
+  );
+  return tokens;
+}
+
+/** The Settings window's floor: its plain canvas's sidebar rung, for `backgroundColor`. */
+export function settingsWindowBackground(resolved: ResolvedAppearance): string {
+  return deriveCanvasTokens(SETTINGS_CANVAS, resolved)["--sidebar"];
+}

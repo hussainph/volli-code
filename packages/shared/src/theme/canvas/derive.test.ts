@@ -4,10 +4,14 @@ import { compositeHex, hexToOklch, isHexColor, oklchToHex } from "../color";
 import { THEME_TOKEN_NAMES } from "../tokens";
 import {
   SECONDARY_FILL_ALPHA,
+  SETTINGS_ACCENT_CANVAS,
+  SETTINGS_CANVAS,
   deriveCanvasTokens,
+  deriveSettingsTokens,
   deriveLabelInk,
   tintCanvasNeutral,
   writingGlass,
+  settingsWindowBackground,
   windowBackground,
 } from "./index";
 import { baseFillHex } from "./gradient";
@@ -164,4 +168,37 @@ describe("neutral paper and canvas-tinted materials", () => {
       expect(windowBackground(DEFAULT_CANVAS, mode)).toBe(baseFillHex(DEFAULT_CANVAS, mode));
     });
   }
+});
+
+describe("Settings' plain canvas", () => {
+  it.each(["light", "dark"] as const)("paints %s greys with no canvas hue", (resolved) => {
+    const tokens = deriveCanvasTokens(SETTINGS_CANVAS, resolved);
+    for (const name of ["--sidebar", "--muted", "--border", "--popover", "--muted-foreground"]) {
+      expect(hexToOklch(tokens[name as keyof typeof tokens]).C, name).toBeLessThan(0.004);
+    }
+    expect(settingsWindowBackground(resolved)).toBe(tokens["--sidebar"]);
+    expect(wcagContrast(tokens["--foreground"], tokens["--sidebar"])).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it.each(["light", "dark"] as const)("wears the system accent over %s greys", (resolved) => {
+    const tokens = deriveSettingsTokens(resolved);
+    const greys = deriveCanvasTokens(SETTINGS_CANVAS, resolved);
+    const accent = deriveCanvasTokens(SETTINGS_ACCENT_CANVAS, resolved);
+    expect(tokens["--sidebar"]).toBe(greys["--sidebar"]);
+    expect(tokens["--border"]).toBe(greys["--border"]);
+    expect(tokens["--primary"]).toBe(accent["--primary"]);
+    expect(hexToOklch(tokens["--primary"]).C).toBeGreaterThan(0.1);
+    const selected = compositeHex(
+      SETTINGS_ACCENT_CANVAS.stops[0].hex,
+      0.18,
+      tokens["--background"],
+    );
+    expect(wcagContrast(tokens["--primary-text"], selected)).toBeGreaterThanOrEqual(4.5);
+    expect(
+      wcagContrast(tokens["--primary-foreground"], tokens["--primary"]),
+    ).toBeGreaterThanOrEqual(4.5);
+    for (const backing of [tokens["--background"], tokens["--sidebar"], selected]) {
+      expect(wcagContrast(tokens["--ring"], backing)).toBeGreaterThanOrEqual(3);
+    }
+  });
 });

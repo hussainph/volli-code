@@ -89,9 +89,12 @@ const HELP = `volli-drive — drive an isolated, keychain-free live Volli build
   find <id> <text> [--window w]    fresh snapshot, only matching nodes (+ ancestors)
   act <id> --gen N --kind click|type|press|select|hover|scroll|wait
           [--ref eN] [--text t] [--key Enter] [--direction up|down] [--wait-ms n]
+          [--record-ms n]          also keep the window's screencast frames until n ms after
           [--find text]            one synthetic action, then a fresh snapshot
   wait <id> --text t [--gone] [--timeout ms] [--find text]
   screenshot <id> [--name label] [--window w]
+  ui-zoom <id> in|out|reset [--window w]
+                                   the View menu's UI zoom command, sent to one window
   windows <id>
   settings-native <id> [--action state|watch|menu|close|frame] [--bounds JSON]
                                    native Settings boundary; never activates a quiet window
@@ -658,12 +661,14 @@ async function main() {
         key: flags.key,
         direction: flags.direction,
         waitMs: flags.waitMs,
+        recordMs: flags.recordMs,
         window: flags.window,
       });
       const a = result.action;
       out(
         `acted: ${a.kind}${a.ref ? ` ${a.ref}` : ""}${a.key ? ` ${a.key}` : ""}${a.text !== undefined ? ` "${a.text}"` : ""} (${a.ms}ms)`,
       );
+      if (result.frames) out(`frames: ${result.frames.count} in ${result.frames.dir}`);
       printSnapshot(result.snapshot, flags.find);
       break;
     }
@@ -688,6 +693,11 @@ async function main() {
     case "screenshot": {
       const result = await call(id, "screenshot", { name: flags.name, window: flags.window });
       out(result.path);
+      break;
+    }
+    case "ui-zoom": {
+      const result = await call(id, "ui-zoom", { step: rest[0], window: flags.window });
+      out(`${result.window}: zoom ${result.scale}`);
       break;
     }
     case "sign-in-url":

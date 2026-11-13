@@ -262,7 +262,7 @@ function ProviderAccount({
   return (
     <>
       <ItemRow
-        name={null}
+        name={provider.label}
         leading={
           <IdentityTile>
             <ModelMark

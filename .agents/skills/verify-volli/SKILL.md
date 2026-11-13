@@ -87,6 +87,8 @@ volli-drive act vd-xxxxxx --gen N --kind scroll --ref … --direction up
 volli-drive wait vd-xxxxxx --text "fake-agent: hello" [--gone] [--timeout 30000]
 volli-drive restore-restart vd-xxxxxx --gen N --ref f2e75 # real Restart and restore click, supervised local relaunch
 volli-drive screenshot vd-xxxxxx --name after-move   # prints the PNG path
+volli-drive act vd-xxxxxx --gen N --ref f2e75 --kind click --record-ms 800  # + renderer screencast frames (not native vibrancy)
+volli-drive ui-zoom vd-xxxxxx in|out|reset --window window-1   # the View menu's UI zoom, to one window
 volli-drive windows vd-xxxxxx                       # #settings is a separate window
 volli-drive settings-native vd-xxxxxx --action watch # observe hidden creation → first reveal
 volli-drive settings-native vd-xxxxxx               # native bounds, menu and scoped paint
