@@ -183,18 +183,15 @@ import {
 } from "@renderer/components/chat/transcript-window";
 import { HostNoticeRow } from "@renderer/components/chat/host-notice-ui";
 import {
-  checkpointReply,
-  currentCheckpoint,
-  holdCheckpoints,
   isCheckpointRow,
-  messageCheckpoints,
   type MessageCheckpoint,
 } from "@renderer/components/chat/message-checkpoints";
-import {
-  createCheckpointNavigator,
-  type CheckpointNavigator,
-} from "@renderer/components/chat/checkpoint-navigator";
+import type { CheckpointNavigator } from "@renderer/components/chat/checkpoint-navigator";
 import { MessageCheckpointRail } from "@renderer/components/chat/message-checkpoint-rail";
+import {
+  useCheckpointNavigation,
+  useMessageCheckpoints,
+} from "@renderer/components/chat/use-message-checkpoints";
 import { RunningOnLabel } from "@renderer/components/hosts/running-on-label";
 import {
   CloudComposerStatus,
@@ -2091,23 +2088,12 @@ function ChatPlaneContent({
     ),
     samePresentedRow,
   );
-  // The person's messages, for the checkpoint rail (VC-1211). Held by content,
-  // so a streamed token hands back the same list and the rail does not render;
-  // the reply a card previews is read from the latest rows when it opens.
-  const heldCheckpoints = React.useRef<readonly MessageCheckpoint[]>([]);
-  const checkpoints = React.useMemo(() => {
-    heldCheckpoints.current = holdCheckpoints(heldCheckpoints.current, messageCheckpoints(rows));
-    return heldCheckpoints.current;
-  }, [rows]);
-  const latestRows = React.useRef(rows);
-  React.useLayoutEffect(() => {
-    latestRows.current = rows;
-  }, [rows]);
-  const readCheckpointReply = React.useCallback(
-    (id: string) => checkpointReply(latestRows.current, id),
-    [],
-  );
-  const [checkpointNavigator] = React.useState(createCheckpointNavigator);
+  // The person's messages, for the checkpoint rail (VC-1211).
+  const {
+    checkpoints,
+    readReply: readCheckpointReply,
+    navigator: checkpointNavigator,
+  } = useMessageCheckpoints(rows);
   // Identity, not an index. A boundary between the turns means a turn's place in
   // `rows` is no longer its place in `turns` — and the last ROW can be a
   // boundary, which would leave the turn still being written with nothing
@@ -2350,6 +2336,7 @@ function ChatPlaneContent({
           checkpoints={checkpoints}
           navigator={checkpointNavigator}
           readReply={readCheckpointReply}
+          belowHeader={cloudLaunch}
         />
       )}
 
@@ -2843,15 +2830,6 @@ const PINNED_SLACK_PX = 8;
 const EARLIER_PREFETCH = "400px 0px 0px 0px";
 
 /**
- * The checkpoint rail's reading line (VC-1211): 40% down the viewport. The
- * root reaches far above the scroller so that a message once above the line
- * stays "intersecting" however far up it scrolls; the observer then reports
- * exactly the crossings of that line, and the reader's exchange is the last
- * message across it. The top margin outruns any mounted window.
- */
-const CHECKPOINT_READING_LINE = "10000000px 0px -60% 0px";
-
-/**
  * The transcript, windowed (VC-338).
  *
  * WHY NOT A VIRTUALIZER. The scroller here is not ours: `Conversation` hands it
@@ -3124,102 +3102,26 @@ function ChatTranscript({
     return () => observer.disconnect();
   }, [armed, control, hasEarlier]);
 
-  // THE CHECKPOINT RAIL (VC-1211). The transcript answers two things for it:
-  // which of the person's messages the reader is in, and how to get to one.
-  // Both run on signals that already exist — the observer below, the scroll
-  // read above it — and publish into the navigator, which re-renders the rail
-  // alone; nothing here sets transcript state except a jump's own anchor.
-  const latest = React.useRef({ rows, start: shown.start, checkpoints });
-  React.useLayoutEffect(() => {
-    latest.current = { rows, start: shown.start, checkpoints };
-  }, [rows, shown.start, checkpoints]);
-  // Pinned to the bottom means the latest exchange, wherever its message sits.
-  const atBottom = React.useRef(true);
-  // Mounted messages above the reading line, as the observer last reported.
-  const aboveLine = React.useRef<ReadonlySet<string>>(new Set());
-  // A jump's message stays current until the reader moves from where it left
-  // them: a message near the end cannot reach the reading line, and the mark
-  // just chosen must not light its neighbour.
-  const jumpHold = React.useRef<{ id: string; top: number } | null>(null);
-  const publishCheckpoint = React.useCallback(() => {
-    const { rows: all, start, checkpoints: list } = latest.current;
-    const hold = jumpHold.current;
-    if (hold !== null) {
-      const scroller = control.scroller();
-      if (scroller !== null && Math.abs(scroller.scrollTop - hold.top) <= 1) {
-        navigator.publish(hold.id);
-        return;
-      }
-      jumpHold.current = null;
-    }
-    // The exchange the mounted window begins inside, when its message is above it.
-    let before: string | null = null;
-    for (let index = Math.min(start, all.length) - 1; index >= 0; index -= 1) {
-      const row = all[index]!;
-      if (row.kind === "turn" && isCheckpointRow(row)) {
-        before = row.messages[0]!.id;
-        break;
-      }
-    }
-    navigator.publish(
-      currentCheckpoint({
-        checkpoints: list,
-        above: aboveLine.current,
-        before,
-        pinned: atBottom.current,
-      }),
-    );
-  }, [control, navigator]);
-
-  // Put the message at the top of the viewport, under the same inset the
-  // scroller keeps for everything else. One measurement, at the jump. The
-  // scroller is written directly: `scrollIntoView` would also scroll the
-  // clipped, non-scrolling wrappers around it.
-  const scrollToCheckpoint = React.useCallback(
-    (id: string): boolean => {
-      const scroller = control.scroller();
-      if (scroller === null) return false;
-      let node: HTMLElement | null = null;
-      for (const candidate of scroller.querySelectorAll<HTMLElement>("[data-message-checkpoint]"))
-        if (candidate.dataset["messageCheckpoint"] === id) {
-          node = candidate;
-          break;
-        }
-      if (node === null) return false;
-      // Reading, not following: the same detach a wheel-up performs.
-      control.stopFollowing();
-      const inset = Number.parseFloat(getComputedStyle(scroller).scrollPaddingTop) || 0;
-      scroller.scrollTop +=
-        node.getBoundingClientRect().top - scroller.getBoundingClientRect().top - inset;
-      jumpHold.current = { id, top: scroller.scrollTop };
-      publishCheckpoint();
-      return true;
+  // The checkpoint rail (VC-1211): this transcript tells it where the reader
+  // is and takes its jumps. A jump above the window moves the same anchor
+  // "Show earlier" moves; `notePinned` rides the scroll read below.
+  const anchorAt = React.useCallback(
+    (id: string) => {
+      record(id);
+      setAnchorKey(id);
     },
-    [control, publishCheckpoint],
+    [record],
   );
-
-  // A mounted message is scrolled to at once. One above the window anchors
-  // the window on it — the anchor "Show earlier" moves — and is landed on by
-  // the commit that mounts it (below). The window then runs from that message
-  // to the end, as it would had the reader scrolled up to it.
-  const pendingJump = React.useRef<string | null>(null);
-  React.useLayoutEffect(
-    () =>
-      navigator.attach((id) => {
-        const index = transcriptRowIndex(latest.current.rows, id);
-        if (index < 0) return;
-        if (index >= latest.current.start) {
-          pendingJump.current = null;
-          scrollToCheckpoint(id);
-          return;
-        }
-        control.stopFollowing();
-        pendingJump.current = id;
-        record(id);
-        setAnchorKey(id);
-      }),
-    [control, navigator, record, scrollToCheckpoint],
-  );
+  const notePinned = useCheckpointNavigation({
+    sessionId,
+    navigator,
+    control,
+    rows,
+    checkpoints,
+    mounted,
+    start: shown.start,
+    anchorAt,
+  });
 
   // Where the reader is, recorded as they move so a tab switch has an answer
   // without the unmount having to read the DOM on its way out. The same listener
@@ -3241,12 +3143,7 @@ function ChatTranscript({
       frame = 0;
       const distance = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
       const pinned = distance <= PINNED_SLACK_PX;
-      // The checkpoint rail's answer moves with this read only when it can:
-      // the bottom reached or left, or a jump's hold to confirm or drop.
-      if (pinned !== atBottom.current || jumpHold.current !== null) {
-        atBottom.current = pinned;
-        publishCheckpoint();
-      }
+      notePinned(pinned);
       if (!pinned) {
         escaped.value = true;
         setArmed(true);
@@ -3288,7 +3185,7 @@ function ChatTranscript({
       scroller.removeEventListener("scroll", onScroll);
       if (frame !== 0) cancelAnimationFrame(frame);
     };
-  }, [control, publishCheckpoint, sessionId]);
+  }, [control, notePinned, sessionId]);
 
   // The offset the reader left, put back. Twice, deliberately: the library
   // scrolls to the bottom from its own ResizeObserver, which fires after this
@@ -3313,54 +3210,6 @@ function ChatTranscript({
       cancelAnimationFrame(frame);
     };
   }, [control, sessionId]);
-
-  // A jump the rail asked for whose message was above the window: landed on
-  // the commit that mounts it. A ref read per commit when there is none.
-  React.useLayoutEffect(() => {
-    const id = pendingJump.current;
-    if (id !== null && scrollToCheckpoint(id)) pendingJump.current = null;
-  }, [mounted, scrollToCheckpoint]);
-
-  // Which mounted messages sit above the reading line. One observer, rebuilt
-  // only when the set of mounted messages changes — never per streamed token,
-  // and nothing is measured per scroll: the observer reports crossings.
-  const mountedCheckpoints = React.useMemo(
-    () =>
-      mounted
-        .flatMap((row) =>
-          row.kind === "turn" && isCheckpointRow(row) ? [row.messages[0]!.id] : [],
-        )
-        .join("\n"),
-    [mounted],
-  );
-  React.useEffect(() => {
-    const scroller = control.scroller();
-    const above = new Set<string>();
-    aboveLine.current = above;
-    if (scroller === null || typeof IntersectionObserver === "undefined") {
-      publishCheckpoint();
-      return;
-    }
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          const id = (entry.target as HTMLElement).dataset["messageCheckpoint"];
-          if (id === undefined) continue;
-          if (entry.isIntersecting) above.add(id);
-          else above.delete(id);
-        }
-        publishCheckpoint();
-      },
-      { root: scroller, rootMargin: CHECKPOINT_READING_LINE },
-    );
-    for (const node of scroller.querySelectorAll<HTMLElement>("[data-message-checkpoint]"))
-      observer.observe(node);
-    publishCheckpoint();
-    return () => observer.disconnect();
-  }, [control, mountedCheckpoints, publishCheckpoint]);
-  React.useEffect(() => {
-    publishCheckpoint();
-  }, [checkpoints, publishCheckpoint]);
 
   const sourceOrigins = mounted.flatMap((row) =>
     row.kind === "work"

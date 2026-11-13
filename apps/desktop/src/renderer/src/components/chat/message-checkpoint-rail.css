@@ -27,6 +27,11 @@
   justify-content: center;
   pointer-events: none;
 }
+/* A cloud Session's team row floats at the plane's top-left (8px down, about
+ * 20px tall): the rail's band starts below it rather than under it. */
+.message-checkpoints[data-below-header] {
+  top: calc(var(--spacing) * 10);
+}
 @container (width >= 720px) {
   .message-checkpoints {
     display: flex;

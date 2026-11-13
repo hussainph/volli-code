@@ -32,18 +32,19 @@ const CLOSE_DELAY_MS = 100;
 /** After a card closes, the next one opens at once: scrubbing is one gesture. */
 const WARM_MS = 300;
 
-export interface MessageCheckpointRailProps {
-  checkpoints: readonly MessageCheckpoint[];
-  navigator: CheckpointNavigator;
-  /** The exchange's last agent text, read when a card opens rather than per token. */
-  readReply(id: string): string | null;
-}
-
 export const MessageCheckpointRail = React.memo(function MessageCheckpointRail({
   checkpoints,
   navigator,
   readReply,
-}: MessageCheckpointRailProps) {
+  belowHeader = false,
+}: {
+  checkpoints: readonly MessageCheckpoint[];
+  navigator: CheckpointNavigator;
+  /** The exchange's last agent text, read when a card opens rather than per token. */
+  readReply(id: string): string | null;
+  /** A header floats in the plane's top-left corner (a cloud Session's team row). */
+  belowHeader?: boolean;
+}) {
   const current = React.useSyncExternalStore(navigator.subscribe, navigator.current);
   const listRef = React.useRef<HTMLOListElement>(null);
   const [preview, setPreview] = React.useState<string | null>(null);
@@ -60,11 +61,19 @@ export const MessageCheckpointRail = React.memo(function MessageCheckpointRail({
     if (preview === null) closedAt.current = performance.now();
   }, [preview]);
   React.useEffect(() => () => window.clearTimeout(timer.current), []);
-  const setOpen = React.useCallback((id: string, open: boolean) => {
+  // The mark just chosen. Its card stays shut until the pointer or focus
+  // leaves it: Radix queues its own open on focus (a zero-delay timer), and a
+  // press can land before that timer does.
+  const chosen = React.useRef<string | null>(null);
+  const setOpen = React.useCallback((id: string, open: boolean, now = false) => {
+    if (chosen.current === id) {
+      if (open) return;
+      chosen.current = null;
+    }
     window.clearTimeout(timer.current);
     if (open) {
       const warm = shown.current !== null || performance.now() - closedAt.current < WARM_MS;
-      if (warm) setPreview(id);
+      if (now || warm) setPreview(id);
       else timer.current = window.setTimeout(() => setPreview(id), OPEN_DELAY_MS);
       return;
     }
@@ -74,7 +83,31 @@ export const MessageCheckpointRail = React.memo(function MessageCheckpointRail({
     );
   }, []);
 
-  const jump = React.useCallback((id: string) => navigator.jump(id), [navigator]);
+  const close = React.useCallback(() => {
+    window.clearTimeout(timer.current);
+    setPreview(null);
+  }, []);
+  // The card has answered its question once the reader goes there; left open
+  // it would sit over the message just landed on.
+  const jump = React.useCallback(
+    (id: string) => {
+      chosen.current = id;
+      close();
+      navigator.jump(id);
+    },
+    [close, navigator],
+  );
+  // Focus is keyboard or a press: either way the card opens with it, without
+  // the pointer's crossing delay, so the reply is there to be described.
+  const focusMark = React.useCallback(
+    (id: string) => {
+      setFocused(id);
+      // Focus arriving is focus that had left: a mark chosen earlier previews again.
+      chosen.current = null;
+      setOpen(id, true, true);
+    },
+    [setOpen],
+  );
 
   // Keep the current mark inside a rail that scrolls (a long chat). Read only
   // when the current mark changes, never per frame.
@@ -92,6 +125,12 @@ export const MessageCheckpointRail = React.memo(function MessageCheckpointRail({
     let frame = 0;
     const read = () => {
       frame = 0;
+      // Hidden by the pane narrowing: its marks have no box left to anchor a
+      // card to, so an open one closes rather than floating free.
+      if (list.clientHeight === 0) {
+        close();
+        return;
+      }
       const top = list.scrollTop > 1;
       const bottom = list.scrollHeight - list.scrollTop - list.clientHeight > 1;
       setEdges((was) => (was.top === top && was.bottom === bottom ? was : { top, bottom }));
@@ -108,7 +147,7 @@ export const MessageCheckpointRail = React.memo(function MessageCheckpointRail({
       observer?.disconnect();
       if (frame !== 0) cancelAnimationFrame(frame);
     };
-  }, [checkpoints.length]);
+  }, [checkpoints.length, close]);
 
   const onKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLOListElement>) => {
@@ -152,7 +191,12 @@ export const MessageCheckpointRail = React.memo(function MessageCheckpointRail({
     checkpoints[checkpoints.length - 1]!.id;
 
   return (
-    <nav aria-label="Messages" data-slot="message-checkpoints" className="message-checkpoints">
+    <nav
+      aria-label="Messages"
+      data-slot="message-checkpoints"
+      data-below-header={belowHeader || undefined}
+      className="message-checkpoints"
+    >
       <ol
         ref={listRef}
         className="message-checkpoint-list"
@@ -168,7 +212,7 @@ export const MessageCheckpointRail = React.memo(function MessageCheckpointRail({
             tabStop={checkpoint.id === stop}
             open={checkpoint.id === preview}
             onOpenChange={setOpen}
-            onFocusMark={setFocused}
+            onFocusMark={focusMark}
             onJump={jump}
             readReply={readReply}
           />
@@ -198,6 +242,8 @@ const CheckpointMark = React.memo(function CheckpointMark({
   readReply(id: string): string | null;
 }) {
   const { id } = checkpoint;
+  const replyId = React.useId();
+  const reply = open ? readReply(id) : null;
   return (
     <li className="flex">
       <HoverCard
@@ -214,6 +260,7 @@ const CheckpointMark = React.memo(function CheckpointMark({
             data-previewed={open || undefined}
             aria-current={current ? "location" : undefined}
             aria-label={checkpoint.label}
+            aria-describedby={reply === null ? undefined : replyId}
             tabIndex={tabStop ? 0 : -1}
             onFocus={() => onFocusMark(id)}
             onClick={() => onJump(id)}
@@ -228,21 +275,31 @@ const CheckpointMark = React.memo(function CheckpointMark({
           data-checkpoint-card=""
           className="flex w-80 flex-col gap-1 px-3 py-2"
         >
-          {open ? <CheckpointCard prompt={checkpoint.prompt} reply={readReply(id)} /> : null}
+          {open ? (
+            <CheckpointCard prompt={checkpoint.prompt} reply={reply} replyId={replyId} />
+          ) : null}
         </HoverCardContent>
       </HoverCard>
     </li>
   );
 });
 
-function CheckpointCard({ prompt, reply }: { prompt: string; reply: string | null }) {
+function CheckpointCard({
+  prompt,
+  reply,
+  replyId,
+}: {
+  prompt: string;
+  reply: string | null;
+  replyId: string;
+}) {
   return (
     <>
       <p dir="auto" className="line-clamp-2 font-medium break-words text-foreground">
         {prompt}
       </p>
       {reply === null ? null : (
-        <p dir="auto" className="line-clamp-3 break-words text-muted-foreground">
+        <p id={replyId} dir="auto" className="line-clamp-3 break-words text-muted-foreground">
           {reply}
         </p>
       )}

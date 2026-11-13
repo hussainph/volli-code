@@ -10,8 +10,13 @@
  *   ?width=<px>      the plane's width, to find where the rail hides
  *   ?short           every exchange is one line each way
  *   ?stream          with ?running, a word lands in the live reply every 50ms
+ *   ?real            each reply is a real Session's shape: tool calls with output,
+ *                    markdown and a distinct code block, so nothing is cached
+ *   ?cloud           a cloud launch, for the team row in the plane's corner
+ *                    (no backend: the row shows a failed read and Retry)
  */
 import {
+  ACTIVITY_METADATA_KEY,
   DEFAULT_CODE_MODE_POLICY,
   DEFAULT_COMPACTION_POLICY,
   DEFAULT_MODEL_PICKER_VIEW,
@@ -24,6 +29,8 @@ import type { UIMessage } from "ai";
 import { ChatPlane } from "@renderer/components/chat/chat-plane";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { ModelAccessProvider, type ModelAccessClient } from "@renderer/lib/model-access-client";
+import { adoptLaunch } from "@renderer/stores/launch";
+import { useCloudTeamStore } from "@renderer/lib/cloud-team";
 import { createChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
@@ -44,6 +51,7 @@ const RUNNING = params.has("running");
 const STREAM = RUNNING && params.has("stream");
 const SPLIT = params.has("split");
 const SHORT = params.has("short");
+const REAL = params.has("real");
 const WIDTH = Number(params.get("width") ?? 0) || null;
 const PROJECT = "checkpoint-lab-project";
 const SESSIONS = SPLIT ? ["checkpoint-lab-left", "checkpoint-lab-right"] : ["checkpoint-lab"];
@@ -80,6 +88,62 @@ const REPLIES = [
   "Sounds good. I'll use a fixed set for now and note where it should become configurable.",
 ];
 
+function tool(
+  id: string,
+  kind: "run-command" | "read-file",
+  label: string,
+  output: string,
+): UIMessage["parts"][number] {
+  return {
+    type: "dynamic-tool",
+    toolName: kind === "run-command" ? "bash" : "read",
+    toolCallId: id,
+    state: "output-available",
+    input: kind === "run-command" ? { command: label } : { path: label },
+    output: { content: [{ type: "text", text: output }] },
+    toolMetadata: {
+      [ACTIVITY_METADATA_KEY]: {
+        kind,
+        nativeToolName: kind === "run-command" ? "bash" : "read",
+        subject: { label, path: kind === "read-file" ? label : null, lineRange: null },
+        outcome: {
+          exitCode: kind === "run-command" ? 0 : null,
+          matchCount: null,
+          fileCount: null,
+          lineCount: null,
+          bytes: null,
+          addedLines: null,
+          removedLines: null,
+          diff: null,
+          summary: null,
+        },
+        startedAt: 1,
+        endedAt: 2,
+      },
+    },
+  } as UIMessage["parts"][number];
+}
+
+/** A reply shaped like a real Session's: work, then prose with a distinct code block. */
+function realReply(index: number, reply: string): UIMessage["parts"] {
+  const file = `src/module-${index}.ts`;
+  return [
+    { type: "text", text: "Looking at it." },
+    tool(`read-${index}`, "read-file", file, `export const value${index} = ${index};\n`.repeat(30)),
+    tool(
+      `grep-${index}`,
+      "run-command",
+      `rg -n value${index} src`,
+      `${file}:1:value${index}\n`.repeat(12),
+    ),
+    tool(`test-${index}`, "run-command", "pnpm test", `✓ ${index} passed\n`.repeat(20)),
+    {
+      type: "text",
+      text: `## Step ${index + 1}\n\n${reply}\n\n- **${index}** changed\n- \`${file}\` updated\n\n\`\`\`ts\nexport function step${index}(input: number): number {\n  const scaled = input * ${index + 1};\n  return scaled > ${index * 7} ? scaled - ${index} : scaled + ${index};\n}\n\`\`\`\n\n${reply}`,
+    },
+  ];
+}
+
 function exchange(index: number): UIMessage[] {
   const ask = ASKS[index % ASKS.length]!;
   const reply = REPLIES[index % REPLIES.length]!;
@@ -93,17 +157,19 @@ function exchange(index: number): UIMessage[] {
     {
       id: `reply-${index}`,
       role: "assistant",
-      parts: [
-        { type: "text", text: long ? `${reply}\n\n${reply}\n\n- ${reply}\n- ${reply}` : reply },
-        ...(long
-          ? [
-              {
-                type: "text" as const,
-                text: "```ts\nexport function settle(card: Card): Column {\n  return card.column;\n}\n```\n\nThat is the last of it for this step.",
-              },
-            ]
-          : []),
-      ],
+      parts: REAL
+        ? realReply(index, reply)
+        : [
+            { type: "text", text: long ? `${reply}\n\n${reply}\n\n- ${reply}\n- ${reply}` : reply },
+            ...(long
+              ? [
+                  {
+                    type: "text" as const,
+                    text: "```ts\nexport function settle(card: Card): Column {\n  return card.column;\n}\n```\n\nThat is the last of it for this step.",
+                  },
+                ]
+              : []),
+          ],
     },
   ];
 }
@@ -176,6 +242,16 @@ export const api = {
 };
 
 export function seed() {
+  // Simulated wiring: a cloud launch with no backend behind it.
+  if (params.has("cloud"))
+    adoptLaunch({
+      store: "cloud",
+      userId: "lab",
+      backendUrl: "https://lab.invalid",
+      deployment: "local",
+    });
+  // The team row at its tallest: a failed read shows its reason and Retry.
+  if (params.has("cloud")) useCloudTeamStore.setState({ readError: "Team unavailable" });
   const messages = transcriptFor();
   const sessions = Object.fromEntries(
     SESSIONS.map((id) => {

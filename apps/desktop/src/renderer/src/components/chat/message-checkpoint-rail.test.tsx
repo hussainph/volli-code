@@ -55,6 +55,21 @@ const press = (key: string) =>
     document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
   });
 
+const over = (target: Element) =>
+  act(() => {
+    target.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: "mouse" }));
+  });
+const out = (target: Element, to: Element) =>
+  act(() => {
+    target.dispatchEvent(
+      new PointerEvent("pointerout", {
+        bubbles: true,
+        pointerType: "mouse",
+        relatedTarget: to,
+      }),
+    );
+  });
+
 describe("MessageCheckpointRail", () => {
   it("draws nothing for an empty chat or a single message", () => {
     render([]);
@@ -113,22 +128,82 @@ describe("MessageCheckpointRail", () => {
     expect(marks().map((mark) => mark.tabIndex)).toEqual([0, -1, -1]);
   });
 
-  it("previews the message and its reply on focus, reading the reply only then", () => {
+  it("previews the message and its reply on focus, at once, reading the reply only then", () => {
     const readReply = vi.fn((id: string) => (id === "b" ? "Answer b" : null));
     render(THREE, readReply);
     expect(readReply).not.toHaveBeenCalled();
     act(() => marks()[1]!.focus());
-    act(() => vi.advanceTimersByTime(300));
     expect(card()?.textContent).toBe("Ask bAnswer b");
     expect(readReply).toHaveBeenCalledWith("b");
     expect(marks()[1]!.dataset["previewed"]).toBe("true");
+    // The reply is the mark's description, so it is heard as well as seen.
+    const described = marks()[1]!.getAttribute("aria-describedby");
+    expect(described && document.getElementById(described)?.textContent).toBe("Answer b");
   });
 
-  it("shows the message alone when the agent has not written yet", () => {
+  it("waits before a first card under the pointer, then swaps cards at once", () => {
+    render(THREE);
+    const [first, second] = [marks()[0]!, marks()[1]!];
+    over(first);
+    expect(card()).toBeNull();
+    act(() => vi.advanceTimersByTime(200));
+    expect(card()?.textContent).toBe("Ask a");
+    out(first, second);
+    over(second);
+    act(() => vi.advanceTimersByTime(0));
+    expect(card()?.textContent).toBe("Ask b");
+  });
+
+  it("shows the message alone, undescribed, when the agent has not written yet", () => {
     render(THREE);
     act(() => marks()[0]!.focus());
-    act(() => vi.advanceTimersByTime(300));
     expect(card()?.querySelectorAll("p")).toHaveLength(1);
+    expect(marks()[0]!.hasAttribute("aria-describedby")).toBe(false);
+  });
+
+  it("closes the card when its mark is chosen", () => {
+    const jump = vi.fn();
+    navigator.attach(jump);
+    render(THREE);
+    act(() => marks()[2]!.focus());
+    expect(card()).not.toBeNull();
+    act(() => marks()[2]!.click());
+    expect(jump).toHaveBeenCalledWith("c");
+    expect(card()).toBeNull();
+    // The hover card's own open timer, queued by the focus, must not reopen it.
+    act(() => vi.advanceTimersByTime(500));
+    expect(card()).toBeNull();
+    // Leaving the mark and coming back previews it again.
+    act(() => marks()[2]!.blur());
+    act(() => marks()[2]!.focus());
+    expect(card()).not.toBeNull();
+  });
+
+  it("closes the card when the rail loses its box (the pane narrowed)", () => {
+    render(THREE);
+    act(() => marks()[1]!.focus());
+    expect(card()).not.toBeNull();
+    // jsdom lays nothing out, so every list here has no height: exactly what
+    // a pane narrowing past the container query leaves behind.
+    act(() => {
+      container.querySelector("ol")!.dispatchEvent(new Event("scroll"));
+      vi.advanceTimersByTime(50);
+    });
+    expect(card()).toBeNull();
+  });
+
+  it("lifts its band below a header in the plane's corner", () => {
+    act(() =>
+      root.render(
+        <MessageCheckpointRail
+          checkpoints={THREE}
+          navigator={navigator}
+          readReply={noReply}
+          belowHeader
+        />,
+      ),
+    );
+    expect(container.querySelector("nav")?.hasAttribute("data-below-header")).toBe(true);
   });
 
   it("does not render again for a held list that says the same thing", () => {

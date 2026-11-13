@@ -7,10 +7,7 @@ import {
   currentCheckpoint,
   holdCheckpoints,
   isCheckpointRow,
-  LABEL_LIMIT,
   messageCheckpoints,
-  plainSnippet,
-  SNIPPET_LIMIT,
 } from "./message-checkpoints";
 
 function user(id: string, ...parts: UIMessage["parts"]): WorkTranscriptRow {
@@ -81,8 +78,9 @@ describe("messageCheckpoints", () => {
   it("bounds the prompt and the accessible name", () => {
     const long = "word ".repeat(400);
     const [checkpoint] = messageCheckpoints([user("long", text(long))]);
-    expect(Array.from(checkpoint!.prompt)).toHaveLength(SNIPPET_LIMIT);
-    expect(Array.from(checkpoint!.label).length).toBeLessThanOrEqual(LABEL_LIMIT);
+    // 280 characters kept for the card, 100 for the accessible name.
+    expect(Array.from(checkpoint!.prompt)).toHaveLength(280);
+    expect(Array.from(checkpoint!.label).length).toBeLessThanOrEqual(100);
     expect(checkpoint!.label.endsWith("…")).toBe(true);
   });
 });
@@ -200,30 +198,61 @@ describe("currentCheckpoint", () => {
   });
 });
 
-describe("plainSnippet", () => {
+describe("snippets", () => {
+  /** The reply snippet `markdown` makes, read through the public reader. */
+  const snippet = (markdown: string) =>
+    checkpointReply([user("q", text("Q")), said("r", markdown)], "q");
+
   it("reads markdown as one line of text", () => {
     expect(
-      plainSnippet(
+      snippet(
         "# Title\n\n- [x] **done** with `code`\n> quoted [link](https://x.y) ![img](a.png)\n\n```ts\nconst a = 1;\n```\n1. last",
       ),
     ).toBe("Title done with code quoted link img last");
   });
 
   it("drops fenced code when there is prose, and keeps it when there is not", () => {
-    expect(plainSnippet("Before\n```\nconst a = 1;\n```\nAfter")).toBe("Before After");
-    expect(plainSnippet("Streaming\n```ts\nconst half = ")).toBe("Streaming");
-    expect(plainSnippet("```ts\nconst a = 1;\n```")).toBe("const a = 1;");
+    expect(snippet("Before\n```\nconst a = 1;\n```\nAfter")).toBe("Before After");
+    expect(snippet("Streaming\n```ts\nconst half = ")).toBe("Streaming");
+    expect(snippet("```ts\nconst a = 1;\n```")).toBe("const a = 1;");
   });
 
   it("keeps snake_case and single asterisks inside words", () => {
-    expect(plainSnippet("use snake_case and 2*3")).toBe("use snake_case and 2*3");
+    expect(snippet("use snake_case and 2*3")).toBe("use snake_case and 2*3");
   });
 
   it("cuts on a code point, not inside an emoji", () => {
-    expect(plainSnippet("🚀🚀🚀🚀", 3)).toBe("🚀🚀…");
+    const [checkpoint] = messageCheckpoints([user("rockets", text("🚀".repeat(300)))]);
+    expect(checkpoint!.prompt).toBe(`${"🚀".repeat(279)}…`);
+    expect(checkpoint!.label).toBe(`${"🚀".repeat(99)}…`);
   });
 
-  it("is empty for whitespace and zero-width text", () => {
-    expect(plainSnippet(" \n\u200B\uFEFF ")).toBe("");
+  it("is nothing for whitespace and zero-width text", () => {
+    expect(snippet(" \n\u200B\uFEFF ")).toBeNull();
+  });
+});
+
+describe("cost per streamed update", () => {
+  it("cuts each message's snippet once, however often the rows are re-read", () => {
+    let reads = 0;
+    const parts: UIMessage["parts"] = [text("A long ask")];
+    const message = {
+      id: "counted",
+      role: "user" as const,
+      get parts() {
+        reads += 1;
+        return parts;
+      },
+    } as UIMessage;
+    const asked: WorkTranscriptRow = { kind: "turn", messages: [message] };
+    const first = messageCheckpoints([asked, said("r", "Partial")]);
+    const readsAfterFirst = reads;
+    // Streamed updates: the reply grows, the user message object is the same.
+    const second = messageCheckpoints([asked, said("r", "Partial so")]);
+    const third = messageCheckpoints([asked, said("r", "Partial so far")]);
+    expect(reads).toBe(readsAfterFirst);
+    expect(second[0]).toBe(first[0]);
+    expect(third[0]).toBe(first[0]);
+    expect(holdCheckpoints(first, third)).toBe(first);
   });
 });

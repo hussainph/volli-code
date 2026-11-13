@@ -13,9 +13,10 @@
  * conversation, so it is not a checkpoint either.
  *
  * COST. This runs whenever the plane's rows change, which includes every
- * streamed chunk. A streamed chunk never changes a user message, so the prompt
- * snippet is cached on the message object and {@link holdCheckpoints} hands
- * back the previous list when nothing in it changed. The reply snippet, which
+ * streamed chunk. A streamed chunk never changes a user message, so each
+ * finished checkpoint is cached on its message object — a streamed update
+ * costs one cache lookup per message, no text work — and
+ * {@link holdCheckpoints} hands back the previous list when nothing changed. The reply snippet, which
  * DOES change per chunk for the live exchange, is not part of the list at all:
  * {@link checkpointReply} reads it from the current rows only when a card opens.
  */
@@ -36,26 +37,36 @@ export interface MessageCheckpoint {
  * Characters kept from a message or reply. The card clamps to a few lines on
  * its own; this only stops a fifteen-kilobyte paste from riding into the DOM.
  */
-export const SNIPPET_LIMIT = 280;
+const SNIPPET_LIMIT = 280;
 
 /** Characters in a mark's accessible name: enough to recognise, short enough to hear. */
-export const LABEL_LIMIT = 100;
+const LABEL_LIMIT = 100;
 
 /** Below this many messages a rail is one or no marks: noise, not navigation. */
 export const MIN_CHECKPOINTS = 2;
 
-const promptCache = new WeakMap<UIMessage, string>();
+/**
+ * The finished checkpoint for each user message the rows have shown, or
+ * `null` for one that is not a checkpoint. Keyed by the message object, which
+ * the transcript keeps for a message nothing happened to: so the snippet and
+ * label are cut once per message, not once per streamed update.
+ */
+const checkpointCache = new WeakMap<UIMessage, MessageCheckpoint | null>();
 
-/** The checkpoint's prompt, or `null` when `row` is not a checkpoint. */
-function checkpointPrompt(row: WorkTranscriptRow): string | null {
+/** The checkpoint `row` is, or `null`. */
+function checkpointOf(row: WorkTranscriptRow): MessageCheckpoint | null {
   if (row.kind !== "turn") return null;
   const message = row.messages[0];
   if (message === undefined || message.role !== "user") return null;
-  const cached = promptCache.get(message);
-  if (cached !== undefined) return cached.length > 0 ? cached : null;
+  const cached = checkpointCache.get(message);
+  if (cached !== undefined) return cached;
   const prompt = messagePrompt(row.messages);
-  promptCache.set(message, prompt);
-  return prompt.length > 0 ? prompt : null;
+  const checkpoint =
+    prompt.length === 0
+      ? null
+      : { id: message.id, prompt, label: plainSnippet(prompt, LABEL_LIMIT) };
+  checkpointCache.set(message, checkpoint);
+  return checkpoint;
 }
 
 function messagePrompt(messages: readonly UIMessage[]): string {
@@ -74,16 +85,15 @@ function messagePrompt(messages: readonly UIMessage[]): string {
 
 /** Whether `row` is one of the person's messages the rail marks. */
 export function isCheckpointRow(row: WorkTranscriptRow): boolean {
-  return checkpointPrompt(row) !== null;
+  return checkpointOf(row) !== null;
 }
 
 /** Every checkpoint in `rows`, in transcript order. */
 export function messageCheckpoints(rows: readonly WorkTranscriptRow[]): MessageCheckpoint[] {
   const checkpoints: MessageCheckpoint[] = [];
   for (const row of rows) {
-    const prompt = checkpointPrompt(row);
-    if (prompt === null || row.kind !== "turn") continue;
-    checkpoints.push({ id: row.messages[0]!.id, prompt, label: plainSnippet(prompt, LABEL_LIMIT) });
+    const checkpoint = checkpointOf(row);
+    if (checkpoint !== null) checkpoints.push(checkpoint);
   }
   return checkpoints;
 }
@@ -165,7 +175,7 @@ export function currentCheckpoint(input: {
  * {@link SNIPPET_LIMIT} on a code-point boundary with an ellipsis. Text that
  * is nothing but code keeps the code, without its fences.
  */
-export function plainSnippet(markdown: string, limit: number = SNIPPET_LIMIT): string {
+function plainSnippet(markdown: string, limit: number = SNIPPET_LIMIT): string {
   // A long paste is cut long before it is cleaned: nothing past the limit is drawn.
   const source = markdown.slice(0, limit * 4);
   const prose = flatten(source.replace(FENCED_BLOCK, " "), limit);
