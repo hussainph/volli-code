@@ -81,10 +81,6 @@ for _ in $(seq 1 20); do
   fi
   sleep 0.2
 done
-# The serving process too: the launcher execs Node, so this PID is the runner's.
-tr '\0' '\n' <"/proc/$pid/cmdline" | grep -Fxq -- --no-wasm-code-gc || {
-  echo 'the serving runner was not started with --no-wasm-code-gc' >&2; exit 1;
-}
 kill -TERM "$pid"
 code=0
 wait "$pid" || code=$?

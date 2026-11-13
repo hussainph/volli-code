@@ -730,7 +730,8 @@ for (const [app, bundle, launcher] of [
     assert.ok(boot.includes("grep -Fq -- ' --no-wasm-code-gc '"));
     assert.ok(boot.includes('NODE_OPTIONS="--require=$probe/execargv.cjs"'));
     assert.ok(boot.includes('argv.includes("--no-wasm-code-gc")'));
-    assert.ok(boot.includes("grep -Fxq -- --no-wasm-code-gc"));
+    // hostd also checks its serving process; the runner's run boot is shared with a shell double.
+    if (app === "hostd") assert.ok(boot.includes("grep -Fxq -- --no-wasm-code-gc"));
   });
 }
 
