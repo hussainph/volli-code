@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { branchTip, insertEntry, setValue } from "./harness-session";
 import { DEFAULT_COMPACTION_SETTINGS } from "./harness-compaction";
-import { type StreamFn } from "@earendil-works/pi-agent-core";
+import { Agent, type StreamFn } from "@earendil-works/pi-agent-core";
 import { JsonlSessionRepo } from "./harness-session";
 import { NodeExecutionEnv, type ExecutionEnv, type ShellExecResult } from "./harness-env";
 import {
@@ -50,6 +50,7 @@ import {
   UtilityCompletionError,
   type DecisionCall,
   type DecisionPort,
+  type DeliveryOutcome,
   type RuntimeSessionIdentity,
   type McpToolDefinition,
   type ObservabilityEvent,
@@ -10676,12 +10677,15 @@ interface HeldRefresh {
   /** Hold the next tool refresh open; resolves once the runtime is inside it. */
   arm(): Promise<void>;
   release(): void;
+  /** End the held refresh with the host refusing it. */
+  fail(error: Error): void;
 }
 
 /** A host whose next tool refresh can be held open. */
 function holdableRefresh(attachment: Attachment): HeldRefresh {
   let armed: { entered: () => void; release: Promise<void> } | undefined;
   let release: (() => void) | undefined;
+  let fail: ((error: Error) => void) | undefined;
   attachment.spec.refreshTools = async () => {
     const held = armed;
     armed = undefined;
@@ -10697,9 +10701,11 @@ function holdableRefresh(attachment: Attachment): HeldRefresh {
       const released = Promise.withResolvers<void>();
       armed = { entered: entered.resolve, release: released.promise };
       release = released.resolve;
+      fail = released.reject;
       return entered.promise;
     },
     release: () => release?.(),
+    fail: (error) => fail?.(error),
   };
 }
 
@@ -11061,6 +11067,557 @@ describe("a retry still refreshing its tools (VC-810)", () => {
     expect(turns.at(-1)?.messages).toContain("first answer");
     expect(turns.at(-1)?.messages).toContain("resumed answer");
     await handle.close();
+  });
+});
+
+/**
+ * A retry of a failed turn, held inside its tool refresh. Boxed, because an
+ * async function returning the retry itself would wait for it to end.
+ */
+async function retryHeld(
+  failed: { handle: { retry(commandId: string): Promise<DeliveryOutcome> }; refresh: HeldRefresh },
+  commandId: string,
+): Promise<{ retrying: Promise<DeliveryOutcome> }> {
+  const entered = failed.refresh.arm();
+  const retrying = failed.handle.retry(commandId);
+  await entered;
+  return { retrying };
+}
+
+/**
+ * A Stop that lands while a retry is still refreshing its tools (VC-1199).
+ *
+ * Nothing is running yet for the Stop to abort: the retry has found Pi idle
+ * and is waiting on the host. It has to give up when the refresh answers,
+ * rather than start the run the person just stopped, and the Session has to
+ * settle the way a Stop during the retried run would have settled it.
+ *
+ * Held open at the same host boundary the VC-810 tests hold it at.
+ */
+describe("a Stop while a retry refreshes its tools (VC-1199)", () => {
+  type Handle = Awaited<ReturnType<ReturnType<typeof createPiAgentRuntime>["startSession"]>>;
+
+  interface FailedTurn {
+    attachment: Attachment;
+    handle: Handle;
+    refresh: HeldRefresh;
+    turns: ProviderCall[];
+  }
+
+  /** Two turns, the second refused by the provider, nothing retried yet. */
+  async function failedTurn(
+    after: ScriptStep[],
+    overrides: Partial<SessionRuntimeSpec> = {},
+  ): Promise<FailedTurn> {
+    const attachment = fixture(overrides);
+    const refresh = holdableRefresh(attachment);
+    const turns: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(turns, settles("first answer")),
+          recording(turns, (emit) => emit.fail("invalid api key")),
+          ...after.map((step) => recording(turns, step)),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember the marker");
+    await handle.submitUserMessage(PASTED);
+    return { attachment, handle, refresh, turns };
+  }
+
+  /** What the Session was told, without what only a streamed request produces. */
+  function settledShape(observations: RuntimeObservation[]): string[] {
+    return kinds(observations).filter((kind) => kind !== "delta" && kind !== "usage");
+  }
+
+  function attentionStates(observations: RuntimeObservation[]): string[] {
+    return attentions(observations).map((observation) =>
+      observation.kind === "attention" ? `${observation.reason}:${observation.state}` : "",
+    );
+  }
+
+  it("gives the retry up and settles it the way a Stop during the retried run does", async () => {
+    // The comparison: the same retry, stopped once its request is with the provider.
+    const streaming = Promise.withResolvers<void>();
+    const control = await failedTurn([
+      haltOnAbort("half a thought", streaming.resolve),
+      settles("retried answer"),
+    ]);
+    const controlRetry = control.handle.retry("retry-1");
+    await streaming.promise;
+    await control.handle.interrupt();
+    await expect(controlRetry).resolves.toMatchObject({ kind: "delivered", delivery: "retry" });
+
+    const gap = await failedTurn([settles("retried answer")]);
+    const { retrying } = await retryHeld(gap, "retry-1");
+    const stopping = tracked(gap.handle.interrupt());
+    await runPendingCallbacks();
+    // Stop answers once the turn it stopped has settled, not before.
+    const answeredInTheGap = stopping.settled();
+    gap.refresh.release();
+    await stopping.promise;
+    const outcome = await retrying;
+
+    expect(answeredInTheGap).toBe(false);
+    expect(outcome).toEqual({
+      kind: "delivered",
+      delivery: "retry",
+      acceptedAt: expect.any(Number),
+    });
+    // No request went out for the retry the person stopped.
+    expect(gap.turns).toHaveLength(2);
+    expect(kinds(gap.attachment.observations).slice(-2)).toEqual([
+      "turn:started",
+      "turn:interrupted",
+    ]);
+    expect(settledShape(gap.attachment.observations)).toEqual(
+      settledShape(control.attachment.observations),
+    );
+    // The failed turn's Attention stands, as it does after any stopped retry.
+    expect(attentionStates(gap.attachment.observations)).toEqual(["auth:raised"]);
+    expect(attentionStates(gap.attachment.observations)).toEqual(
+      attentionStates(control.attachment.observations),
+    );
+    // The retry was accepted once, into the turn the Stop ended.
+    const turnIds = gap.attachment.observations.flatMap((observation) =>
+      observation.kind === "turn" ? [observation.turnId] : [],
+    );
+    expect((await gap.handle.reconcile(null)).receipts).toEqual([
+      { commandId: "retry-1", acceptedAt: (outcome as { acceptedAt: number }).acceptedAt },
+    ]);
+    expect(turnIds.slice(-2)).toEqual([turnIds.at(-1), turnIds.at(-1)]);
+
+    // The failed reply is still there to retry, and retrying it answers the
+    // request it failed on, sent once.
+    await expect(gap.handle.retry("retry-2")).resolves.toMatchObject({
+      kind: "delivered",
+      delivery: "retry",
+    });
+    expect(gap.turns).toHaveLength(3);
+    expect(gap.turns[2]!.messages.split(PASTED).length - 1).toBe(1);
+    expect(settledTexts(gap.attachment.observations)).toEqual(["first answer", "retried answer"]);
+    await control.handle.close();
+    await gap.handle.close();
+  });
+
+  it("ends an automatic retry's turn the way a Stop during its backoff does", async () => {
+    const attachment = fixture();
+    const refresh = holdableRefresh(attachment);
+    const turns: ProviderCall[] = [];
+    let entered: Promise<void> | undefined;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      retryBackoffMs: instantBackoff,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(turns, (emit) => {
+            // The next refresh is the automatic retry's own.
+            entered = refresh.arm();
+            emit.fail(DROPPED_SOCKET);
+          }),
+          recording(turns, settles("later answer")),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    const submitting = handle.submitUserMessage("GO-MARKER");
+    await vi.waitFor(() => expect(entered).toBeDefined());
+    await entered;
+
+    const stopping = tracked(handle.interrupt());
+    await runPendingCallbacks();
+    const answeredInTheGap = stopping.settled();
+    refresh.release();
+    await stopping.promise;
+
+    expect(answeredInTheGap).toBe(false);
+    await expect(submitting).resolves.toEqual({ kind: "delivered", delivery: "prompt" });
+    expect(turns).toHaveLength(1);
+    // Exactly what "abandons the wait when the turn is interrupted" records.
+    expect(kinds(attachment.observations)).toEqual([
+      "attachment:started",
+      "turn:started",
+      "usage",
+      "turn:interrupted",
+    ]);
+
+    // The next message is a turn of its own, sent the message the stopped
+    // turn answered once.
+    await handle.submitUserMessage("again");
+    expect(turns).toHaveLength(2);
+    expect(turns[1]!.messages.split("GO-MARKER").length - 1).toBe(1);
+    const turnStates = attachment.observations.flatMap((observation) =>
+      observation.kind === "turn" ? [[observation.state, observation.turnId] as const] : [],
+    );
+    expect(turnStates.map(([state]) => state)).toEqual([
+      "started",
+      "interrupted",
+      "started",
+      "completed",
+    ]);
+    expect(turnStates[2]![1]).not.toBe(turnStates[1]![1]);
+    await handle.close();
+  });
+
+  it("honours a Stop between an automatic retry's decision and its opening", async () => {
+    let refreshes = 0;
+    const attachment = fixture({
+      refreshTools: async () => {
+        refreshes += 1;
+        return null;
+      },
+    });
+    const turns: ProviderCall[] = [];
+    let handle: Handle | undefined;
+    let armed = false;
+    let failedRunEnded = false;
+    // Where the hook fired, read when it fired: the failed run's `agent_end`
+    // observers had settled, and they had not ended the turn — so they had
+    // decided to resume it. A Pi that let go of the run any earlier would
+    // land this Stop before that decision, where an older check answers it,
+    // and this test would prove nothing; it fails instead.
+    let atHook: { agentEndSettled: boolean; kinds: string[]; refreshes: number } | undefined;
+    type PiInternals = {
+      finishRun: () => void;
+      processEvents: (event: { type: string }) => Promise<void>;
+    };
+    const internals = Agent.prototype as unknown as PiInternals;
+    const finishRun = internals.finishRun;
+    const processEvents = internals.processEvents;
+    const settledSpy = vi
+      .spyOn(internals, "processEvents")
+      .mockImplementation(async function (this: unknown, event) {
+        await processEvents.call(this, event);
+        if (armed && event.type === "agent_end") failedRunEnded = true;
+      });
+    // Pi lets go of the run here, after the turn's own `agent_end` decided to
+    // resume it and before the runtime opens the resumed run.
+    const spy = vi.spyOn(internals, "finishRun").mockImplementation(function (this: unknown) {
+      finishRun.call(this);
+      if (!armed) return;
+      armed = false;
+      atHook = {
+        agentEndSettled: failedRunEnded,
+        kinds: kinds(attachment.observations),
+        refreshes,
+      };
+      void handle!.interrupt();
+    });
+    try {
+      const runtime = createPiAgentRuntime({
+        sessionDataDir: attachment.sessionDataDir,
+        retryBackoffMs: instantBackoff,
+        models: modelsWithStream(
+          scriptedStream([
+            recording(turns, (emit) => {
+              armed = true;
+              emit.fail(DROPPED_SOCKET);
+            }),
+            recording(turns, settles("later answer")),
+          ]),
+        ),
+      });
+      handle = await runtime.startSession(attachment.spec);
+      await expect(handle.submitUserMessage("go")).resolves.toEqual({
+        kind: "delivered",
+        delivery: "prompt",
+      });
+
+      expect(atHook).toEqual({
+        agentEndSettled: true,
+        kinds: ["attachment:started", "turn:started", "usage"],
+        refreshes: expect.any(Number),
+      });
+      expect(turns).toHaveLength(1);
+      expect(kinds(attachment.observations)).toEqual([
+        "attachment:started",
+        "turn:started",
+        "usage",
+        "turn:interrupted",
+      ]);
+      // A retry already stopped does not refresh for a run that never starts.
+      expect(refreshes).toBe(atHook!.refreshes);
+      await handle.close();
+    } finally {
+      spy.mockRestore();
+      settledSpy.mockRestore();
+    }
+  });
+
+  it("lets a message sent after the Stop open a turn of its own", async () => {
+    const gap = await failedTurn([settles("answer to the message")]);
+    const { retrying } = await retryHeld(gap, "retry-1");
+    const stopping = gap.handle.interrupt();
+    const submitting = gap.handle.submitUserMessage("MESSAGE-AFTER-STOP");
+    await runPendingCallbacks();
+    gap.refresh.release();
+    await stopping;
+
+    await expect(submitting).resolves.toEqual({ kind: "delivered", delivery: "prompt" });
+    await expect(retrying).resolves.toMatchObject({ kind: "delivered", delivery: "retry" });
+    expect(gap.turns).toHaveLength(3);
+    expect(gap.turns[2]!.messages).toContain("MESSAGE-AFTER-STOP");
+    expect(gap.turns[2]!.messages.split(PASTED).length - 1).toBe(1);
+    const turnStates = gap.attachment.observations.flatMap((observation) =>
+      observation.kind === "turn" ? [`${observation.state}:${observation.turnId}`] : [],
+    );
+    const [retried, message] = [turnStates.at(-4)!.split(":")[1], turnStates.at(-1)!.split(":")[1]];
+    expect(turnStates.slice(-4)).toEqual([
+      `started:${retried}`,
+      `interrupted:${retried}`,
+      `started:${message}`,
+      `completed:${message}`,
+    ]);
+    expect(message).not.toBe(retried);
+    expect(settledTexts(gap.attachment.observations)).toEqual([
+      "first answer",
+      "answer to the message",
+    ]);
+    await gap.handle.close();
+  });
+
+  it("settles the stopped retry once for a second Stop", async () => {
+    const gap = await failedTurn([settles("retried answer")]);
+    const { retrying } = await retryHeld(gap, "retry-1");
+    const first = tracked(gap.handle.interrupt());
+    const second = tracked(gap.handle.interrupt());
+    await runPendingCallbacks();
+    const answeredInTheGap = first.settled() || second.settled();
+    gap.refresh.release();
+    await Promise.all([first.promise, second.promise]);
+
+    expect(answeredInTheGap).toBe(false);
+    await expect(retrying).resolves.toMatchObject({ kind: "delivered", delivery: "retry" });
+    expect(gap.turns).toHaveLength(2);
+    expect(kinds(gap.attachment.observations).filter((kind) => kind.startsWith("turn:"))).toEqual([
+      "turn:started",
+      "turn:completed",
+      "turn:started",
+      "turn:interrupted",
+      "turn:started",
+      "turn:interrupted",
+    ]);
+    await gap.handle.close();
+  });
+
+  it("refuses a retry its attachment closed under, and keeps its failed reply", async () => {
+    const gap = await failedTurn([]);
+    const before = kinds(gap.attachment.observations);
+    const { retrying } = await retryHeld(gap, "retry-1");
+    const closing = tracked(gap.handle.close());
+    await runPendingCallbacks();
+    gap.refresh.release();
+    await closing.promise;
+
+    await expect(retrying).resolves.toEqual({
+      kind: "rejected",
+      reason: "closed",
+      message: "This attachment is closed.",
+    });
+    expect(gap.turns).toHaveLength(2);
+    expect(kinds(gap.attachment.observations)).toEqual([...before, "attachment:closed"]);
+    expect((await gap.handle.reconcile(null)).receipts ?? []).toEqual([]);
+    expect(gap.handle.resumeBoundary?.()).toBe("settled");
+  });
+
+  it("leaves a manual retry whose refresh failed retryable, with nothing on the ledger", async () => {
+    const gap = await failedTurn([settles("retried answer")]);
+    const before = kinds(gap.attachment.observations);
+    const { retrying } = await retryHeld(gap, "retry-1");
+    gap.refresh.fail(new Error("The host could not refresh the tools."));
+
+    await expect(retrying).rejects.toThrow("The host could not refresh the tools.");
+    expect(gap.turns).toHaveLength(2);
+    expect(kinds(gap.attachment.observations)).toEqual(before);
+    expect((await gap.handle.reconcile(null)).receipts ?? []).toEqual([]);
+    expect(gap.handle.resumeBoundary?.()).toBe("settled");
+
+    // Nothing of the failed retry rides into the next one: it answers the
+    // request the reply failed on, sent once, and is the only acceptance.
+    await expect(gap.handle.retry("retry-2")).resolves.toMatchObject({
+      kind: "delivered",
+      delivery: "retry",
+    });
+    expect(gap.turns).toHaveLength(3);
+    expect(gap.turns[2]!.messages.split(PASTED).length - 1).toBe(1);
+    expect(
+      ((await gap.handle.reconcile(null)).receipts ?? []).map(({ commandId }) => commandId),
+    ).toEqual(["retry-2"]);
+    await gap.handle.close();
+  });
+
+  it("answers a Stop waiting on a manual retry whose refresh failed", async () => {
+    const gap = await failedTurn([settles("retried answer")]);
+    const before = kinds(gap.attachment.observations);
+    const { retrying } = await retryHeld(gap, "retry-1");
+    const stopping = gap.handle.interrupt();
+    gap.refresh.fail(new Error("The host could not refresh the tools."));
+
+    await stopping;
+    await expect(retrying).rejects.toThrow("The host could not refresh the tools.");
+    // The retry never opened a turn, so there was none for the Stop to end:
+    // the failed turn is still the last thing on the ledger.
+    expect(gap.turns).toHaveLength(2);
+    expect(kinds(gap.attachment.observations)).toEqual(before);
+    expect((await gap.handle.reconcile(null)).receipts ?? []).toEqual([]);
+    await expect(gap.handle.retry("retry-2")).resolves.toMatchObject({ kind: "delivered" });
+    expect(settledTexts(gap.attachment.observations)).toEqual(["first answer", "retried answer"]);
+    await gap.handle.close();
+  });
+
+  it("ends an automatic retry's turn when its refresh fails, so the next message opens its own", async () => {
+    const attachment = fixture();
+    const refresh = holdableRefresh(attachment);
+    const turns: ProviderCall[] = [];
+    let entered: Promise<void> | undefined;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      retryBackoffMs: instantBackoff,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(turns, (emit) => {
+            entered = refresh.arm();
+            emit.fail(DROPPED_SOCKET);
+          }),
+          recording(turns, settles("later answer")),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    const submitting = handle.submitUserMessage("GO-MARKER");
+    await vi.waitFor(() => expect(entered).toBeDefined());
+    await entered;
+    refresh.fail(new Error("The host could not refresh the tools."));
+
+    await expect(submitting).rejects.toThrow("The host could not refresh the tools.");
+    expect(turns).toHaveLength(1);
+    expect(kinds(attachment.observations)).toEqual([
+      "attachment:started",
+      "turn:started",
+      "usage",
+      "turn:interrupted",
+    ]);
+
+    await expect(handle.submitUserMessage("again", "queue", "message-2")).resolves.toMatchObject({
+      kind: "delivered",
+      delivery: "prompt",
+    });
+    expect(turns).toHaveLength(2);
+    expect(turns[1]!.messages.split("GO-MARKER").length - 1).toBe(1);
+    const turnStates = attachment.observations.flatMap((observation) =>
+      observation.kind === "turn" ? [[observation.state, observation.turnId] as const] : [],
+    );
+    expect(turnStates.map(([state]) => state)).toEqual([
+      "started",
+      "interrupted",
+      "started",
+      "completed",
+    ]);
+    expect(turnStates[2]![1]).not.toBe(turnStates[1]![1]);
+    // The message is accepted into its own turn, not the dead one.
+    const accepted = entryRecords(handle.recovery!.sessionFilePath).flatMap((entry) => {
+      const data = entry["data"] as { kind?: string; commandId?: string; turnId?: string };
+      return entry["customType"] === "volli.observation.v1" && data.kind === "command-accepted"
+        ? [{ commandId: data.commandId, turnId: data.turnId }]
+        : [];
+    });
+    expect(accepted).toEqual([{ commandId: "message-2", turnId: turnStates[2]![1] }]);
+    await handle.close();
+  });
+
+  it("settles an automatic retry once when a Stop waits on a refresh that fails", async () => {
+    const attachment = fixture();
+    const refresh = holdableRefresh(attachment);
+    let entered: Promise<void> | undefined;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      retryBackoffMs: instantBackoff,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            entered = refresh.arm();
+            emit.fail(DROPPED_SOCKET);
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    const submitting = handle.submitUserMessage("go");
+    await vi.waitFor(() => expect(entered).toBeDefined());
+    await entered;
+    const stopping = handle.interrupt();
+    refresh.fail(new Error("The host could not refresh the tools."));
+
+    await stopping;
+    await expect(submitting).rejects.toThrow("The host could not refresh the tools.");
+    expect(kinds(attachment.observations)).toEqual([
+      "attachment:started",
+      "turn:started",
+      "usage",
+      "turn:interrupted",
+    ]);
+    await handle.close();
+  });
+
+  it("refuses a retry whose attachment was cancelled under it", async () => {
+    const cancel = new AbortController();
+    const gap = await failedTurn([], { signal: cancel.signal });
+    const before = kinds(gap.attachment.observations);
+    const { retrying } = await retryHeld(gap, "retry-1");
+    cancel.abort();
+    gap.refresh.release();
+
+    await expect(retrying).resolves.toEqual({
+      kind: "rejected",
+      reason: "closed",
+      message: "This attachment is closed.",
+    });
+    expect(gap.turns).toHaveLength(2);
+    expect(kinds(gap.attachment.observations)).toEqual(before);
+    expect((await gap.handle.reconcile(null)).receipts ?? []).toEqual([]);
+    await gap.handle.close();
+  });
+
+  it("ends an automatic retry's turn its attachment closed under", async () => {
+    const attachment = fixture();
+    const refresh = holdableRefresh(attachment);
+    const turns: ProviderCall[] = [];
+    let entered: Promise<void> | undefined;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      retryBackoffMs: instantBackoff,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(turns, (emit) => {
+            entered = refresh.arm();
+            emit.fail(DROPPED_SOCKET);
+          }),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    const submitting = handle.submitUserMessage("go");
+    await vi.waitFor(() => expect(entered).toBeDefined());
+    await entered;
+
+    const closing = handle.close();
+    await runPendingCallbacks();
+    refresh.release();
+    await closing;
+    await submitting;
+
+    expect(turns).toHaveLength(1);
+    // Exactly what "abandons the wait when the attachment closes" records.
+    expect(kinds(attachment.observations)).toEqual([
+      "attachment:started",
+      "turn:started",
+      "usage",
+      "turn:interrupted",
+      "attachment:closed",
+    ]);
   });
 });
 
