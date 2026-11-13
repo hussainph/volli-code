@@ -778,7 +778,13 @@ describe("background Done trim", () => {
       ).toEqual([
         expect.objectContaining({
           actor: "automation",
-          payload: { kind: "worktree_trimmed", entries: 1, bytes: expect.any(Number), kept: 1 },
+          payload: {
+            kind: "worktree_trimmed",
+            entries: 1,
+            bytes: expect.any(Number),
+            kept: 1,
+            trigger: { kind: "done" },
+          },
         }),
       ]);
       expect(ports.onMutation).toHaveBeenCalledTimes(2);

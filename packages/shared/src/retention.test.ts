@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { computeArchiveReadiness, computeWorktreeReclaim } from "./retention";
+import {
+  computeArchiveReadiness,
+  computeWorktreeReclaim,
+  decideTrimFinish,
+  MERGE_CLOCK_MARGIN_MS,
+} from "./retention";
+import type { TicketStatus } from "./ticket";
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -224,6 +230,216 @@ describe("computeWorktreeReclaim", () => {
     expect(computeWorktreeReclaim({ ...base, doneEntryAt: 100 * DAY - 14 * DAY + 1 })).toEqual({
       reclaim: false,
       reason: null,
+    });
+  });
+});
+
+/** A merge record and a column move, as the trim reads them from history. */
+const merge = (url: string, at: number, mergedAt?: number) =>
+  mergedAt === undefined
+    ? ({ kind: "pr_merged", url, at } as const)
+    : ({ kind: "pr_merged", url, at, mergedAt } as const);
+const move = (to: TicketStatus, at: number) => ({ kind: "status_changed", to, at }) as const;
+
+describe("decideTrimFinish (VC-340, VC-1156)", () => {
+  const OLD = "https://x/pull/1";
+  const NEW = "https://x/pull/2";
+  const MIN = 60_000;
+  const base = { status: "needs_review" as const, archived: false, mergedPrUrl: null, history: [] };
+  const kept = { finished: false, reason: "moved since the merge" };
+
+  it("finishes an archived ticket, in any column", () => {
+    expect(decideTrimFinish({ ...base, status: "doing", archived: true })).toEqual({
+      finished: true,
+      trigger: { kind: "archived" },
+    });
+  });
+
+  it("finishes a Done ticket with no PR at all", () => {
+    expect(decideTrimFinish({ ...base, status: "done" })).toEqual({
+      finished: true,
+      trigger: { kind: "done" },
+    });
+  });
+
+  it("does not finish an unmerged ticket outside Done", () => {
+    expect(decideTrimFinish(base)).toEqual({ finished: false, reason: "not finished" });
+  });
+
+  it("finishes a merged ticket never moved after its merge (unchanged from VC-340)", () => {
+    expect(
+      decideTrimFinish({
+        ...base,
+        mergedPrUrl: OLD,
+        history: [move("doing", 1), move("needs_review", 2), merge(OLD, 3)],
+      }),
+    ).toEqual({ finished: true, trigger: { kind: "pr_merged", url: OLD } });
+  });
+
+  it("finishes on a merge observed before its record lands", () => {
+    expect(
+      decideTrimFinish({ ...base, mergedPrUrl: OLD, history: [move("needs_review", 1)] }),
+    ).toEqual({ finished: true, trigger: { kind: "pr_merged", url: OLD } });
+  });
+
+  it.each(["backlog", "todo", "doing", "needs_review"] as const)(
+    "does not finish a ticket moved to %s after its merge, while that merge is the latest",
+    (to) => {
+      expect(
+        decideTrimFinish({
+          ...base,
+          status: to,
+          mergedPrUrl: OLD,
+          history: [merge(OLD, 1), move("done", 2), move(to, 3)],
+        }),
+      ).toEqual(kept);
+    },
+  );
+
+  it("does not finish the VC-1150 sequence: merged in review, then moved to Doing", () => {
+    expect(
+      decideTrimFinish({
+        ...base,
+        status: "doing",
+        mergedPrUrl: OLD,
+        history: [move("needs_review", 1), merge(OLD, 2), move("doing", 3)],
+      }),
+    ).toEqual(kept);
+  });
+
+  it("dates a duplicated merge record from its first appearance", () => {
+    expect(
+      decideTrimFinish({
+        ...base,
+        status: "doing",
+        mergedPrUrl: OLD,
+        history: [merge(OLD, 1), move("doing", 2), merge(OLD, 3)],
+      }),
+    ).toEqual(kept);
+  });
+
+  it("finishes again when a new PR merges after the reactivation, before and after its record lands", () => {
+    const history = [merge(OLD, 1), move("doing", 2)];
+    const finished = { finished: true, trigger: { kind: "pr_merged", url: NEW } };
+    expect(decideTrimFinish({ ...base, status: "doing", mergedPrUrl: NEW, history })).toEqual(
+      finished,
+    );
+    expect(
+      decideTrimFinish({
+        ...base,
+        status: "doing",
+        mergedPrUrl: NEW,
+        history: [...history, merge(NEW, 3)],
+      }),
+    ).toEqual(finished);
+  });
+
+  it("does not finish on a new PR's merge recorded before a later move", () => {
+    expect(
+      decideTrimFinish({
+        ...base,
+        status: "doing",
+        mergedPrUrl: NEW,
+        history: [merge(NEW, 1), move("doing", 2)],
+      }),
+    ).toEqual(kept);
+  });
+
+  it("finishes a reactivated ticket moved back to Done by hand, with no new PR", () => {
+    expect(
+      decideTrimFinish({
+        ...base,
+        status: "done",
+        mergedPrUrl: OLD,
+        history: [merge(OLD, 1), move("doing", 2), move("done", 3)],
+      }),
+    ).toEqual({ finished: true, trigger: { kind: "done" } });
+  });
+
+  describe("dating a move against GitHub's merge time", () => {
+    const T0 = 1_000 * MIN;
+
+    it("keeps a ticket moved after the merge but before the watch saw it", () => {
+      expect(
+        decideTrimFinish({
+          ...base,
+          status: "doing",
+          mergedPrUrl: OLD,
+          history: [move("doing", T0 + 5 * MIN), merge(OLD, T0 + 20 * MIN, T0)],
+        }),
+      ).toEqual(kept);
+    });
+
+    it("keeps a ticket moved shortly before the merge, inside the clock margin", () => {
+      expect(MERGE_CLOCK_MARGIN_MS).toBe(MIN);
+      expect(
+        decideTrimFinish({
+          ...base,
+          status: "doing",
+          mergedPrUrl: OLD,
+          history: [move("doing", T0 - MERGE_CLOCK_MARGIN_MS), merge(OLD, T0 + 20 * MIN, T0)],
+        }),
+      ).toEqual(kept);
+    });
+
+    it("finishes a ticket last moved well before the merge, as today", () => {
+      expect(
+        decideTrimFinish({
+          ...base,
+          mergedPrUrl: OLD,
+          history: [
+            move("needs_review", T0 - MERGE_CLOCK_MARGIN_MS - 1),
+            merge(OLD, T0 + 20 * MIN, T0),
+          ],
+        }),
+      ).toEqual({ finished: true, trigger: { kind: "pr_merged", url: OLD } });
+    });
+
+    it("dates by order alone when the record carries no merge time", () => {
+      const history = [move("doing", T0 + 5 * MIN), merge(OLD, T0 + 20 * MIN)];
+      expect(decideTrimFinish({ ...base, status: "doing", mergedPrUrl: OLD, history })).toEqual({
+        finished: true,
+        trigger: { kind: "pr_merged", url: OLD },
+      });
+      expect(
+        decideTrimFinish({
+          ...base,
+          status: "doing",
+          mergedPrUrl: OLD,
+          history: [...history, move("doing", T0 + 30 * MIN)],
+        }),
+      ).toEqual(kept);
+    });
+
+    it("takes the earliest merge time any record of the PR carries", () => {
+      expect(
+        decideTrimFinish({
+          ...base,
+          status: "doing",
+          mergedPrUrl: OLD,
+          history: [
+            move("doing", T0 + 5 * MIN),
+            merge(OLD, T0 + 30 * MIN),
+            merge(OLD, T0 + 40 * MIN, T0 + 10 * MIN),
+            merge(OLD, T0 + 50 * MIN, T0 + 3 * MIN),
+            merge(OLD, T0 + 60 * MIN, T0 + 20 * MIN),
+          ],
+        }),
+      ).toEqual(kept);
+    });
+
+    it("ignores another PR's merge time", () => {
+      expect(
+        decideTrimFinish({
+          ...base,
+          mergedPrUrl: OLD,
+          history: [
+            move("needs_review", T0 + 5 * MIN),
+            merge(NEW, T0 + 6 * MIN, T0),
+            merge(OLD, T0 + 20 * MIN),
+          ],
+        }),
+      ).toEqual({ finished: true, trigger: { kind: "pr_merged", url: OLD } });
     });
   });
 });

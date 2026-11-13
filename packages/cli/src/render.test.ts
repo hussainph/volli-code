@@ -900,6 +900,35 @@ describe("renderCliSuccess", () => {
     expect(text).toContain("event  labels_changed  added=bug  removed=[]  actor=user");
   });
 
+  it("names a merge's time and the finish a worktree trim acted on, tolerating neither", () => {
+    const text = renderCliSuccess(
+      "ticket.show",
+      {
+        ticket: { id: "VC-1", status: "doing", title: "Ship" },
+        events: [
+          { payload: { kind: "pr_merged", url: "https://x/pull/9", mergedAt: 1_794_137_000_000 } },
+          { payload: { kind: "worktree_trimmed", entries: 2, bytes: 10, kept: 1 } },
+          {
+            payload: {
+              kind: "worktree_trimmed",
+              entries: 3,
+              bytes: 20,
+              kept: 0,
+              trigger: { kind: "pr_merged", url: "https://x/pull/9" },
+            },
+          },
+        ],
+      },
+      { json: false },
+    );
+
+    expect(text).toContain("event  pr_merged  url=https://x/pull/9  mergedAt=1794137000000");
+    expect(text).toContain("event  worktree_trimmed  entries=2  bytes=10  kept=1");
+    expect(text).toContain(
+      "event  worktree_trimmed  entries=3  bytes=20  kept=0  trigger.kind=pr_merged  trigger.url=https://x/pull/9",
+    );
+  });
+
   it("keeps malformed and future ticket-log shapes legible without unbounding a row", () => {
     // The renderer reads untyped wire records, and the whole point of routing
     // unknown fields to the envelope is that a payload this build has never

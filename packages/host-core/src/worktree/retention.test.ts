@@ -552,7 +552,13 @@ describe("trimFinishedWorktree", () => {
     expect(trimEvents()).toEqual([
       expect.objectContaining({
         actor: "automation",
-        payload: { kind: "worktree_trimmed", entries: 1, bytes: expect.any(Number), kept: 1 },
+        payload: {
+          kind: "worktree_trimmed",
+          entries: 1,
+          bytes: expect.any(Number),
+          kept: 1,
+          trigger: { kind: "done" },
+        },
       }),
     ]);
   });
@@ -563,14 +569,58 @@ describe("trimFinishedWorktree", () => {
 
     expect((await trimFinishedWorktree(trimDeps(), "t1")).kind).toBe("trimmed");
     expect(existsSync(join(wt, "node_modules"))).toBe(false);
+    expect(trimEvents()[0]!.payload).toMatchObject({ trigger: { kind: "archived" } });
   });
 
-  it("trims on a merged PR wherever the card sits", async () => {
+  it("trims on a merged PR wherever the card sits, and names the PR", async () => {
     const wt = seedWorktree();
     seedTicket(wt, "doing");
+    const url = "https://x/pull/1";
 
-    expect((await trimFinishedWorktree(trimDeps(), "t1", { prMerged: true })).kind).toBe("trimmed");
+    expect((await trimFinishedWorktree(trimDeps(), "t1", { mergedPrUrl: url })).kind).toBe(
+      "trimmed",
+    );
     expect(existsSync(join(wt, "node_modules"))).toBe(false);
+    expect(trimEvents()[0]!.payload).toMatchObject({ trigger: { kind: "pr_merged", url } });
+  });
+
+  it("leaves a ticket moved after its PR merged alone (VC-1156)", async () => {
+    const wt = seedWorktree();
+    seedTicket(wt, "doing");
+    const url = "https://x/pull/1";
+    recordTicketEvent(ctx.db, "t1", { kind: "pr_merged", url }, 1, { kind: "automation" });
+    recordTicketEvent(
+      ctx.db,
+      "t1",
+      { kind: "status_changed", from: "needs_review", to: "doing" },
+      2,
+    );
+
+    expect(await trimFinishedWorktree(trimDeps(), "t1", { mergedPrUrl: url })).toEqual({
+      kind: "skipped",
+      reason: "moved since the merge",
+    });
+    expect(existsSync(join(wt, "node_modules"))).toBe(true);
+    expect(trimEvents()).toEqual([]);
+  });
+
+  it("refuses a merge-finished trim when the ticket's history does not parse", async () => {
+    const wt = seedWorktree();
+    seedTicket(wt, "doing");
+    const url = "https://x/pull/1";
+    recordTicketEvent(ctx.db, "t1", { kind: "pr_merged", url }, 1, { kind: "automation" });
+    ctx.db
+      .prepare(
+        `INSERT INTO ticket_events (id, ticket_id, kind, actor, payload, created_at)
+         VALUES ('corrupt', 't1', 'status_changed', 'user', '{not json', 2)`,
+      )
+      .run();
+
+    expect(await trimFinishedWorktree(trimDeps(), "t1", { mergedPrUrl: url })).toEqual({
+      kind: "skipped",
+      reason: "unreadable ticket history",
+    });
+    expect(existsSync(join(wt, "node_modules"))).toBe(true);
   });
 
   it("leaves an unfinished ticket alone", async () => {

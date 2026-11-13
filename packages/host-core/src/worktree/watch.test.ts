@@ -13,8 +13,9 @@ import {
   insertTicket,
   setTicketRetentionKeep,
   updateTicketFields,
+  updateTicketPositionStatus,
 } from "../db/tickets-repo";
-import type { NotificationRequest } from "@volli/shared";
+import type { NotificationRequest, TicketStatus } from "@volli/shared";
 import { runGitCapturingAsync } from "./git";
 import type { RunNet } from "./net";
 import type { WorktreePorts } from "./types";
@@ -1434,5 +1435,297 @@ describe("pollRetention — ghCwd needs a usable .git, not just a directory (VC-
     tempDirs.push(wt);
     mkdirSync(join(wt, ".git"));
     expect(await cwdFor(wt)).toBe("worktree");
+  });
+});
+
+/** Whether a reactivated fixture still holds its ignored and untracked working material. */
+function intact(wt: string): boolean {
+  return (
+    existsSync(join(wt, "node_modules", "index.js")) &&
+    existsSync(join(wt, ".scratch", "VC-1", "receipt.json")) &&
+    existsSync(join(wt, "notes.md"))
+  );
+}
+
+/** Puts fresh working material back, as a reactivated ticket's session would. */
+function rework(wt: string): void {
+  mkdirSync(join(wt, "node_modules"), { recursive: true });
+  writeFileSync(join(wt, "node_modules", "index.js"), "1\n");
+  mkdirSync(join(wt, ".scratch", "VC-1"), { recursive: true });
+  writeFileSync(join(wt, ".scratch", "VC-1", "receipt.json"), "{}\n");
+}
+
+// VC-1156: a merged PR is an observation; a move is intent, and intent wins. A
+// ticket moved back to work after its PR merged keeps everything in its
+// worktree — ignored dependencies and scratch material included — until it is
+// finished again: moved to Done, archived, or a PR merges after the move.
+describe("pollRetention — a reactivated merged ticket is not trimmed (VC-1156)", () => {
+  const OLD_PR = "https://x/pull/1216";
+  const NEW_PR = "https://x/pull/1300";
+
+  /** A committed repo with ignored deps and scratch, and an untracked file. */
+  function workingWorktree(): string {
+    const root = mkdtempSync(join(tmpdir(), "volli-watch-reactivated-"));
+    tempDirs.push(root);
+    const git = (args: readonly string[]) =>
+      execFileSync("git", args, {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: "Volli Test",
+          GIT_AUTHOR_EMAIL: "test@volli.local",
+          GIT_COMMITTER_NAME: "Volli Test",
+          GIT_COMMITTER_EMAIL: "test@volli.local",
+        },
+      });
+    git(["init", "-q", "-b", "main"]);
+    writeFileSync(join(root, ".gitignore"), "node_modules/\n.scratch/\n");
+    writeFileSync(join(root, "package.json"), "{}\n");
+    git(["add", "-A"]);
+    git(["commit", "-q", "-m", "fixture"]);
+    mkdirSync(join(root, "node_modules"), { recursive: true });
+    writeFileSync(join(root, "node_modules", "index.js"), "1\n");
+    mkdirSync(join(root, ".scratch", "VC-1"), { recursive: true });
+    writeFileSync(join(root, ".scratch", "VC-1", "receipt.json"), "{}\n");
+    writeFileSync(join(root, "notes.md"), "untracked work\n");
+    return root;
+  }
+
+  function seed(status: TicketStatus, worktreePath: string, prUrl = OLD_PR): void {
+    seedProject();
+    insertTicket(ctx.db, testTicket("p1", { id: "t1", status, worktreePath, branch: "volli/t1" }));
+    updateTicketFields(ctx.db, "t1", { prUrl }, 1);
+  }
+
+  /** The durable merge record, as the watch writes it. */
+  function merged(url: string, at: number): void {
+    recordTicketEvent(ctx.db, "t1", { kind: "pr_merged", url }, at, { kind: "automation" });
+  }
+
+  /** A deliberate column move, as the board's move command records it. */
+  function move(from: TicketStatus, to: TicketStatus, at: number): void {
+    updateTicketPositionStatus(ctx.db, "t1", to, 0, at);
+    recordTicketEvent(ctx.db, "t1", { kind: "status_changed", from, to }, at, { kind: "user" });
+  }
+
+  async function poll(
+    prState: "MERGED" | "OPEN" = "MERGED",
+    store = createRetentionStore(),
+    now = 5000,
+    mergedAt: string | null = "2026-11-08T00:00:00Z",
+  ): Promise<{ calls: number; notified: number }> {
+    const { run, calls } = scriptedNet(() =>
+      prView(prState === "MERGED" ? { state: "MERGED", mergedAt } : {}),
+    );
+    let notified = 0;
+    await pollRetention(
+      {
+        db: ctx.db,
+        net: run,
+        now: () => now,
+        notify: () => {
+          notified += 1;
+        },
+        trim: {
+          worktree: { db: ctx.db, gitAsync: runGitCapturingAsync, blobsRoot: "unused" },
+          now: () => now,
+          busySites: async () => [],
+        },
+      },
+      store,
+    );
+    return { calls: calls.length, notified };
+  }
+
+  function trims() {
+    return listTicketEvents(ctx.db, "t1")
+      .map((event) => event.payload)
+      .filter((payload) => payload.kind === "worktree_trimmed");
+  }
+
+  it("leaves the worktree alone when the old merge is still the latest observation (the VC-1150 sequence)", async () => {
+    const wt = workingWorktree();
+    seed("needs_review", wt);
+    merged(OLD_PR, 2);
+    move("needs_review", "doing", 3);
+
+    await poll();
+
+    expect(intact(wt)).toBe(true);
+    expect(trims()).toEqual([]);
+  });
+
+  it.each(["todo", "needs_review", "backlog"] as const)(
+    "leaves a ticket reactivated out of Done into %s alone",
+    async (to) => {
+      const wt = workingWorktree();
+      seed("needs_review", wt);
+      merged(OLD_PR, 2);
+      move("needs_review", "done", 3);
+      move("done", to, 4);
+
+      await poll();
+
+      expect(intact(wt)).toBe(true);
+      expect(trims()).toEqual([]);
+    },
+  );
+
+  it("trims once a new PR merges after the reactivation, and names that PR", async () => {
+    const wt = workingWorktree();
+    seed("doing", wt, NEW_PR);
+    merged(OLD_PR, 2);
+    move("needs_review", "doing", 3);
+
+    await poll("MERGED");
+
+    expect(existsSync(join(wt, "node_modules"))).toBe(false);
+    expect(existsSync(join(wt, ".scratch"))).toBe(false);
+    expect(existsSync(join(wt, "notes.md"))).toBe(true);
+    expect(trims()).toEqual([
+      expect.objectContaining({ trigger: { kind: "pr_merged", url: NEW_PR } }),
+    ]);
+  });
+
+  it("still polls an open new PR on a reactivated ticket and leaves its worktree alone", async () => {
+    const wt = workingWorktree();
+    seed("doing", wt, NEW_PR);
+    merged(OLD_PR, 2);
+    move("needs_review", "doing", 3);
+
+    expect((await poll("OPEN")).calls).toBe(1);
+
+    expect(intact(wt)).toBe(true);
+  });
+
+  it("records a later PR's merge, then protects a second reactivation, within one launch and after a restart", async () => {
+    const wt = workingWorktree();
+    seed("doing", wt, NEW_PR);
+    merged(OLD_PR, 2);
+    move("needs_review", "doing", 3);
+    const store = createRetentionStore();
+
+    // The second PR merges: recorded on its own, finished again, trimmed — and
+    // no second notification, as before.
+    expect((await poll("MERGED", store, 4)).notified).toBe(0);
+    expect(
+      listTicketEvents(ctx.db, "t1")
+        .map((event) => event.payload)
+        .filter((payload) => payload.kind === "pr_merged"),
+    ).toEqual([
+      { kind: "pr_merged", url: OLD_PR },
+      { kind: "pr_merged", url: NEW_PR, mergedAt: Date.parse("2026-11-08T00:00:00Z") },
+    ]);
+    expect(trims()).toHaveLength(1);
+
+    // Reactivated again, and the session rebuilds its material.
+    move("needs_review", "doing", 5);
+    rework(wt);
+
+    // Same launch: the remembered merge answers, without a gh read.
+    expect((await poll("MERGED", store, 6)).calls).toBe(0);
+    expect(intact(wt)).toBe(true);
+    // A restart: the durable record answers, without a gh read.
+    expect((await poll("MERGED", createRetentionStore(), 7)).calls).toBe(0);
+    expect(intact(wt)).toBe(true);
+    expect(trims()).toHaveLength(1);
+  });
+
+  it("protects a reactivation within the launch that trimmed the merge", async () => {
+    const wt = workingWorktree();
+    seed("needs_review", wt);
+    const store = createRetentionStore();
+
+    expect((await poll("MERGED", store, 2)).notified).toBe(1);
+    expect(trims()).toHaveLength(1);
+    move("needs_review", "doing", 3);
+    rework(wt);
+
+    await poll("MERGED", store, 4);
+
+    expect(intact(wt)).toBe(true);
+    expect(trims()).toHaveLength(1);
+  });
+
+  it("trims a reactivated ticket moved to Done by hand, with no new PR, and says so", async () => {
+    const wt = workingWorktree();
+    seed("needs_review", wt);
+    merged(OLD_PR, 2);
+    move("needs_review", "doing", 3);
+    move("doing", "done", 4);
+
+    await poll();
+
+    expect(existsSync(join(wt, "node_modules"))).toBe(false);
+    expect(existsSync(join(wt, "notes.md"))).toBe(true);
+    expect(trims()).toEqual([expect.objectContaining({ trigger: { kind: "done" } })]);
+  });
+
+  it("trims a merged ticket that was never moved after the merge, naming the merge", async () => {
+    const wt = workingWorktree();
+    seed("needs_review", wt);
+    move("doing", "needs_review", 1);
+    merged(OLD_PR, 2);
+
+    await poll();
+
+    expect(existsSync(join(wt, "node_modules"))).toBe(false);
+    expect(existsSync(join(wt, "notes.md"))).toBe(true);
+    expect(trims()).toEqual([
+      expect.objectContaining({ trigger: { kind: "pr_merged", url: OLD_PR } }),
+    ]);
+  });
+
+  it("keeps a ticket moved back to work after the merge but before the watch saw it", async () => {
+    const wt = workingWorktree();
+    seed("needs_review", wt);
+    const t0 = Date.parse("2026-11-08T11:00:00Z");
+    // The merge happens at T0 unseen; the Board moves the ticket back at T1;
+    // the watch, backed off, reads the merge at T2 and records it then.
+    move("needs_review", "doing", t0 + 60_000);
+
+    await poll("MERGED", createRetentionStore(), t0 + 600_000, "2026-11-08T11:00:00Z");
+
+    expect(intact(wt)).toBe(true);
+    expect(trims()).toEqual([]);
+    expect(
+      listTicketEvents(ctx.db, "t1")
+        .map((event) => event.payload)
+        .filter((payload) => payload.kind === "pr_merged"),
+    ).toEqual([{ kind: "pr_merged", url: OLD_PR, mergedAt: t0 }]);
+    // A restart answers from the stored record, and its merge time still holds.
+    await poll("MERGED", createRetentionStore(), t0 + 700_000);
+    expect(intact(wt)).toBe(true);
+  });
+
+  it("dates a merge read without a merge time by order alone", async () => {
+    const wt = workingWorktree();
+    seed("needs_review", wt);
+    move("needs_review", "doing", 3);
+
+    await poll("MERGED", createRetentionStore(), 5000, null);
+
+    expect(trims()).toEqual([
+      expect.objectContaining({ trigger: { kind: "pr_merged", url: OLD_PR } }),
+    ]);
+    expect(
+      listTicketEvents(ctx.db, "t1")
+        .map((event) => event.payload)
+        .filter((payload) => payload.kind === "pr_merged"),
+    ).toEqual([{ kind: "pr_merged", url: OLD_PR }]);
+  });
+
+  it("trims a ticket whose merge is observed for the first time this cycle", async () => {
+    const wt = workingWorktree();
+    seed("needs_review", wt);
+    move("doing", "needs_review", 1);
+
+    await poll("MERGED");
+
+    expect(existsSync(join(wt, "node_modules"))).toBe(false);
+    expect(trims()).toEqual([
+      expect.objectContaining({ trigger: { kind: "pr_merged", url: OLD_PR } }),
+    ]);
   });
 });
