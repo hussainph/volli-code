@@ -362,6 +362,13 @@ export default defineConfig(({ mode, command }) => ({
         // a window that walks out from under a reader while the Session
         // streams. Neither is visible in a screenshot of a short transcript.
         "src/components/chat/transcript-window.ts",
+        // The checkpoint rail's rules (VC-1211): which rows are the person's
+        // messages, what a card previews, which exchange the reader is in, and
+        // the list held stable through streamed tokens. A wrong answer is a
+        // mark that jumps to the wrong message, or a rail that redraws per
+        // token; neither shows in a still screenshot.
+        "src/components/chat/message-checkpoints.ts",
+        "src/components/chat/checkpoint-navigator.ts",
         // ⌘K's list-shape decisions (VC-205): which section an @scope narrows
         // to, where it truncates behind "Show all", and the Ticket-priority
         // score wrapped around cmdk's matcher. One shared filter scores both

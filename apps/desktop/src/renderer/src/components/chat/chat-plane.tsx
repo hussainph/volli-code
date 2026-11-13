@@ -182,6 +182,16 @@ import {
   transcriptWindow,
 } from "@renderer/components/chat/transcript-window";
 import { HostNoticeRow } from "@renderer/components/chat/host-notice-ui";
+import {
+  isCheckpointRow,
+  type MessageCheckpoint,
+} from "@renderer/components/chat/message-checkpoints";
+import type { CheckpointNavigator } from "@renderer/components/chat/checkpoint-navigator";
+import { MessageCheckpointRail } from "@renderer/components/chat/message-checkpoint-rail";
+import {
+  useCheckpointNavigation,
+  useMessageCheckpoints,
+} from "@renderer/components/chat/use-message-checkpoints";
 import { RunningOnLabel } from "@renderer/components/hosts/running-on-label";
 import {
   CloudComposerStatus,
@@ -2078,6 +2088,12 @@ function ChatPlaneContent({
     ),
     samePresentedRow,
   );
+  // The person's messages, for the checkpoint rail (VC-1211).
+  const {
+    checkpoints,
+    readReply: readCheckpointReply,
+    navigator: checkpointNavigator,
+  } = useMessageCheckpoints(rows);
   // Identity, not an index. A boundary between the turns means a turn's place in
   // `rows` is no longer its place in `turns` — and the last ROW can be a
   // boundary, which would leave the turn still being written with nothing
@@ -2239,6 +2255,8 @@ function ChatPlaneContent({
                       <ChatTranscript
                         sessionId={sessionId}
                         rows={rows}
+                        checkpoints={checkpoints}
+                        navigator={checkpointNavigator}
                         context={turnContext}
                         liveTurn={liveTurn}
                         historyBefore={session.historyBefore}
@@ -2309,6 +2327,18 @@ function ChatPlaneContent({
           </FileMentionProvider>
         </BrowserCardHostContext.Provider>
       </CodeModePictureHostContext.Provider>
+
+      {/* The person's messages as marks in the left margin (VC-1211), outside
+          the transcript's `role="log"` so a new mark is never announced as
+          conversation. It hides itself when the pane leaves no margin. */}
+      {quietEmpty || initialReadFailed ? null : (
+        <MessageCheckpointRail
+          checkpoints={checkpoints}
+          navigator={checkpointNavigator}
+          readReply={readCheckpointReply}
+          belowHeader={cloudLaunch}
+        />
+      )}
 
       {/* Opaque, because the transcript scrolls the full height of the plane
           behind it. The fade above hands off to this; between them the
@@ -2854,10 +2884,18 @@ const EARLIER_PREFETCH = "400px 0px 0px 0px";
  * offset moves by the height that arrived. A row keeps its React identity
  * while a page completes it (`stableRowKeys`), so its open disclosures and
  * the anchors inside it survive.
+ *
+ * AND IT CAN BE JUMPED THROUGH (VC-1211). The checkpoint rail beside it marks
+ * every message the person sent among the rows held here, mounted or not. A
+ * mark above the window moves the same anchor "Show earlier" moves, so the
+ * jump mounts nothing the reader could not have scrolled to, and the rows it
+ * mounts are dropped again the same way once the reader returns to the bottom.
  */
 function ChatTranscript({
   sessionId,
   rows,
+  checkpoints,
+  navigator,
   context,
   liveTurn,
   historyBefore,
@@ -2867,6 +2905,10 @@ function ChatTranscript({
 }: {
   sessionId: string;
   rows: readonly TranscriptRow[];
+  /** The person's messages in `rows`, held stable across streamed tokens. */
+  checkpoints: readonly MessageCheckpoint[];
+  /** Where this transcript tells the checkpoint rail its position and takes its jumps. */
+  navigator: CheckpointNavigator;
   context: TurnContext;
   /** The turn the harness is still writing into, by identity, or `null`. */
   liveTurn: readonly UIMessage[] | null;
@@ -3060,6 +3102,27 @@ function ChatTranscript({
     return () => observer.disconnect();
   }, [armed, control, hasEarlier]);
 
+  // The checkpoint rail (VC-1211): this transcript tells it where the reader
+  // is and takes its jumps. A jump above the window moves the same anchor
+  // "Show earlier" moves; `notePinned` rides the scroll read below.
+  const anchorAt = React.useCallback(
+    (id: string) => {
+      record(id);
+      setAnchorKey(id);
+    },
+    [record],
+  );
+  const notePinned = useCheckpointNavigation({
+    sessionId,
+    navigator,
+    control,
+    rows,
+    checkpoints,
+    mounted,
+    start: shown.start,
+    anchorAt,
+  });
+
   // Where the reader is, recorded as they move so a tab switch has an answer
   // without the unmount having to read the DOM on its way out. The same listener
   // is what retires revealed pages: `escaped` is set the moment the reader
@@ -3080,6 +3143,7 @@ function ChatTranscript({
       frame = 0;
       const distance = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
       const pinned = distance <= PINNED_SLACK_PX;
+      notePinned(pinned);
       if (!pinned) {
         escaped.value = true;
         setArmed(true);
@@ -3121,7 +3185,7 @@ function ChatTranscript({
       scroller.removeEventListener("scroll", onScroll);
       if (frame !== 0) cancelAnimationFrame(frame);
     };
-  }, [control, sessionId]);
+  }, [control, notePinned, sessionId]);
 
   // The offset the reader left, put back. Twice, deliberately: the library
   // scrolls to the bottom from its own ResizeObserver, which fires after this
@@ -3425,7 +3489,13 @@ export function ChatTranscriptRow({
       return <ToolRefreshNotice refresh={row.refresh} />;
     case "turn":
       return (
-        <ChatTurn messages={row.messages} context={context} live={live} anchorKey={row.viewKey} />
+        <ChatTurn
+          messages={row.messages}
+          context={context}
+          live={live}
+          anchorKey={row.viewKey}
+          checkpoint={isCheckpointRow(row) ? row.messages[0]?.id : undefined}
+        />
       );
   }
 }
@@ -3446,9 +3516,12 @@ export const ChatTurn = React.memo(function ChatTurn({
   live,
   deliveryLabel,
   anchorKey,
+  checkpoint,
 }: {
   messages: readonly UIMessage[];
   anchorKey?: string;
+  /** This message's id when it is a mark on the checkpoint rail (VC-1211). */
+  checkpoint?: string | undefined;
   context: TurnContext;
   /** This turn is the one the harness is still writing into. Only it animates. */
   live: boolean;
@@ -3557,7 +3630,7 @@ export const ChatTurn = React.memo(function ChatTurn({
     (context.deliveryLabels?.get(first.id) === "Not delivered" ? "Not delivered" : undefined);
 
   return (
-    <Message from={role} className="max-w-full">
+    <Message from={role} className="max-w-full" data-message-checkpoint={checkpoint}>
       <MessageContent className="gap-0">
         {attribution?.label ? (
           <div className="pb-2 text-ui text-muted-foreground">
