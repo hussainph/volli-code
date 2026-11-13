@@ -1,7 +1,12 @@
+import * as React from "react";
 import { LoadingLabel } from "@renderer/components/ui/loading-label";
 import { Spinner } from "@renderer/components/ui/spinner";
 import { ComposerAttachButton } from "@renderer/components/attachments/composer-attach-button";
-import { OffNote } from "@renderer/components/automations/automation-run-menu";
+import {
+  AUTOMATION_GROUP_LABEL,
+  AutomationGroupHeading,
+  OffNote,
+} from "@renderer/components/automations/automation-run-menu";
 import type { AutomationGroup } from "@renderer/components/automations/ticket-rail-automations-model";
 import { ComposerRunRow, type ComposerRun } from "./composer-run";
 import { RunnerPicker, type RunnerPickerState } from "@renderer/components/chat/runner-picker";
@@ -192,8 +197,11 @@ export function ComposerFooter({
                 <ChatIcon />
                 Start chat
               </DropdownMenuRadioItem>
+              {/* No "Run automation" heading over the column headings
+                  (VC-1212): two stacked headings read as one more row each.
+                  Each column's heading names its group; the rows under them
+                  are the project's Automations. */}
               <DropdownMenuSeparator />
-              <DropdownMenuLabel>Run automation</DropdownMenuLabel>
               <CreateRunAutomationItems {...automationOffer} />
             </DropdownMenuRadioGroup>
           </DropdownMenuContent>
@@ -224,12 +232,8 @@ export function CreateRunAutomationItems({
       </div>
     );
   }
-  return groups.map((group) => (
-    <DropdownMenuGroup key={group.status}>
-      <DropdownMenuLabel>
-        {group.label}
-        {group.current ? " · this column" : ""}
-      </DropdownMenuLabel>
+  return groups.map((group, index) => (
+    <DropdownMenuAutomationGroup key={group.status} group={group} separated={index > 0}>
       {group.automations.map((automation) => (
         <DropdownMenuRadioItem key={automation.id} value={`automation:${automation.id}`}>
           <AutomationIcon />
@@ -239,6 +243,33 @@ export function CreateRunAutomationItems({
           <OffNote automation={automation} enabledIds={enabledIds} />
         </DropdownMenuRadioItem>
       ))}
-    </DropdownMenuGroup>
+    </DropdownMenuAutomationGroup>
   ));
+}
+
+/**
+ * The card menu's column group, on the dropdown primitive: the same heading,
+ * named as the group's accessible label, set off from the column before it.
+ */
+function DropdownMenuAutomationGroup({
+  group,
+  separated,
+  children,
+}: {
+  group: AutomationGroup;
+  separated: boolean;
+  children: React.ReactNode;
+}) {
+  const headingId = React.useId();
+  return (
+    <>
+      {separated ? <DropdownMenuSeparator /> : null}
+      <DropdownMenuGroup aria-labelledby={headingId}>
+        <DropdownMenuLabel id={headingId} className={AUTOMATION_GROUP_LABEL}>
+          <AutomationGroupHeading group={group} />
+        </DropdownMenuLabel>
+        {children}
+      </DropdownMenuGroup>
+    </>
+  );
 }

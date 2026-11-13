@@ -317,6 +317,49 @@ describe("the board card's Automations submenu", () => {
     });
   });
 
+  it("heads each column as a named, separated group the keyboard never stops on (VC-1212)", async () => {
+    doors.list.mockResolvedValue({
+      ok: true,
+      automations: [
+        automation(),
+        automation({ id: "a2", name: "Triage", trigger: { kind: "columns", columns: ["todo"] } }),
+      ],
+    });
+
+    await open();
+
+    const groups = [...document.querySelectorAll<HTMLElement>('[data-slot="context-menu-group"]')];
+    expect(groups.map((group) => group.getAttribute("role"))).toEqual(["group", "group"]);
+    expect(
+      groups.map(
+        (group) => document.getElementById(group.getAttribute("aria-labelledby")!)?.textContent,
+      ),
+    ).toEqual(["DoingThis ticket", "Todo"]);
+    for (const group of groups) {
+      const heading = group.querySelector('[data-slot="context-menu-label"]')!;
+      expect(heading.getAttribute("role")).toBeNull();
+      expect(heading.hasAttribute("tabindex")).toBe(false);
+    }
+    expect(groups[0]!.previousElementSibling?.getAttribute("role")).not.toBe("separator");
+    expect(groups[1]!.previousElementSibling?.getAttribute("role")).toBe("separator");
+
+    // Arrow keys walk the Automations only; Radix moves focus on the next task.
+    const visited: string[] = [];
+    for (let step = 0; step < 2; step += 1) {
+      await act(async () => {
+        (document.activeElement ?? document.body).dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+        );
+        await new Promise((settle) => setTimeout(settle, 0));
+      });
+      visited.push(document.activeElement?.textContent ?? "");
+    }
+    expect(visited.map((row) => row.replace("Manual only", ""))).toEqual([
+      "Review sweep",
+      "Triage",
+    ]);
+  });
+
   it("offers no Run once — no surface does any more (VC-406)", async () => {
     await open();
 

@@ -43,6 +43,7 @@ import {
   overridePressable,
   RAIL_UNREAD_LABEL,
   ticketRailAutomations,
+  type AutomationGroup,
   type RailRunAction,
   type TicketRailAutomations,
 } from "./ticket-rail-automations-model";
@@ -310,14 +311,8 @@ export function AutomationRunMenuItems({
           under another column's heading runs that Automation on THIS Ticket by
           hand, through the same `runAutomationOnTicket` the current column's
           rows always reached: no move, no arming, no different landing. */}
-      {rail.groups.map((group) => (
-        <ContextMenuGroup key={group.status}>
-          <ContextMenuLabel className="flex items-center justify-between gap-2">
-            <span>{group.label}</span>
-            {group.current ? (
-              <span className="text-ui font-normal normal-case tracking-normal">This ticket</span>
-            ) : null}
-          </ContextMenuLabel>
+      {rail.groups.map((group, index) => (
+        <ContextMenuAutomationGroup key={group.status} group={group} separated={index > 0}>
           {group.automations.map((automation) => (
             <ContextMenuItem
               key={automation.id}
@@ -329,7 +324,7 @@ export function AutomationRunMenuItems({
               <OffNote automation={automation} enabledIds={enabledIds} />
             </ContextMenuItem>
           ))}
-        </ContextMenuGroup>
+        </ContextMenuAutomationGroup>
       ))}
       {rail.offered.length === 0 ? (
         // Empty inline pickers keep only their accessible result announcement.
@@ -387,6 +382,58 @@ export function AutomationRunMenuItems({
           </ContextMenuSub>
         </>
       )}
+    </>
+  );
+}
+
+/**
+ * One column's heading in an Automation menu (VC-1212), shared by the card's
+ * context menu and the new-ticket launch menu so the two read alike: the
+ * column's name, and — for the Ticket's own column — a quiet note at the
+ * trailing edge. The heading is a `MenuLabel`, so the primitive's smaller rung
+ * and secondary ink are what tell it apart from the rows under it; Radix never
+ * focuses it.
+ */
+export function AutomationGroupHeading({ group }: { group: AutomationGroup }) {
+  return (
+    <>
+      <span className="min-w-0 flex-1 break-words">{group.label}</span>
+      {group.current ? <span className="shrink-0 font-normal">{CURRENT_GROUP_NOTE}</span> : null}
+    </>
+  );
+}
+
+/** What the Ticket's own column says beside its heading, in every Automation menu. */
+const CURRENT_GROUP_NOTE = "This ticket";
+
+/** The label row's layout once it carries the trailing note. */
+export const AUTOMATION_GROUP_LABEL = "flex items-center gap-2";
+
+/**
+ * A column's rows under their heading, as one announced group: the heading is
+ * the group's accessible name, and every group after the first is set off by
+ * the menu's own divider so a column reads as a section rather than as one
+ * more row.
+ */
+function ContextMenuAutomationGroup({
+  group,
+  separated,
+  children,
+}: {
+  group: AutomationGroup;
+  separated: boolean;
+  children: React.ReactNode;
+}) {
+  const headingId = React.useId();
+  return (
+    <>
+      {separated ? <ContextMenuSeparator /> : null}
+      <ContextMenuGroup aria-labelledby={headingId}>
+        <ContextMenuLabel id={headingId} className={AUTOMATION_GROUP_LABEL}>
+          <AutomationGroupHeading group={group} />
+        </ContextMenuLabel>
+        {children}
+      </ContextMenuGroup>
     </>
   );
 }
