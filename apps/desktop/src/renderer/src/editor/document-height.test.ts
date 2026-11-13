@@ -217,6 +217,93 @@ describe("deferred document layout (Monaco automaticLayout is disabled)", () => 
     expect(f.frames.size).toBe(0);
   });
 
+  it("settles after a cut instead of flipping between two heights (VC-1214)", () => {
+    // The composer body as measured in the lab at 1280x800: a 40vh cap of
+    // 320px inside an `overflow-y-auto` wrapper with classic 10px scrollbars.
+    // The cut body wraps to 12 lines (304px) at the full 526px but to 13
+    // (328px) at 516px. The host does not clip Monaco's DOM, so whenever the
+    // editor is still laid out taller than the host's box the wrapper
+    // overflows and its scrollbar takes 10px from the host.
+    const cap = 320;
+    let long = true;
+    let styleHeight = 0;
+    let laidOut = { width: 526, height: cap };
+    let nextId = 0;
+    const frames = new Map<number, () => void>();
+    const heights: number[] = [];
+    const box = () => Math.min(cap, styleHeight);
+    const sync = createDocumentLayout({
+      getContentHeight: () => (long ? 424 : laidOut.width === 526 ? 304 : 328),
+      setHeight: (px) => {
+        styleHeight = px;
+        sync.schedule(); // the host's ResizeObserver
+      },
+      getHostSize: () => ({ width: laidOut.height > box() ? 516 : 526, height: box() }),
+      layout: (size) => {
+        const rewrapped = size.width !== laidOut.width;
+        laidOut = size;
+        if (rewrapped) sync.schedule(); // Monaco's content-size change
+      },
+      isResizeActive: () => false,
+      onContentHeightChange: (px) => heights.push(px),
+      requestFrame: (callback) => {
+        frames.set(++nextId, callback);
+        return nextId;
+      },
+      cancelFrame: (id) => frames.delete(id),
+    });
+    const run = (limit: number) => {
+      for (let frame = 0; frame < limit && frames.size > 0; frame++) {
+        const [id, callback] = frames.entries().next().value!;
+        frames.delete(id);
+        callback();
+      }
+    };
+    sync.initialize();
+    run(10);
+    expect(laidOut).toEqual({ width: 526, height: cap });
+
+    long = false; // select the tail and delete it
+    heights.length = 0;
+    sync.schedule();
+    run(20);
+    expect(frames.size).toBe(0);
+    expect(laidOut).toEqual({ width: 526, height: 304 });
+    expect(heights).toEqual([304]);
+  });
+
+  it("collapses the editor before shrinking the host, then fits the CSS-floored box", () => {
+    const f = fixture();
+    const floor = 140;
+    f.setHeight.mockImplementation((px) => f.hostSize(600, Math.max(floor, Math.min(384, px))));
+    f.sync.schedule();
+    f.flush();
+    f.layout.mockClear();
+    f.contentHeight(88);
+    f.sync.schedule();
+    f.flush();
+    expect(f.layout.mock.calls).toEqual([
+      [{ width: 600, height: 88 }], // before the host write: same width, no re-wrap
+      [{ width: 600, height: floor }], // the box CSS actually gave
+    ]);
+    expect(f.layout.mock.invocationCallOrder[0]).toBeLessThan(
+      f.setHeight.mock.invocationCallOrder.at(-1)!,
+    );
+  });
+
+  it("stops a shrinking fit when the collapse tears the editor down", () => {
+    const f = fixture();
+    f.sync.schedule();
+    f.flush();
+    f.setHeight.mockClear();
+    f.layout.mockImplementationOnce(() => f.sync.dispose());
+    f.contentHeight(100);
+    f.sync.schedule();
+    f.flush();
+    expect(f.setHeight).not.toHaveBeenCalled();
+    expect(f.onContentHeightChange).toHaveBeenCalledTimes(1);
+  });
+
   it("can dispose after a completed frame without cancelling unrelated work", () => {
     const f = fixture();
     f.sync.schedule();
