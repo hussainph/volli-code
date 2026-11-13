@@ -204,6 +204,7 @@ export const MessageCheckpointRail = React.memo(function MessageCheckpointRail({
       <ol
         ref={listRef}
         className="message-checkpoint-list"
+        data-scroll-thumb="none"
         data-cut-top={edges.top || undefined}
         data-cut-bottom={edges.bottom || undefined}
         onKeyDown={onKeyDown}

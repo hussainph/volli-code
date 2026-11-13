@@ -3,13 +3,11 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { useProjectShortcuts } from "./use-project-shortcuts";
-import { useOverlayScrollbars } from "./use-overlay-scrollbars";
 import { useUiStore } from "@renderer/stores/ui";
 import { useProjectsStore } from "@renderer/stores/projects";
 let host: HTMLDivElement, root: ReturnType<typeof createRoot>;
 function Harness() {
   useProjectShortcuts();
-  useOverlayScrollbars();
   return <div data-scroll />;
 }
 beforeEach(async () => {
@@ -48,20 +46,5 @@ describe("navigation chrome", () => {
     expect(useUiStore.getState().projectRailHidden).toBe(false);
     await fire({ key: "2", metaKey: true });
     expect(select).toHaveBeenCalledExactlyOnceWith(1);
-  });
-  it("reveals a scroll thumb once per burst and removes it after idle or unmount", async () => {
-    const scroller = host.firstElementChild!;
-    const write = vi.spyOn(scroller, "setAttribute");
-    scroller.dispatchEvent(new Event("scroll"));
-    scroller.dispatchEvent(new Event("scroll"));
-    expect(scroller.hasAttribute("data-scrolling")).toBe(true);
-    expect(write).toHaveBeenCalledTimes(1);
-    vi.advanceTimersByTime(699);
-    expect(scroller.hasAttribute("data-scrolling")).toBe(true);
-    vi.advanceTimersByTime(1);
-    expect(scroller.hasAttribute("data-scrolling")).toBe(false);
-    scroller.dispatchEvent(new Event("scroll"));
-    await act(async () => root.render(null));
-    expect(scroller.hasAttribute("data-scrolling")).toBe(false);
   });
 });

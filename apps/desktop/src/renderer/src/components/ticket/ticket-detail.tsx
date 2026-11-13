@@ -1562,7 +1562,7 @@ function TicketDetailContent({ projectId, ticketPrefix, ticket }: TicketDetailPr
                   ? undefined
                   : (picked) => void ticketAttachments.attachFiles(picked),
               )}
-              className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
+              className="min-h-0 flex-1 overflow-y-auto"
             >
               <TicketBodyPanel
                 ticket={ticket}

@@ -101,7 +101,7 @@ export function MarkdownPreview({ projectId, ticketId, relPath, text }: Markdown
         // and answers arrow keys, and a reading surface that could only be
         // scrolled with a pointer would be a step down from it.
         tabIndex={0}
-        className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto text-sm leading-prose outline-none [scrollbar-gutter:stable] focus-visible:ring-1 focus-visible:ring-ring"
+        className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto text-sm leading-prose outline-none focus-visible:ring-1 focus-visible:ring-ring"
       >
         {segments.map((segment, index) =>
           segment.kind === "markdown" ? (
