@@ -2446,7 +2446,8 @@ async function attachSession(
      *
      * `stopped` is a Stop (or a close) that landed inside the span, when there
      * was no run yet for `agent.abort()` to reach (VC-1199). The retry reads it
-     * once its refresh answers and, instead of starting the run, settles the
+     * before refreshing (a stopped retry skips the refresh) and again once the
+     * refresh answers, and instead of starting the run it settles the
      * turn the way that Stop would have settled the run, all before letting
      * go — so a message waiting on {@link runOpening} opens a turn of its own
      * after the stopped one, and a Stop waiting on it answers on the settled
@@ -3202,24 +3203,35 @@ async function attachSession(
         operation: "executor.retry" as const,
         delivery: "retry" as const,
       };
-      // A refresh that answers after the attachment closed refuses with the
-      // closed sentence. Closing is a Stop (see {@link interruptTurn}), and it
-      // is settled below with the others rather than thrown at the caller.
-      await refreshTools(turnRefreshTrigger()).catch((error: unknown) => {
-        if (!closed) throw error;
-      });
-      if (!opening.stopped) return { kind: "run", run: agent.continue() };
-      // Stopped before Pi ran anything, so there is no run to abort: the run is
-      // simply never started. The failed reply goes back where it was — after
+      // A retry a Stop already reached will not run, so it does not refresh:
+      // that would only delay the Stop's settle and announce tools to a run
+      // that never happens. A refresh that answers after the attachment
+      // closed refuses with the closed sentence; closing is a Stop (see
+      // {@link interruptTurn}), settled below with the others. Any other
+      // refusal is this retry failing, kept to be thrown once the opening is
+      // undone.
+      const refreshFailed = opening.stopped
+        ? undefined
+        : await refreshTools(turnRefreshTrigger()).then(
+            () => undefined,
+            (error: unknown) => (closed ? undefined : { error }),
+          );
+      if (!opening.stopped && refreshFailed === undefined) {
+        return { kind: "run", run: agent.continue() };
+      }
+      // No run will start. The failed reply goes back where it was — after
       // it, the refresh may have appended announcements, which the ledger
       // already holds in that order — so the next retry finds it to drop, and
       // the context is the one the ledger rebuilds.
       const live = [...agent.state.messages];
       live.splice(droppedAt, 0, ...dropped);
       agent.state.messages = live;
-      // A closing attachment opens nothing; it only ends what is already open.
-      if ((closed || cancelled) && !resumingTurn) {
+      // A manual retry that failed or was closed under opened nothing, so it
+      // leaves nothing on the ledger: the failed turn is still the last one,
+      // and still retryable.
+      if (!resumingTurn && (refreshFailed !== undefined || closed || cancelled)) {
         pendingRunDelivery = undefined;
+        if (refreshFailed !== undefined) throw refreshFailed.error;
         return { kind: "closed" };
       }
       // The ledger a Stop during the run would have left: the retry accepted
@@ -3227,11 +3239,18 @@ async function attachSession(
       // turn interrupted — the bottom of `agent_end` for a stopped run, less the
       // aborted reply no request produced. Its Attention stays, as it does
       // after any stopped retry, for the next retry to clear.
+      //
+      // An automatic retry whose refresh failed ends here too: its turn is
+      // open on the ledger and nothing will ever resume it, so it is ended
+      // the one way a turn ends without completing, before the failure is
+      // thrown. Left open, the next message would carry on the dead turn's id
+      // and record its acceptance into it.
       await recordTurnStart();
       await clearTransportNotice();
       await commitObservation(
         await persistObservation({ kind: "turn", state: "interrupted", turnId }),
       );
+      if (refreshFailed !== undefined) throw refreshFailed.error;
       return { kind: "stopped" };
     };
 
@@ -4445,6 +4464,12 @@ async function attachSession(
         // A retry still opening its run answers this Stop by never starting it.
         // Waited for that settle and no further: once it lets go, a message
         // that was waiting may open a run of its own, which this Stop predates.
+        //
+        // The settle waits out the retry's tool refresh. That is the host's
+        // own work — its refresh queue, local SQLite reads, recording the
+        // refresh, MCP and secret port setup, durable appends; no network —
+        // and `close()` already waits on the same refresh, so a refresh that
+        // never answered would wedge this attachment either way.
         if (openingRun !== undefined) return runOpening;
         await agent.waitForIdle();
       },
