@@ -394,6 +394,93 @@ describe("verifyBackupBundleFile", () => {
     expect(verified.problems[0]?.message).toMatch(/session ledger/);
   });
 
+  it("reports a dropped transcript once when several records reference it", async () => {
+    // The prompt is named by its command's intent and by its event. References
+    // are logged per row and keyed once, after the scan.
+    const context = setup();
+    await writeBackupBundleFile(writeOptions(context));
+    const prompt = context.profile.transcriptIds.prompt;
+    const dropped = transcriptArtifactPath(prompt);
+    withManifest(context.outputPath, (manifest, entries) => {
+      entries.splice(
+        entries.findIndex((entry) => entry.path === dropped),
+        1,
+      );
+      manifest.entries = manifest.entries.filter((entry) => entry.path !== dropped);
+    });
+
+    const verified = await verifyBackupBundleFile(context.outputPath, context.workDir);
+
+    expect(verified.ok).toBe(false);
+    if (verified.ok) return;
+    expect(verified.problems).toEqual([
+      {
+        kind: "artifact-missing",
+        message: `Transcript ${prompt} is referenced by the session ledger but is not in the bundle.`,
+      },
+    ]);
+  });
+
+  it("reports an attachment and a transcript that no record references", async () => {
+    const context = setup();
+    await writeBackupBundleFile(writeOptions(context));
+    const blobBytes = Buffer.from("unreferenced attachment");
+    const blobHash = createHash("sha256").update(blobBytes).digest("hex");
+    const transcriptBytes = Buffer.from('{"unreferenced":true}');
+    const transcriptDigest = createHash("sha256").update(transcriptBytes).digest("hex");
+    const strayBlob = blobArtifactPath(blobHash);
+    const strayTranscript = transcriptArtifactPath(`sha256:${transcriptDigest}`);
+    withManifest(context.outputPath, (manifest, entries) => {
+      entries.push({ path: strayBlob, bytes: blobBytes });
+      entries.push({ path: strayTranscript, bytes: transcriptBytes });
+      manifest.entries.push(
+        { path: strayBlob, kind: "blob", sizeBytes: blobBytes.length, sha256: blobHash },
+        {
+          path: strayTranscript,
+          kind: "transcript",
+          sizeBytes: transcriptBytes.length,
+          sha256: transcriptDigest,
+        },
+      );
+    });
+
+    const verified = await verifyBackupBundleFile(context.outputPath, context.workDir);
+
+    expect(verified.ok).toBe(false);
+    if (verified.ok) return;
+    // Exactly the two strays: every referenced artifact is still matched.
+    expect(verified.problems.map((problem) => problem.message)).toEqual([
+      `Bundle carries attachment ${strayBlob}, which no blob record references.`,
+      `Bundle carries transcript ${strayTranscript}, which no session record references.`,
+    ]);
+  });
+
+  it("keeps its scratch rollback journal off disk while writing and verifying", async () => {
+    // better-sqlite3's defensive mode once turned `journal_mode = OFF` into an
+    // on-disk DELETE journal: a `-journal` file beside each scratch database
+    // for every open write transaction, rewritten at every commit.
+    const context = setup();
+    const journals = new Set<string>();
+    let checkpoints = 0;
+    const scan = (directory: string): void => {
+      if (!existsSync(directory)) return;
+      for (const entry of readdirSync(directory, { withFileTypes: true })) {
+        const path = join(directory, entry.name);
+        if (entry.isDirectory()) scan(path);
+        else if (entry.name.endsWith("-journal")) journals.add(entry.name);
+      }
+    };
+    await writeBackupBundleFile(
+      writeOptions(context, async () => {
+        checkpoints += 1;
+        scan(context.workDir);
+      }),
+    );
+
+    expect(checkpoints).toBeGreaterThan(2);
+    expect([...journals]).toEqual([]);
+  });
+
   it("reports a file the manifest does not list", async () => {
     const context = setup();
     await writeBackupBundleFile(writeOptions(context));
