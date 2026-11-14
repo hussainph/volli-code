@@ -63,6 +63,8 @@ export const NOTIFICATION_PRODUCERS = [
   "harness-input-needed",
   /** A resume a person scheduled for a quota reset was skipped at its time. */
   "scheduled-resume-skipped",
+  /** Chats stopped because a provider sign-in must be redone; once per provider (VC-1236). */
+  "provider-sign-in-required",
   /** The retention watch saw a ticket's pull request merge. */
   "pull-request-merged",
   /** The retention watch reclaimed a stale worktree directory (VC-113). */
@@ -119,6 +121,8 @@ export const NOTIFICATION_PRODUCER_POLICY: Record<NotificationProducer, Notifica
   // A skipped resume leaves the stopped Session exactly where the person left
   // it, still waiting on them — the same switch as every other "needs you".
   "scheduled-resume-skipped": { kind: "preference", event: "needs-you" },
+  // Every chat on that provider is blocked on the person signing in again.
+  "provider-sign-in-required": { kind: "preference", event: "needs-you" },
   "pull-request-merged": { kind: "preference", event: "finished" },
   "worktree-reclaimed": { kind: "preference", event: "swept" },
   // Same switch as the worktree reclaim, and the same act one layer down:
@@ -250,6 +254,7 @@ export interface NotificationProducerTargets {
   "session-watchdog": SessionNotificationTarget;
   "harness-input-needed": SessionNotificationTarget;
   "scheduled-resume-skipped": SessionNotificationTarget;
+  "provider-sign-in-required": SessionNotificationTarget;
   "pull-request-merged": TicketNotificationTarget;
   "worktree-reclaimed": TicketNotificationTarget;
   // No target: one reap can take processes from several Tickets at once, and

@@ -9,6 +9,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  providerSignInStop,
   SESSION_FAILURE_ATTENTION_KINDS,
   SESSION_PERSON_NEEDS,
   revealedSessionAttention,
@@ -330,5 +331,49 @@ describe("shownSessionNotificationItem", () => {
       interactionId: null,
       attentionId: null,
     });
+  });
+});
+
+const SIGN_IN_STOP = {
+  ...attention("auth_required"),
+  stopDetail: {
+    category: "auth-failed" as const,
+    providerType: "volli.credential-refresh-failed",
+    message: null,
+    httpStatus: null,
+    retry: "not-retried" as const,
+    resetsAt: null,
+  },
+};
+const signInStopOf = (
+  active: SessionAttention[],
+  modelSelection: { providerId: string } | null = { providerId: "anthropic" },
+  stopped: unknown = null,
+) =>
+  providerSignInStop({
+    attention: { active, primary: active[0] ?? null },
+    modelSelection,
+    stopped,
+    status: "open",
+  } as Pick<SessionProjection, "attention" | "modelSelection" | "stopped" | "status">);
+
+describe("providerSignInStop (VC-1236)", () => {
+  it("names the provider and the Attention of a sign-in stop", () => {
+    expect(signInStopOf([attention("adapter_unrecoverable"), SIGN_IN_STOP])).toEqual({
+      providerId: "anthropic",
+      attentionId: "attention-auth_required",
+    });
+  });
+
+  it("answers null for no cause, another cause, no model, or a stopped Session", () => {
+    expect(signInStopOf([attention("auth_required")])).toBeNull();
+    expect(
+      signInStopOf([
+        { ...SIGN_IN_STOP, stopDetail: { ...SIGN_IN_STOP.stopDetail, httpStatus: 403 } },
+      ]),
+    ).toBeNull();
+    expect(signInStopOf([SIGN_IN_STOP], null)).toBeNull();
+    expect(signInStopOf([SIGN_IN_STOP], { providerId: "anthropic" }, { at: 1 })).toBeNull();
+    expect(signInStopOf([])).toBeNull();
   });
 });

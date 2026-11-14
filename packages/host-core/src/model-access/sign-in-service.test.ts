@@ -8,6 +8,9 @@ import { describe, expect, it, vi } from "vite-plus/test";
 
 import { ModelAccessSignInService, redactSubmitted, type SignInOwner } from "./sign-in-service";
 
+const warn = vi.hoisted(() => vi.fn());
+vi.mock("../log/root", () => ({ hostLogger: () => ({ warn }) }));
+
 // --- a scripted flow -------------------------------------------------------
 //
 // The port, not pi-ai: `login` parks until the test says how it ended, and hands
@@ -152,6 +155,38 @@ describe("ModelAccessSignInService", () => {
       // Stored, not verified: no provider offers a validation call.
       outcome: { kind: "signed-in" },
     });
+  });
+
+  it("tells the host only of a completed sign-in, and a listener's throw changes nothing", async () => {
+    const signedIn: string[] = [];
+    const port = scriptedPort();
+    const service = new ModelAccessSignInService({
+      pi: port.pi,
+      newId: countedIds(),
+      onSignedIn: (providerId) => {
+        signedIn.push(providerId);
+        throw new Error("listener failed");
+      },
+    });
+    const owner = recordingOwner();
+    service.begin("anthropic", "oauth", owner);
+    port.flow().succeed();
+    await flush();
+    expect(signedIn).toEqual(["anthropic"]);
+    expect(owner.updates.at(-1)).toMatchObject({ outcome: { kind: "signed-in" } });
+    // Reported once, by code; the listener's own text is not logged.
+    expect(warn).toHaveBeenCalledExactlyOnceWith("sign-in listener failed", {
+      code: "model-access.sign-in-listener-failed",
+      providerId: "anthropic",
+      errorName: "Error",
+    });
+
+    // A cancelled or failed attempt stored nothing, so nothing is told.
+    service.begin("openai-codex", "oauth", recordingOwner());
+    service.cancel("id-2");
+    port.flow(1).fail(new Error("The operation was aborted."));
+    await flush();
+    expect(signedIn).toEqual(["anthropic"]);
   });
 
   it("rejects the parked question on cancel and calls the ending cancelled, not failed", async () => {

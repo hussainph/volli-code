@@ -44,6 +44,7 @@ export function acceptSettingsNavigation(navigation: SettingsWindowNavigation): 
     settingsCategory: navigation.category ?? null,
     configureCategory: navigation.configureCategory ?? null,
     settingsSignInProviderId: navigation.signInProviderId ?? null,
+    settingsSignInReauthenticate: navigation.reauthenticate ?? null,
   });
   void prepareWindowNavigation(navigation, request.signal)
     .then(() => {

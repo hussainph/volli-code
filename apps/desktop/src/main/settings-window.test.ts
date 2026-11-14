@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import { createSettingsWindowOwner, restoreSettingsFrame } from "./settings-window";
+import type { SettingsWindowNavigation } from "../ipc/settings-window";
+import {
+  createSettingsWindowOwner,
+  restoreSettingsFrame,
+  settleSettingsNavigation,
+} from "./settings-window";
 
 describe("native Settings lifetime", () => {
   it("creates one independent window, navigates and raises it, then recreates after close", () => {
@@ -61,5 +66,39 @@ describe("Settings frame persistence", () => {
     { x: NaN, y: 0, width: 900, height: 680 },
   ])("rejects malformed frames", (frame) => {
     expect(restoreSettingsFrame(frame, displays)).toEqual({});
+  });
+});
+
+describe("settling a Settings navigation (VC-1236)", () => {
+  it("spends a sign-in-again request once acknowledged, so a page reload cannot replay it", () => {
+    let kept: SettingsWindowNavigation | null = {
+      revision: 3,
+      category: "model-access",
+      signInProviderId: "anthropic",
+      reauthenticate: "oauth",
+    };
+    // The page's bootstrap read sees the request and starts the flow once.
+    expect(kept).toMatchObject({ reauthenticate: "oauth" });
+    const ready = settleSettingsNavigation(kept, 3);
+    expect(ready.acknowledged).toBe(true);
+    kept = ready.navigation;
+    // A reload reads the kept navigation again: same pane, no request.
+    expect(kept).toEqual({ revision: 3, category: "model-access" });
+    // The reloaded page acknowledges the same revision; nothing comes back.
+    const reloaded = settleSettingsNavigation(kept, 3);
+    expect(reloaded).toEqual({ acknowledged: true, navigation: kept });
+  });
+
+  it("acknowledges nothing for a stale or absent revision, and keeps the request", () => {
+    const current: SettingsWindowNavigation = {
+      revision: 4,
+      signInProviderId: "anthropic",
+      reauthenticate: "api-key",
+    };
+    expect(settleSettingsNavigation(current, 3)).toEqual({
+      acknowledged: false,
+      navigation: current,
+    });
+    expect(settleSettingsNavigation(null, 1)).toEqual({ acknowledged: false, navigation: null });
   });
 });

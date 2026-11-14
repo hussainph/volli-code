@@ -144,6 +144,7 @@ import {
   sameQueuedMessage,
   sessionBlocker,
   sessionModelStanding,
+  attentionProviderStandings,
   visibleBlocker,
   settledHeldIds,
   steerTurnIsCurrent,
@@ -686,6 +687,13 @@ function ChatPlaneContent({
         ? null
         : sessionModelStanding(modelSelection, pickerModels, providers),
     [cloudLaunch, modelSelection, pickerModels, providers, provisional, runners.selected],
+  );
+  // Each stop's own provider (VC-1236): a chat switched to another model after
+  // it stopped still offers the sign-in of the provider that failed.
+  const stopProviders = projection?.attentionProviders;
+  const attentionProviders = React.useMemo(
+    () => attentionProviderStandings(stopProviders, providers),
+    [stopProviders, providers],
   );
   const changeModel = React.useCallback(
     (next: ComposerModelSelection) => {
@@ -1317,7 +1325,8 @@ function ChatPlaneContent({
       openSettings: () => setSettingsOpen(true, "model-access"),
       // And when the row knows WHICH provider, straight to its sign-in: the
       // pane auto-starts (or offers) that provider's flow on arrival.
-      signIn: (providerId) => setSettingsOpen(true, "model-access", providerId),
+      signIn: (providerId, reauthenticate) =>
+        setSettingsOpen(true, "model-access", providerId, reauthenticate),
       dismissError: () => dismissError(),
       dismiss: dismissBlocker,
       scheduleResume: (request) => void scheduleResume(request),
@@ -1383,6 +1392,7 @@ function ChatPlaneContent({
       // A capability inventory can lag execution (or omit environment-backed
       // credentials). Only the runner's Session attention can reject its model.
       sessionModel: localModelRecovery ? sessionModel : null,
+      attentionProviders: localModelRecovery ? attentionProviders : {},
       signInProviders: localModelRecovery ? signInProviders : [],
       scheduledResume: projection?.scheduledResume ?? null,
       turnActive: projection?.turnActive ?? false,

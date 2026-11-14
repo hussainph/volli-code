@@ -1916,6 +1916,7 @@ it("a parent reads a delegated child's provider failure as facts plus untrusted 
   });
   const text = noticeText(h.commands, `${PARENT}:tc-1`)!;
   expect(text).toContain("auth-failed");
-  expect(text).toContain("provider sign-in failed");
+  expect(text).toContain("the provider sign-in expired or was refused");
+  expect(text).toContain("a person must sign in to this model provider again");
   expect(text).toMatch(/\| .*Ignore the user/);
 });

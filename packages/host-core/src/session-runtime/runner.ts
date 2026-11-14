@@ -636,8 +636,15 @@ export function createRunnerComposition(input: RunnerCompositionInput): RunnerCo
   // know: open bindings, pending starts and the start latch (VC-577), and
   // every folded projection, for scheduled resume.
   const runtime = assembly.sessionRuntime;
+  const piModels = runtimeServices?.modelAccess?.models;
   bindSessionRuntime?.({
     observeScheduledResume: lifecycle.observeScheduledResume,
+    ...(piModels === undefined
+      ? {}
+      : {
+          // The label Model Access shows for the provider (`provider.name`).
+          providerLabel: (providerId: string) => piModels.getProvider(providerId)?.name ?? null,
+        }),
     ...(runtime === null
       ? {}
       : {

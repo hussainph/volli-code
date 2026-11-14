@@ -82,6 +82,8 @@ import {
   withdrawInteraction,
   type SessionBlockerActs,
   type SessionBlockerInput,
+  type SessionModelStanding,
+  attentionProviderStandings,
 } from "./chat-plane-model";
 
 function heldMessage(id: string, text: string, state: HeldMessage["state"]): HeldMessage {
@@ -162,6 +164,9 @@ describe("the Session's own model, against the catalog", () => {
       providerId: "azure-openai-responses",
       providerLabel: "Azure OpenAI Responses",
       state: "authentication-required",
+      // What the stop's sign-in recovery reads (VC-1236).
+      billingSource: "unknown",
+      signInMethods: [],
     });
     expect(
       sessionModelStanding(
@@ -180,6 +185,23 @@ describe("the Session's own model, against the catalog", () => {
 
   it("has nothing to say about a Session with no recorded model", () => {
     expect(sessionModelStanding(null, catalog, providers)).toBeNull();
+  });
+
+  it("carries how the provider is signed in to, for a stopped sign-in's recovery", () => {
+    const signedIn: ModelAccessProvider[] = [
+      {
+        ...providers[0]!,
+        billingSource: "subscription",
+        signIn: [{ type: "oauth", label: "Sign in", isSubscription: true }],
+      },
+    ];
+    expect(
+      sessionModelStanding(
+        { providerId: "azure-openai-responses", modelId: "gpt-5.6-luna" },
+        catalog,
+        signedIn,
+      ),
+    ).toMatchObject({ billingSource: "subscription", signInMethods: ["oauth"] });
   });
 });
 
@@ -586,8 +608,8 @@ describe("sessionBlocker", () => {
 
   // The row that already knows WHICH provider is blocking typing sends the
   // reader straight to that provider's sign-in, never merely to the category
-  // (VC-53). The harness's own `auth_required` names no provider id, so its
-  // recovery stays Settings.
+  // (VC-53). The harness's own `auth_required` names no provider id, so with
+  // no pinned model to name one its recovery stays Settings.
   it("deep-links a signed-out pinned model to its own provider's sign-in", () => {
     const signedInTo: string[] = [];
     const pinned = blockerInput({
@@ -605,6 +627,171 @@ describe("sessionBlocker", () => {
     expect(sessionBlocker(raised(attention("auth_required")), ACTS, false)?.action?.label).toBe(
       "Open settings",
     );
+  });
+
+  // An expired subscription login reads as signed in to the catalog (a stored
+  // credential exists), so the stop itself is the only report. Its cause
+  // survives the privacy filter as structured facts, and the row names it with
+  // the one recovery that fixes it — per cause (VC-1236).
+  describe("a stopped sign-in, per cause", () => {
+    const withheld = "[Provider text withheld: possible request content.]";
+    const stop = (providerType: string | null, httpStatus: number | null): SessionAttention => ({
+      ...attention("auth_required", withheld),
+      stopDetail: {
+        category: "auth-failed",
+        providerType,
+        message: withheld,
+        httpStatus,
+        retry: "not-retried",
+        resetsAt: null,
+      },
+    });
+    const SUBSCRIPTION = {
+      providerId: "anthropic",
+      providerLabel: "Anthropic",
+      state: "available" as const,
+      billingSource: "subscription" as const,
+      signInMethods: ["api-key", "oauth"] as const,
+    };
+    const KEY = { ...SUBSCRIPTION, billingSource: "unknown" as const };
+    const run = (primary: SessionAttention, sessionModel: SessionModelStanding | null) => {
+      const pressed: [string, string | undefined][] = [];
+      const blocker = sessionBlocker(
+        { ...raised(primary), sessionModel },
+        { ...ACTS, signIn: (id, reauthenticate) => pressed.push([id, reauthenticate]) },
+        false,
+      );
+      blocker?.action?.act();
+      return { blocker, pressed };
+    };
+
+    it("a refused refresh: one line and Sign in, asking to sign in again", () => {
+      const { blocker, pressed } = run(stop("volli.credential-refresh-failed", null), SUBSCRIPTION);
+      expect(blocker).toMatchObject({
+        message: "Stopped: the provider sign-in expired or was refused",
+        // Withheld prose says it was withheld rather than leaving the row bare.
+        detail: withheld,
+        action: { label: "Sign in" },
+      });
+      expect(pressed).toEqual([["anthropic", "oauth"]]);
+    });
+
+    it("a refused refresh before the catalog has answered still signs in again", () => {
+      const { pressed } = run(stop("volli.credential-refresh-failed", null), {
+        providerId: "anthropic",
+        providerLabel: "Anthropic",
+        state: "available",
+      });
+      expect(pressed).toEqual([["anthropic", "oauth"]]);
+    });
+
+    it("a chat switched to another model after it stopped still names the provider that failed", () => {
+      const primary = stop("volli.credential-refresh-failed", null);
+      const pressed: [string, string | undefined][] = [];
+      const blocker = sessionBlocker(
+        {
+          ...raised(primary),
+          // Now on OpenAI; the stop is Anthropic's.
+          sessionModel: {
+            providerId: "openai-codex",
+            providerLabel: "OpenAI",
+            state: "available",
+            billingSource: "subscription",
+            signInMethods: ["oauth"],
+          },
+          attentionProviders: attentionProviderStandings({ [primary.id]: "anthropic" }, [
+            {
+              id: "anthropic",
+              label: "Anthropic",
+              state: "available",
+              accountLabel: null,
+              billingSource: "subscription",
+              recovery: null,
+              hasStoredCredential: true,
+              signIn: [{ type: "oauth", label: "Claude Pro/Max", isSubscription: true }],
+            },
+          ]),
+        },
+        { ...ACTS, signIn: (id, reauthenticate) => pressed.push([id, reauthenticate]) },
+        false,
+      );
+      blocker?.action?.act();
+      expect(blocker?.action?.label).toBe("Sign in");
+      expect(pressed).toEqual([["anthropic", "oauth"]]);
+    });
+
+    it("a stop's provider the catalog does not list reads as unavailable, not as another", () => {
+      expect(attentionProviderStandings({ a: "gone" }, [])).toEqual({
+        a: { providerId: "gone", providerLabel: "gone", state: "unavailable" },
+      });
+      expect(attentionProviderStandings(undefined, [])).toEqual({});
+    });
+
+    it("a 401 on a subscription login: Sign in, asking to sign in again", () => {
+      const { blocker, pressed } = run(stop("authentication_error", 401), SUBSCRIPTION);
+      expect(blocker?.action?.label).toBe("Sign in");
+      expect(pressed).toEqual([["anthropic", "oauth"]]);
+    });
+
+    it("a 401 on an API key: the key entry, labelled for what it opens", () => {
+      const { blocker, pressed } = run(stop("authentication_error", 401), KEY);
+      expect(blocker?.action?.label).toBe("API key");
+      expect(pressed).toEqual([["anthropic", "api-key"]]);
+    });
+
+    it("no credential at all: the ordinary deep link, with no sign-in-again intent", () => {
+      const { blocker, pressed } = run(stop("volli.credential-missing", null), KEY);
+      expect(blocker).toMatchObject({
+        message: "Stopped: not signed in to the provider",
+        action: { label: "Sign in" },
+      });
+      expect(pressed).toEqual([["anthropic", undefined]]);
+    });
+
+    it("Open settings where signing in again is not the fix, or cannot be named", () => {
+      const settingsFor = (primary: SessionAttention, model: SessionModelStanding | null) =>
+        run(primary, model).blocker?.action?.label;
+      // Access a credential lacks is not fixed by signing in again.
+      expect(settingsFor(stop("permission_error", 403), SUBSCRIPTION)).toBe("Open settings");
+      expect(run(stop("permission_error", 403), SUBSCRIPTION).blocker?.message).toBe(
+        "Stopped: the provider denied access to this model",
+      );
+      // An unreadable stored key, a key the provider does not take, no named model.
+      expect(settingsFor(stop("volli.credential-unavailable", null), KEY)).toBe("Open settings");
+      expect(
+        settingsFor(stop("authentication_error", 401), { ...KEY, signInMethods: ["oauth"] }),
+      ).toBe("Open settings");
+      expect(
+        settingsFor(stop("volli.credential-refresh-failed", null), {
+          ...SUBSCRIPTION,
+          signInMethods: ["api-key"],
+        }),
+      ).toBe("Open settings");
+      expect(settingsFor(stop("authentication_error", 401), null)).toBe("Open settings");
+    });
+  });
+
+  it("names a model the provider does not serve, with Settings as its recovery", () => {
+    expect(
+      sessionBlocker(
+        raised({
+          ...attention("configuration_invalid", "model: fixture"),
+          stopDetail: {
+            category: "bad-request",
+            providerType: "not_found_error",
+            message: "model: fixture",
+            httpStatus: 404,
+            retry: "not-retried",
+            resetsAt: null,
+          },
+        }),
+        ACTS,
+        false,
+      ),
+    ).toMatchObject({
+      message: "Stopped: the provider does not offer this model",
+      action: { label: "Open settings" },
+    });
   });
 
   // Settings writes the app DEFAULT, copied into a Session at birth and never
@@ -1890,7 +2077,7 @@ it("shows the provider's typed interruption cause in the blocker instead of gene
   for (const [category, kind, wording] of [
     ["rate-limited", "adapter_unrecoverable", "usage or rate limit"],
     ["provider-refused", "adapter_unrecoverable", "declined"],
-    ["auth-failed", "auth_required", "sign-in failed"],
+    ["auth-failed", "auth_required", "sign-in expired or was refused"],
     ["context-overflow", "context_limit_reached", "Context limit"],
   ] as const) {
     const blocker = sessionBlocker(

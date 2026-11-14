@@ -19,7 +19,7 @@
 import { untrustedProseLines, untrustedProseResponseLines } from "./untrusted-content";
 import { shortSessionId } from "./session";
 import type { SessionStopActor } from "./session-ledger";
-import { sessionStopSummary, type SessionStopDetail } from "./session-stop";
+import { sessionStopNextStep, sessionStopSummary, type SessionStopDetail } from "./session-stop";
 import {
   sessionHostNoticeMetadata,
   type SessionHostNoticeMetadata,
@@ -353,6 +353,7 @@ export function composeWatchNotice(input: ComposeWatchNoticeInput): ComposedNoti
             ? []
             : [
                 `${sessionStopSummary(detail)} (${detail.category}); retry: ${detail.retry}; reset: ${detail.resetsAt ?? "not stated"}.`,
+                sessionStopNextStep(detail),
                 ...prose(
                   "provider stop detail",
                   JSON.stringify({
@@ -454,6 +455,7 @@ export function composeSubagentNotice(input: ComposeSubagentNoticeInput): Compos
       ? []
       : [
           `${sessionStopSummary(detail)} (${detail.category}); retry: ${detail.retry}; reset: ${detail.resetsAt ?? "not stated"}.`,
+          sessionStopNextStep(detail),
           ...untrustedProseResponseLines({
             response: "provider stop detail",
             blocks: [{ label: "provider error", text: JSON.stringify(detail) }],

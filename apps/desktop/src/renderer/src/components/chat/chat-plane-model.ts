@@ -1,4 +1,11 @@
-import { sessionStopSummary } from "@volli/shared";
+import {
+  SESSION_CREDENTIAL_STOP_TYPES,
+  sessionStopCause,
+  sessionStopSummary,
+  type ModelAccessBillingSource,
+  type ModelAccessSignInType,
+  type SessionStopDetail,
+} from "@volli/shared";
 /**
  * The chat plane's decisions, without a plane.
  *
@@ -60,6 +67,14 @@ export interface SessionModelStanding {
   /** Named rather than the model, because signing in is per provider. */
   providerLabel: string;
   state: ModelAccessState;
+  /**
+   * How the provider's credential here is billed; `subscription` is a stored
+   * login (every Pi OAuth sign-in is a subscription). Absent when the catalog
+   * has not said.
+   */
+  billingSource?: ModelAccessBillingSource;
+  /** The sign-in methods the provider offers. Absent when the catalog has not said. */
+  signInMethods?: readonly ModelAccessSignInType[];
 }
 
 /**
@@ -80,14 +95,50 @@ export function sessionModelStanding(
   providers: readonly ModelAccessProvider[],
 ): SessionModelStanding | null {
   if (selection === null) return null;
-  const providerLabel =
-    providers.find((provider) => provider.id === selection.providerId)?.label ??
-    selection.providerId;
+  const provider = providers.find((candidate) => candidate.id === selection.providerId);
+  const providerLabel = provider?.label ?? selection.providerId;
   const model = models.find(
     (candidate) =>
       candidate.providerId === selection.providerId && candidate.modelId === selection.modelId,
   );
-  return { providerId: selection.providerId, providerLabel, state: model?.state ?? "unavailable" };
+  return {
+    providerId: selection.providerId,
+    providerLabel,
+    state: model?.state ?? "unavailable",
+    ...(provider === undefined
+      ? {}
+      : {
+          billingSource: provider.billingSource,
+          signInMethods: provider.signIn.map((method) => method.type),
+        }),
+  };
+}
+
+/**
+ * The provider each active Attention was raised against, read against the
+ * catalog the same way {@link sessionModelStanding} reads the Session's model
+ * (VC-1236). The projection binds the provider when the Attention is raised;
+ * this only looks up how that provider is signed in to now.
+ */
+export function attentionProviderStandings(
+  attentionProviders: Readonly<Record<string, string>> | undefined,
+  providers: readonly ModelAccessProvider[],
+): Readonly<Record<string, SessionModelStanding>> {
+  const standings: Record<string, SessionModelStanding> = {};
+  for (const [attentionId, providerId] of Object.entries(attentionProviders ?? {})) {
+    const provider = providers.find((candidate) => candidate.id === providerId);
+    standings[attentionId] =
+      provider === undefined
+        ? { providerId, providerLabel: providerId, state: "unavailable" }
+        : {
+            providerId,
+            providerLabel: provider.label,
+            state: provider.state,
+            billingSource: provider.billingSource,
+            signInMethods: provider.signIn.map((method) => method.type),
+          };
+  }
+  return standings;
 }
 
 /* -------------------------------------------------------------- answering */
@@ -511,6 +562,13 @@ export interface SessionBlockerInput {
   catalogError: string | null;
   /** This Session's model against the catalog — see {@link sessionModelStanding}. */
   sessionModel: SessionModelStanding | null;
+  /**
+   * Per active Attention, the provider it was raised against, from the catalog
+   * (VC-1236; {@link attentionProviderStandings}). A stop's recovery names THAT
+   * provider, not one the Session was switched to since. An Attention with no
+   * entry falls back to {@link SessionBlockerInput.sessionModel}.
+   */
+  attentionProviders?: Readonly<Record<string, SessionModelStanding>>;
   /** The resume this Session is waiting to run at a quota reset, if any. */
   scheduledResume: PresentedScheduledResume | null;
   /** Whether a turn is open now — a restart resume's, while the recovery warning still stands. */
@@ -536,8 +594,13 @@ export interface SessionBlockerActs {
   recover(): void;
   retryRuntime(): void;
   openSettings(): void;
-  /** Opens Model Access AT the named provider's sign-in — never merely the category. */
-  signIn(providerId: string): void;
+  /**
+   * Opens Model Access AT the named provider's sign-in — never merely the
+   * category. With `reauthenticate`, that method starts even though the
+   * provider reads as connected: the stopped chat's request to sign in again
+   * (VC-1236).
+   */
+  signIn(providerId: string, reauthenticate?: ModelAccessSignInType): void;
   /** Clears the Session's own transport latch, which is not a durable fact. */
   dismissError(): void;
   /** Hides one rendered error locally; a changed or re-raised report returns. */
@@ -632,6 +695,13 @@ export function sessionBlocker(
   const retry: SessionBlockerAction = { label: "Retry", act: acts.recover };
   const retryRuntime: SessionBlockerAction = { label: "Retry", act: acts.retryRuntime };
   const settings: SessionBlockerAction = { label: "Settings", act: acts.openSettings };
+  // Straight to the pinned provider's sign-in when the Session names one; the
+  // catalog need not have answered, because the action only needs who.
+  const sessionSignIn = (
+    attentionId: string,
+    stop: SessionStopDetail,
+  ): SessionBlockerAction | null =>
+    signInRecovery(stop, input.attentionProviders?.[attentionId] ?? input.sessionModel, acts);
   const dismiss = (key: string) => () => acts.dismiss(key);
   if (input.sessionError !== null) {
     const dismissKey = `session-error:${input.sessionError}`;
@@ -703,6 +773,7 @@ export function sessionBlocker(
         retry,
         retryRuntime,
         settings,
+        sessionSignIn,
         acts.dismiss,
         {
           scheduled: input.scheduledResume,
@@ -839,13 +910,17 @@ function attentionDismissKey(attention: SessionAttention): string {
  * terminal to finish a Settings task.
  *
  * Retry cannot repair an expired account or invalid configuration. The row
- * offers Open settings alone instead of asking the person to diagnose which
- * of two competing recoveries will work.
+ * offers one recovery instead of asking the person to diagnose which of two
+ * competing ones will work: the provider's own Sign in when the stop is a
+ * sign-in and the Session names its provider (VC-1236), Open settings
+ * otherwise. Once signed in, a message continues the Session.
  */
 function providerRecovery(input: {
   message: string;
   detail: string | null;
   settings: SessionBlockerAction;
+  /** The provider's own sign-in, when the stop is a sign-in and the provider is known. */
+  signIn?: SessionBlockerAction | null;
   dismissKey: string;
   dismiss(): void;
 }): SessionBlockerState {
@@ -853,11 +928,54 @@ function providerRecovery(input: {
     {
       message: input.message,
       detail: input.detail,
-      action: { ...input.settings, label: "Open settings" },
+      action: input.signIn ?? { ...input.settings, label: "Open settings" },
     },
     input.dismissKey,
     input.dismiss,
   );
+}
+
+/**
+ * The one action that fixes a sign-in stop, per cause (VC-1236), or `null`
+ * for the general Open settings.
+ *
+ * - **A login the provider refused or could not renew** — a refused refresh,
+ *   or a 401 on a subscription login — is fixed by signing in to that provider
+ *   again. The account still reads as connected (its dead credential is still
+ *   stored), so the press carries the explicit sign-in-again intent and starts
+ *   the provider's subscription sign-in: **Sign in**.
+ * - **An API key the provider refused** is fixed by a new key: the same intent
+ *   with the key method, which opens that provider's key entry: **API key**.
+ * - **No credential at all** is the ordinary deep link to the provider's
+ *   sign-in, which presses it because the account is not connected.
+ * - Anything else — an unreadable stored credential (its own cause), a 403,
+ *   a provider the Session cannot name — is Settings' to sort out.
+ */
+export function signInRecovery(
+  stop: SessionStopDetail,
+  provider: SessionModelStanding | null,
+  acts: Pick<SessionBlockerActs, "signIn">,
+): SessionBlockerAction | null {
+  if (provider === null || sessionStopCause(stop) !== "sign-in") return null;
+  const { providerId } = provider;
+  const offers = (method: ModelAccessSignInType): boolean =>
+    provider.signInMethods === undefined || provider.signInMethods.includes(method);
+  if (stop.providerType === SESSION_CREDENTIAL_STOP_TYPES.missing) {
+    return { label: "Sign in", act: () => acts.signIn(providerId) };
+  }
+  const login =
+    stop.providerType === SESSION_CREDENTIAL_STOP_TYPES.refreshFailed ||
+    provider.billingSource === "subscription";
+  if (login) {
+    return offers("oauth")
+      ? { label: "Sign in", act: () => acts.signIn(providerId, "oauth") }
+      : null;
+  }
+  // A refused credential that is not a login is a key, when the catalog says
+  // the provider takes one.
+  return provider.signInMethods?.includes("api-key") === true
+    ? { label: "API key", act: () => acts.signIn(providerId, "api-key") }
+    : null;
 }
 
 /**
@@ -872,8 +990,9 @@ function providerRecovery(input: {
  * also carries a local Dismiss, which hides the current report without claiming
  * it is repaired.
  *
- * - **Open settings** — Pi auth/configuration recovery sends you to Model
- *   Access, where signing in now happens, without a competing Retry.
+ * - **Sign in** / **Open settings** — Pi auth/configuration recovery sends
+ *   you to the provider's sign-in, or to Model Access, without a competing
+ *   Retry.
  * - **Retry of the start** — `configuration_invalid` whose detail reports a
  *   worktree that could not be prepared (`isWorktreePreparationAttention`,
  *   VC-1015): headed "Worktree unavailable", because nothing in Settings fixes
@@ -913,6 +1032,7 @@ function attentionBlocker(
   retry: SessionBlockerAction,
   retryRuntime: SessionBlockerAction,
   settings: SessionBlockerAction,
+  signIn: (attentionId: string, stop: SessionStopDetail) => SessionBlockerAction | null,
   dismiss: (dismissKey: string) => void,
   resume: ResumeContext,
   turn: InterruptedTurnContext,
@@ -928,6 +1048,11 @@ function attentionBlocker(
           : "Sign-in required",
         detail,
         settings,
+        // Only a stop whose structured cause is a sign-in earns the provider's
+        // own recovery (`signInRecovery`): access a credential lacks is not
+        // fixed by signing in again, and a report with no cause keeps the
+        // general route.
+        signIn: attention.stopDetail ? signIn(attention.id, attention.stopDetail) : null,
         dismissKey,
         dismiss: dismissAttention,
       });
@@ -940,7 +1065,9 @@ function attentionBlocker(
         );
       }
       return providerRecovery({
-        message: "Configuration invalid",
+        message: attention.stopDetail
+          ? sessionStopSummary(attention.stopDetail)
+          : "Configuration invalid",
         detail,
         settings,
         dismissKey,

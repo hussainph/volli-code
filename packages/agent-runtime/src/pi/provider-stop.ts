@@ -1,6 +1,7 @@
 /** Read only provider-returned fields, never classify prose (VC-482). */
 import type { AssistantMessage, JsonObject, ProviderResponse } from "@earendil-works/pi-ai";
 import {
+  SESSION_CREDENTIAL_STOP_TYPES,
   type SessionRuntimeSpec,
   type SessionStopCategory,
   type SessionStopDetail,
@@ -33,8 +34,18 @@ const TYPES: Readonly<Record<string, SessionStopCategory>> = {
   permission_error: "auth-failed",
   UNAUTHENTICATED: "auth-failed",
   PERMISSION_DENIED: "auth-failed",
+  [SESSION_CREDENTIAL_STOP_TYPES.missing]: "auth-failed",
+  [SESSION_CREDENTIAL_STOP_TYPES.refreshFailed]: "auth-failed",
+  [SESSION_CREDENTIAL_STOP_TYPES.refreshUnreachable]: "network",
+  [SESSION_CREDENTIAL_STOP_TYPES.unavailable]: "auth-failed",
+  // Anthropic's 402: payment or billing, a spent allowance by another name.
+  billing_error: "rate-limited",
   invalid_request_error: "bad-request",
   INVALID_ARGUMENT: "bad-request",
+  // A model this account is not served (Anthropic, OpenAI, Google wording).
+  not_found_error: "bad-request",
+  model_not_found: "bad-request",
+  NOT_FOUND: "bad-request",
   context_length_exceeded: "context-overflow",
   context_window_exceeded: "context-overflow",
   ECONNRESET: "network",
@@ -134,19 +145,135 @@ export function safeProviderMessage(
   return safe;
 }
 
+/** Node, undici and DOM names for a request that never got an answer. */
+const UNREACHED_CODES: ReadonlySet<string> = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ECONNABORTED",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ETIMEDOUT",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ENETDOWN",
+  "EPIPE",
+  "UND_ERR_SOCKET",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
+]);
+const UNREACHED_NAMES: ReadonlySet<string> = new Set(["TimeoutError"]);
+const UNREACHED_TEXT =
+  /\b(?:fetch failed|ECONN(?:REFUSED|RESET|ABORTED)|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|UND_ERR_[A-Z_]+|socket hang up|TimeoutError|timed out|aborted due to timeout)\b/i;
+/**
+ * The token endpoint's HTTP status, in the shapes Pi's OAuth flows print it:
+ * `status=400` (Anthropic), `failed (400)` (Codex), `status 401` (Meta, Kimi),
+ * and a leading `403 Forbidden` (Copilot).
+ */
+const TOKEN_STATUS = /(?:\bstatus[=:\s]\s*|\bfailed \(|^)(\d{3})\b/im;
+/** OAuth 2.0's own words for a grant the server will not renew (RFC 6749 §5.2). */
+const REFUSED_GRANT = /\b(?:invalid_grant|invalid_client|unauthorized_client)\b/;
+
+/**
+ * Why a subscription login's renewal failed, read from Pi's error IN MEMORY
+ * and never logged or kept (VC-1236).
+ *
+ * Pi wraps every refresh failure in one `ModelsError("oauth")` — a revoked
+ * refresh token and a token endpoint that is down alike — and keeps what
+ * happened only in the wrapped error's sentence and cause chain. The two need
+ * opposite answers: a refused grant is the person's to fix by signing in, and
+ * an endpoint that never answered (unreachable, timed out, 5xx, 429) is a
+ * network failure the transport retry already handles, exactly as a failed
+ * request to the API is. Only an answer that refuses — a 4xx other than
+ * 408/429, or OAuth's refusal codes — reads as refused; anything this cannot
+ * place is retried rather than sending a person to sign in.
+ */
+function refreshFailureType(error: unknown): string {
+  let status: number | null = null;
+  let refused = false;
+  let unreached = false;
+  let current: unknown = error;
+  for (let depth = 0; depth < 6 && current !== undefined && current !== null; depth += 1) {
+    const value = record(current);
+    const code = value["code"];
+    if (typeof code === "string" && UNREACHED_CODES.has(code)) unreached = true;
+    if (current instanceof Error) {
+      if (UNREACHED_NAMES.has(current.name)) unreached = true;
+      const sentence = current.message;
+      if (UNREACHED_TEXT.test(sentence)) unreached = true;
+      if (REFUSED_GRANT.test(sentence)) refused = true;
+      const stated = TOKEN_STATUS.exec(sentence);
+      if (stated !== null && status === null) status = Number(stated[1]);
+    }
+    current = value["cause"];
+  }
+  if (status !== null && status >= 400 && status < 500 && status !== 408 && status !== 429)
+    refused = true;
+  if (status !== null && (status >= 500 || status === 408 || status === 429)) unreached = true;
+  return refused && !unreached
+    ? SESSION_CREDENTIAL_STOP_TYPES.refreshFailed
+    : SESSION_CREDENTIAL_STOP_TYPES.refreshUnreachable;
+}
+
 /** One request's small accumulator. Raw events and headers are never retained. */
 export class ProviderStopCapture {
   constructor(private readonly redaction?: RedactionPort) {}
 
   #type: string | null = null;
+  /** Why no credential could be had for this request, before anything was sent. */
+  #credential: string | null = null;
+  /**
+   * Whether this request reached the wire: a fetch began, a response arrived,
+   * or the provider streamed an event. A credential cause is only ever the
+   * answer when nothing did — a request that went out has its own facts, and
+   * they win.
+   */
+  #sent = false;
   #message: string | null = null;
   #status: number | null = null;
   #resetsAt: number | null = null;
   #bodyResetsAt: number | null = null;
 
+  /**
+   * Resolve this request's credential first, and keep why it could not be had.
+   *
+   * Pi resolves auth inside the stream's setup and, when that throws, reports
+   * the stream as failed with nothing but the thrown sentence: the typed
+   * `ModelsError.code` is gone, no request was sent, so no status or provider
+   * type exists either. A refused OAuth refresh's sentence embeds the token
+   * endpoint's JSON body, which the privacy filter rightly withholds — and a
+   * stop with no type, no status and withheld prose read as `unknown`
+   * (VC-1236). Resolving through Pi's public `getAuth` first keeps the code as
+   * a fact. The failure is rethrown unchanged, so Pi's own failure stays the
+   * stream's failure and no second refresh is attempted.
+   *
+   * `missing` is the caller's reading of a resolution that answered nothing
+   * for a provider Pi knows: the case Pi's own request setup refuses as "not
+   * configured". It is recorded only as a candidate; {@link detail} uses it
+   * only when no request went out.
+   */
+  async credential(resolve: () => Promise<{ missing: boolean }>): Promise<void> {
+    this.#credential = null;
+    let resolved: { missing: boolean };
+    try {
+      resolved = await resolve();
+    } catch (error) {
+      const code = record(error)["code"];
+      this.#credential =
+        code === "oauth"
+          ? refreshFailureType(error)
+          : code === "auth"
+            ? SESSION_CREDENTIAL_STOP_TYPES.unavailable
+            : null;
+      throw error;
+    }
+    if (resolved.missing) this.#credential = SESSION_CREDENTIAL_STOP_TYPES.missing;
+  }
+
   /** Preserve error facts before an SDK replaces them with friendly prose. */
   fetch(inner: typeof globalThis.fetch, now: () => number): typeof globalThis.fetch {
     return async (input, init) => {
+      this.#sent = true;
       this.#type = null;
       this.#message = null;
       this.#status = null;
@@ -194,7 +321,7 @@ export class ProviderStopCapture {
               }
               raw += decoder.decode(part.value, { stream: true });
             }
-            if (raw.length > 0) this.event(JSON.parse(raw));
+            if (raw.length > 0) this.#read(JSON.parse(raw));
           } catch {
             /* Body failure must never replace the provider's failure. */
           } finally {
@@ -208,6 +335,7 @@ export class ProviderStopCapture {
   }
 
   response(response: ProviderResponse, now: number): void {
+    this.#sent = true;
     this.#status = response.status;
     // Select only a retry instant. Never copy the header map into a fact.
     const retry = response.headers["retry-after"];
@@ -219,7 +347,14 @@ export class ProviderStopCapture {
     }
   }
 
+  /** One event the provider streamed for this request. */
   event(value: unknown): void {
+    this.#sent = true;
+    this.#read(value);
+  }
+
+  /** Read one provider error/stop shape, from the stream, a body or an SDK envelope. */
+  #read(value: unknown): void {
     const event = record(value);
     const response = record(event["response"]);
     const delta = record(event["delta"]);
@@ -259,7 +394,7 @@ export class ProviderStopCapture {
     const envelope = /^(?:(\d{3})\s*:?[ ]*)?(\{[\s\S]*\})$/.exec(raw);
     if (envelope !== null) {
       try {
-        this.event(JSON.parse(envelope[2]!));
+        this.#read(JSON.parse(envelope[2]!));
         if (envelope[1] !== undefined && this.#status === null) this.#status = Number(envelope[1]);
       } catch {
         /* Malformed prose is not evidence. */
@@ -269,7 +404,7 @@ export class ProviderStopCapture {
       message.rawStopReason === "volli.stream-stalled" ||
       message.rawStopReason === "volli.runtime-error"
         ? message.rawStopReason
-        : (this.#type ?? message.rawStopReason ?? null);
+        : ((this.#sent ? null : this.#credential) ?? this.#type ?? message.rawStopReason ?? null);
     // A diagnostic is historical unless Pi explicitly attributes it to the
     // failed stream (after its first event, without an SSE fallback). Even then
     // it cannot override a terminal response/status/stop reason.
@@ -293,11 +428,11 @@ export class ProviderStopCapture {
     const statusCategory =
       this.#status === 401 || this.#status === 403
         ? "auth-failed"
-        : this.#status === 429
+        : this.#status === 429 || this.#status === 402
           ? "rate-limited"
           : this.#status === 503 || this.#status === 529
             ? "provider-overloaded"
-            : this.#status === 400 || this.#status === 422
+            : this.#status === 400 || this.#status === 404 || this.#status === 422
               ? "bad-request"
               : "unknown";
     const category =

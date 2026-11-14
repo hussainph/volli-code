@@ -46,6 +46,7 @@ function retrySettings() {
       category: state.settingsCategory ?? "general",
       configureCategory: state.configureCategory ?? undefined,
       signInProviderId: state.settingsSignInProviderId ?? undefined,
+      reauthenticate: state.settingsSignInReauthenticate ?? undefined,
     })
     .then((result) => {
       if (!result.ok) toastError(`Couldn't open Settings: ${result.error}`);

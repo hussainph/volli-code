@@ -137,6 +137,7 @@ import {
 } from "@renderer/components/ticket/ticket-rail-model";
 import { appStateStorage, registerSharedPreferenceDefaults } from "@renderer/lib/app-state-storage";
 import type { SettingsWindowOpenInput } from "../../../ipc/settings-window";
+import type { ModelAccessSignInType } from "@volli/shared";
 
 let settingsWindowOpener: ((navigation: SettingsWindowOpenInput) => void) | null = null;
 /** Installed by the desktop entry, leaving injected/test stores transport-free. */
@@ -407,6 +408,12 @@ interface UiState {
    */
   settingsSignInProviderId: string | null;
   /**
+   * With {@link UiState.settingsSignInProviderId}: sign in to that provider
+   * again with this method even though it reads as connected — the request a
+   * chat stopped on the provider's sign-in sends (VC-1236). Spent with it.
+   */
+  settingsSignInReauthenticate: ModelAccessSignInType | null;
+  /**
    * A legacy project-settings pane someone asked for by name, or null (VC-303).
    *
    * Settings owns its own selected pane, so this is a REQUEST rather than a
@@ -491,7 +498,12 @@ interface UiState {
    */
   setUiScale(scale: number): void;
   resetUiScale(): void;
-  setSettingsOpen(open: boolean, category?: string, signInProviderId?: string): void;
+  setSettingsOpen(
+    open: boolean,
+    category?: string,
+    signInProviderId?: string,
+    reauthenticate?: ModelAccessSignInType,
+  ): void;
   /**
    * Spend the deep-linked sign-in request: the Model Access pane calls this as
    * it takes {@link UiState.settingsSignInProviderId}, so its next mount arrives
@@ -614,6 +626,7 @@ export function createUiStore(storage?: StateStorage) {
         settingsNavigationError: null,
         settingsCategory: null,
         settingsSignInProviderId: null,
+        settingsSignInReauthenticate: null,
         configureCategory: null,
         newTicketOpen: false,
         sessionDetail: null,
@@ -636,19 +649,26 @@ export function createUiStore(storage?: StateStorage) {
         stepUiScale: (delta) => set((state) => ({ uiScale: steppedScale(state.uiScale, delta) })),
         setUiScale: (scale) => set({ uiScale: sanitizeUiScale(scale) }),
         resetUiScale: () => set({ uiScale: UI_SCALE_DEFAULT }),
-        setSettingsOpen: (open, category, signInProviderId) => {
+        setSettingsOpen: (open, category, signInProviderId, reauthenticate) => {
           if (settingsWindowOpener !== null) {
             // Closing an in-app route must never close an independent native window.
-            if (open) settingsWindowOpener({ category, signInProviderId });
+            if (open)
+              settingsWindowOpener({
+                category,
+                signInProviderId,
+                ...(reauthenticate === undefined ? {} : { reauthenticate }),
+              });
             return;
           }
           set({
             settingsOpen: open,
             settingsCategory: category ?? null,
             settingsSignInProviderId: signInProviderId ?? null,
+            settingsSignInReauthenticate: reauthenticate ?? null,
           });
         },
-        consumeSettingsSignIn: () => set({ settingsSignInProviderId: null }),
+        consumeSettingsSignIn: () =>
+          set({ settingsSignInProviderId: null, settingsSignInReauthenticate: null }),
         requestConfigureCategory: (key) => {
           if (settingsWindowOpener !== null) {
             settingsWindowOpener({ configureCategory: key });
@@ -659,6 +679,7 @@ export function createUiStore(storage?: StateStorage) {
             settingsOpen: true,
             settingsCategory: null,
             settingsSignInProviderId: null,
+            settingsSignInReauthenticate: null,
           });
         },
         consumeConfigureCategory: () => set({ configureCategory: null }),

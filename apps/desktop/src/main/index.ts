@@ -307,6 +307,7 @@ import { registerIpcHandlers } from "./ipc";
 import { registerAppMenu } from "./menu";
 import {
   createSettingsWindowOwner,
+  settleSettingsNavigation,
   restoreSettingsFrame,
   SETTINGS_WINDOW_SIZE,
 } from "./settings-window";
@@ -2390,6 +2391,11 @@ const appStartup = app.whenReady().then(async () => {
     piModelAccess === null
       ? null
       : new ModelAccessSignInService({
+          // A completed sign-in ends that provider's sign-in alert episode
+          // (VC-1236); it resumes nothing.
+          ...(liveHost === undefined
+            ? {}
+            : { onSignedIn: (providerId: string) => liveHost.providerSignIn.signedIn(providerId) }),
           // Sign in with ChatGPT names this installation to OpenAI (Pi 0.99).
           pi: piSignIn(piModelAccess.models, {
             deviceId: () => {
@@ -3096,7 +3102,11 @@ const appStartup = app.whenReady().then(async () => {
       assertSettingsRequester(sender);
       // An opening command can supersede the bootstrap read. Do not expose
       // the old scope; return the new intent and wait for its committed frame.
-      if (settingsNavigation !== null && appliedRevision === settingsNavigation.revision) {
+      // Acknowledging also spends the one-shot sign-in request, so a reload
+      // of the page cannot start that auth flow again (VC-1236).
+      const settled = settleSettingsNavigation(settingsNavigation, appliedRevision);
+      settingsNavigation = settled.navigation;
+      if (settled.acknowledged) {
         settingsRendererReady = true;
         const window = settingsWindow.current();
         if (window !== null) showSettings(window);

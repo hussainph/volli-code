@@ -21,6 +21,7 @@ import {
   accountAction,
   applySignInUpdate,
   deepLinkedAction,
+  reauthenticationMethod,
   IDLE_SIGN_IN_VIEW,
   partitionAccounts,
   retireAnsweredPrompt,
@@ -61,11 +62,14 @@ const COPY_FEEDBACK_MS = 1200;
 export function ModelAccessAccounts({
   providers,
   autoSignInProviderId,
+  reauthenticate,
   onRecover,
   onChanged,
 }: {
   providers: readonly ModelAccessProvider[];
   autoSignInProviderId?: string;
+  /** A stopped chat asked to sign in to that provider again with this method (VC-1236). */
+  reauthenticate?: ModelAccessSignInType;
   onRecover(provider: ModelAccessProvider): void | Promise<void>;
   onChanged(): void | Promise<void>;
 }) {
@@ -75,6 +79,7 @@ export function ModelAccessAccounts({
       key={provider.id}
       provider={provider}
       onArrival={deepLinkedAction(provider, autoSignInProviderId)}
+      reauthenticateWith={reauthenticationMethod(provider, autoSignInProviderId, reauthenticate)}
       onRecover={onRecover}
       onChanged={onChanged}
     />
@@ -159,11 +164,14 @@ function FilteredAccounts({
 function ProviderAccount({
   provider,
   onArrival,
+  reauthenticateWith = null,
   onRecover,
   onChanged,
 }: {
   provider: ModelAccessProvider;
   onArrival: DeepLinkedAction;
+  /** The method a sign-in-again request starts here, even at a connected account. */
+  reauthenticateWith?: ModelAccessSignInType | null;
   onRecover(provider: ModelAccessProvider): void | Promise<void>;
   onChanged(): void | Promise<void>;
 }) {
@@ -182,7 +190,8 @@ function ProviderAccount({
 
   const busy = starting || signingOut;
 
-  const startOnArrival = onArrival === "sign-in" ? (provider.signIn[0]?.type ?? null) : null;
+  const startOnArrival =
+    reauthenticateWith ?? (onArrival === "sign-in" ? (provider.signIn[0]?.type ?? null) : null);
   const autoStarted = React.useRef(false);
   const startSignInRef = React.useRef(startSignIn);
   startSignInRef.current = startSignIn;
