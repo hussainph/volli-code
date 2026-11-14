@@ -24,31 +24,40 @@
  *
  * So the library discards a scroll in the frame where the reply adds a line,
  * and one in the frame after. It is not a coin toss between timers: it is
- * decided by the frame. Measured in the lab with a fast stream, it discarded:
+ * decided by the frame. Measured in the lab with a fast stream, on main:
  *
- * - an arrival in the zone: the reader is at the end but not following, and
- *   the reply runs on below the fold;
- * - an ArrowUp, PageUp or thumb drag away from the end, in roughly a quarter of
- *   presses: never released, so the next line pulled the reader back to the
- *   end.
+ * - a thumb drag that stopped within the zone was left not following a third
+ *   of the time. The thumb (VC-1217) writes in its own ResizeObserver
+ *   callback, so its scroll events keep company with a line landing;
+ * - an ArrowUp, PageUp, Home or thumb drag away from the end was pulled back
+ *   to the end in about a quarter of presses.
  *
  * The wheel up was never lost, because the library releases on the `wheel`
  * event itself.
  *
- * Here geometry decides instead of the frame. Comparing where two consecutive
- * scroll events leave the reader:
+ * Here geometry and the reader's hand decide, not the frame. Comparing where
+ * two consecutive scroll events leave the reader:
  *
  * - Growth below the reader only ever adds distance to the end, and anchoring
  *   keeps that distance as it is. So distance to the end that SHRANK between
  *   two scroll events is the reader moving toward the end.
- * - A `scrollTop` that GREW is the library's own reading of the same move.
- *   Either one, landing in the zone, is an arrival.
+ * - With no hand on the transcript, a `scrollTop` that GREW counts too. That
+ *   is the library's own reading, and it catches a small step down taken in
+ *   the frame a line lands.
+ * - A held thumb keeps its share of the scroll range as the reply lengthens
+ *   (VC-1217), which moves `scrollTop` and the distance to the end with
+ *   nobody moving. While it is held, only that share tells which way the
+ *   reader went.
  * - Moving away is told apart from anchoring by the hand behind it, not by
  *   geometry. While a reply streams, anchoring can lower `scrollTop` as content
  *   above shrinks, in the same frame as growth below adds distance, which is
  *   exactly what a scroll up looks like (VC-1232). So a release needs the
  *   reader's hand on the transcript too: a scrolling key, a grab of the
  *   scroll thumb, or a touch.
+ *
+ * The library still judges every scroll event as well, a millisecond later.
+ * {@link followingSettled} says what to make true once it has: ours is the
+ * last word.
  *
  * Pure, so the node test project reaches every branch. The listeners that
  * feed it are `useReaderFollowing` in `conversation.tsx`.
@@ -89,32 +98,69 @@ export function scrollPlace(geometry: ScrollGeometry): ScrollPlace {
 export type FollowingChange = "follow" | "release" | null;
 
 /**
- * The reader's hand on the transcript: none, a scrolling key or a lifted drag
- * moments ago, or a thumb drag or touch still held.
+ * The reader's hand on the transcript: none, a key that scrolls up or a drag
+ * lifted moments ago, or a thumb drag or touch still held.
  */
 export type ReaderHand = "none" | "recent" | "holding";
 
 /**
+ * How far, in pixels, the reader moved toward the end between two places: a
+ * negative number is away from it. While a thumb is held this is the change in
+ * the thumb's share of the scroll range, in today's pixels.
+ */
+function towardEnd(previous: ScrollPlace, current: ScrollPlace, hand: ReaderHand): number {
+  if (hand === "holding") {
+    const range = previous.top + previous.fromEnd;
+    const share = range > 0 ? previous.top / range : 0;
+    return current.top - share * (current.top + current.fromEnd);
+  }
+  return previous.fromEnd - current.fromEnd;
+}
+
+/**
  * What one scroll event means for following, given where the previous scroll
  * event left the reader and their hand. `null` is no change.
- *
- * A thumb held still is the one place `scrollTop` grows with no move toward
- * the end. The drag keeps the thumb's share of the scroll range as the reply
- * lengthens (VC-1217), so while a hand holds it only a shorter distance to the
- * end counts as nearer.
  */
 export function followingAfterScroll(
   previous: ScrollPlace,
   current: ScrollPlace,
   hand: ReaderHand,
 ): FollowingChange {
+  const moved = towardEnd(previous, current, hand);
   const nearer =
-    current.fromEnd < previous.fromEnd - MOVED_PX ||
-    (hand !== "holding" && current.top > previous.top + MOVED_PX);
+    moved > MOVED_PX || (hand === "none" && current.top > previous.top + MOVED_PX);
   if (nearer) return current.fromEnd <= FOLLOW_ZONE_PX ? "follow" : null;
+  if (hand === "none") return null;
   const away =
-    current.top < previous.top - MOVED_PX && current.fromEnd > previous.fromEnd + MOVED_PX;
-  return hand !== "none" && away ? "release" : null;
+    hand === "holding"
+      ? moved < -MOVED_PX
+      : current.top < previous.top - MOVED_PX && moved < -MOVED_PX;
+  return away ? "release" : null;
+}
+
+/**
+ * What to make true once the library has judged the same scroll event, which
+ * it does a millisecond after it. `wasFollowing` is the library's state when
+ * the event arrived, `following` its state now.
+ *
+ * - An arrival the library discarded is followed.
+ * - A release the library undid is released again.
+ * - With a hand on the transcript, a move that was not toward the end does
+ *   not re-attach. The library re-attaches on any rise in `scrollTop` near
+ *   the end, which a held thumb keeping its place makes with no move at all.
+ * - With no hand, the library's own re-attach stands. That includes the
+ *   re-lock near the end when content shrinks.
+ */
+export function followingSettled(input: {
+  readonly change: FollowingChange;
+  readonly hand: ReaderHand;
+  readonly wasFollowing: boolean;
+  readonly following: boolean;
+}): FollowingChange {
+  const { change, hand, wasFollowing, following } = input;
+  if (change === "follow") return following ? null : "follow";
+  if (change === "release") return following ? "release" : null;
+  return hand !== "none" && !wasFollowing && following ? "release" : null;
 }
 
 /** A key press, as far as scrolling is concerned. */

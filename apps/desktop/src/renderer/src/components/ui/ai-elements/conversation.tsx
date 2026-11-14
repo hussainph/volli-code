@@ -44,7 +44,12 @@ import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 
 import { SCROLL_THUMB_GRAB_EVENT } from "@renderer/lib/scroll-thumb/overlay-scrollbars";
 
-import { followingAfterScroll, keyScrollsUp, scrollPlace } from "./reader-following";
+import {
+  followingAfterScroll,
+  followingSettled,
+  keyScrollsUp,
+  scrollPlace,
+} from "./reader-following";
 import { wheelDetachesFollowing } from "./scroll-chaining";
 import { glideToLatest } from "./scroll-to-latest";
 
@@ -271,17 +276,16 @@ const LIFT_EVENTS = ["lostpointercapture", "touchend", "touchcancel", "blur"] as
  * library's version of it does not hold up are in `reader-following.ts`.
  *
  * A scroll event releases at once when it moves away from the end under the
- * reader's hand. Releasing synchronously matters: the library's
- * following loop writes on the frame's animation callbacks, which run after
- * this event, and once released it stops instead of pulling the reader back
- * mid-scroll.
+ * reader's hand. Releasing synchronously matters: the library's following
+ * loop writes on the frame's animation callbacks, which run after this event,
+ * and once released it stops instead of pulling the reader back mid-scroll.
  *
- * An arrival is applied one millisecond later instead. The library judges the
- * same event on a one-millisecond timer of its own, which can still read
- * anchoring as a scroll up and release (VC-1232). Timers with equal delays
- * run in the order they were set. The library's listener was attached when
- * its scroller mounted, before this effect ran, so this one runs after it and
- * has the last word.
+ * The rest waits one millisecond (`followingSettled`). The library judges the
+ * same event on a one-millisecond timer of its own: it can discard an arrival,
+ * read anchoring as a scroll up and release (VC-1232), or re-attach on a held
+ * thumb keeping its place. Timers with equal delays run in the order they were
+ * set. The library's listener was attached when its scroller mounted, before
+ * this effect ran, so this one runs after it and has the last word.
  *
  * Engaging uses the library's own `scrollToBottom("instant")`, as "Scroll to
  * latest" does on arrival. It is only called when the library has not already
@@ -317,15 +321,21 @@ function useReaderFollowing() {
       if (ownWrite) return;
       const hand = held ? "holding" : performance.now() < handUntil ? "recent" : "none";
       const change = followingAfterScroll(previous, place, hand);
-      if (change === "release") {
-        if (state.isAtBottom) latest.current.stopScroll();
-      } else if (change === "follow") {
-        const timer = view.setTimeout(() => {
-          timers.delete(timer);
-          if (!state.isAtBottom) void latest.current.scrollToBottom("instant");
-        }, 1);
-        timers.add(timer);
-      }
+      const wasFollowing = state.isAtBottom;
+      if (change === "release" && wasFollowing) latest.current.stopScroll();
+      if (change === null && hand === "none") return;
+      const timer = view.setTimeout(() => {
+        timers.delete(timer);
+        const settle = followingSettled({
+          change,
+          hand,
+          wasFollowing,
+          following: state.isAtBottom,
+        });
+        if (settle === "follow") void latest.current.scrollToBottom("instant");
+        else if (settle === "release") latest.current.stopScroll();
+      }, 1);
+      timers.add(timer);
     };
     const onKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;

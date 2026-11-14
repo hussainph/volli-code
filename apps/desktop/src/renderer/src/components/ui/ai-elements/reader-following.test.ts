@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   FOLLOW_ZONE_PX,
   followingAfterScroll,
+  followingSettled,
   keyScrollsUp,
   scrollPlace,
   type ScrollKey,
@@ -25,11 +26,13 @@ describe("followingAfterScroll", () => {
     expect(FOLLOW_ZONE_PX).toBe(70);
   });
 
-  it("follows a reader who arrives within the zone, at any distance inside it", () => {
-    for (const fromEnd of [0, 10, 18, 40, 69, 70]) {
-      expect(followingAfterScroll(at(9_000, 400), at(9_400 - fromEnd, fromEnd), "none")).toBe(
-        "follow",
-      );
+  it("follows a reader who arrives within the zone, at any distance inside it, with any hand", () => {
+    for (const hand of ["none", "recent", "holding"] as const) {
+      for (const fromEnd of [0, 10, 18, 40, 69, 70]) {
+        expect(followingAfterScroll(at(9_000, 400), at(9_400 - fromEnd, fromEnd), hand)).toBe(
+          "follow",
+        );
+      }
     }
   });
 
@@ -43,20 +46,29 @@ describe("followingAfterScroll", () => {
     expect(followingAfterScroll(at(9_000, 60), at(8_984, 30), "none")).toBe("follow");
   });
 
-  it("counts a scrollTop that grew even when a line landed below in the same frame", () => {
+  it("counts a scrollTop that grew, with no hand, even when a line landed below in the same frame", () => {
     // Down 10, while the reply added 18: the end is further, the reader moved toward it.
     expect(followingAfterScroll(at(9_000, 40), at(9_010, 48), "none")).toBe("follow");
   });
 
-  it("does not take a held thumb keeping its place as the reply grows for a move nearer", () => {
-    // The drag rewrites scrollTop for the thumb's share of a longer range.
-    expect(followingAfterScroll(at(9_000, 40), at(9_010, 48), "holding")).toBeNull();
-    // A drag that does bring the end nearer still arrives.
-    expect(followingAfterScroll(at(9_000, 300), at(9_300, 18), "holding")).toBe("follow");
+  it("does not count a scrollTop that grew under a key that scrolls up", () => {
+    // The library's write to the end and the key's first step, in one event.
+    expect(followingAfterScroll(at(9_000, 1), at(9_028, 7), "recent")).toBeNull();
+  });
+
+  it("reads a held thumb by its share of the range", () => {
+    // Keeping its place as the reply grows: scrollTop and distance both move.
+    expect(followingAfterScroll(at(9_000, 1_000), at(9_018, 1_002), "holding")).toBeNull();
+    expect(followingAfterScroll(at(9_000, 54), at(9_018, 54), "holding")).toBeNull();
+    // Dragged down: the share grows.
+    expect(followingAfterScroll(at(9_000, 300), at(9_282, 18), "holding")).toBe("follow");
+    // Dragged up: the share shrinks.
+    expect(followingAfterScroll(at(9_000, 1), at(8_900, 101), "holding")).toBe("release");
+    // An empty range has no share to keep.
+    expect(followingAfterScroll(at(0, 0), at(0, 0), "holding")).toBeNull();
   });
 
   it("releases a reader whose own hand scrolls away from the end", () => {
-    expect(followingAfterScroll(at(9_000, 1), at(8_900, 101), "holding")).toBe("release");
     expect(followingAfterScroll(at(9_000, 1), at(8_960, 41), "recent")).toBe("release");
     // Away and a line added in the same frame.
     expect(followingAfterScroll(at(9_000, 1), at(8_960, 59), "recent")).toBe("release");
@@ -65,6 +77,8 @@ describe("followingAfterScroll", () => {
   it("leaves following alone when nothing of the reader's moved it away", () => {
     // Anchoring: a block above shrank, the end is as far as it was.
     expect(followingAfterScroll(at(9_000, 1), at(8_954, 1), "recent")).toBeNull();
+    // A line below grew the distance with no scroll up.
+    expect(followingAfterScroll(at(9_000, 1), at(9_000, 19), "recent")).toBeNull();
     // Anchoring and a line below in one frame look like a scroll up, without a hand.
     expect(followingAfterScroll(at(9_000, 1), at(8_954, 19), "none")).toBeNull();
   });
@@ -72,6 +86,37 @@ describe("followingAfterScroll", () => {
   it("ignores sub-pixel rounding", () => {
     expect(followingAfterScroll(at(9_000, 40), at(9_000.4, 39.6), "none")).toBeNull();
     expect(followingAfterScroll(at(9_000, 40), at(8_999.6, 40.4), "recent")).toBeNull();
+  });
+});
+
+describe("followingSettled", () => {
+  const settle = (
+    change: "follow" | "release" | null,
+    hand: "none" | "recent" | "holding",
+    wasFollowing: boolean,
+    following: boolean,
+  ) => followingSettled({ change, hand, wasFollowing, following });
+
+  it("follows an arrival the library discarded, and leaves one it took", () => {
+    expect(settle("follow", "none", false, false)).toBe("follow");
+    expect(settle("follow", "none", false, true)).toBeNull();
+  });
+
+  it("releases again when the library undid a release", () => {
+    expect(settle("release", "recent", true, true)).toBe("release");
+    expect(settle("release", "recent", true, false)).toBeNull();
+  });
+
+  it("undoes the library's re-attach on a move under a hand that was not toward the end", () => {
+    expect(settle(null, "holding", false, true)).toBe("release");
+    expect(settle(null, "recent", false, true)).toBe("release");
+    // Already following before the event: nothing was re-attached.
+    expect(settle(null, "holding", true, true)).toBeNull();
+    expect(settle(null, "holding", false, false)).toBeNull();
+  });
+
+  it("leaves the library's own re-attach alone with no hand", () => {
+    expect(settle(null, "none", false, true)).toBeNull();
   });
 });
 

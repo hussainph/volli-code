@@ -220,6 +220,29 @@ it("releases a reader who drags the thumb up in a frame where a line lands", asy
   expect(Math.min(...after)).toBeGreaterThan(100);
 });
 
+it("keeps a reader released who drags the thumb a little up and holds it while the reply grows", async () => {
+  await act(async () => {
+    scroller.dispatchEvent(new Event(SCROLL_THUMB_GRAB_EVENT));
+  });
+  position -= 40;
+  await frame();
+  // Held still: a frame after each line lands, the thumb keeps its share of
+  // the longer range (VC-1217), which raises scrollTop with nobody moving. Its
+  // scroll event comes once the library has stopped discarding for the line.
+  for (let i = 0; i < 6; i++) {
+    const share = position / end();
+    await frame(LINE);
+    await frame();
+    position = Math.round(share * end());
+    await frame();
+  }
+  await frame();
+  expect(fromEnd()).toBeGreaterThan(40);
+  await act(async () => {
+    document.body.dispatchEvent(new PointerEvent("lostpointercapture", { bubbles: true }));
+  });
+});
+
 it("follows a reader who holds the thumb at the end while the reply grows, and after they let go", async () => {
   await readUp();
   await act(async () => {
