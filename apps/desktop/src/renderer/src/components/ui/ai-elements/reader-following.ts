@@ -6,55 +6,60 @@
  *
  * - A scroll that brings the reader nearer the end and leaves them within
  *   {@link FOLLOW_ZONE_PX} of it turns following on. That covers the wheel, the
- *   keyboard, a drag of the scroll thumb, and anything else that moves them.
- * - A scroll the reader makes away from the end turns following off at once,
- *   and it stays off while the reply grows.
- * - Nothing else changes it. Content growing below, the browser's scroll
- *   anchoring, and the library's own writes all leave it as it is.
+ *   keyboard, a drag of the scroll thumb, and a scroll no input announces.
+ * - A scroll the reader's hand makes away from the end turns following off at
+ *   once, and it stays off while the reply grows. The hand is a wheel, a key,
+ *   a touch, the scroll thumb or a pointer held in the transcript (selecting).
+ * - Nothing else changes it. Content growing above or below, the browser's
+ *   scroll anchoring, rows the transcript window swaps, and the library's own
+ *   writes all leave following as it was. A release the library makes with no
+ *   hand behind it is undone.
+ * - A pointer held in the transcript never turns following on: a reader
+ *   selecting text is not captured when the selection auto-scrolls. Nor does
+ *   the scroll that follows the transcript letting go for the reader (a jump
+ *   to a message, a reading place put back).
+ *
+ * The rule never compares a scroll event with one the library wrote itself:
+ * when a write and a step of the reader's land in one event, the step starts
+ * at the write ({@link placeBefore}).
  *
  * WHY IT IS OURS
  *
- * `use-stick-to-bottom` 1.1.6 has the same rule in `handleScroll`, but it
- * throws away every scroll event that lands while its ResizeObserver's
- * `resizeDifference` is set. When the content changes height in a frame, the
- * observer reports after that frame's layout and sets the difference. The
- * scroll event was dispatched earlier in the same frame, and its one-
- * millisecond timer runs after the observer. The reset waits for the next
- * frame's animation callback plus another millisecond.
+ * `use-stick-to-bottom` 1.1.6 has the same rule in `handleScroll`, and three
+ * things undo it:
  *
- * So the library discards a scroll in the frame where the reply adds a line,
- * and one in the frame after. It is not a coin toss between timers: it is
- * decided by the frame. Measured in the lab with a fast stream, on main:
+ * - It throws away every scroll event that lands while its ResizeObserver's
+ *   `resizeDifference` is set. When the content changes height in a frame, the
+ *   observer reports after that frame's layout; the scroll event was
+ *   dispatched earlier in the frame, and its one-millisecond timer runs after
+ *   the observer. The reset waits for the next frame's animation callback plus
+ *   another millisecond. So a scroll in the frame where the reply adds a line,
+ *   or the frame after, is lost: an arrival is not followed, a key or thumb
+ *   step up is not released and the next line pulls the reader back.
+ * - It reads any drop in `scrollTop` it does not discard as the reader leaving,
+ *   anchoring included. A turn start adds a row at the end while the window
+ *   drops one of the same height from the top: the height does not change, the
+ *   observer stays quiet, anchoring lowers `scrollTop` by the row, and the
+ *   library lets go of a reader who did nothing.
+ * - Its own writes and a reader's step land in one scroll event, which it
+ *   corrects for and a naive comparison does not (`ignoreScrollToTop`).
  *
- * - a thumb drag that stopped within the zone was left not following a third
- *   of the time. The thumb (VC-1217) writes in its own ResizeObserver
- *   callback, so its scroll events keep company with a line landing;
- * - an ArrowUp, PageUp, Home or thumb drag away from the end was pulled back
- *   to the end in about a quarter of presses.
- *
- * The wheel up was never lost, because the library releases on the `wheel`
- * event itself.
- *
- * Here geometry and the reader's hand decide, not the frame. Comparing where
- * two consecutive scroll events leave the reader:
+ * Here the reader's hand and geometry decide, not the frame. Between two
+ * scroll events:
  *
  * - Growth below the reader only ever adds distance to the end, and anchoring
- *   keeps that distance as it is. So distance to the end that SHRANK between
- *   two scroll events is the reader moving toward the end.
- * - With no hand on the transcript, a `scrollTop` that GREW counts too. That
- *   is the library's own reading, and it catches a small step down taken in
- *   the frame a line lands.
- * - A thumb keeps its share of the scroll range as the reply lengthens
- *   (VC-1217), which moves `scrollTop` and the distance to the end with
- *   nobody moving. Under the thumb, that share tells a move away; a drag
- *   follows when it reaches the end, or when it lets go within the zone
- *   having brought the thumb down.
- * - Moving away is told apart from anchoring by the hand behind it, not by
- *   geometry. While a reply streams, anchoring can lower `scrollTop` as content
- *   above shrinks, in the same frame as growth below adds distance, which is
- *   exactly what a scroll up looks like (VC-1232). So a release needs the
- *   reader's hand on the transcript too: a scrolling key, a grab of the
- *   scroll thumb, or a touch.
+ *   keeps that distance as it is. So distance to the end that SHRANK is the
+ *   reader moving toward the end, whatever moved them.
+ * - Under a wheel or key that scrolls toward the end, a `scrollTop` that grew
+ *   counts too: a small step taken in the frame a line lands.
+ * - Moving away needs a hand that is not going down: `scrollTop` fell and the
+ *   distance grew. Without a hand that is anchoring and a line in one frame,
+ *   which looks exactly like a scroll up (VC-1232).
+ * - The thumb keeps its share of the scroll range as the reply lengthens
+ *   (VC-1217), which moves `scrollTop` and the distance with nobody moving.
+ *   Under the thumb that share tells a move away; a drag follows when it
+ *   reaches the end, or when it lets go within the zone having brought the
+ *   thumb down ({@link followingOnLift}).
  *
  * The library still judges every scroll event as well, a millisecond later.
  * {@link followingSettled} says what to make true once it has: ours is the
@@ -78,11 +83,6 @@ export const FOLLOW_ZONE_PX = 70;
  * them (`scrollHeight - 1 - clientHeight`). Its zone is measured from there.
  */
 const AT_END_PX = 1;
-
-/** Within the follow zone, measured as the library measures it. */
-function inZone(place: ScrollPlace): boolean {
-  return place.fromEnd - AT_END_PX <= FOLLOW_ZONE_PX;
-}
 
 /** Smaller moves are sub-pixel rounding, not a scroll. */
 const MOVED_PX = 0.5;
@@ -108,62 +108,88 @@ export function scrollPlace(geometry: ScrollGeometry): ScrollPlace {
   };
 }
 
+/** Within the follow zone, measured as the library measures it. */
+function inZone(place: ScrollPlace): boolean {
+  return place.fromEnd - AT_END_PX <= FOLLOW_ZONE_PX;
+}
+
+/**
+ * Where the reader was before this scroll event. The library marks each write
+ * of its own with `ignoreScrollToTop`; when this event's position is not that
+ * write, the write and a step of the reader's landed in one event, and the
+ * write is where the step started. Measured against today's geometry.
+ */
+export function placeBefore(
+  previous: ScrollPlace,
+  libraryWrite: number | undefined,
+  geometry: ScrollGeometry,
+): ScrollPlace {
+  if (libraryWrite === undefined || libraryWrite === geometry.scrollTop) return previous;
+  return scrollPlace({ ...geometry, scrollTop: libraryWrite });
+}
+
 export type FollowingChange = "follow" | "release" | null;
 
 /**
  * The reader's hand on the transcript.
  *
- * - `direct`: a key that scrolls up, or a touch, held or lifted moments ago.
- *   It moves the content itself.
+ * - `down`, `up`: a wheel or a key that scrolls toward the end or the start,
+ *   moments ago.
+ * - `direct`: a touch, or a key that moves the view either way (Tab).
+ * - `select`: a pointer pressed in the transcript and held, or just lifted.
  * - `thumb`: a drag of the scroll thumb, held or lifted moments ago.
+ * - `app`: the transcript let go itself, for the reader, moments ago: a
+ *   disclosure opened, a jump to a message, a reading place put back
+ *   (`useStopFollowing`). The writes that follow are its, not an arrival.
  */
-export type ReaderHand = "none" | "direct" | "thumb";
+export type ReaderHand = "none" | "down" | "up" | "direct" | "select" | "thumb" | "app";
 
 /**
- * How far, in pixels, the reader moved toward the end between two places: a
- * negative number is away from it. Under the thumb this is the change in the
- * thumb's share of the scroll range, in today's pixels.
+ * How far, in pixels, the thumb moved toward the end between two places: the
+ * change in its share of the scroll range, in today's pixels. Negative is away.
  */
-function towardEnd(previous: ScrollPlace, current: ScrollPlace, hand: ReaderHand): number {
-  if (hand === "thumb") {
-    const range = previous.top + previous.fromEnd;
-    const share = range > 0 ? previous.top / range : 0;
-    return current.top - share * (current.top + current.fromEnd);
-  }
-  return previous.fromEnd - current.fromEnd;
+function thumbTowardEnd(previous: ScrollPlace, current: ScrollPlace): number {
+  const range = previous.top + previous.fromEnd;
+  const share = range > 0 ? previous.top / range : 0;
+  return current.top - share * (current.top + current.fromEnd);
+}
+
+/** Whether a scroll event under the thumb moved it, rather than the thumb keeping its place. */
+export function thumbMoved(previous: ScrollPlace, current: ScrollPlace): boolean {
+  return Math.abs(thumbTowardEnd(previous, current)) > MOVED_PX;
 }
 
 /**
- * What one scroll event means for following, given where the previous scroll
- * event left the reader and their hand. `null` is no change.
- *
- * Under the thumb only the end itself, or a move away, is decided here. A
- * thumb keeps its share of the scroll range as the reply lengthens (VC-1217),
- * and its scroll event can come after another event has already read the
- * longer range: `scrollTop` then rises with nobody moving, which no
- * comparison of two places can tell from a step down. Where a drag that stops
- * short of the end leaves the reader is decided when it lets go
- * ({@link followingOnLift}).
+ * What one scroll event means for following, given where the reader was
+ * before it ({@link placeBefore}) and their hand. `null` is no change.
  */
 export function followingAfterScroll(
   previous: ScrollPlace,
   current: ScrollPlace,
   hand: ReaderHand,
 ): FollowingChange {
-  const moved = towardEnd(previous, current, hand);
   if (hand === "thumb") {
+    const moved = thumbTowardEnd(previous, current);
     if (current.fromEnd <= AT_END_PX && moved > MOVED_PX) return "follow";
     return moved < -MOVED_PX ? "release" : null;
   }
-  const nearer = moved > MOVED_PX || (hand === "none" && current.top > previous.top + MOVED_PX);
-  if (nearer) return inZone(current) ? "follow" : null;
-  if (hand === "none") return null;
-  return current.top < previous.top - MOVED_PX && moved < -MOVED_PX ? "release" : null;
-}
-
-/** Whether a scroll event under the thumb moved it, rather than the thumb keeping its place. */
-export function thumbMoved(previous: ScrollPlace, current: ScrollPlace): boolean {
-  return Math.abs(towardEnd(previous, current, "thumb")) > MOVED_PX;
+  const nearer = previous.fromEnd - current.fromEnd > MOVED_PX;
+  const rose = current.top > previous.top + MOVED_PX;
+  const away =
+    current.top < previous.top - MOVED_PX && current.fromEnd > previous.fromEnd + MOVED_PX;
+  switch (hand) {
+    case "none":
+      return nearer && inZone(current) ? "follow" : null;
+    case "down":
+      return (nearer || rose) && inZone(current) ? "follow" : null;
+    case "up":
+    case "direct":
+      if (nearer) return inZone(current) ? "follow" : null;
+      return away ? "release" : null;
+    case "select":
+    case "app":
+      return away ? "release" : null;
+  }
 }
 
 /**
@@ -179,7 +205,7 @@ export function followingOnLift(
   moved: ScrollPlace,
   lifted: ScrollPlace,
 ): FollowingChange {
-  const down = towardEnd(grabbed, lifted, "thumb") > MOVED_PX;
+  const down = thumbTowardEnd(grabbed, lifted) > MOVED_PX;
   return down && (inZone(moved) || inZone(lifted)) ? "follow" : null;
 }
 
@@ -213,16 +239,18 @@ export function foldJudgement(
 }
 
 /**
- * What to make true once the library has judged the same scroll event, which
- * it does a millisecond after it.
+ * What to make true once the library has judged the same scroll events, which
+ * it does a millisecond after each.
  *
- * - An arrival the library discarded is followed.
- * - A release the library undid is released again.
- * - With a hand on the transcript, a move that was not toward the end does
- *   not re-attach. The library re-attaches on any rise in `scrollTop` near
+ * - An arrival the library discarded is followed; a release it undid is
+ *   released again.
+ * - A release the library made by itself stands only if a hand that can
+ *   leave was on the transcript. With no hand, or a hand going down, it was
+ *   anchoring or a row swap read as the reader leaving: following comes back.
+ * - A re-attach the library made by itself stands with no hand (its re-lock
+ *   near the end when content shrinks) or a hand going down. Under any other
+ *   hand it is undone: the library re-attaches on any rise in `scrollTop` near
  *   the end, which a thumb keeping its place makes with no move at all.
- * - With no hand, the library's own re-attach stands. That includes the
- *   re-lock near the end when content shrinks.
  */
 export function followingSettled(
   input: PendingJudgement & {
@@ -233,7 +261,10 @@ export function followingSettled(
   const { change, hand, wasFollowing, following } = input;
   if (change === "follow") return following ? null : "follow";
   if (change === "release") return following ? "release" : null;
-  return hand !== "none" && !wasFollowing && following ? "release" : null;
+  const handLeaves = hand !== "none" && hand !== "down";
+  if (wasFollowing && !following) return handLeaves ? null : "follow";
+  if (!wasFollowing && following) return handLeaves ? "release" : null;
+  return null;
 }
 
 /** A key press, as far as scrolling is concerned. */
@@ -246,9 +277,24 @@ export interface ScrollKey {
   readonly onControl: boolean;
 }
 
-/** Whether a key press, when it scrolls the transcript at all, scrolls it toward the start. */
-export function keyScrollsUp(press: ScrollKey): boolean {
-  if (press.inTextEntry) return false;
-  if (press.key === " ") return press.shiftKey && !press.onControl;
-  return press.key === "ArrowUp" || press.key === "PageUp" || press.key === "Home";
+const KEYS_UP = new Set(["ArrowUp", "PageUp", "Home"]);
+const KEYS_DOWN = new Set(["ArrowDown", "PageDown", "End"]);
+
+/** The hand a key press puts on the transcript, when it can scroll it at all. */
+export function keyHand(press: ScrollKey): ReaderHand {
+  if (press.inTextEntry) return "none";
+  if (press.key === " ") {
+    if (press.onControl) return "none";
+    return press.shiftKey ? "up" : "down";
+  }
+  if (KEYS_UP.has(press.key)) return "up";
+  if (KEYS_DOWN.has(press.key)) return "down";
+  // Focus moving to a control scrolls it into view, either way.
+  return press.key === "Tab" ? "direct" : "none";
+}
+
+/** The hand a wheel event puts on the transcript. */
+export function wheelHand(deltaY: number): ReaderHand {
+  if (deltaY > 0) return "down";
+  return deltaY < 0 ? "up" : "none";
 }

@@ -17,7 +17,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
 import { SCROLL_THUMB_GRAB_EVENT } from "@renderer/lib/scroll-thumb/overlay-scrollbars";
 
-import { Conversation, ConversationContent } from "./conversation";
+import { Conversation, ConversationContent, useStopFollowing } from "./conversation";
 
 const VIEWPORT = 800;
 const LINE = 18;
@@ -25,6 +25,13 @@ let contentHeight = 0;
 let position = 0;
 let lastReported = 0;
 let resizeCallbacks: ResizeObserverCallback[] = [];
+let stopFollowing: () => void = () => {};
+
+/** Stands in for a disclosure or a jump: the transcript's own `stopFollowing`. */
+function Reader() {
+  stopFollowing = useStopFollowing();
+  return <p>transcript</p>;
+}
 let animationCallbacks: FrameRequestCallback[] = [];
 let host: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
@@ -85,6 +92,43 @@ async function rest() {
   return fromEnd();
 }
 
+/** A key pressed on what has focus in the transcript (its text, here). */
+const keyInTranscript = (key: string) =>
+  act(async () => {
+    scroller
+      .querySelector("p")!
+      .dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+  });
+
+/** The library's following loop runs on the next frame's callbacks. */
+async function animationCallbacksOnly() {
+  await act(async () => {
+    const callbacks = animationCallbacks;
+    animationCallbacks = [];
+    for (const callback of callbacks) callback(performance.now());
+    await microtasks();
+  });
+}
+
+/** Lets the library's and this hook's one-millisecond timers run. */
+const settleTimers = () => act(async () => settle());
+
+/** The content observers report the current height, with no growth. */
+async function observe() {
+  await act(async () => {
+    for (const callback of resizeCallbacks) {
+      callback(
+        [{ contentRect: { height: contentHeight } } as ResizeObserverEntry],
+        {} as ResizeObserver,
+      );
+    }
+    await microtasks();
+  });
+}
+
+/** Lets the half-second a wheel or key counts as the reader's hand run out. */
+const handLifts = () => new Promise((resolve) => setTimeout(resolve, 600));
+
 const wheel = (deltaY: number) =>
   act(async () => {
     scroller.dispatchEvent(new WheelEvent("wheel", { deltaY, bubbles: true }));
@@ -116,7 +160,7 @@ beforeEach(async () => {
     root.render(
       <Conversation>
         <ConversationContent>
-          <p>transcript</p>
+          <Reader />
         </ConversationContent>
       </Conversation>,
     ),
@@ -202,9 +246,7 @@ it("does not follow a reader who stops just outside the zone", async () => {
 });
 
 it("releases a reader who scrolls up by key in a frame where a line lands, and keeps them released", async () => {
-  await act(async () => {
-    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
-  });
+  await keyInTranscript("ArrowUp");
   // A smooth 40px step over three frames, the first sharing its frame with a line.
   position -= 14;
   await frame(LINE);
@@ -327,7 +369,7 @@ it("keeps following when anchoring lowers the position with no reader behind it"
 
 it("does not take a scroll on a key typed into a field as the reader leaving", async () => {
   const field = document.createElement("textarea");
-  document.body.append(field);
+  scroller.querySelector("p")!.after(field);
   try {
     await act(async () => {
       field.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
@@ -340,4 +382,130 @@ it("does not take a scroll on a key typed into a field as the reader leaving", a
   } finally {
     field.remove();
   }
+});
+
+it("does not take a key pressed outside the transcript as the reader leaving", async () => {
+  // The other pane, the sidebar: a control with focus that is not in here.
+  const elsewhere = document.createElement("button");
+  document.body.append(elsewhere);
+  try {
+    await act(async () => {
+      elsewhere.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
+    });
+    contentHeight -= 46;
+    position -= 46;
+    await frame(4 * LINE, { readFirst: true });
+    await stream(10);
+    expect(await rest()).toBeLessThanOrEqual(1);
+  } finally {
+    elsewhere.remove();
+  }
+});
+
+for (const step of [4, 15]) {
+  it(`releases a ${step}px wheel step up taken in the event of the library's write, and keeps it released`, async () => {
+    // A line lands; on the next frame's callbacks the library writes the end,
+    // and the reader's wheel moves in the same frame, so one scroll event
+    // carries both.
+    await frame(LINE);
+    await animationCallbacksOnly();
+    await wheel(-step);
+    position -= step;
+    await frame();
+    const after = await stream(20);
+    expect(Math.min(...after)).toBeGreaterThanOrEqual(step);
+    expect(after.at(-1)).toBeGreaterThan(after[0]!);
+  });
+}
+
+it("keeps a released reader in place when content above them grows", async () => {
+  await wheel(-40);
+  position -= 40;
+  await frame();
+  await handLifts();
+  // A row above the viewport grows 60px (an image, a tool's output) and
+  // anchoring raises scrollTop by as much: the reader has not moved.
+  position += 60;
+  await frame(60, { readFirst: true });
+  const after = await stream(10);
+  expect(Math.min(...after)).toBeGreaterThan(40);
+});
+
+it("opts out of scroll anchoring while following, and back in once released", async () => {
+  expect(scroller.style.overflowAnchor).toBe("none");
+  await wheel(-100);
+  position -= 100;
+  await frame();
+  await settleTimers();
+  expect(scroller.style.overflowAnchor).toBe("");
+  await wheel(100);
+  position = end();
+  await frame();
+  await settleTimers();
+  expect(scroller.style.overflowAnchor).toBe("none");
+});
+
+it("keeps following through a turn start whose row swap lowers scrollTop with no reader behind it", async () => {
+  // The window adds a row at the end and drops one as tall from the top: the
+  // height holds, the library's observer stays quiet, and anchoring (were it
+  // on) lowers scrollTop by the row. The library reads a scroll up and lets go.
+  position -= 108;
+  await frame();
+  await stream(10);
+  expect(await rest()).toBeLessThanOrEqual(1);
+});
+
+it("does not capture a reader selecting text when the selection auto-scrolls into the zone", async () => {
+  await readUp();
+  await act(async () => {
+    scroller
+      .querySelector("p")!
+      .dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
+  });
+  // The selection runs past the bottom edge and the browser scrolls after it.
+  for (let i = 0; i < 6; i++) {
+    position = Math.min(end() - 10, position + 120);
+    await frame(i % 2 === 0 ? LINE : 0);
+  }
+  await act(async () => {
+    window.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, button: 0 }));
+  });
+  const after = await stream(10);
+  expect(Math.min(...after)).toBeGreaterThan(10);
+  expect(after.at(-1)).toBeGreaterThan(after[0]!);
+});
+
+it("does not take the transcript's own jump near the end, just after it let go, for an arrival", async () => {
+  await readUp();
+  await handLifts();
+  // A jump to the last message, 40px above the end: the transcript lets go
+  // first (`stopFollowing`), then writes the place.
+  await act(async () => stopFollowing());
+  position = end() - 40;
+  await frame(LINE);
+  const after = await stream(10);
+  expect(Math.min(...after)).toBeGreaterThan(40);
+  expect(after.at(-1)).toBeGreaterThan(after[0]!);
+});
+
+it("measures a transcript swapped in place afresh", async () => {
+  // Released 300px up in one Session…
+  await wheel(-300);
+  position -= 300;
+  await frame();
+  await handLifts();
+  // …and the plane shows another in its place, one that ends 40px below the
+  // same scrollTop. The library re-locks a reader that near, as it does when
+  // content shrinks; nobody scrolled.
+  contentHeight -= 260;
+  await observe();
+  await frame();
+  // The reader nudges the wheel up 10px. Measured from the old Session it
+  // would read as a move from 300px to 50px from the end, an arrival.
+  await wheel(-10);
+  position -= 10;
+  await frame();
+  const after = await stream(10);
+  expect(Math.min(...after)).toBeGreaterThanOrEqual(50);
+  expect(after.at(-1)).toBeGreaterThan(after[0]!);
 });
