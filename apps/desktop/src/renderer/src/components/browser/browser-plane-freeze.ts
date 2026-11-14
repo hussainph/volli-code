@@ -9,6 +9,8 @@
  * in the coverage gate so each one has a test.
  */
 
+import { NATIVE_PLANE_IGNORE_ATTR } from "@renderer/lib/native-plane-ignore";
+
 /** Where the React app mounts. Portals normally land outside it. */
 export const APP_ROOT_ID = "root";
 
@@ -32,12 +34,9 @@ const POSITIONED_OVERLAY_SELECTOR =
 const EXPLICIT_OVERLAY_SELECTOR = "[data-native-plane-overlay]";
 
 /**
- * The opt-OUT: presentational chrome that is drawn fixed or portalled but never
- * covers a plane's content meaningfully — the app's scroll thumbs, which sit on
- * a scroller's own edge and move every scroll frame. Neither a floating
- * candidate nor, in `browser-pane.tsx`, a reason to re-check.
+ * The opt-OUT (`lib/native-plane-ignore.ts`): neither a floating candidate nor,
+ * in `browser-pane.tsx`, a reason to re-check.
  */
-export const NATIVE_PLANE_IGNORE_ATTR = "data-native-plane-ignore";
 const NATIVE_PLANE_IGNORE_SELECTOR = `[${NATIVE_PLANE_IGNORE_ATTR}]`;
 
 /** Whether `node` is (inside) presentational chrome the plane ignores. */

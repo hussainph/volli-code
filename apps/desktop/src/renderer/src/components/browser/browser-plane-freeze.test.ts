@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
+import { NATIVE_PLANE_IGNORE_ATTR } from "@renderer/lib/native-plane-ignore";
+
 import {
   APP_ROOT_ID,
-  NATIVE_PLANE_IGNORE_ATTR,
   hasNativePlaneOverlay,
   hasVisibleNativePlane,
   ignoredByNativePlane,

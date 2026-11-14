@@ -76,7 +76,7 @@
  * always-visible mode. While a thumb shows, a press on it — within 8px of the
  * scroller's far edge — is the thumb's, not the content's.
  */
-import { NATIVE_PLANE_IGNORE_ATTR } from "@renderer/components/browser/browser-plane-freeze";
+import { NATIVE_PLANE_IGNORE_ATTR } from "@renderer/lib/native-plane-ignore";
 
 import {
   EDGE_INSET_PROPERTY,
