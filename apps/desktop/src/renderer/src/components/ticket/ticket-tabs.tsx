@@ -37,7 +37,6 @@ import {
   UnpinIcon,
   SunIcon,
   TerminalIcon,
-  CloseIcon,
   UnlinkIcon,
   MinusIcon,
 } from "@renderer/components/ui/icon";
@@ -57,6 +56,7 @@ import { useModelCatalogue } from "@renderer/lib/use-model-catalogue";
 import {
   TabActionsContext,
   TabContextActions,
+  TabContextClose,
   type TabAction,
 } from "@renderer/components/ui/tab-actions";
 import { hidesToIsland, useBrowserTabsStore } from "@renderer/stores/browser-tabs";
@@ -106,6 +106,15 @@ export type TicketTabKind = "body" | "session" | "file" | "diff" | "chat" | "bro
  * and reserves that one for the single state that is asking for a person.
  */
 export type TicketTabStatus = "idle" | "starting" | "ready" | "working" | "waiting" | "error";
+
+/**
+ * Whether closing a ticket-strip tab is destructive, which both of its menus
+ * draw (VC-1229). Closing a Session tab ends what is running in it; File,
+ * Diff and Browser tabs are views that reopen. The Body tab never closes.
+ */
+function ticketTabCloseIsDestructive(tab: TicketTabDescriptor): boolean {
+  return tab.kind === "session" || tab.kind === "chat";
+}
 
 /** Whether a ticket-strip tab of this kind shows a close affordance. */
 export function isClosableTicketTab(kind: TicketTabKind): boolean {
@@ -577,9 +586,7 @@ function TicketTab({
         {sessionTab ? (
           <>
             <ContextMenuSeparator />
-            <ContextMenuItem icon={CloseIcon} variant="destructive" onSelect={onClose}>
-              Close
-            </ContextMenuItem>
+            <TabContextClose onClose={onClose} />
           </>
         ) : null}
       </ContextMenuContent>
@@ -744,6 +751,7 @@ function TicketTabList({
       onSelect={(tab) => onSelectTab(tab.id)}
       onUngroup={onUngroup}
       onClose={onCloseTab}
+      closeDestructive={ticketTabCloseIsDestructive}
       actionsFor={(tab) => {
         const actions: TabAction[] = [];
         if (onTakeOutTab && groups === undefined)
