@@ -46,9 +46,11 @@ import { SCROLL_THUMB_GRAB_EVENT } from "@renderer/lib/scroll-thumb/overlay-scro
 
 import {
   followingAfterScroll,
+  followingOnLift,
   followingSettled,
   keyScrollsUp,
   scrollPlace,
+  thumbMoved,
 } from "./reader-following";
 import { wheelDetachesFollowing } from "./scroll-chaining";
 import { glideToLatest } from "./scroll-to-latest";
@@ -303,8 +305,13 @@ function useReaderFollowing() {
     if (scroller === null) return;
     const view = scroller.ownerDocument.defaultView ?? window;
     let place = scrollPlace(scroller);
-    let held = false;
-    let handUntil = 0;
+    // Until when each kind of hand is on the transcript: `Infinity` while
+    // held, and READER_HAND_MS more once lifted.
+    let thumbUntil = 0;
+    let directUntil = 0;
+    // Where the thumb was grabbed, and where the reader last moved it.
+    let grabbed = place;
+    let thumbRest = place;
     const timers = new Set<number>();
     // The library's own writes are not the reader's, and their scroll event
     // can arrive a frame late: after a wheel up has already released, where it
@@ -319,7 +326,9 @@ function useReaderFollowing() {
       const previous = place;
       place = scrollPlace(scroller);
       if (ownWrite) return;
-      const hand = held ? "holding" : performance.now() < handUntil ? "recent" : "none";
+      const now = performance.now();
+      const hand = now < thumbUntil ? "thumb" : now < directUntil ? "direct" : "none";
+      if (thumbUntil === Infinity && thumbMoved(previous, place)) thumbRest = place;
       const change = followingAfterScroll(previous, place, hand);
       const wasFollowing = state.isAtBottom;
       if (change === "release" && wasFollowing) latest.current.stopScroll();
@@ -346,29 +355,43 @@ function useReaderFollowing() {
         inTextEntry: target?.closest(TEXT_ENTRY) != null,
         onControl: target?.closest(SPACE_CONTROL) != null,
       });
-      if (up) handUntil = performance.now() + READER_HAND_MS;
+      if (up) directUntil = Math.max(directUntil, performance.now() + READER_HAND_MS);
     };
-    // A grab of the scroll thumb (whose press never reaches the scroller, so
-    // the thumb says so itself) or a touch anywhere in the transcript.
-    const onHold = () => {
-      held = true;
+    // A grab of the scroll thumb, whose press never reaches the scroller, so
+    // the thumb says so itself; or a touch anywhere in the transcript.
+    const onGrab = () => {
+      thumbUntil = Infinity;
+      grabbed = scrollPlace(scroller);
+      thumbRest = grabbed;
     };
-    const onLift = () => {
-      if (!held) return;
-      held = false;
-      handUntil = performance.now() + READER_HAND_MS;
+    const onTouch = () => {
+      directUntil = Infinity;
+    };
+    const onLift = (event: Event) => {
+      const lifted = performance.now() + READER_HAND_MS;
+      const touch = event.type === "touchend" || event.type === "touchcancel";
+      // A drag ends with its pointer capture; a touch with its touchend; both with blur.
+      if (thumbUntil === Infinity && !touch) {
+        thumbUntil = lifted;
+        // Where the reader last moved the thumb, not where it was kept since.
+        const change = followingOnLift(grabbed, thumbRest);
+        if (change === "follow" && !state.isAtBottom) {
+          void latest.current.scrollToBottom("instant");
+        }
+      }
+      if (directUntil === Infinity && event.type !== "lostpointercapture") directUntil = lifted;
     };
     scroller.addEventListener("scroll", classify, { capture: true, passive: true });
     scroller.addEventListener("scroll", onScroll, { passive: true });
-    scroller.addEventListener(SCROLL_THUMB_GRAB_EVENT, onHold);
-    scroller.addEventListener("touchstart", onHold, { passive: true });
+    scroller.addEventListener(SCROLL_THUMB_GRAB_EVENT, onGrab);
+    scroller.addEventListener("touchstart", onTouch, { passive: true });
     view.addEventListener("keydown", onKey);
     for (const name of LIFT_EVENTS) view.addEventListener(name, onLift, { passive: true });
     return () => {
       scroller.removeEventListener("scroll", classify, { capture: true });
       scroller.removeEventListener("scroll", onScroll);
-      scroller.removeEventListener(SCROLL_THUMB_GRAB_EVENT, onHold);
-      scroller.removeEventListener("touchstart", onHold);
+      scroller.removeEventListener(SCROLL_THUMB_GRAB_EVENT, onGrab);
+      scroller.removeEventListener("touchstart", onTouch);
       view.removeEventListener("keydown", onKey);
       for (const name of LIFT_EVENTS) view.removeEventListener(name, onLift);
       for (const timer of timers) view.clearTimeout(timer);

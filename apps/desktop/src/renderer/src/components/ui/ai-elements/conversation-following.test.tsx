@@ -161,21 +161,34 @@ async function readUp() {
   expect(away.at(-1)).toBeGreaterThan(400);
 }
 
-for (const [how, arrive] of [
-  ["wheel", (by: number) => wheel(by)],
-  // A drag of the scroll thumb: no wheel, only the position.
-  ["thumb", async () => {}],
+const grab = () =>
+  act(async () => {
+    scroller.dispatchEvent(new Event(SCROLL_THUMB_GRAB_EVENT));
+  });
+// The thumb swallows its pointerup; the end of its pointer capture is what is left.
+const letGo = () =>
+  act(async () => {
+    document.body.dispatchEvent(new PointerEvent("lostpointercapture", { bubbles: true }));
+  });
+const none = async () => {};
+
+for (const [how, before, after] of [
+  ["wheel", (by: number) => wheel(by), none],
+  ["a thumb drag", grab, letGo],
+  // A scroll no input announces: only the position moves.
+  ["a scripted scroll", none, none],
 ] as const) {
   it(`follows a reader who arrives by ${how} within the zone in a frame where a line lands`, async () => {
     for (const stop of [0, 18, 69]) {
       await readUp();
-      await arrive(fromEnd() - stop);
+      await before(fromEnd() - stop);
       position = end() - stop;
       // The line lands in the very frame the reader arrives: the library
       // discards the arrival, and on main the reply runs on below the fold.
       await frame(2 * LINE);
-      const following = await stream(10);
-      expect(following.at(-1), `stopped ${stop}px from the end`).toBeLessThanOrEqual(1);
+      await after();
+      await stream(10);
+      expect(await rest(), `stopped ${stop}px from the end`).toBeLessThanOrEqual(1);
     }
   });
 }
@@ -207,23 +220,16 @@ it("releases a reader who scrolls up by key in a frame where a line lands, and k
 });
 
 it("releases a reader who drags the thumb up in a frame where a line lands", async () => {
-  await act(async () => {
-    scroller.dispatchEvent(new Event(SCROLL_THUMB_GRAB_EVENT));
-  });
+  await grab();
   position -= 100;
   await frame(LINE);
-  await act(async () => {
-    // The thumb swallows its pointerup; the end of its pointer capture is what is left.
-    document.body.dispatchEvent(new PointerEvent("lostpointercapture", { bubbles: true }));
-  });
+  await letGo();
   const after = await stream(20);
   expect(Math.min(...after)).toBeGreaterThan(100);
 });
 
-it("keeps a reader released who drags the thumb a little up and holds it while the reply grows", async () => {
-  await act(async () => {
-    scroller.dispatchEvent(new Event(SCROLL_THUMB_GRAB_EVENT));
-  });
+it("keeps a reader released who drags the thumb a little up, holds it while the reply grows, and lets go", async () => {
+  await grab();
   position -= 40;
   await frame();
   // Held still: a frame after each line lands, the thumb keeps its share of
@@ -238,25 +244,29 @@ it("keeps a reader released who drags the thumb a little up and holds it while t
   }
   await frame();
   expect(fromEnd()).toBeGreaterThan(40);
-  await act(async () => {
-    document.body.dispatchEvent(new PointerEvent("lostpointercapture", { bubbles: true }));
-  });
+  // A last small step up, in the frame a line lands and is laid out before
+  // the scroll event reads it. Then let go: the thumb's update still keeps
+  // its place once, a frame after the release.
+  position -= 5;
+  const share = position / end();
+  await frame(LINE, { readFirst: true });
+  await letGo();
+  await frame();
+  position = Math.round(share * end());
+  await frame();
+  const after = await stream(10);
+  expect(Math.min(...after)).toBeGreaterThan(40);
 });
 
 it("follows a reader who holds the thumb at the end while the reply grows, and after they let go", async () => {
   await readUp();
-  await act(async () => {
-    scroller.dispatchEvent(new Event(SCROLL_THUMB_GRAB_EVENT));
-  });
+  await grab();
   // The thumb taken to the end writes the end itself as the content grows.
   for (let i = 0; i < 6; i++) {
     position = end();
     await frame(i % 2 === 0 ? LINE : 0);
   }
-  await act(async () => {
-    // The thumb swallows its pointerup; the end of its pointer capture is what is left.
-    document.body.dispatchEvent(new PointerEvent("lostpointercapture", { bubbles: true }));
-  });
+  await letGo();
   await stream(10);
   expect(await rest()).toBeLessThanOrEqual(1);
 });
@@ -281,12 +291,8 @@ it("stays released when the scroll event of the library's last write arrives aft
 });
 
 it("lets go of the reader's hand when the thumb's drag ends", async () => {
-  await act(async () => {
-    scroller.dispatchEvent(new Event(SCROLL_THUMB_GRAB_EVENT));
-  });
-  await act(async () => {
-    document.body.dispatchEvent(new PointerEvent("lostpointercapture", { bubbles: true }));
-  });
+  await grab();
+  await letGo();
   await new Promise((resolve) => setTimeout(resolve, 600));
   // Anchoring and a line in one frame, which looks like a scroll up: with no
   // hand on the transcript any more, following holds.

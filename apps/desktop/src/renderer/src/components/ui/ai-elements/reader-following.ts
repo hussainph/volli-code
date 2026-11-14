@@ -44,10 +44,11 @@
  * - With no hand on the transcript, a `scrollTop` that GREW counts too. That
  *   is the library's own reading, and it catches a small step down taken in
  *   the frame a line lands.
- * - A held thumb keeps its share of the scroll range as the reply lengthens
+ * - A thumb keeps its share of the scroll range as the reply lengthens
  *   (VC-1217), which moves `scrollTop` and the distance to the end with
- *   nobody moving. While it is held, only that share tells which way the
- *   reader went.
+ *   nobody moving. Under the thumb, that share tells a move away; a drag
+ *   follows when it reaches the end, or when it lets go within the zone
+ *   having brought the thumb down.
  * - Moving away is told apart from anchoring by the hand behind it, not by
  *   geometry. While a reply streams, anchoring can lower `scrollTop` as content
  *   above shrinks, in the same frame as growth below adds distance, which is
@@ -98,18 +99,28 @@ export function scrollPlace(geometry: ScrollGeometry): ScrollPlace {
 export type FollowingChange = "follow" | "release" | null;
 
 /**
- * The reader's hand on the transcript: none, a key that scrolls up or a drag
- * lifted moments ago, or a thumb drag or touch still held.
+ * The reader's hand on the transcript.
+ *
+ * - `direct`: a key that scrolls up, or a touch, held or lifted moments ago.
+ *   It moves the content itself.
+ * - `thumb`: a drag of the scroll thumb, held or lifted moments ago.
  */
-export type ReaderHand = "none" | "recent" | "holding";
+export type ReaderHand = "none" | "direct" | "thumb";
+
+/**
+ * Within this many pixels of the end is the end itself: where a thumb taken
+ * all the way down puts the reader, and where the library's own following
+ * keeps them.
+ */
+const AT_END_PX = 1;
 
 /**
  * How far, in pixels, the reader moved toward the end between two places: a
- * negative number is away from it. While a thumb is held this is the change in
- * the thumb's share of the scroll range, in today's pixels.
+ * negative number is away from it. Under the thumb this is the change in the
+ * thumb's share of the scroll range, in today's pixels.
  */
 function towardEnd(previous: ScrollPlace, current: ScrollPlace, hand: ReaderHand): number {
-  if (hand === "holding") {
+  if (hand === "thumb") {
     const range = previous.top + previous.fromEnd;
     const share = range > 0 ? previous.top / range : 0;
     return current.top - share * (current.top + current.fromEnd);
@@ -120,6 +131,14 @@ function towardEnd(previous: ScrollPlace, current: ScrollPlace, hand: ReaderHand
 /**
  * What one scroll event means for following, given where the previous scroll
  * event left the reader and their hand. `null` is no change.
+ *
+ * Under the thumb only the end itself, or a move away, is decided here. A
+ * thumb keeps its share of the scroll range as the reply lengthens (VC-1217),
+ * and its scroll event can come after another event has already read the
+ * longer range: `scrollTop` then rises with nobody moving, which no
+ * comparison of two places can tell from a step down. Where a drag that stops
+ * short of the end leaves the reader is decided when it lets go
+ * ({@link followingOnLift}).
  */
 export function followingAfterScroll(
   previous: ScrollPlace,
@@ -127,14 +146,29 @@ export function followingAfterScroll(
   hand: ReaderHand,
 ): FollowingChange {
   const moved = towardEnd(previous, current, hand);
+  if (hand === "thumb") {
+    if (current.fromEnd <= AT_END_PX && moved > MOVED_PX) return "follow";
+    return moved < -MOVED_PX ? "release" : null;
+  }
   const nearer = moved > MOVED_PX || (hand === "none" && current.top > previous.top + MOVED_PX);
   if (nearer) return current.fromEnd <= FOLLOW_ZONE_PX ? "follow" : null;
   if (hand === "none") return null;
-  const away =
-    hand === "holding"
-      ? moved < -MOVED_PX
-      : current.top < previous.top - MOVED_PX && moved < -MOVED_PX;
-  return away ? "release" : null;
+  return current.top < previous.top - MOVED_PX && moved < -MOVED_PX ? "release" : null;
+}
+
+/** Whether a scroll event under the thumb moved it, rather than the thumb keeping its place. */
+export function thumbMoved(previous: ScrollPlace, current: ScrollPlace): boolean {
+  return Math.abs(towardEnd(previous, current, "thumb")) > MOVED_PX;
+}
+
+/**
+ * What a thumb drag means for following when it lets go: grabbed at
+ * `grabbed`, last moved to `rest`. A drag that brought the thumb down and
+ * rested within the zone follows; one that took it up stays released.
+ */
+export function followingOnLift(grabbed: ScrollPlace, rest: ScrollPlace): FollowingChange {
+  const down = towardEnd(grabbed, rest, "thumb") > MOVED_PX;
+  return down && rest.fromEnd <= FOLLOW_ZONE_PX ? "follow" : null;
 }
 
 /**
@@ -146,7 +180,7 @@ export function followingAfterScroll(
  * - A release the library undid is released again.
  * - With a hand on the transcript, a move that was not toward the end does
  *   not re-attach. The library re-attaches on any rise in `scrollTop` near
- *   the end, which a held thumb keeping its place makes with no move at all.
+ *   the end, which a thumb keeping its place makes with no move at all.
  * - With no hand, the library's own re-attach stands. That includes the
  *   re-lock near the end when content shrinks.
  */
