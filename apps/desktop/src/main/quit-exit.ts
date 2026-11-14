@@ -9,20 +9,33 @@
  * waiting. Nothing JavaScript can call skips that join (`process.exit` and
  * `process.reallyExit` wait for it too), so when the only workers left are
  * read-only (`decideQuitExit` in `@volli/shared`) this ends the process with
- * SIGKILL, after it has made itself every write a normal exit leaves to that
+ * SIGKILL, after it has made itself the writes a normal exit leaves to that
  * teardown:
  *
- * - every browser session's cookies and DOM storage, which Chromium would
- *   write after Node's teardown, the step the join blocks;
- * - the first-paint mirror's pending write and the log's tail;
+ * - every browser session's cookies (`cookies.flushStore()`, awaited) and DOM
+ *   storage (`flushStorageData()`, which returns before the write lands: it
+ *   is followed by the cookie round trip and a short wait, and is
+ *   best-effort; measured on Electron 44.9.3, a localStorage value set just
+ *   before survived 10 of 10 kills made this way, and 0 of 8 made at once
+ *   after the call);
+ * - the first-paint mirror's pending write;
  * - the process's `exit` listeners (the perf store's close, the setup
- *   commands' process groups), which Node runs during its teardown.
+ *   commands' process groups), which Node runs during its teardown, then the
+ *   log's tail, so what those listeners log is kept.
  *
- * Everything the quit itself drains (Sessions, the agent socket, the runner,
- * terminals, drafts) has drained before this runs: it replaces only the call
- * that ends the quit. What it skips is the rest of Chromium's teardown (its
- * caches: preferences, network state, HSTS, the HTTP cache index) and Node's
- * cleanup hooks; committed SQLite data is on disk either way.
+ * Windows and IPC stay alive until the kill, so the decision is asked again
+ * after every wait, the last time in the same tick as the kill; any answer
+ * but "exit now" falls back to the ordinary `app.exit`.
+ *
+ * It replaces only the call that ends the quit: the quit's drain (Sessions,
+ * the agent socket, the runner, terminals, drafts) runs first, as before, and
+ * as before an exit after the drain's 15 s deadline comes part-way through it
+ * (the `exit call` line says `afterDeadline`). What the kill skips: the rest
+ * of Chromium's teardown (pending Preferences and Local State writes, network
+ * state and HSTS, the HTTP cache index), the windows' `closed` handlers (the
+ * Browser Tabs' `closeAll`: in-memory tab registry, an IPC event and hold
+ * notices, nothing on disk), and Node's cleanup hooks (better-sqlite3's close,
+ * so the host's connection is not checkpointed; committed data is on disk).
  *
  * An upgrade is never cut short: a quit asked during one is held, its window
  * stays up saying so, and the quit runs once the upgrade's worker has exited.
@@ -93,6 +106,7 @@ const log = hostLogger("quit");
 
 export function createQuitExit(ports: QuitExitPorts): QuitExit {
   let acceptedAt: number | null = null;
+  let deadlineExpired = false;
   let exiting = false;
   let holding = false;
   const sinceQuitMs = (): number | null =>
@@ -104,7 +118,25 @@ export function createQuitExit(ports: QuitExitPorts): QuitExit {
     log.info("quit accepted", { reason });
   };
 
-  const exitNow = async (code: number): Promise<void> => {
+  /** The exit's line: how it ends, what still runs, and whether the drain ran out of time. */
+  const exitLine = (mode: "immediate" | "normal", changed: boolean): void => {
+    log.info("exit call", {
+      mode,
+      liveWorkers: ports.liveWorkers(),
+      sinceQuitMs: sinceQuitMs(),
+      afterDeadline: deadlineExpired,
+      ...(changed ? { changed: true } : {}),
+    });
+  };
+
+  /**
+   * Windows and IPC are still alive until the process ends, so a worker
+   * may start while this waits: every step that awaits is followed by
+   * asking again, and the last answer comes in the same tick as the kill.
+   */
+  const stillExitNow = (): boolean => ports.decide({ claim: true }) === "exit-now";
+
+  const exitNow = async (app: { exit(code?: number): void }, code: number): Promise<void> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([
       ports.flush().catch(() => undefined),
@@ -113,11 +145,24 @@ export function createQuitExit(ports: QuitExitPorts): QuitExit {
       }),
     ]);
     clearTimeout(timer);
-    await ports.flushLog().catch(() => undefined);
+    if (!stillExitNow()) {
+      exitLine("normal", true);
+      app.exit(code);
+      return;
+    }
+    exitLine("immediate", false);
+    // The exit listeners first, then the log: anything they log is kept.
     try {
       ports.runExitHandlers(code);
     } catch {
       // One listener that throws must not keep the process alive.
+    }
+    await ports.flushLog().catch(() => undefined);
+    // No JavaScript runs between this answer and the kill.
+    if (!stillExitNow()) {
+      exitLine("normal", true);
+      app.exit(code);
+      return;
     }
     ports.kill();
   };
@@ -129,14 +174,12 @@ export function createQuitExit(ports: QuitExitPorts): QuitExit {
       ports.endReadOnlyWorkers();
       await ports.settleWorkers(WORKER_SETTLE_GRACE_MS);
     }
-    const immediate = ports.decide({ claim: true }) === "exit-now";
-    log.info("exit call", {
-      mode: immediate ? "immediate" : "normal",
-      liveWorkers: ports.liveWorkers(),
-      sinceQuitMs: sinceQuitMs(),
-    });
-    if (immediate) await exitNow(code);
-    else app.exit(code);
+    if (stillExitNow()) {
+      await exitNow(app, code);
+      return;
+    }
+    exitLine("normal", false);
+    app.exit(code);
   };
 
   const waitForUpgrade = async (): Promise<void> => {
@@ -147,8 +190,9 @@ export function createQuitExit(ports: QuitExitPorts): QuitExit {
 
   return {
     accepted,
-    drained(deadlineExpired) {
-      log.info("shutdown drained", { durationMs: sinceQuitMs(), deadlineExpired });
+    drained(expired) {
+      deadlineExpired = expired;
+      log.info("shutdown drained", { durationMs: sinceQuitMs(), deadlineExpired: expired });
     },
     exitingApp(app) {
       return new Proxy(app, {

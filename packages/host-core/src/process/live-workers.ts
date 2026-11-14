@@ -112,21 +112,31 @@ export function quitExitDecision(options: { claim: boolean }): QuitExitDecision 
 }
 
 /**
- * Ends every live worker the quit may end, the way Node's teardown would end
- * it: `terminate()`, which stops a worker running JavaScript at once and one
- * inside a native call only when that call returns. A check is ended only
- * once claimed; any other worker is left to the ordinary exit. Returns how
- * many it asked to end, so what is still running afterwards is what is
- * stuck in a native call.
+ * Ends the live workers for a quit that will not wait for them, the way
+ * Node's teardown would end them: `terminate()`, which stops a worker running
+ * JavaScript at once and one inside a native call only when that call
+ * returns. Unless every live worker may be ended (a check counted as
+ * claimable), it ends and claims nothing, and the quit waits as before. A
+ * check is ended only once claimed; one already writing is left to finish.
+ * Returns how many it asked to end, so what is still running afterwards is
+ * what is stuck in a native call.
+ *
+ * A claimed check that is not killed in the end (the quit fell back to the
+ * ordinary exit) was terminated here, so it stops at its first write
+ * without writing; nothing records the check, and the next launch checks
+ * again.
  */
 export function endReadOnlyWorkers(): number {
+  const workers = [...live];
+  const kinds = workers.map((worker) => declaredWorkerExitKind(worker));
+  if (decideQuitExit(kinds.map((kind) => classifyWorker(kind, true))) !== "exit-now") return 0;
   let ended = 0;
-  for (const worker of live) {
-    const kind = declaredWorkerExitKind(worker);
-    if (classifyWorker(kind, kind === "database-check" && claim(worker)) !== "read-only") continue;
+  workers.forEach((worker, index) => {
+    const kind = kinds[index];
+    if (classifyWorker(kind, kind === "database-check" && claim(worker)) !== "read-only") return;
     void worker.terminate();
     ended += 1;
-  }
+  });
   return ended;
 }
 

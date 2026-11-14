@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   holdDatabaseCheckForSmoke,
   smokeDatabaseCheckOffMainBytes,
+  smokeBackupHoldRows,
   smokeDatabaseWorkerHoldRows,
   smokeDatabaseWorkerHoldUntil,
   type DatabaseCheckSmokeGlobal,
@@ -39,6 +40,14 @@ describe("smokeDatabaseWorkerHoldRows", () => {
     expect(
       smokeDatabaseWorkerHoldRows({ VOLLI_SMOKE_DATABASE_WORKER_HOLD_ROWS: "2000000000" }),
     ).toBe(2_000_000_000);
+  });
+});
+
+describe("smokeBackupHoldRows", () => {
+  it("holds nothing unless a whole number is set", () => {
+    expect(smokeBackupHoldRows({})).toBeUndefined();
+    expect(smokeBackupHoldRows({ VOLLI_SMOKE_BACKUP_HOLD_ROWS: "1.5" })).toBeUndefined();
+    expect(smokeBackupHoldRows({ VOLLI_SMOKE_BACKUP_HOLD_ROWS: "1000" })).toBe(1000);
   });
 });
 

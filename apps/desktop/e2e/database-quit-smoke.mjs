@@ -16,7 +16,11 @@
  *  2. A quit during the routine check ends the process within seconds
  *     (`[quit] exit call` says `immediate`), and the database file is
  *     byte-identical, its WAL empty. The next launch opens it.
- *  3. A quit during a schema upgrade (held inside SQLite until this smoke
+ *  3. A quit while the automatic backup's worker is inside a long read-only
+ *     SQLite call, after boot, with the host's own connection open and a row
+ *     written just before: the process ends within seconds, and the next
+ *     launch's routine check passes and the row is there.
+ *  4. A quit during a schema upgrade (held inside SQLite until this smoke
  *     releases it) keeps the process and its window until the upgrade
  *     returns; the window says the quit waits. A second launch
  *     meanwhile brings the window forward. The process then exits 0, and the
@@ -57,6 +61,8 @@ const HELD_CHECK = {
   VOLLI_SMOKE_DATABASE_CHECK_OFF_MAIN_BYTES: "0",
   VOLLI_SMOKE_DATABASE_WORKER_HOLD_ROWS: "100000000000",
 };
+/** The automatic backup held inside SQLite, its live connection open read-only, far longer than any bound here. */
+const HELD_BACKUP = { VOLLI_SMOKE_BACKUP_HOLD_ROWS: "100000000000" };
 /** How long a quit during the check may take to end the process (expected: about a second). */
 const IMMEDIATE_EXIT_BOUND_MS = 15_000;
 const checks = [];
@@ -73,8 +79,8 @@ async function check(label, operation) {
   console.log(`PASS: ${label}`);
 }
 
-async function profile() {
-  const root = join(scratch, "profile");
+async function profile(name = "profile") {
+  const root = join(scratch, name);
   const userDataDir = join(root, "user-data");
   const home = join(root, "home");
   const worktrees = join(root, "worktrees");
@@ -194,6 +200,37 @@ async function statusPage(run, label) {
   return page;
 }
 
+/** Writes one ticket through the window's bridge; resolves with null or the error. */
+function createTicket(page, title) {
+  return page.evaluate(async (ticketTitle) => {
+    const boot = await window.api.data.bootstrap();
+    if (!boot.ok) return boot.error;
+    const result = await window.api.tickets.create({
+      projectId: boot.data.projects[0].id,
+      status: "todo",
+      title: ticketTitle,
+      priority: "medium",
+    });
+    return result.ok ? null : result.error;
+  }, title);
+}
+
+/** Resolves once the backup's worker has marked its hold (`held`, beside its snapshot). */
+async function heldBackup(userDataDir) {
+  const directory = join(userDataDir, "backups");
+  return waitUntil(
+    "the automatic backup held inside SQLite",
+    async () => {
+      const names = await fs.readdir(directory).catch(() => []);
+      for (const name of names.filter((entry) => entry.startsWith(".automatic-"))) {
+        if (await fs.stat(join(directory, name, "held")).catch(() => null)) return true;
+      }
+      return false;
+    },
+    { timeout: 60000, interval: 100 },
+  );
+}
+
 async function boardHasSeed(run) {
   const page = await firstAppWindow(run.app, { timeout: 60000 });
   await page.waitForLoadState("domcontentloaded");
@@ -265,6 +302,66 @@ async function main() {
     await boardHasSeed(after);
   });
   await close(after);
+
+  // A fresh profile: its first launch starts the automatic backup at boot.
+  const backupConfig = await profile("backup-profile");
+  const backupRepo = await makeGitRepo(scratch, "backup-project-");
+  const backingUp = await open(backupConfig, "held backup", HELD_BACKUP);
+  await check(
+    "a quit while the backup is inside SQLite, the host's connection open, ends the process at once",
+    async () => {
+      const page = await firstAppWindow(backingUp.app, { timeout: 60000 });
+      await page.waitForLoadState("domcontentloaded");
+      assertBuiltRendererLoaded(page);
+      await seedProjects(page, [
+        { id: "backup-quit-project", name: "Backup Quit", path: backupRepo, prefix: "BKP" },
+      ]);
+      await heldBackup(backupConfig.userDataDir);
+      assert.equal(await createTicket(page, "Written just before the quit"), null);
+      const exited = exitOf(backingUp);
+      const asked = Date.now();
+      await quit(backingUp);
+      const exit = await Promise.race([
+        exited,
+        new Promise((resolve) => setTimeout(() => resolve(null), IMMEDIATE_EXIT_BOUND_MS)),
+      ]);
+      const quitMs = Date.now() - asked;
+      assert.ok(exit !== null, `the process outlived the quit by ${IMMEDIATE_EXIT_BOUND_MS} ms`);
+      runs.delete(backingUp);
+      console.log(
+        `quit during the backup: process gone ${quitMs} ms after the quit; ${JSON.stringify(exit)}`,
+      );
+      assert.deepEqual(exit, { code: null, signal: "SIGKILL" }, "ended by the app's own exit");
+      assert.match(
+        backingUp.output,
+        /\[quit\] exit call \{[^}]*mode: 'immediate'[^}]*liveWorkers: 1/s,
+      );
+      // Killed with the host's connection open: its last commits are still in the WAL.
+      const wal = await fs.stat(`${backupConfig.dbPath}-wal`).catch(() => null);
+      console.log(`WAL left by the killed process: ${wal?.size ?? 0} bytes`);
+      assert.ok((wal?.size ?? 0) > 0, "the WAL holds the last commits");
+    },
+  );
+  const afterBackup = await open(backupConfig, "launch after the killed backup", {
+    VOLLI_SMOKE_DATABASE_CHECK_OFF_MAIN_BYTES: "0",
+  });
+  await check(
+    "the next launch's check passes, and the row written before the quit is there",
+    async () => {
+      const page = await firstAppWindow(afterBackup.app, { timeout: 60000 });
+      await page.waitForLoadState("domcontentloaded");
+      assertBuiltRendererLoaded(page);
+      await goToBoard(page);
+      await cardById(page, "BKP-1")
+        .filter({ hasText: "Written just before the quit" })
+        .waitFor({ timeout: 15000 });
+      assert.match(
+        afterBackup.output,
+        /\[desktop\] database check finished \{[^}]*outcome: 'clean'/s,
+      );
+    },
+  );
+  await close(afterBackup);
 
   const { fromVersion, head } = olderDatabase("write", join(scratch, "older.db"), "2");
   for (const suffix of ["", "-wal", "-shm"])

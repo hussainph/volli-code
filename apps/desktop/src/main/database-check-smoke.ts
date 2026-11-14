@@ -6,9 +6,10 @@
  * small check answers long before the window's 400 ms, so without them no
  * lane would ever take that path.
  *
- * Two more, for VC-1208's quit, keep the worker inside long read-only SQLite
- * statements before its open (a count of rows, or until a file exists), so a
- * smoke can quit while it is there.
+ * Three more, for VC-1208's quit, keep a worker inside long read-only SQLite
+ * statements: the launch's database worker before its open (a count of rows,
+ * or until a file exists), and the automatic backup before its copy, so a
+ * smoke can quit while one is there.
  *
  * None changes what is checked. One moves the size from which the check
  * runs in the worker; another holds the launch, after the worker has
@@ -29,6 +30,13 @@ export const SMOKE_HOLD_DATABASE_CHECK_ENV = "VOLLI_SMOKE_HOLD_DATABASE_CHECK";
  */
 export const SMOKE_DATABASE_WORKER_HOLD_ROWS_ENV = "VOLLI_SMOKE_DATABASE_WORKER_HOLD_ROWS";
 
+/**
+ * A whole number of rows: the automatic backup's worker, with the live
+ * database open read-only, counts that many in one statement before its copy
+ * (VC-1208), so a smoke can quit with the host's own connection open.
+ */
+export const SMOKE_BACKUP_HOLD_ROWS_ENV = "VOLLI_SMOKE_BACKUP_HOLD_ROWS";
+
 /** A file path: the worker keeps holding inside SQLite until the smoke creates it. */
 export const SMOKE_DATABASE_WORKER_HOLD_UNTIL_ENV = "VOLLI_SMOKE_DATABASE_WORKER_HOLD_UNTIL";
 
@@ -47,6 +55,13 @@ export function smokeDatabaseCheckOffMainBytes(env: NodeJS.ProcessEnv): number |
 /** The smoke's held-step size, or `undefined` (the shipped default: no hold) unless set to a whole number. */
 export function smokeDatabaseWorkerHoldRows(env: NodeJS.ProcessEnv): number | undefined {
   const value = env[SMOKE_DATABASE_WORKER_HOLD_ROWS_ENV];
+  if (value === undefined || !/^\d+$/.test(value)) return undefined;
+  return Number(value);
+}
+
+/** The backup's held-step size, or `undefined` (the shipped default: no hold) unless set to a whole number. */
+export function smokeBackupHoldRows(env: NodeJS.ProcessEnv): number | undefined {
+  const value = env[SMOKE_BACKUP_HOLD_ROWS_ENV];
   if (value === undefined || !/^\d+$/.test(value)) return undefined;
   return Number(value);
 }

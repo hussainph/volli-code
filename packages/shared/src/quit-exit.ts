@@ -50,48 +50,52 @@ export type QuitExitDecision =
   | "finish-upgrade-first";
 
 /**
- * The tag a creation site puts on its worker. A registered symbol, so a
- * package that cannot import the host's watcher can still declare its worker.
+ * The registered symbol's key a creation site tags its worker under. A
+ * package that cannot load this one at run time (a worker entry that must
+ * stay small) declares through this type, so the key cannot drift.
  */
-const WORKER_EXIT_KIND: unique symbol = Symbol.for("volli.worker-exit-kind");
+export type WorkerExitKindKey = "volli.worker-exit-kind";
+
+const WORKER_EXIT_KIND_KEY: WorkerExitKindKey = "volli.worker-exit-kind";
+const WORKER_EXIT_KIND: unique symbol = Symbol.for(WORKER_EXIT_KIND_KEY);
+
+/**
+ * What each declared kind is to a quit; `claimed` matters only for a check.
+ * Every kind must be here: a new kind does not compile until it is classified.
+ */
+const DECLARED_CLASS = {
+  "database-check": (claimed: boolean) => (claimed ? "read-only" : "writing"),
+  "database-upgrade": () => "upgrade",
+  "automatic-backup": () => "read-only",
+  "database-reader": () => "read-only",
+  stateless: () => "read-only",
+} as const satisfies Record<DeclaredWorkerKind, (claimed: boolean) => WorkerExitClass>;
 
 /** Declares what `worker` is; call right after constructing it. */
 export function declareWorkerExitKind(worker: object, kind: DeclaredWorkerKind): void {
   Object.defineProperty(worker, WORKER_EXIT_KIND, { value: kind, configurable: true });
 }
 
+function isDeclaredWorkerKind(value: unknown): value is DeclaredWorkerKind {
+  return typeof value === "string" && Object.hasOwn(DECLARED_CLASS, value);
+}
+
 /** The kind a creation site declared, or `undefined`. */
 export function declaredWorkerExitKind(worker: object): DeclaredWorkerKind | undefined {
   const value: unknown = (worker as { [WORKER_EXIT_KIND]?: unknown })[WORKER_EXIT_KIND];
-  return value === "database-check" ||
-    value === "database-upgrade" ||
-    value === "automatic-backup" ||
-    value === "database-reader" ||
-    value === "stateless"
-    ? value
-    : undefined;
+  return isDeclaredWorkerKind(value) ? value : undefined;
 }
 
 /**
  * One worker's class. A check is read-only only while the quit holds its
- * claim (`claimed`): unclaimed, it may already be writing.
+ * claim (`claimed`): unclaimed, it may already be writing. A worker no
+ * creation site declared is unknown, and the quit waits for it.
  */
 export function classifyWorker(
   kind: DeclaredWorkerKind | undefined,
   claimed = false,
 ): WorkerExitClass {
-  switch (kind) {
-    case "database-check":
-      return claimed ? "read-only" : "writing";
-    case "database-upgrade":
-      return "upgrade";
-    case "automatic-backup":
-    case "database-reader":
-    case "stateless":
-      return "read-only";
-    default:
-      return "unknown";
-  }
+  return kind === undefined ? "unknown" : DECLARED_CLASS[kind](claimed);
 }
 
 /** The rule: an upgrade waits with its window; all read-only exits now; anything else exits as before. */

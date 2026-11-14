@@ -36,6 +36,13 @@ export interface AutomaticBackupRequest {
   appVersion: string;
   outputPath: string;
   now: number;
+  /**
+   * Smokes only (`VOLLI_SMOKE_BACKUP_HOLD_ROWS`, VC-1208): with the live
+   * database open read-only, one SQLite statement counts this many rows
+   * before the copy, so a smoke can quit while the worker is inside a long
+   * native call. It marks the moment with a `held` file in its work directory.
+   */
+  holdRows?: number | undefined;
   /** Only the move's own backup bypasses its whole-flow maintenance pause. */
   move?: {
     exportRoot: string;
@@ -204,6 +211,14 @@ export async function createAutomaticBackup(
     const snapshotPath = join(workDir, "snapshot.db");
     try {
       source.pragma("cache_size = -2048");
+      if (request.holdRows !== undefined) {
+        await writeFile(join(workDir, "held"), "", { mode: 0o600 });
+        source
+          .prepare(
+            "WITH RECURSIVE counted(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM counted WHERE n < ?) SELECT count(*) FROM counted",
+          )
+          .get(request.holdRows);
+      }
       // One native copy step cannot be restarted indefinitely by concurrent
       // Session writes. SQLite WAL writers still proceed on their own connection.
       await source.backup(snapshotPath, { progress: () => 0x7fff_ffff });

@@ -79,6 +79,8 @@ interface BackupPlatform {
   workerEntry: string | URL;
   appVersion: string;
   reveal(directory: string): Promise<void>;
+  /** Smokes only: the backup's hold before its copy (`AutomaticBackupRequest.holdRows`). */
+  holdRows?: number;
 }
 
 export interface HostCoreOptions {
@@ -261,6 +263,7 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
                   transcriptsRoot: sessionTranscriptsRoot(options.dataDir),
                   appVersion: backupPlatform.appVersion,
                   now: Date.now(),
+                  holdRows: backupPlatform.holdRows,
                 },
                 signal,
                 onNotice,

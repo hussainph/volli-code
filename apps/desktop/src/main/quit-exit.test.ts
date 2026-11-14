@@ -86,6 +86,7 @@ describe("createQuitExit: the exit", () => {
         mode: "normal",
         liveWorkers: 0,
         sinceQuitMs: 0,
+        afterDeadline: false,
       }),
     );
   });
@@ -105,9 +106,13 @@ describe("createQuitExit: the exit", () => {
     const target = app(p.order);
     createQuitExit(p).exitingApp(target).exit();
     await settled();
-    expect(p.order).toEqual(["end", "settle", "flush", "flushLog", "exitHandlers", "kill"]);
+    // The exit listeners before the log's tail, so what they log is kept.
+    expect(p.order).toEqual(["end", "settle", "flush", "exitHandlers", "flushLog", "kill"]);
     expect(target.exit).not.toHaveBeenCalled();
     expect(p.runExitHandlers).toHaveBeenCalledWith(0);
+    // Asked before the writes, after them, and in the same tick as the kill.
+    expect(p.decide).toHaveBeenCalledTimes(3);
+    expect(p.decide).toHaveBeenNthCalledWith(3, { claim: true });
     expect(log.records).toContainEqual(
       expect.objectContaining({
         msg: "exit call",
@@ -115,6 +120,40 @@ describe("createQuitExit: the exit", () => {
         liveWorkers: 2,
         sinceQuitMs: null,
       }),
+    );
+  });
+
+  it.each([2, 3])(
+    "turns the kill into the ordinary exit when a worker it may not end starts meanwhile (answer %i)",
+    async (changesAt) => {
+      log = captureHostLog("info");
+      let asked = 0;
+      const p = ports({
+        liveWorkers: () => 1,
+        decide: vi.fn(() => (++asked >= changesAt ? ("exit" as const) : ("exit-now" as const))),
+      });
+      const target = app(p.order);
+      createQuitExit(p).exitingApp(target).exit(0);
+      await settled();
+      expect(p.kill).not.toHaveBeenCalled();
+      expect(target.exit).toHaveBeenCalledExactlyOnceWith(0);
+      expect(p.order.at(-1)).toBe("app.exit(0)");
+      expect(log.records).toContainEqual(
+        expect.objectContaining({ msg: "exit call", mode: "normal", changed: true }),
+      );
+    },
+  );
+
+  it("says when the exit comes after the drain's deadline", async () => {
+    log = captureHostLog("info");
+    const p = ports();
+    const quit = createQuitExit(p);
+    quit.accepted("quit");
+    quit.drained(true);
+    quit.exitingApp(app(p.order)).exit(0);
+    await settled();
+    expect(log.records).toContainEqual(
+      expect.objectContaining({ msg: "exit call", mode: "normal", afterDeadline: true }),
     );
   });
 

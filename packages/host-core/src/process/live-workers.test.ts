@@ -133,29 +133,51 @@ describe("quitExitDecision", () => {
 });
 
 describe("endReadOnlyWorkers", () => {
-  it("ends the read-only workers and a claimed check, and leaves every other one running", async () => {
+  it("ends every live worker, a check once claimed, when all of them may be ended", async () => {
     const backup = start();
     declareWorkerExitKind(backup, "automatic-backup");
     const gate = createReadOnlyGate();
     const check = start();
     declareWorkerExitKind(check, "database-check");
     attachReadOnlyGate(check, gate);
-    const writingGate = createReadOnlyGate();
-    const writing = start();
-    declareWorkerExitKind(writing, "database-check");
-    attachReadOnlyGate(writing, writingGate);
-    leaveReadOnlyPhase(writingGate);
-    const upgrade = start();
-    declareWorkerExitKind(upgrade, "database-upgrade");
-    const unknown = start();
     const ended = Promise.all([exited(backup), exited(check)]);
 
     expect(endReadOnlyWorkers()).toBe(2);
     await ended;
-    expect(liveWorkerCount()).toBe(3);
+    expect(liveWorkerCount()).toBe(0);
     expect(() => leaveReadOnlyPhase(gate)).toThrow(/Volli is quitting/);
-    expect(quitExitDecision({ claim: true })).toBe("finish-upgrade-first");
-    void unknown;
+  });
+
+  it("ends and claims nothing for a quit that waits", () => {
+    declareWorkerExitKind(start(), "automatic-backup");
+    const gate = createReadOnlyGate();
+    const check = start();
+    declareWorkerExitKind(check, "database-check");
+    attachReadOnlyGate(check, gate);
+    start();
+    const upgrade = start();
+    declareWorkerExitKind(upgrade, "database-upgrade");
+
+    expect(endReadOnlyWorkers()).toBe(0);
+    expect(liveWorkerCount()).toBe(4);
+    // Unclaimed: the check may still go on to write.
+    expect(() => leaveReadOnlyPhase(gate)).not.toThrow();
+  });
+
+  it("leaves a check that is already writing to finish", async () => {
+    const backup = start();
+    declareWorkerExitKind(backup, "automatic-backup");
+    const gate = createReadOnlyGate();
+    const writing = start();
+    declareWorkerExitKind(writing, "database-check");
+    attachReadOnlyGate(writing, gate);
+    leaveReadOnlyPhase(gate);
+    const ended = exited(backup);
+
+    expect(endReadOnlyWorkers()).toBe(1);
+    await ended;
+    expect(liveWorkerCount()).toBe(1);
+    expect(quitExitDecision({ claim: true })).toBe("exit");
   });
 });
 

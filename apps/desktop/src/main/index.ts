@@ -99,6 +99,7 @@ import { createQuitExit } from "./quit-exit";
 import {
   holdDatabaseCheckForSmoke,
   smokeDatabaseCheckOffMainBytes,
+  smokeBackupHoldRows,
   smokeDatabaseWorkerHoldRows,
   smokeDatabaseWorkerHoldUntil,
 } from "./database-check-smoke";
@@ -513,6 +514,8 @@ const desktopLog = ownsAppProfile
       terminal: isDev || isSmokeBootCapture(process.env),
     })
   : null;
+/** After the browser sessions' flush, before an immediate exit: DOM storage's write is not awaitable. */
+const DOM_STORAGE_SETTLE_MS = 100;
 /** The first-paint mirror's pending writes, once boot has a writer (VC-1208's immediate exit). */
 let settleFirstPaintMirror: () => Promise<void> = () => Promise.resolve();
 /** Why a quit happens, as far as main knows it when the quit is accepted (VC-1208). */
@@ -537,14 +540,18 @@ const quitExit = createQuitExit({
   settleWorkers: settleLiveWorkers,
   decide: quitExitDecision,
   endReadOnlyWorkers,
-  flush: () =>
-    Promise.allSettled([
+  flush: async () => {
+    await Promise.allSettled([
       ...[...browserSessions].map(async (browserSession) => {
+        // Returns before the write lands; the cookie round trip and the
+        // wait below give it time (best-effort, see quit-exit.ts).
         browserSession.flushStorageData();
         await browserSession.cookies.flushStore();
       }),
       settleFirstPaintMirror(),
-    ]),
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, DOM_STORAGE_SETTLE_MS));
+  },
   flushLog: () => desktopLog?.flush() ?? Promise.resolve(),
   runExitHandlers: (code) => {
     process.emit("exit", code);
@@ -1350,6 +1357,8 @@ const appStartup = app.whenReady().then(async () => {
     // quit already under way. A quit held for an upgrade runs now.
     if (quitExit.quitting()) return;
   }
+  // A smoke may hold the automatic backup inside SQLite (VC-1208); inert unless set.
+  const backupHoldRows = smokeBackupHoldRows(process.env);
   const hostCore = createHostCore(hostPorts, {
     dataDir: app.getPath("userData"),
     stopPolicy: "desktop-quit",
@@ -1359,6 +1368,7 @@ const appStartup = app.whenReady().then(async () => {
     backups: {
       workerEntry: join(__dirname, "automatic-backup-worker.cjs"),
       appVersion: app.getVersion(),
+      ...(backupHoldRows === undefined ? {} : { holdRows: backupHoldRows }),
       reveal: async (directory) => {
         const error = await shell.openPath(directory);
         if (error) throw new Error(error);
