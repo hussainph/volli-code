@@ -14,6 +14,7 @@ export async function measureChatWindow({ contents, rendererRssMb, settings, pau
     streamTokenRate: STREAM_TOKEN_RATE,
     streamContent: STREAM_CONTENT,
     island: ISLAND,
+    materials: MATERIALS,
     draftPlanes: DRAFT_PLANES,
     draftBallast: DRAFT_BALLAST,
     draftKeys: DRAFT_KEYS,
@@ -212,6 +213,7 @@ export async function measureChatWindow({ contents, rendererRssMb, settings, pau
     await pause(2500);
 
     report.steps.push(await sample("empty"));
+    await run(`window.chatBench.materialsArm(${JSON.stringify(MATERIALS)})`);
     await run(`window.chatBench.seed(${SESSIONS}, ${TURNS})`);
     if (ARM === "draft") await draftArm();
     else if (ARM === "reveal") await revealArm();
