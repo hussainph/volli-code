@@ -26,11 +26,13 @@ import { ArrowDownIcon } from "@renderer/components/ui/icon";
 
 import { Button } from "@renderer/components/ui/button";
 import { cn } from "@renderer/lib/utils";
-import type { ComponentProps, ReactNode, Ref } from "react";
+import { prefersReducedMotion } from "@renderer/hooks/use-reduced-motion";
+import type { ComponentProps, MouseEvent, ReactNode, Ref } from "react";
 import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -40,6 +42,7 @@ import type { StickToBottomContext } from "use-stick-to-bottom";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 
 import { wheelDetachesFollowing } from "./scroll-chaining";
+import { glideToLatest } from "./scroll-to-latest";
 
 /**
  * The render-prop form of `StickToBottom`'s children is deliberately dropped.
@@ -91,6 +94,10 @@ export type ConversationProps = Omit<ComponentProps<typeof StickToBottom>, "chil
  *
  * Reduced motion needs no branch now: there is no motion left to reduce. The
  * prop stays open so the lab can put `smooth` back and re-run the comparison.
+ *
+ * The one scroll that does move is the one a person asks for: "Scroll to
+ * latest" ({@link ConversationScrollButton}), and its motion is not the
+ * library's either.
  */
 export const Conversation = ({ className, resize, children, ...props }: ConversationProps) => {
   // Held by ref, not context, because this handler lives OUTSIDE the provider:
@@ -274,12 +281,30 @@ export const ConversationEmptyState = ({
 
 export type ConversationScrollButtonProps = ComponentProps<typeof Button>;
 
+/**
+ * The reader's own hand on the transcript during a trip to the end: it is
+ * theirs again at once. A wheel, a press on the scrollbar or a touch.
+ */
+const TAKE_BACK_EVENTS = ["wheel", "pointerdown", "touchstart"] as const;
+
+/**
+ * "Scroll to latest". The trip is `glideToLatest`'s, not the library's spring,
+ * which stopped short whenever content above the reader changed height on the
+ * way (VC-1232; the argument is in `scroll-to-latest.ts`). The library is told
+ * on arrival, with an instant `scrollToBottom`, so following a streamed reply
+ * starts from the end. The trip outlives the button's own hiding: this
+ * component stays mounted while the transcript has messages and only its
+ * button comes and goes.
+ */
 export const ConversationScrollButton = ({
   className,
   ...props
 }: ConversationScrollButtonProps) => {
   const { isAtBottom, scrollToBottom, scrollRef, contentRef } = useStickToBottomContext();
   const [awayFromBottom, setAwayFromBottom] = useState(false);
+  const [travelling, setTravelling] = useState(false);
+  const stopTrip = useRef<(() => void) | null>(null);
+  useEffect(() => () => stopTrip.current?.(), []);
   useLayoutEffect(() => {
     const scroller = scrollRef.current;
     if (scroller === null) return;
@@ -306,7 +331,9 @@ export const ConversationScrollButton = ({
     };
   }, [scrollRef, contentRef, isAtBottom]);
 
-  const shown = !isAtBottom && awayFromBottom;
+  // Gone the moment it is pressed, as it was when the library's spring
+  // claimed the bottom on the press.
+  const shown = !isAtBottom && awayFromBottom && !travelling;
   // While the button is up, the masked viewport lifts its bottom fade above it
   // (`[data-scroll-button]` in globals.css). Marked here rather than read back
   // with `.chat-transcript:has(<this button>)`: a `:has()` whose argument
@@ -322,9 +349,34 @@ export const ConversationScrollButton = ({
     };
   }, [shown, scrollRef]);
 
-  const handleScrollToBottom = useCallback(() => {
-    scrollToBottom();
-  }, [scrollToBottom]);
+  const handleScrollToBottom = useCallback(
+    (event: MouseEvent<HTMLButtonElement>) => {
+      const scroller = scrollRef.current;
+      if (scroller === null) return;
+      stopTrip.current?.();
+      const end = () => {
+        for (const name of TAKE_BACK_EVENTS) scroller.removeEventListener(name, takeBack);
+        stopTrip.current = null;
+        setTravelling(false);
+      };
+      // Keyboard activation (a click with no pointer behind it) and reduced
+      // motion arrive at once; a pointer press glides.
+      const cancel = glideToLatest(scroller, event.detail === 0 || prefersReducedMotion(), () => {
+        end();
+        scrollToBottom("instant");
+      });
+      function takeBack() {
+        cancel();
+        end();
+      }
+      for (const name of TAKE_BACK_EVENTS) {
+        scroller.addEventListener(name, takeBack, { passive: true });
+      }
+      stopTrip.current = takeBack;
+      setTravelling(true);
+    },
+    [scrollRef, scrollToBottom],
+  );
 
   return (
     shown && (

@@ -3351,8 +3351,8 @@ function ChatTranscript({
   // "Scroll to latest" pressed while rows are held back retires the window
   // first, as arriving at the bottom would, so the scroll that follows runs
   // over the tail alone. Scrolling across the hold would have the fill swap
-  // rows in under it, and a spring that sees content above it change height
-  // stops short of the end.
+  // rows in under it: work for rows the reader is leaving, which arriving
+  // would drop again. (The trip itself ends at the end either way, VC-1232.)
   React.useLayoutEffect(() => {
     if (dropHeld === undefined || heldFrom < 0) return;
     dropHeld.current = retireWindow;
