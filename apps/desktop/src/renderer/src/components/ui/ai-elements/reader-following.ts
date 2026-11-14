@@ -125,7 +125,13 @@ export function placeBefore(
   geometry: ScrollGeometry,
 ): ScrollPlace {
   if (libraryWrite === undefined || libraryWrite === geometry.scrollTop) return previous;
-  return scrollPlace({ ...geometry, scrollTop: libraryWrite });
+  // Read field by field: the scroller's geometry is getters on its prototype,
+  // which a spread would not copy.
+  return scrollPlace({
+    scrollTop: libraryWrite,
+    scrollHeight: geometry.scrollHeight,
+    clientHeight: geometry.clientHeight,
+  });
 }
 
 export type FollowingChange = "follow" | "release" | null;

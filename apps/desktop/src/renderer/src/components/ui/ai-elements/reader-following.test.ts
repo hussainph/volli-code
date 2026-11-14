@@ -40,6 +40,21 @@ describe("placeBefore", () => {
     // The library wrote the end (9,199); the reader's wheel took 11 off it.
     expect(placeBefore(at(9_000, 200), 9_199, geometry)).toEqual(at(9_199, 1));
   });
+
+  it("reads geometry kept in getters, as a scroll element keeps it", () => {
+    class Scroller {
+      get scrollTop() {
+        return 9_188;
+      }
+      get scrollHeight() {
+        return 10_000;
+      }
+      get clientHeight() {
+        return 800;
+      }
+    }
+    expect(placeBefore(at(9_000, 200), 9_199, new Scroller())).toEqual(at(9_199, 1));
+  });
 });
 
 describe("followingAfterScroll", () => {
