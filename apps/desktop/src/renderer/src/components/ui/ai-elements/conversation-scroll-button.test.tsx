@@ -35,7 +35,12 @@ beforeEach(() => {
   Object.defineProperties(scroller, {
     scrollHeight: { get: () => 1000 },
     clientHeight: { get: () => 200 },
-    scrollTop: { get: () => top },
+    scrollTop: {
+      get: () => top,
+      set: (value: number) => {
+        top = value;
+      },
+    },
   });
   state.scrollRef.current = scroller;
   state.contentRef.current = document.createElement("div");
@@ -60,9 +65,14 @@ it("appears only when detached, and goes away on reaching the latest line", asyn
   await act(async () => root.render(<ConversationScrollButton />));
   const button = host.querySelector<HTMLButtonElement>("button")!;
   expect(button.getAttribute("data-slot")).toBe("conversation-scroll-button");
+  // From the keyboard: at the end on the next frame, and following again.
   await act(async () => button.click());
-  expect(state.scrollToBottom).toHaveBeenCalledOnce();
-  top = 800;
+  expect(host.querySelector("button")).toBeNull();
+  await act(async () => {
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  });
+  expect(top).toBe(800);
+  expect(state.scrollToBottom).toHaveBeenCalledExactlyOnceWith("instant");
   await act(async () => {
     scroller.dispatchEvent(new Event("scroll"));
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));

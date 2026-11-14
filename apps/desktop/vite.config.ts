@@ -597,6 +597,9 @@ export default defineConfig(({ mode, command }) => ({
         // is a pure `.ts` beside `ui/ai-elements/conversation.tsx` so the
         // gate can reach it; the `.tsx` glue that calls it stays outside.
         "src/components/ui/ai-elements/scroll-chaining.ts",
+        // "Scroll to latest" (VC-1232): the trip that must end at the true end
+        // however the content changes on the way. A wrong answer stops short.
+        "src/components/ui/ai-elements/scroll-to-latest.ts",
         "src/lib/boundary-timer.ts",
         // Where a chat-named path opens (VC-120): the raw-tool-path translation
         // both transcript surfaces trust before touching any store or IPC.

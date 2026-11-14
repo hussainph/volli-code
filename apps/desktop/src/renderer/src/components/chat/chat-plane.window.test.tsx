@@ -1694,7 +1694,7 @@ describe("a far jump lands first and fills in behind (VC-1226)", () => {
     // The window goes before the scroll does, so the scroll runs over the tail.
     expect(spacer()).toBeNull();
     expect(turnRows()).toBe(TRANSCRIPT_TAIL_ROWS);
-    // The library scrolls on its next frames, to one pixel short of its maximum.
+    // The trip runs on the next frames and ends at the maximum (VC-1232).
     await waitFor(() => scroller.scrollTop > 40_000 - 600 - 8);
     await scrollTo(scroller, scroller.scrollTop);
 
