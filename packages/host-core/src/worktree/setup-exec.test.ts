@@ -231,6 +231,21 @@ describe("runPendingWorktreeSetup", () => {
     expect(stopRunningWorktreeSetups()).toBe(0);
   });
 
+  it("never signals a group at the quit once its shell has exited: the id may no longer be ours (VC-652)", async () => {
+    const { worktreePath, deps, params } = pendingWorktree();
+    // The shell exits right after the marker; the background child keeps the
+    // pipes open, so the run settles only after the drain grace: the window in
+    // which the id is still listed while its leader is gone.
+    const running = runPendingWorktreeSetup(deps, params("(sleep 3) & touch shell-done"));
+    const marker = join(worktreePath, "shell-done");
+    for (let i = 0; i < 400 && !existsSync(marker); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(stopRunningWorktreeSetups()).toBe(0);
+    expect(await running).toEqual({ kind: "succeeded" });
+  });
+
   it("finishes when the shell exits, though a background process it left holds the output open", async () => {
     const { deps, params } = pendingWorktree();
     const started = Date.now();

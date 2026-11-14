@@ -586,10 +586,12 @@ const quitExit = createQuitExit({
   stopChildren: async () => {
     // What Node's `exit` listeners would stop or write (ours, and pi-mcp's for
     // its stdio servers), done before a watched exit whose teardown a kill can
-    // skip (VC-652).
-    stopRunningWorktreeSetups();
-    desktopPerf?.store.flush();
-    await stopMcpServerProcessGroups();
+    // skip (VC-652). Each on its own: one that throws does not skip the others.
+    await Promise.allSettled([
+      (async () => stopRunningWorktreeSetups())(),
+      (async () => desktopPerf?.store.flush())(),
+      stopMcpServerProcessGroups(),
+    ]);
   },
   watchAvailable: () => exitWatch?.available() ?? false,
   watchExit: () => exitWatch?.arm() ?? null,

@@ -219,15 +219,30 @@ describe("createQuitExit: the exit", () => {
     expect(log.records.findLast((r) => r.component === "quit")?.msg).toBe("exit call");
   });
 
-  it("waits for the children's stop, bounded, before the watch", async () => {
+  it("stops children after the browser writes, and waits for them at most 1 s", async () => {
     vi.useFakeTimers();
-    const p = ports({ stopChildren: vi.fn(() => new Promise(() => undefined)) });
+    const p = ports({
+      stopChildren: vi.fn(() => {
+        p.order.push("stopChildren");
+        return new Promise(() => undefined);
+      }),
+    });
     const target = app(p.order);
     createQuitExit(p).exitingApp(target).exit(0);
-    await vi.advanceTimersByTimeAsync(IMMEDIATE_EXIT_FLUSH_MS - 1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p.order).toEqual(["flush", "stopChildren"]);
+    await vi.advanceTimersByTimeAsync(999);
     expect(p.watchExit).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(IMMEDIATE_EXIT_FLUSH_MS);
+    await vi.advanceTimersByTimeAsync(1);
     expect(p.order.slice(-3)).toEqual(["flushLog", "watch", "app.exit(0)"]);
+  });
+
+  it("goes on to the exit when stopping children rejects", async () => {
+    const p = ports({ stopChildren: vi.fn(() => Promise.reject(new Error("EPERM"))) });
+    const target = app(p.order);
+    createQuitExit(p).exitingApp(target).exit(0);
+    await settled();
+    expect(target.exit).toHaveBeenCalledExactlyOnceWith(0);
   });
 
   it.each([0, 1])("exits though the log's write fails (%i live workers)", async (liveWorkers) => {

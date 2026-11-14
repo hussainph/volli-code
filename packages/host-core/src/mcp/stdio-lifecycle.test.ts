@@ -23,7 +23,11 @@ import { fileURLToPath } from "node:url";
 import type { McpServerDraft } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
-import { createMcpProtocolClientOpener, stopMcpServerProcessGroups } from "./client";
+import {
+  createMcpProtocolClientOpener,
+  ownsStdioGroup,
+  stopMcpServerProcessGroups,
+} from "./client";
 import { MemoryMcpCredentialStore } from "./credential-store";
 import { closeAllMcpSessionHosts, McpSessionHost } from "./session-host";
 
@@ -90,6 +94,19 @@ function host(server: McpServerDraft, workspacePath = dir): McpSessionHost {
 }
 
 const call = { serverId: "stdio", toolName: "fixture_echo", arguments: {}, toolCallId: "one" };
+
+describe("ownsStdioGroup", () => {
+  const recorded = "Sat Nov 14 13:18:09 2026";
+  it("is ours only while the pid that leads it started when the recorded leader did", () => {
+    expect(ownsStdioGroup(recorded, recorded)).toBe(true);
+    // The id emptied and was reused by an unrelated group: its leader started later.
+    expect(ownsStdioGroup(recorded, "Sat Nov 14 13:18:10 2026")).toBe(false);
+    expect(ownsStdioGroup(recorded, "Mon Dec  1 09:00:00 2026")).toBe(false);
+    // Nothing runs with that pid.
+    expect(ownsStdioGroup(recorded, null)).toBe(false);
+    expect(ownsStdioGroup(recorded, "")).toBe(false);
+  });
+});
 
 describe.skipIf(process.platform === "win32")("stdio MCP server lifecycle", () => {
   it("ends the launcher, the server and the server's own children when a Session detaches", async () => {
@@ -242,6 +259,31 @@ describe.skipIf(process.platform === "win32")("stdio MCP server lifecycle", () =
     // Nothing left to stop; closing the attachment afterwards is harmless.
     expect(await stopMcpServerProcessGroups(300)).toBe(0);
     await attachment.close();
+  });
+
+  it("forgets a server that exited by itself: the quit's stop never signals its group id again (VC-652)", async () => {
+    const pidFile = join(dir, "self-closed-pids.json");
+    const attachment = host({
+      id: "stdio",
+      name: "Exits",
+      enabled: true,
+      transport: {
+        type: "stdio",
+        command: process.execPath,
+        args: [SERVER, "--pid-file", pidFile],
+      },
+    });
+    await attachment.port.call({ ...call, toolName: "fixture_exit" }, new AbortController().signal);
+    const { server, sleeper } = pids(pidFile);
+    expect(await until(() => !alive(server))).toBe(true);
+    // Its transport closed with it; the helper it left is still running, in a
+    // group whose leader is gone: from now on that id is not certainly ours.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(await stopMcpServerProcessGroups(300)).toBe(0);
+    expect(alive(sleeper)).toBe(true);
+    // The attachment's own close still ends what it left, as before (VC-470).
+    await attachment.close();
+    expect(await until(() => !alive(sleeper))).toBe(true);
   });
 
   it("ends a server's leftover helpers when the server had already exited on its own", async () => {

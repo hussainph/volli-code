@@ -67,6 +67,12 @@ const WORKER_SETTLE_GRACE_MS = 1_000;
 /** The bound on the writes an exit makes itself (immediate, or ordinary with no worker). */
 const IMMEDIATE_EXIT_FLUSH_MS = 2_000;
 
+/**
+ * The bound on stopping children before a watched exit: a stdio MCP server
+ * that ignores SIGTERM gets SIGKILL within it (`stopMcpServerProcessGroups`).
+ */
+const CHILDREN_STOP_MS = 1_000;
+
 export interface QuitExitPorts {
   /** Milliseconds, monotonic. */
   now(): number;
@@ -139,6 +145,21 @@ export interface QuitExit {
 
 const log = hostLogger("quit");
 
+/** Waits for `work`, at most `limitMs`; its failure, thrown or rejected, is ignored. */
+const bounded = async (
+  work: () => Promise<unknown> | void,
+  limitMs = IMMEDIATE_EXIT_FLUSH_MS,
+): Promise<void> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    (async () => work())().catch(() => undefined),
+    new Promise((resolve) => {
+      timer = setTimeout(resolve, limitMs);
+    }),
+  ]);
+  clearTimeout(timer);
+};
+
 export function createQuitExit(ports: QuitExitPorts): QuitExit {
   let acceptedAt: number | null = null;
   let deadlineExpired = false;
@@ -167,18 +188,6 @@ export function createQuitExit(ports: QuitExitPorts): QuitExit {
       ...(changed ? { changed: true } : {}),
       ...(watch === undefined ? {} : { watch }),
     });
-  };
-
-  /** Waits for `work`, at most the writes' bound; its failure is ignored. */
-  const bounded = async (work: () => Promise<unknown> | void): Promise<void> => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    await Promise.race([
-      (async () => work())().catch(() => undefined),
-      new Promise((resolve) => {
-        timer = setTimeout(resolve, IMMEDIATE_EXIT_FLUSH_MS);
-      }),
-    ]);
-    clearTimeout(timer);
   };
 
   /** The writes a normal exit leaves to the teardown, made now, bounded. */
@@ -230,7 +239,8 @@ export function createQuitExit(ports: QuitExitPorts): QuitExit {
    */
   const watchedExit = async (app: { exit(code?: number): void }, code: number): Promise<void> => {
     await flushBounded();
-    await bounded(() => ports.stopChildren());
+    // After the browser sessions' writes; never more than its own second.
+    await bounded(() => ports.stopChildren(), CHILDREN_STOP_MS);
     // Windows and IPC are alive until the exit: a worker may have started.
     if (ports.liveWorkers() > 0) {
       exitLine("normal", true);
