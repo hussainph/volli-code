@@ -244,6 +244,15 @@ const provenance = { source: { kind: "system" as const, id: "test", detail: null
 // stage's place and name the wrong stage (VC-1220).
 const PRODUCTION_ADMISSION_BOUND_MS = 30_000;
 const STALLED_STAGE_BOUND_MS = 50;
+// How long a poll waits for a real Pi turn to end after its ask is cancelled.
+// Vitest's default 1 s window is shorter than real Pi work under load: it ran
+// out in 1 of 150 runs at 6 concurrent copies of this file and 2 of 32 at 8
+// copies with coverage, while the slowest traced await in about 6,900 runs was
+// 1.1 s (VC-1220). 4 s still ends inside the local 5 s test timeout, so a turn
+// that never ends fails here, by name, rather than as a bare test timeout. A
+// stall that blocks the event loop past the window cannot fail it alone:
+// `expect.poll` makes one more attempt after its window expires (VC-1233).
+const TURN_END_POLL = { timeout: 4_000 } as const;
 
 function fixture() {
   const database = openTestDb();
@@ -932,7 +941,10 @@ describe("crash recovery through the durable Pi binding (VC-753)", () => {
     });
     await trace.call("poll for the turn's end", () =>
       expect
-        .poll(async () => (await f.host.projection({ sessionId })).projection.turnActive)
+        .poll(
+          async () => (await f.host.projection({ sessionId })).projection.turnActive,
+          TURN_END_POLL,
+        )
         .toBe(false),
     );
     const current = await f.restart(f);
@@ -976,7 +988,10 @@ describe("crash recovery through the durable Pi binding (VC-753)", () => {
     });
     await trace.call("poll for the turn's end", () =>
       expect
-        .poll(async () => (await f.host.projection({ sessionId })).projection.turnActive)
+        .poll(
+          async () => (await f.host.projection({ sessionId })).projection.turnActive,
+          TURN_END_POLL,
+        )
         .toBe(false),
     );
     const current = await f.restart(f);
@@ -1059,7 +1074,10 @@ describe("crash recovery through the durable Pi binding (VC-753)", () => {
       });
       await trace.call("poll for the turn's end", () =>
         expect
-          .poll(async () => (await f.host.projection({ sessionId })).projection.turnActive)
+          .poll(
+            async () => (await f.host.projection({ sessionId })).projection.turnActive,
+            TURN_END_POLL,
+          )
           .toBe(false),
       );
       const current = await f.restart(f);
