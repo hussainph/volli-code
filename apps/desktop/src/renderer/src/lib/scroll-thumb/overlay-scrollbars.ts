@@ -16,14 +16,25 @@
  * axis. Over a code block that scrolls sideways inside a transcript that scrolls
  * down, both show — as both native bars used to.
  *
- * NO FORCED LAYOUT, AND NOTHING IN A SCROLL HANDLER. Event handlers only
- * record what happened and ask for an update. The update runs as a
- * ResizeObserver callback — after layout, so its reads find layout clean — from
- * an observer created for that request, which makes it the LAST callback of the
- * frame's post-layout pass: its writes land after every other component's own
- * post-layout reads, so they cannot force any of them, and the browser lays the
- * two small fixed elements out again before paint. A scroll is read once per
- * frame and drawn in the same frame.
+ * NO FORCED LAYOUT, AND NOTHING IN A SCROLL HANDLER. Event handlers only record
+ * what happened and request an update. An update runs as the callback of a
+ * ResizeObserver created for that request and observing `<html>`:
+ *
+ *   - it runs after layout, so its reads find layout clean;
+ *   - its observer is the newest, and callbacks run in creation order, so it is
+ *     the LAST callback of the frame's first delivery: its writes land after
+ *     every other component's post-layout reads and cannot force them. The
+ *     writes are transforms and sizes on two fixed elements; the browser lays
+ *     them out again before paint, so a scroll is drawn in the same frame.
+ *
+ * A request can never be made from INSIDE a ResizeObserver delivery: a new
+ * observation of `<html>` there is shallower than what was just delivered, so
+ * Chromium skips it and raises "ResizeObserver loop completed with undelivered
+ * notifications". So the observer that watches the targets for size changes,
+ * and the MutationObserver that watches their children, only schedule a request
+ * for the next animation frame; the content-driven update lands one frame
+ * later. Observations are only added from an update (whose own observation is
+ * `<html>`, the shallowest there is), so they never trip that rule either.
  *
  * CSS scroll-driven animation and anchor positioning would have needed no
  * script for position, and were measured and rejected (a Chrome trace of the
@@ -32,13 +43,11 @@
  * `use-stick-to-bottom`'s own `scrollTop` reads force a layout (7 → 31), and an
  * anchored track doubled the layout time of the whole run.
  *
- * What script decides:
- *
- *   - WHICH scrollers are targets: those under the pointer, or, when the
- *     pointer is over none, the one that scrolled;
- *   - where each track sits and how long its thumb is, from the target's box
- *     and sizes, and where the thumb sits, from its scroll position;
- *   - visibility (hover, a scroll burst, a drag), and the drag itself.
+ * LAYERING. A track is drawn last in `<body>` at the z-index of its target's
+ * outermost stacking layer: above the target, below anything stacked over it
+ * (a popover, a dialog's scrim). A scroller under a modal — inside an
+ * `aria-hidden` or `inert` subtree, as Radix marks the page behind one — is
+ * never a target.
  *
  * The thumbs are presentational: `aria-hidden`, never focusable, and
  * `pointer-events: none`. Wheel, trackpad, keyboard, find-in-page, focus
@@ -46,20 +55,25 @@
  * drag is recognised by hit-testing the press against a thumb's lane in a
  * capturing listener — the one synchronous read, once per press — and
  * swallowed there so the press never reaches the content (or a Radix menu's
- * outside-press handler) underneath.
+ * outside-press handler) underneath. A drag ends on release, cancel, blur, a
+ * move with no button down, or the scroller unmounting; Escape cancels it and
+ * puts the scroll back.
+ *
+ * Not handled: scrollers inside shadow roots, right-to-left layouts (the
+ * vertical thumb stays on the right), forced-colours styling, and an
+ * always-visible mode. While a thumb shows, a press on it — within 8px of the
+ * scroller's far edge — is the thumb's, not the content's.
  */
 import {
   THUMB_EDGE_INSET,
   THUMB_THICKNESS,
   TRACK_INSET,
-  dragScrollPosition,
   hitsThumb,
   inThumbLane,
-  overflows,
-  thumbOffset,
-  thumbRatio,
-  trackLength,
-  type DragStart,
+  laneMetrics,
+  scrollForOffset,
+  type Box,
+  type LaneMetrics,
 } from "./geometry";
 
 /** On each target: the axes it is the target for, `"y"`, `"x"` or `"x y"`. A marker for tests and devtools; no style keys on it. */
@@ -78,30 +92,18 @@ export const DRAGGING_ATTR = "data-scroll-thumb-dragging";
  * a native bar, so turning native bars off leaves neither without one.
  */
 export const EXCLUDED_SELECTOR = ".xterm, .monaco-editor";
+/** The page behind a modal: Radix's `hideOthers` marks it `aria-hidden`; `inert` is the platform's own. */
+export const BLOCKED_SELECTOR = '[aria-hidden="true"], [inert]';
 /** How long a thumb stays up after the last scroll event. */
 export const HIDE_AFTER_MS = 700;
+/** The one diagnostic an update failure logs, once per window. */
+export const UPDATE_FAILED_CODE = "SCROLL_THUMB_UPDATE_FAILED";
 /** Geometry changes smaller than this are not worth a style write. */
 const PX_EPSILON = 0.1;
-/** Children observed for content growth; past this the target's own re-observe covers it. */
-const MAX_OBSERVED_CHILDREN = 64;
+/** Children observed for content growth. Beyond this, growth is caught when the child list changes. */
+const MAX_OBSERVED_CHILDREN = 2000;
 
 type Axis = "x" | "y";
-
-interface Lane {
-  axis: Axis;
-  track: HTMLDivElement;
-  thumb: HTMLDivElement;
-  target: HTMLElement | null;
-  /** The target's box at its last measure; the lane highlight and the press pre-check read it. */
-  box: DOMRect | null;
-  overflow: boolean;
-  /** Where the track sits and how big it is, the thumb's length and offset: viewport px. */
-  geometry: LaneGeometry;
-  /** What {@link flush} last wrote, to skip writes that would change nothing. */
-  written: LaneGeometry;
-  /** Pointer in this lane: the thumb brightens. */
-  aimed: boolean;
-}
 
 interface LaneGeometry {
   x: number;
@@ -110,15 +112,48 @@ interface LaneGeometry {
   height: number;
   length: number;
   offset: number;
+  layer: number;
 }
 
-const NO_GEOMETRY: LaneGeometry = { x: 0, y: 0, width: 0, height: 0, length: 0, offset: 0 };
+const NO_GEOMETRY: LaneGeometry = {
+  x: 0,
+  y: 0,
+  width: 0,
+  height: 0,
+  length: 0,
+  offset: 0,
+  layer: 0,
+};
 
-interface Drag extends DragStart {
+interface Lane {
+  axis: Axis;
+  track: HTMLDivElement;
+  thumb: HTMLDivElement;
+  target: HTMLElement | null;
+  /** The target's drawn box at its last measure; the lane highlight and the press pre-check read it. */
+  box: DOMRect | null;
+  metrics: LaneMetrics | null;
+  /** The z-index of the target's outermost stacking layer, read when the target is taken. */
+  layer: number | null;
+  /** Where the track sits and how big it is, the thumb's length and offset: viewport px. */
+  geometry: LaneGeometry;
+  /** What {@link flush} last wrote, to skip writes that would change nothing. */
+  written: LaneGeometry;
+  /** Pointer in this lane: the thumb brightens. */
+  aimed: boolean;
+}
+
+interface Drag {
   lane: Lane;
   target: HTMLElement;
   pointerId: number;
-  next: number;
+  /** Pointer coordinate on the axis at the press, and the thumb offset then. */
+  startPointer: number;
+  startOffset: number;
+  /** The scroll at the press, which Escape restores. */
+  startScroll: number;
+  /** The latest pointer coordinate on the axis. */
+  pointer: number;
   frame: number | null;
 }
 
@@ -150,7 +185,8 @@ function createLane(doc: Document, axis: Axis): Lane {
     thumb,
     target: null,
     box: null,
-    overflow: false,
+    metrics: null,
+    layer: null,
     geometry: { ...NO_GEOMETRY },
     written: { ...NO_GEOMETRY },
     aimed: false,
@@ -169,43 +205,55 @@ export function installOverlayScrollbars(doc: Document): () => void {
   const laneList = [lanes.y, lanes.x];
 
   let hovered = false;
-  /** The scroll container whose targets the pointer last resolved to. */
+  /** The scroll container whose targets the pointer last resolved to. `null` when it resolved to none. */
   let hoverContainer: HTMLElement | null = null;
   /** The element of the current scroll burst; lanes targeting it show while it lasts. */
   let scrolled: HTMLElement | null = null;
   let hideTimer: number | undefined;
   let drag: Drag | null = null;
   let swallowClick = false;
-  /** Recorded by handlers, resolved after the next layout. */
+  /** Recorded by handlers, resolved in the next update. */
   let pendingHover: Element | null = null;
   let pendingScroll: HTMLElement | null = null;
-  /** A `pointerover` that arrived mid-scroll, resolved when the burst ends. */
+  /** Where the pointer last moved: a `pointerover` at the same place is content moving under it. */
+  let lastPointer: { x: number; y: number } | null = null;
+  /** A `pointerover` inside the scrolling element, mid-burst: content moving, resolved when the burst ends. */
   let deferredHover: Element | null = null;
+  /** The targets' observations need rebuilding (targets changed, or a child list did). */
+  let observationsStale = false;
   /** The elements that carry {@link TARGET_ATTR} in the DOM right now, and with what. */
   const applied = new Map<HTMLElement, string>();
   /** Computed overflow per element: style only, and overflow classes do not toggle in practice. */
   const axesCache = new WeakMap<Element, ScrollAxes | null>();
-  /** Which scrollers a pointer inside a given scroll container resolves to. */
-  let probeCache = new WeakMap<Element, Targets>();
+  let loggedFailure = false;
 
-  /** Re-reads the targets after any layout that resized them or their content. */
-  const resizes = new win.ResizeObserver(requestUpdate);
-  /**
-   * The pending post-layout update. A NEW observer per request, on purpose:
-   * ResizeObserver callbacks run in the order their observers were created, so
-   * the newest runs last — after every other component's own post-layout reads
-   * in that frame, which our writes therefore cannot force. Observing an
-   * element queues its first notification for the next layout.
-   */
+  /** The pending update's observer. See the header: a new one per request, never inside a delivery. */
   let update: ResizeObserver | null = null;
   /** Inside {@link runUpdate}: whatever changes now is written by its own flush. */
   let updating = false;
-  const mutations = new win.MutationObserver(observeContent);
+  let nextFrameRequest: number | null = null;
+
+  /** Size changes of the targets and their children. Runs inside a delivery: only schedules. */
+  const resizes = new win.ResizeObserver(requestUpdateNextFrame);
+  /** Child lists of the targets. May run inside a delivery: only schedules. */
+  const mutations = new win.MutationObserver(() => {
+    observationsStale = true;
+    requestUpdateNextFrame();
+  });
 
   function requestUpdate(): void {
     if (update !== null || updating) return;
     update = new win.ResizeObserver(runUpdate);
     update.observe(doc.documentElement);
+  }
+
+  /** For callers that may be inside a ResizeObserver delivery: the request is made from the next frame. */
+  function requestUpdateNextFrame(): void {
+    if (nextFrameRequest !== null) return;
+    nextFrameRequest = win.requestAnimationFrame(() => {
+      nextFrameRequest = null;
+      requestUpdate();
+    });
   }
 
   function scrollAxes(element: Element): ScrollAxes | null {
@@ -228,29 +276,41 @@ export function installOverlayScrollbars(doc: Document): () => void {
     return null;
   }
 
+  function blocked(element: Element): boolean {
+    return element.closest(BLOCKED_SELECTOR) !== null;
+  }
+
   function eligible(element: HTMLElement): boolean {
     return (
-      element.getAttribute(OPT_OUT_ATTR) !== "none" && element.closest(EXCLUDED_SELECTOR) === null
+      element.getAttribute(OPT_OUT_ATTR) !== "none" &&
+      element.closest(EXCLUDED_SELECTOR) === null &&
+      !blocked(element)
     );
   }
 
-  /** The innermost eligible scroller overflowing on each axis, at or above `from`. */
+  /** The innermost eligible scroller overflowing on each axis, at or above `from`. Reads layout: updates only. */
   function findScrollers(from: Element): Targets {
     const found: Targets = { y: null, x: null };
-    if (from.closest(EXCLUDED_SELECTOR) !== null) return found;
+    if (from.closest(EXCLUDED_SELECTOR) !== null || blocked(from)) return found;
     for (let node = containerOf(from); node !== null; node = containerOf(node.parentElement)) {
       if (!eligible(node)) continue;
       const axes = scrollAxes(node);
       if (axes === null) continue;
-      if (found.y === null && axes.y && overflows(node.clientHeight, node.scrollHeight)) {
-        found.y = node;
-      }
-      if (found.x === null && axes.x && overflows(node.clientWidth, node.scrollWidth)) {
-        found.x = node;
-      }
+      if (found.y === null && axes.y && node.scrollHeight > node.clientHeight + 1) found.y = node;
+      if (found.x === null && axes.x && node.scrollWidth > node.clientWidth + 1) found.x = node;
       if (found.y !== null && found.x !== null) break;
     }
     return found;
+  }
+
+  function targets(): Set<HTMLElement> {
+    const set = new Set<HTMLElement>();
+    for (const lane of laneList) if (lane.target !== null) set.add(lane.target);
+    return set;
+  }
+
+  function containsTarget(element: Element): boolean {
+    return laneList.some((lane) => lane.target !== null && element.contains(lane.target));
   }
 
   /** Points the lanes at `next`. Model only: {@link flush} writes the DOM. */
@@ -261,78 +321,98 @@ export function installOverlayScrollbars(doc: Document): () => void {
       if (lane.target === element) continue;
       lane.target = element;
       lane.box = null;
-      lane.overflow = false;
+      lane.metrics = null;
+      lane.layer = null;
       lane.aimed = false;
       lane.geometry = { ...NO_GEOMETRY };
+      if (drag !== null && drag.lane === lane) endDrag();
     }
-    resizes.disconnect();
-    mutations.disconnect();
-    observeContent();
-    for (const element of new Set([next.y, next.x])) {
-      if (element !== null) mutations.observe(element, { childList: true });
-    }
-    requestUpdate();
+    observationsStale = true;
   }
 
   /**
-   * Content growth does not resize a scroller's own box, so its children are
-   * observed too. Re-observing a target queues a fresh measure for a child list
-   * that changed beyond the observed ones.
+   * Rebuilds what the observers watch. Called only from an update, whose own
+   * observation (`<html>`) is the shallowest possible, so these deeper ones are
+   * delivered in the same frame rather than skipped.
    */
-  function observeContent(): void {
-    for (const element of new Set([lanes.y.target, lanes.x.target])) {
-      if (element === null) continue;
+  function syncObservations(): void {
+    observationsStale = false;
+    resizes.disconnect();
+    mutations.disconnect();
+    for (const element of targets()) {
       resizes.observe(element);
       const children = element.children;
       for (let index = 0; index < children.length && index < MAX_OBSERVED_CHILDREN; index += 1) {
         resizes.observe(children[index]!);
       }
+      mutations.observe(element, { childList: true });
     }
   }
 
-  /** Reads each target's box, sizes and scroll position. Called only from ResizeObserver callbacks, after layout. */
+  /** The z-index of the outermost positioned, z-indexed ancestor: the layer the target is painted in. */
+  function layerOf(element: HTMLElement): number {
+    let layer = 0;
+    for (let node: HTMLElement | null = element; node !== null; node = node.parentElement) {
+      if (node === doc.body) break;
+      const style = win.getComputedStyle(node);
+      if (style.position !== "static" && style.zIndex !== "auto") {
+        const z = Number.parseInt(style.zIndex, 10);
+        if (Number.isFinite(z)) layer = z;
+      }
+    }
+    return layer;
+  }
+
+  /** Reads each target's box, sizes and scroll position. Updates only: layout is clean. */
   function measureLanes(): void {
-    let lost = false;
     for (const lane of laneList) {
       const element = lane.target;
       if (element === null) continue;
-      if (!element.isConnected) {
-        lost = true;
+      if (!element.isConnected || blocked(element)) {
+        retarget({
+          y: lane.axis === "y" ? null : lanes.y.target,
+          x: lane.axis === "x" ? null : lanes.x.target,
+        });
         continue;
       }
       const box = element.getBoundingClientRect();
       lane.box = box;
-      if (lane.axis === "y") {
-        const { clientHeight, scrollHeight, scrollTop } = element;
-        lane.overflow = overflows(clientHeight, scrollHeight);
-        const track = trackLength(clientHeight);
-        lane.geometry = {
-          x: box.right - THUMB_EDGE_INSET - THUMB_THICKNESS,
-          y: box.top + TRACK_INSET,
-          width: THUMB_THICKNESS,
-          height: track,
-          length: track * thumbRatio(clientHeight, scrollHeight),
-          offset: thumbOffset(scrollTop, clientHeight, scrollHeight),
-        };
-      } else {
-        const { clientWidth, scrollWidth, scrollLeft } = element;
-        lane.overflow = overflows(clientWidth, scrollWidth);
-        const track = trackLength(clientWidth);
-        lane.geometry = {
-          x: box.left + TRACK_INSET,
-          y: box.bottom - THUMB_EDGE_INSET - THUMB_THICKNESS,
-          width: track,
-          height: THUMB_THICKNESS,
-          length: track * thumbRatio(clientWidth, scrollWidth),
-          offset: thumbOffset(Math.abs(scrollLeft), clientWidth, scrollWidth),
-        };
-      }
-    }
-    if (lost) {
-      retarget({
-        y: lanes.y.target?.isConnected ? lanes.y.target : null,
-        x: lanes.x.target?.isConnected ? lanes.x.target : null,
+      if (lane.layer === null) lane.layer = layerOf(element);
+      const vertical = lane.axis === "y";
+      const layoutSize = vertical ? element.offsetHeight : element.offsetWidth;
+      const drawnSize = vertical ? box.height : box.width;
+      const metrics = laneMetrics({
+        clientSize: vertical ? element.clientHeight : element.clientWidth,
+        scrollSize: vertical ? element.scrollHeight : element.scrollWidth,
+        scrollPos: vertical ? element.scrollTop : Math.abs(element.scrollLeft),
+        scale: layoutSize > 0 ? drawnSize / layoutSize : 1,
       });
+      lane.metrics = metrics;
+      const offset =
+        drag !== null && drag.lane === lane ? dragOffset(drag, metrics) : metrics.offset;
+      lane.geometry = vertical
+        ? {
+            x: box.right - THUMB_EDGE_INSET - THUMB_THICKNESS,
+            y: box.top + TRACK_INSET,
+            width: THUMB_THICKNESS,
+            height: metrics.track,
+            length: metrics.length,
+            offset,
+            layer: lane.layer,
+          }
+        : {
+            x: box.left + TRACK_INSET,
+            y: box.bottom - THUMB_EDGE_INSET - THUMB_THICKNESS,
+            width: metrics.track,
+            height: THUMB_THICKNESS,
+            length: metrics.length,
+            offset,
+            layer: lane.layer,
+          };
+      // Content grew or shrank under a held drag: keep the content where the
+      // thumb is — at the end, if the thumb was taken to the end. Written here,
+      // in the update, where layout is already clean.
+      if (drag !== null && drag.lane === lane) writeDragScroll(drag, offset, metrics);
     }
   }
 
@@ -341,44 +421,62 @@ export function installOverlayScrollbars(doc: Document): () => void {
     update?.disconnect();
     update = null;
     updating = true;
-    const hover = pendingHover;
-    const scroll = pendingScroll;
-    pendingHover = null;
-    pendingScroll = null;
-    if (hover !== null && drag === null) resolveHover(hover);
-    else if (scroll !== null && drag === null && (!hovered || containsTarget(scroll))) {
-      resolveScroll(scroll);
+    try {
+      const hover = pendingHover;
+      const scroll = pendingScroll;
+      pendingHover = null;
+      pendingScroll = null;
+      if (hover !== null && drag === null) resolveHover(hover);
+      else if (scroll !== null && drag === null && (!hovered || containsTarget(scroll))) {
+        resolveScroll(scroll);
+      }
+      if (observationsStale) syncObservations();
+      measureLanes();
+      flush();
+    } catch (error) {
+      // One bad scroller must not freeze every thumb in the window: drop the
+      // targets, so the next hover or scroll starts clean.
+      if (!loggedFailure) {
+        loggedFailure = true;
+        console.error(`[scroll-thumb] ${UPDATE_FAILED_CODE}`, error);
+      }
+      try {
+        retarget({ y: null, x: null });
+        hovered = false;
+        hoverContainer = null;
+        flush();
+      } catch {
+        // Already logged once; the next update tries again.
+      }
+    } finally {
+      updating = false;
     }
-    measureLanes();
-    flush();
-    updating = false;
   }
 
   function resolveHover(from: Element): void {
     if (!from.isConnected) return;
     const container = containerOf(from);
     if (container === null) {
-      setHovered(false);
+      hovered = false;
+      hoverContainer = null;
       return;
     }
-    // Rows, spans and links inside the same scroller resolve the same way:
-    // only entering a different scroll container can change the targets.
+    // Rows inside the scroller the pointer already resolved to need nothing.
     if (container === hoverContainer) {
-      setHovered(lanes.y.target !== null || lanes.x.target !== null);
+      hovered = true;
       return;
     }
-    let targets = probeCache.get(container);
-    if (targets === undefined) {
-      targets = findScrollers(from);
-      probeCache.set(container, targets);
+    const found = findScrollers(from);
+    if (found.y === null && found.x === null) {
+      // Nothing here scrolls: no thumb, and no memory of this container, so a
+      // list that fills later resolves afresh on the next crossing.
+      hovered = false;
+      hoverContainer = null;
+      return;
     }
     hoverContainer = container;
-    if (targets.y === null && targets.x === null) {
-      setHovered(false);
-      return;
-    }
-    retarget(targets);
-    setHovered(true);
+    retarget(found);
+    hovered = true;
   }
 
   function resolveScroll(element: HTMLElement): void {
@@ -386,23 +484,13 @@ export function installOverlayScrollbars(doc: Document): () => void {
     const axes = scrollAxes(element);
     if (axes === null) return;
     retarget({ y: axes.y ? element : lanes.y.target, x: axes.x ? element : lanes.x.target });
+    hoverContainer = null;
     // A pointer resting over it since before the scroll crossed no boundary,
     // so no `pointerover` said so.
-    setHovered(element.matches(":hover"));
-    probeCache = new WeakMap();
+    hovered = element.matches(":hover");
   }
 
-  function setHovered(next: boolean): void {
-    if (hovered === next) return;
-    hovered = next;
-    if (!next) {
-      hoverContainer = null;
-      for (const lane of laneList) lane.aimed = false;
-    }
-    requestUpdate();
-  }
-
-  /** Keeps the tracks last in `<body>`, after any portal opened since: an anchor must precede what it positions. */
+  /** Keeps the tracks last in `<body>`, after any portal opened since: equal z-index paints in tree order. */
   function mountTracks(): void {
     const body = doc.body;
     if (body === null) return;
@@ -413,6 +501,32 @@ export function installOverlayScrollbars(doc: Document): () => void {
       return;
     }
     body.append(lanes.y.track, lanes.x.track);
+  }
+
+  /** Moves and sizes a lane's track and thumb, touching only what changed. Transforms for position. */
+  function writeGeometry(lane: Lane): void {
+    const next = lane.geometry;
+    const last = lane.written;
+    const moved = (a: number, b: number) => Math.abs(a - b) >= PX_EPSILON;
+    if (moved(next.x, last.x) || moved(next.y, last.y)) {
+      lane.track.style.transform = `translate(${next.x}px, ${next.y}px)`;
+    }
+    if (moved(next.width, last.width)) lane.track.style.width = `${next.width}px`;
+    if (moved(next.height, last.height)) lane.track.style.height = `${next.height}px`;
+    if (next.layer !== last.layer || lane.track.style.zIndex === "") {
+      lane.track.style.zIndex = String(next.layer);
+    }
+    const vertical = lane.axis === "y";
+    if (moved(next.length, last.length)) {
+      if (vertical) lane.thumb.style.height = `${next.length}px`;
+      else lane.thumb.style.width = `${next.length}px`;
+    }
+    if (moved(next.offset, last.offset)) {
+      lane.thumb.style.transform = vertical
+        ? `translateY(${next.offset}px)`
+        : `translateX(${next.offset}px)`;
+    }
+    lane.written = { ...next };
   }
 
   /** Every DOM write, at the end of the update, after every read. */
@@ -440,12 +554,14 @@ export function installOverlayScrollbars(doc: Document): () => void {
         drag !== null
           ? drag.lane === lane
           : hovered || (scrolled !== null && scrolled === lane.target);
-      const state = lane.target !== null && lane.overflow && show ? "visible" : "hidden";
+      const state =
+        lane.target !== null && lane.metrics?.overflow === true && show ? "visible" : "hidden";
       const track = lane.track;
       if (state === "visible") writeGeometry(lane);
       if (track.getAttribute("data-state") !== state) track.setAttribute("data-state", state);
-      if (track.hasAttribute("data-lane") !== lane.aimed)
+      if (track.hasAttribute("data-lane") !== lane.aimed) {
         track.toggleAttribute("data-lane", lane.aimed);
+      }
       const dragging = drag !== null && drag.lane === lane;
       if (track.hasAttribute("data-dragging") !== dragging) {
         track.toggleAttribute("data-dragging", dragging);
@@ -457,38 +573,30 @@ export function installOverlayScrollbars(doc: Document): () => void {
     }
   }
 
-  /** Moves and sizes a lane's track and thumb, touching only what changed. Transforms for position. */
-  function writeGeometry(lane: Lane): void {
-    const next = lane.geometry;
-    const last = lane.written;
-    const moved = (a: number, b: number) => Math.abs(a - b) >= PX_EPSILON;
-    if (moved(next.x, last.x) || moved(next.y, last.y)) {
-      lane.track.style.transform = `translate(${next.x}px, ${next.y}px)`;
+  function setHovered(next: boolean): void {
+    if (hovered === next) return;
+    hovered = next;
+    if (!next) {
+      hoverContainer = null;
+      for (const lane of laneList) lane.aimed = false;
     }
-    if (moved(next.width, last.width)) lane.track.style.width = `${next.width}px`;
-    if (moved(next.height, last.height)) lane.track.style.height = `${next.height}px`;
-    const vertical = lane.axis === "y";
-    if (moved(next.length, last.length)) {
-      if (vertical) lane.thumb.style.height = `${next.length}px`;
-      else lane.thumb.style.width = `${next.length}px`;
-    }
-    if (moved(next.offset, last.offset)) {
-      lane.thumb.style.transform = vertical
-        ? `translateY(${next.offset}px)`
-        : `translateX(${next.offset}px)`;
-    }
-    lane.written = { ...next };
+    requestUpdate();
   }
 
   function handlePointerOver(event: PointerEvent): void {
     if (drag !== null || !(event.target instanceof win.Element)) return;
-    if (scrolled !== null) {
-      // Mid-scroll, what passes under a still pointer is the content moving,
-      // not the reader choosing: the scrolling element keeps its thumb, and the
-      // pointer is resolved when the burst ends.
+    const still =
+      lastPointer !== null && event.clientX === lastPointer.x && event.clientY === lastPointer.y;
+    if (still && scrolled !== null && scrolled.contains(event.target)) {
+      // Mid-scroll, what passes under a STILL pointer inside the scrolling
+      // element is the content moving, not the reader choosing: it keeps its
+      // thumb, and the pointer is resolved when the burst ends. A pointer that
+      // moved — into a transcript that is streaming, or elsewhere — is
+      // resolved now.
       deferredHover = event.target;
       return;
     }
+    deferredHover = null;
     pendingHover = event.target;
     requestUpdate();
   }
@@ -504,10 +612,11 @@ export function installOverlayScrollbars(doc: Document): () => void {
 
   /** Aims a thumb while the pointer is in its lane, from the box cached at the last measure. */
   function handlePointerMove(event: PointerEvent): void {
+    lastPointer = { x: event.clientX, y: event.clientY };
     if (drag !== null || !hovered) return;
     for (const lane of laneList) {
       const aimed =
-        lane.overflow &&
+        lane.metrics?.overflow === true &&
         lane.box !== null &&
         inThumbLane(lane.box, lane.axis, event.clientX, event.clientY);
       if (lane.aimed !== aimed) {
@@ -548,10 +657,6 @@ export function installOverlayScrollbars(doc: Document): () => void {
     }, HIDE_AFTER_MS);
   }
 
-  function containsTarget(element: Element): boolean {
-    return laneList.some((lane) => lane.target !== null && element.contains(lane.target));
-  }
-
   /** A menu sliding in, a pane resizing: the target moved without scrolling. */
   function handleSettled(event: Event): void {
     const element = event.target;
@@ -562,6 +667,15 @@ export function installOverlayScrollbars(doc: Document): () => void {
     if (lanes.y.target !== null || lanes.x.target !== null) requestUpdate();
   }
 
+  function axisPointer(lane: Lane, event: { clientX: number; clientY: number }): number {
+    return lane.axis === "y" ? event.clientY : event.clientX;
+  }
+
+  function dragOffset(current: Drag, metrics: LaneMetrics): number {
+    const offset = current.startOffset + (current.pointer - current.startPointer);
+    return Math.min(metrics.travel, Math.max(0, offset));
+  }
+
   function handlePointerDown(event: PointerEvent): void {
     swallowClick = false;
     if (event.button !== 0 || drag !== null) return;
@@ -569,29 +683,28 @@ export function installOverlayScrollbars(doc: Document): () => void {
     if (!(pressed instanceof win.Node)) return;
     for (const lane of laneList) {
       const target = lane.target;
-      if (target === null || !lane.overflow || lane.box === null) continue;
+      if (target === null || lane.metrics?.overflow !== true || lane.box === null) continue;
       if (lane.track.getAttribute("data-state") !== "visible") continue;
       // Only a press on the scroller's own content can be a grab: whatever lies
       // over its edge (a resize grip, a floating control) keeps its presses.
       if (!target.contains(pressed)) continue;
       if (!inThumbLane(lane.box, lane.axis, event.clientX, event.clientY)) continue;
-      const scroller = target.getBoundingClientRect();
-      const thumb = lane.thumb.getBoundingClientRect();
-      if (!hitsThumb(scroller, thumb, lane.axis, event.clientX, event.clientY)) continue;
+      const scroller: Box = target.getBoundingClientRect();
+      if (!hitsThumb(scroller, lane.thumb.getBoundingClientRect(), lane.axis, event.clientX, event.clientY)) {
+        continue;
+      }
       // Ours: no text selection, no focus move, and no outside-press for a menu.
       event.preventDefault();
       event.stopImmediatePropagation();
-      const vertical = lane.axis === "y";
-      const scroll = vertical ? target.scrollTop : target.scrollLeft;
+      const pointer = axisPointer(lane, event);
       drag = {
         lane,
         target,
         pointerId: event.pointerId,
-        pointer: vertical ? event.clientY : event.clientX,
-        scroll,
-        clientSize: vertical ? target.clientHeight : target.clientWidth,
-        scrollSize: vertical ? target.scrollHeight : target.scrollWidth,
-        next: scroll,
+        startPointer: pointer,
+        startOffset: lane.geometry.offset,
+        startScroll: lane.axis === "y" ? target.scrollTop : target.scrollLeft,
+        pointer,
         frame: null,
       };
       try {
@@ -604,44 +717,93 @@ export function installOverlayScrollbars(doc: Document): () => void {
     }
   }
 
-  /** Writes the scroll a drag asked for, and moves the thumb with it in the same frame. */
+  function scheduleDragWrite(): void {
+    if (drag !== null && drag.frame === null) drag.frame = win.requestAnimationFrame(applyDrag);
+  }
+
+  /** Writes the scroll a drag asks for, and moves the thumb with it in the same frame. */
   function applyDrag(): void {
-    if (drag === null) return;
-    drag.frame = null;
-    const lane = drag.lane;
-    if (lane.axis === "y") drag.target.scrollTop = drag.next;
-    else drag.target.scrollLeft = drag.next;
-    lane.geometry = {
-      ...lane.geometry,
-      offset: thumbOffset(drag.next, drag.clientSize, drag.scrollSize),
-    };
+    const current = drag;
+    if (current === null) return;
+    current.frame = null;
+    const { lane, target } = current;
+    const metrics = lane.metrics;
+    if (!target.isConnected || metrics === null) {
+      endDrag();
+      return;
+    }
+    const offset = dragOffset(current, metrics);
+    writeDragScroll(current, offset, metrics);
+    lane.geometry = { ...lane.geometry, offset };
     writeGeometry(lane);
   }
 
-  function handleDragMove(event: PointerEvent): void {
-    if (drag === null || event.pointerId !== drag.pointerId) return;
-    event.stopImmediatePropagation();
-    drag.next = dragScrollPosition(drag, drag.lane.axis === "y" ? event.clientY : event.clientX);
-    // One write per frame: the pointer cannot be in two places within one.
-    if (drag.frame === null) drag.frame = win.requestAnimationFrame(applyDrag);
+  /**
+   * The scroll for a drag's thumb offset. At either end it asks for the end
+   * itself rather than a number measured a frame ago, so a drag held at the
+   * bottom of a growing transcript is at the true bottom — where
+   * `use-stick-to-bottom` takes over again on release.
+   */
+  function writeDragScroll(current: Drag, offset: number, metrics: LaneMetrics): void {
+    const scroll =
+      metrics.travel > 0 && offset >= metrics.travel
+        ? Number.MAX_SAFE_INTEGER
+        : scrollForOffset(offset, metrics.travel, metrics.range);
+    if (current.lane.axis === "y") current.target.scrollTop = scroll;
+    else current.target.scrollLeft = scroll;
   }
 
-  function endDrag(event: PointerEvent): void {
-    if (drag === null || event.pointerId !== drag.pointerId) return;
+  function handleDragMove(event: PointerEvent): void {
+    const current = drag;
+    if (current === null || event.pointerId !== current.pointerId) return;
     event.stopImmediatePropagation();
-    if (drag.frame !== null) win.cancelAnimationFrame(drag.frame);
+    if (event.buttons === 0) {
+      // The release happened where we could not see it (another app, a lost
+      // capture): no button, no drag.
+      endDrag();
+      return;
+    }
+    current.pointer = axisPointer(current.lane, event);
+    // One write per frame: the pointer cannot be in two places within one.
+    scheduleDragWrite();
+  }
+
+  function handlePointerUp(event: PointerEvent): void {
+    const current = drag;
+    if (current === null || event.pointerId !== current.pointerId) return;
+    event.stopImmediatePropagation();
+    if (current.frame !== null) win.cancelAnimationFrame(current.frame);
+    current.frame = null;
     applyDrag();
     // The press was ours, so the click it would complete is ours too.
     swallowClick = event.type === "pointerup";
+    endDrag();
+  }
+
+  function endDrag(): void {
+    const current = drag;
+    if (current === null) return;
+    if (current.frame !== null) win.cancelAnimationFrame(current.frame);
     drag = null;
+    try {
+      if (current.lane.thumb.hasPointerCapture(current.pointerId)) {
+        current.lane.thumb.releasePointerCapture(current.pointerId);
+      }
+    } catch {
+      // Capture already gone.
+    }
     requestUpdate();
   }
 
-  function handleLostCapture(): void {
-    if (drag === null) return;
-    if (drag.frame !== null) win.cancelAnimationFrame(drag.frame);
-    drag = null;
-    requestUpdate();
+  function handleKeyDown(event: KeyboardEvent): void {
+    const current = drag;
+    if (current === null || event.key !== "Escape") return;
+    // Escape cancels the drag, not the menu or dialog it is in.
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (current.lane.axis === "y") current.target.scrollTop = current.startScroll;
+    else current.target.scrollLeft = current.startScroll;
+    endDrag();
   }
 
   function handleClick(event: MouseEvent): void {
@@ -660,13 +822,15 @@ export function installOverlayScrollbars(doc: Document): () => void {
   // Window, capturing: ahead of every document and React root listener.
   win.addEventListener("pointerdown", handlePointerDown, active);
   win.addEventListener("pointermove", handleDragMove, active);
-  win.addEventListener("pointerup", endDrag, active);
-  win.addEventListener("pointercancel", endDrag, active);
+  win.addEventListener("pointerup", handlePointerUp, active);
+  win.addEventListener("pointercancel", handlePointerUp, active);
+  win.addEventListener("keydown", handleKeyDown, active);
   win.addEventListener("click", handleClick, active);
+  win.addEventListener("blur", endDrag);
   win.addEventListener("resize", handleResize, passive);
   doc.addEventListener("transitionend", handleSettled, passive);
   doc.addEventListener("animationend", handleSettled, passive);
-  for (const lane of laneList) lane.thumb.addEventListener("lostpointercapture", handleLostCapture);
+  for (const lane of laneList) lane.thumb.addEventListener("lostpointercapture", endDrag);
 
   return () => {
     doc.removeEventListener("scroll", handleScroll, passive);
@@ -675,18 +839,21 @@ export function installOverlayScrollbars(doc: Document): () => void {
     win.removeEventListener("pointermove", handlePointerMove, passive);
     win.removeEventListener("pointerdown", handlePointerDown, active);
     win.removeEventListener("pointermove", handleDragMove, active);
-    win.removeEventListener("pointerup", endDrag, active);
-    win.removeEventListener("pointercancel", endDrag, active);
+    win.removeEventListener("pointerup", handlePointerUp, active);
+    win.removeEventListener("pointercancel", handlePointerUp, active);
+    win.removeEventListener("keydown", handleKeyDown, active);
     win.removeEventListener("click", handleClick, active);
+    win.removeEventListener("blur", endDrag);
     win.removeEventListener("resize", handleResize, passive);
     doc.removeEventListener("transitionend", handleSettled, passive);
     doc.removeEventListener("animationend", handleSettled, passive);
     win.clearTimeout(hideTimer);
+    if (nextFrameRequest !== null) win.cancelAnimationFrame(nextFrameRequest);
     if (drag !== null && drag.frame !== null) win.cancelAnimationFrame(drag.frame);
     drag = null;
-    resizes.disconnect();
     update?.disconnect();
     update = null;
+    resizes.disconnect();
     mutations.disconnect();
     for (const element of applied.keys()) element.removeAttribute(TARGET_ATTR);
     applied.clear();

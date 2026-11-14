@@ -3,11 +3,11 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   THUMB_MIN_LENGTH,
   TRACK_INSET,
-  dragScrollPosition,
   hitsThumb,
   inThumbLane,
+  laneMetrics,
   overflows,
-  thumbOffset,
+  scrollForOffset,
   thumbRatio,
   trackLength,
 } from "./geometry";
@@ -25,46 +25,50 @@ describe("scroll thumb geometry", () => {
   });
 
   it("fills the whole track when nothing overflows", () => {
-    expect(thumbRatio(300, 300)).toBe(1);
-    expect(thumbRatio(300, 120)).toBe(1);
-    expect(thumbRatio(0, 500)).toBe(1);
+    expect(thumbRatio(300, 300, 296)).toBe(1);
+    expect(thumbRatio(300, 120, 296)).toBe(1);
+    expect(thumbRatio(0, 500, 0)).toBe(1);
   });
 
-  it("is the visible share of the content, floored at the minimum length", () => {
-    expect(thumbRatio(200, 800)).toBe(0.25);
+  it("is the visible share of the content, floored at the minimum drawn length", () => {
+    expect(thumbRatio(200, 800, 196)).toBe(0.25);
     // 160 / 100000 would be a 0.25px thumb: the floor is 20px of a 156px track.
-    expect(thumbRatio(160, 100_000)).toBe(THUMB_MIN_LENGTH / trackLength(160));
+    expect(thumbRatio(160, 100_000, 156)).toBe(THUMB_MIN_LENGTH / 156);
   });
 
   it("places the thumb at the scroll progress along the track less the thumb", () => {
     // 200px box, 800px content: track 196, thumb 49, travel 147.
-    expect(thumbOffset(0, 200, 800)).toBe(0);
-    expect(thumbOffset(300, 200, 800)).toBe(73.5);
-    expect(thumbOffset(600, 200, 800)).toBe(147);
-    // Overscroll and nothing to scroll both pin it.
-    expect(thumbOffset(900, 200, 800)).toBe(147);
-    expect(thumbOffset(-20, 200, 800)).toBe(0);
-    expect(thumbOffset(10, 200, 200)).toBe(0);
+    const at = (scrollPos: number) =>
+      laneMetrics({ clientSize: 200, scrollSize: 800, scrollPos, scale: 1 });
+    expect(at(0)).toEqual({ overflow: true, track: 196, length: 49, travel: 147, offset: 0, range: 600 });
+    expect(at(300).offset).toBe(73.5);
+    expect(at(600).offset).toBe(147);
+    // Overscroll pins it.
+    expect(at(900).offset).toBe(147);
+    expect(at(-20).offset).toBe(0);
+    expect(laneMetrics({ clientSize: 200, scrollSize: 200, scrollPos: 10, scale: 1 })).toMatchObject({
+      overflow: false,
+      offset: 0,
+      range: 0,
+    });
   });
 
-  it("maps pointer travel onto content travel, the track less the thumb against the overflow", () => {
-    // 200px box, 800px content: ratio 0.25, track 196, thumb travel 147, range 600.
-    const start = { pointer: 100, scroll: 0, clientSize: 200, scrollSize: 800 };
-    expect(dragScrollPosition(start, 100 + 147)).toBeCloseTo(600);
-    expect(dragScrollPosition(start, 100 + 49)).toBeCloseTo(200);
-    expect(dragScrollPosition({ ...start, scroll: 300 }, 100)).toBe(300);
+  it("draws in viewport px under zoom: the track spans the drawn box, the range stays content px", () => {
+    // A 200px scroller under zoom 1.25 is drawn 250px tall.
+    const zoomed = laneMetrics({ clientSize: 200, scrollSize: 800, scrollPos: 300, scale: 1.25 });
+    expect(zoomed.track).toBe(246);
+    expect(zoomed.length).toBe(61.5);
+    expect(zoomed.travel).toBe(184.5);
+    expect(zoomed.range).toBe(600);
+    // So a pointer pixel is range / travel of content: 600 / 184.5, not 600 / 147.
+    expect(scrollForOffset(zoomed.travel / 2, zoomed.travel, zoomed.range)).toBe(300);
   });
 
-  it("clamps a drag to the scroll range", () => {
-    const start = { pointer: 50, scroll: 100, clientSize: 200, scrollSize: 800 };
-    expect(dragScrollPosition(start, -1000)).toBe(0);
-    expect(dragScrollPosition(start, 5000)).toBe(600);
-  });
-
-  it("leaves the scroll alone when there is nothing to drag", () => {
-    expect(
-      dragScrollPosition({ pointer: 0, scroll: 0, clientSize: 200, scrollSize: 200 }, 80),
-    ).toBe(0);
+  it("maps a thumb offset back onto the content, clamped", () => {
+    expect(scrollForOffset(36, 72, 300)).toBe(150);
+    expect(scrollForOffset(-10, 72, 300)).toBe(0);
+    expect(scrollForOffset(500, 72, 300)).toBe(300);
+    expect(scrollForOffset(10, 0, 300)).toBe(0);
   });
 
   it("finds the lane along the right edge for y and the bottom edge for x", () => {

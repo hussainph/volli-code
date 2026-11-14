@@ -3,8 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import {
   DRAGGING_ATTR,
+  EXCLUDED_SELECTOR,
   HIDE_AFTER_MS,
   TARGET_ATTR,
+  UPDATE_FAILED_CODE,
   installOverlayScrollbars,
 } from "./overlay-scrollbars";
 
@@ -40,6 +42,7 @@ function setSizes(
   })) {
     Object.defineProperty(element, key, { get: () => value, configurable: true });
   }
+  resized(element);
 }
 
 function rect(left: number, top: number, right: number, bottom: number): DOMRect {
@@ -68,10 +71,28 @@ const thumb = (axis: "x" | "y") =>
   track(axis)!.querySelector<HTMLElement>('[data-slot="scroll-thumb"]')!;
 const state = (axis: "x" | "y") => track(axis)?.getAttribute("data-state");
 
-/** ResizeObservers whose callbacks the test fires, standing in for the browser's post-layout pass. */
-let observers: { callback: () => void; targets: Set<Element> }[] = [];
+/**
+ * ResizeObservers whose callbacks the test fires, standing in for the browser's
+ * post-layout pass with its rules: a callback runs for a NEW observation (its
+ * first notification) or for an observed element whose size changed
+ * ({@link resized}), not otherwise.
+ */
+interface FakeObserver {
+  callback: () => void;
+  targets: Set<Element>;
+  due: Set<Element>;
+}
+let observers: FakeObserver[] = [];
 function flushResize(): void {
-  for (const observer of observers) if (observer.targets.size > 0) observer.callback();
+  for (const observer of observers) {
+    if (observer.due.size === 0) continue;
+    observer.due.clear();
+    observer.callback();
+  }
+}
+/** The browser noticed `element` change size. */
+function resized(element: Element): void {
+  for (const observer of observers) if (observer.targets.has(element)) observer.due.add(element);
 }
 
 let frames: FrameRequestCallback[] = [];
@@ -81,10 +102,12 @@ function flushFrames(): void {
   for (const callback of due) callback(0);
 }
 
-/** One rendering update: layout, then observers (reads), then the next frame (writes). */
+/** A few rendering updates: observers after layout, then the next frames' callbacks. */
 function settle(): void {
-  flushResize();
-  flushFrames();
+  for (let pass = 0; pass < 3; pass += 1) {
+    flushResize();
+    flushFrames();
+  }
 }
 
 let teardown: () => void = () => {};
@@ -96,18 +119,23 @@ beforeEach(() => {
   vi.stubGlobal(
     "ResizeObserver",
     class {
-      targets = new Set<Element>();
+      record: FakeObserver;
       constructor(callback: () => void) {
-        observers.push({ callback, targets: this.targets });
+        this.record = { callback, targets: new Set(), due: new Set() };
+        observers.push(this.record);
       }
       observe(element: Element) {
-        this.targets.add(element);
+        if (this.record.targets.has(element)) return; // Chromium: re-observing is a no-op
+        this.record.targets.add(element);
+        this.record.due.add(element);
       }
       unobserve(element: Element) {
-        this.targets.delete(element);
+        this.record.targets.delete(element);
+        this.record.due.delete(element);
       }
       disconnect() {
-        this.targets.clear();
+        this.record.targets.clear();
+        this.record.due.clear();
       }
     },
   );
@@ -191,21 +219,45 @@ describe("overlay scroll thumb", () => {
     flushResize();
     // Half of the track less the thumb: (196 - 49) / 2.
     expect(thumb("y").style.transform).toBe("translateY(73.5px)");
-    expect(frames).toHaveLength(0);
   });
 
-  it("runs each update from an observer newer than any other, so it is the frame's last", () => {
+  it("runs each update from an observer created for it, after any other", () => {
     const list = scroller({ client: 200, scroll: 800 });
     document.body.append(list);
     list.dispatchEvent(new Event("scroll"));
-    const before = observers.length;
-    // Someone else's observer, created after our request was made.
-    new ResizeObserver(() => {}).observe(document.body);
-    list.dispatchEvent(new Event("scroll"));
-    expect(observers.length).toBe(before + 1);
     settle();
+    const before = observers.length;
+    // Someone else's observer, created before our next request.
+    const order: string[] = [];
+    new ResizeObserver(() => order.push("theirs")).observe(document.body);
     list.dispatchEvent(new Event("scroll"));
     expect(observers.length).toBe(before + 2);
+    const ours = observers.at(-1)!;
+    expect([...ours.targets]).toEqual([document.documentElement]);
+    const run = ours.callback;
+    ours.callback = () => {
+      order.push("ours");
+      run();
+    };
+    // Callbacks run in creation order: theirs, then ours, last.
+    flushResize();
+    expect(order).toEqual(["theirs", "ours"]);
+  });
+
+  it("never observes from inside a delivery: a size change only asks for the next frame", () => {
+    const list = scroller({ client: 200, scroll: 800 });
+    document.body.append(list);
+    list.dispatchEvent(new Event("scroll"));
+    settle();
+    const before = observers.length;
+    setSizes(list, { client: 200, scroll: 900 });
+    flushResize(); // the targets' observer runs: it must not create an observer now
+    expect(observers.length).toBe(before);
+    expect(frames).toHaveLength(1);
+    flushFrames(); // the next frame makes the request
+    expect(observers.length).toBe(before + 1);
+    flushResize();
+    expect(Number.parseFloat(thumb("y").style.height)).toBeCloseTo((196 * 200) / 900);
   });
 
   it("skips a write that would move nothing by a tenth of a pixel", () => {
@@ -298,7 +350,9 @@ describe("overlay scroll thumb", () => {
       list.children[index % 2]!.dispatchEvent(pointer("pointerover"));
       settle();
     }
-    expect(lookups).not.toHaveBeenCalled();
+    // Resolving a container looks for excluded surfaces; crossing rows inside
+    // the one already resolved never does.
+    expect(lookups.mock.calls.filter(([selector]) => selector === EXCLUDED_SELECTOR)).toEqual([]);
     expect(state("y")).toBe("visible");
   });
 
@@ -383,17 +437,19 @@ describe("overlay scroll thumb", () => {
     expect(track("y")!.hasAttribute("data-dragging")).toBe(true);
 
     // Thumb travel 72px over a 300px range: 36px of pointer is 150px of content.
-    row.dispatchEvent(pointer("pointermove", { clientX: 198, clientY: 30 }));
-    row.dispatchEvent(pointer("pointermove", { clientX: 198, clientY: 46 }));
+    row.dispatchEvent(pointer("pointermove", { clientX: 198, clientY: 30, buttons: 1 }));
+    row.dispatchEvent(pointer("pointermove", { clientX: 198, clientY: 46, buttons: 1 }));
     expect(frames).toHaveLength(1);
     expect(list.scrollTop).toBe(0);
     flushFrames();
     expect(list.scrollTop).toBe(150);
     // The thumb moves in the same frame as the write: half of 96 less 24.
     expect(thumb("y").style.transform).toBe("translateY(36px)");
-    row.dispatchEvent(pointer("pointermove", { clientX: 198, clientY: 500 }));
+    row.dispatchEvent(pointer("pointermove", { clientX: 198, clientY: 500, buttons: 1 }));
     flushFrames();
-    expect(list.scrollTop).toBe(300);
+    // Taken to the end, a drag asks for the end itself (the browser clamps), so
+    // it stays at the true end while content grows.
+    expect(list.scrollTop).toBe(Number.MAX_SAFE_INTEGER);
 
     row.dispatchEvent(pointer("pointerup", { clientX: 198, clientY: 500 }));
     settle();
@@ -435,15 +491,113 @@ describe("overlay scroll thumb", () => {
     list.append(row);
     setSizes(list, { client: 100, scroll: 400 });
     await Promise.resolve(); // MutationObserver delivery
-    expect(observers.some((observer) => observer.targets.has(row))).toBe(true);
     settle();
+    expect(observers.some((observer) => observer.targets.has(row))).toBe(true);
     expect(thumb("y").style.height).toBe("24px");
     expect(state("y")).toBe("visible");
 
     list.remove();
+    resized(list); // a removed element reports a zero size
     settle();
     expect(list.hasAttribute(TARGET_ATTR)).toBe(false);
     expect(state("y")).toBe("hidden");
+  });
+
+  it("never targets a scroller under a modal, and drops one a modal covers", () => {
+    const page = document.createElement("div");
+    const list = scroller({ client: 200, scroll: 800 });
+    page.append(list);
+    document.body.append(page);
+    list.dispatchEvent(new Event("scroll"));
+    settle();
+    expect(state("y")).toBe("visible");
+    page.setAttribute("aria-hidden", "true"); // Radix hideOthers
+    list.dispatchEvent(new Event("scroll"));
+    settle();
+    expect(state("y")).toBe("hidden");
+    expect(list.hasAttribute(TARGET_ATTR)).toBe(false);
+    list.firstElementChild!.dispatchEvent(pointer("pointerover"));
+    settle();
+    expect(list.hasAttribute(TARGET_ATTR)).toBe(false);
+  });
+
+  it("forgets a container that resolved to nothing, so the next crossing resolves again", () => {
+    const transcript = scroller({ client: 300, scroll: 900 });
+    const menu = scroller({ client: 100, scroll: 100 });
+    document.body.append(transcript, menu);
+    transcript.firstElementChild!.dispatchEvent(pointer("pointerover"));
+    settle();
+    for (const row of [menu.firstElementChild!, menu.lastElementChild!, menu.firstElementChild!]) {
+      row.dispatchEvent(pointer("pointerover"));
+      settle();
+      expect(state("y")).toBe("hidden");
+    }
+    setSizes(menu, { client: 100, scroll: 400 }); // it filled while the pointer was on it
+    menu.lastElementChild!.dispatchEvent(pointer("pointerover"));
+    settle();
+    expect(menu.getAttribute(TARGET_ATTR)).toBe("y");
+    expect(state("y")).toBe("visible");
+  });
+
+  it("ends a drag on blur and on a move with no button, and Escape puts the scroll back", () => {
+    const list = scroller({ client: 100, scroll: 400 });
+    document.body.append(list);
+    const row = list.firstElementChild!;
+    row.dispatchEvent(pointer("pointerover"));
+    settle();
+    vi.spyOn(thumb("y"), "getBoundingClientRect").mockReturnValue(rect(193, 2, 197, 26));
+    const press = () => row.dispatchEvent(pointer("pointerdown", { clientX: 198, clientY: 10, button: 0 }));
+    const dragging = () => document.documentElement.hasAttribute(DRAGGING_ATTR);
+
+    press();
+    settle();
+    expect(dragging()).toBe(true);
+    window.dispatchEvent(new Event("blur"));
+    settle();
+    expect(dragging()).toBe(false);
+
+    press();
+    row.dispatchEvent(pointer("pointermove", { clientX: 198, clientY: 60, buttons: 0 }));
+    flushFrames();
+    settle();
+    expect(dragging()).toBe(false);
+    expect(list.scrollTop).toBe(0);
+
+    list.scrollTop = 40;
+    press();
+    row.dispatchEvent(pointer("pointermove", { clientX: 198, clientY: 50, buttons: 1 }));
+    flushFrames();
+    expect(list.scrollTop).not.toBe(40);
+    const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    const menuSaw = vi.fn();
+    document.addEventListener("keydown", menuSaw);
+    document.body.dispatchEvent(escape);
+    settle();
+    expect(list.scrollTop).toBe(40);
+    expect(escape.defaultPrevented).toBe(true);
+    expect(menuSaw).not.toHaveBeenCalled();
+    expect(dragging()).toBe(false);
+    document.removeEventListener("keydown", menuSaw);
+  });
+
+  it("recovers from an update that throws, and logs it once", () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const bad = scroller({ client: 100, scroll: 400 });
+    const good = scroller({ client: 100, scroll: 400 });
+    document.body.append(bad, good);
+    vi.spyOn(bad, "getBoundingClientRect").mockImplementation(() => {
+      throw new Error("boom");
+    });
+    for (let index = 0; index < 3; index += 1) {
+      bad.firstElementChild!.dispatchEvent(pointer("pointerover"));
+      settle();
+      good.firstElementChild!.dispatchEvent(pointer("pointerover"));
+      settle();
+    }
+    expect(good.getAttribute(TARGET_ATTR)).toBe("y");
+    expect(state("y")).toBe("visible");
+    expect(logged).toHaveBeenCalledTimes(1);
+    expect(String(logged.mock.calls[0]![0])).toContain(UPDATE_FAILED_CODE);
   });
 
   it("tears down completely", () => {
