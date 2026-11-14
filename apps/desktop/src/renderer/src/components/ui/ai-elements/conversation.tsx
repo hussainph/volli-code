@@ -444,6 +444,11 @@ function useReaderFollowing(): () => void {
       thumbRest = grabbed;
     };
     const onTouch = () => handFor("direct", Infinity);
+    // Focus moving into the transcript (Tab from outside it, code calling
+    // `focus()`, assistive technology) scrolls the newly focused element into
+    // view: that scroll is the reader's. Focus on something already in view
+    // scrolls nothing, so a reader following at the end stays there.
+    const onFocus = () => handFor("direct");
     letGo.current = () => {
       handFor("app");
       waiting = null;
@@ -455,8 +460,11 @@ function useReaderFollowing(): () => void {
     const onLift = (event: Event) => {
       if (hand.until !== Infinity) return;
       const kind = hand.kind;
+      // Listening in the capture phase on the window hears every element's
+      // blur: a press in the transcript blurs the composer. Only the window
+      // itself losing focus (a blur whose target is no node) ends a hand.
       const ends =
-        event.type === "blur" ||
+        (event.type === "blur" && !(event.target instanceof view.Node)) ||
         (kind === "thumb" && event.type === "lostpointercapture") ||
         (kind === "select" && (event.type === "pointerup" || event.type === "pointercancel")) ||
         (kind === "direct" && (event.type === "touchend" || event.type === "touchcancel"));
@@ -478,6 +486,7 @@ function useReaderFollowing(): () => void {
     scroller.addEventListener("wheel", onWheel, { passive: true });
     scroller.addEventListener(SCROLL_THUMB_GRAB_EVENT, onGrab);
     scroller.addEventListener("touchstart", onTouch, { passive: true });
+    scroller.addEventListener("focusin", onFocus);
     view.addEventListener("keydown", onKey);
     view.addEventListener("pointerdown", onPress, { capture: true, passive: true });
     for (const name of LIFT_EVENTS) {
@@ -489,6 +498,7 @@ function useReaderFollowing(): () => void {
       scroller.removeEventListener("wheel", onWheel);
       scroller.removeEventListener(SCROLL_THUMB_GRAB_EVENT, onGrab);
       scroller.removeEventListener("touchstart", onTouch);
+      scroller.removeEventListener("focusin", onFocus);
       view.removeEventListener("keydown", onKey);
       view.removeEventListener("pointerdown", onPress, { capture: true });
       for (const name of LIFT_EVENTS) view.removeEventListener(name, onLift, { capture: true });

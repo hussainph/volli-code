@@ -9,11 +9,17 @@
  *   keyboard, a drag of the scroll thumb, and a scroll no input announces.
  * - A scroll the reader's hand makes away from the end turns following off at
  *   once, and it stays off while the reply grows. The hand is a wheel, a key,
- *   a touch, the scroll thumb or a pointer held in the transcript (selecting).
+ *   a touch, the scroll thumb, a pointer held in the transcript (selecting),
+ *   or focus moving into the transcript.
  * - Nothing else changes it. Content growing above or below, the browser's
  *   scroll anchoring, rows the transcript window swaps, and the library's own
  *   writes all leave following as it was. A release the library makes with no
  *   hand behind it is undone.
+ * - Known and accepted: a scroll caused by something that is neither a hand,
+ *   a focus move nor a `stopFollowing` call (VoiceOver moving over plain text,
+ *   drag-and-drop auto-scroll near the top edge, a bare `scrollIntoView` from
+ *   code) is pulled back to the end while following; any new code that
+ *   scrolls the transcript must call `stopFollowing` first.
  * - A pointer held in the transcript never turns following on: a reader
  *   selecting text is not captured when the selection auto-scrolls. Nor does
  *   the scroll that follows the transcript letting go for the reader (a jump
@@ -141,7 +147,8 @@ export type FollowingChange = "follow" | "release" | null;
  *
  * - `down`, `up`: a wheel or a key that scrolls toward the end or the start,
  *   moments ago.
- * - `direct`: a touch, or a key that moves the view either way (Tab).
+ * - `direct`: a touch, a key that moves the view either way (Tab), or focus
+ *   moving into the transcript, whose scroll-into-view goes either way.
  * - `select`: a pointer pressed in the transcript and held, or just lifted.
  * - `thumb`: a drag of the scroll thumb, held or lifted moments ago.
  * - `app`: the transcript let go itself, for the reader, moments ago: a

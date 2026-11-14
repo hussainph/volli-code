@@ -519,6 +519,71 @@ it("does not take the transcript's own jump near the end, just after it let go, 
   expect(after.at(-1)).toBeGreaterThan(after[0]!);
 });
 
+it("keeps a press held through another element's blur, so a selection that scrolls up stays released", async () => {
+  // The composer has focus; a press on the transcript's text blurs it.
+  const composer = document.createElement("textarea");
+  document.body.append(composer);
+  try {
+    await act(async () => {
+      scroller
+        .querySelector("p")!
+        .dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
+      composer.dispatchEvent(new FocusEvent("blur"));
+    });
+    await handLifts();
+    // Still held: the selection runs above the top edge and the browser
+    // scrolls after it, up.
+    position -= 300;
+    await frame();
+    const during = await stream(10);
+    await act(async () => {
+      window.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, button: 0 }));
+    });
+    const after = await stream(10);
+    expect(Math.min(...during, ...after)).toBeGreaterThanOrEqual(300);
+  } finally {
+    composer.remove();
+  }
+});
+
+it("ends a held press when the window itself loses focus", async () => {
+  await act(async () => {
+    scroller
+      .querySelector("p")!
+      .dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
+    window.dispatchEvent(new FocusEvent("blur"));
+  });
+  await handLifts();
+  // Nobody's hand is on the transcript now: a drop with no reader behind it
+  // does not release.
+  position -= 108;
+  await frame();
+  await stream(10);
+  expect(await rest()).toBeLessThanOrEqual(1);
+});
+
+it("lets focus moving into the transcript scroll the reader to it, and stay there", async () => {
+  // Tab from outside the transcript, or code calling focus(), lands on a
+  // control 2,000px up; the browser scrolls it into view.
+  await act(async () => {
+    scroller.querySelector("p")!.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+  });
+  position -= 2_000;
+  await frame(LINE);
+  const after = await stream(20);
+  expect(Math.min(...after)).toBeGreaterThanOrEqual(2_000);
+  expect(after.at(-1)).toBeGreaterThan(after[0]!);
+});
+
+it("keeps following when focus lands on something already in view at the end", async () => {
+  await act(async () => {
+    scroller.querySelector("p")!.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+  });
+  // Nothing to scroll into view; lines keep landing.
+  await stream(10);
+  expect(await rest()).toBeLessThanOrEqual(1);
+});
+
 it("measures a transcript swapped in place afresh", async () => {
   // Released 300px up in one Session…
   await wheel(-300);
