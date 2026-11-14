@@ -150,6 +150,45 @@ const steps = {
     }
   },
 
+  /**
+   * Opens one Session the way N-1's app reads it: its own projection
+   * checkpoint first, then its own engine's read (which falls back to the
+   * event log when the checkpoint is refused). Reports what it made of the
+   * checkpoint and what the Session shows, never an exact decoded shape.
+   */
+  readSession: async (step) => {
+    const { createSessionEngine } = await n1("@volli/session-engine");
+    const { createSqliteSessionLedger } = await n1("./session-control/sqlite-ledger");
+    const db = openVolliDb(command.dbPath);
+    try {
+      let next = 0;
+      const engine = createSessionEngine({
+        ledger: createSqliteSessionLedger(db),
+        clock: { now: () => NOW },
+        ids: { next: (kind) => `n1-read-${kind}-${++next}` },
+      });
+      const checkpoint =
+        typeof engine.getProjectionCheckpoint === "function"
+          ? await engine.getProjectionCheckpoint({ sessionId: step.sessionId })
+          : undefined;
+      const projection = await engine.getSession({ sessionId: step.sessionId });
+      const active = projection?.attention?.active ?? [];
+      return {
+        found: projection !== null,
+        checkpoint:
+          checkpoint === undefined ? "unsupported" : checkpoint === null ? "refold" : "read",
+        modelProvider: projection?.modelSelection?.providerId ?? null,
+        attention: active.map((item) => ({
+          id: item.id,
+          kind: item.kind,
+          stopCategory: item.stopDetail?.category ?? null,
+        })),
+      };
+    } finally {
+      db.close();
+    }
+  },
+
   /** The previous runtime's real queue replay/steer paths, not a copied guard. */
   followUpIdentityReplay: async (step) => {
     const queue = await optional("./db/session-follow-up-repo");
