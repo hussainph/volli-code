@@ -127,8 +127,7 @@ export function followingAfterScroll(
   hand: ReaderHand,
 ): FollowingChange {
   const moved = towardEnd(previous, current, hand);
-  const nearer =
-    moved > MOVED_PX || (hand === "none" && current.top > previous.top + MOVED_PX);
+  const nearer = moved > MOVED_PX || (hand === "none" && current.top > previous.top + MOVED_PX);
   if (nearer) return current.fromEnd <= FOLLOW_ZONE_PX ? "follow" : null;
   if (hand === "none") return null;
   const away =

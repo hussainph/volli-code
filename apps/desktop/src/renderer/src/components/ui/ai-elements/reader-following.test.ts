@@ -6,6 +6,8 @@ import {
   followingSettled,
   keyScrollsUp,
   scrollPlace,
+  type FollowingChange,
+  type ReaderHand,
   type ScrollKey,
   type ScrollPlace,
 } from "./reader-following";
@@ -89,14 +91,14 @@ describe("followingAfterScroll", () => {
   });
 });
 
-describe("followingSettled", () => {
-  const settle = (
-    change: "follow" | "release" | null,
-    hand: "none" | "recent" | "holding",
-    wasFollowing: boolean,
-    following: boolean,
-  ) => followingSettled({ change, hand, wasFollowing, following });
+const settle = (
+  change: FollowingChange,
+  hand: ReaderHand,
+  wasFollowing: boolean,
+  following: boolean,
+) => followingSettled({ change, hand, wasFollowing, following });
 
+describe("followingSettled", () => {
   it("follows an arrival the library discarded, and leaves one it took", () => {
     expect(settle("follow", "none", false, false)).toBe("follow");
     expect(settle("follow", "none", false, true)).toBeNull();
