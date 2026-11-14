@@ -6,6 +6,7 @@ import { ProviderStopCapture, finalStopDetail, safeProviderMessage } from "./pro
 import {
   decodeSessionStopDetail,
   RECOVERED_TURN_INTERRUPTED_DETAIL,
+  sessionStopCause,
   type SessionStopDetail,
 } from "@volli/shared";
 
@@ -37,6 +38,7 @@ import { JsonlSessionRepo } from "./harness-session";
 import { NodeExecutionEnv, type ExecutionEnv } from "./harness-env";
 import {
   getSupportedThinkingLevels,
+  lazyStream,
   type AssistantMessage,
   type CredentialStore,
   type Models,
@@ -2627,7 +2629,7 @@ async function attachSession(
       const capture = new ProviderStopCapture(credentialRedaction);
       providerStop = capture;
       const maxTokens = outputCeiling(requestModel, context);
-      return models.streamSimple(requestModel, context, {
+      const requestOptions: Parameters<Models["streamSimple"]>[2] = {
         ...options,
         // Google/Bedrock cannot accept custom fetch. Missing SDK fields on
         // those routes remain unknown rather than inferred from their prose.
@@ -2655,6 +2657,21 @@ async function attachSession(
               },
             }
           : {}),
+      };
+      // The credential is resolved before the request so a failure to obtain
+      // one stays a typed fact (`ProviderStopCapture.credential`). A refresh
+      // this performs is persisted before it returns, so the resolution inside
+      // `streamSimple` reads the fresh credential back instead of refreshing.
+      return lazyStream(requestModel, async () => {
+        await capture.credential(() =>
+          // The same overrides Pi's own resolution inside `streamSimple` reads.
+          models.getAuth(requestModel, {
+            apiKey: options?.apiKey,
+            env: options?.env,
+            signal: options?.signal,
+          }),
+        );
+        return models.streamSimple(requestModel, context, requestOptions);
       });
     };
     // A provider request that goes silent — most often a socket that died
@@ -3919,6 +3936,10 @@ async function attachSession(
           // Structured provider facts outrank recovery heuristics over prose.
           if (stopDetail.category === "auth-failed") failure.reason = "auth";
           if (stopDetail.category === "context-overflow") failure.reason = "context";
+          // A model the provider does not serve this account is fixed in
+          // Settings, not by running the same request again.
+          if (sessionStopCause(stopDetail) === "model-unavailable")
+            failure.reason = "configuration";
         }
         return;
       }

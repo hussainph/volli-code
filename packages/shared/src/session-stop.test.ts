@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
+  SESSION_CREDENTIAL_STOP_TYPES,
   SESSION_STOP_CATEGORIES,
+  sessionStopCause,
+  sessionStopNextStep,
   sessionStopSummary,
   type SessionStopDetail,
 } from "./session-stop";
@@ -69,6 +72,65 @@ describe("durable interruption details", () => {
       expect(sessionStopSummary({ ...detail, category })).toMatch(/^Stopped:/);
       expect(sessionStopSummary({ ...detail, category })).not.toContain("Limit used");
     }
+  });
+  it.each([
+    // [category, providerType, httpStatus, cause]
+    ["auth-failed", SESSION_CREDENTIAL_STOP_TYPES.refreshFailed, null, "sign-in"],
+    ["auth-failed", SESSION_CREDENTIAL_STOP_TYPES.missing, null, "sign-in"],
+    ["auth-failed", "authentication_error", 401, "sign-in"],
+    ["auth-failed", null, 401, "sign-in"],
+    ["auth-failed", "permission_error", 403, "permission"],
+    ["auth-failed", null, 403, "permission"],
+    ["bad-request", "not_found_error", 404, "model-unavailable"],
+    ["bad-request", "invalid_request_error", 400, "request"],
+    ["rate-limited", "usage_limit_reached", 429, "quota"],
+    ["rate-limited", "billing_error", 402, "quota"],
+    ["rate-limited", "rate_limit_error", 429, "transient"],
+    ["network", "ECONNRESET", null, "transient"],
+    ["unknown", null, null, "unknown"],
+  ] as const)(
+    "reads %s/%s/%s as %s from structured facts alone",
+    (category, providerType, httpStatus, cause) => {
+      // Withheld prose must not change the answer: it is never read.
+      const stop: SessionStopDetail = {
+        ...detail,
+        category,
+        providerType,
+        httpStatus,
+        message: "[Provider text withheld: possible request content.]",
+      };
+      expect(sessionStopCause(stop)).toBe(cause);
+      expect(sessionStopSummary(stop)).toMatch(/^Stopped:/);
+      expect(sessionStopNextStep(stop)).toMatch(/^Next:/);
+    },
+  );
+  it("tells sign-in apart from retry, and quota with and without a stated reset", () => {
+    const signIn = {
+      ...detail,
+      category: "auth-failed" as const,
+      providerType: SESSION_CREDENTIAL_STOP_TYPES.refreshFailed,
+      httpStatus: null,
+    };
+    // The runtime's own codes ride the existing bounded `providerType` field,
+    // so the frozen codec (and every older reader of it) takes them unchanged.
+    for (const providerType of Object.values(SESSION_CREDENTIAL_STOP_TYPES)) {
+      expect(decodeSessionStopDetail({ ...signIn, providerType }, "stop")).toEqual({
+        ...signIn,
+        providerType,
+      });
+    }
+    expect(sessionStopSummary(signIn)).toBe("Stopped: the provider sign-in expired or was refused");
+    expect(sessionStopNextStep(signIn)).toContain("a person must sign in");
+    expect(
+      sessionStopSummary({ ...signIn, providerType: SESSION_CREDENTIAL_STOP_TYPES.missing }),
+    ).toBe("Stopped: not signed in to the provider");
+    expect(sessionStopNextStep({ ...detail, category: "network" })).toBe(
+      "Next: a retry may succeed.",
+    );
+    expect(sessionStopNextStep(detail)).toContain("until the reset above");
+    expect(sessionStopNextStep({ ...detail, resetsAt: null })).toContain(
+      "wait for the provider's allowance to reset",
+    );
   });
   it("round-trips details on interruptions and Attentions through the frozen codec and renderer scrub", () => {
     for (const category of SESSION_STOP_CATEGORIES) {

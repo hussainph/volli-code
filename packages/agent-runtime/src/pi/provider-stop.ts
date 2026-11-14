@@ -1,6 +1,7 @@
 /** Read only provider-returned fields, never classify prose (VC-482). */
 import type { AssistantMessage, JsonObject, ProviderResponse } from "@earendil-works/pi-ai";
 import {
+  SESSION_CREDENTIAL_STOP_TYPES,
   type SessionRuntimeSpec,
   type SessionStopCategory,
   type SessionStopDetail,
@@ -33,8 +34,17 @@ const TYPES: Readonly<Record<string, SessionStopCategory>> = {
   permission_error: "auth-failed",
   UNAUTHENTICATED: "auth-failed",
   PERMISSION_DENIED: "auth-failed",
+  [SESSION_CREDENTIAL_STOP_TYPES.missing]: "auth-failed",
+  [SESSION_CREDENTIAL_STOP_TYPES.refreshFailed]: "auth-failed",
+  [SESSION_CREDENTIAL_STOP_TYPES.unavailable]: "auth-failed",
+  // Anthropic's 402: payment or billing, a spent allowance by another name.
+  billing_error: "rate-limited",
   invalid_request_error: "bad-request",
   INVALID_ARGUMENT: "bad-request",
+  // A model this account is not served (Anthropic, OpenAI, Google wording).
+  not_found_error: "bad-request",
+  model_not_found: "bad-request",
+  NOT_FOUND: "bad-request",
   context_length_exceeded: "context-overflow",
   context_window_exceeded: "context-overflow",
   ECONNRESET: "network",
@@ -139,10 +149,43 @@ export class ProviderStopCapture {
   constructor(private readonly redaction?: RedactionPort) {}
 
   #type: string | null = null;
+  /** Why no credential could be had for this request, before anything was sent. */
+  #credential: string | null = null;
   #message: string | null = null;
   #status: number | null = null;
   #resetsAt: number | null = null;
   #bodyResetsAt: number | null = null;
+
+  /**
+   * Resolve this request's credential first, and keep why it could not be had.
+   *
+   * Pi resolves auth inside the stream's setup and, when that throws, reports
+   * the stream as failed with nothing but the thrown sentence: the typed
+   * `ModelsError.code` is gone, no request was sent, so no status or provider
+   * type exists either. A refused OAuth refresh's sentence embeds the token
+   * endpoint's JSON body, which the privacy filter rightly withholds — and a
+   * stop with no type, no status and withheld prose read as `unknown`
+   * (VC-1236). Resolving through Pi's public `getAuth` first keeps the code as
+   * a fact. The failure is rethrown unchanged, so Pi's own failure stays the
+   * stream's failure and no second refresh is attempted.
+   */
+  async credential(resolve: () => Promise<unknown>): Promise<void> {
+    this.#credential = null;
+    let resolved: unknown;
+    try {
+      resolved = await resolve();
+    } catch (error) {
+      const code = record(error)["code"];
+      this.#credential =
+        code === "oauth"
+          ? SESSION_CREDENTIAL_STOP_TYPES.refreshFailed
+          : code === "auth"
+            ? SESSION_CREDENTIAL_STOP_TYPES.unavailable
+            : null;
+      throw error;
+    }
+    if (resolved === undefined) this.#credential = SESSION_CREDENTIAL_STOP_TYPES.missing;
+  }
 
   /** Preserve error facts before an SDK replaces them with friendly prose. */
   fetch(inner: typeof globalThis.fetch, now: () => number): typeof globalThis.fetch {
@@ -269,7 +312,7 @@ export class ProviderStopCapture {
       message.rawStopReason === "volli.stream-stalled" ||
       message.rawStopReason === "volli.runtime-error"
         ? message.rawStopReason
-        : (this.#type ?? message.rawStopReason ?? null);
+        : (this.#credential ?? this.#type ?? message.rawStopReason ?? null);
     // A diagnostic is historical unless Pi explicitly attributes it to the
     // failed stream (after its first event, without an SSE fallback). Even then
     // it cannot override a terminal response/status/stop reason.
@@ -293,11 +336,11 @@ export class ProviderStopCapture {
     const statusCategory =
       this.#status === 401 || this.#status === 403
         ? "auth-failed"
-        : this.#status === 429
+        : this.#status === 429 || this.#status === 402
           ? "rate-limited"
           : this.#status === 503 || this.#status === 529
             ? "provider-overloaded"
-            : this.#status === 400 || this.#status === 422
+            : this.#status === 400 || this.#status === 404 || this.#status === 422
               ? "bad-request"
               : "unknown";
     const category =

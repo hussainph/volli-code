@@ -2,6 +2,7 @@ import {
   ERROR_RECOVERY,
   formatSessionOrigin,
   decodeSessionStopDetail,
+  sessionStopNextStep,
   sessionStopSummary,
   isAgentMutationPlan,
   LEGACY_DOCTOR_REMEDY,
@@ -708,6 +709,7 @@ function sessionStopLines(session: Record<string, unknown>): string[] {
   const detail = decodeSessionStopDetail(session["interruption"], "interruption");
   return [
     `${sessionStopSummary(detail)}; retry: ${detail.retry}; reset: ${resetInstantText(detail.resetsAt)}.`,
+    sessionStopNextStep(detail),
     ...untrustedProseResponseLines({
       response: "provider stop detail",
       blocks: [

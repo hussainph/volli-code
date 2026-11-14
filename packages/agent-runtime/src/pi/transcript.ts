@@ -10,6 +10,7 @@
 
 import { safeStopMessage } from "./safe-diagnostic";
 import type { AssistantMessage, KnownApi, Usage } from "@earendil-works/pi-ai";
+import { sessionStopCause } from "@volli/shared";
 import type {
   AttentionObservation,
   CostBasis,
@@ -187,11 +188,7 @@ export function isTransientTransportFailure(failure: RuntimeFailure): boolean {
     category === "runtime-stopped"
   )
     return true;
-  if (
-    ["usage_limit_reached", "usage_not_included", "insufficient_quota", "quota_exceeded"].includes(
-      failure.stopDetail?.providerType ?? "",
-    )
-  )
+  if (failure.stopDetail !== undefined && sessionStopCause(failure.stopDetail) === "quota")
     return false;
   if (failure.reason !== "model") return false;
   const text = failure.message;

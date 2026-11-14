@@ -38,6 +38,9 @@ describe("provider stop facts", () => {
     ["insufficient_quota", "rate-limited"],
     ["authentication_error", "auth-failed"],
     ["invalid_request_error", "bad-request"],
+    ["billing_error", "rate-limited"],
+    ["not_found_error", "bad-request"],
+    ["model_not_found", "bad-request"],
     ["context_length_exceeded", "context-overflow"],
     ["ECONNRESET", "network"],
     ["volli.stream-stalled", "runtime-stopped"],
@@ -57,6 +60,8 @@ describe("provider stop facts", () => {
     [401, "auth-failed"],
     [403, "auth-failed"],
     [429, "rate-limited"],
+    [402, "rate-limited"],
+    [404, "bad-request"],
     [529, "provider-overloaded"],
     [503, "provider-overloaded"],
     [400, "bad-request"],
@@ -67,6 +72,58 @@ describe("provider stop facts", () => {
     capture.response({ status: status as number, headers: { authorization: "private" } }, 0);
     expect(capture.detail(message())).toMatchObject({ category, httpStatus: status });
     expect(JSON.stringify(capture.detail(message()))).not.toContain("private");
+  });
+
+  it.each([
+    ["oauth", "volli.credential-refresh-failed"],
+    ["auth", "volli.credential-unavailable"],
+  ])(
+    "keeps a credential that could not be had (ModelsError %s) as a typed sign-in stop",
+    async (code, providerType) => {
+      // Pi's own sentence for a refused refresh embeds the endpoint's body
+      // between other fields, so it is withheld whole.
+      const thrown = Object.assign(
+        new Error(
+          `OAuth refresh failed for fixture: token refresh request failed. details=Error: HTTP request failed. status=400; body={"error":"invalid_grant"}; stack=Error: HTTP request failed.`,
+        ),
+        { code },
+      );
+      const capture = new ProviderStopCapture();
+      await expect(capture.credential(async () => Promise.reject(thrown))).rejects.toBe(thrown);
+      expect(capture.detail(message({ errorMessage: thrown.message }))).toEqual({
+        category: "auth-failed",
+        providerType,
+        message: "[Provider text withheld: possible request content.]",
+        httpStatus: null,
+        retry: "not-retried",
+        resetsAt: null,
+      });
+    },
+  );
+
+  it("reads an unconfigured provider as missing, and an abort or success as nothing", async () => {
+    const missing = new ProviderStopCapture();
+    await missing.credential(async () => undefined);
+    expect(
+      missing.detail(message({ errorMessage: "Provider is not configured: fixture" })),
+    ).toMatchObject({ category: "auth-failed", providerType: "volli.credential-missing" });
+
+    const aborted = new ProviderStopCapture();
+    const abort = Object.assign(new Error("aborted"), { name: "AbortError" });
+    await expect(aborted.credential(async () => Promise.reject(abort))).rejects.toBe(abort);
+    expect(aborted.detail(message({ stopReason: "aborted" }))).toMatchObject({
+      category: "unknown",
+      providerType: null,
+    });
+
+    const resolved = new ProviderStopCapture();
+    await resolved.credential(async () => ({ auth: {} }));
+    resolved.response({ status: 401, headers: {} }, 0);
+    expect(resolved.detail(message())).toMatchObject({
+      category: "auth-failed",
+      providerType: null,
+      httpStatus: 401,
+    });
   });
 
   it("reads stream-native error envelopes and explicit stop reasons", () => {
@@ -212,6 +269,7 @@ describe("provider stop facts", () => {
       "usage_limit_reached",
       "insufficient_quota",
       "quota_exceeded",
+      "billing_error",
       "authentication_error",
       "invalid_request_error",
       "context_length_exceeded",

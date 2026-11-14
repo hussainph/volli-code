@@ -586,8 +586,8 @@ describe("sessionBlocker", () => {
 
   // The row that already knows WHICH provider is blocking typing sends the
   // reader straight to that provider's sign-in, never merely to the category
-  // (VC-53). The harness's own `auth_required` names no provider id, so its
-  // recovery stays Settings.
+  // (VC-53). The harness's own `auth_required` names no provider id, so with
+  // no pinned model to name one its recovery stays Settings.
   it("deep-links a signed-out pinned model to its own provider's sign-in", () => {
     const signedInTo: string[] = [];
     const pinned = blockerInput({
@@ -605,6 +605,76 @@ describe("sessionBlocker", () => {
     expect(sessionBlocker(raised(attention("auth_required")), ACTS, false)?.action?.label).toBe(
       "Open settings",
     );
+  });
+
+  // An expired subscription login reads as signed in to the catalog (a stored
+  // credential exists), so the stop itself is the only report. Its cause
+  // survives the privacy filter as structured facts, and the row names it with
+  // the one recovery that fixes it (VC-1236).
+  it("says a stopped sign-in in one line with the provider's own Sign in", () => {
+    const signedInTo: string[] = [];
+    const withheld = "[Provider text withheld: possible request content.]";
+    const stop = (providerType: string, httpStatus: number | null): SessionAttention => ({
+      ...attention("auth_required", withheld),
+      stopDetail: {
+        category: "auth-failed",
+        providerType,
+        message: withheld,
+        httpStatus,
+        retry: "not-retried",
+        resetsAt: null,
+      },
+    });
+    const pinned = (primary: SessionAttention) => ({
+      ...raised(primary),
+      sessionModel: {
+        providerId: "anthropic",
+        providerLabel: "Anthropic",
+        state: "available" as const,
+      },
+    });
+
+    const expired = sessionBlocker(
+      pinned(stop("volli.credential-refresh-failed", null)),
+      { ...ACTS, signIn: (id) => signedInTo.push(id) },
+      false,
+    );
+    expired?.action?.act();
+    expect(expired).toMatchObject({
+      message: "Stopped: the provider sign-in expired or was refused",
+      // Withheld prose says it was withheld rather than leaving the row bare.
+      detail: withheld,
+      action: { label: "Sign in" },
+    });
+    expect(signedInTo).toEqual(["anthropic"]);
+    // Access a credential lacks is not fixed by signing in again.
+    expect(sessionBlocker(pinned(stop("permission_error", 403)), ACTS, false)).toMatchObject({
+      message: "Stopped: the provider denied access to this model",
+      action: { label: "Open settings" },
+    });
+  });
+
+  it("names a model the provider does not serve, with Settings as its recovery", () => {
+    expect(
+      sessionBlocker(
+        raised({
+          ...attention("configuration_invalid", "model: fixture"),
+          stopDetail: {
+            category: "bad-request",
+            providerType: "not_found_error",
+            message: "model: fixture",
+            httpStatus: 404,
+            retry: "not-retried",
+            resetsAt: null,
+          },
+        }),
+        ACTS,
+        false,
+      ),
+    ).toMatchObject({
+      message: "Stopped: the provider does not offer this model",
+      action: { label: "Open settings" },
+    });
   });
 
   // Settings writes the app DEFAULT, copied into a Session at birth and never
@@ -1890,7 +1960,7 @@ it("shows the provider's typed interruption cause in the blocker instead of gene
   for (const [category, kind, wording] of [
     ["rate-limited", "adapter_unrecoverable", "usage or rate limit"],
     ["provider-refused", "adapter_unrecoverable", "declined"],
-    ["auth-failed", "auth_required", "sign-in failed"],
+    ["auth-failed", "auth_required", "sign-in expired or was refused"],
     ["context-overflow", "context_limit_reached", "Context limit"],
   ] as const) {
     const blocker = sessionBlocker(

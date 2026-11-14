@@ -12,6 +12,7 @@ import { readAutomationRunAttendance } from "./db/automations-repo";
 import { readSessionProvenance } from "./db/session-provenance-repo";
 import { markSessionUnread, readSessionUnread, writeSessionUnread } from "./db/session-read-repo";
 import { createRunAttentionWatch } from "./automations/run-attention";
+import { createProviderSignInAlert } from "./session-control/provider-sign-in-alert";
 import {
   createSqliteSessionLedger,
   createHostLiveWork,
@@ -154,6 +155,11 @@ export function createHostSessionServices(
       ports.attention.deliver(request);
     },
   });
+  const providerSignIn = createProviderSignInAlert({
+    notify: (request) => {
+      ports.attention.deliver(request);
+    },
+  });
   // The process's one Engine decorator: every committed Session Event is
   // announced here, after its transaction, to every observer below.
   const sessionWakeBus = createSessionWakeBus(
@@ -207,6 +213,7 @@ export function createHostSessionServices(
         report: (error) => ports.log.error("failed to record session resumption", { error }),
       });
       runAttention.observe(projection);
+      providerSignIn.observe(projection);
       runtime.observeScheduledResume(projection);
       sessionReadWatch.observe(projection);
       liveWork.observeSession(projection);
@@ -216,6 +223,7 @@ export function createHostSessionServices(
     observeEvent: (event) => liveWork.observeEvent(event),
     observeBirth: (sessionId) => {
       runAttention.observeBirth(sessionId);
+      providerSignIn.observeBirth(sessionId);
       sessionReadWatch.observeBirth(sessionId);
     },
   });

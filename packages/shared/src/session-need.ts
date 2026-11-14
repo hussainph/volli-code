@@ -66,6 +66,7 @@ import {
   type SessionProjection,
 } from "./session-ledger";
 import { NO_SESSION_NOTIFICATION_ITEM, type SessionNotificationItem } from "./notification-catalog";
+import { sessionStopCause } from "./session-stop";
 
 /**
  * The Attention kinds that mean the Session's own plumbing failed — VC-112's
@@ -263,4 +264,38 @@ export function sessionNotificationItem(projection: {
   return asking && primary !== null
     ? { interactionId: null, attentionId: primary.id }
     : NO_SESSION_NOTIFICATION_ITEM;
+}
+
+/** A Session stopped because its provider sign-in must be redone. */
+export interface ProviderSignInStop {
+  /** The provider of the Session's model: the credential every stop shares. */
+  providerId: string;
+  /** The Attention that reports it, which a notification click lands on. */
+  attentionId: string;
+}
+
+/**
+ * Whether this Session stands stopped on its provider's sign-in, and on which
+ * provider (VC-1236).
+ *
+ * Read from structured facts only: an active `auth_required` Attention whose
+ * stop detail's cause is a sign-in (`sessionStopCause`), on the model the
+ * Session last selected. Every Session on one provider shares one credential,
+ * so this is what lets the host tell a person once, for the provider, rather
+ * than leave them to find each stopped chat. A Session already stopped by a
+ * person, or one with no recorded model, answers `null`.
+ */
+export function providerSignInStop(
+  projection: Pick<SessionProjection, "attention" | "modelSelection" | "stopped">,
+): ProviderSignInStop | null {
+  if (projection.stopped != null) return null;
+  const providerId = projection.modelSelection?.providerId;
+  if (providerId === undefined) return null;
+  const attention = projection.attention.active.find(
+    (candidate) =>
+      candidate.kind === "auth_required" &&
+      candidate.stopDetail !== undefined &&
+      sessionStopCause(candidate.stopDetail) === "sign-in",
+  );
+  return attention === undefined ? null : { providerId, attentionId: attention.id };
 }

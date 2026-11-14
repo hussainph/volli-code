@@ -1,4 +1,4 @@
-import { sessionStopSummary } from "@volli/shared";
+import { sessionStopCause, sessionStopSummary } from "@volli/shared";
 /**
  * The chat plane's decisions, without a plane.
  *
@@ -632,6 +632,13 @@ export function sessionBlocker(
   const retry: SessionBlockerAction = { label: "Retry", act: acts.recover };
   const retryRuntime: SessionBlockerAction = { label: "Retry", act: acts.retryRuntime };
   const settings: SessionBlockerAction = { label: "Settings", act: acts.openSettings };
+  // Straight to the pinned provider's sign-in when the Session names one; the
+  // catalog need not have answered, because the action only needs who.
+  const pinnedProviderId = input.sessionModel?.providerId ?? null;
+  const signIn: SessionBlockerAction | null =
+    pinnedProviderId === null
+      ? null
+      : { label: "Sign in", act: () => acts.signIn(pinnedProviderId) };
   const dismiss = (key: string) => () => acts.dismiss(key);
   if (input.sessionError !== null) {
     const dismissKey = `session-error:${input.sessionError}`;
@@ -703,6 +710,7 @@ export function sessionBlocker(
         retry,
         retryRuntime,
         settings,
+        signIn,
         acts.dismiss,
         {
           scheduled: input.scheduledResume,
@@ -839,13 +847,17 @@ function attentionDismissKey(attention: SessionAttention): string {
  * terminal to finish a Settings task.
  *
  * Retry cannot repair an expired account or invalid configuration. The row
- * offers Open settings alone instead of asking the person to diagnose which
- * of two competing recoveries will work.
+ * offers one recovery instead of asking the person to diagnose which of two
+ * competing ones will work: the provider's own Sign in when the stop is a
+ * sign-in and the Session names its provider (VC-1236), Open settings
+ * otherwise. Once signed in, a message continues the Session.
  */
 function providerRecovery(input: {
   message: string;
   detail: string | null;
   settings: SessionBlockerAction;
+  /** The provider's own sign-in, when the stop is a sign-in and the provider is known. */
+  signIn?: SessionBlockerAction | null;
   dismissKey: string;
   dismiss(): void;
 }): SessionBlockerState {
@@ -853,7 +865,7 @@ function providerRecovery(input: {
     {
       message: input.message,
       detail: input.detail,
-      action: { ...input.settings, label: "Open settings" },
+      action: input.signIn ?? { ...input.settings, label: "Open settings" },
     },
     input.dismissKey,
     input.dismiss,
@@ -872,8 +884,9 @@ function providerRecovery(input: {
  * also carries a local Dismiss, which hides the current report without claiming
  * it is repaired.
  *
- * - **Open settings** — Pi auth/configuration recovery sends you to Model
- *   Access, where signing in now happens, without a competing Retry.
+ * - **Sign in** / **Open settings** — Pi auth/configuration recovery sends
+ *   you to the provider's sign-in, or to Model Access, without a competing
+ *   Retry.
  * - **Retry of the start** — `configuration_invalid` whose detail reports a
  *   worktree that could not be prepared (`isWorktreePreparationAttention`,
  *   VC-1015): headed "Worktree unavailable", because nothing in Settings fixes
@@ -913,6 +926,7 @@ function attentionBlocker(
   retry: SessionBlockerAction,
   retryRuntime: SessionBlockerAction,
   settings: SessionBlockerAction,
+  signIn: SessionBlockerAction | null,
   dismiss: (dismissKey: string) => void,
   resume: ResumeContext,
   turn: InterruptedTurnContext,
@@ -928,6 +942,13 @@ function attentionBlocker(
           : "Sign-in required",
         detail,
         settings,
+        // Only a stop whose structured cause is a sign-in earns the provider's
+        // own Sign in: access a credential lacks is not fixed by signing in
+        // again, and a report with no cause keeps the general route.
+        signIn:
+          attention.stopDetail && sessionStopCause(attention.stopDetail) === "sign-in"
+            ? signIn
+            : null,
         dismissKey,
         dismiss: dismissAttention,
       });
@@ -940,7 +961,9 @@ function attentionBlocker(
         );
       }
       return providerRecovery({
-        message: "Configuration invalid",
+        message: attention.stopDetail
+          ? sessionStopSummary(attention.stopDetail)
+          : "Configuration invalid",
         detail,
         settings,
         dismissKey,
