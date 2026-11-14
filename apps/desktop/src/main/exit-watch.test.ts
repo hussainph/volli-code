@@ -12,11 +12,12 @@ import {
   EXIT_WATCH_ENV,
   EXIT_WATCH_GRACE_MS,
   EXIT_WATCH_MAX_MS,
-  EXIT_WATCH_RECORD_FILE_NAME,
   EXIT_WATCH_SCRIPT,
   EXIT_WATCH_SHELL,
   exitWatchArgv,
   exitWatchProbeArgv,
+  exitWatchRecordFileName,
+  exitWatchRecordPid,
   nodeExitWatchPorts,
   parseExitWatchRecord,
   parseProbeOutput,
@@ -135,8 +136,10 @@ function fakePorts(overrides: Partial<ExitWatchPorts> = {}): ExitWatchPorts {
     directory: "/profile",
     probe: vi.fn(async () => "1794651621\n"),
     spawn: vi.fn(() => ({ signal: vi.fn() })),
+    listRecords: vi.fn(async () => []),
     readRecord: vi.fn(async () => null),
     removeRecord: vi.fn(async () => undefined),
+    isAlive: vi.fn(() => false),
     ...overrides,
   };
 }
@@ -207,11 +210,16 @@ describe("createExitWatch", () => {
   });
 
   it("does nothing at all off macOS", async () => {
-    const ports = fakePorts({ platform: "linux", readRecord: vi.fn(async () => "{}") });
+    const ports = fakePorts({
+      platform: "linux",
+      listRecords: vi.fn(async () => [7]),
+      readRecord: vi.fn(async () => "{}"),
+    });
     const watch = createExitWatch(ports);
     await watch.probe();
     await watch.logPreviousExit();
     expect(watch.arm()).toBeNull();
+    expect(watch.available()).toBe(false);
     expect(ports.probe).not.toHaveBeenCalled();
     expect(ports.spawn).not.toHaveBeenCalled();
     expect(ports.readRecord).not.toHaveBeenCalled();
@@ -220,6 +228,7 @@ describe("createExitWatch", () => {
   it("logs the previous exit with numbers and codes only, then removes the record", async () => {
     log = captureHostLog("info");
     const ports = fakePorts({
+      listRecords: vi.fn(async () => [101]),
       readRecord: vi.fn(
         async () =>
           '{"v":1,"goneMs":5031,"killed":true,"killedAtMs":5004,"outcome":"killed","graceMs":5000}',
@@ -237,12 +246,33 @@ describe("createExitWatch", () => {
         graceMs: 5000,
       }),
     );
-    expect(ports.removeRecord).toHaveBeenCalledOnce();
+    expect(ports.readRecord).toHaveBeenCalledWith(101);
+    expect(ports.removeRecord).toHaveBeenCalledExactlyOnceWith(101);
+  });
+
+  it("leaves the record of a pid still running (its watch may still be watching), and this launch's own", async () => {
+    log = captureHostLog("info");
+    const ports = fakePorts({
+      listRecords: vi.fn(async () => [4242, 300, 301]),
+      isAlive: vi.fn((pid: number) => pid === 300),
+      readRecord: vi.fn(
+        async () =>
+          '{"v":1,"goneMs":80,"killed":false,"killedAtMs":0,"outcome":"gone","graceMs":5000}',
+      ),
+    });
+    await createExitWatch(ports).logPreviousExit();
+    // 4242 is this process (fakePorts' pid); 300 is alive; only 301 is read.
+    expect(ports.readRecord).toHaveBeenCalledExactlyOnceWith(301);
+    expect(ports.removeRecord).toHaveBeenCalledExactlyOnceWith(301);
+    expect(log.records.filter((r) => r.msg === "previous exit")).toHaveLength(1);
   });
 
   it("removes a record it cannot read, logs a code, and is quiet when there is none", async () => {
     log = captureHostLog("info");
-    const bad = fakePorts({ readRecord: vi.fn(async () => "garbage") });
+    const bad = fakePorts({
+      listRecords: vi.fn(async () => [9]),
+      readRecord: vi.fn(async () => "garbage"),
+    });
     await createExitWatch(bad).logPreviousExit();
     expect(bad.removeRecord).toHaveBeenCalledOnce();
     expect(log.records).toContainEqual(
@@ -251,7 +281,12 @@ describe("createExitWatch", () => {
     const none = fakePorts();
     await createExitWatch(none).logPreviousExit();
     expect(none.removeRecord).not.toHaveBeenCalled();
+    const unlisted = fakePorts({
+      listRecords: vi.fn(async () => Promise.reject(new Error("EACCES"))),
+    });
+    await expect(createExitWatch(unlisted).logPreviousExit()).resolves.toBeUndefined();
     const failing = fakePorts({
+      listRecords: vi.fn(async () => [9]),
       readRecord: vi.fn(async () => Promise.reject(new Error("EACCES"))),
     });
     await expect(createExitWatch(failing).logPreviousExit()).resolves.toBeUndefined();
@@ -268,8 +303,8 @@ function exited(child: ChildProcess): Promise<{ at: number; signal: NodeJS.Signa
   });
 }
 
-async function record(directory: string, timeoutMs = 8000): Promise<unknown> {
-  const file = join(directory, EXIT_WATCH_RECORD_FILE_NAME);
+async function record(directory: string, pid: number, timeoutMs = 8000): Promise<unknown> {
+  const file = join(directory, exitWatchRecordFileName(pid));
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (existsSync(file)) return JSON.parse(await readFile(file, "utf8"));
@@ -342,7 +377,7 @@ describe.runIf(process.platform === "darwin")("the exit watch, for real", () => 
     expect(end.signal).toBe("SIGKILL");
     expect(end.at - armedAt).toBeGreaterThanOrEqual(BOUNDS.graceMs - 20);
     expect(end.at - armedAt).toBeLessThan(BOUNDS.graceMs + 1500);
-    const written = (await record(directory)) as { killedAtMs: number };
+    const written = (await record(directory, app.pid!)) as { killedAtMs: number };
     expect(written).toMatchObject({ v: 1, killed: true, outcome: "killed" });
     expect(written.killedAtMs).toBeGreaterThanOrEqual(BOUNDS.graceMs);
     await new Promise((resolve) => setTimeout(resolve, 200));
@@ -360,7 +395,7 @@ describe.runIf(process.platform === "darwin")("the exit watch, for real", () => 
     watch.arm();
     const end = await exited(app);
     expect(end.signal).toBeNull();
-    const written = (await record(directory)) as { goneMs: number };
+    const written = (await record(directory, app.pid!)) as { goneMs: number };
     expect(written).toMatchObject({ killed: false, outcome: "gone" });
     expect(written.goneMs).toBeLessThan(BOUNDS.graceMs);
   });
@@ -376,7 +411,7 @@ describe.runIf(process.platform === "darwin")("the exit watch, for real", () => 
     watch.arm();
     setTimeout(() => app.kill("SIGSEGV"), 100);
     await exited(app);
-    expect(await record(directory)).toMatchObject({ killed: false, outcome: "gone" });
+    expect(await record(directory, app.pid!)).toMatchObject({ killed: false, outcome: "gone" });
   });
 
   it("never touches a process whose start time is not the one it was given (a reused pid)", async () => {
@@ -394,7 +429,10 @@ describe.runIf(process.platform === "darwin")("the exit watch, for real", () => 
       cwd: directory,
       env: EXIT_WATCH_ENV,
     });
-    expect(await record(directory)).toMatchObject({ killed: false, outcome: "mismatch" });
+    expect(await record(directory, other.pid!)).toMatchObject({
+      killed: false,
+      outcome: "mismatch",
+    });
     await new Promise((resolve) => setTimeout(resolve, BOUNDS.graceMs + 300));
     expect(other.exitCode).toBeNull();
     expect(other.signalCode).toBeNull();
@@ -408,7 +446,7 @@ describe.runIf(process.platform === "darwin")("the exit watch, for real", () => 
     // No probe: the start is unknown.
     const armedAt = Date.now();
     watch.arm();
-    const written = (await record(directory)) as { goneMs: number };
+    const written = (await record(directory, app.pid!)) as { goneMs: number };
     expect(written).toMatchObject({ killed: false, outcome: "timeout" });
     expect(written.goneMs).toBeGreaterThanOrEqual(1200);
     expect(Date.now() - armedAt).toBeLessThan(4000);
@@ -429,7 +467,7 @@ describe.runIf(process.platform === "darwin")("the exit watch, for real", () => 
     handle.disarm();
     const end = await exited(app);
     expect(end.signal).toBeNull();
-    expect(await record(directory)).toMatchObject({ killed: false, outcome: "disarmed" });
+    expect(await record(directory, app.pid!)).toMatchObject({ killed: false, outcome: "disarmed" });
   });
 
   it.each([
@@ -447,7 +485,8 @@ describe.runIf(process.platform === "darwin")("the exit watch, for real", () => 
     const started = Date.now();
     const end = await exited(child);
     expect(end.at - started).toBeLessThan(2000);
-    expect(existsSync(join(directory, EXIT_WATCH_RECORD_FILE_NAME))).toBe(false);
+    const { readdirSync } = await import("node:fs");
+    expect(readdirSync(directory)).toEqual([]);
   });
 
   it("starts the watch with exactly the environment and directory it is given", async () => {
@@ -509,13 +548,108 @@ describe.runIf(process.platform === "darwin")("the exit watch, for real", () => 
     await exited(app);
   });
 
-  it("reads and removes the record through the real ports", async () => {
+  it("reads, lists and removes records through the real ports, by pid", async () => {
     const directory = await profile();
     const ports = nodeExitWatchPorts({ platform: "darwin", pid: process.pid, directory });
-    expect(await ports.readRecord()).toBeNull();
-    await writeFile(join(directory, EXIT_WATCH_RECORD_FILE_NAME), "x");
-    expect(await ports.readRecord()).toBe("x");
-    await ports.removeRecord();
-    expect(await ports.readRecord()).toBeNull();
+    expect(await ports.listRecords()).toEqual([]);
+    expect(await ports.readRecord(77)).toBeNull();
+    await writeFile(join(directory, exitWatchRecordFileName(77)), "x");
+    await writeFile(join(directory, "exit-watch-77.json.123"), "partial");
+    await writeFile(join(directory, "other.json"), "{}");
+    expect(await ports.listRecords()).toEqual([77]);
+    expect(await ports.readRecord(77)).toBe("x");
+    await ports.removeRecord(77);
+    expect(await ports.readRecord(77)).toBeNull();
+    expect(ports.isAlive(process.pid)).toBe(true);
+    const gone = target(0.05);
+    await exited(gone);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(ports.isAlive(gone.pid!)).toBe(false);
+  });
+
+  it("does not kill on a wall clock that jumped: the grace is also its own sum of capped steps", async () => {
+    const directory = await profile();
+    const app = target();
+    const ports = nodeExitWatchPorts({ platform: "darwin", pid: app.pid!, directory });
+    const start = parseProbeOutput(
+      await ports.probe(
+        EXIT_WATCH_SHELL,
+        ["-f", "-c", EXIT_WATCH_SCRIPT, ...exitWatchProbeArgv(app.pid!)!],
+        {
+          cwd: directory,
+          env: EXIT_WATCH_ENV,
+          timeoutMs: 5000,
+        },
+      ),
+    );
+    // An exit call 10 s "ago", as after a sleep or a clock step: the wall clock says the grace is long past.
+    const armedAt = Date.now();
+    const argv = exitWatchArgv({
+      pid: app.pid!,
+      startedAt: start,
+      exitCallAtMs: armedAt - 10_000,
+      ...BOUNDS,
+      graceMs: 1500,
+      maxMs: 60_000,
+    })!;
+    ports.spawn(EXIT_WATCH_SHELL, ["-f", "-c", EXIT_WATCH_SCRIPT, ...argv], {
+      cwd: directory,
+      env: EXIT_WATCH_ENV,
+    });
+    const end = await exited(app);
+    expect(end.signal).toBe("SIGKILL");
+    // Not on the first poll: the 10 s jump counts as one step (ten polls, 200 ms
+    // here) at most, so the kill waits for the rest of the 1.5 s grace.
+    expect(end.at - armedAt).toBeGreaterThanOrEqual(1200);
+  });
+
+  it("checks the disarm last, right before the kill: a disarm at the grace still holds", async () => {
+    const directory = await profile();
+    const app = target(1.5);
+    const watch = createExitWatch(
+      nodeExitWatchPorts({ platform: "darwin", pid: app.pid!, directory }),
+      BOUNDS,
+    );
+    await watch.probe();
+    const handle = watch.arm()!;
+    // Disarm in the window where the identity check (a `ps`) runs at the grace.
+    await new Promise((resolve) => setTimeout(resolve, BOUNDS.graceMs - 10));
+    handle.disarm();
+    const end = await exited(app);
+    expect(end.signal).toBeNull();
+    expect(await record(directory, app.pid!)).toMatchObject({ killed: false, outcome: "disarmed" });
+  });
+
+  it("removes its temporary record when the rename fails, and leaves nothing behind", async () => {
+    const directory = await profile();
+    const app = target(0.2);
+    // The record's name taken by a directory: the rename fails.
+    const { mkdirSync, readdirSync } = await import("node:fs");
+    mkdirSync(join(directory, exitWatchRecordFileName(app.pid!)));
+    const watch = createExitWatch(
+      nodeExitWatchPorts({ platform: "darwin", pid: app.pid!, directory }),
+      BOUNDS,
+    );
+    await watch.probe();
+    watch.arm();
+    await exited(app);
+    let names: string[] = [];
+    for (let i = 0; i < 100; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      if ((await watchesRunning(app.pid!)) === 0) break;
+    }
+    names = readdirSync(directory);
+    expect(names.filter((name) => name.includes(".json."))).toEqual([]);
+  });
+});
+
+describe("exitWatchRecordPid", () => {
+  it("reads a record's pid from its name, and nothing else", () => {
+    expect(exitWatchRecordPid("exit-watch-4242.json")).toBe(4242);
+    expect(exitWatchRecordPid(exitWatchRecordFileName(7))).toBe(7);
+    expect(exitWatchRecordPid("exit-watch-0.json")).toBeNull();
+    expect(exitWatchRecordPid("exit-watch-12.json.99")).toBeNull();
+    expect(exitWatchRecordPid("exit-watch.json")).toBeNull();
+    expect(exitWatchRecordPid("exit-watch-x.json")).toBeNull();
   });
 });

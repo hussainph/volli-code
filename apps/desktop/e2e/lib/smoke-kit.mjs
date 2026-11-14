@@ -68,7 +68,7 @@
  * These smokes are NOT wired into `vp test`; they need a display + the built app.
  */
 import { execFile, execFileSync } from "node:child_process";
-import { mkdirSync, promises as fs, rmSync } from "node:fs";
+import { mkdirSync, promises as fs, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -594,26 +594,40 @@ export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * Whether a bounded close (`closeAppBounded`'s result) ended with the app's
- * own quit: exit code 0, or SIGKILL the app chose, which its log since the
- * quit began names. The app kills itself on an immediate exit when only
- * read-only workers are left (VC-1208), and its exit watch kills it when
- * Electron's own teardown outlives the exit call by 5 s (VC-652: `exit call
- * { ..., watch: 'armed' }`). Either way the close sent no signal and no
- * close step failed.
+ * own quit: exit code 0, or a SIGKILL the app chose. The close sent no signal
+ * and no close step failed, and:
+ *
+ * - an immediate exit (VC-1208): the app's log since the quit began says
+ *   `exit call { mode: 'immediate' }`;
+ * - the exit watch's kill (VC-652): the log says `exit call { watch: 'armed' }`
+ *   AND the watch's own record for this exact pid, in the profile, says it
+ *   killed it. Any other SIGKILL (out of memory, someone else's) is not the
+ *   app's quit.
+ *
+ * `userDataDir` is the profile the app ran on; read after the close, which
+ * waits for the watch to finish (`settleExitWatch`).
  */
-export function quitEndedByApp(close, logSinceQuit) {
+export function quitEndedByApp(close, logSinceQuit, { userDataDir } = {}) {
   if (!close || !["graceful", "natural-after-close", "already-exited"].includes(close.kind)) {
     return false;
   }
   if (!Array.isArray(close.closeFailures) || close.closeFailures.length > 0) return false;
   if (close.exit?.code === 0 && close.exit?.signal === null) return true;
-  return (
-    close.exit?.code === null &&
-    close.exit?.signal === "SIGKILL" &&
-    /\[quit\] exit call \{[^}]*(?:mode: ['"]immediate['"]|watch: ['"]armed['"])/s.test(
-      logSinceQuit ?? "",
-    )
-  );
+  if (close.exit?.code !== null || close.exit?.signal !== "SIGKILL") return false;
+  const line = /\[quit\] exit call \{[^}]*\}/s.exec(logSinceQuit ?? "")?.[0] ?? "";
+  if (/mode: ['"]immediate['"]/.test(line)) return true;
+  if (!/watch: ['"]armed['"]/.test(line) || typeof userDataDir !== "string") return false;
+  return exitWatchRecord(userDataDir, close.pid)?.outcome === "killed";
+}
+
+/** The exit watch's record for `pid` in `userDataDir` (VC-652), or null. */
+export function exitWatchRecord(userDataDir, pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return null;
+  try {
+    return JSON.parse(readFileSync(join(userDataDir, `exit-watch-${pid}.json`), "utf8"));
+  } catch {
+    return null;
+  }
 }
 
 export const CLOSE_APP_BOUNDED_DEFAULTS = Object.freeze({

@@ -104,7 +104,7 @@ async function profile() {
 
 async function open(config, label, extraEnv = {}) {
   const app = await launch({ ...config, extraEnv: { ...config.extraEnv, ...extraEnv } });
-  const run = { app, label, stderr: "", output: "" };
+  const run = { app, label, userDataDir: config.userDataDir, stderr: "", output: "" };
   runs.add(run);
   // Main's log, both streams: the quit's exit line says how it ended.
   app.process().stdout?.on("data", (chunk) => {
@@ -126,7 +126,10 @@ async function close(run) {
   const exit = await closeAppBounded(run.app, { closeGraceMs: 20000 });
   console.log(`CLEANUP: ${run.label}: ${Date.now() - started} ms ${JSON.stringify(exit)}`);
   runs.delete(run);
-  assert.ok(quitEndedByApp(exit, run.output), `${run.label} did not quit cleanly`);
+  assert.ok(
+    quitEndedByApp(exit, run.output, { userDataDir: run.userDataDir }),
+    `${run.label} did not quit cleanly`,
+  );
 }
 
 /** Every Electron window main holds, with the page each shows. */

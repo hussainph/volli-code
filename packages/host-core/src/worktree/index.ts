@@ -238,7 +238,7 @@ export type { SetupRun, SetupRunPorts, SetupRunParams, SetupFeedResult } from ".
 // a structured Session claims and runs it as a child process before its first
 // turn.
 export { claimFirstRunSetup } from "./first-run";
-export { runPendingWorktreeSetup } from "./setup-exec";
+export { runPendingWorktreeSetup, stopRunningWorktreeSetups } from "./setup-exec";
 
 // The environment recipe (VC-584, behind the `cloud` flag): the resume run a
 // structured start makes, and what a terminal types for a claimed setup run.

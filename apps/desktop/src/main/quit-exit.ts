@@ -40,14 +40,21 @@
  * An upgrade is never cut short: a quit asked during one is held, its window
  * stays up saying so, and the quit runs once the upgrade's worker has exited.
  *
- * The ordinary exit, with no worker running (VC-652), makes the same writes
- * first (the browser sessions and the first-paint mirror, same bound), then
- * starts the exit watch (`exit-watch.ts`) in the same tick as its last count
- * of zero workers and the `app.exit`: Electron's own teardown can outlive the
- * exit by minutes on a loaded Mac, and the watch ends the process 5 s after
- * the exit call. It is never started while a worker runs, and a worker that
- * starts after it disarms it, so the worker rules above stay the only ones
- * that apply to a live worker.
+ * The ordinary exit, with no worker running (VC-652), is bounded too:
+ * Electron's own teardown can outlive the exit by minutes on a loaded Mac, and
+ * the exit watch (`exit-watch.ts`) ends the process 5 s after the real
+ * `app.exit`. Before it is armed, the quit does itself everything a kill in
+ * that teardown would skip and the next launch could notice: the same writes
+ * as an immediate exit (same bound), the setup commands' process groups and
+ * the perf store's buffer (`stopChildren`), then the log's tail. Then, in one
+ * tick with the last count of zero workers, it arms the watch and calls the
+ * real `app.exit`, so the 5 s measure Electron's native shutdown only, never
+ * JavaScript of ours. The watch is never started while a worker runs, and a
+ * worker that starts after it disarms it, so the worker rules above stay the
+ * only ones that apply to a live worker.
+ *
+ * Every exit writes the log's tail before `app.exit` (bounded): the lines a
+ * quit just wrote are the ones a person reading the log wants most.
  *
  * Electron-free: `app`, the workers and the writes are ports.
  */
@@ -84,8 +91,16 @@ export interface QuitExitPorts {
   /** Ends the process at once. */
   kill(): void;
   /**
-   * Starts the exit watch for an exit with no worker running; null when it
-   * did not start (another platform, or the spawn failed).
+   * Stops, before a watched exit, what Node's teardown would otherwise stop
+   * (the setup commands' process groups) and writes what it would write (the
+   * perf store's buffer): a kill can land before that teardown runs.
+   */
+  stopChildren(): void;
+  /** Whether this platform has the exit watch (it is armed only after the log is written). */
+  watchAvailable(): boolean;
+  /**
+   * Starts the exit watch, its grace counted from now; null when it did not
+   * start (the spawn failed).
    */
   watchExit(): { disarm(): void } | null;
   /** Calls `listener` whenever a worker starts from now on; returns the unsubscribe. */
@@ -169,11 +184,17 @@ export function createQuitExit(ports: QuitExitPorts): QuitExit {
    */
   const stillExitNow = (): boolean => ports.decide({ claim: true }) === "exit-now";
 
+  /** The ordinary exit, unwatched: the log's tail first, as every exit. */
+  const plainExit = async (app: { exit(code?: number): void }, code: number): Promise<void> => {
+    await ports.flushLog().catch(() => undefined);
+    app.exit(code);
+  };
+
   const exitNow = async (app: { exit(code?: number): void }, code: number): Promise<void> => {
     await flushBounded();
     if (!stillExitNow()) {
       exitLine("normal", true);
-      app.exit(code);
+      await plainExit(app, code);
       return;
     }
     exitLine("immediate", false);
@@ -194,14 +215,40 @@ export function createQuitExit(ports: QuitExitPorts): QuitExit {
   };
 
   /**
-   * The ordinary exit with no worker running, watched. Called in the same
-   * tick as the last count of zero workers: nothing starts between that count,
-   * the watch and the exit. A worker that starts later disarms the watch.
+   * The ordinary exit with no worker running, watched. Everything that awaits
+   * comes first; the last count of zero workers, the watch and the real exit
+   * share one tick, so nothing starts between them and the watch's grace is
+   * Electron's native shutdown only. A worker that starts later disarms it.
    */
-  const watchedExit = (app: { exit(code?: number): void }, code: number): void => {
+  const watchedExit = async (app: { exit(code?: number): void }, code: number): Promise<void> => {
+    await flushBounded();
+    try {
+      ports.stopChildren();
+    } catch {
+      // One that throws must not keep the process alive.
+    }
+    // Windows and IPC are alive until the exit: a worker may have started.
+    if (ports.liveWorkers() > 0) {
+      exitLine("normal", true);
+      await plainExit(app, code);
+      return;
+    }
+    const armable = ports.watchAvailable();
+    exitLine("normal", false, armable ? "armed" : "unavailable");
+    await ports.flushLog().catch(() => undefined);
+    if (!armable) {
+      app.exit(code);
+      return;
+    }
+    if (ports.liveWorkers() > 0) {
+      // Started while the log was written: exit as before, unwatched.
+      log.info("exit watch not armed", { reason: "worker-started" });
+      app.exit(code);
+      return;
+    }
     const watch = ports.watchExit();
-    exitLine("normal", false, watch === null ? "unavailable" : "armed");
-    if (watch !== null) {
+    if (watch === null) log.warn("exit watch failed", { code: "spawn-failed" });
+    else {
       const stop = ports.onWorkerStarted(() => {
         stop();
         watch.disarm();
@@ -223,18 +270,11 @@ export function createQuitExit(ports: QuitExitPorts): QuitExit {
       return;
     }
     if (ports.liveWorkers() === 0) {
-      await flushBounded();
-      // Windows and IPC are alive until the exit: a worker may have started.
-      if (ports.liveWorkers() === 0) {
-        watchedExit(app, code);
-        return;
-      }
-      exitLine("normal", true);
-      app.exit(code);
+      await watchedExit(app, code);
       return;
     }
     exitLine("normal", false);
-    app.exit(code);
+    await plainExit(app, code);
   };
 
   const waitForUpgrade = async (): Promise<void> => {

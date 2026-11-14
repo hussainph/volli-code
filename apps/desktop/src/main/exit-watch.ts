@@ -12,23 +12,30 @@
  * host's SQLite connections) before either wait. Squirrel's installer waits
  * for the process to end, so an update waits with it.
  *
- * So the bound cannot live in this process. At the exit call the quit starts
- * a detached `/bin/zsh` that outlives it. It is given the pid, the pid's start
- * time (read once at launch by the same script), the exit call's time and its
- * bounds, as numbers. It:
+ * So the bound cannot live in this process. In the same tick as the real
+ * `app.exit` the quit starts a detached `/bin/zsh` that outlives it. It is
+ * given the pid, the pid's start time (read once at launch by the same
+ * script), the exit's time and its bounds, as numbers. It:
  *
  * - touches nothing if the pid's start time is not the one it was given (a
  *   reused pid, or a start time this launch could not read);
  * - polls until the process is gone, and once `graceMs` has passed since the
- *   exit call sends it SIGKILL, if it is still that same process;
- * - on SIGUSR1 (a worker started after the exit call) stops being allowed to
- *   kill and only measures;
+ *   exit, by the wall clock AND by its own running sum of the time between
+ *   polls, each step counted at most ten polls long (a system sleep or a clock
+ *   step after the exit is not time the process had: it adds at most one
+ *   such step), sends it SIGKILL if it is still that same process;
+ * - on SIGUSR1 (a worker started after the exit) stops being allowed to
+ *   kill and only measures; the disarm is the last thing looked at before the
+ *   kill;
  * - leaves the background band a throttled app would hand it
  *   (`taskpolicy -B` on itself), so its own clock is not throttled with the
  *   process it watches;
- * - ends itself in every case, at the latest `maxMs` after the exit call;
- * - writes one record, `exit-watch.json` in its working directory (the
- *   profile's), which the next launch logs and removes.
+ * - ends itself in every case, at the latest `maxMs` after the exit;
+ * - writes one record, `exit-watch-<pid>.json` in its working directory (the
+ *   profile's), through a temporary file it removes if the rename fails. A
+ *   later launch logs and removes the records of pids that are gone, so a
+ *   relaunch that starts while the old process lingers never reads a watch
+ *   still running, or credits one launch's record to another.
  *
  * It runs only for an exit with no worker running (`quit-exit.ts` arms it
  * after that decision), so the cases VC-1208 handles keep their own rules and
@@ -45,13 +52,23 @@
  * `nodeExitWatchPorts` are the real ones.
  */
 import { execFile, spawn } from "node:child_process";
-import { readFile, rm } from "node:fs/promises";
+import { readdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 
 import { hostLogger } from "@volli/host-core/log";
 
-/** The record's file name, in the profile directory (the watch's working directory). */
-export const EXIT_WATCH_RECORD_FILE_NAME = "exit-watch.json";
+/** A watched pid's record file name, in the profile directory (the watch's working directory). */
+export function exitWatchRecordFileName(pid: number): string {
+  return `exit-watch-${pid}.json`;
+}
+
+/** The pid a record file name is for, or null when the name is not a record's. */
+export function exitWatchRecordPid(fileName: string): number | null {
+  const match = /^exit-watch-(\d{1,10})\.json$/.exec(fileName);
+  if (match === null) return null;
+  const pid = Number(match[1]);
+  return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+}
 
 /** How long after the exit call a process that is still alive is ended. */
 export const EXIT_WATCH_GRACE_MS = 5_000;
@@ -88,11 +105,12 @@ if [[ $1 == probe && $# -eq 2 ]]; then started; exit 0; fi
 [[ $1 == watch && $# -eq 7 && $3 == <-> && $4 == <1-> && $5 == <1-> && $6 == <1-> && $7 == <1-> ]] || exit 0
 start=$3 t0=$4 grace=$5 max=$6 poll=$7
 (( poll < 10 )) && poll=10
+integer step=$(( poll * 10 ))
 nokill=0
 trap 'nokill=1' USR1
 trap '' HUP INT PIPE
 same() { (( start > 0 )) && [[ $(started) == $start ]]; }
-integer t gone killedAt=0
+integer t gone killedAt=0 slept=0 dt prev=t0
 outcome=gone killed=false
 taskpolicy -B -p $$ >/dev/null 2>&1
 if (( start > 0 )) && kill -0 $pid 2>/dev/null && ! same && kill -0 $pid 2>/dev/null; then
@@ -100,10 +118,16 @@ if (( start > 0 )) && kill -0 $pid 2>/dev/null && ! same && kill -0 $pid 2>/dev/
 else
   while kill -0 $pid 2>/dev/null; do
     (( t = EPOCHREALTIME * 1000 ))
-    if (( t - t0 >= max )); then outcome=timeout; break; fi
-    if [[ $killed == false ]] && (( nokill == 0 && t - t0 >= grace )); then
+    (( dt = t - prev, prev = t ))
+    (( dt < 0 )) && dt=0
+    (( dt > step )) && dt=step
+    (( slept += dt ))
+    if (( t - t0 >= max || slept >= max )); then outcome=timeout; break; fi
+    if [[ $killed == false ]] && (( t - t0 >= grace && slept >= grace )); then
       if same; then
-        kill -KILL $pid 2>/dev/null && { killed=true; killedAt=$(( t - t0 )); }
+        if (( nokill == 0 )); then
+          kill -KILL $pid 2>/dev/null && { killed=true; killedAt=$(( t - t0 )); }
+        fi
       elif (( start > 0 )) && kill -0 $pid 2>/dev/null; then
         outcome=mismatch; break
       fi
@@ -114,7 +138,8 @@ fi
 [[ $killed == true && $outcome == gone ]] && outcome=killed
 (( nokill == 1 )) && [[ $outcome == gone ]] && outcome=disarmed
 (( gone = EPOCHREALTIME * 1000 - t0 ))
-print -r -- "{\"v\":1,\"goneMs\":$gone,\"killed\":$killed,\"killedAtMs\":$killedAt,\"outcome\":\"$outcome\",\"graceMs\":$grace}" > exit-watch.json.$$ 2>/dev/null && mv -f exit-watch.json.$$ exit-watch.json 2>/dev/null
+record=exit-watch-$pid.json
+print -r -- "{\"v\":1,\"goneMs\":$gone,\"killed\":$killed,\"killedAtMs\":$killedAt,\"outcome\":\"$outcome\",\"graceMs\":$grace}" > $record.$$ 2>/dev/null && mv -f $record.$$ $record 2>/dev/null || rm -f $record.$$ 2>/dev/null
 exit 0
 `;
 
@@ -234,8 +259,12 @@ export interface ExitWatchPorts {
   probe(shell: string, argv: readonly string[], options: ProbeOptions): Promise<string>;
   /** Starts the watch detached, stdio ignored, and returns a way to signal it. */
   spawn(shell: string, argv: readonly string[], options: SpawnOptions): { signal(): void } | null;
-  readRecord(): Promise<string | null>;
-  removeRecord(): Promise<void>;
+  /** The pids the profile holds records for. */
+  listRecords(): Promise<number[]>;
+  readRecord(pid: number): Promise<string | null>;
+  removeRecord(pid: number): Promise<void>;
+  /** Whether `pid` is running (a watch may still be watching it). */
+  isAlive(pid: number): boolean;
 }
 
 export interface ProbeOptions {
@@ -252,7 +281,9 @@ export interface SpawnOptions {
 export interface ExitWatch {
   /** Reads this process's start time for later; call once at launch. */
   probe(): Promise<void>;
-  /** Starts the watch at the exit call; null on a platform without it, or when it would not start. */
+  /** Whether this platform has the watch. */
+  available(): boolean;
+  /** Starts the watch, its grace counted from now; null on a platform without it, or when it would not start. */
   arm(): ExitWatchHandle | null;
   /** Logs the previous exit's record, if there is one, and removes it. */
   logPreviousExit(): Promise<void>;
@@ -280,6 +311,7 @@ export function createExitWatch(
   const supported = ports.platform === "darwin";
   let startedAt = 0;
   return {
+    available: () => supported,
     async probe() {
       if (!supported) return;
       const argv = exitWatchProbeArgv(ports.pid);
@@ -332,17 +364,27 @@ export function createExitWatch(
     },
     async logPreviousExit() {
       if (!supported) return;
-      let text: string | null;
+      let pids: number[];
       try {
-        text = await ports.readRecord();
+        pids = await ports.listRecords();
       } catch {
         return;
       }
-      if (text === null) return;
-      const record = parseExitWatchRecord(text);
-      if (record === null) log.warn("previous exit unreadable", { code: "bad-record" });
-      else log.info("previous exit", { ...record });
-      await ports.removeRecord().catch(() => undefined);
+      // A pid still running may still be watched: its record is a later launch's to read.
+      for (const pid of pids) {
+        if (pid === ports.pid || ports.isAlive(pid)) continue;
+        let text: string | null;
+        try {
+          text = await ports.readRecord(pid);
+        } catch {
+          continue;
+        }
+        if (text === null) continue;
+        const record = parseExitWatchRecord(text);
+        if (record === null) log.warn("previous exit unreadable", { code: "bad-record" });
+        else log.info("previous exit", { ...record });
+        await ports.removeRecord(pid).catch(() => undefined);
+      }
     },
   };
 }
@@ -353,7 +395,7 @@ export function nodeExitWatchPorts(options: {
   readonly pid: number;
   readonly directory: string;
 }): ExitWatchPorts {
-  const record = join(options.directory, EXIT_WATCH_RECORD_FILE_NAME);
+  const record = (pid: number) => join(options.directory, exitWatchRecordFileName(pid));
   return {
     ...options,
     now: () => Date.now(),
@@ -388,14 +430,27 @@ export function nodeExitWatchPorts(options: {
         },
       };
     },
-    readRecord: async () => {
+    listRecords: async () =>
+      (await readdir(options.directory))
+        .map((name) => exitWatchRecordPid(name))
+        .filter((pid): pid is number => pid !== null),
+    readRecord: async (pid) => {
       try {
-        return await readFile(record, "utf8");
+        return await readFile(record(pid), "utf8");
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
         throw error;
       }
     },
-    removeRecord: () => rm(record, { force: true }),
+    removeRecord: (pid) => rm(record(pid), { force: true }),
+    isAlive: (pid) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch (error) {
+        // EPERM: a process of another user holds the pid; it is not ours, and not gone.
+        return (error as NodeJS.ErrnoException).code === "EPERM";
+      }
+    },
   };
 }

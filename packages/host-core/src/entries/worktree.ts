@@ -53,6 +53,7 @@ export {
   scanTrimTargets,
   setRetentionTtlDays,
   setTrimSettings,
+  stopRunningWorktreeSetups,
   trimAllWorktrees,
   trimFinishedWorktree,
   WorktreeChangeWatchManager,

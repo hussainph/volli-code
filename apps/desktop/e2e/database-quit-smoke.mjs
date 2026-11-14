@@ -111,7 +111,7 @@ async function profile(name = "profile") {
 
 async function open(config, label, extraEnv = {}) {
   const app = await launch({ ...config, extraEnv: { ...config.extraEnv, ...extraEnv } });
-  const run = { app, label, output: "" };
+  const run = { app, label, userDataDir: config.userDataDir, output: "" };
   runs.add(run);
   const capture = (chunk) => {
     run.output = `${run.output}${chunk}`.slice(-64000);
@@ -139,7 +139,10 @@ async function close(run) {
   const exit = await closeAppBounded(run.app, { closeGraceMs: ORDINARY_QUIT_MS });
   console.log(`CLEANUP: ${run.label}: ${Date.now() - started} ms ${JSON.stringify(exit)}`);
   runs.delete(run);
-  assert.ok(quitEndedByApp(exit, run.output), `${run.label} did not quit cleanly`);
+  assert.ok(
+    quitEndedByApp(exit, run.output, { userDataDir: run.userDataDir }),
+    `${run.label} did not quit cleanly`,
+  );
 }
 
 /** Resolves with the child's exit once it has exited. */

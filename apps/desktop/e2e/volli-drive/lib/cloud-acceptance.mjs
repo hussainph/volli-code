@@ -247,8 +247,8 @@ export function observedChildExit(child, expectedPid) {
  * bounded close sent no signal and the app's own log, written since the quit
  * began, says it made that exit (`quitEndedByApp`).
  */
-export function immediateQuit(close, logSinceQuit) {
-  return close?.exit?.signal === "SIGKILL" && quitEndedByApp(close, logSinceQuit);
+export function immediateQuit(close, logSinceQuit, { userDataDir } = {}) {
+  return close?.exit?.signal === "SIGKILL" && quitEndedByApp(close, logSinceQuit, { userDataDir });
 }
 
 export function cleanQuitProblems(close) {

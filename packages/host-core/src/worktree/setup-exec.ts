@@ -146,9 +146,25 @@ let exitHookInstalled = false;
 function stopLiveGroupsOnExit(): void {
   if (exitHookInstalled) return;
   exitHookInstalled = true;
-  process.once("exit", () => {
-    for (const pgid of liveGroups) killGroup(pgid, "SIGKILL");
-  });
+  process.once("exit", stopRunningWorktreeSetups);
+}
+
+/**
+ * Stops every setup command running now, with its whole process group
+ * (SIGKILL), and returns how many it stopped. The quit calls it before an exit
+ * whose teardown may never run (VC-652: the exit watch can end the process
+ * before Node's `exit` listeners), so a setup such as `pnpm install` cannot
+ * outlive the app in the working copy. The `exit` listener stays installed for
+ * a setup started later. A stopped run settles as `signalled`; its claim is
+ * spent, as for any setup that dies.
+ */
+export function stopRunningWorktreeSetups(): number {
+  let stopped = 0;
+  for (const pgid of liveGroups) {
+    killGroup(pgid, "SIGKILL");
+    stopped += 1;
+  }
+  return stopped;
 }
 
 function killGroup(pgid: number, signal: NodeJS.Signals): void {

@@ -231,10 +231,12 @@ async function main() {
         { timeout: 10000 },
       ).catch(() => false);
       // Exit 0, or the app's exit watch ending a native teardown that
-      // outlived the exit call by 5 s (VC-652): its exit line armed one.
+      // outlived the exit by 5 s (VC-652): its exit line armed one and its
+      // record for this pid says it killed it.
       const ended = quitEndedByApp(
-        { kind: "natural-after-close", exit, closeFailures: [] },
+        { kind: "natural-after-close", pid: child.pid, exit, closeFailures: [] },
         output,
+        { userDataDir },
       );
       return {
         ok: ended && socketGone === true && exitAfterMs >= SETTLE_MS,

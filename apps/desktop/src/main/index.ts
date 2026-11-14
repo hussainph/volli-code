@@ -344,6 +344,7 @@ import {
   releaseAgentSites as releaseWorktreeAgentSites,
   type AgentSiteReleaseReport,
   orphanCleanupEngine,
+  stopRunningWorktreeSetups,
 } from "@volli/host-core/worktree";
 import { registerHarnessIpcHandlers } from "./harness-ipc";
 import { ensureHarnessRuntime, harnessLaunchArgv } from "./harness-runtime";
@@ -401,7 +402,7 @@ import {
 } from "./browser/cursor-overlay";
 import { closeHeadlessTabsOnTicketArchive } from "./browser/lifecycle";
 import { hostLogger, hostLogLevel } from "@volli/host-core/log";
-import { exitAfterLogFlush, logPowerTransitions, startDesktopLog } from "./log/desktop-log";
+import { logPowerTransitions, startDesktopLog } from "./log/desktop-log";
 import { startDesktopPerfStore } from "./log/perf-store";
 import { registerRendererLogForwarding } from "./log/renderer-log";
 import { registerRendererStallForwarding } from "./log/renderer-stall";
@@ -578,6 +579,13 @@ const quitExit = createQuitExit({
     process.emit("exit", code);
   },
   kill: () => process.kill(process.pid, "SIGKILL"),
+  stopChildren: () => {
+    // What Node's `exit` listeners would stop or write, done before a watched
+    // exit whose teardown a kill can skip (VC-652).
+    stopRunningWorktreeSetups();
+    desktopPerf?.store.flush();
+  },
+  watchAvailable: () => exitWatch?.available() ?? false,
   watchExit: () => exitWatch?.arm() ?? null,
   onWorkerStarted,
 });
@@ -585,10 +593,8 @@ const quitTimeline = {
   accepted: () => quitExit.accepted(currentQuitReason()),
   drained: (deadlineExpired: boolean) => quitExit.drained(deadlineExpired),
 };
-/** `app`, whose `exit` writes the log's tail first: every accepted quit ends in it. */
-const quittingApp = quitExit.exitingApp(
-  desktopLog === null ? app : exitAfterLogFlush(app, desktopLog),
-);
+/** `app`, whose `exit` is the quit's last step (`quit-exit.ts`, which writes the log's tail first): every accepted quit ends in it. */
+const quittingApp = quitExit.exitingApp(app);
 /** Electron main's own composition lines; the areas below log under their own names. */
 const log = hostLogger("desktop");
 const repackLog = hostLogger("transcript-repack");

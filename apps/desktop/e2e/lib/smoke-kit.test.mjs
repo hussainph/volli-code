@@ -572,27 +572,56 @@ test("closeAppBounded rejects when the child survives every shutdown attempt", a
   assert.deepEqual(child.signals, ["SIGTERM", "SIGKILL"]);
 });
 
-test("quitEndedByApp: exit 0, or a SIGKILL the app's own exit line names (VC-1208, VC-652)", () => {
-  const clean = { kind: "graceful", exit: { code: 0, signal: null }, closeFailures: [] };
-  const killed = { kind: "graceful", exit: { code: null, signal: "SIGKILL" }, closeFailures: [] };
-  const watched = "[quit] exit call {\n  mode: 'normal',\n  watch: 'armed'\n}\n";
-  const immediate = "[quit] exit call {\n  mode: 'immediate',\n  liveWorkers: 1\n}\n";
-  assert.equal(quitEndedByApp(clean, ""), true);
-  assert.equal(quitEndedByApp({ ...clean, kind: "already-exited" }, ""), true);
-  assert.equal(quitEndedByApp(killed, watched), true);
-  assert.equal(quitEndedByApp(killed, immediate), true);
-  assert.equal(quitEndedByApp({ ...killed, kind: "natural-after-close" }, watched), true);
-  // A kill the app's log does not name, or one the close sent, is not the app's quit.
-  assert.equal(quitEndedByApp(killed, "[quit] exit call {\n  mode: 'normal'\n}\n"), false);
-  assert.equal(quitEndedByApp(killed, watched.replace("armed", "unavailable")), false);
-  assert.equal(quitEndedByApp(killed, undefined), false);
-  assert.equal(quitEndedByApp({ ...killed, kind: "sigkill" }, watched), false);
-  assert.equal(quitEndedByApp({ ...killed, kind: "sigterm" }, watched), false);
-  assert.equal(quitEndedByApp({ ...killed, closeFailures: ["timed out"] }, watched), false);
-  assert.equal(quitEndedByApp({ ...clean, exit: { code: 1, signal: null } }, watched), false);
-  assert.equal(
-    quitEndedByApp({ ...killed, exit: { code: null, signal: "SIGSEGV" } }, watched),
-    false,
-  );
-  assert.equal(quitEndedByApp(null, watched), false);
+test("quitEndedByApp: exit 0, or a SIGKILL the app's own exit line and the watch's record name (VC-1208, VC-652)", async () => {
+  const dir = await fs.mkdtemp(join(os.tmpdir(), "quit-ended-"));
+  try {
+    const clean = {
+      kind: "graceful",
+      pid: 4242,
+      exit: { code: 0, signal: null },
+      closeFailures: [],
+    };
+    const killed = {
+      kind: "graceful",
+      pid: 4242,
+      exit: { code: null, signal: "SIGKILL" },
+      closeFailures: [],
+    };
+    const watched = "[quit] exit call {\n  mode: 'normal',\n  watch: 'armed'\n}\n";
+    const immediate = "[quit] exit call {\n  mode: 'immediate',\n  liveWorkers: 1\n}\n";
+    const at = { userDataDir: dir };
+    assert.equal(quitEndedByApp(clean, ""), true);
+    assert.equal(quitEndedByApp({ ...clean, kind: "already-exited" }, ""), true);
+    assert.equal(quitEndedByApp(killed, immediate), true);
+    // The watch's kill counts only when its record for this pid says so.
+    assert.equal(quitEndedByApp(killed, watched, at), false);
+    await fs.writeFile(
+      join(dir, "exit-watch-4242.json"),
+      '{"v":1,"outcome":"gone","killed":false}',
+    );
+    assert.equal(quitEndedByApp(killed, watched, at), false);
+    await fs.writeFile(
+      join(dir, "exit-watch-4242.json"),
+      '{"v":1,"outcome":"killed","killed":true}',
+    );
+    assert.equal(quitEndedByApp(killed, watched, at), true);
+    assert.equal(quitEndedByApp({ ...killed, kind: "natural-after-close" }, watched, at), true);
+    assert.equal(quitEndedByApp(killed, watched), false);
+    assert.equal(quitEndedByApp({ ...killed, pid: 4243 }, watched, at), false);
+    // A kill the app's log does not name, or one the close sent, is not the app's quit.
+    assert.equal(quitEndedByApp(killed, "[quit] exit call {\n  mode: 'normal'\n}\n", at), false);
+    assert.equal(quitEndedByApp(killed, watched.replace("armed", "unavailable"), at), false);
+    assert.equal(quitEndedByApp(killed, undefined, at), false);
+    assert.equal(quitEndedByApp({ ...killed, kind: "sigkill" }, watched, at), false);
+    assert.equal(quitEndedByApp({ ...killed, kind: "sigterm" }, watched, at), false);
+    assert.equal(quitEndedByApp({ ...killed, closeFailures: ["timed out"] }, watched, at), false);
+    assert.equal(quitEndedByApp({ ...clean, exit: { code: 1, signal: null } }, watched, at), false);
+    assert.equal(
+      quitEndedByApp({ ...killed, exit: { code: null, signal: "SIGSEGV" } }, watched, at),
+      false,
+    );
+    assert.equal(quitEndedByApp(null, watched, at), false);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
 });

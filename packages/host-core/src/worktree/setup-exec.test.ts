@@ -20,7 +20,7 @@ import { readEnvironmentRun } from "./environment-runs";
 import { isFirstRunPending, markFirstRunPending, workingCopyRecordPath } from "./first-run";
 import { retryWorktreeSetup, startWorktreeSetupAnyway } from "./setup-gate";
 import { resetPhasesForTest } from "./phase";
-import { runPendingWorktreeSetup } from "./setup-exec";
+import { runPendingWorktreeSetup, stopRunningWorktreeSetups } from "./setup-exec";
 import type { WorktreePhase, WorktreePorts } from "./types";
 
 let ctx: TestDb;
@@ -207,6 +207,28 @@ describe("runPendingWorktreeSetup", () => {
     await new Promise((resolve) => setTimeout(resolve, 1_500));
     expect(existsSync(join(worktreePath, "late"))).toBe(false);
     expect(existsSync(join(worktreePath, "late-child"))).toBe(false);
+  });
+
+  it("is stopped with its whole group by the quit, with no exit listener needed (VC-652)", async () => {
+    const { worktreePath, deps, params } = pendingWorktree();
+    expect(stopRunningWorktreeSetups()).toBe(0);
+    // A long setup with a child of its own, like an install spawning workers.
+    const running = runPendingWorktreeSetup(
+      deps,
+      params("(sleep 2; touch late-child) & sleep 2; touch late"),
+    );
+    for (let i = 0; i < 100 && phases.length === 0; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    // What the quit does before an exit whose teardown may never run: nothing
+    // here emits `exit`, so only this stop can reach the group.
+    expect(stopRunningWorktreeSetups()).toBe(1);
+    expect(await running).toMatchObject({ kind: "failed" });
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    expect(existsSync(join(worktreePath, "late"))).toBe(false);
+    expect(existsSync(join(worktreePath, "late-child"))).toBe(false);
+    expect(stopRunningWorktreeSetups()).toBe(0);
   });
 
   it("finishes when the shell exits, though a background process it left holds the output open", async () => {
