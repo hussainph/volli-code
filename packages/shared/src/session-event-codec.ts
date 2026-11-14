@@ -878,6 +878,7 @@ export interface SessionPresentationProjection extends Pick<
   | "lastActivityAt"
   | "bornTicketless"
   | "todoList"
+  | "attentionProviders"
 > {
   attention: RendererSessionAttentionProjection;
   interactions: RendererSessionInteractionProjection;

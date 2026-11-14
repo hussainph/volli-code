@@ -35,10 +35,24 @@ function authStop(sessionId: string, stopDetail: SessionStopDetail = SIGN_IN): S
 /** Only the fields the rule reads; the rest of a projection is irrelevant to it. */
 function projection(
   sessionId: string,
-  options: { providerId?: string; attention?: SessionAttention | null; stopped?: boolean } = {},
+  options: {
+    providerId?: string;
+    attention?: SessionAttention | null;
+    stopped?: boolean;
+    /** The provider the stop belongs to, when it differs from the current model. */
+    stoppedOn?: string;
+    completedTurn?: string;
+    archived?: boolean;
+  } = {},
 ): SessionProjection {
   const active = options.attention ? [options.attention] : [];
   return {
+    status: options.archived ? "archived" : "open",
+    lastTurnOutcome: options.completedTurn === undefined ? null : "completed",
+    latestTurnId: options.completedTurn ?? null,
+    ...(options.attention && options.stoppedOn !== undefined
+      ? { attentionProviders: { [options.attention.id]: options.stoppedOn } }
+      : {}),
     session: {
       id: sessionId,
       projectId: "p",
@@ -141,6 +155,70 @@ describe("provider sign-in alert", () => {
     alert.observe(projection("a"));
     alert.observe(projection("a", { attention: authStop("a") }));
     expect(notified).toHaveLength(2);
+  });
+
+  it("a chat switched to another model after it stopped is still the first provider's stop", () => {
+    const { alert, notified } = harness();
+    alert.observeBirth("a");
+    alert.observeBirth("b");
+    alert.observe(projection("a", { attention: authStop("a") }));
+    expect(notified).toHaveLength(1);
+    // The person moves chat a to OpenAI to keep working: the same stop, still
+    // Anthropic's — no new alert, and no alert naming OpenAI.
+    alert.observe(
+      projection("a", {
+        providerId: "openai-codex",
+        stoppedOn: "anthropic",
+        attention: authStop("a"),
+      }),
+    );
+    expect(notified).toHaveLength(1);
+    // It still holds Anthropic's episode: a second Anthropic chat stays quiet.
+    alert.observe(projection("b", { attention: authStop("b") }));
+    expect(notified).toHaveLength(1);
+    // A turn completing on OpenAI clears a's stop and says nothing about Anthropic.
+    alert.observe(projection("a", { providerId: "openai-codex", completedTurn: "t1" }));
+    alert.observeBirth("c");
+    alert.observe(projection("c", { attention: authStop("c") }));
+    expect(notified).toHaveLength(1);
+  });
+
+  it("any completed turn on the provider ends its episode, however the sign-in happened", () => {
+    const { alert, notified } = harness();
+    for (const id of ["a", "b", "c"]) alert.observeBirth(id);
+    alert.observe(projection("a", { attention: authStop("a") }));
+    expect(notified).toHaveLength(1);
+    // Signed in through the `pi` CLI: Volli saw no sign-in, but b's next turn on
+    // Anthropic completes. a stays stopped (nothing resumes it).
+    alert.observe(projection("b", { completedTurn: "t1" }));
+    // Re-folding the same completed turn is not a second proof.
+    alert.observe(projection("b", { completedTurn: "t1" }));
+    alert.observe(projection("c", { attention: authStop("c") }));
+    expect(notified).toHaveLength(2);
+  });
+
+  it("an archived Session holds no episode open and raises nothing", () => {
+    const { alert, notified } = harness();
+    for (const id of ["a", "b"]) alert.observeBirth(id);
+    alert.observe(projection("a", { attention: authStop("a") }));
+    expect(notified).toHaveLength(1);
+    alert.observe(projection("a", { attention: authStop("a"), archived: true }));
+    alert.observe(projection("b", { attention: authStop("b") }));
+    expect(notified).toHaveLength(2);
+    alert.observeBirth("d");
+    alert.observe(projection("d", { attention: authStop("d"), archived: true }));
+    expect(notified).toHaveLength(2);
+  });
+
+  it("an unreadable credential is not an expired sign-in and raises nothing", () => {
+    const { alert, notified } = harness();
+    alert.observeBirth("a");
+    alert.observe(
+      projection("a", {
+        attention: authStop("a", { ...SIGN_IN, providerType: "volli.credential-unavailable" }),
+      }),
+    );
+    expect(notified).toEqual([]);
   });
 
   it("keeps providers apart: one provider's episode does not silence another's", () => {

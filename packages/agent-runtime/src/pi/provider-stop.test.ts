@@ -101,6 +101,80 @@ describe("provider stop facts", () => {
     },
   );
 
+  // Pi wraps every refresh failure in one `oauth` error; only an answer that
+  // refuses the grant is a sign-in (VC-1236). Shapes from Pi's own OAuth flows.
+  it.each([
+    [
+      "Anthropic's 400 invalid_grant",
+      "details=Error: HTTP request failed. status=400; body=x",
+      undefined,
+      "refresh-failed",
+    ],
+    [
+      "Codex's refusal",
+      "OpenAI Codex token refresh failed (401): denied",
+      undefined,
+      "refresh-failed",
+    ],
+    ["Copilot's leading status", "403 Forbidden: bad token", undefined, "refresh-failed"],
+    ["a bare invalid_grant", "invalid_grant: Refresh token not found", undefined, "refresh-failed"],
+    [
+      "a 5xx",
+      "details=Error: HTTP request failed. status=502; body=x",
+      undefined,
+      "refresh-unreachable",
+    ],
+    [
+      "a 429",
+      "OpenAI Codex token refresh failed (429): slow down",
+      undefined,
+      "refresh-unreachable",
+    ],
+    ["a 408", "failed with status 408", undefined, "refresh-unreachable"],
+    [
+      "a socket code in the chain",
+      "request failed",
+      { code: "ECONNREFUSED" },
+      "refresh-unreachable",
+    ],
+    [
+      "a timeout error in the chain",
+      "request failed",
+      { name: "TimeoutError" },
+      "refresh-unreachable",
+    ],
+    [
+      "Node's words for no answer",
+      "details=TypeError: fetch failed; code=ENOTFOUND",
+      undefined,
+      "refresh-unreachable",
+    ],
+    ["nothing placeable", "token refresh returned invalid JSON", undefined, "refresh-unreachable"],
+  ] as const)("reads %s", async (_, sentence, inner, expected) => {
+    // Pi's shape: the flow's own error as the cause, its sentence repeated
+    // after the wrapper's prefix.
+    const flowError = Object.assign(new Error(sentence), inner ?? {});
+    const thrown = Object.assign(
+      new Error(`OAuth refresh failed for fixture: ${sentence}`, { cause: flowError }),
+      { code: "oauth" },
+    );
+    const capture = new ProviderStopCapture();
+    await expect(capture.credential(async () => Promise.reject(thrown))).rejects.toBe(thrown);
+    expect(capture.detail(message({ errorMessage: thrown.message })).providerType).toBe(
+      `volli.credential-${expected}`,
+    );
+  });
+
+  it("reads a thrown value that is not an Error by its code alone", async () => {
+    const thrown = Object.assign(new Error("OAuth refresh failed for fixture: request failed"), {
+      code: "oauth",
+      cause: { code: "ETIMEDOUT" },
+    });
+    const capture = new ProviderStopCapture();
+    await expect(capture.credential(async () => Promise.reject(thrown))).rejects.toBe(thrown);
+    expect(capture.detail(message()).providerType).toBe("volli.credential-refresh-unreachable");
+  });
+
   it("reads an unconfigured provider as missing, and an abort or success as nothing", async () => {
     const missing = new ProviderStopCapture();
     await missing.credential(async () => ({ missing: true }));

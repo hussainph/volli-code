@@ -36,6 +36,7 @@ const TYPES: Readonly<Record<string, SessionStopCategory>> = {
   PERMISSION_DENIED: "auth-failed",
   [SESSION_CREDENTIAL_STOP_TYPES.missing]: "auth-failed",
   [SESSION_CREDENTIAL_STOP_TYPES.refreshFailed]: "auth-failed",
+  [SESSION_CREDENTIAL_STOP_TYPES.refreshUnreachable]: "network",
   [SESSION_CREDENTIAL_STOP_TYPES.unavailable]: "auth-failed",
   // Anthropic's 402: payment or billing, a spent allowance by another name.
   billing_error: "rate-limited",
@@ -144,6 +145,76 @@ export function safeProviderMessage(
   return safe;
 }
 
+/** Node, undici and DOM names for a request that never got an answer. */
+const UNREACHED_CODES: ReadonlySet<string> = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ECONNABORTED",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ETIMEDOUT",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ENETDOWN",
+  "EPIPE",
+  "UND_ERR_SOCKET",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
+]);
+const UNREACHED_NAMES: ReadonlySet<string> = new Set(["TimeoutError"]);
+const UNREACHED_TEXT =
+  /\b(?:fetch failed|ECONN(?:REFUSED|RESET|ABORTED)|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|UND_ERR_[A-Z_]+|socket hang up|TimeoutError|timed out|aborted due to timeout)\b/i;
+/**
+ * The token endpoint's HTTP status, in the shapes Pi's OAuth flows print it:
+ * `status=400` (Anthropic), `failed (400)` (Codex), `status 401` (Meta, Kimi),
+ * and a leading `403 Forbidden` (Copilot).
+ */
+const TOKEN_STATUS = /(?:\bstatus[=:\s]\s*|\bfailed \(|^)(\d{3})\b/im;
+/** OAuth 2.0's own words for a grant the server will not renew (RFC 6749 §5.2). */
+const REFUSED_GRANT = /\b(?:invalid_grant|invalid_client|unauthorized_client)\b/;
+
+/**
+ * Why a subscription login's renewal failed, read from Pi's error IN MEMORY
+ * and never logged or kept (VC-1236).
+ *
+ * Pi wraps every refresh failure in one `ModelsError("oauth")` — a revoked
+ * refresh token and a token endpoint that is down alike — and keeps what
+ * happened only in the wrapped error's sentence and cause chain. The two need
+ * opposite answers: a refused grant is the person's to fix by signing in, and
+ * an endpoint that never answered (unreachable, timed out, 5xx, 429) is a
+ * network failure the transport retry already handles, exactly as a failed
+ * request to the API is. Only an answer that refuses — a 4xx other than
+ * 408/429, or OAuth's refusal codes — reads as refused; anything this cannot
+ * place is retried rather than sending a person to sign in.
+ */
+function refreshFailureType(error: unknown): string {
+  let status: number | null = null;
+  let refused = false;
+  let unreached = false;
+  let current: unknown = error;
+  for (let depth = 0; depth < 6 && current !== undefined && current !== null; depth += 1) {
+    const value = record(current);
+    const code = value["code"];
+    if (typeof code === "string" && UNREACHED_CODES.has(code)) unreached = true;
+    if (current instanceof Error) {
+      if (UNREACHED_NAMES.has(current.name)) unreached = true;
+      const sentence = current.message;
+      if (UNREACHED_TEXT.test(sentence)) unreached = true;
+      if (REFUSED_GRANT.test(sentence)) refused = true;
+      const stated = TOKEN_STATUS.exec(sentence);
+      if (stated !== null && status === null) status = Number(stated[1]);
+    }
+    current = value["cause"];
+  }
+  if (status !== null && status >= 400 && status < 500 && status !== 408 && status !== 429)
+    refused = true;
+  if (status !== null && (status >= 500 || status === 408 || status === 429)) unreached = true;
+  return refused && !unreached
+    ? SESSION_CREDENTIAL_STOP_TYPES.refreshFailed
+    : SESSION_CREDENTIAL_STOP_TYPES.refreshUnreachable;
+}
+
 /** One request's small accumulator. Raw events and headers are never retained. */
 export class ProviderStopCapture {
   constructor(private readonly redaction?: RedactionPort) {}
@@ -190,7 +261,7 @@ export class ProviderStopCapture {
       const code = record(error)["code"];
       this.#credential =
         code === "oauth"
-          ? SESSION_CREDENTIAL_STOP_TYPES.refreshFailed
+          ? refreshFailureType(error)
           : code === "auth"
             ? SESSION_CREDENTIAL_STOP_TYPES.unavailable
             : null;

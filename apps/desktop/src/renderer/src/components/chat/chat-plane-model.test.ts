@@ -83,6 +83,7 @@ import {
   type SessionBlockerActs,
   type SessionBlockerInput,
   type SessionModelStanding,
+  attentionProviderStandings,
 } from "./chat-plane-model";
 
 function heldMessage(id: string, text: string, state: HeldMessage["state"]): HeldMessage {
@@ -682,6 +683,48 @@ describe("sessionBlocker", () => {
         state: "available",
       });
       expect(pressed).toEqual([["anthropic", "oauth"]]);
+    });
+
+    it("a chat switched to another model after it stopped still names the provider that failed", () => {
+      const primary = stop("volli.credential-refresh-failed", null);
+      const pressed: [string, string | undefined][] = [];
+      const blocker = sessionBlocker(
+        {
+          ...raised(primary),
+          // Now on OpenAI; the stop is Anthropic's.
+          sessionModel: {
+            providerId: "openai-codex",
+            providerLabel: "OpenAI",
+            state: "available",
+            billingSource: "subscription",
+            signInMethods: ["oauth"],
+          },
+          attentionProviders: attentionProviderStandings({ [primary.id]: "anthropic" }, [
+            {
+              id: "anthropic",
+              label: "Anthropic",
+              state: "available",
+              accountLabel: null,
+              billingSource: "subscription",
+              recovery: null,
+              hasStoredCredential: true,
+              signIn: [{ type: "oauth", label: "Claude Pro/Max", isSubscription: true }],
+            },
+          ]),
+        },
+        { ...ACTS, signIn: (id, reauthenticate) => pressed.push([id, reauthenticate]) },
+        false,
+      );
+      blocker?.action?.act();
+      expect(blocker?.action?.label).toBe("Sign in");
+      expect(pressed).toEqual([["anthropic", "oauth"]]);
+    });
+
+    it("a stop's provider the catalog does not list reads as unavailable, not as another", () => {
+      expect(attentionProviderStandings({ a: "gone" }, [])).toEqual({
+        a: { providerId: "gone", providerLabel: "gone", state: "unavailable" },
+      });
+      expect(attentionProviderStandings(undefined, [])).toEqual({});
     });
 
     it("a 401 on a subscription login: Sign in, asking to sign in again", () => {

@@ -6,6 +6,7 @@ import { ProviderStopCapture, finalStopDetail, safeProviderMessage } from "./pro
 import {
   decodeSessionStopDetail,
   RECOVERED_TURN_INTERRUPTED_DETAIL,
+  SESSION_CREDENTIAL_STOP_TYPES,
   sessionStopCause,
   type SessionStopDetail,
 } from "@volli/shared";
@@ -3945,6 +3946,12 @@ async function attachSession(
           // Settings, not by running the same request again.
           if (sessionStopCause(stopDetail) === "model-unavailable")
             failure.reason = "configuration";
+          // A renewal that never got an answer is the wire's, not the
+          // credential's, whatever words ("token refresh") its sentence holds:
+          // the transport retry answers it, and if that is spent it is a
+          // failed run, not a request to sign in.
+          if (stopDetail.providerType === SESSION_CREDENTIAL_STOP_TYPES.refreshUnreachable)
+            failure.reason = "model";
         }
         return;
       }

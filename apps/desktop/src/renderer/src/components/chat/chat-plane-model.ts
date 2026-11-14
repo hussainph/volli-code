@@ -114,6 +114,33 @@ export function sessionModelStanding(
   };
 }
 
+/**
+ * The provider each active Attention was raised against, read against the
+ * catalog the same way {@link sessionModelStanding} reads the Session's model
+ * (VC-1236). The projection binds the provider when the Attention is raised;
+ * this only looks up how that provider is signed in to now.
+ */
+export function attentionProviderStandings(
+  attentionProviders: Readonly<Record<string, string>> | undefined,
+  providers: readonly ModelAccessProvider[],
+): Readonly<Record<string, SessionModelStanding>> {
+  const standings: Record<string, SessionModelStanding> = {};
+  for (const [attentionId, providerId] of Object.entries(attentionProviders ?? {})) {
+    const provider = providers.find((candidate) => candidate.id === providerId);
+    standings[attentionId] =
+      provider === undefined
+        ? { providerId, providerLabel: providerId, state: "unavailable" }
+        : {
+            providerId,
+            providerLabel: provider.label,
+            state: provider.state,
+            billingSource: provider.billingSource,
+            signInMethods: provider.signIn.map((method) => method.type),
+          };
+  }
+  return standings;
+}
+
 /* -------------------------------------------------------------- answering */
 
 /**
@@ -535,6 +562,13 @@ export interface SessionBlockerInput {
   catalogError: string | null;
   /** This Session's model against the catalog — see {@link sessionModelStanding}. */
   sessionModel: SessionModelStanding | null;
+  /**
+   * Per active Attention, the provider it was raised against, from the catalog
+   * (VC-1236; {@link attentionProviderStandings}). A stop's recovery names THAT
+   * provider, not one the Session was switched to since. An Attention with no
+   * entry falls back to {@link SessionBlockerInput.sessionModel}.
+   */
+  attentionProviders?: Readonly<Record<string, SessionModelStanding>>;
   /** The resume this Session is waiting to run at a quota reset, if any. */
   scheduledResume: PresentedScheduledResume | null;
   /** Whether a turn is open now — a restart resume's, while the recovery warning still stands. */
@@ -663,8 +697,11 @@ export function sessionBlocker(
   const settings: SessionBlockerAction = { label: "Settings", act: acts.openSettings };
   // Straight to the pinned provider's sign-in when the Session names one; the
   // catalog need not have answered, because the action only needs who.
-  const sessionSignIn = (stop: SessionStopDetail): SessionBlockerAction | null =>
-    signInRecovery(stop, input.sessionModel, acts);
+  const sessionSignIn = (
+    attentionId: string,
+    stop: SessionStopDetail,
+  ): SessionBlockerAction | null =>
+    signInRecovery(stop, input.attentionProviders?.[attentionId] ?? input.sessionModel, acts);
   const dismiss = (key: string) => () => acts.dismiss(key);
   if (input.sessionError !== null) {
     const dismissKey = `session-error:${input.sessionError}`;
@@ -911,8 +948,8 @@ function providerRecovery(input: {
  *   with the key method, which opens that provider's key entry: **API key**.
  * - **No credential at all** is the ordinary deep link to the provider's
  *   sign-in, which presses it because the account is not connected.
- * - Anything else — an unreadable stored key, a 403, a provider the Session
- *   cannot name — is Settings' to sort out.
+ * - Anything else — an unreadable stored credential (its own cause), a 403,
+ *   a provider the Session cannot name — is Settings' to sort out.
  */
 export function signInRecovery(
   stop: SessionStopDetail,
@@ -926,7 +963,6 @@ export function signInRecovery(
   if (stop.providerType === SESSION_CREDENTIAL_STOP_TYPES.missing) {
     return { label: "Sign in", act: () => acts.signIn(providerId) };
   }
-  if (stop.providerType === SESSION_CREDENTIAL_STOP_TYPES.unavailable) return null;
   const login =
     stop.providerType === SESSION_CREDENTIAL_STOP_TYPES.refreshFailed ||
     provider.billingSource === "subscription";
@@ -996,7 +1032,7 @@ function attentionBlocker(
   retry: SessionBlockerAction,
   retryRuntime: SessionBlockerAction,
   settings: SessionBlockerAction,
-  signIn: (stop: SessionStopDetail) => SessionBlockerAction | null,
+  signIn: (attentionId: string, stop: SessionStopDetail) => SessionBlockerAction | null,
   dismiss: (dismissKey: string) => void,
   resume: ResumeContext,
   turn: InterruptedTurnContext,
@@ -1016,7 +1052,7 @@ function attentionBlocker(
         // own recovery (`signInRecovery`): access a credential lacks is not
         // fixed by signing in again, and a report with no cause keeps the
         // general route.
-        signIn: attention.stopDetail ? signIn(attention.stopDetail) : null,
+        signIn: attention.stopDetail ? signIn(attention.id, attention.stopDetail) : null,
         dismissKey,
         dismiss: dismissAttention,
       });

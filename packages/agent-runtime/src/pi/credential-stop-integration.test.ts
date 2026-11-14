@@ -30,8 +30,10 @@ import {
   type Api,
   type ApiKeyAuth,
   type Credential,
+  type CredentialStore,
   type Provider,
 } from "@earendil-works/pi-ai";
+import { PiFileCredentialStore } from "./models";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { groqProvider } from "@earendil-works/pi-ai/providers/groq";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
@@ -149,10 +151,21 @@ async function startFake(): Promise<Fake> {
  * OAuth refresh both call the global `fetch` (the SDK through the runtime's
  * capture wrapper), so the bytes cross a real HTTP connection either way.
  */
+/**
+ * What the token endpoint's own fetch does instead of reaching the fake, when
+ * a case needs a failure no HTTP answer can make: a connection the host
+ * refuses, a request that times out. Returning `undefined` reaches the fake.
+ */
+let tokenTransport: (() => Promise<Response> | undefined) | null = null;
+
 function routeTo(fake: Fake): void {
   const real = globalThis.fetch;
   vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.hostname === "platform.claude.com") {
+      const instead = tokenTransport?.();
+      if (instead !== undefined) return instead;
+    }
     if (url.hostname === "api.anthropic.com" || url.hostname === "platform.claude.com") {
       const local = new URL(url.pathname + url.search, fake.origin);
       return input instanceof Request ? real(new Request(local, input), init) : real(local, init);
@@ -178,6 +191,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  tokenTransport = null;
   vi.unstubAllGlobals();
   await fake.close();
   rmSync(root, { recursive: true, force: true });
@@ -185,10 +199,10 @@ afterEach(async () => {
 
 async function session(
   credential: Credential | undefined,
-  options: { provider?: Provider<Api>; modelId?: string } = {},
+  options: { provider?: Provider<Api>; modelId?: string; credentials?: CredentialStore } = {},
 ) {
   const using = options.provider ?? provider;
-  const credentials = new InMemoryCredentialStore();
+  const credentials = options.credentials ?? new InMemoryCredentialStore();
   if (credential !== undefined) await credentials.modify(using.id, async () => credential);
   // No ambient environment: a key in the test runner's env must not answer for
   // the credential under test.
@@ -574,6 +588,230 @@ describe("a provider that needs no credential", () => {
       expect(fake.paths).toContain("/v1/chat/completions");
       expect(turn).toMatchObject({ stopDetail: { httpStatus: 500 } });
       expect(JSON.stringify(observations)).not.toContain("volli.credential-missing");
+    } finally {
+      await handle.close();
+    }
+  });
+});
+
+const EXPIRED_LOGIN: Credential = {
+  type: "oauth",
+  access: SUBSCRIPTION_ACCESS,
+  refresh: SUBSCRIPTION_REFRESH,
+  expires: 0,
+};
+/** A renewal the token endpoint grants: the fixture shape Pi reads back. */
+function granted(response: ServerResponse): void {
+  json(response, 200, {
+    access_token: `${SUBSCRIPTION_ACCESS}-renewed`,
+    refresh_token: `${SUBSCRIPTION_REFRESH}-renewed`,
+    expires_in: 3600,
+  });
+}
+const tokenRequests = () => fake.paths.filter((path) => path === "/v1/oauth/token").length;
+const messageRequests = () => fake.paths.filter((path) => path === "/v1/messages").length;
+const raisedReasons = (observations: readonly RuntimeObservation[]) =>
+  observations.flatMap((o) => (o.kind === "attention" && o.state === "raised" ? [o.reason] : []));
+
+// A renewal that never got an answer is the wire's, not the credential's: Pi
+// wraps it in the same `oauth` error as a refused grant, and only an answer
+// that refuses may send a person to sign in (VC-1236).
+describe("a subscription renewal the token endpoint did not refuse", () => {
+  it.each([
+    ["a 500", (response: ServerResponse) => json(response, 500, { error: "server_error" })],
+    ["a 429", (response: ServerResponse) => json(response, 429, { error: "rate_limited" })],
+  ])(
+    "%s is retried as a network failure and the turn completes once it answers",
+    async (_, fail) => {
+      let calls = 0;
+      fake.handle.token = (_request, _body, response) => {
+        calls += 1;
+        if (calls <= 2) fail(response);
+        else granted(response);
+      };
+      const { handle, observations } = await session(EXPIRED_LOGIN);
+      try {
+        await handle.submitUserMessage("fixture");
+        expect(stopOf(observations).turn).toMatchObject({ kind: "turn", state: "completed" });
+        expect(calls).toBeGreaterThanOrEqual(3);
+        expect(messageRequests()).toBe(1);
+        expect(raisedReasons(observations)).not.toContain("auth");
+      } finally {
+        await handle.close();
+      }
+    },
+  );
+
+  it("an endpoint that never answers: retried, then a network stop that asks no one to sign in", async () => {
+    fake.handle.token = (_request, _body, response) => json(response, 503, { error: "down" });
+    const { handle, observations } = await session(EXPIRED_LOGIN);
+    try {
+      await handle.submitUserMessage("fixture");
+      const { turn } = stopOf(observations);
+      expect(tokenRequests()).toBeGreaterThan(2);
+      expect(messageRequests()).toBe(0);
+      expect(turn).toMatchObject({
+        state: "interrupted",
+        stopDetail: {
+          category: "network",
+          providerType: "volli.credential-refresh-unreachable",
+          retry: "exhausted",
+        },
+      });
+      expect(raisedReasons(observations)).toContain("runtime-failure");
+      expect(raisedReasons(observations)).not.toContain("auth");
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it.each([
+    [
+      "a refused connection",
+      () =>
+        Promise.reject(
+          Object.assign(new TypeError("fetch failed"), {
+            cause: Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:9"), {
+              code: "ECONNREFUSED",
+            }),
+          }),
+        ),
+    ],
+    [
+      "a timeout",
+      () =>
+        Promise.reject(
+          new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+        ),
+    ],
+  ])("%s is retried, and the turn completes once the endpoint answers", async (_, failure) => {
+    let failures = 0;
+    tokenTransport = () => {
+      if (failures >= 2) return undefined;
+      failures += 1;
+      return failure();
+    };
+    fake.handle.token = (_request, _body, response) => granted(response);
+    const { handle, observations } = await session(EXPIRED_LOGIN);
+    try {
+      await handle.submitUserMessage("fixture");
+      expect(failures).toBe(2);
+      expect(stopOf(observations).turn).toMatchObject({ kind: "turn", state: "completed" });
+      expect(raisedReasons(observations)).not.toContain("auth");
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it("an invalid_grant is refused: a sign-in stop, not retried", async () => {
+    // The default fake token endpoint answers 400 invalid_grant.
+    const { handle, observations } = await session(EXPIRED_LOGIN);
+    try {
+      const before = tokenRequests();
+      await handle.submitUserMessage("fixture");
+      expect(tokenRequests() - before).toBe(1);
+      expect(stopOf(observations).turn).toMatchObject({
+        stopDetail: {
+          category: "auth-failed",
+          providerType: "volli.credential-refresh-failed",
+          retry: "not-retried",
+        },
+      });
+      expect(raisedReasons(observations)).toEqual(["auth"]);
+    } finally {
+      await handle.close();
+    }
+  });
+});
+
+describe("a credential store that cannot be read", () => {
+  it("is its own stop: not an expired sign-in, not retried", async () => {
+    const unreadable: CredentialStore = {
+      read: async () => {
+        throw new Error("EACCES: fixture store unreadable");
+      },
+      list: async () => [],
+      modify: async () => undefined,
+      delete: async () => undefined,
+    };
+    const { handle, observations } = await session(undefined, { credentials: unreadable });
+    try {
+      await handle.submitUserMessage("fixture");
+      expect(fake.paths).toEqual([]);
+      expect(stopOf(observations).turn).toMatchObject({
+        stopDetail: {
+          category: "auth-failed",
+          providerType: "volli.credential-unavailable",
+          retry: "not-retried",
+        },
+      });
+    } finally {
+      await handle.close();
+    }
+  });
+});
+
+describe("resolving the credential first", () => {
+  it("renews a login exactly once, through a store that behaves like the real file", async () => {
+    let calls = 0;
+    fake.handle.token = (_request, _body, response) => {
+      calls += 1;
+      // The attach's own look at the credential fails quietly, so the
+      // renewal under test is the turn's own.
+      if (calls === 1) json(response, 500, { error: "server_error" });
+      else granted(response);
+    };
+    const authorizations: (string | undefined)[] = [];
+    fake.handle.messages = (request, _body, response) => {
+      authorizations.push(request.headers.authorization);
+      okStream(response, "ok");
+    };
+    const store = new PiFileCredentialStore(join(root, "auth.json"));
+    const { handle, observations } = await session(EXPIRED_LOGIN, { credentials: store });
+    try {
+      await handle.submitUserMessage("fixture");
+      await handle.submitUserMessage("again");
+      expect(stopOf(observations).turn).toMatchObject({ kind: "turn", state: "completed" });
+      // The turn renewed exactly once: Volli's resolution refreshed and
+      // persisted it, and Pi's own resolution in the request, and every later
+      // turn's, read the fresh credential back.
+      expect(calls).toBe(2);
+      expect(authorizations).toEqual([
+        `Bearer ${SUBSCRIPTION_ACCESS}-renewed`,
+        `Bearer ${SUBSCRIPTION_ACCESS}-renewed`,
+      ]);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it("a Stop while the credential is being renewed ends the turn as a Stop", async () => {
+    const reached = Promise.withResolvers<void>();
+    const answer = Promise.withResolvers<ServerResponse>();
+    let calls = 0;
+    fake.handle.token = (_request, _body, response) => {
+      calls += 1;
+      // The attach's own look at the credential is answered (and fails
+      // quietly there); the turn's renewal is the one left hanging.
+      if (calls === 1) {
+        json(response, 500, { error: "server_error" });
+        return;
+      }
+      reached.resolve();
+      answer.resolve(response);
+    };
+    const { handle, observations } = await session(EXPIRED_LOGIN);
+    try {
+      const turn = handle.submitUserMessage("fixture");
+      await reached.promise;
+      await handle.interrupt();
+      granted(await answer.promise);
+      await turn;
+      const { turn: settled } = stopOf(observations);
+      expect(settled).toMatchObject({ kind: "turn", state: "interrupted" });
+      expect(settled?.kind === "turn" ? settled.stopDetail : undefined).toBeUndefined();
+      expect(raisedReasons(observations)).toEqual([]);
+      expect(messageRequests()).toBe(0);
     } finally {
       await handle.close();
     }

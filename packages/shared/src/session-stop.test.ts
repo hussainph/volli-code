@@ -12,6 +12,7 @@ import {
   decodeSessionStopDetail,
   scrubSessionEventPayload,
 } from "./session-event-codec";
+import { providerSignInStop } from "./session-need";
 import {
   observationPayload,
   projectSession,
@@ -51,6 +52,11 @@ const event = (sequence: number, payload: SessionEventPayload): SessionEvent => 
   payload,
 });
 const interruption = { kind: "turn.interrupted", attachmentId: "a", turnId: "t" } as const;
+const select = (providerId: string) =>
+  ({
+    kind: "model.selected",
+    selection: { providerId, modelId: `${providerId}-model`, reasoningLevel: "off" },
+  }) as const;
 
 describe("durable interruption details", () => {
   it("the observation-to-event boundary keeps details only on interrupted turns", () => {
@@ -205,6 +211,84 @@ describe("durable interruption details", () => {
     expect(sessionInterruptionDetail(completed)).toBeNull();
     expect(completed.lastTurnStopDetail).toBeUndefined();
     expect(sessionInterruptionDetail(projectSession(session, [event(1, interruption)]))).toBeNull();
+  });
+  it("binds a sign-in stop to the provider that failed, not the model switched to after (VC-1236)", () => {
+    const signInStop = {
+      category: "auth-failed",
+      providerType: SESSION_CREDENTIAL_STOP_TYPES.refreshFailed,
+      message: null,
+      httpStatus: null,
+      retry: "not-retried",
+      resetsAt: null,
+    } as const;
+    const raised = {
+      kind: "attention.raised",
+      attention: {
+        id: "pi:attention:a:auth",
+        attachmentId: "a",
+        kind: "auth_required",
+        detail: null,
+        diagnostic: null,
+        stopDetail: signInStop,
+      },
+    } as const;
+    const stoppedOnA = [event(1, select("anthropic")), event(2, raised)];
+    const switched = [...stoppedOnA, event(3, select("openai-codex"))];
+    const projection = projectSession(session, switched);
+    expect(projection.attentionProviders).toEqual({ "pi:attention:a:auth": "anthropic" });
+    expect(providerSignInStop(projection)).toEqual({
+      providerId: "anthropic",
+      attentionId: "pi:attention:a:auth",
+    });
+    // The same through a checkpoint taken before the switch.
+    const advanced = advanceSessionProjection(
+      createSessionProjectionCheckpoint(session, stoppedOnA),
+      [event(3, select("openai-codex"))],
+    ).projection;
+    expect(providerSignInStop(advanced)?.providerId).toBe("anthropic");
+    // A successful turn on the new model clears the stop, as it always has.
+    const cleared = projectSession(session, [
+      ...switched,
+      event(4, { kind: "attention.cleared", attentionId: "pi:attention:a:auth" }),
+    ]);
+    expect(providerSignInStop(cleared)).toBeNull();
+    expect(cleared.attentionProviders).toBeUndefined();
+    // An older checkpoint without the map falls back to the Session's model.
+    const { attentionProviders: _dropped, ...legacy } = projection;
+    expect(providerSignInStop(legacy)?.providerId).toBe("openai-codex");
+    // An archived Session, and an Attention raised before any model, name nobody.
+    expect(providerSignInStop({ ...projection, status: "archived" })).toBeNull();
+    expect(providerSignInStop(projectSession(session, [event(1, raised)]))).toBeNull();
+  });
+  it("reads only a model-not-found type as an unavailable model; a bare 404 is the provider's own detail", () => {
+    const notFound = { ...detail, category: "bad-request" as const, httpStatus: 404 };
+    expect(sessionStopCause({ ...notFound, providerType: null })).toBe("request");
+    expect(sessionStopCause({ ...notFound, providerType: "not_found_error" })).toBe(
+      "model-unavailable",
+    );
+  });
+  it("names an unreadable credential and an unreachable token endpoint for what they are", () => {
+    const unreadable = {
+      ...detail,
+      category: "auth-failed" as const,
+      providerType: SESSION_CREDENTIAL_STOP_TYPES.unavailable,
+      httpStatus: null,
+    };
+    expect(sessionStopCause(unreadable)).toBe("credential-unreadable");
+    expect(sessionStopSummary(unreadable)).toBe(
+      "Stopped: the stored provider credential could not be read",
+    );
+    expect(sessionStopNextStep(unreadable)).toContain("Settings");
+    const unreachable = {
+      ...detail,
+      category: "network" as const,
+      providerType: SESSION_CREDENTIAL_STOP_TYPES.refreshUnreachable,
+      httpStatus: null,
+    };
+    expect(sessionStopCause(unreachable)).toBe("transient");
+    expect(sessionStopSummary(unreachable)).toBe(
+      "Stopped: the provider's sign-in service could not be reached",
+    );
   });
   it("does not let an older crash Attention hide the current provider stop", () => {
     const projection = projectSession(session, [

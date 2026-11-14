@@ -41,6 +41,9 @@ import type {
   ModelAccessSignInUpdate,
 } from "@volli/shared";
 import type { ModelAccessSignInBeginResult, Result } from "@volli/shared";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("model-access-sign-in");
 
 /**
  * Where one attempt's updates go, and the only thing this service knows about
@@ -155,8 +158,15 @@ export class ModelAccessSignInService {
         this.#settle(attempt, { kind: "signed-in" });
         try {
           this.#onSignedIn?.(providerId);
-        } catch {
-          // A listener's failure is not the sign-in's: the credential is stored.
+        } catch (error) {
+          // A listener's failure is not the sign-in's: the credential is
+          // stored. Reported by code and error class only; the listener's
+          // text is never logged.
+          log.warn("sign-in listener failed", {
+            code: "model-access.sign-in-listener-failed",
+            providerId,
+            errorName: error instanceof Error ? error.name : typeof error,
+          });
         }
       },
       (error: unknown) => this.#settle(attempt, this.#failure(attempt, error)),

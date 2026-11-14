@@ -144,6 +144,7 @@ import {
   sameQueuedMessage,
   sessionBlocker,
   sessionModelStanding,
+  attentionProviderStandings,
   visibleBlocker,
   settledHeldIds,
   steerTurnIsCurrent,
@@ -686,6 +687,13 @@ function ChatPlaneContent({
         ? null
         : sessionModelStanding(modelSelection, pickerModels, providers),
     [cloudLaunch, modelSelection, pickerModels, providers, provisional, runners.selected],
+  );
+  // Each stop's own provider (VC-1236): a chat switched to another model after
+  // it stopped still offers the sign-in of the provider that failed.
+  const stopProviders = projection?.attentionProviders;
+  const attentionProviders = React.useMemo(
+    () => attentionProviderStandings(stopProviders, providers),
+    [stopProviders, providers],
   );
   const changeModel = React.useCallback(
     (next: ComposerModelSelection) => {
@@ -1384,6 +1392,7 @@ function ChatPlaneContent({
       // A capability inventory can lag execution (or omit environment-backed
       // credentials). Only the runner's Session attention can reject its model.
       sessionModel: localModelRecovery ? sessionModel : null,
+      attentionProviders: localModelRecovery ? attentionProviders : {},
       signInProviders: localModelRecovery ? signInProviders : [],
       scheduledResume: projection?.scheduledResume ?? null,
       turnActive: projection?.turnActive ?? false,

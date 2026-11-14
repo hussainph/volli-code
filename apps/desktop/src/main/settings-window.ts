@@ -1,5 +1,5 @@
 /** Single-instance, nonmodal Settings lifetime, independent of the workspace. */
-import type { SettingsWindowOpenInput } from "../ipc/settings-window";
+import type { SettingsWindowNavigation, SettingsWindowOpenInput } from "../ipc/settings-window";
 
 export interface SettingsNativeWindow {
   isDestroyed(): boolean;
@@ -38,6 +38,28 @@ export function createSettingsWindowOwner<W extends SettingsNativeWindow>(ports:
       return window !== null && !window.isDestroyed() ? window : null;
     },
   };
+}
+
+/**
+ * The Settings page's readiness answer for one revision, and what main keeps
+ * of that navigation afterwards (VC-1236).
+ *
+ * Acknowledged is the page saying it has taken this revision. Its one-shot
+ * sign-in request — the provider to sign in to, and a stopped chat's
+ * sign-in-again intent — is spent at that moment: main keeps the navigation
+ * for the page's next bootstrap read, and a reload of the page must arrive
+ * at the same pane without starting that provider's auth flow again. A stale
+ * or superseded revision acknowledges nothing and changes nothing.
+ */
+export function settleSettingsNavigation(
+  current: SettingsWindowNavigation | null,
+  appliedRevision: number,
+): { acknowledged: boolean; navigation: SettingsWindowNavigation | null } {
+  if (current === null || appliedRevision !== current.revision) {
+    return { acknowledged: false, navigation: current };
+  }
+  const { signInProviderId: _provider, reauthenticate: _reauthenticate, ...spent } = current;
+  return { acknowledged: true, navigation: spent };
 }
 
 export interface SettingsFrame {

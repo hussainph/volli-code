@@ -8,6 +8,9 @@ import { describe, expect, it, vi } from "vite-plus/test";
 
 import { ModelAccessSignInService, redactSubmitted, type SignInOwner } from "./sign-in-service";
 
+const warn = vi.hoisted(() => vi.fn());
+vi.mock("../log/root", () => ({ hostLogger: () => ({ warn }) }));
+
 // --- a scripted flow -------------------------------------------------------
 //
 // The port, not pi-ai: `login` parks until the test says how it ended, and hands
@@ -171,6 +174,12 @@ describe("ModelAccessSignInService", () => {
     await flush();
     expect(signedIn).toEqual(["anthropic"]);
     expect(owner.updates.at(-1)).toMatchObject({ outcome: { kind: "signed-in" } });
+    // Reported once, by code; the listener's own text is not logged.
+    expect(warn).toHaveBeenCalledExactlyOnceWith("sign-in listener failed", {
+      code: "model-access.sign-in-listener-failed",
+      providerId: "anthropic",
+      errorName: "Error",
+    });
 
     // A cancelled or failed attempt stored nothing, so nothing is told.
     service.begin("openai-codex", "oauth", recordingOwner());

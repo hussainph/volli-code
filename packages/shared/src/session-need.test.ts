@@ -354,7 +354,8 @@ const signInStopOf = (
     attention: { active, primary: active[0] ?? null },
     modelSelection,
     stopped,
-  } as Pick<SessionProjection, "attention" | "modelSelection" | "stopped">);
+    status: "open",
+  } as Pick<SessionProjection, "attention" | "modelSelection" | "stopped" | "status">);
 
 describe("providerSignInStop (VC-1236)", () => {
   it("names the provider and the Attention of a sign-in stop", () => {
