@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 
 import { runnerStallTestTimeout, testWorkerExecArgv } from "../vitest.node-flags.ts";
+import { NO_WASM_CODE_GC } from "../wasm-code-gc-workaround.ts";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const workflow = parse(readFileSync(join(root, ".github/workflows/ci.yml"), "utf8"));
@@ -709,6 +710,30 @@ test("a failed host-core shard summarizes its timed-out tests against runner hea
   ).run;
   assert.ok(policy.includes("scripts/ci-timeout-stall-summary.test.mjs"));
 });
+
+for (const [app, bundle, launcher] of [
+  ["runner", "runner/runner.cjs", "volli-runner"],
+  ["hostd", "hostd/hostd.cjs", "volli-hostd"],
+]) {
+  test(`the packaged ${launcher} starts Node without Wasm code GC, and its boot check proves it`, () => {
+    // nodejs/node#66366 in Code Mode's per-program workers; the CLI starts none.
+    assert.equal(NO_WASM_CODE_GC, "--no-wasm-code-gc");
+    const pack = readFileSync(join(root, `apps/${app}/scripts/package.mjs`), "utf8");
+    assert.match(
+      pack,
+      /import \{ NO_WASM_CODE_GC \} from "\.\.\/\.\.\/\.\.\/wasm-code-gc-workaround\.ts";/u,
+    );
+    assert.match(pack, /exec "\$here\/node" \$\{flags\}"\$here\/\.\.\/lib\/\$\{bundle\}" "\$@"/u);
+    assert.ok(pack.includes(`launcher("${bundle}", \`\${NO_WASM_CODE_GC} \`)`));
+    assert.ok(pack.includes('launcher("volli.cjs")'));
+    const boot = readFileSync(join(root, `apps/${app}/scripts/ci-boot-artifact.sh`), "utf8");
+    assert.ok(boot.includes("grep -Fq -- ' --no-wasm-code-gc '"));
+    assert.ok(boot.includes('NODE_OPTIONS="--require=$probe/execargv.cjs"'));
+    assert.ok(boot.includes('argv.includes("--no-wasm-code-gc")'));
+    // hostd also checks its serving process; the runner's run boot is shared with a shell double.
+    if (app === "hostd") assert.ok(boot.includes("grep -Fxq -- --no-wasm-code-gc"));
+  });
+}
 
 test("symbolization runs in the existing Linux job without consuming diagnostic or test failures", () => {
   const steps = jobs["test-host-core"].steps;

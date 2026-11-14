@@ -63,6 +63,21 @@ step "Code Mode executes from the artifact's worker and wasm"
 "$root/bin/node" "$root/lib/probe-codemode.mjs"
 "$hostd" --version
 
+step "hostd's Node starts with --no-wasm-code-gc"
+# nodejs/node#66366 (wasm-code-gc-workaround.ts). The launcher, then the process it starts.
+grep -Fq -- ' --no-wasm-code-gc ' "$hostd" || {
+  echo 'bin/volli-hostd does not start Node with --no-wasm-code-gc' >&2
+  exit 1
+}
+probe=$(mktemp -d)
+printf '%s\n' 'require("node:fs").writeFileSync(process.env.EXECARGV_OUT, JSON.stringify(process.execArgv));' >"$probe/execargv.cjs"
+EXECARGV_OUT="$probe/execargv.json" NODE_OPTIONS="--require=$probe/execargv.cjs" "$hostd" --version >/dev/null
+"$root/bin/node" -e '
+  const argv = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  if (!argv.includes("--no-wasm-code-gc")) throw new Error("hostd execArgv lacks --no-wasm-code-gc: " + JSON.stringify(argv));
+  console.log("hostd execArgv: " + JSON.stringify(argv));' "$probe/execargv.json"
+rm -rf "$probe"
+
 step "boot against an empty data directory"
 # Under /tmp, not $TMPDIR: macOS's per-user TMPDIR is a long /var/folders
 # path, and a unix socket path is capped at 104 bytes there.
@@ -87,6 +102,16 @@ if [[ "$serving" != true ]]; then
   exit 1
 fi
 test "$(mode "$data/volli.sock")" = 600
+# The serving process too: the launcher execs Node, so this PID is hostd's.
+if [[ -r "/proc/$pid/cmdline" ]]; then
+  arguments=$(tr '\0' '\n' <"/proc/$pid/cmdline")
+else
+  arguments=$(ps -o command= -p "$pid" | tr ' ' '\n')
+fi
+grep -Fxq -- --no-wasm-code-gc <<<"$arguments" || {
+  echo "the serving hostd was not started with --no-wasm-code-gc" >&2
+  exit 1
+}
 
 step "the volli CLI lists projects through the socket"
 projects=$(env -u VOLLI_SESSION -u VOLLI_SESSION_TOKEN -u VOLLI_TICKET \

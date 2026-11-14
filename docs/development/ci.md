@@ -127,7 +127,18 @@ that is adding it to its ref scope. The backport, nodejs/node#66376, is in no
 `--no-wasm-code-gc` on Node 24 (`vitest.node-flags.ts`), which removes the race.
 Remove the flag when `.nvmrc` moves to a Node with the backport. Another
 package whose forks abort the same way spreads `TEST_WORKER_NODE_FLAGS` the same
-way.
+way. The aborting forks' Wasm was Node's own TypeScript transformer, loaded by
+workers that run `.ts` sources under `--experimental-transform-types`.
+
+**Shipped processes carry the same flag.** The packaged `volli-runner` and
+`volli-hostd` run Node 24 and start one Code Mode worker with a QuickJS Wasm
+instance per program, so their launchers start Node with `--no-wasm-code-gc`
+too. Their boot checks fail without it, both in the launcher and in the
+running process's arguments. The `volli` CLI launcher starts no workers and
+does not get the flag. The desktop app is not affected: Electron's V8 already
+has the fix. `wasm-code-gc-workaround.ts` holds the flag and the reason, and
+both sides use it. Remove it once the packaged Node's V8 contains V8
+9b8ca54d5a.
 
 **Runner health.** Each shard also writes `runner-health.log` into its
 diagnostics artifact (`scripts/ci-runner-health.sh`): every 5 s, the CPU split
