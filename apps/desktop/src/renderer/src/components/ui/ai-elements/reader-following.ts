@@ -6,7 +6,7 @@
  *
  * - A scroll that brings the reader nearer the end and leaves them within
  *   {@link FOLLOW_ZONE_PX} of it turns following on. That covers the wheel, the
- *   keyboard, a scrollbar or thumb drag, and anything else that moves them.
+ *   keyboard, a drag of the scroll thumb, and anything else that moves them.
  * - A scroll the reader makes away from the end turns following off at once,
  *   and it stays off while the reply grows.
  * - Nothing else changes it. Content growing below, the browser's scroll
@@ -47,8 +47,8 @@
  *   geometry. While a reply streams, anchoring can lower `scrollTop` as content
  *   above shrinks, in the same frame as growth below adds distance, which is
  *   exactly what a scroll up looks like (VC-1232). So a release needs the
- *   reader's hand on the transcript too: a scrolling key, or a press held on
- *   the scrollbar or by touch.
+ *   reader's hand on the transcript too: a scrolling key, a grab of the
+ *   scroll thumb, or a touch.
  *
  * Pure, so the node test project reaches every branch. The listeners that
  * feed it are `useReaderFollowing` in `conversation.tsx`.

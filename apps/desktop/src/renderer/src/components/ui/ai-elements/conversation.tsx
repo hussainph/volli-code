@@ -247,7 +247,7 @@ function ConversationBridge({ children }: { children: ReactNode }) {
 }
 
 /**
- * How long a scrolling key press, or a press lifted off the scrollbar, still
+ * How long a scrolling key press, or a thumb or touch just lifted, still
  * counts as the reader's hand on the transcript, in milliseconds. That covers
  * one smooth keyboard scroll (about 150ms in Chromium) with room to spare, and
  * a held key's repeats keep renewing it.
@@ -258,8 +258,8 @@ const READER_HAND_MS = 500;
 const TEXT_ENTRY = "input, textarea, select, [contenteditable]:not([contenteditable='false'])";
 /** Where Space presses a control rather than scrolling. */
 const SPACE_CONTROL = "button, a[href], summary, [role='button'], [role='link']";
-/** The end of a press or touch on the transcript, wherever it lifts. */
-const LIFT_EVENTS = ["pointerup", "pointercancel", "touchend", "touchcancel"] as const;
+/** The end of a thumb drag or a touch, wherever it lifts; a drag also ends when the window loses focus. */
+const LIFT_EVENTS = ["pointerup", "pointercancel", "touchend", "touchcancel", "blur"] as const;
 
 /**
  * Following, decided by the reader's own scrolls; the rule and the reason the
@@ -323,12 +323,9 @@ function useReaderFollowing() {
       });
       if (up) handUntil = performance.now() + READER_HAND_MS;
     };
-    // A press on the scroller itself, not on anything inside it, is a press on
-    // its scrollbar. A touch anywhere in it is a hand on it.
-    const onPress = (event: PointerEvent) => {
-      if (event.target === scroller) held = true;
-    };
-    const onTouch = () => {
+    // A grab of the scroll thumb (whose press never reaches the scroller, so
+    // the thumb says so itself) or a touch anywhere in the transcript.
+    const onHold = () => {
       held = true;
     };
     const onLift = () => {
@@ -337,14 +334,14 @@ function useReaderFollowing() {
       handUntil = performance.now() + READER_HAND_MS;
     };
     scroller.addEventListener("scroll", onScroll, { passive: true });
-    scroller.addEventListener("pointerdown", onPress, { passive: true });
-    scroller.addEventListener("touchstart", onTouch, { passive: true });
+    scroller.addEventListener(SCROLL_THUMB_GRAB_EVENT, onHold);
+    scroller.addEventListener("touchstart", onHold, { passive: true });
     view.addEventListener("keydown", onKey);
     for (const name of LIFT_EVENTS) view.addEventListener(name, onLift, { passive: true });
     return () => {
       scroller.removeEventListener("scroll", onScroll);
-      scroller.removeEventListener("pointerdown", onPress);
-      scroller.removeEventListener("touchstart", onTouch);
+      scroller.removeEventListener(SCROLL_THUMB_GRAB_EVENT, onHold);
+      scroller.removeEventListener("touchstart", onHold);
       view.removeEventListener("keydown", onKey);
       for (const name of LIFT_EVENTS) view.removeEventListener(name, onLift);
       for (const timer of timers) view.clearTimeout(timer);

@@ -5,6 +5,7 @@ import {
   followingAfterScroll,
   keyScrollsUp,
   scrollPlace,
+  type ScrollKey,
   type ScrollPlace,
 } from "./reader-following";
 
@@ -66,10 +67,10 @@ describe("followingAfterScroll", () => {
   });
 });
 
-describe("keyScrollsUp", () => {
-  const press = (key: string, more: Partial<Parameters<typeof keyScrollsUp>[0]> = {}) =>
-    keyScrollsUp({ key, shiftKey: false, inTextEntry: false, onControl: false, ...more });
+const press = (key: string, more: Partial<ScrollKey> = {}) =>
+  keyScrollsUp({ key, shiftKey: false, inTextEntry: false, onControl: false, ...more });
 
+describe("keyScrollsUp", () => {
   it("is the keys that scroll toward the start", () => {
     expect(press("ArrowUp")).toBe(true);
     expect(press("PageUp")).toBe(true);

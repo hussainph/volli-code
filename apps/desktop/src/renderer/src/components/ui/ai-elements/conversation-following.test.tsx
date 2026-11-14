@@ -15,6 +15,8 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
+import { SCROLL_THUMB_GRAB_EVENT } from "@renderer/lib/scroll-thumb/overlay-scrollbars";
+
 import { Conversation, ConversationContent } from "./conversation";
 
 const VIEWPORT = 800;
@@ -149,8 +151,8 @@ async function readUp() {
 
 for (const [how, arrive] of [
   ["wheel", (by: number) => wheel(by)],
-  // A scrollbar drag, or the app-drawn thumb: no wheel, only the position.
-  ["drag", async () => {}],
+  // A drag of the scroll thumb: no wheel, only the position.
+  ["thumb", async () => {}],
 ] as const) {
   it(`follows a reader who arrives by ${how} within the zone in a frame where a line lands`, async () => {
     for (const stop of [0, 18, 69]) {
@@ -192,9 +194,9 @@ it("releases a reader who scrolls up by key in a frame where a line lands, and k
   expect(after.at(-1)).toBeGreaterThan(after[0]!);
 });
 
-it("releases a reader who drags the scrollbar up in a frame where a line lands", async () => {
+it("releases a reader who drags the thumb up in a frame where a line lands", async () => {
   await act(async () => {
-    scroller.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    scroller.dispatchEvent(new Event(SCROLL_THUMB_GRAB_EVENT));
   });
   position -= 100;
   await frame(LINE);
@@ -203,6 +205,23 @@ it("releases a reader who drags the scrollbar up in a frame where a line lands",
   });
   const after = await stream(20);
   expect(Math.min(...after)).toBeGreaterThan(100);
+});
+
+it("follows a reader who holds the thumb at the end while the reply grows, and after they let go", async () => {
+  await readUp();
+  await act(async () => {
+    scroller.dispatchEvent(new Event(SCROLL_THUMB_GRAB_EVENT));
+  });
+  // The thumb taken to the end writes the end itself as the content grows.
+  for (let i = 0; i < 6; i++) {
+    position = end();
+    await frame(i % 2 === 0 ? LINE : 0);
+  }
+  await act(async () => {
+    window.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+  });
+  const after = await stream(10);
+  expect(after.at(-1)).toBeLessThanOrEqual(1);
 });
 
 it("releases one wheel notch up at once, and following never comes back by itself", async () => {
