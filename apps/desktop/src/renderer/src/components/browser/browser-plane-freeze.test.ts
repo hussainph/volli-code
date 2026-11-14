@@ -1,10 +1,13 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
+import { NATIVE_PLANE_IGNORE_ATTR } from "@renderer/lib/native-plane-ignore";
+
 import {
   APP_ROOT_ID,
   hasNativePlaneOverlay,
   hasVisibleNativePlane,
+  ignoredByNativePlane,
   planeVisibility,
   shouldPaintPlanePixels,
   PLANE_CAPTURE_DEADLINE_MS,
@@ -98,6 +101,21 @@ describe("hasNativePlaneOverlay", () => {
     expect(hasNativePlaneOverlay(document, anchor)).toBe(true);
     setBox(overlay, 400, 300);
     expect(hasNativePlaneOverlay(document, anchor)).toBe(false);
+  });
+
+  it("never yields to presentational chrome that opts out, even fixed and over the plane", () => {
+    const { anchor } = scene();
+    // The scroll thumb's track: fixed, a body child, its pill inside.
+    const track = surface({ style: "position: fixed", [NATIVE_PLANE_IGNORE_ATTR]: "" });
+    const pill = surface({ style: "position: absolute" }, track);
+    expect(hasNativePlaneOverlay(document, anchor)).toBe(false);
+    expect(ignoredByNativePlane(track)).toBe(true);
+    expect(ignoredByNativePlane(pill)).toBe(true);
+    expect(ignoredByNativePlane(pill.appendChild(document.createTextNode("x")))).toBe(true);
+    expect(ignoredByNativePlane(anchor)).toBe(false);
+    // A real surface beside it still freezes the plane.
+    surface({ role: "menu" });
+    expect(hasNativePlaneOverlay(document, anchor)).toBe(true);
   });
 
   it("sees fixed and opted-in chrome inside the root, not its layout containers", () => {

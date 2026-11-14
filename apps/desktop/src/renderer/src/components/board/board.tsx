@@ -1215,15 +1215,16 @@ export const Board = React.memo(function Board({
                 // React — by the performance harness and the board smokes —
                 // where counting card nodes would now answer the window's size.
                 data-board-ticket-count={visible.length}
+                data-scroll-thumb="none"
                 className={cn(
                   // Columns cap below full height so a strip of canvas stays
-                  // grab-able under them (mouse pan). Scrollbar is
-                  // hidden — drag / shift-wheel / trackpad replace it.
+                  // grab-able under them (mouse pan). No scroll thumb
+                  // (`data-scroll-thumb` above) — drag / shift-wheel /
+                  // trackpad replace it.
                   // Centre the set once every column reaches its width cap.
                   // Safe alignment falls back to start on overflow so the
                   // first column stays reachable at the left gutter.
                   "flex min-h-0 flex-1 items-start justify-center-safe gap-3 overflow-x-auto px-3 pb-4",
-                  "[scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
                   panning ? "cursor-grabbing select-none" : "cursor-grab",
                 )}
               >

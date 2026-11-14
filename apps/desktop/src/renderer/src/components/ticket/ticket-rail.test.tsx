@@ -117,26 +117,18 @@ describe("TicketRail header", () => {
     expect(html).toContain("ticket-inspector-now");
   });
 
-  // The stylesheet half of the same contract, read off the file rather than
-  // rendered: jsdom draws no scrollbar and Chromium is not in this suite, so
-  // what is provable here is that the RULE exists, that it is keyed to the
-  // marker above, and — the part that matters most — that it is still SCOPED.
-  // Widening it to `*` would take the app's overlay scrollbars off the editor,
-  // the sidebar and every portalled menu, which is the one way this cosmetic
-  // fix could do real damage.
-  it("hides the scrollbar in globals.css for that scope alone", () => {
+  // The rails used to hide their scrollbars because a native bar took width.
+  // Native bars are now off everywhere and the app's overlay thumb takes none
+  // (VC-1217), so the rails keep no exception of their own.
+  it("keeps no rail-only scrollbar rule in globals.css", () => {
     const css = readFileSync(
       path.join(fileURLToPath(new URL(".", import.meta.url)), "../../globals.css"),
       "utf8",
     );
 
-    expect(css).toContain("[data-volli-rail] *::-webkit-scrollbar");
-    expect(css).toMatch(/\[data-volli-rail\][\s\S]{0,120}scrollbar-width: none/);
-    // The global treatment the rest of the app keeps: a 10px bar with a token
-    // thumb. If this ever stops matching, the rail's rule stopped being an
-    // exception and became the policy.
-    expect(css).toContain("--scrollbar-size: 10px");
-    expect(css).toMatch(/\*::-webkit-scrollbar \{\s*width: var\(--scrollbar-size\)/);
+    expect(css).not.toContain("[data-volli-rail] *::-webkit-scrollbar");
+    expect(css).not.toMatch(/\[data-volli-rail\][\s\S]{0,120}scrollbar-width: none/);
+    expect(css).toMatch(/\*,\s*::before,\s*::after \{\s*scrollbar-width: none;/);
   });
 
   it("yields empty Sessions artwork to the allocated height, keeping actions scrollable", () => {

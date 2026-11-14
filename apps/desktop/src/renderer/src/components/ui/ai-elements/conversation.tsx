@@ -41,6 +41,8 @@ import {
 import type { StickToBottomContext } from "use-stick-to-bottom";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 
+import { SCROLL_THUMB_GRAB_EVENT } from "@renderer/lib/scroll-thumb/overlay-scrollbars";
+
 import { wheelDetachesFollowing } from "./scroll-chaining";
 import { glideToLatest } from "./scroll-to-latest";
 
@@ -283,9 +285,11 @@ export type ConversationScrollButtonProps = ComponentProps<typeof Button>;
 
 /**
  * The reader's own hand on the transcript during a trip to the end: it is
- * theirs again at once. A wheel, a press on the scrollbar or a touch.
+ * theirs again at once. A wheel, a press, a touch, or a grab of the scroll
+ * thumb — whose press is swallowed before it reaches the scroller, so the thumb
+ * says so itself (`lib/scroll-thumb`).
  */
-const TAKE_BACK_EVENTS = ["wheel", "pointerdown", "touchstart"] as const;
+const TAKE_BACK_EVENTS = ["wheel", "pointerdown", "touchstart", SCROLL_THUMB_GRAB_EVENT] as const;
 
 /**
  * "Scroll to latest". The trip is `glideToLatest`'s, not the library's spring,

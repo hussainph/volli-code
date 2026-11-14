@@ -726,7 +726,7 @@ function LocalFileView({
       source: state.source,
     });
     return (
-      <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
+      <div className="min-h-0 flex-1 overflow-y-auto">
         <ContentColumn className="flex flex-col gap-2 py-6">
           {conflict !== null && (
             <LiveReconciliationAffordance

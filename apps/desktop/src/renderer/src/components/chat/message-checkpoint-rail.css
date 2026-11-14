@@ -7,13 +7,13 @@
  * root, the rail's parent), so the width is the pane's, not the window's: a
  * split pane or an open inspector hides it on its own.
  *
- * The threshold, from the transcript's geometry: the scrollbar lane takes
- * 10px (`--scrollbar-size`), the column (`--container-transcript`, 648px) is
- * centred in what is left, and its 24px gutters put the text 600px wide. The
- * text's left edge is therefore (W - 610) / 2. The rail ends 32px from the
+ * The threshold, from the transcript's geometry: the column
+ * (`--container-transcript`, 648px) is centred in the pane — the scroll thumb
+ * takes no width (VC-1217) — and its 24px gutters put the text 600px wide. The
+ * text's left edge is therefore (W - 600) / 2. The rail ends 32px from the
  * pane's edge (8px inset + 24px marks), and wants at least 16px of paper
- * before the text: (W - 610) / 2 >= 48, so W >= 706px. 720px leaves
- * 23px at the threshold. Narrower than that the rail is `display: none` —
+ * before the text: (W - 600) / 2 >= 48, so W >= 696px. 720px leaves
+ * 12px of margin over that at the threshold. Narrower than that the rail is `display: none` —
  * hidden, not squeezed, so it never draws over a line of text.
  */
 .message-checkpoints {
@@ -48,7 +48,6 @@
   flex-direction: column;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-width: none;
   pointer-events: auto;
   mask-image: linear-gradient(
     to bottom,
@@ -57,9 +56,6 @@
     black calc(100% - var(--cut-bottom)),
     transparent 100%
   );
-}
-.message-checkpoint-list::-webkit-scrollbar {
-  display: none;
 }
 .message-checkpoint-list[data-cut-top] {
   --cut-top: calc(var(--spacing) * 4);

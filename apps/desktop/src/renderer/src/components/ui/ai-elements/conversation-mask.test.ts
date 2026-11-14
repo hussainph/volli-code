@@ -4,18 +4,15 @@ import { expect, it } from "vite-plus/test";
 
 const css = readFileSync(resolve(import.meta.dirname, "../../../globals.css"), "utf8");
 
-it("fades bounded transcript pixels but keeps an opaque native scrollbar lane", () => {
+it("fades bounded transcript pixels with one mask, leaving the thumb outside it", () => {
   const viewport = css
     .match(/\.chat-transcript \[data-conversation-viewport\] \{([^}]+)\}/)?.[1]
     ?.replace(/\s+/g, " ");
   expect(viewport).toContain("var(--composer-height, 0px)");
-  expect(viewport).toContain("linear-gradient(black, black)");
-  expect(viewport).toContain("mask-size: 100% 100%, var(--scrollbar-size) 100%");
-  expect(viewport).toContain("mask-position: center, right top");
-  expect(viewport).toContain("mask-repeat: no-repeat");
-  expect(viewport).toContain("mask-composite: add");
-  const scrollbar = css.match(/\*::-webkit-scrollbar \{([^}]+)\}/)?.[1];
-  expect(scrollbar).toContain("width: var(--scrollbar-size)");
-  expect(css).toContain("--scrollbar-size: 10px");
+  // No second opaque lane: the scroll thumb is drawn at the document's end,
+  // outside the viewport, so the viewport's mask cannot reach it (VC-1217).
+  expect(viewport).not.toContain("linear-gradient(black, black)");
+  expect(viewport).not.toContain("--scrollbar-size");
+  expect(css).not.toContain("--scrollbar-size");
   expect(css).toContain(".chat-transcript [data-conversation-viewport][data-scroll-button]");
 });

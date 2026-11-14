@@ -216,8 +216,9 @@ never grows with attachment count. Inspector labels show two bounded pills and a
 `+N` searchable editor. Sessions and Automations own independent overflow so their
 headings cannot be buried by metadata. Board label pills are neutral; colour stays
 in label editors and pickers. A card's animated live ring is separate from its
-neutral selection border. Renderer scroll thumbs are trackless and visible only
-on scroll or hover.
+neutral selection border. Renderer scroll thumbs are trackless, take no layout
+width (one app-drawn overlay; native scrollbars are off) and show only on scroll
+or hover.
 
 ### Measure and rhythm
 

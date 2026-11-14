@@ -500,12 +500,12 @@ export function TabStrip({
           <div
             ref={scrollerRef}
             data-slot="tab-scroll"
+            // The fades and the inventory chevron say where the strip is; a
+            // thumb would sit across the captions.
+            data-scroll-thumb="none"
             data-overflow-left={(overflow.overflowing && !overflow.atStart) || undefined}
             data-overflow-right={(overflow.overflowing && !overflow.atEnd) || undefined}
-            className={cn(
-              "flex min-w-0 flex-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
-              "items-center",
-            )}
+            className={cn("flex min-w-0 flex-1 overflow-x-auto", "items-center")}
           >
             <div
               role="tablist"

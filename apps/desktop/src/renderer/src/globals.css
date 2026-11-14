@@ -2129,81 +2129,74 @@ section:has(> div > div > [data-slot="pref-section-title"]) > .bg-card {
   display: flex !important;
 }
 
-/* Scrollbars (#49): one global overlay-style treatment instead of Chromium's
- * stock bars — thin, trackless, a token-colored pill thumb inset by a
- * transparent border (background-clip keeps the pill off the container edge).
- * Progressive reveal approximates macOS overlay behavior without JS: near
- * invisible at rest, visible while the scroll container is hovered, bright
- * while the thumb itself is grabbed. Chromium-only app, so the -webkit
- * pseudo-elements are authoritative (no scrollbar-width/color needed). */
-:root {
-  --scrollbar-size: 10px;
-}
-*::-webkit-scrollbar {
-  width: var(--scrollbar-size);
-  height: var(--scrollbar-size);
-}
-*::-webkit-scrollbar-track,
-*::-webkit-scrollbar-corner {
-  background: transparent;
-}
-*::-webkit-scrollbar-button {
-  display: none;
-  width: 0;
-  height: 0;
-}
-*::-webkit-scrollbar-thumb {
-  border: 3px solid transparent;
-  border-radius: 9999px;
-  background-color: transparent;
-  background-clip: content-box;
-}
-*:hover::-webkit-scrollbar-thumb,
-*[data-scrolling]::-webkit-scrollbar-thumb {
-  background-color: var(--border-strong);
-}
-*::-webkit-scrollbar-thumb:hover,
-*::-webkit-scrollbar-thumb:active {
-  background-color: var(--muted-foreground);
-}
-
-/* THE RAILS KEEP NO SCROLLBAR AT ALL (VC-406 follow-up).
+/* Scroll thumbs (VC-1217): no native scrollbar anywhere, one app-drawn thumb.
  *
- * The bars above are styled but still CLASSIC: Chromium takes their 10px out of
- * the scroll container's content box the moment it overflows, and gives it back
- * the moment it does not. On a rail that is not a stripe appearing at the edge
- * — it is every row in the column stepping 10px left and back again each time a
- * fold opens or closes, which is the one motion a page of folds must not have.
- * The rail is 240–400px of mostly-one-line rows, so that step is a visible
- * reflow of the whole page for a bar nobody was reading.
+ * Any styled `::-webkit-scrollbar`, and the standard properties under macOS
+ * "Show scroll bars: Always" (or Automatic with a mouse), give a CLASSIC bar
+ * that takes its width out of the scroller the moment it overflows: content
+ * sat off centre, menus grew, and a bar coming and going rewrapped text. So the
+ * native bar is off for every element, and `lib/scroll-thumb/overlay-
+ * scrollbars.ts` draws overlay thumbs that take no layout width.
  *
- * Scoped to the rail ROOTS (`home-rail.tsx`, `ticket-rail.tsx`) and everything
- * inside them — the Now column, the Files, Diffs and Search lists, the capped
- * Automations list, and the folds under the footer rows — rather than to a
- * handful of named scrollers, because a page handed in by the host scrolls in
- * its own element that those files never see. It reaches nothing outside a
- * rail: the editor, the sidebar and the main surfaces keep the overlay bar
- * above, and menus, popovers and tooltips opened FROM a rail are portalled to
- * the body, so they are not descendants of this scope and keep theirs too.
+ * Unlayered on purpose, so no utility can bring a native bar back.
  *
- * Only the bar is gone. `overflow` is untouched, so the wheel, the trackpad,
- * keyboard paging and `scrollIntoView` all behave exactly as before — this is
- * the same pair (`scrollbar-width` plus the `-webkit` pseudo-element) that the
- * tab strip, the board and the project rail already use inline, spelled once
- * here for a subtree instead. */
-[data-volli-rail],
-[data-volli-rail] * {
+ * The tracks are placed and the thumbs moved by script, with transforms only,
+ * and never from inside a scroll handler. CSS scroll-driven animation and
+ * anchor positioning were measured for this and rejected: naming a scroll
+ * timeline on the transcript made 4x as many of `use-stick-to-bottom`'s own
+ * `scrollTop` reads force a layout, and anchoring the track doubled layout time
+ * while a reply streamed. */
+*,
+::before,
+::after {
   scrollbar-width: none;
 }
-[data-volli-rail]::-webkit-scrollbar,
-[data-volli-rail] *::-webkit-scrollbar {
-  display: none;
-  width: 0;
-  height: 0;
+[data-slot="scroll-thumb-track"] {
+  /* Script places it, and sets its z-index to its target's own stacking
+   * layer: above the target, below anything stacked over it (a popover, a
+   * dialog's scrim). */
+  position: fixed;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  /* Shown and hidden without a fade, as the native bar was: an opacity
+   * transition kept style dirty for its whole run and made the transcript's
+   * own scrollTop reads force a style recalc every frame of it (measured). */
+  visibility: hidden;
+}
+[data-slot="scroll-thumb-track"][data-state="visible"] {
+  visibility: visible;
+}
+[data-slot="scroll-thumb"] {
+  position: absolute;
+  top: 0;
+  left: 0;
+  border-radius: 9999px;
+  background-color: var(--border-strong);
+}
+[data-axis="y"] > [data-slot="scroll-thumb"] {
+  width: 100%;
+}
+[data-axis="x"] > [data-slot="scroll-thumb"] {
+  height: 100%;
+}
+/* The sidebar's resize grip lies over its scrollers' right edge (4px, 5 at
+ * 125% zoom): its thumbs are drawn clear of it. */
+[data-volli-sidebar] {
+  --scroll-thumb-edge-inset: 5px;
+}
+/* Pointer in the thumb's lane, or the thumb grabbed. */
+[data-slot="scroll-thumb-track"][data-lane] > [data-slot="scroll-thumb"],
+[data-slot="scroll-thumb-track"][data-dragging] > [data-slot="scroll-thumb"] {
+  background-color: var(--muted-foreground);
+}
+:root[data-scroll-thumb-dragging] {
+  cursor: default;
+  user-select: none;
 }
 
 /* Range inputs — painted in tokens rather than accented, for the same reason
- * the scrollbars above are.
+ * the scroll thumbs above are.
  *
  * `accent-color: var(--primary)` looked like the one-line answer and is a trap:
  * setting it takes Chromium off the `color-scheme` path for the WHOLE control,
@@ -3596,27 +3589,17 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
 }
 /* The mask owns a bounded, non-scrolling viewport, never the full scrollback.
  * The detached affordance has its own clear band rather than covering a line.
- * A second opaque mask keeps the native scrollbar lane outside the text fade:
- * masking the whole viewport made the thumb disappear beneath the composer. */
+ * The scroll thumb is drawn outside the viewport (VC-1217), so the fade cannot
+ * hide it beneath the composer. */
 .chat-transcript [data-conversation-viewport] {
   --scroll-edge-clearance: 8px;
-  mask-image:
-    linear-gradient(
-      to bottom,
-      transparent,
-      black 12px,
-      black calc(100% - var(--composer-height, 0px) - var(--scroll-edge-clearance) - 20px),
-      transparent calc(100% - var(--composer-height, 0px) - var(--scroll-edge-clearance))
-    ),
-    linear-gradient(black, black);
-  mask-size:
-    100% 100%,
-    var(--scrollbar-size) 100%;
-  mask-position:
-    center,
-    right top;
-  mask-repeat: no-repeat;
-  mask-composite: add;
+  mask-image: linear-gradient(
+    to bottom,
+    transparent,
+    black 12px,
+    black calc(100% - var(--composer-height, 0px) - var(--scroll-edge-clearance) - 20px),
+    transparent calc(100% - var(--composer-height, 0px) - var(--scroll-edge-clearance))
+  );
 }
 /* Marked by the scroll button itself, never `:has()` on the transcript (VC-1231). */
 .chat-transcript [data-conversation-viewport][data-scroll-button] {
