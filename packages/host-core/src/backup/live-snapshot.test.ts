@@ -6,17 +6,28 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { cloneOrCopyFile } from "../db/file-clone";
-import { copyLiveDatabase } from "./live-snapshot";
+import { copyFileOutOfProcess, copyLiveDatabase } from "./live-snapshot";
 
 const copyMock = vi.hoisted(() => ({
   copyFile: vi.fn<typeof import("node:fs/promises").copyFile>(),
+  open: vi.fn<typeof import("node:fs/promises").open>(),
 }));
 vi.mock("node:fs/promises", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:fs/promises")>()),
   copyFile: copyMock.copyFile,
+  open: copyMock.open,
+}));
+const syncMock = vi.hoisted(() => ({
+  openSync: vi.fn<typeof import("node:fs").openSync>(),
+  copyFileSync: vi.fn<typeof import("node:fs").copyFileSync>(),
+}));
+vi.mock("node:fs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:fs")>()),
+  openSync: syncMock.openSync,
+  copyFileSync: syncMock.copyFileSync,
 }));
 const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+const actualSync = await vi.importActual<typeof import("node:fs")>("node:fs");
 
 let root: string;
 let dbPath: string;
@@ -52,11 +63,17 @@ function counts(path: string): { lefts: number; rights: number; check: string } 
     db.close();
   }
 }
-const clone = (from: string, to: string) => cloneOrCopyFile(from, to);
+const clone = (from: string, to: string) =>
+  copyFileOutOfProcess(from, to, { clone: process.platform === "darwin" });
+/** The path a volume that cannot clone takes, forced on any platform. */
+const plainCopy = (from: string, to: string) => copyFileOutOfProcess(from, to, { clone: false });
 const noHold = async () => () => {};
 
 beforeEach(() => {
   copyMock.copyFile.mockReset().mockImplementation(actualFs.copyFile);
+  copyMock.open.mockReset().mockImplementation(actualFs.open);
+  syncMock.openSync.mockReset().mockImplementation(actualSync.openSync);
+  syncMock.copyFileSync.mockReset().mockImplementation(actualSync.copyFileSync);
   root = mkdtempSync(join(tmpdir(), "volli-live-snapshot-"));
   dbPath = join(root, "volli.db");
   live = openLive();
@@ -89,7 +106,10 @@ describe("copyLiveDatabase", () => {
     copy.close();
   });
 
-  it("stays consistent under continuous writes, and leaves the WAL free to restart", async () => {
+  it.each([
+    ["a clone where the volume has them", clone],
+    ["a plain copy where it has none", plainCopy],
+  ])("stays consistent under continuous writes through %s, and frees the WAL", async (_, copy) => {
     let id = 2000;
     const writer = setInterval(() => {
       for (let n = 0; n < 5; n++) commit(live, ++id);
@@ -103,7 +123,7 @@ describe("copyLiveDatabase", () => {
         await fs.rm(snapshot, { force: true });
         const before = id;
         await copyLiveDatabase(source, dbPath, snapshot, {
-          clone,
+          clone: copy,
           holdCheckpoints: async () => {
             holds.push("held");
             return () => holds.push("released");
@@ -167,7 +187,7 @@ describe("copyLiveDatabase", () => {
         clone,
         holdCheckpoints: async () => released,
       }),
-    ).rejects.toThrow("kept restarting");
+    ).rejects.toMatchObject({ reason: "wal-kept-restarting" });
     expect(copyMock.copyFile).toHaveBeenCalledTimes(3);
     expect(released).toHaveBeenCalledOnce();
     // The read transaction ended with the failure.
@@ -189,6 +209,50 @@ describe("copyLiveDatabase", () => {
     source.close();
     expect(result.walBytes).toBe(0);
     expect(counts(snapshot)).toEqual({ lefts: 2000, rights: 2000, check: "ok" });
+  });
+
+  it("never opens the live database file in this process", async () => {
+    // Closing any descriptor on it would drop SQLite's fcntl locks on it.
+    const source = new Database(dbPath, { readonly: true, fileMustExist: true });
+    for (const copy of [clone, plainCopy]) {
+      const snapshot = join(root, `snapshot-${copy === clone ? "clone" : "copy"}.db`);
+      await copyLiveDatabase(source, dbPath, snapshot, { clone: copy, holdCheckpoints: noHold });
+      expect(counts(snapshot).check).toBe("ok");
+    }
+    source.close();
+    const opened = [
+      ...copyMock.open.mock.calls,
+      ...copyMock.copyFile.mock.calls,
+      ...syncMock.openSync.mock.calls,
+      ...syncMock.copyFileSync.mock.calls,
+    ].map((call) => String(call[0]));
+    expect(opened).toContain(`${dbPath}-wal`);
+    expect(opened).not.toContain(dbPath);
+  });
+
+  it("fails with a code when the copy does not pass quick_check", async () => {
+    live.pragma("wal_checkpoint(TRUNCATE)");
+    const pageSize = live.pragma("page_size", { simple: true }) as number;
+    const pages = live.pragma("page_count", { simple: true }) as number;
+    const source = new Database(dbPath, { readonly: true, fileMustExist: true });
+    const released = vi.fn();
+    await expect(
+      copyLiveDatabase(source, dbPath, join(root, "snapshot.db"), {
+        clone: async (from, to) => {
+          const method = await plainCopy(from, to);
+          // An invalid b-tree page type in the middle of the copy.
+          const handle = await actualFs.open(to, "r+");
+          await handle.write(Buffer.from([0x00]), 0, 1, Math.floor(pages / 2) * pageSize);
+          await handle.close();
+          return method;
+        },
+        holdCheckpoints: async () => released,
+      }),
+    ).rejects.toMatchObject({ name: "LiveSnapshotError", reason: "copy-integrity" });
+    expect(released).toHaveBeenCalledOnce();
+    source.close();
+    // The live database was never touched.
+    expect(counts(dbPath)).toEqual({ lefts: 2000, rights: 2000, check: "ok" });
   });
 
   it.each(["hold", "wal-copied", "cloned", "claimed", "done"])(

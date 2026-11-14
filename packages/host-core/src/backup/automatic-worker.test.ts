@@ -9,6 +9,7 @@ import { withProfileMaintenance } from "./profile-maintenance";
 import { WAL_AUTOCHECKPOINT_PAGES } from "../db/autocheckpoint";
 import {
   automaticBackupDiskRequirement,
+  checkpointHoldClient,
   createAutomaticBackup,
   runAutomaticBackupWorker,
 } from "./automatic-worker";
@@ -202,6 +203,49 @@ describe("the automatic backup worker", () => {
     ]);
     expect(pragma("wal_autocheckpoint", { simple: true })).toBe(WAL_AUTOCHECKPOINT_PAGES);
   }, 30_000);
+  it("copies without the pause when main cannot hold its checkpoint", async () => {
+    profile.db.pragma(`wal_autocheckpoint = ${WAL_AUTOCHECKPOINT_PAGES}`);
+    const pragma = profile.db.pragma.bind(profile.db);
+    vi.spyOn(profile.db, "pragma").mockImplementation((source, options) => {
+      if (source === "wal_autocheckpoint = 0")
+        throw Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
+      return pragma(source, options);
+    });
+    const target = request();
+    const result = await runAutomaticBackupWorker(
+      ENTRY,
+      target,
+      new AbortController().signal,
+      () => {},
+      { execArgv: ARGS, liveDatabase: profile.db },
+    );
+    expect(result.sizeBytes).toBeGreaterThan(0);
+    expect(readBackupBundle(readFileSync(target.outputPath)).ok).toBe(true);
+    expect(pragma("wal_autocheckpoint", { simple: true })).toBe(WAL_AUTOCHECKPOINT_PAGES);
+  }, 30_000);
+  it("copies without the pause when main never answers", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const posted: string[] = [];
+      const client = checkpointHoldClient((message) => posted.push(message.type));
+      let resolved = false;
+      const flight = client.request().then((release) => {
+        resolved = true;
+        return release;
+      });
+      expect(posted).toEqual(["hold-checkpoints"]);
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(resolved).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      (await flight)();
+      // The release still reaches main, which ignores one it holds nothing for.
+      expect(posted).toEqual(["hold-checkpoints", "release-checkpoints"]);
+      // A late answer is harmless.
+      client.answered();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it("ends the hold when the worker dies holding it", async () => {
     profile.db.pragma(`wal_autocheckpoint = ${WAL_AUTOCHECKPOINT_PAGES}`);
     await expect(

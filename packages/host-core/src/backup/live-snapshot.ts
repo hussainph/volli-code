@@ -38,20 +38,65 @@
  * place, before the hold ends. Main's commits only append to the WAL
  * meanwhile, which is never cloned.
  *
- * Where the volume cannot clone, `clone` copies the bytes: still consistent,
+ * The live database file is opened only by SQLite and by a `cp` child. On
+ * POSIX, closing ANY descriptor for a file drops every fcntl lock the process
+ * holds on it, SQLite's included, so this process never opens it with plain
+ * fs calls. The WAL file is read and copied here: SQLite never takes fcntl
+ * locks on it. In `os_unix.c` they are set only on the main database file
+ * (`unixLock`, which the pager calls on its main file alone) and on the
+ * `-shm` (`unixShmSystemLock`), where all WAL-mode locks live; `wal.c` never
+ * calls `sqlite3OsLock` on the WAL handle. An F_GETLK probe from another
+ * process, with a reader and a writer mid-transaction, found locks on the
+ * database and the `-shm` and none on the `-wal`.
+ *
+ * Where the volume cannot clone, `cp` copies the bytes: still consistent,
  * with the read transaction (and the hold) lasting as long as that copy.
+ * The recovered copy must pass `quick_check` before it is bundled: it reads
+ * the whole file once (18-38 s cold, 2 s warm, on a 2.3 GB profile).
  */
+import { execFile } from "node:child_process";
 import { copyFile, open, rm, stat } from "node:fs/promises";
+import { promisify } from "node:util";
 import Database from "better-sqlite3";
+
+const run = promisify(execFile);
+const CP = "/bin/cp";
 
 /** The WAL header: a restart rewrites it with new salts. */
 const WAL_HEADER_BYTES = 32;
+/**
+ * The bytes of a clone rewritten with themselves to claim it. Any write pays
+ * the clone's deferred cost; the file header (the first 100 bytes of page 1)
+ * is always present, and rewriting its start with its own bytes changes
+ * nothing SQLite reads.
+ */
+const CLONE_CLAIM_BYTES = 16;
 /** A restart that keeps beating the copy is not expected; a third gives up. */
 const MAX_WAL_COPY_ATTEMPTS = 3;
 
+export type LiveFileCopyMethod = "cp-clone" | "cp";
+
+/** Why a live copy failed; `message` is the code. */
+export type LiveSnapshotFailure =
+  | "wal-kept-restarting"
+  | "copy-checkpoint-busy"
+  | "copy-journal-mode"
+  | "copy-integrity";
+
+export class LiveSnapshotError extends Error {
+  // A declared field, not a parameter property: the bench loads this file
+  // with Node's type stripping, which has no parameter properties.
+  readonly reason: LiveSnapshotFailure;
+  constructor(reason: LiveSnapshotFailure) {
+    super(reason);
+    this.name = "LiveSnapshotError";
+    this.reason = reason;
+  }
+}
+
 export interface LiveSnapshotOptions {
-  /** Copies a whole file, cloning where the volume can (`cloneOrCopyFile`). */
-  clone: (source: string, target: string) => "cp-clone" | "copy";
+  /** Copies the live database file outside this process ({@link copyFileOutOfProcess}). */
+  clone: (source: string, target: string) => Promise<LiveFileCopyMethod>;
   /** Asks main to hold its automatic checkpoint; resolves with the release. */
   holdCheckpoints: () => Promise<() => void>;
 }
@@ -63,13 +108,38 @@ export interface LiveSnapshotResult {
   holdMs: number;
   /** Bytes of live WAL copied and recovered into the copy. */
   walBytes: number;
-  method: "cp-clone" | "copy";
+  method: LiveFileCopyMethod;
+  /** How long the copy's `quick_check` took. */
+  quickCheckMs: number;
+}
+
+/**
+ * Copies `source` to `target` in a `cp` child, so this process opens no
+ * descriptor on `source`. `clone` asks for `cp -c` (`clonefile(2)`, macOS);
+ * if that fails, or without it, plain `cp` copies the bytes.
+ */
+export async function copyFileOutOfProcess(
+  source: string,
+  target: string,
+  options: { clone: boolean },
+): Promise<LiveFileCopyMethod> {
+  if (options.clone) {
+    try {
+      await run(CP, ["-c", "--", source, target]);
+      return "cp-clone";
+    } catch {
+      // A volume or a cp without clones: copy the bytes instead.
+    }
+  }
+  await run(CP, ["--", source, target]);
+  return "cp";
 }
 
 /**
  * Copies the database `source` reads (at `dbPath`) to `snapshotPath`, in the
- * caller's scratch directory, as one self-contained database file. `source`
- * must be a read-only connection with no open transaction.
+ * caller's scratch directory, as one self-contained database file that passed
+ * `quick_check`. `source` must be a read-only connection with no open
+ * transaction.
  */
 export async function copyLiveDatabase(
   source: Database.Database,
@@ -83,7 +153,7 @@ export async function copyLiveDatabase(
   let holdMs: number;
   let readTransactionMs: number;
   let walBytes: number;
-  let method: "cp-clone" | "copy";
+  let method: LiveFileCopyMethod;
   try {
     const began = performance.now();
     source.exec("BEGIN");
@@ -91,30 +161,43 @@ export async function copyLiveDatabase(
       // The first read takes the read lock and fixes the snapshot.
       source.prepare("SELECT count(*) FROM sqlite_schema").get();
       walBytes = await copyLiveWal(`${dbPath}-wal`, snapshotWal);
-      method = options.clone(dbPath, snapshotPath);
+      method = await options.clone(dbPath, snapshotPath);
     } finally {
       source.exec("COMMIT");
       readTransactionMs = performance.now() - began;
     }
-    if (method === "cp-clone") await claimClone(snapshotPath);
+    // A plain copy shares nothing; claiming it is harmless and cheap.
+    await claimClone(snapshotPath);
   } finally {
     release();
     holdMs = performance.now() - held;
   }
-  // The copy is the caller's scratch file: recovering and checkpointing it
-  // writes nothing the live database shares.
+  // The copy is the caller's scratch file: recovering, checkpointing and
+  // checking it touches nothing the live database shares.
   const copy = new Database(snapshotPath, { fileMustExist: true });
+  let quickCheckMs: number;
   try {
     copy.pragma("cache_size = -2048");
     const [checkpoint] = copy.pragma("wal_checkpoint(TRUNCATE)") as { busy: number }[];
-    if (checkpoint?.busy !== 0) throw new Error("The database copy could not be checkpointed.");
-    copy.pragma("journal_mode = DELETE");
+    if (checkpoint?.busy !== 0) throw new LiveSnapshotError("copy-checkpoint-busy");
+    if (copy.pragma("journal_mode = DELETE", { simple: true }) !== "delete")
+      throw new LiveSnapshotError("copy-journal-mode");
+    const checked = performance.now();
+    let result: unknown;
+    try {
+      result = copy.pragma("quick_check", { simple: true });
+    } catch {
+      // SQLITE_CORRUPT and the like: the copy is not sound either way.
+      result = undefined;
+    }
+    quickCheckMs = performance.now() - checked;
+    if (result !== "ok") throw new LiveSnapshotError("copy-integrity");
   } finally {
     copy.close();
   }
   await rm(snapshotWal, { force: true });
   await rm(`${snapshotPath}-shm`, { force: true });
-  return { readTransactionMs, holdMs, walBytes, method };
+  return { readTransactionMs, holdMs, walBytes, method, quickCheckMs };
 }
 
 /** Copies the live WAL's bytes, again if a restart landed mid-copy. 0 when there is none. */
@@ -133,8 +216,7 @@ async function copyLiveWal(liveWal: string, copyPath: string): Promise<number> {
     // A copy too short for a header carries no frame recovery would replay.
     if (copied === null || (live !== null && copied.equals(live)))
       return (await stat(copyPath)).size;
-    if (attempt >= MAX_WAL_COPY_ATTEMPTS)
-      throw new Error("The live WAL kept restarting while it was copied.");
+    if (attempt >= MAX_WAL_COPY_ATTEMPTS) throw new LiveSnapshotError("wal-kept-restarting");
   }
 }
 
@@ -142,7 +224,7 @@ async function copyLiveWal(liveWal: string, copyPath: string): Promise<number> {
 async function claimClone(path: string): Promise<void> {
   const handle = await open(path, "r+");
   try {
-    const head = Buffer.alloc(WAL_HEADER_BYTES);
+    const head = Buffer.alloc(CLONE_CLAIM_BYTES);
     const { bytesRead } = await handle.read(head, 0, head.length, 0);
     await handle.write(head, 0, bytesRead, 0);
     await handle.datasync();

@@ -520,10 +520,11 @@ async function worker() {
       }
       Object.assign(done, { stepPages, restarts, remainingPages: lastRemaining });
     } else {
-      const { copyLiveDatabase } = await import("../src/backup/live-snapshot.ts");
-      const { cloneOrCopyFile } = await import("../src/db/file-clone.ts");
+      const { copyFileOutOfProcess, copyLiveDatabase } =
+        await import("../src/backup/live-snapshot.ts");
       const result = await copyLiveDatabase(source, dbPath, target, {
-        clone: (from, to) => cloneOrCopyFile(from, to),
+        clone: (from, to) =>
+          copyFileOutOfProcess(from, to, { clone: process.platform === "darwin" }),
         holdCheckpoints: async () => {
           if (backupMode === "clone-nohold") return () => {};
           const held = new Promise((resolve) => (state.held = resolve));
@@ -535,6 +536,7 @@ async function worker() {
       done.readTransactionMs = Math.round(result.readTransactionMs * 10) / 10;
       done.holdMs = Math.round(result.holdMs * 10) / 10;
       done.method = result.method;
+      done.quickCheckMs = Math.round(result.quickCheckMs);
       done.copiedWalBytes = result.walBytes;
     }
     done.ms = Math.round(performance.now() - started);

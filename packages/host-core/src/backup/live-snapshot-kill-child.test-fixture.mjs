@@ -9,8 +9,7 @@
 //   done        the copy is finished
 await import("../secrets/test-support/ts-hooks.mjs");
 const { default: Database } = await import("better-sqlite3");
-const { copyLiveDatabase } = await import("./live-snapshot.ts");
-const { cloneOrCopyFile } = await import("../db/file-clone.ts");
+const { copyFileOutOfProcess, copyLiveDatabase } = await import("./live-snapshot.ts");
 
 const [dbPath, snapshotPath, step] = process.argv.slice(2);
 const kill = (at) => {
@@ -20,9 +19,9 @@ const kill = (at) => {
 };
 const source = new Database(dbPath, { readonly: true, fileMustExist: true });
 await copyLiveDatabase(source, dbPath, snapshotPath, {
-  clone: (from, to) => {
+  clone: async (from, to) => {
     kill("wal-copied");
-    const method = cloneOrCopyFile(from, to);
+    const method = await copyFileOutOfProcess(from, to, { clone: process.platform === "darwin" });
     kill("cloned");
     return method;
   },

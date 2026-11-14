@@ -28,8 +28,12 @@ import { hostLogger } from "../log/root";
 import { rotateAutomaticBackups } from "./automatic";
 import { isDiskFullError } from "../migration-export/errors";
 import { holdAutocheckpoint } from "../db/autocheckpoint";
-import { cloneOrCopyFile } from "../db/file-clone";
-import { copyLiveDatabase, type LiveSnapshotResult } from "./live-snapshot";
+import {
+  copyFileOutOfProcess,
+  copyLiveDatabase,
+  LiveSnapshotError,
+  type LiveSnapshotResult,
+} from "./live-snapshot";
 
 export interface AutomaticBackupRequest {
   dataDir: string;
@@ -70,8 +74,16 @@ type WorkerMessage =
   | ({ type: "done" } & BackupWorkerResult)
   | { type: "failed"; code: ProfileBackupFailureCode; message: string; detail: string };
 
-/** What main sends the worker. */
-type MainMessage = { type: "cancel" } | { type: "checkpoints-held" };
+/**
+ * What main sends the worker. `checkpoints-held` always answers a hold
+ * request; `held: false` means main could not pause its checkpoint, and the
+ * copy goes ahead without it (still consistent; main may then pay the
+ * clone's deferred cost).
+ */
+type MainMessage = { type: "cancel" } | { type: "checkpoints-held"; held: boolean };
+
+/** How long the worker waits for main to answer a hold before copying without it. */
+const HOLD_ANSWER_TIMEOUT_MS = 10_000;
 
 /**
  * The longest main holds its automatic checkpoint for one copy. A clone takes
@@ -137,11 +149,21 @@ export function runAutomaticBackupWorker(
       if (message.type === "notice") onNotice(message.notice);
       else if (message.type === "hold-checkpoints") {
         release();
+        let held = false;
         if (liveDatabase) {
-          releaseHold = holdAutocheckpoint(liveDatabase);
-          holdTimer = setTimeout(release, CHECKPOINT_HOLD_LIMIT_MS);
+          try {
+            releaseHold = holdAutocheckpoint(liveDatabase);
+            holdTimer = setTimeout(release, CHECKPOINT_HOLD_LIMIT_MS);
+            held = true;
+          } catch (error) {
+            hostLogger("profile-backups").warn("backup checkpoint hold failed", {
+              code: "checkpoint-hold-failed",
+              sqliteCode: (error as { code?: unknown } | null)?.code ?? "unknown",
+            });
+          }
         }
-        worker.postMessage({ type: "checkpoints-held" } satisfies MainMessage, []);
+        // Always answered: the worker waits for this before it copies.
+        worker.postMessage({ type: "checkpoints-held", held } satisfies MainMessage, []);
       } else if (message.type === "release-checkpoints") release();
       else if (message.type === "snapshot")
         hostLogger("profile-backups").info("backup snapshot", {
@@ -149,6 +171,7 @@ export function runAutomaticBackupWorker(
           readTransactionMs: Math.round(message.readTransactionMs),
           holdMs: Math.round(message.holdMs),
           walBytes: message.walBytes,
+          quickCheckMs: Math.round(message.quickCheckMs),
         });
       else if (message.type === "done")
         result = {
@@ -281,7 +304,8 @@ export async function createAutomaticBackup(
       // and main's next checkpoint paid for it.
       onSnapshot(
         await copyLiveDatabase(source, request.dbPath, snapshotPath, {
-          clone: (from, to) => cloneOrCopyFile(from, to),
+          // Clones on APFS; elsewhere `cp` (a reflink where coreutils makes one).
+          clone: (from, to) => copyFileOutOfProcess(from, to, { clone: platform() === "darwin" }),
           holdCheckpoints,
         }),
       );
@@ -347,19 +371,11 @@ export function serveAutomaticBackupWorker(): void {
   if (!port) throw new Error("Automatic backup must run in a worker.");
   const request = workerData as AutomaticBackupRequest;
   let cancelled = false;
-  let held: (() => void) | undefined;
+  const hold = checkpointHoldClient((message) => port.postMessage(message));
   port.on("message", (message: MainMessage) => {
-    if (message.type === "checkpoints-held") held?.();
+    if (message.type === "checkpoints-held") hold.answered();
     else cancelled = true;
   });
-  const holdCheckpoints = async () => {
-    const answered = new Promise<void>((resolve) => {
-      held = resolve;
-    });
-    port.postMessage({ type: "hold-checkpoints" } satisfies WorkerMessage);
-    await answered;
-    return () => port.postMessage({ type: "release-checkpoints" } satisfies WorkerMessage);
-  };
   let nextPressureCheck = 0;
   let underPressure = false;
   let lastNotice: string | null | undefined;
@@ -402,26 +418,33 @@ export function serveAutomaticBackupWorker(): void {
   };
   const onSnapshot = (snapshot: LiveSnapshotResult) =>
     port.postMessage({ type: "snapshot", ...snapshot } satisfies WorkerMessage);
-  void createAutomaticBackup(request, checkpoint, holdCheckpoints, onSnapshot)
+  void createAutomaticBackup(request, checkpoint, hold.request, onSnapshot)
     .then(
       (result) => port.postMessage({ type: "done", ...result } satisfies WorkerMessage),
       (error: unknown) => {
         const failure =
           error instanceof ProfileBackupError
             ? error
-            : request.move && isDiskFullError(error)
-              ? new ProfileBackupError(
-                  "disk-space",
-                  "Move backup ran out of disk space. Free space, then retry.",
-                )
-              : error instanceof BackupBundleError
+            : error instanceof LiveSnapshotError
+              ? error.reason === "copy-integrity"
                 ? new ProfileBackupError(
                     "verification",
-                    request.move
-                      ? "Move backup verification failed. Nothing has moved; retry the backup."
-                      : "Backup verification failed. Any written bundle was kept as failed. Try Back up now.",
+                    "Backup stopped: the copy of the database failed its integrity check. Try Back up now.",
                   )
-                : new ProfileBackupError("io", "Backup could not be completed. Try Back up now.");
+                : new ProfileBackupError("io", "Backup could not be completed. Try Back up now.")
+              : request.move && isDiskFullError(error)
+                ? new ProfileBackupError(
+                    "disk-space",
+                    "Move backup ran out of disk space. Free space, then retry.",
+                  )
+                : error instanceof BackupBundleError
+                  ? new ProfileBackupError(
+                      "verification",
+                      request.move
+                        ? "Move backup verification failed. Nothing has moved; retry the backup."
+                        : "Backup verification failed. Any written bundle was kept as failed. Try Back up now.",
+                    )
+                  : new ProfileBackupError("io", "Backup could not be completed. Try Back up now.");
         port.postMessage({
           type: "failed",
           code: failure.code,
@@ -434,6 +457,33 @@ export function serveAutomaticBackupWorker(): void {
       port.removeAllListeners();
       port.close();
     });
+}
+
+/**
+ * The worker's side of main's checkpoint hold. `request` resolves when main
+ * answers, or after `timeoutMs` without an answer, and the copy then goes
+ * ahead without the pause. Its release always tells main, which ignores a
+ * release it holds nothing for.
+ */
+export function checkpointHoldClient(
+  post: (message: { type: "hold-checkpoints" } | { type: "release-checkpoints" }) => void,
+  timeoutMs = HOLD_ANSWER_TIMEOUT_MS,
+): { request: () => Promise<() => void>; answered: () => void } {
+  let answer: (() => void) | undefined;
+  return {
+    answered: () => answer?.(),
+    request: async () => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await new Promise<void>((resolve) => {
+        answer = resolve;
+        timer = setTimeout(resolve, timeoutMs);
+        post({ type: "hold-checkpoints" });
+      });
+      clearTimeout(timer);
+      answer = undefined;
+      return () => post({ type: "release-checkpoints" });
+    },
+  };
 }
 
 async function requireMoveDisk(directory: string, requiredBytes: number): Promise<void> {
