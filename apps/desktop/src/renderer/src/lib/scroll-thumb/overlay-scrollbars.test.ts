@@ -730,6 +730,44 @@ describe("overlay scroll thumb", () => {
     expect(disconnects).not.toHaveBeenCalled();
   });
 
+  it("stays bounded while a hovered list grows by appending: the new last row replaces the old", async () => {
+    const list = scroller({ client: 200, scroll: 8000 });
+    for (let index = 0; index < 300; index += 1) list.append(document.createElement("p"));
+    document.body.append(list);
+    list.firstElementChild!.dispatchEvent(pointer("pointerover"));
+    settle();
+    const watched = () => observers.reduce((count, observer) => count + observer.targets.size, 0);
+    expect(watched()).toBe(1 + 64 + 1);
+    for (let index = 0; index < 500; index += 1) {
+      list.append(document.createElement("p"));
+      await Promise.resolve();
+      settle();
+    }
+    expect(watched()).toBeLessThanOrEqual(1 + 64 + 1);
+    expect(observers.some((observer) => observer.targets.has(list.lastElementChild!))).toBe(true);
+  });
+
+  it("never grabs a part of the thumb its ancestors clip away", () => {
+    const outer = document.createElement("div");
+    outer.style.overflowX = "hidden";
+    outer.style.overflowY = "hidden";
+    vi.spyOn(outer, "getBoundingClientRect").mockReturnValue(rect(0, 0, 200, 50));
+    const list = scroller({ client: 100, scroll: 400 });
+    outer.append(list);
+    document.body.append(outer);
+    const row = list.firstElementChild!;
+    row.dispatchEvent(pointer("pointerover"));
+    settle();
+    // A thumb spanning y 30–54: drawn down to 50, clipped below it.
+    vi.spyOn(thumb("y"), "getBoundingClientRect").mockReturnValue(rect(193, 30, 197, 54));
+    const hidden = pointer("pointerdown", { clientX: 198, clientY: 52, button: 0 });
+    row.dispatchEvent(hidden);
+    expect(hidden.defaultPrevented).toBe(false);
+    const drawn = pointer("pointerdown", { clientX: 198, clientY: 40, button: 0 });
+    row.dispatchEvent(drawn);
+    expect(drawn.defaultPrevented).toBe(true);
+  });
+
   it("tears down completely", () => {
     const list = scroller({ client: 200, scroll: 800 });
     document.body.append(list);

@@ -39,8 +39,9 @@
  * later. Observations are only added from an update (whose own observation is
  * `<html>`, the shallowest there is) or from that next frame, so they never
  * trip that rule either. They cost little: each target, its first 64
- * children and its last one, added to as children arrive and never rebuilt
- * for a child-list change; and none at all while every thumb is hidden.
+ * children and its current last one — at most 65 children, kept up to date as
+ * children arrive (a new last child replaces the old) and never rebuilt for a
+ * child-list change; and none at all while every thumb is hidden.
  *
  * CSS scroll-driven animation and anchor positioning would have needed no
  * script for position, and were measured and rejected (a Chrome trace of the
@@ -75,6 +76,8 @@
  * always-visible mode. While a thumb shows, a press on it — within 8px of the
  * scroller's far edge — is the thumb's, not the content's.
  */
+import { NATIVE_PLANE_IGNORE_ATTR } from "@renderer/components/browser/browser-plane-freeze";
+
 import {
   EDGE_INSET_PROPERTY,
   THUMB_EDGE_INSET,
@@ -177,6 +180,8 @@ interface Lane {
   host: Element | null;
   /** The track's part that is visible, as a `clip-path` inset; `null` when it is wholly clipped away. */
   clip: string | null;
+  /** What of the target its clipping ancestors leave visible: a press outside it is not the thumb's. */
+  visible: Box | null;
   /** Where the track sits and how big it is, the thumb's length and offset: viewport px. */
   geometry: LaneGeometry;
   /** What {@link flush} last wrote, to skip writes that would change nothing. */
@@ -218,6 +223,9 @@ function createLane(doc: Document, axis: Axis): Lane {
   track.setAttribute("data-axis", axis);
   track.setAttribute("data-state", "hidden");
   track.setAttribute("aria-hidden", "true");
+  // Presentational, on a scroller's own edge: a Browser Tab's native plane
+  // neither yields to it nor re-checks on its every frame.
+  track.setAttribute(NATIVE_PLANE_IGNORE_ATTR, "");
   const thumb = doc.createElement("div");
   thumb.setAttribute("data-slot", "scroll-thumb");
   track.append(thumb);
@@ -234,6 +242,7 @@ function createLane(doc: Document, axis: Axis): Lane {
     clippers: null,
     host: null,
     clip: "none",
+    visible: null,
     geometry: { ...NO_GEOMETRY },
     written: { ...NO_GEOMETRY },
     aimed: false,
@@ -322,13 +331,20 @@ export function installOverlayScrollbars(doc: Document): () => void {
     for (const record of records) {
       for (const node of record.addedNodes) if (node instanceof win.Element) pendingAdded.add(node);
       for (const node of record.removedNodes) {
-        if (node instanceof win.Element && observedChildren.delete(node)) resizes.unobserve(node);
+        if (!(node instanceof win.Element)) continue;
+        for (const watched of observedChildren.values()) {
+          if (watched.delete(node)) resizes.unobserve(node);
+        }
       }
     }
     requestUpdateNextFrame();
   });
-  /** The targets' children being observed, and children added since, observed from the next frame. */
-  const observedChildren = new Set<Element>();
+  /**
+   * Per target, the children being observed: its first {@link OBSERVED_CHILDREN}
+   * and its last, never more. Children added since are taken in from the next
+   * frame, outside any ResizeObserver delivery.
+   */
+  const observedChildren = new Map<HTMLElement, Set<Element>>();
   const pendingAdded = new Set<Element>();
   /** Whether the targets are being observed at all: released while every thumb is hidden. */
   let observing = false;
@@ -423,6 +439,7 @@ export function installOverlayScrollbars(doc: Document): () => void {
       lane.clippers = null;
       lane.host = null;
       lane.clip = "none";
+      lane.visible = null;
       lane.aimed = false;
       lane.geometry = { ...NO_GEOMETRY };
       if (drag !== null && drag.lane === lane) endDrag();
@@ -445,19 +462,37 @@ export function installOverlayScrollbars(doc: Document): () => void {
     for (const element of targets()) {
       observing = true;
       resizes.observe(element);
-      const children = element.children;
-      for (let index = 0; index < children.length && index < OBSERVED_CHILDREN; index += 1) {
-        observeChild(children[index]!);
-      }
-      if (element.lastElementChild !== null) observeChild(element.lastElementChild);
+      observeChildren(element);
       mutations.observe(element, { childList: true });
     }
   }
 
-  function observeChild(child: Element): void {
-    if (observedChildren.has(child)) return;
-    observedChildren.add(child);
-    resizes.observe(child);
+  /**
+   * Brings a target's observed children to its first {@link OBSERVED_CHILDREN}
+   * plus its current last child: a new tail replaces the old one (unless that
+   * is among the first), so a list that grows by appending stays at 65.
+   */
+  function observeChildren(element: HTMLElement): void {
+    const wanted = new Set<Element>();
+    const children = element.children;
+    for (let index = 0; index < children.length && index < OBSERVED_CHILDREN; index += 1) {
+      wanted.add(children[index]!);
+    }
+    if (element.lastElementChild !== null) wanted.add(element.lastElementChild);
+    const watched = observedChildren.get(element) ?? new Set<Element>();
+    for (const child of watched) {
+      if (!wanted.has(child)) {
+        resizes.unobserve(child);
+        watched.delete(child);
+      }
+    }
+    for (const child of wanted) {
+      if (!watched.has(child)) {
+        resizes.observe(child);
+        watched.add(child);
+      }
+    }
+    observedChildren.set(element, watched);
   }
 
   /** Children added since: the first few of a short list, and each target's new last child. */
@@ -465,13 +500,7 @@ export function installOverlayScrollbars(doc: Document): () => void {
     if (pendingAdded.size === 0) return;
     pendingAdded.clear();
     if (!observing) return;
-    for (const element of targets()) {
-      const children = element.children;
-      for (let index = 0; index < children.length && index < OBSERVED_CHILDREN; index += 1) {
-        observeChild(children[index]!);
-      }
-      if (element.lastElementChild !== null) observeChild(element.lastElementChild);
-    }
+    for (const element of targets()) observeChildren(element);
   }
 
   /** Stops watching targets whose thumbs are all hidden: a stream there costs nothing until shown again. */
@@ -626,7 +655,8 @@ export function installOverlayScrollbars(doc: Document): () => void {
             offset,
             layer: lane.layer,
           };
-      lane.clip = clipFor(lane.geometry, visibleRect(box, lane.clippers ?? []));
+      lane.visible = visibleRect(box, lane.clippers ?? []);
+      lane.clip = clipFor(lane.geometry, lane.visible);
       // Content grew or shrank under a held drag: keep the content where the
       // thumb is — at the end, if the thumb was taken to the end. Written here,
       // in the update, where layout is already clean.
@@ -921,6 +951,18 @@ export function installOverlayScrollbars(doc: Document): () => void {
       // over its edge (a resize grip, a floating control) keeps its presses.
       if (!target.contains(pressed)) continue;
       if (!inThumbLane(lane.box, lane.axis, event.clientX, event.clientY, lane.lane)) continue;
+      // Only what is drawn can be grabbed: not a part of the thumb its
+      // ancestors clip (the transcript's bands under its header and composer).
+      const visible = lane.visible;
+      if (
+        visible === null ||
+        event.clientX < visible.left ||
+        event.clientX > visible.right ||
+        event.clientY < visible.top ||
+        event.clientY > visible.bottom
+      ) {
+        continue;
+      }
       const scroller: Box = target.getBoundingClientRect();
       const thumbBox = lane.thumb.getBoundingClientRect();
       if (!hitsThumb(scroller, thumbBox, lane.axis, event.clientX, event.clientY, lane.lane)) {

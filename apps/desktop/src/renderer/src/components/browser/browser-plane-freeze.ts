@@ -31,6 +31,21 @@ const POSITIONED_OVERLAY_SELECTOR =
  */
 const EXPLICIT_OVERLAY_SELECTOR = "[data-native-plane-overlay]";
 
+/**
+ * The opt-OUT: presentational chrome that is drawn fixed or portalled but never
+ * covers a plane's content meaningfully — the app's scroll thumbs, which sit on
+ * a scroller's own edge and move every scroll frame. Neither a floating
+ * candidate nor, in `browser-pane.tsx`, a reason to re-check.
+ */
+export const NATIVE_PLANE_IGNORE_ATTR = "data-native-plane-ignore";
+const NATIVE_PLANE_IGNORE_SELECTOR = `[${NATIVE_PLANE_IGNORE_ATTR}]`;
+
+/** Whether `node` is (inside) presentational chrome the plane ignores. */
+export function ignoredByNativePlane(node: Node): boolean {
+  const element = node instanceof Element ? node : node.parentElement;
+  return element !== null && element.closest(NATIVE_PLANE_IGNORE_SELECTOR) !== null;
+}
+
 /** The anchor a Browser Tab's `WebContentsView` is positioned over. */
 const PLANE_ANCHOR_SELECTOR = "[data-browser-plane]";
 
@@ -68,12 +83,13 @@ export function nativePlaneOverlayCandidates(doc: Document): Element[] {
   // Only the small portal layer needs a general walk; never walk a transcript
   // and compute styles for every token on each mutation.
   for (const child of doc.body.children) {
-    if (child === root) continue;
+    if (child === root || child.matches(NATIVE_PLANE_IGNORE_SELECTOR)) continue;
     candidates.add(child);
     for (const element of child.querySelectorAll("*")) candidates.add(element);
   }
   const floatingElements: Element[] = [];
   for (const element of candidates) {
+    if (element.closest(NATIVE_PLANE_IGNORE_SELECTOR) !== null) continue;
     const style = view.getComputedStyle(element);
     if (
       style.display === "none" ||
