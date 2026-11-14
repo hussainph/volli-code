@@ -762,6 +762,8 @@ describe("createHostCore composition", () => {
       }),
       expect.any(AbortSignal),
       expect.any(Function),
+      // Main's own connection, so the worker can hold its automatic checkpoint (VC-1201).
+      { liveDatabase: core.database.db },
     );
     await backups.reveal();
     expect(reveal).toHaveBeenCalledWith(join(root, "backups"));

@@ -21,6 +21,20 @@
  *   --reader-pin-ms N     a worker holds a read transaction N ms at a time, as the automatic
  *                         backup's one-step copy does
  *   --backup              a worker copies the whole database once, as the automatic backup does
+ *   --backup-mode M       how that copy is taken (VC-1201):
+ *                           one-step  one `backup()` step, one long read transaction (before VC-1201)
+ *                           steps     `backup()` in steps of --step-pages pages, each its own read
+ *                                     transaction; reports restarts, and gives up when the run ends
+ *                           clone     `copyLiveDatabase` (`src/backup/live-snapshot.ts`), the
+ *                                     production copy: clones under a short read transaction
+ *                                     while main holds its automatic checkpoint
+ *                           clone-nohold  the same without main's hold
+ *   --backup-delay-ms N   when the copy starts, after the load does (default 3000)
+ *   --catch-up worker     main turns its automatic checkpoint off while the copy runs; when the
+ *                         copy is done a one-shot worker connection backfills the WAL in PASSIVE
+ *                         passes until under 400 frames remain, then main turns it back on
+ *   --backup-checkpoint   after the copy, the worker runs `wal_checkpoint(PASSIVE)` on its own
+ *                         read-write connection (VC-1201's option a)
  *
  * The connection mirrors `openVolliDb`'s pragmas (`src/db/database-file.ts`);
  * keep them in step. Payloads are the database's own, sampled and never printed.
@@ -64,6 +78,11 @@ async function main() {
       checkpoint: { type: "string", default: "auto" },
       "reader-pin-ms": { type: "string", default: "0" },
       backup: { type: "boolean", default: false },
+      "backup-mode": { type: "string", default: "one-step" },
+      "step-pages": { type: "string", default: "1000" },
+      "backup-checkpoint": { type: "boolean", default: false },
+      "backup-delay-ms": { type: "string", default: "3000" },
+      "catch-up": { type: "string", default: "main" },
     },
   });
   const dbPath = positionals[0];
@@ -76,6 +95,9 @@ async function main() {
   const readerPinMs = Number(values["reader-pin-ms"]);
   const mode = values.checkpoint;
   if (mode !== "auto" && mode !== "worker") throw new Error("--checkpoint is auto or worker");
+  const backupMode = values["backup-mode"];
+  if (!["one-step", "steps", "clone", "clone-nohold"].includes(backupMode))
+    throw new Error("--backup-mode is one-step, steps, clone or clone-nohold");
 
   const db = new Database(dbPath, { timeout: 5000 });
   db.pragma("journal_mode = WAL");
@@ -134,7 +156,7 @@ async function main() {
      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
   );
 
-  const timed = (write) => {
+  const timed = (kind, write) => {
     const before = walState();
     const cpu = threadCpuMs();
     const started = performance.now();
@@ -146,6 +168,8 @@ async function main() {
     const restarted = after.mxFrame < before.mxFrame;
     const backfilled = after.nBackfill - (restarted ? 0 : before.nBackfill);
     return {
+      kind,
+      at: Date.now() - startedAt,
       wall,
       cpu: threadCpuMs() - cpu,
       checkpointed: backfilled > 0,
@@ -154,6 +178,8 @@ async function main() {
     };
   };
 
+  // Times below (`at`) count from here, when the load starts.
+  const startedAt = Date.now();
   const drafts = [];
   const events = [];
   const ticks = [];
@@ -167,14 +193,14 @@ async function main() {
         n: draftNumber,
       });
       drafts.push(
-        timed(() => {
+        timed("draft", () => {
           readState.get("volli:chat-drafts");
           upsertState.run("volli:chat-drafts", value, Date.now());
         }),
       );
     }, draftMs),
     ...sessions.map((session) =>
-      setInterval(() => events.push(timed(() => appendEvent(session))), eventMs),
+      setInterval(() => events.push(timed("event", () => appendEvent(session))), eventMs),
     ),
   ];
   let lastTick = performance.now();
@@ -192,15 +218,49 @@ async function main() {
 
   const helpers = [];
   const helper = (job) => {
-    const thread = new Worker(new URL(import.meta.url), { workerData: { dbPath, ...job } });
+    const thread = new Worker(new URL(import.meta.url), {
+      workerData: { dbPath, startedAt, ...job },
+    });
     const done = new Promise((resolve) => thread.once("exit", resolve));
-    thread.on("message", (message) => helperMessages.push(message));
+    thread.on("message", (message) => {
+      // The WAL the copy left behind, read the moment the copy reports done.
+      if (message.kind === "backup-done") message.walBytesAtDone = walBytes();
+      // `holdAutocheckpoint` (src/db/autocheckpoint.ts), as main runs it for the copy.
+      if (message.kind === "hold") {
+        db.pragma("wal_autocheckpoint = 0");
+        // oxlint-disable-next-line unicorn/require-post-message-target-origin
+        thread.postMessage("held");
+        return;
+      }
+      if (message.kind === "release") {
+        db.pragma(mode === "auto" ? "wal_autocheckpoint = 400" : "wal_autocheckpoint = 0");
+        return;
+      }
+      helperMessages.push(message);
+      if (values["catch-up"] !== "worker") return;
+      if (message.kind === "backup-start") db.pragma("wal_autocheckpoint = 0");
+      if (message.kind === "backup-done") {
+        helper({ job: "catch-up" });
+        helpers
+          .at(-1)
+          .done.then(() =>
+            db.pragma(mode === "auto" ? "wal_autocheckpoint = 400" : "wal_autocheckpoint = 0"),
+          );
+      }
+    });
     helpers.push({ thread, done });
   };
   const helperMessages = [];
   if (mode === "worker") helper({ job: "checkpoint" });
   if (readerPinMs > 0) helper({ job: "pin", readerPinMs });
-  if (values.backup) helper({ job: "backup" });
+  if (values.backup)
+    helper({
+      job: "backup",
+      backupMode,
+      stepPages: Number(values["step-pages"]),
+      backupCheckpoint: values["backup-checkpoint"],
+      backupDelayMs: Number(values["backup-delay-ms"]),
+    });
 
   await sleep(seconds * 1000);
   for (const timer of timers) clearInterval(timer);
@@ -246,11 +306,67 @@ async function main() {
     };
   };
   const stalls = ticks.filter((tick) => tick.late >= 200);
+  // Around the copy: commits while it ran, the first checkpoint after it, and the rest.
+  const backupStart = helperMessages.find((m) => m.kind === "backup-start")?.at;
+  const backupDone = helperMessages.find((m) => m.kind === "backup-done")?.at;
+  const phases = (() => {
+    if (backupStart === undefined) return undefined;
+    const all = [...drafts, ...events].toSorted((a, b) => a.at - b.at);
+    const end = backupDone ?? Infinity;
+    const during = all.filter((r) => r.at >= backupStart && r.at <= end);
+    const catchUp = all.find((r) => r.at > end && r.checkpointed);
+    const later = all.filter((r) => r.at > end && r !== catchUp);
+    const shape = (list) => ({
+      commits: list.length,
+      maxMs: quantile(
+        list.map((r) => r.wall),
+        100,
+      ),
+      checkpointMaxMs: quantile(
+        list.filter((r) => r.checkpointed).map((r) => r.wall),
+        100,
+      ),
+      checkpointP50Ms: quantile(
+        list.filter((r) => r.checkpointed).map((r) => r.wall),
+        50,
+      ),
+      withoutCheckpointMaxMs: quantile(
+        list.filter((r) => !r.checkpointed).map((r) => r.wall),
+        100,
+      ),
+      atLeast200Ms: list.filter((r) => r.wall >= 200).length,
+    });
+    return {
+      before: shape(all.filter((r) => r.at < backupStart)),
+      during: shape(during),
+      catchUp:
+        catchUp === undefined
+          ? null
+          : {
+              at: catchUp.at,
+              wallMs: Math.round(catchUp.wall * 10) / 10,
+              cpuMs: Math.round(catchUp.cpu * 10) / 10,
+              backfilled: catchUp.backfilled,
+            },
+      after: shape(later),
+    };
+  })();
   const checkpointMessages = helperMessages.filter((message) => message.kind === "checkpoint");
   console.log(
     JSON.stringify(
       {
-        arm: { checkpoint: mode, readerPinMs, backup: values.backup },
+        arm: {
+          checkpoint: mode,
+          readerPinMs,
+          backup: values.backup,
+          ...(values.backup
+            ? {
+                backupMode,
+                backupCheckpoint: values["backup-checkpoint"],
+                catchUp: values["catch-up"],
+              }
+            : {}),
+        },
         load: { seconds, sessions: sessions.length, eventMs, draftMs, draftBytes },
         appStateSet: commits(drafts),
         sessionAppend: commits(events),
@@ -266,7 +382,20 @@ async function main() {
           stalls: stalls.length,
           offCpuStalls: stalls.filter((tick) => tick.cpu < tick.late / 2).length,
         },
-        wal: { maxBytes: walMax },
+        wal: { maxBytes: walMax, endBytes: walBytes() },
+        phases,
+        // The slowest commits of either kind, with when they ran (ms from start).
+        worst: [...drafts, ...events]
+          .toSorted((a, b) => b.wall - a.wall)
+          .slice(0, 4)
+          .map((r) => ({
+            kind: r.kind,
+            at: r.at,
+            wallMs: Math.round(r.wall * 10) / 10,
+            cpuMs: Math.round(r.cpu * 10) / 10,
+            backfilled: r.backfilled,
+            walFrames: r.walFrames,
+          })),
         helper:
           helperMessages.length === 0
             ? undefined
@@ -296,10 +425,20 @@ function report(message) {
 }
 
 async function worker() {
-  const { dbPath, job, readerPinMs } = workerData;
-  const state = { stopped: false };
+  const {
+    dbPath,
+    job,
+    readerPinMs,
+    startedAt,
+    backupMode,
+    stepPages,
+    backupCheckpoint,
+    backupDelayMs,
+  } = workerData;
+  const state = { stopped: false, held: undefined };
   parentPort.on("message", (message) => {
     if (message === "stop") state.stopped = true;
+    if (message === "held") state.held?.();
   });
   if (job === "checkpoint") {
     const db = new Database(dbPath, { timeout: 0 });
@@ -315,6 +454,26 @@ async function worker() {
       });
     }
     db.close();
+  } else if (job === "catch-up") {
+    // One shot, right after the copy: PASSIVE passes until main's own threshold.
+    const db = new Database(dbPath, { timeout: 0 });
+    db.pragma("wal_autocheckpoint = 0");
+    const passes = [];
+    for (let pass = 0; pass < 20; pass += 1) {
+      const began = performance.now();
+      const cpu = threadCpuMs();
+      const [row] = db.pragma("wal_checkpoint(PASSIVE)");
+      passes.push({
+        ms: Math.round(performance.now() - began),
+        cpuMs: Math.round(threadCpuMs() - cpu),
+        busy: row.busy,
+        log: row.log,
+        checkpointed: row.checkpointed,
+      });
+      if (row.busy === 0 && row.log - row.checkpointed < 400) break;
+    }
+    report({ kind: "catch-up", at: Date.now() - startedAt, passes });
+    db.close();
   } else if (job === "pin") {
     const db = new Database(dbPath, { readonly: true });
     await sleep(3000);
@@ -326,22 +485,87 @@ async function worker() {
       db.exec("COMMIT");
       report({
         kind: "reader-released",
+        at: Date.now() - startedAt,
         heldMs: Math.round(performance.now() - started),
       });
       await sleep(2000);
     }
     db.close();
   } else if (job === "backup") {
-    await sleep(3000);
+    await sleep(backupDelayMs);
+    report({ kind: "backup-start", at: Date.now() - startedAt });
     const source = new Database(dbPath, { readonly: true });
     source.pragma("cache_size = -2048");
     const target = `${dbPath}.wal-bench-copy`;
     const started = performance.now();
-    // The automatic backup's own call: one step, one read transaction.
-    await source.backup(target, { progress: () => 0x7fff_ffff });
-    report({ kind: "backup-done", ms: Math.round(performance.now() - started) });
+    const done = { kind: "backup-done", backupMode };
+    if (backupMode === "one-step") {
+      // The automatic backup's call before VC-1201: one step, one read transaction.
+      await source.backup(target, { progress: () => 0x7fff_ffff });
+    } else if (backupMode === "steps") {
+      // Each step is its own read transaction; another connection's write restarts the copy.
+      let restarts = 0;
+      let lastRemaining = Infinity;
+      try {
+        await source.backup(target, {
+          progress: ({ remainingPages }) => {
+            if (state.stopped) throw new Error("run ended");
+            if (remainingPages > lastRemaining) restarts += 1;
+            lastRemaining = remainingPages;
+            return stepPages;
+          },
+        });
+      } catch (error) {
+        done.unfinished = error instanceof Error ? error.message : String(error);
+      }
+      Object.assign(done, { stepPages, restarts, remainingPages: lastRemaining });
+    } else {
+      const { copyFileOutOfProcess, copyLiveDatabase } =
+        await import("../src/backup/live-snapshot.ts");
+      const result = await copyLiveDatabase(source, dbPath, target, {
+        clone: (from, to) =>
+          copyFileOutOfProcess(from, to, { clone: process.platform === "darwin" }),
+        holdCheckpoints: async () => {
+          if (backupMode === "clone-nohold") return () => {};
+          const held = new Promise((resolve) => (state.held = resolve));
+          report({ kind: "hold" });
+          await held;
+          return () => report({ kind: "release" });
+        },
+      });
+      done.readTransactionMs = Math.round(result.readTransactionMs * 10) / 10;
+      done.holdMs = Math.round(result.holdMs * 10) / 10;
+      done.method = result.method;
+      done.quickCheckMs = Math.round(result.quickCheckMs);
+      done.copiedWalBytes = result.walBytes;
+    }
+    done.ms = Math.round(performance.now() - started);
+    done.at = Date.now() - startedAt;
+    report(done);
     source.close();
-    rmSync(target, { force: true });
+    if (backupCheckpoint) {
+      // Option a: the worker backfills on its own connection before main's next threshold.
+      const writer = new Database(dbPath, { timeout: 0 });
+      writer.pragma("wal_autocheckpoint = 0");
+      const began = performance.now();
+      const cpu = threadCpuMs();
+      const [row] = writer.pragma("wal_checkpoint(PASSIVE)");
+      report({
+        kind: "worker-checkpoint",
+        at: Date.now() - startedAt,
+        ms: Math.round(performance.now() - began),
+        cpuMs: Math.round(threadCpuMs() - cpu),
+        busy: row.busy,
+        log: row.log,
+        checkpointed: row.checkpointed,
+      });
+      writer.close();
+    }
+    // Kept until the run ends, as the backup keeps its copy while it writes the bundle:
+    // a clone shares the live file's blocks until then.
+    while (!state.stopped) await sleep(100);
+    for (const suffix of ["", "-wal", "-shm", "-journal"])
+      rmSync(`${target}${suffix}`, { force: true });
   }
   // Ends this thread only; its message listener would otherwise keep it alive.
   process.exit(0);

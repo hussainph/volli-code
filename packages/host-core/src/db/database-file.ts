@@ -56,6 +56,7 @@ import {
   isCheckedDatabaseFile,
   type CheckedDatabaseFile,
 } from "./checked-file";
+import { WAL_AUTOCHECKPOINT_PAGES } from "./autocheckpoint";
 import { assertMigrationDiskSpace } from "./disk-preflight";
 import { cloneOrCopyFile, type FileCloneDeps } from "./file-clone";
 import { timeStep, type UpgradeTimings } from "./upgrade-timings";
@@ -528,7 +529,7 @@ export function openVolliDb(
       // ceiling keeps the WAL file itself from dominating a 260k-event history's
       // disk footprint while the automatic checkpoint still amortizes to a page
       // or two per commit.
-      db.pragma("wal_autocheckpoint = 400");
+      db.pragma(`wal_autocheckpoint = ${WAL_AUTOCHECKPOINT_PAGES}`);
       if (compatibility?.newer === true) {
         log.warn("database schema is newer and declares itself compatible; not migrating", {
           schemaVersion: compatibility.schemaVersion,
