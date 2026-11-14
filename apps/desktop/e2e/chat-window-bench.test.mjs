@@ -125,6 +125,36 @@ test("island A/B arm is explicit, validated and applied before the stream", asyn
   assert.ok(arm < expressions.findIndex((expression) => expression.includes("streamAndScroll")));
 });
 
+test("materials A/B arm is explicit, validated and applied before any plane mounts", async () => {
+  assert.equal(benchSettings().materials, "on");
+  assert.equal(
+    parseBenchArgs(["--arm", "draft", "--materials", "backdrop-off"]).settings.materials,
+    "backdrop-off",
+  );
+  assert.throws(() => benchSettings({ materials: "matte" }));
+  for (const arm of ["draft", "stream"]) {
+    const expressions = [];
+    await measureChatWindow({
+      settings: benchSettings({ arm, materials: "masks-off", streamSamples: 1, draftKeys: 1 }),
+      pause: async () => {},
+      rendererRssMb: async () => 123,
+      contents: {
+        debugger: { async sendCommand() {} },
+        async sendInputEvents() {},
+        async executeJavaScript(expression) {
+          expressions.push(expression);
+          if (expression.includes("uncaught")) return [];
+          if (expression.includes("stopTyping")) return { latencyMs: [], handlerMs: [] };
+          return expression.includes("showDraft") ? { nodes: 1 } : 1;
+        },
+      },
+    });
+    const applied = expressions.indexOf('window.chatBench.materialsArm("masks-off")');
+    assert.ok(applied >= 0, arm);
+    assert.ok(applied < expressions.findIndex((expression) => expression.includes("seed(")), arm);
+  }
+});
+
 test("cadence overlay is read-only, scoped, exact and refuses missing/changed production wiring", () => {
   const id = "/snapshot/apps/desktop/src/renderer/src/components/ui/ai-elements/pele-diagram.tsx";
   const source = "const SAMPLE_MS = 100;\nexport const probe = SAMPLE_MS;";

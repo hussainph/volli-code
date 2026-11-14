@@ -99,6 +99,11 @@ material's drop shadows. Compare arms with `--skip-build` on one build and the
 same trace mode, and repeat each: run-to-run spread on a loaded machine is
 larger than most single-arm differences.
 
+`--materials on|backdrop-off|masks-off|off` (default `on`) is the Volli Glass
+A/B (VC-1145), page CSS applied before any plane mounts, never product code:
+`backdrop-off` drops every backdrop blur, `masks-off` the transcript's two fade
+masks, `off` both and the glass rims. It applies to every arm.
+
 `--phases` (or `--draft-trace`, `--reveal-trace`, `--stream-trace <file>`) captures
 raw Chromium lanes and adds machine-readable `report.phases`: exclusive **script,
 style/layout, paint, main-thread composite preparation** milliseconds, clipped to
@@ -119,6 +124,35 @@ The output schema and workload remain comparable to earlier PR tables, but the
 measurement transport now includes supervisor IPC and a guarded host. Do not mix
 historical direct-launch latency numbers with guarded runs as a causal A/B;
 re-run both source revisions through this same harness.
+
+## Headless phases, no Electron
+
+`headless.mjs` drives the same page in chrome-headless-shell with GPU
+compositing (`--use-angle=metal`), a fresh page per run, no app and no
+credentials. Two workloads on a 2,000-turn Session: `type` (150 keys at 60 ms
+into its composer beside an 8,000-node ballast: key-to-paint and Chromium's
+key-to-present) and `stream` (a prose reply following at 30 words/s for 8 s:
+frame times, long tasks). `--trace` adds exclusive main-thread script, style,
+layout, prePaint, paint and composite milliseconds, viz draw time and render
+passes per frame.
+
+```sh
+node apps/desktop/e2e/bench/chat-window/headless.mjs build .scratch/hl/head
+node apps/desktop/e2e/bench/chat-window/headless.mjs stream .scratch/hl/head --runs 3 --trace
+node apps/desktop/e2e/bench/chat-window/headless.mjs type .scratch/hl/head \
+  --runs 3 --materials on,off --trace --json .scratch/hl/type.json
+```
+
+To compare revisions, check each out under `.scratch/`, copy this folder's
+`main.tsx`, `bench.css`, `index.html`, `vite.config.ts` and `headless.mjs` over
+its own, run `headless.mjs build` there, then pass every build directory
+comma-separated: builds and materials arms alternate within each round.
+Headless is not the app (no shell, canvas or real window): confirm a decisive
+result through the guarded entry above.
+
+The number to watch for streaming is `stream` script milliseconds per 8 s at
+2,000 turns: about 0.6 s on 0.3.0-canary.7, 7.7 s on main before VC-1145, and
+1.4 s after it.
 
 ## Invented diagram cadence probe
 

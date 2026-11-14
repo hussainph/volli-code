@@ -708,6 +708,117 @@ async function streamAndScroll(
   };
 }
 
+/**
+ * A reply in prose, the common case: paragraphs, a list every third, a short
+ * fence every fifth. Split into words, the stream's tokens.
+ */
+const PROSE_TOKENS = Array.from({ length: 40 }, (_value, index) =>
+  [
+    `Paragraph ${index}. The projection folds each part in order, so the row keeps its identity while the text grows; nothing above it re-measures unless its own height changes. We checked \`src/module-${index}.ts\` against the previous turn and the shape still holds.\n\n`,
+    index % 3 === 1
+      ? `- first point about case ${index}, with a short clause\n- second point, naming \`foldTurn\`\n- third point, closing the list\n\n`
+      : "",
+    index % 5 === 4
+      ? `\`\`\`ts\n${Array.from({ length: 8 }, (_line, line) => `const step${index}_${line} = fold(parts[${line}], state);\n`).join("")}\`\`\`\n\n`
+      : "",
+  ].join(""),
+)
+  .join("")
+  .split(/(?<=\s)/);
+
+function proseSnapshot(sessionId: string, base: readonly UIMessage[], tokens: number): void {
+  const message: UIMessage = {
+    id: `${sessionId}-stream-probe`,
+    role: "assistant",
+    parts: [{ type: "text", text: PROSE_TOKENS.slice(0, tokens).join("") }],
+  };
+  store.setState((state) => {
+    const sessions = (state as unknown as { sessions: Record<string, unknown> }).sessions;
+    const slice = sessions[sessionId] as { transcript: typeof EMPTY_TRANSCRIPT };
+    return {
+      sessions: {
+        ...sessions,
+        [sessionId]: {
+          ...slice,
+          lifecycle: "working",
+          transcript: {
+            ...slice.transcript,
+            turnActive: true,
+            durableMessages: base,
+            messages: [...base, message],
+          },
+        },
+      },
+    } as never;
+  });
+}
+
+/**
+ * A prose reply streaming into the end of a long transcript while the reader
+ * follows it (VC-1145): no reader scrolling, so every frame is the stream's
+ * own cost. A store update lands on each frame whose token count moved, at
+ * `tokenRate` words per second, for `durationMs`.
+ */
+async function streamFollow(
+  sessionId: string,
+  index: number,
+  durationMs: number,
+  tokenRate: number,
+): Promise<unknown> {
+  const scroller = planeScroller(index);
+  if (scroller === null) return { ok: false, why: "no scroller" };
+  const slice = (store.getState() as unknown as { sessions: Record<string, never> }).sessions[
+    sessionId
+  ];
+  const base = (
+    slice as unknown as { transcript: { messages: readonly UIMessage[] } }
+  ).transcript.messages.filter((message) => message.id !== `${sessionId}-stream-probe`);
+  resetStream(sessionId, base);
+  await settle();
+  scroller.scrollTop = scroller.scrollHeight;
+  await settle();
+  proseSnapshot(sessionId, base, 1);
+  await settle();
+  scroller.scrollTop = scroller.scrollHeight;
+  await settle();
+  const longTasks: number[] = [];
+  const observer = new PerformanceObserver((list) => {
+    for (const entry of list.getEntries()) longTasks.push(entry.duration);
+  });
+  observer.observe({ type: "longtask", buffered: false });
+  const frames: number[] = [];
+  const distances: number[] = [];
+  let updates = 0;
+  let tokens = 1;
+  performance.mark("chat-bench:start");
+  const started = performance.now();
+  while (performance.now() - started < durationMs) {
+    const due = 1 + Math.floor(((performance.now() - started) * tokenRate) / 1_000);
+    if (due !== tokens) {
+      proseSnapshot(sessionId, base, due);
+      tokens = due;
+      updates += 1;
+    }
+    frames.push(await new Promise<number>((resolve) => requestAnimationFrame(resolve)));
+    distances.push(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight);
+  }
+  performance.mark("chat-bench:end");
+  for (const entry of observer.takeRecords()) longTasks.push(entry.duration);
+  observer.disconnect();
+  settleStream(sessionId);
+  await settle();
+  return {
+    ok: tokens > 1,
+    updates,
+    tokens,
+    frameTimesMs: frames.slice(1).map((value, at) => value - frames[at]!),
+    longTasksMs: longTasks,
+    maxDistancePx: Math.max(...distances),
+    endDistancePx: distances.at(-1),
+    nodes: nodes(),
+  };
+}
+
 /* ----------------------------------------------------------------- surface */
 
 let setMounted: ((ids: readonly string[]) => void) | null = null;
@@ -947,9 +1058,9 @@ let typingProbe: {
   detach: () => void;
 } | null = null;
 
-function startTypingProbe(): boolean {
+function startTypingProbe(target: string = DRAFT_SESSION): boolean {
   const textarea = document.querySelector<HTMLTextAreaElement>(
-    `[data-bench-plane="${DRAFT_SESSION}"] textarea`,
+    `[data-bench-plane="${target}"] textarea`,
   );
   if (textarea === null) return false;
   textarea.focus();
@@ -1157,6 +1268,11 @@ interface ChatBench {
   collect(): void;
   uncaught(): { message: string; stack: string | null }[];
   islandArm(arm: string): void;
+  materialsArm(arm: string): void;
+  showSession(index: number, ballast: number): Promise<{ nodes: number }>;
+  startTypingIn(index: number): boolean;
+  draftLength(index: number): number;
+  streamFollow(index: number, durationMs: number, tokenRate: number): Promise<unknown>;
 }
 
 /** Page-only CSS for each island A/B arm; `on` is the product as shipped. */
@@ -1166,6 +1282,24 @@ const ISLAND_ARM_CSS: Record<string, string> = {
   "shimmer-off":
     ".liquid-island-shimmer .liquid-island-word { animation: none !important; background: none !important; color: var(--muted-foreground) !important; }",
   "filters-off": ".liquid-island-material { filter: none !important; }",
+};
+
+/**
+ * Page-only CSS for the Volli Glass A/B (VC-1145); `on` is the product as
+ * shipped. `backdrop-off` drops every backdrop blur (veil, rim, shadow and
+ * geometry stay); `masks-off` drops the transcript's two fade masks; `off`
+ * drops both and the glass rims. Never product code, never a shipped toggle.
+ */
+const MATERIALS_ARM_CSS: Record<string, string> = {
+  on: "",
+  "backdrop-off": "*, *::before, *::after { backdrop-filter: none !important; }",
+  "masks-off":
+    ".chat-transcript, .chat-transcript [data-conversation-viewport] { mask-image: none !important; }",
+  off: [
+    "*, *::before, *::after { backdrop-filter: none !important; }",
+    ".chat-transcript, .chat-transcript [data-conversation-viewport] { mask-image: none !important; }",
+    ".glass::after, .material-floating::after { display: none !important; }",
+  ].join(" "),
 };
 
 /** What the island drew in one sample: proof the arm streamed with a live turn island. */
@@ -1251,6 +1385,56 @@ const bench: ChatBench = {
     style.dataset.benchIslandArm = arm;
     style.textContent = css;
     document.head.append(style);
+  },
+  materialsArm(arm) {
+    const css = MATERIALS_ARM_CSS[arm];
+    if (css === undefined) throw new Error(`unknown materials arm ${arm}`);
+    const style = document.createElement("style");
+    style.dataset.benchMaterialsArm = arm;
+    style.textContent = css;
+    document.head.append(style);
+  },
+  async showSession(index, ballast) {
+    // A Session with a model can be written to: the typing probe needs an
+    // enabled composer under its long transcript.
+    const id = sessionIds[index]!;
+    store.setState((state) => {
+      const sessions = (state as unknown as { sessions: Record<string, { projection: object }> })
+        .sessions;
+      const slice = sessions[id]!;
+      return {
+        sessions: {
+          ...sessions,
+          [id]: {
+            ...slice,
+            projection: {
+              ...slice.projection,
+              modelSelection: {
+                providerId: "anthropic",
+                modelId: "claude-sonnet-4-5",
+                reasoningLevel: "medium",
+              },
+            },
+          },
+        },
+      } as never;
+    });
+    setBallastCount?.(ballast);
+    setMounted?.([id]);
+    await settle();
+    await settle();
+    return { nodes: nodes() };
+  },
+  startTypingIn(index) {
+    return startTypingProbe(sessionIds[index]);
+  },
+  draftLength(index) {
+    return useChatDraftsStore.getState().drafts[sessionIds[index] ?? ""]?.text.length ?? -1;
+  },
+  async streamFollow(index, durationMs, tokenRate) {
+    const sessionId = sessionIds[index];
+    if (sessionId === undefined) return { ok: false, why: "no session" };
+    return streamFollow(sessionId, index, durationMs, tokenRate);
   },
 };
 
