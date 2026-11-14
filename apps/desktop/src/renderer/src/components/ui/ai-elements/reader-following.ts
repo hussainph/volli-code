@@ -72,6 +72,18 @@
  */
 export const FOLLOW_ZONE_PX = 70;
 
+/**
+ * Within this many pixels of the end is the end itself: where a thumb taken
+ * all the way down puts the reader, and where the library's following keeps
+ * them (`scrollHeight - 1 - clientHeight`). Its zone is measured from there.
+ */
+const AT_END_PX = 1;
+
+/** Within the follow zone, measured as the library measures it. */
+function inZone(place: ScrollPlace): boolean {
+  return place.fromEnd - AT_END_PX <= FOLLOW_ZONE_PX;
+}
+
 /** Smaller moves are sub-pixel rounding, not a scroll. */
 const MOVED_PX = 0.5;
 
@@ -106,13 +118,6 @@ export type FollowingChange = "follow" | "release" | null;
  * - `thumb`: a drag of the scroll thumb, held or lifted moments ago.
  */
 export type ReaderHand = "none" | "direct" | "thumb";
-
-/**
- * Within this many pixels of the end is the end itself: where a thumb taken
- * all the way down puts the reader, and where the library's own following
- * keeps them.
- */
-const AT_END_PX = 1;
 
 /**
  * How far, in pixels, the reader moved toward the end between two places: a
@@ -151,7 +156,7 @@ export function followingAfterScroll(
     return moved < -MOVED_PX ? "release" : null;
   }
   const nearer = moved > MOVED_PX || (hand === "none" && current.top > previous.top + MOVED_PX);
-  if (nearer) return current.fromEnd <= FOLLOW_ZONE_PX ? "follow" : null;
+  if (nearer) return inZone(current) ? "follow" : null;
   if (hand === "none") return null;
   return current.top < previous.top - MOVED_PX && moved < -MOVED_PX ? "release" : null;
 }
@@ -175,7 +180,7 @@ export function followingOnLift(
   lifted: ScrollPlace,
 ): FollowingChange {
   const down = towardEnd(grabbed, lifted, "thumb") > MOVED_PX;
-  return down && Math.min(moved.fromEnd, lifted.fromEnd) <= FOLLOW_ZONE_PX ? "follow" : null;
+  return down && (inZone(moved) || inZone(lifted)) ? "follow" : null;
 }
 
 /** One scroll event's judgement, waiting for the library's own. */

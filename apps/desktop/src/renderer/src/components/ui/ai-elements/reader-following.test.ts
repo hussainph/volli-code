@@ -33,7 +33,7 @@ describe("followingAfterScroll", () => {
 
   it("follows a reader who arrives within the zone, at any distance inside it", () => {
     for (const hand of ["none", "direct"] as const) {
-      for (const fromEnd of [0, 10, 18, 40, 69, 70]) {
+      for (const fromEnd of [0, 10, 18, 40, 69, 70, 71]) {
         expect(followingAfterScroll(at(9_000, 400), at(9_400 - fromEnd, fromEnd), hand)).toBe(
           "follow",
         );
@@ -42,7 +42,8 @@ describe("followingAfterScroll", () => {
   });
 
   it("does not follow a reader who stops outside the zone", () => {
-    expect(followingAfterScroll(at(9_000, 400), at(9_329, 71), "none")).toBeNull();
+    // The library's end is a pixel above the true one, and 70 from there is 71 from the true end.
+    expect(followingAfterScroll(at(9_000, 400), at(9_328, 72), "none")).toBeNull();
     expect(followingAfterScroll(at(9_000, 400), at(9_310, 90), "none")).toBeNull();
   });
 
@@ -129,7 +130,7 @@ describe("followingOnLift", () => {
   });
 
   it("leaves a thumb let go outside the zone, or taken up into it", () => {
-    expect(followingOnLift(at(8_000, 1_000), at(8_929, 71), at(8_929, 71))).toBeNull();
+    expect(followingOnLift(at(8_000, 1_000), at(8_928, 72), at(8_928, 72))).toBeNull();
     // Up 40 from the end: within the zone, but the reader went up.
     expect(followingOnLift(at(9_000, 1), at(8_960, 41), at(8_960, 41))).toBeNull();
   });
