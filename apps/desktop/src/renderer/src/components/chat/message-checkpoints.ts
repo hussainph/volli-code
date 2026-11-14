@@ -152,21 +152,30 @@ export function checkpointReply(rows: readonly WorkTranscriptRow[], id: string):
  * reader is either at the top of the conversation or inside an exchange whose
  * message is above the transcript's mounted window; `before` is that message
  * (the last checkpoint above the window), or `null` when there is none.
+ *
+ * `held` is for a window with rows held back inside it after a far jump
+ * (VC-1226): the last checkpoint before the end of those rows, given only
+ * while their spacer has reached the reading line. The reader is then past
+ * every mounted message above the hold, so one of those is never their
+ * exchange: theirs is the held one, or a mounted message below the hold that
+ * is above the line.
  */
 export function currentCheckpoint(input: {
   checkpoints: readonly MessageCheckpoint[];
   above: ReadonlySet<string>;
   before: string | null;
   pinned: boolean;
+  held?: string | null;
 }): string | null {
-  const { checkpoints, above, before, pinned } = input;
+  const { checkpoints, above, before, pinned, held = null } = input;
   if (checkpoints.length === 0) return null;
   if (pinned) return checkpoints[checkpoints.length - 1]!.id;
+  const heldAt = held === null ? -1 : checkpoints.findIndex(({ id }) => id === held);
   for (let index = checkpoints.length - 1; index >= 0; index -= 1) {
     const id = checkpoints[index]!.id;
-    if (above.has(id)) return id;
+    if (above.has(id)) return index < heldAt ? held : id;
   }
-  return before ?? checkpoints[0]!.id;
+  return heldAt >= 0 ? held : (before ?? checkpoints[0]!.id);
 }
 
 /**

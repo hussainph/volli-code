@@ -24,9 +24,18 @@ let control: ConversationControl;
 let notePinned: (pinned: boolean) => void = () => {};
 const anchorAt = vi.fn();
 
-function Harness({ sessionId, start }: { sessionId: string; start: number }) {
+function Harness({
+  sessionId,
+  start,
+  held = null,
+}: {
+  sessionId: string;
+  start: number;
+  held?: { start: number; end: number } | null;
+}) {
   // A new array per render, as a streamed update hands the transcript.
-  const mounted = ROWS.slice(start);
+  const mounted =
+    held === null ? ROWS.slice(start) : [...ROWS.slice(start, held.start), ...ROWS.slice(held.end)];
   notePinned = useCheckpointNavigation({
     sessionId,
     navigator,
@@ -35,12 +44,16 @@ function Harness({ sessionId, start }: { sessionId: string; start: number }) {
     checkpoints: CHECKPOINTS,
     mounted,
     start,
+    held,
     anchorAt,
   });
   return null;
 }
-const render = (sessionId: string, start: number) =>
-  act(() => root.render(<Harness sessionId={sessionId} start={start} />));
+const render = (
+  sessionId: string,
+  start: number,
+  held: { start: number; end: number } | null = null,
+) => act(() => root.render(<Harness sessionId={sessionId} start={start} held={held} />));
 
 /** A drawn message whose viewport position the test sets. */
 function drawn(id: string, top: () => number): HTMLElement {
@@ -86,6 +99,20 @@ describe("useCheckpointNavigation", () => {
     render("s1", 1);
     render("s1", 1);
     expect(searches).toHaveBeenCalledTimes(2);
+  });
+
+  it("anchors the window on a message a far jump is still filling in (VC-1226)", () => {
+    // Rows 3-7 held back below a landing at 1: u5 is inside the window's range
+    // but not drawn, so it is reached by moving the anchor, not by scrolling.
+    render("s1", 1, { start: 3, end: 8 });
+    act(() => navigator.jump("u5"));
+    expect(anchorAt).toHaveBeenCalledWith("u5");
+    // Below the hold the rows are mounted, and the jump just lands.
+    anchorAt.mockReset();
+    drawn("u9", () => 120);
+    act(() => navigator.jump("u9"));
+    expect(anchorAt).not.toHaveBeenCalled();
+    expect(navigator.current()).toBe("u9");
   });
 
   it("drops a pending jump when the plane switches Session in place", () => {
