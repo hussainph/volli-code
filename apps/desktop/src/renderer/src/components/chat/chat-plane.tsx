@@ -64,6 +64,7 @@ import {
   useConversationControl,
 } from "@renderer/components/ui/ai-elements/conversation";
 import { FileMentionProvider } from "@renderer/components/ui/ai-elements/chat-markdown";
+import { FOLLOW_ZONE_PX } from "@renderer/components/ui/ai-elements/reader-following";
 import { MarkdownAttachmentsProvider } from "@renderer/components/attachments/markdown-image";
 import { BlobReadProvider } from "@renderer/components/attachments/blob-read";
 import {
@@ -2874,14 +2875,11 @@ const HELD_ROW_PX = 24;
 const FILL_TIMEOUT_MS = 200;
 
 /**
- * How close to the end `use-stick-to-bottom` counts as at the bottom (its
- * `STICK_TO_BOTTOM_OFFSET_PX`). Any change to the column above a reader that
- * close (a fill step, or the browser's scroll anchoring answering one) puts
- * them back on following, though the transcript's own bottom is 8px. So the
- * fill waits while the reader is there, and looks again after
- * {@link FILL_PAUSE_MS}.
+ * How long the fill waits before looking again while the reader is within
+ * {@link FOLLOW_ZONE_PX} of the end. Any change to the column above a reader
+ * that close (a fill step, or the browser's scroll anchoring answering one)
+ * puts them back on following, though the transcript's own bottom is 8px.
  */
-const FOLLOW_ZONE_PX = 70;
 const FILL_PAUSE_MS = 250;
 
 /** Runs `step` when the main thread is next idle, or after the timeout. Returns the cancel. */

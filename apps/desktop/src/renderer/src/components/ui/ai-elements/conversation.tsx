@@ -17,7 +17,8 @@
  * `StickToBottom` props forced to `instant` where upstream animates, and
  * `ConversationEmptyState` reduced to its shell (no default title or copy),
  * and `ConversationContent`'s masked viewport, reachable through `viewportRef`,
- * which `ConversationScrollButton` marks while it is up.
+ * which `ConversationScrollButton` marks while it is up, and following decided
+ * from the reader's own scrolls (`useReaderFollowing`).
  *
  * Apache-2.0 §4(b) requires a modified file to say so. See `./PROVENANCE.md`.
  */
@@ -43,6 +44,19 @@ import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 
 import { SCROLL_THUMB_GRAB_EVENT } from "@renderer/lib/scroll-thumb/overlay-scrollbars";
 
+import {
+  foldJudgement,
+  followingAfterScroll,
+  followingOnLift,
+  followingSettled,
+  keyHand,
+  placeBefore,
+  scrollPlace,
+  thumbMoved,
+  wheelHand,
+  type PendingJudgement,
+  type ReaderHand,
+} from "./reader-following";
 import { wheelDetachesFollowing } from "./scroll-chaining";
 import { glideToLatest } from "./scroll-to-latest";
 
@@ -222,16 +236,20 @@ export const useConversationControl = (): ConversationControl =>
  * The consumers here are every tool row in the transcript.
  */
 function ConversationBridge({ children }: { children: ReactNode }) {
+  const letGo = useReaderFollowing();
   const { stopScroll, scrollRef } = useStickToBottomContext();
-  const latest = useRef({ stopScroll, scrollRef });
+  const latest = useRef({ stopScroll, scrollRef, letGo });
   useLayoutEffect(() => {
-    latest.current = { stopScroll, scrollRef };
+    latest.current = { stopScroll, scrollRef, letGo };
     const scroller = scrollRef.current;
     if (scroller) scroller.dataset.conversationScroller = "";
-  }, [scrollRef, stopScroll]);
+  }, [scrollRef, stopScroll, letGo]);
   const control = useMemo<ConversationControl>(
     () => ({
-      stopFollowing: () => latest.current.stopScroll(),
+      stopFollowing: () => {
+        latest.current.stopScroll();
+        latest.current.letGo();
+      },
       scroller: () => latest.current.scrollRef.current,
     }),
     [],
@@ -241,6 +259,247 @@ function ConversationBridge({ children }: { children: ReactNode }) {
       {children}
     </ConversationControlContext.Provider>
   );
+}
+
+/**
+ * How long a wheel or key, or a thumb, touch or press just lifted, still counts
+ * as the reader's hand on the transcript, in milliseconds. That covers one
+ * smooth keyboard scroll (about 150ms in Chromium) with room to spare; a held
+ * key's repeats and a trackpad's momentum keep renewing it.
+ */
+const READER_HAND_MS = 500;
+
+/** Where a key press types rather than scrolls. */
+const TEXT_ENTRY = "input, textarea, select, [contenteditable]:not([contenteditable='false'])";
+/** Where Space presses a control rather than scrolling. */
+const SPACE_CONTROL = "button, a[href], summary, [role='button'], [role='link']";
+/** How a held hand ends: a thumb's lost capture, a press lifted, a touch ended, or the window losing focus. */
+const LIFT_EVENTS = [
+  "lostpointercapture",
+  "pointerup",
+  "pointercancel",
+  "touchend",
+  "touchcancel",
+  "blur",
+] as const;
+
+/**
+ * Following, decided by the reader's own scrolls; the rule and the reason the
+ * library's version of it does not hold up are in `reader-following.ts`.
+ *
+ * A scroll event releases at once when it moves away from the end under the
+ * reader's hand. Releasing synchronously matters: the library's following
+ * loop writes on the frame's animation callbacks, which run after this event,
+ * and once released it stops instead of pulling the reader back mid-scroll.
+ *
+ * The rest waits one millisecond (`followingSettled`). The library judges the
+ * same event on a one-millisecond timer of its own: it can discard an arrival,
+ * read anchoring as a scroll up and release, or re-attach on a thumb keeping
+ * its place. Timers with equal delays run in the order they were set. The
+ * library's listener was attached when its scroller mounted, before this
+ * effect ran, so this one runs after it and has the last word.
+ *
+ * While following, the scroller opts out of scroll anchoring. Following means
+ * the end is pinned, which anchoring works against: when a turn starts, the
+ * window adds a row at the end and drops one of the same height from the top,
+ * and anchoring would lower `scrollTop` by that row and leave the new reply
+ * below the fold. Released, a reader keeps anchoring's steady view.
+ *
+ * Engaging uses the library's own `scrollToBottom("instant")`, as "Scroll to
+ * latest" does on arrival. It is only called when the library has not already
+ * re-attached by itself, so the move it makes is the one following was about
+ * to make anyway.
+ *
+ * Returns what to call when the transcript lets go of following itself
+ * (`stopFollowing`): for a moment, the writes that come with it (a jump, a
+ * reading place put back) are its, not an arrival.
+ */
+function useReaderFollowing(): () => void {
+  const { scrollRef, contentRef, state, scrollToBottom, stopScroll } = useStickToBottomContext();
+  const latest = useRef({ scrollToBottom, stopScroll });
+  const sync = useRef<() => void>(() => {});
+  const letGo = useRef<() => void>(() => {});
+  useLayoutEffect(() => {
+    latest.current = { scrollToBottom, stopScroll };
+  }, [scrollToBottom, stopScroll]);
+  // Every render: following changes through the library's own state too.
+  useLayoutEffect(() => sync.current());
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    if (scroller === null) return;
+    const view = scroller.ownerDocument.defaultView ?? window;
+    const doc = scroller.ownerDocument;
+    const syncAnchor = () => {
+      const wanted = state.isAtBottom ? "none" : "";
+      if (scroller.style.overflowAnchor !== wanted) scroller.style.overflowAnchor = wanted;
+    };
+    sync.current = syncAnchor;
+    syncAnchor();
+    const follow = () => {
+      if (!state.isAtBottom) void latest.current.scrollToBottom("instant");
+      syncAnchor();
+    };
+    const release = () => {
+      if (state.isAtBottom) latest.current.stopScroll();
+      syncAnchor();
+    };
+
+    let place = scrollPlace(scroller);
+    // A hand held (`Infinity`) or lifted moments ago, and which.
+    let hand: { kind: ReaderHand; until: number } = { kind: "none", until: 0 };
+    const handNow = (): ReaderHand => (performance.now() < hand.until ? hand.kind : "none");
+    const handFor = (kind: ReaderHand, until = performance.now() + READER_HAND_MS) => {
+      // A held thumb or press outranks a wheel or key while it lasts.
+      const held = hand.until === Infinity && (hand.kind === "thumb" || hand.kind === "select");
+      if (held && kind !== hand.kind) return;
+      hand = { kind, until };
+    };
+    // Where the thumb was grabbed, and where the reader last moved it.
+    let grabbed = place;
+    let thumbRest = place;
+    // Whether the last press in the document landed in this transcript: a key
+    // pressed with nothing focused scrolls the scroller pressed last.
+    let pressedHere = false;
+
+    // The judgement waiting for the library's, and the timer that applies it.
+    let waiting: PendingJudgement | null = null;
+    let settleTimer = 0;
+    const settle = () => {
+      const judgement = waiting;
+      waiting = null;
+      if (judgement === null) return;
+      const change = followingSettled({ ...judgement, following: state.isAtBottom });
+      if (change === "follow") follow();
+      else if (change === "release") release();
+      else syncAnchor();
+    };
+
+    // The library marks its own writes with `ignoreScrollToTop` and clears it
+    // in its own listener, so it is read here in the capture phase, which runs
+    // first on the scroller itself.
+    let libraryWrite: number | undefined;
+    const classify = () => {
+      libraryWrite = state.ignoreScrollToTop;
+    };
+    const onScroll = () => {
+      const previous = placeBefore(place, libraryWrite, scroller);
+      place = scrollPlace(scroller);
+      // The library's own write is not the reader's; its scroll event can
+      // arrive a frame late, after a wheel up has already released.
+      if (libraryWrite !== undefined && libraryWrite === scroller.scrollTop) return;
+      const kind = handNow();
+      if (kind === "thumb" && hand.until === Infinity && thumbMoved(previous, place)) {
+        thumbRest = place;
+      }
+      const change = followingAfterScroll(previous, place, kind);
+      const wasFollowing = state.isAtBottom;
+      if (change === "release") release();
+      waiting = foldJudgement(waiting, { change, hand: kind, wasFollowing });
+      view.clearTimeout(settleTimer);
+      settleTimer = view.setTimeout(settle, 1);
+    };
+    // Content that changed size moves the reader's place with it: the next
+    // scroll event is measured from here, and a transcript swapped in place
+    // (another Session in the same plane) starts afresh.
+    const content = contentRef.current;
+    const observer = new ResizeObserver(() => {
+      place = scrollPlace(scroller);
+      syncAnchor();
+    });
+    if (content !== null) observer.observe(content);
+
+    const onWheel = (event: WheelEvent) => {
+      const kind = wheelHand(event.deltaY);
+      if (kind !== "none") handFor(kind);
+      // The library releases on a wheel up in its own listener, before this one.
+      syncAnchor();
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      const target = event.target instanceof view.Element ? event.target : null;
+      // Only a key this transcript takes: pressed inside it, or with nothing
+      // focused after a press in it.
+      const nowhere = target === null || target === doc.body || target === doc.documentElement;
+      if (!(target !== null && scroller.contains(target)) && !(nowhere && pressedHere)) return;
+      const kind = keyHand({
+        key: event.key,
+        shiftKey: event.shiftKey,
+        inTextEntry: target?.closest(TEXT_ENTRY) != null,
+        onControl: target?.closest(SPACE_CONTROL) != null,
+      });
+      if (kind !== "none") handFor(kind);
+    };
+    // A press anywhere: whether it was in this transcript, and if it was, a
+    // pointer held there (a selection, which may auto-scroll).
+    const onPress = (event: PointerEvent) => {
+      const target = event.target instanceof view.Node ? event.target : null;
+      pressedHere = target !== null && scroller.contains(target);
+      if (pressedHere && event.button === 0) handFor("select", Infinity);
+    };
+    // A grab of the scroll thumb: its press never reaches the scroller (the
+    // thumb swallows it), so the thumb says so itself.
+    const onGrab = () => {
+      handFor("thumb", Infinity);
+      grabbed = scrollPlace(scroller);
+      thumbRest = grabbed;
+    };
+    const onTouch = () => handFor("direct", Infinity);
+    letGo.current = () => {
+      handFor("app");
+      waiting = null;
+      view.clearTimeout(settleTimer);
+      syncAnchor();
+    };
+    // The thumb swallows its own `pointerup` too, but it holds the pointer
+    // captured for the drag, and every way a drag ends ends that capture.
+    const onLift = (event: Event) => {
+      if (hand.until !== Infinity) return;
+      const kind = hand.kind;
+      const ends =
+        event.type === "blur" ||
+        (kind === "thumb" && event.type === "lostpointercapture") ||
+        (kind === "select" && (event.type === "pointerup" || event.type === "pointercancel")) ||
+        (kind === "direct" && (event.type === "touchend" || event.type === "touchcancel"));
+      if (!ends) return;
+      hand = { kind, until: performance.now() + READER_HAND_MS };
+      if (
+        kind === "thumb" &&
+        followingOnLift(grabbed, thumbRest, scrollPlace(scroller)) === "follow"
+      ) {
+        // The drag's last word: whatever its scroll events left waiting is moot.
+        waiting = null;
+        view.clearTimeout(settleTimer);
+        follow();
+      }
+    };
+
+    scroller.addEventListener("scroll", classify, { capture: true, passive: true });
+    scroller.addEventListener("scroll", onScroll, { passive: true });
+    scroller.addEventListener("wheel", onWheel, { passive: true });
+    scroller.addEventListener(SCROLL_THUMB_GRAB_EVENT, onGrab);
+    scroller.addEventListener("touchstart", onTouch, { passive: true });
+    view.addEventListener("keydown", onKey);
+    view.addEventListener("pointerdown", onPress, { capture: true, passive: true });
+    for (const name of LIFT_EVENTS) {
+      view.addEventListener(name, onLift, { capture: true, passive: true });
+    }
+    return () => {
+      scroller.removeEventListener("scroll", classify, { capture: true });
+      scroller.removeEventListener("scroll", onScroll);
+      scroller.removeEventListener("wheel", onWheel);
+      scroller.removeEventListener(SCROLL_THUMB_GRAB_EVENT, onGrab);
+      scroller.removeEventListener("touchstart", onTouch);
+      view.removeEventListener("keydown", onKey);
+      view.removeEventListener("pointerdown", onPress, { capture: true });
+      for (const name of LIFT_EVENTS) view.removeEventListener(name, onLift, { capture: true });
+      observer.disconnect();
+      view.clearTimeout(settleTimer);
+      sync.current = () => {};
+      letGo.current = () => {};
+      scroller.style.overflowAnchor = "";
+    };
+  }, [scrollRef, contentRef, state]);
+  return useCallback(() => letGo.current(), []);
 }
 
 export type ConversationContentProps = ComponentProps<typeof StickToBottom.Content> & {
