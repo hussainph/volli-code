@@ -23,6 +23,8 @@ import {
   applyResolvedAppearanceClass,
   deriveCanvasPaint,
   paintCanvas,
+  paintSettingsCanvas,
+  paintWindowCanvas,
   resetSystemAppearanceWatchForTests,
   systemPrefersDark,
   watchSystemAppearance,
@@ -264,6 +266,28 @@ describe("deriveCanvasPaint", () => {
   });
 });
 
+describe("paintSettingsCanvas", () => {
+  it.each(["light", "dark"] as const)(
+    "paints %s system greys and the system accent, whatever canvas is authored",
+    (resolved) => {
+      const settings = fakeRoot();
+      const authored = fakeRoot();
+      paintSettingsCanvas(DEFAULT_CANVAS, resolved, { root: settings.root });
+      paintCanvas(DEFAULT_CANVAS, resolved, { root: authored.root });
+      for (const name of [...THEME_TOKEN_NAMES, ...CANVAS_TOKEN_NAMES])
+        expect(settings.written.has(name), name).toBe(true);
+      expect(settings.classes.has(resolved)).toBe(true);
+      for (const name of ["--sidebar", "--border", "--popover", "--surface-quaternary"]) {
+        const value = settings.written.get(name)!;
+        expect(value).not.toBe(authored.written.get(name));
+        if (value.startsWith("#")) expect(hexToOklch(value).C, name).toBeLessThan(0.004);
+      }
+      expect(settings.written.get("--canvas-accent")).toBe("#007aff");
+      expect(settings.written.get("--canvas-mesh")).not.toContain(DEFAULT_CANVAS.stops[0].hex);
+    },
+  );
+});
+
 describe("paintCanvas", () => {
   it("writes the app tokens and the canvas properties in one pass", () => {
     const { root, written } = fakeRoot();
@@ -427,11 +451,33 @@ describe("the default root", () => {
     expect([...classes]).toEqual(["light"]);
   });
 
+  it("paints the window it runs in: plain in Settings, the authored canvas elsewhere", () => {
+    const settings = fakeRoot();
+    vi.stubGlobal("window", { location: { hash: "#settings" } });
+    paintWindowCanvas(DEFAULT_CANVAS, "dark", { root: settings.root });
+    expect(settings.written.get("--canvas-accent")).toBe("#007aff");
+    const main = fakeRoot();
+    vi.stubGlobal("window", { location: { hash: "" } });
+    paintWindowCanvas(DEFAULT_CANVAS, "dark", { root: main.root });
+    expect(main.written.get("--canvas-accent")).toBe(DEFAULT_CANVAS.stops[0].hex);
+  });
+
+  it("paints the Settings window's `<html>` when no root is passed", () => {
+    const { root, written, classes } = fakeRoot();
+    vi.stubGlobal("document", { documentElement: root });
+
+    paintSettingsCanvas(DEFAULT_CANVAS, "dark");
+
+    expect(written.get("--canvas-accent")).toBe("#007aff");
+    expect([...classes]).toEqual(["dark"]);
+  });
+
   it("no-ops rather than throwing where there is no document", () => {
     // Only reachable headlessly — `boot()` paints as part of adopting the
     // bootstrap rows, and that must not turn a test about boot into a
     // ReferenceError about the DOM.
     expect(() => paintCanvas(DEFAULT_CANVAS, "dark")).not.toThrow();
+    expect(() => paintSettingsCanvas(DEFAULT_CANVAS, "dark")).not.toThrow();
     expect(() => applyResolvedAppearanceClass("dark")).not.toThrow();
   });
 });

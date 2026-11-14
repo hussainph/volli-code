@@ -58,7 +58,11 @@ export function PrefRow({
           <p className="mt-1 text-ui leading-5 text-muted-foreground">{description}</p>
         ) : null}
       </div>
-      <div className="flex max-w-full flex-wrap items-center gap-2">{children}</div>
+      {/* `ml-auto`: when a narrow window wraps the control under its label it
+          stays on the trailing edge, the column every other control sits in. */}
+      <div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-2">
+        {children}
+      </div>
     </div>
   );
 }

@@ -34,6 +34,18 @@ saturated backdrops, keeping lightness and hue. The painted focus ring is one so
 glass, navigation glass and the rail footer wash together; contrast tests hold it at 3:1 across
 the canvas matrix. `deriveCanvasTokens` alone carries the paper-side ring.
 
+### Settings is the plain exception
+
+The Settings window is a native-style pane, the one deliberate exception to the three
+layers. It never wears the authored canvas: `paintSettingsCanvas` paints generated system
+greys (`SETTINGS_CANVAS`, one achromatic stop at zero vibrancy and grain) with the system
+blue accent (`SETTINGS_ACCENT_CANVAS`), in the resolved appearance. Toolbar and sidebar sit
+on the opaque `--sidebar` rung; content is paper. No canvas mesh, no glass, no backdrop blur:
+every glass or floating material in that window, including overlays portalled to `<body>`,
+renders on its solid fill (`:root[data-window="settings"]`). The native window has no
+`vibrancy`. Appearance's canvas pad and swatches remain previews of the authored canvas.
+The main window's theming is unaffected.
+
 ### Canvas sampling is a surface boolean
 
 `GlassSurface tint` selects canvas-sampling navigation glass, not whether generated neutrals

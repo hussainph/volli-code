@@ -69,7 +69,7 @@ import {
   type ProjectSurfaceOverride,
 } from "@renderer/theme/apply";
 import {
-  paintCanvas,
+  paintWindowCanvas,
   systemPrefersDark,
   type PaintCanvasOptions,
 } from "@renderer/theme/canvas-paint";
@@ -200,8 +200,9 @@ const defaultDeps: ThemeStoreDeps = {
   },
   // Point-free on purpose. An arrow re-listing the parameters is how the
   // `transient` flag came to be silently dropped here: a shorter function is
-  // assignable to a longer signature, so the mistake typechecks.
-  paintCanvas,
+  // assignable to a longer signature, so the mistake typechecks. The Settings
+  // window paints its plain system canvas instead (VC-1228).
+  paintCanvas: paintWindowCanvas,
   refreshEditorTheme: (themeId) => refreshMonacoEditorTheme(themeId),
   beginScopeRepaint,
   systemPrefersDark: () => systemPrefersDark(),

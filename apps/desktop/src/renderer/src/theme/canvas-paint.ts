@@ -36,6 +36,9 @@ import {
   readingBackings,
   readingInk,
   SECONDARY_FILL_ALPHA,
+  SETTINGS_ACCENT_CANVAS,
+  SETTINGS_CANVAS,
+  deriveSettingsTokens,
   regularGlassBackdrop,
   regularGlassTone,
   writingGlass,
@@ -46,6 +49,7 @@ import {
 } from "@volli/shared";
 
 import { applyThemeTokens, type ThemeApplyOptions } from "@renderer/theme/apply";
+import { isSettingsWindow } from "@renderer/lib/window-role";
 
 /**
  * The gradient itself — one CSS `background` value, grain layer included.
@@ -402,6 +406,56 @@ export function paintCanvas(
   applyResolvedAppearanceClass(resolved, target);
   const { tokens, canvasTokens } = deriveCanvasPaint(canvas, resolved);
   applyThemeTokens(tokens, target, canvasTokens, options);
+}
+
+/**
+ * The Settings window's paint (VC-1228): system greys ({@link SETTINGS_CANVAS})
+ * with the system accent, in the resolved appearance, whatever canvas is
+ * authored. The canvas half is the grey canvas's own derivation with only its
+ * accent-coloured members taken from the accent canvas.
+ */
+function deriveSettingsPaint(resolved: ResolvedAppearance): ReturnType<typeof deriveCanvasPaint> {
+  const { canvasTokens } = deriveCanvasPaint(SETTINGS_CANVAS, resolved);
+  const tokens = deriveSettingsTokens(resolved);
+  const accent = SETTINGS_ACCENT_CANVAS.stops[0].hex;
+  return {
+    tokens,
+    canvasTokens: {
+      ...canvasTokens,
+      "--canvas-accent": accent,
+      "--flow": `linear-gradient(120deg, ${accent}, ${accent})`,
+      "--accent-tint": `color-mix(in srgb, ${accent} 10%, ${tokens["--card"]})`,
+      "--accent-selected": `color-mix(in srgb, ${accent} 18%, ${tokens["--card"]})`,
+    },
+  };
+}
+
+/**
+ * Paints the Settings window. Settings is a plain native pane; the authored
+ * canvas appears there only as the Appearance pane's own preview, which draws
+ * it directly. Same signature as {@link paintCanvas}, so the theme store swaps
+ * one for the other without re-listing parameters.
+ */
+export function paintSettingsCanvas(
+  _canvas: Canvas,
+  resolved: ResolvedAppearance,
+  options: PaintCanvasOptions = {},
+): void {
+  const target = options.root ?? documentRoot();
+  if (target === null) return;
+  applyResolvedAppearanceClass(resolved, target);
+  const { tokens, canvasTokens } = deriveSettingsPaint(resolved);
+  applyThemeTokens(tokens, target, canvasTokens, options);
+}
+
+/** The paint this window wears: the plain Settings paint there, the authored canvas elsewhere. */
+export function paintWindowCanvas(
+  canvas: Canvas,
+  resolved: ResolvedAppearance,
+  options: PaintCanvasOptions = {},
+): void {
+  if (isSettingsWindow()) paintSettingsCanvas(canvas, resolved, options);
+  else paintCanvas(canvas, resolved, options);
 }
 
 /**

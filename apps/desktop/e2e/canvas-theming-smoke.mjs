@@ -433,6 +433,20 @@ const settledWindowBackground = (app, expected, role = "main") =>
     { timeout: 6000 },
   ).catch(() => readWindowBackground(app, role));
 
+/**
+ * Settings is a plain native pane (VC-1228): its own document wears generated
+ * system greys, and its native edge is that palette's sidebar rung — never the
+ * authored canvas. The authored canvas shows there only as the Appearance
+ * pane's own preview, the Edit canvas swatch.
+ */
+const settingsPlainEdge = async (settings) =>
+  (await readAppliedTokens(settings, ["--sidebar"]))["--sidebar"].toLowerCase();
+const canvasPreview = (settings) =>
+  settings
+    .locator('[aria-label="Edit canvas"]')
+    .first()
+    .evaluate((el) => el.style.background);
+
 // ---- navigation -------------------------------------------------------------
 
 /**
@@ -983,16 +997,19 @@ try {
     // every paint, so this waits on the round trip rather than sampling it —
     // and in doing so also proves that write reaches main.
     const windowBg = await settledWindowBackground(app, fill);
-    const settingsWindowBg = await settledWindowBackground(app, fill, "settings");
+    const plainEdge = await settingsPlainEdge(settings);
+    const settingsWindowBg = await settledWindowBackground(app, plainEdge, "settings");
     return {
       // Both halves: the window IS the fill, AND the fill is genuinely not the
       // card rung — with a canvas armed those differ deliberately, and a check
       // that only asserted equality would still pass if the canvas collapsed.
+      // Settings keeps its plain edge (VC-1228), whatever the canvas.
       ok:
         fill === BASE_FILL.dark &&
         windowBg === fill &&
         windowBg !== background &&
-        settingsWindowBg === fill,
+        settingsWindowBg === plainEdge &&
+        plainEdge !== fill,
       detail: `main=${windowBg} settings=${settingsWindowBg} fill=${fill} --background=${background}`,
     };
   });
@@ -1053,13 +1070,15 @@ try {
     ]);
     const fill = baseFillOf(canvas);
     const windowBg = await settledWindowBackground(app, fill);
-    const settingsWindowBg = await settledWindowBackground(app, fill, "settings");
+    const plainEdge = await settingsPlainEdge(settings);
+    const settingsWindowBg = await settledWindowBackground(app, plainEdge, "settings");
     return {
       ok:
         fill === BASE_FILL.light &&
         windowBg === fill &&
         windowBg !== background &&
-        settingsWindowBg === fill,
+        settingsWindowBg === plainEdge &&
+        plainEdge !== fill,
       detail: `main=${windowBg} settings=${settingsWindowBg} fill=${fill} --background=${background}`,
     };
   });
@@ -1160,7 +1179,7 @@ cursor-style = block
   // ---- 5. authoring a canvas through the real editor ------------------------
   await attempt(
     12,
-    "the canvas editor repaints live in Settings and persists what it painted",
+    "the canvas editor previews in Settings, persists, and repaints the workbench",
     async () => {
       settings = await openAppearanceSettings(page);
       const before = await readAppliedTokens(page, ["--canvas", "--primary", "--background"]);
@@ -1169,6 +1188,7 @@ cursor-style = block
         "--primary",
         "--background",
       ]);
+      const previewBefore = await canvasPreview(settings);
       await authorCanvas(settings, {
         hex: AUTHORED_HEX,
         vibrancy: AUTHORED_VIBRANCY,
@@ -1183,12 +1203,20 @@ cursor-style = block
         const stop = canvas?.stops[canvas.primaryIndex];
         return stop !== undefined && Math.abs(stop.x - originX) > 0.02 ? canvas : null;
       });
+      const previewAfter = await canvasPreview(settings);
       const afterSettings = await readAppliedTokens(settings, [
         "--canvas",
         "--primary",
         "--background",
       ]);
-      await waitForToken(page, "--canvas", afterSettings["--canvas"], { timeout: 10000 });
+      await waitUntil(
+        "the workbench canvas to repaint",
+        async () => {
+          const now = (await readAppliedTokens(page, ["--canvas"]))["--canvas"];
+          return now === before["--canvas"] ? null : now;
+        },
+        { timeout: 10000 },
+      );
       const after = await readAppliedTokens(page, ["--canvas", "--primary", "--background"]);
 
       return {
@@ -1196,12 +1224,13 @@ cursor-style = block
           stored.stops[stored.primaryIndex].hex === AUTHORED_HEX &&
           Math.abs(stored.vibrancy - Number(AUTHORED_VIBRANCY)) < 0.005 &&
           Math.abs(stored.grain - Number(AUTHORED_GRAIN)) < 0.005 &&
-          beforeSettings["--canvas"] !== afterSettings["--canvas"] &&
-          afterSettings["--canvas"] === after["--canvas"] &&
+          // The editor's own preview moved; the Settings window stayed plain.
+          previewAfter !== previewBefore &&
+          JSON.stringify(afterSettings) === JSON.stringify(beforeSettings) &&
           after["--primary"] !== before["--primary"] &&
           after["--canvas"] !== before["--canvas"] &&
           after["--background"] === before["--background"],
-        detail: `stored=${JSON.stringify(stored)} --primary ${before["--primary"]}→${after["--primary"]} settings=${afterSettings["--primary"]}`,
+        detail: `stored=${JSON.stringify(stored)} --primary ${before["--primary"]}→${after["--primary"]} settings=${afterSettings["--primary"]} preview ${previewBefore === previewAfter ? "unchanged" : "moved"}`,
       };
     },
   );
@@ -1217,24 +1246,27 @@ cursor-style = block
     settings = await openAppearanceSettings(page);
     await openAccentEditor(settings);
     const field = settings.getByRole("textbox", { name: "Primary colour hex" });
-    const before = await readAppliedTokens(settings, ["--canvas"]);
+    // Settings itself stays plain (VC-1228); the preview is the editor's swatch.
+    const before = { "--canvas": await canvasPreview(settings) };
+    const settingsBefore = await readAppliedTokens(settings, ["--canvas"]);
     const mainBefore = await readAppliedTokens(page, ["--canvas"]);
     const storedBefore = await storedGlobalCanvas(page);
     const keptHex = storedBefore.stops[storedBefore.primaryIndex].hex;
 
     await field.click();
     await field.fill(ABANDONED_HEX);
-    const previewed = await waitUntil("the typed colour to paint in Settings", async () => {
-      const now = await readAppliedTokens(settings, ["--canvas"]);
-      return now["--canvas"] === before["--canvas"] ? null : now["--canvas"];
+    const previewed = await waitUntil("the typed colour to preview in Settings", async () => {
+      const now = await canvasPreview(settings);
+      return now === before["--canvas"] ? null : now;
     });
 
     await settings.keyboard.press("Escape");
 
     const restored = await waitUntil("the abandoned preview to come off", async () => {
-      const now = await readAppliedTokens(settings, ["--canvas"]);
-      return now["--canvas"] === before["--canvas"] ? now["--canvas"] : null;
-    }).catch(async () => (await readAppliedTokens(settings, ["--canvas"]))["--canvas"]);
+      const now = await canvasPreview(settings);
+      return now === before["--canvas"] ? now : null;
+    }).catch(() => canvasPreview(settings));
+    const settingsAfter = await readAppliedTokens(settings, ["--canvas"]);
     const storedAfter = await storedGlobalCanvas(page);
     // Escape also dismisses the colour popover. Reopen it to check the
     // restored field rather than waiting on a deliberately unmounted input.
@@ -1247,6 +1279,7 @@ cursor-style = block
         previewed !== before["--canvas"] &&
         restored === before["--canvas"] &&
         mainAfter["--canvas"] === mainBefore["--canvas"] &&
+        settingsAfter["--canvas"] === settingsBefore["--canvas"] &&
         storedAfter.stops[storedAfter.primaryIndex].hex === keptHex &&
         (await field.inputValue()) === keptHex,
       detail: `painted ${before["--canvas"]}→${previewed}→${restored} main=${mainAfter["--canvas"]} stored=${storedAfter.stops[storedAfter.primaryIndex].hex}`,
@@ -1380,7 +1413,8 @@ cursor-style = block
       },
       { timeout: 6000 },
     );
-    const settingsFill = baseFillOf((await readAppliedTokens(settings, ["--canvas"]))["--canvas"]);
+    // Settings keeps its plain edge while it edits a workspace's canvas (VC-1228).
+    const settingsFill = await settingsPlainEdge(settings);
     const settingsWindowBg = await settledWindowBackground(app, settingsFill, "settings");
 
     const stored = await storedTheme(page);

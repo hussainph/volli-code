@@ -93,7 +93,8 @@ it("shows account marks, compact rows and all providers on request", async () =>
   expect(accounts.querySelector('[data-slot="identity-tile"] svg')).not.toBeNull();
   expect(available.querySelectorAll('[data-testid^="account-"]')).toHaveLength(5);
   expect(available.querySelectorAll("svg path").length).toBeGreaterThanOrEqual(5);
-  expect(accounts.textContent).not.toContain("Azure OpenAI");
+  // The Settings account lists name each provider in the row (VC-1228).
+  expect(accounts.textContent).toContain("Azure OpenAI");
   expect(accounts.querySelector('[role="img"][aria-label="Azure OpenAI"]')).not.toBeNull();
   expect(host.textContent).not.toContain("Unknown");
   expect(host.textContent).not.toContain("Sign in required");
@@ -102,7 +103,7 @@ it("shows account marks, compact rows and all providers on request", async () =>
   )!;
   await act(async () => showAll.click());
   expect(available.querySelectorAll('[data-testid^="account-"]')).toHaveLength(7);
-  expect(available.querySelector('[aria-label="mistral"]')).not.toBeNull();
+  expect(available.textContent).toContain("mistral");
 });
 it("searches beyond the preview without needing Show all", async () => {
   await act(async () =>
@@ -120,7 +121,7 @@ it("searches beyond the preview without needing Show all", async () => {
   });
   const available = host.querySelector('[data-slot="model-access-accounts-available"]')!;
   expect(available.querySelectorAll('[data-testid^="account-"]')).toHaveLength(1);
-  expect(available.querySelector('[aria-label="mistral"]')).not.toBeNull();
+  expect(available.textContent).toContain("mistral");
   expect(available.textContent).not.toContain("Show all");
 });
 

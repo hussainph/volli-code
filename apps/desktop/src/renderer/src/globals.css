@@ -3714,9 +3714,6 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   height: var(--spacing-titlebar);
   padding: 6px 16px 6px 88px;
 }
-.settings-window [data-slot="pref-content"] {
-  border-radius: var(--radius-container) 0 0 0;
-}
 [data-settings-scope] [data-selected="true"] {
   background: var(--fill-secondary);
   box-shadow: inset 0 0 0 0.5px var(--border-strong);
@@ -3849,12 +3846,42 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   gap: inherit;
 }
 
-/* Preferences has its own authored canvas, a single tinted navigation glass
- * pass, and independent paper content. The frame itself is not another blur. */
+/* Settings is a plain native pane (VC-1228), the one deliberate exception to
+ * the canvas: theme/canvas-paint.ts paints this window from SETTINGS_CANVAS,
+ * so its tokens are generated system greys. No mesh, no web glass: the toolbar
+ * and sidebar sit on the opaque sidebar rung, content on paper, and every
+ * overlay (portalled outside `.settings-window`, hence the root attribute) is
+ * opaque. Backdrop blur also misrenders over a vibrant macOS window. */
+:root[data-window="settings"],
 .settings-window {
-  background: var(--canvas-mesh), var(--canvas);
+  background: var(--sidebar);
 }
-[data-slot="pref-navigation"].glass {
-  border-radius: 0;
+[data-slot="pref-navigation"] {
   --settings-icon-ink: var(--control-light-paper);
+}
+:root[data-window="settings"]
+  :is(
+    .glass,
+    .material-clear,
+    .material-regular,
+    .material-thick,
+    .material-floating,
+    [cmdk-dialog],
+    .toaster [data-sonner-toast].material-floating,
+    [data-slot="tab-strip"]
+  ):not(:is(.material-floating, [cmdk-dialog]) *) {
+  background: var(--material-solid-fill, var(--glass-fill)) !important;
+  backdrop-filter: none !important;
+}
+:root[data-window="settings"]
+  :is(.material-floating, [cmdk-dialog])
+  :is(.material-regular, .material-clear) {
+  background: transparent !important;
+  backdrop-filter: none !important;
+}
+:root[data-window="settings"] :is(.glass, .material-floating)::after {
+  display: none;
+}
+:root[data-window="settings"] :is(.material-floating, [cmdk-dialog]) {
+  border: 0.5px solid var(--border-strong);
 }

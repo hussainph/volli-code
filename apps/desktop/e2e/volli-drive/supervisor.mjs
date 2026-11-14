@@ -275,6 +275,9 @@ async function act(args) {
     throw new Error(`generation ${gen} was taken of window ${current.window}, not ${name}`);
   const target = ref ? page.locator(`aria-ref=${ref}`) : null;
   const timeout = 10_000;
+  // Motion evidence: consecutive compositor frames of this window from just
+  // before the action until recordMs after it, never a screen capture.
+  const recording = args.recordMs === undefined ? null : await startFrames(page, name);
   const started = performance.now();
   switch (kind) {
     case "click":
@@ -309,12 +312,21 @@ async function act(args) {
       break;
   }
   const actionMs = Math.round(performance.now() - started);
+  const frames =
+    recording === null
+      ? undefined
+      : await recording.stop(Math.min(Math.max(Number(args.recordMs) || 0, 0), 5_000));
   // Let the renderer commit what the action caused before re-reading it.
   await page.waitForTimeout(Number(args.settleMs ?? 250));
   const fresh = await snapshot({ window: name });
-  const result = { action: { kind, ref, key, text, direction, ms: actionMs }, snapshot: fresh };
+  const result = {
+    action: { kind, ref, key, text, direction, ms: actionMs },
+    frames,
+    snapshot: fresh,
+  };
   transcript({
     cmd: "act",
+    frames,
     gen,
     kind,
     ref,
@@ -324,6 +336,35 @@ async function act(args) {
     nextGeneration: fresh.generation,
   });
   return result;
+}
+
+/** Page.startScreencast frames, written as PNGs beside the screenshots. */
+async function startFrames(page, windowName) {
+  shotCounter += 1;
+  const dir = join(
+    L.screenshotsDir,
+    `${String(shotCounter).padStart(3, "0")}-frames-${windowName}`,
+  );
+  mkdirSync(dir, { recursive: true });
+  const cdp = await page.context().newCDPSession(page);
+  const writes = [];
+  const begin = performance.now();
+  cdp.on("Page.screencastFrame", ({ data, sessionId }) => {
+    const at = Math.round(performance.now() - begin);
+    const path = join(dir, `${String(writes.length).padStart(4, "0")}-${at}ms.png`);
+    writes.push(fs.writeFile(path, Buffer.from(data, "base64")));
+    void cdp.send("Page.screencastFrameAck", { sessionId }).catch(() => {});
+  });
+  await cdp.send("Page.startScreencast", { format: "png", everyNthFrame: 1 });
+  return {
+    async stop(afterMs) {
+      await page.waitForTimeout(afterMs);
+      await cdp.send("Page.stopScreencast").catch(() => {});
+      await Promise.all(writes);
+      await cdp.detach().catch(() => {});
+      return { dir, count: writes.length };
+    },
+  };
 }
 
 async function waitFor({ text, gone = false, timeout = 15_000, window }) {
@@ -1521,6 +1562,29 @@ async function handle(cmd, args) {
       return waitFor(args);
     case "screenshot":
       return screenshot(args);
+    case "ui-zoom": {
+      // The View menu's addressed zoom event, delivered to one window's page.
+      if (!["in", "out", "reset"].includes(args.step))
+        throw new Error("ui-zoom step must be in, out or reset");
+      const { page, name } = await pickWindow(args.window);
+      const url = page.url();
+      await app.evaluate(
+        ({ BrowserWindow }, input) => {
+          const target = BrowserWindow.getAllWindows().find(
+            (w) => w.webContents.getURL() === input.url,
+          );
+          if (!target) throw new Error("window not found");
+          target.webContents.send("volli:ui-zoom-command", input.step);
+        },
+        { url, step: args.step },
+      );
+      await page.waitForTimeout(300);
+      const scale = await page.evaluate(
+        () => getComputedStyle(document.querySelector("[style*=zoom]") ?? document.body).zoom,
+      );
+      transcript({ cmd: "ui-zoom", window: name, step: args.step, scale });
+      return { window: name, scale };
+    }
     case "windows":
       return windowsList();
     case "doctor":
