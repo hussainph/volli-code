@@ -600,6 +600,10 @@ export default defineConfig(({ mode, command }) => ({
         // "Scroll to latest" (VC-1232): the trip that must end at the true end
         // however the content changes on the way. A wrong answer stops short.
         "src/components/ui/ai-elements/scroll-to-latest.ts",
+        // Following a streaming reply (VC-1234): whether a reader's own scroll
+        // turns it on or off. A wrong answer leaves the reply running below
+        // the fold, or pulls a reader who scrolled up back to the end.
+        "src/components/ui/ai-elements/reader-following.ts",
         "src/lib/boundary-timer.ts",
         // Where a chat-named path opens (VC-120): the raw-tool-path translation
         // both transcript surfaces trust before touching any store or IPC.
