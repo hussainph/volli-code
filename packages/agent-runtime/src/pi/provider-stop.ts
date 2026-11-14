@@ -151,6 +151,13 @@ export class ProviderStopCapture {
   #type: string | null = null;
   /** Why no credential could be had for this request, before anything was sent. */
   #credential: string | null = null;
+  /**
+   * Whether this request reached the wire: a fetch began, a response arrived,
+   * or the provider streamed an event. A credential cause is only ever the
+   * answer when nothing did — a request that went out has its own facts, and
+   * they win.
+   */
+  #sent = false;
   #message: string | null = null;
   #status: number | null = null;
   #resetsAt: number | null = null;
@@ -168,10 +175,15 @@ export class ProviderStopCapture {
    * (VC-1236). Resolving through Pi's public `getAuth` first keeps the code as
    * a fact. The failure is rethrown unchanged, so Pi's own failure stays the
    * stream's failure and no second refresh is attempted.
+   *
+   * `missing` is the caller's reading of a resolution that answered nothing
+   * for a provider Pi knows: the case Pi's own request setup refuses as "not
+   * configured". It is recorded only as a candidate; {@link detail} uses it
+   * only when no request went out.
    */
-  async credential(resolve: () => Promise<unknown>): Promise<void> {
+  async credential(resolve: () => Promise<{ missing: boolean }>): Promise<void> {
     this.#credential = null;
-    let resolved: unknown;
+    let resolved: { missing: boolean };
     try {
       resolved = await resolve();
     } catch (error) {
@@ -184,12 +196,13 @@ export class ProviderStopCapture {
             : null;
       throw error;
     }
-    if (resolved === undefined) this.#credential = SESSION_CREDENTIAL_STOP_TYPES.missing;
+    if (resolved.missing) this.#credential = SESSION_CREDENTIAL_STOP_TYPES.missing;
   }
 
   /** Preserve error facts before an SDK replaces them with friendly prose. */
   fetch(inner: typeof globalThis.fetch, now: () => number): typeof globalThis.fetch {
     return async (input, init) => {
+      this.#sent = true;
       this.#type = null;
       this.#message = null;
       this.#status = null;
@@ -237,7 +250,7 @@ export class ProviderStopCapture {
               }
               raw += decoder.decode(part.value, { stream: true });
             }
-            if (raw.length > 0) this.event(JSON.parse(raw));
+            if (raw.length > 0) this.#read(JSON.parse(raw));
           } catch {
             /* Body failure must never replace the provider's failure. */
           } finally {
@@ -251,6 +264,7 @@ export class ProviderStopCapture {
   }
 
   response(response: ProviderResponse, now: number): void {
+    this.#sent = true;
     this.#status = response.status;
     // Select only a retry instant. Never copy the header map into a fact.
     const retry = response.headers["retry-after"];
@@ -262,7 +276,14 @@ export class ProviderStopCapture {
     }
   }
 
+  /** One event the provider streamed for this request. */
   event(value: unknown): void {
+    this.#sent = true;
+    this.#read(value);
+  }
+
+  /** Read one provider error/stop shape, from the stream, a body or an SDK envelope. */
+  #read(value: unknown): void {
     const event = record(value);
     const response = record(event["response"]);
     const delta = record(event["delta"]);
@@ -302,7 +323,7 @@ export class ProviderStopCapture {
     const envelope = /^(?:(\d{3})\s*:?[ ]*)?(\{[\s\S]*\})$/.exec(raw);
     if (envelope !== null) {
       try {
-        this.event(JSON.parse(envelope[2]!));
+        this.#read(JSON.parse(envelope[2]!));
         if (envelope[1] !== undefined && this.#status === null) this.#status = Number(envelope[1]);
       } catch {
         /* Malformed prose is not evidence. */
@@ -312,7 +333,7 @@ export class ProviderStopCapture {
       message.rawStopReason === "volli.stream-stalled" ||
       message.rawStopReason === "volli.runtime-error"
         ? message.rawStopReason
-        : (this.#credential ?? this.#type ?? message.rawStopReason ?? null);
+        : ((this.#sent ? null : this.#credential) ?? this.#type ?? message.rawStopReason ?? null);
     // A diagnostic is historical unless Pi explicitly attributes it to the
     // failed stream (after its first event, without an SSE fallback). Even then
     // it cannot override a terminal response/status/stop reason.

@@ -103,7 +103,7 @@ describe("provider stop facts", () => {
 
   it("reads an unconfigured provider as missing, and an abort or success as nothing", async () => {
     const missing = new ProviderStopCapture();
-    await missing.credential(async () => undefined);
+    await missing.credential(async () => ({ missing: true }));
     expect(
       missing.detail(message({ errorMessage: "Provider is not configured: fixture" })),
     ).toMatchObject({ category: "auth-failed", providerType: "volli.credential-missing" });
@@ -117,13 +117,48 @@ describe("provider stop facts", () => {
     });
 
     const resolved = new ProviderStopCapture();
-    await resolved.credential(async () => ({ auth: {} }));
+    await resolved.credential(async () => ({ missing: false }));
     resolved.response({ status: 401, headers: {} }, 0);
     expect(resolved.detail(message())).toMatchObject({
       category: "auth-failed",
       providerType: null,
       httpStatus: 401,
     });
+  });
+
+  // A credential cause names a request that never left. Once one did — a
+  // fetch began, a response arrived, the provider streamed — its own facts
+  // are the stop, whatever the resolution beforehand answered.
+  it.each([
+    [
+      "a fetch",
+      async (capture: ProviderStopCapture) => {
+        await capture.fetch(
+          async () => new Response("{}", { status: 200 }),
+          () => 0,
+        )("x");
+      },
+    ],
+    [
+      "a response",
+      async (capture: ProviderStopCapture) => {
+        capture.response({ status: 500, headers: {} }, 0);
+      },
+    ],
+    [
+      "a stream event",
+      async (capture: ProviderStopCapture) => {
+        capture.event({ type: "error", error: { type: "overloaded_error", message: "busy" } });
+      },
+    ],
+  ])("never lets a credential candidate outrank a request that went out (%s)", async (_, sent) => {
+    const capture = new ProviderStopCapture();
+    await capture.credential(async () => ({ missing: true }));
+    await sent(capture);
+    expect(capture.detail(message({ errorMessage: "500 server error" })).providerType).not.toBe(
+      "volli.credential-missing",
+    );
+    expect(capture.detail(message()).category).not.toBe("auth-failed");
   });
 
   it("reads stream-native error envelopes and explicit stop reasons", () => {

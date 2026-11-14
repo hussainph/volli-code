@@ -23,7 +23,17 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { createModels, InMemoryCredentialStore, type Credential } from "@earendil-works/pi-ai";
+import {
+  createModels,
+  createProvider,
+  InMemoryCredentialStore,
+  type Api,
+  type ApiKeyAuth,
+  type Credential,
+  type Provider,
+} from "@earendil-works/pi-ai";
+import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
+import { groqProvider } from "@earendil-works/pi-ai/providers/groq";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import type { RuntimeObservation } from "@volli/shared";
 import { createPiAgentRuntime } from "./runtime";
@@ -173,16 +183,20 @@ afterEach(async () => {
   rmSync(root, { recursive: true, force: true });
 });
 
-async function session(credential: Credential | undefined) {
+async function session(
+  credential: Credential | undefined,
+  options: { provider?: Provider<Api>; modelId?: string } = {},
+) {
+  const using = options.provider ?? provider;
   const credentials = new InMemoryCredentialStore();
-  if (credential !== undefined) await credentials.modify(provider.id, async () => credential);
+  if (credential !== undefined) await credentials.modify(using.id, async () => credential);
   // No ambient environment: a key in the test runner's env must not answer for
   // the credential under test.
   const models = createModels({
     credentials,
     authContext: { env: async () => undefined, fileExists: async () => false },
   });
-  models.setProvider(provider);
+  models.setProvider(using);
   const workspace = join(root, "worktree");
   mkdirSync(workspace, { recursive: true });
   const observations: RuntimeObservation[] = [];
@@ -202,7 +216,11 @@ async function session(credential: Credential | undefined) {
     },
     workspacePath: workspace,
     venue: "local",
-    model: { providerId: provider.id, modelId: model.id, reasoningLevel: "off" },
+    model: {
+      providerId: using.id,
+      modelId: options.modelId ?? model.id,
+      reasoningLevel: "off",
+    },
     brief: { text: "fixture" },
     tools: { tools: [] },
     observer: async (observation) => {
@@ -456,6 +474,106 @@ describe("the neighbours that also need a person", () => {
           (o) => o.kind === "attention" && o.state === "raised" && o.reason === "auth",
         ),
       ).toBe(false);
+    } finally {
+      await handle.close();
+    }
+  });
+});
+
+/**
+ * A provider that needs no credential: an OpenAI-compatible endpoint on this
+ * machine (Ollama, LM Studio and the like). Pi's request setup refuses an auth
+ * that resolves to `undefined`, and its OpenAI-compatible adapter refuses one
+ * with no key ("No API key for provider"), so such an endpoint is configured
+ * with a placeholder key the server ignores — and its requests go out.
+ */
+function localProvider(auth: ApiKeyAuth): Provider<Api> {
+  const template = groqProvider().getModels()[0]!;
+  return createProvider({
+    id: "local-fixture",
+    name: "Local fixture",
+    baseUrl: `${fake.origin}/v1`,
+    auth: { apiKey: auth },
+    models: [
+      { ...template, id: "local-model", provider: "local-fixture", baseUrl: `${fake.origin}/v1` },
+    ],
+    api: openAICompletionsApi(),
+  });
+}
+
+const KEYLESS: ApiKeyAuth = {
+  name: "No key",
+  resolve: async () => ({ auth: { apiKey: "placeholder" } }),
+};
+
+describe("a provider that needs no credential", () => {
+  it("a 500 keeps its status and is never read as a sign-in", async () => {
+    fake.handle.messages = (_request, _body, response) =>
+      json(response, 500, { error: { type: "server_error", message: "boom" } });
+    const { handle, observations } = await session(undefined, {
+      provider: localProvider(KEYLESS),
+      modelId: "local-model",
+    });
+    try {
+      await handle.submitUserMessage("fixture");
+      const { turn, attention } = stopOf(observations);
+      expect(fake.paths.every((path) => path === "/v1/chat/completions")).toBe(true);
+      expect(turn).toMatchObject({ stopDetail: { httpStatus: 500 } });
+      expect(turn?.kind === "turn" ? turn.stopDetail?.category : null).not.toBe("auth-failed");
+      expect(attention).toMatchObject({ reason: "runtime-failure" });
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it("a 429 keeps its status and type and is never read as a sign-in", async () => {
+    fake.handle.messages = (_request, _body, response) =>
+      json(response, 429, {
+        error: { type: "insufficient_quota", code: "insufficient_quota", message: "quota" },
+      });
+    const { handle, observations } = await session(undefined, {
+      provider: localProvider(KEYLESS),
+      modelId: "local-model",
+    });
+    try {
+      await handle.submitUserMessage("fixture");
+      const { turn, attention } = stopOf(observations);
+      expect(turn).toMatchObject({
+        stopDetail: {
+          category: "rate-limited",
+          providerType: "insufficient_quota",
+          httpStatus: 429,
+        },
+      });
+      expect(attention).toMatchObject({ reason: "runtime-failure" });
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it("a credential that appears between the check and the request: the request's facts win", async () => {
+    // The first resolution (Volli's) answers nothing; Pi's own, a moment
+    // later, finds the key a sign-in just stored, and the request goes out.
+    let resolutions = 0;
+    const racing: ApiKeyAuth = {
+      name: "Racing key",
+      resolve: async () => {
+        resolutions += 1;
+        return resolutions === 1 ? undefined : { auth: { apiKey: "fixture-late-key" } };
+      },
+    };
+    fake.handle.messages = (_request, _body, response) =>
+      json(response, 500, { error: { type: "server_error", message: "boom" } });
+    const { handle, observations } = await session(undefined, {
+      provider: localProvider(racing),
+      modelId: "local-model",
+    });
+    try {
+      await handle.submitUserMessage("fixture");
+      const { turn } = stopOf(observations);
+      expect(fake.paths).toContain("/v1/chat/completions");
+      expect(turn).toMatchObject({ stopDetail: { httpStatus: 500 } });
+      expect(JSON.stringify(observations)).not.toContain("volli.credential-missing");
     } finally {
       await handle.close();
     }

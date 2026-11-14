@@ -32,7 +32,6 @@
 import {
   providerSignInStop,
   shortSessionId,
-  type ProviderSignInStop,
   type NotificationRequest,
   type SessionProjection,
 } from "@volli/shared";
@@ -42,6 +41,8 @@ import { hostLogger } from "../log/root";
 const log = hostLogger("provider-sign-in-alert");
 
 export interface ProviderSignInAlertPorts {
+  /** The provider's display name, or `null` when unknown; the id stands in then. */
+  providerLabel?(providerId: string): string | null;
   /** The one delivery path (VC-295); it owns the preference and focus rules. */
   notify(request: NotificationRequest): void;
   /** Diagnostics seam. Defaults to the host log. */
@@ -55,15 +56,15 @@ export interface ProviderSignInAlert {
   observeBirth(sessionId: string): void;
 }
 
-/** What the alert says. Product text only; the provider is named by its id. */
-export function providerSignInNotification(
-  stop: ProviderSignInStop,
+/** What the alert says. Product text only; the provider by its label, else its id. */
+function providerSignInNotification(
+  provider: string,
   session: { id: string; title: string | null },
 ): { title: string; body: string } {
   const subject = session.title ?? `Session ${shortSessionId(session.id)}`;
   return {
     title: "Sign-in needed",
-    body: `${subject} stopped: the ${stop.providerId} sign-in expired or was refused.`,
+    body: `${subject} stopped: the ${provider} sign-in expired or was refused.`,
   };
 }
 
@@ -97,7 +98,10 @@ export function createProviderSignInAlert(ports: ProviderSignInAlertPorts): Prov
         if (episodeOpen(stop.providerId, sessionId)) return;
         ports.notify({
           producer: "provider-sign-in-required",
-          ...providerSignInNotification(stop, projection.session),
+          ...providerSignInNotification(
+            ports.providerLabel?.(stop.providerId) ?? stop.providerId,
+            projection.session,
+          ),
           target: {
             kind: "session",
             projectId: projection.session.projectId,

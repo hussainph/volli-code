@@ -58,10 +58,11 @@ function projection(
   } as unknown as SessionProjection;
 }
 
-function harness() {
+function harness(labels: Record<string, string> = {}) {
   const notified: NotificationRequest[] = [];
   const errors: unknown[] = [];
   const alert = createProviderSignInAlert({
+    providerLabel: (providerId) => labels[providerId] ?? null,
     notify: (request) => notified.push(request),
     onError: (error) => errors.push(error),
   });
@@ -70,7 +71,7 @@ function harness() {
 
 describe("provider sign-in alert", () => {
   it("tells the person once when four chats stop on one credential", () => {
-    const { alert, notified, errors } = harness();
+    const { alert, notified, errors } = harness({ anthropic: "Anthropic" });
     const ids = ["a", "b", "c", "d"];
     for (const id of ids) alert.observe(projection(id));
     for (const id of ids) {
@@ -83,7 +84,7 @@ describe("provider sign-in alert", () => {
       {
         producer: "provider-sign-in-required",
         title: "Sign-in needed",
-        body: "Chat a stopped: the anthropic sign-in expired or was refused.",
+        body: "Chat a stopped: the Anthropic sign-in expired or was refused.",
         target: {
           kind: "session",
           projectId: "p",

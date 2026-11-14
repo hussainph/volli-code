@@ -38,6 +38,7 @@ function runtimeWiring() {
     pendingTurnStarts: vi.fn((): ReadonlySet<string> => new Set<string>()),
     holdTurnStarts: vi.fn(),
     releaseTurnStarts: vi.fn(),
+    providerLabel: vi.fn(() => null),
   } satisfies SessionRuntimeWiring;
 }
 

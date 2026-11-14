@@ -2663,14 +2663,19 @@ async function attachSession(
       // this performs is persisted before it returns, so the resolution inside
       // `streamSimple` reads the fresh credential back instead of refreshing.
       return lazyStream(requestModel, async () => {
-        await capture.credential(() =>
+        await capture.credential(async () => {
           // The same overrides Pi's own resolution inside `streamSimple` reads.
-          models.getAuth(requestModel, {
+          const auth = await models.getAuth(requestModel, {
             apiKey: options?.apiKey,
             env: options?.env,
             signal: options?.signal,
-          }),
-        );
+          });
+          // `getAuth` answers nothing for an unknown provider too. Only a
+          // known provider's empty answer is the "not configured" Pi refuses.
+          return {
+            missing: auth === undefined && models.getProvider(requestModel.provider) !== undefined,
+          };
+        });
         return models.streamSimple(requestModel, context, requestOptions);
       });
     };

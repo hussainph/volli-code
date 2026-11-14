@@ -62,6 +62,11 @@ export interface SessionRuntimeWiring {
   /** The runtime's idle-exit start latch (VC-577). */
   holdTurnStarts(): void;
   releaseTurnStarts(): void;
+  /**
+   * A provider's display name, as Model Access labels it, or `null` when no
+   * runtime knows it. Read for the provider sign-in alert (VC-1236).
+   */
+  providerLabel(providerId: string): string | null;
 }
 
 const NO_PENDING_STARTS: ReadonlySet<string> = new Set();
@@ -147,6 +152,7 @@ export function createHostSessionServices(
     pendingTurnStarts: () => NO_PENDING_STARTS,
     holdTurnStarts: () => undefined,
     releaseTurnStarts: () => undefined,
+    providerLabel: () => null,
   };
   const hostNoticeOutbox = createSqliteHostNoticeOutbox(db, sessionLedger);
   const runAttention = createRunAttentionWatch({
@@ -156,6 +162,7 @@ export function createHostSessionServices(
     },
   });
   const providerSignIn = createProviderSignInAlert({
+    providerLabel: (providerId) => runtime.providerLabel(providerId),
     notify: (request) => {
       ports.attention.deliver(request);
     },
