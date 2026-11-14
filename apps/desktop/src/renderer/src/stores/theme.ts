@@ -62,7 +62,6 @@ import type {
 import { create } from "zustand";
 
 import { toastError } from "@renderer/lib/toast";
-import { isSettingsWindow } from "@renderer/lib/window-role";
 import {
   resolveActiveTheme,
   resolveThemeSurface,
@@ -70,8 +69,7 @@ import {
   type ProjectSurfaceOverride,
 } from "@renderer/theme/apply";
 import {
-  paintCanvas,
-  paintSettingsCanvas,
+  paintWindowCanvas,
   systemPrefersDark,
   type PaintCanvasOptions,
 } from "@renderer/theme/canvas-paint";
@@ -204,7 +202,7 @@ const defaultDeps: ThemeStoreDeps = {
   // `transient` flag came to be silently dropped here: a shorter function is
   // assignable to a longer signature, so the mistake typechecks. The Settings
   // window paints its plain system canvas instead (VC-1228).
-  paintCanvas: isSettingsWindow() ? paintSettingsCanvas : paintCanvas,
+  paintCanvas: paintWindowCanvas,
   refreshEditorTheme: (themeId) => refreshMonacoEditorTheme(themeId),
   beginScopeRepaint,
   systemPrefersDark: () => systemPrefersDark(),

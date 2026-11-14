@@ -49,6 +49,7 @@ import {
 } from "@volli/shared";
 
 import { applyThemeTokens, type ThemeApplyOptions } from "@renderer/theme/apply";
+import { isSettingsWindow } from "@renderer/lib/window-role";
 
 /**
  * The gradient itself — one CSS `background` value, grain layer included.
@@ -445,6 +446,16 @@ export function paintSettingsCanvas(
   applyResolvedAppearanceClass(resolved, target);
   const { tokens, canvasTokens } = deriveSettingsPaint(resolved);
   applyThemeTokens(tokens, target, canvasTokens, options);
+}
+
+/** The paint this window wears: the plain Settings paint there, the authored canvas elsewhere. */
+export function paintWindowCanvas(
+  canvas: Canvas,
+  resolved: ResolvedAppearance,
+  options: PaintCanvasOptions = {},
+): void {
+  if (isSettingsWindow()) paintSettingsCanvas(canvas, resolved, options);
+  else paintCanvas(canvas, resolved, options);
 }
 
 /**

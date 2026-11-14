@@ -24,6 +24,7 @@ import {
   deriveCanvasPaint,
   paintCanvas,
   paintSettingsCanvas,
+  paintWindowCanvas,
   resetSystemAppearanceWatchForTests,
   systemPrefersDark,
   watchSystemAppearance,
@@ -448,6 +449,17 @@ describe("the default root", () => {
 
     expect(written.get("--canvas")).toBe(canvasBackground(DEFAULT_CANVAS, "light"));
     expect([...classes]).toEqual(["light"]);
+  });
+
+  it("paints the window it runs in: plain in Settings, the authored canvas elsewhere", () => {
+    const settings = fakeRoot();
+    vi.stubGlobal("window", { location: { hash: "#settings" } });
+    paintWindowCanvas(DEFAULT_CANVAS, "dark", { root: settings.root });
+    expect(settings.written.get("--canvas-accent")).toBe("#007aff");
+    const main = fakeRoot();
+    vi.stubGlobal("window", { location: { hash: "" } });
+    paintWindowCanvas(DEFAULT_CANVAS, "dark", { root: main.root });
+    expect(main.written.get("--canvas-accent")).toBe(DEFAULT_CANVAS.stops[0].hex);
   });
 
   it("paints the Settings window's `<html>` when no root is passed", () => {
