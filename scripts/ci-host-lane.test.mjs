@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 import { parse } from "yaml";
 
-import { testWorkerExecArgv } from "../vitest.node-flags.ts";
+import { runnerStallTestTimeout, testWorkerExecArgv } from "../vitest.node-flags.ts";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const workflow = parse(readFileSync(join(root, ".github/workflows/ci.yml"), "utf8"));
@@ -674,6 +674,40 @@ test("Node 24 test forks run without Wasm code GC, in every project that saw the
   assert.equal(desktop.match(/\.\.\.TEST_WORKER_NODE_FLAGS,/gu)?.length, 2);
   const main = desktop.slice(desktop.indexOf('name: "main"'));
   assert.ok(main.indexOf("...TEST_WORKER_NODE_FLAGS,") < main.indexOf("coverage: {"));
+});
+
+test("host-core takes the runner-stall test timeout in CI only, and no other lane does (VC-1233)", () => {
+  assert.deepEqual(runnerStallTestTimeout({ CI: "true" }), { testTimeout: 15_000 });
+  assert.deepEqual(runnerStallTestTimeout({ CI: "1" }), { testTimeout: 15_000 });
+  // At a desk Vitest keeps its own 5 s default.
+  assert.deepEqual(runnerStallTestTimeout({}), {});
+  assert.deepEqual(runnerStallTestTimeout({ CI: "" }), {});
+  assert.deepEqual(runnerStallTestTimeout({ CI: "false" }), {});
+  assert.deepEqual(runnerStallTestTimeout({ CI: "0" }), {});
+  const host = readFileSync(join(root, "packages/host-core/vite.config.ts"), "utf8");
+  assert.equal(host.match(/\.\.\.RUNNER_STALL_TEST_TIMEOUT,/gu)?.length, 1);
+  // Desktop and the packages showed no five-second stall failure of their own.
+  const desktop = readFileSync(join(root, "apps/desktop/vite.config.ts"), "utf8");
+  assert.doesNotMatch(desktop, /RUNNER_STALL_TEST_TIMEOUT|testTimeout/u);
+});
+
+test("a failed host-core shard summarizes its timed-out tests against runner health", () => {
+  const steps = jobs["test-host-core"].steps;
+  const shard = steps.find((step) => step.name.startsWith("Run shard "));
+  const summary = steps.find(
+    (step) => step.name === "Summarize timed-out tests against runner health",
+  );
+  const upload = steps.find((step) => step.name === "Upload host-core worker diagnostics");
+  assert.ok(steps.indexOf(summary) > steps.indexOf(shard));
+  assert.ok(steps.indexOf(summary) < steps.indexOf(upload));
+  assert.equal(summary.if, "failure()");
+  assert.equal(summary["continue-on-error"], undefined);
+  assert.equal(summary.run, "node scripts/ci-timeout-stall-summary.mjs .tmp/host-core-diagnostics");
+  assert.ok(shard.env.VOLLI_TEST_DIAGNOSTICS.endsWith("/.tmp/host-core-diagnostics"));
+  const policy = jobs.check.steps.find(
+    (step) => step.name === "Check host Electron boundary and CI gate policy",
+  ).run;
+  assert.ok(policy.includes("scripts/ci-timeout-stall-summary.test.mjs"));
 });
 
 test("symbolization runs in the existing Linux job without consuming diagnostic or test failures", () => {

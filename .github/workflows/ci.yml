@@ -386,7 +386,7 @@ jobs:
           node scripts/check-host-electron-imports.mjs --self-test
           node scripts/check-host-electron-imports.mjs
           node --test scripts/ci-host-lane.test.mjs scripts/ci-rerun-abandoned.test.mjs
-          node --test apps/desktop/scripts/test-sequencer.test.mjs scripts/setup-toolchain.test.mjs scripts/host-test-diagnostics.test.mjs scripts/worker-node-archive.test.mjs scripts/ci-runner-health.test.mjs
+          node --test apps/desktop/scripts/test-sequencer.test.mjs scripts/setup-toolchain.test.mjs scripts/host-test-diagnostics.test.mjs scripts/worker-node-archive.test.mjs scripts/ci-runner-health.test.mjs scripts/ci-timeout-stall-summary.test.mjs
 
       # The encoded design system (the tokens ARE the spec, not a document).
       # `vp check` is fmt + lint. These source-specific guards run separately
@@ -852,6 +852,13 @@ jobs:
             --coverage.thresholds.statements=0 --coverage.thresholds.branches=0 \
             --coverage.thresholds.functions=0 --coverage.thresholds.lines=0 2>&1 \
             | node ../../scripts/capture-test-output.cjs "$VOLLI_TEST_DIAGNOSTICS/coverage.log"
+
+      # A test that failed on its timeout gets one summary line saying whether
+      # the runner-health samples over the seconds it ran show a disk stall
+      # (VC-1233). Reads only this shard's diagnostics; always exits 0.
+      - name: Summarize timed-out tests against runner health
+        if: failure()
+        run: node scripts/ci-timeout-stall-summary.mjs .tmp/host-core-diagnostics
 
       # Keep the raw native stderr as well as PID/thread/test correlation even
       # when a fork dies before Vitest can report its suite. Never retry here.

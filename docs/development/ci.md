@@ -137,6 +137,33 @@ VM. A stall on an idle machine is the test. A degraded runner also shows before
 any test runs: compare the job's `Checkout` and `Setup Vite+` durations with
 other jobs in the same workflow run.
 
+**Runner disk stalls and the CI test timeout.** GitHub's Linux runners stall
+on disk for a few seconds at a time, several times a week, in green runs as
+well as red ones. In the artifacts a stall is one or two `runner-health.log`
+samples at 50 to 55% `iowait` with `blocked` at 4 to 6 and `io_full` rising
+(it is a 10 s average, so it peaks a sample later), while the rest of the job
+stays at 25% or less. In the `events-*.jsonl` files, tests in every fork of the
+shard run 10 to 60 times slower over the same seconds and recover together. A
+test caught inside a synchronous better-sqlite3 or `fs` call cannot run its
+continuation until the disk answers, so its timeout fires late (5,160 ms on a
+5,000 ms limit) and a test with nothing wrong fails. host-core failed that way
+at 5,010 to 7,023 ms; the longest stalled window seen was about 8 s.
+So `Test (host-core i/2)` runs with a 15 s per-test timeout when `CI` is set
+(`RUNNER_STALL_TEST_TIMEOUT` in `vitest.node-flags.ts`). Locally Vitest keeps
+its 5 s default, so a slow test is still noticed at a desk. A test or file that
+sets its own timeout keeps it. The timeout is for stalls of a few seconds. A test
+that hangs still fails, 15 s in. The desktop shards and `Test (packages)` showed
+no failure of this kind, so they keep 5 s.
+
+When a host-core shard fails, `Summarize timed-out tests against runner
+health` (`scripts/ci-timeout-stall-summary.mjs`) adds a line to the job summary
+for each test that failed on its timeout. The line gives the test's limit, how
+long it ran and when, and whether any runner-health sample over those seconds
+reached 30% `iowait`. It also lists the awaits the test's `test-trace` left
+pending, for suites that keep one. A stall beside a test that ran a few seconds
+past its limit is the runner. A test that ran its whole 15 s with no stall, or
+with a pending await, is the test.
+
 **`abandoned`.** `CI gate` prints this when GitHub never assigned a lane a
 runner. The job has no steps and no log, and its annotations say "The job was
 not acquired by Runner of type hosted even after multiple attempts". GitHub
