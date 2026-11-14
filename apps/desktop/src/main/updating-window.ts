@@ -20,6 +20,18 @@ export interface UpdatingWindowOptions {
   /** `ELECTRON_RENDERER_URL` in a dev run; absent, the packaged page. */
   readonly devRendererUrl: string | undefined;
   readonly policy: ReturnType<typeof quietWindowPolicy>;
+  /** A quit is waiting for the upgrade (VC-1208): the page says so. */
+  readonly quitPending?: boolean;
+}
+
+/** The upgrade window, as the launch and the quit hold it. */
+export interface UpdatingWindow {
+  /** Safe to call more than once. */
+  close(): void;
+  /** Brings it forward, as a second launch or a Dock click asks. */
+  reveal(): void;
+  /** Says the quit waits for the upgrade, and brings it forward. */
+  quitting(): void;
 }
 
 /**
@@ -33,6 +45,7 @@ export function updatingPageUrl(
   paint: FirstPaintHint,
   devRendererUrl: string | undefined,
   work: "upgrade" | "check" = "upgrade",
+  then?: "quit",
 ): string {
   const url = new URL(
     devRendererUrl === undefined
@@ -42,50 +55,87 @@ export function updatingPageUrl(
   url.searchParams.set("appearance", paint.appearance);
   url.searchParams.set("background", paint.background);
   if (work === "check") url.searchParams.set("work", "check");
+  if (then === "quit") url.searchParams.set("then", "quit");
   return url.toString();
 }
 
+/**
+ * Which page a launch's first window shows, as the log names it (VC-1208):
+ * the upgrade's, the routine check's, or the app's own.
+ */
+export function launchWindowPage(url: string): "upgrade" | "check" | "app" {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return "app";
+  }
+  if (parsed.pathname !== "/updating.html") return "app";
+  return parsed.searchParams.get("work") === "check" ? "check" : "upgrade";
+}
+
 /** Opens the window; it shows itself once painted. `close` is safe to call more than once. */
-export function openUpdatingWindow(options: UpdatingWindowOptions): { close(): void } {
+export function openUpdatingWindow(options: UpdatingWindowOptions): UpdatingWindow {
   const paint = resolveFirstPaint({
     hint: null,
     canvas: null,
     appearance: null,
     systemPrefersDark: nativeTheme.shouldUseDarkColors,
   });
-  const window = new BrowserWindow({
-    width: 420,
-    height: 240,
-    resizable: false,
-    minimizable: false,
-    maximizable: false,
-    fullscreenable: false,
-    title: "Volli Code",
-    // No title bar and no window buttons: nothing here is for the person to
-    // act on, and the app's own window replaces this one when the upgrade is
-    // done. Quitting still works; an upgrade cut short is a crash the open
-    // already recovers from.
-    titleBarStyle: "hidden",
-    backgroundColor: paint.background,
-    show: false,
-    focusable: options.policy.focusable,
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      backgroundThrottling: options.policy.backgroundThrottling,
-    },
-  });
-  if (process.platform === "darwin") window.setWindowButtonVisibility(false);
-  window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  window.webContents.on("will-navigate", (event) => event.preventDefault());
-  window.once("ready-to-show", () => {
+  const open = (quitPending: boolean): BrowserWindow => {
+    const created = new BrowserWindow({
+      width: 420,
+      height: 240,
+      resizable: false,
+      minimizable: false,
+      maximizable: false,
+      fullscreenable: false,
+      title: "Volli Code",
+      // No title bar and no window buttons: nothing here is for the person to
+      // act on, and the app's own window replaces this one when the upgrade is
+      // done. A quit waits for the upgrade with this window up (VC-1208).
+      titleBarStyle: "hidden",
+      backgroundColor: paint.background,
+      show: false,
+      focusable: options.policy.focusable,
+      webPreferences: {
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        backgroundThrottling: options.policy.backgroundThrottling,
+      },
+    });
+    if (process.platform === "darwin") created.setWindowButtonVisibility(false);
+    created.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+    created.webContents.on("will-navigate", (event) => event.preventDefault());
+    created.once("ready-to-show", () => {
+      if (!created.isDestroyed()) revealWindow(created, options.policy);
+    });
+    void created.loadURL(
+      updatingPageUrl(paint, options.devRendererUrl, "upgrade", quitPending ? "quit" : undefined),
+    );
+    return created;
+  };
+  let window = open(options.quitPending === true);
+  let closed = false;
+  const reveal = (): void => {
     if (!window.isDestroyed()) revealWindow(window, options.policy);
-  });
-  void window.loadURL(updatingPageUrl(paint, options.devRendererUrl));
+  };
   return {
     close: () => {
+      closed = true;
       if (!window.isDestroyed()) window.destroy();
+    },
+    reveal,
+    quitting: () => {
+      if (closed) return;
+      // Closed by the person (a menu's Close Window): a quit still gets its window.
+      if (window.isDestroyed()) {
+        window = open(true);
+        return;
+      }
+      void window.loadURL(updatingPageUrl(paint, options.devRendererUrl, "upgrade", "quit"));
+      reveal();
     },
   };
 }

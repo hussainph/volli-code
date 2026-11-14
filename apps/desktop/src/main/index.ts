@@ -42,6 +42,7 @@ import {
   runnerStaysAvailable,
   VOLLI_USER_ZDOTDIR_ENV,
   workspaceInstallCommand,
+  quitReason,
 } from "@volli/shared";
 import type { SessionEnvRepair } from "@volli/shared";
 import type { HarnessAdapter, HarnessId, ResolvedAppearance } from "@volli/shared";
@@ -88,8 +89,20 @@ import {
   updateInstallQuitInFlight,
 } from "./quit-gate";
 import { isInternalNavigationTarget } from "./navigation";
-import { openUpdatingWindow, updatingPageUrl } from "./updating-window";
-import { holdDatabaseCheckForSmoke, smokeDatabaseCheckOffMainBytes } from "./database-check-smoke";
+import {
+  launchWindowPage,
+  openUpdatingWindow,
+  updatingPageUrl,
+  type UpdatingWindow,
+} from "./updating-window";
+import { createQuitExit } from "./quit-exit";
+import {
+  holdDatabaseCheckForSmoke,
+  smokeDatabaseCheckOffMainBytes,
+  smokeBackupHoldRows,
+  smokeDatabaseWorkerHoldRows,
+  smokeDatabaseWorkerHoldUntil,
+} from "./database-check-smoke";
 import {
   firstPaintMirrorPath,
   firstPaintMirrorWriter,
@@ -115,6 +128,11 @@ import {
   databaseStartupWork,
   ROUTINE_CHECK_OFF_MAIN_BYTES,
   runDatabaseUpgradeWorker,
+  endReadOnlyWorkers,
+  liveWorkerCount,
+  quitExitDecision,
+  settleLiveWorkers,
+  watchLiveWorkers,
   startOrphanScan,
   createLoginPathBootstrap,
   ADOPTION_PROBE,
@@ -446,6 +464,14 @@ installSmokeBootCapture(process.env, app, process.stdout, process.stderr);
 const nativeWindowPolicy = quietWindowPolicy(process.env, process.platform);
 applyQuietAppPolicy(app, nativeWindowPolicy);
 
+// Every worker thread from here on is seen by the quit's last step (VC-1208):
+// one the quit does not know to be read-only is waited for, as before.
+watchLiveWorkers();
+// Every browser session, so an exit that cannot wait for Chromium's own
+// teardown can still write their cookies and storage first (`quit-exit.ts`).
+const browserSessions = new Set<Electron.Session>();
+app.on("session-created", (created) => browserSessions.add(created));
+
 const isDev = !app.isPackaged;
 const agentSocket = createHostAgentSocket();
 const shutdownAgentSocket = agentSocket.shutdown;
@@ -488,12 +514,80 @@ const desktopLog = ownsAppProfile
       terminal: isDev || isSmokeBootCapture(process.env),
     })
   : null;
+/** After the browser sessions' flush, before an immediate exit: DOM storage's write is not awaitable. */
+const DOM_STORAGE_SETTLE_MS = 100;
+/** The first-paint mirror's pending writes, once boot has a writer (VC-1208's immediate exit). */
+let settleFirstPaintMirror: () => Promise<void> = () => Promise.resolve();
+/** Why a quit happens, as far as main knows it when the quit is accepted (VC-1208). */
+let quitAfterLastWindow = false;
+let relaunchAsked = false;
+let relaunchPending: () => boolean = () => false;
+let systemShuttingDown: () => boolean = () => false;
+const currentQuitReason = () =>
+  quitReason({
+    updateInstall: updateInstallQuitInFlight(),
+    relaunch: relaunchAsked || relaunchPending(),
+    systemShutdown: systemShuttingDown(),
+    lastWindowClosed: quitAfterLastWindow,
+  });
+/**
+ * The quit's last step and its timeline (VC-1208): once only read-only
+ * workers remain, the process ends without waiting for them.
+ */
+const quitExit = createQuitExit({
+  now: () => performance.now(),
+  liveWorkers: liveWorkerCount,
+  settleWorkers: settleLiveWorkers,
+  decide: quitExitDecision,
+  endReadOnlyWorkers,
+  flush: async () => {
+    await Promise.allSettled([
+      ...[...browserSessions].map(async (browserSession) => {
+        // Returns before the write lands; the cookie round trip and the
+        // wait below give it time (best-effort, see quit-exit.ts).
+        browserSession.flushStorageData();
+        await browserSession.cookies.flushStore();
+      }),
+      settleFirstPaintMirror(),
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, DOM_STORAGE_SETTLE_MS));
+  },
+  flushLog: () => desktopLog?.flush() ?? Promise.resolve(),
+  runExitHandlers: (code) => {
+    process.emit("exit", code);
+  },
+  kill: () => process.kill(process.pid, "SIGKILL"),
+});
+const quitTimeline = {
+  accepted: () => quitExit.accepted(currentQuitReason()),
+  drained: (deadlineExpired: boolean) => quitExit.drained(deadlineExpired),
+};
 /** `app`, whose `exit` writes the log's tail first: every accepted quit ends in it. */
-const quittingApp = desktopLog === null ? app : exitAfterLogFlush(app, desktopLog);
+const quittingApp = quitExit.exitingApp(
+  desktopLog === null ? app : exitAfterLogFlush(app, desktopLog),
+);
 /** Electron main's own composition lines; the areas below log under their own names. */
 const log = hostLogger("desktop");
 const repackLog = hostLogger("transcript-repack");
 const worktreeLog = hostLogger("worktree");
+// The launch's half of the update timeline (VC-1208): when the person first
+// sees a window, counted from the process's start, and which one it is.
+let firstWindowShown = false;
+app.on("browser-window-created", (_event, created) => {
+  const shown = () => {
+    if (firstWindowShown || created.isDestroyed() || !created.isVisible()) return;
+    firstWindowShown = true;
+    log.info("first window shown", {
+      sinceStartMs: Math.round(process.uptime() * 1000),
+      page: launchWindowPage(created.webContents.getURL()),
+    });
+  };
+  // `show` can come late for a window macOS counts as occluded (the quiet
+  // windows a harness keeps below every other); every window here is revealed
+  // from its `ready-to-show`, so it is asked there too, once that has run.
+  created.once("show", shown);
+  created.once("ready-to-show", () => setImmediate(shown));
+});
 /**
  * Brings a window back for a launch that found none (VC-577). Bound once the
  * window factory exists; until then a second launch has nothing to open.
@@ -506,7 +600,7 @@ let revealWindowForLaunch: (() => void) | null = null;
  */
 const DATABASE_WAIT_WINDOW_DELAY_MS = 400;
 /** The schema-upgrade window (VC-1105), while a launch has one up. */
-let updatingWindow: { close(): void } | null = null;
+let updatingWindow: UpdatingWindow | null = null;
 function closeUpdatingWindow(): void {
   updatingWindow?.close();
   updatingWindow = null;
@@ -516,8 +610,37 @@ function closeUpdatingWindow(): void {
  * still running (VC-1203), until the app loads into it.
  */
 let checkingWindow: BrowserWindow | null = null;
+/** The upgrade window, opened now if the launch has not opened it yet. */
+function upgradeWindow(quitPending = false): UpdatingWindow {
+  updatingWindow ??= openUpdatingWindow({
+    devRendererUrl: isDev ? process.env["ELECTRON_RENDERER_URL"] : undefined,
+    policy: nativeWindowPolicy,
+    quitPending,
+  });
+  return updatingWindow;
+}
 if (ownsAppProfile) {
+  // A quit during a schema upgrade waits for it with its window up, saying so
+  // (VC-1208); the launch stops there, and the quit runs once it is done.
+  app.on("before-quit", (event) => {
+    quitExit.holdForUpgrade(event, {
+      reason: currentQuitReason,
+      showWaiting: () => {
+        if (updatingWindow === null) upgradeWindow(true);
+        else updatingWindow.quitting();
+      },
+      quit: () => app.quit(),
+    });
+  });
+  // While the upgrade window is up it is the app's window: a Dock click or
+  // a second launch brings it forward instead of doing nothing.
+  app.on("activate", () => updatingWindow?.reveal());
   app.on("second-instance", () => {
+    if (updatingWindow !== null) {
+      updatingWindow.reveal();
+      sealQuietAppActivation(app, nativeWindowPolicy);
+      return;
+    }
     answerSecondInstance(mainWindows()[0], {
       cloudEnabled: () => isExperimentEnabled("cloud"),
       hasSettingsWindow: () =>
@@ -1172,10 +1295,15 @@ const appStartup = app.whenReady().then(async () => {
     const { kind, ...versions } = startupWork;
     const started = performance.now();
     log.info(kind === "upgrade" ? "database upgrade started" : "database check started", versions);
+    const holdRows = smokeDatabaseWorkerHoldRows(process.env);
+    const holdUntil = smokeDatabaseWorkerHoldUntil(process.env);
     const running = runDatabaseUpgradeWorker(join(__dirname, "database-upgrade-worker.cjs"), {
       dbPath,
       logLevel: hostLogLevel(),
       dev: isDev,
+      work: kind,
+      ...(holdRows === undefined ? {} : { holdRows }),
+      ...(holdUntil === undefined ? {} : { holdUntil }),
     });
     // A login launch may be headed for the menu bar, which cannot be known
     // until the database is open: it gets no window early.
@@ -1186,9 +1314,10 @@ const appStartup = app.whenReady().then(async () => {
       openedAtLogin: app.getLoginItemSettings().wasOpenedAtLogin,
     });
     const showWaiting = setTimeout(() => {
-      const devRendererUrl = isDev ? process.env["ELECTRON_RENDERER_URL"] : undefined;
       if (kind === "upgrade") {
-        updatingWindow = openUpdatingWindow({ devRendererUrl, policy: nativeWindowPolicy });
+        // A quit during the beat may have opened it already (VC-1208).
+        if (updatingWindow !== null) return;
+        upgradeWindow();
       } else if (!mayEnterMenuBar) {
         // Painted from the file beside the database, never the database
         // itself: the look the app will open in (first-paint-mirror.ts).
@@ -1207,8 +1336,9 @@ const appStartup = app.whenReady().then(async () => {
     }, DATABASE_WAIT_WINDOW_DELAY_MS);
     databaseUpgrade = await running;
     // A smoke may hold the launch here, after the answer, to watch the wait
-    // window (database-check-smoke.ts); inert unless it asked.
-    await holdDatabaseCheckForSmoke(process.env);
+    // window (database-check-smoke.ts); inert unless it asked, and never over
+    // a quit that waited for the upgrade.
+    if (!quitExit.quitting()) await holdDatabaseCheckForSmoke(process.env);
     clearTimeout(showWaiting);
     log.info(kind === "upgrade" ? "database upgrade finished" : "database check finished", {
       ...versions,
@@ -1222,7 +1352,13 @@ const appStartup = app.whenReady().then(async () => {
             : "refused",
       durationMs: Math.round(performance.now() - started),
     });
+    // A quit during the database work (VC-1208) ends the launch here: the
+    // worker has closed the database, and nothing may open it again for a
+    // quit already under way. A quit held for an upgrade runs now.
+    if (quitExit.quitting()) return;
   }
+  // A smoke may hold the automatic backup inside SQLite (VC-1208); inert unless set.
+  const backupHoldRows = smokeBackupHoldRows(process.env);
   const hostCore = createHostCore(hostPorts, {
     dataDir: app.getPath("userData"),
     stopPolicy: "desktop-quit",
@@ -1232,6 +1368,7 @@ const appStartup = app.whenReady().then(async () => {
     backups: {
       workerEntry: join(__dirname, "automatic-backup-worker.cjs"),
       appVersion: app.getVersion(),
+      ...(backupHoldRows === undefined ? {} : { holdRows: backupHoldRows }),
       reveal: async (directory) => {
         const error = await shell.openPath(directory);
         if (error) throw new Error(error);
@@ -1288,6 +1425,7 @@ const appStartup = app.whenReady().then(async () => {
       // Let the IPC reply paint success before restarting the entire service
       // graph; degraded handlers must not be replaced with partially live ones.
       setTimeout(() => {
+        relaunchAsked = true;
         app.relaunch();
         app.quit();
       }, 750);
@@ -1338,6 +1476,7 @@ const appStartup = app.whenReady().then(async () => {
       relaunch: () => {
         try {
           restore?.acceptRestart();
+          relaunchAsked = true;
           app.relaunch();
         } catch (error) {
           dialog.showErrorBox(
@@ -1864,7 +2003,10 @@ const appStartup = app.whenReady().then(async () => {
         relaunch.quitRefused();
       },
     },
+    timeline: quitTimeline,
   });
+  relaunchPending = relaunch.pending;
+  systemShuttingDown = () => runnerEdge.menuBar()?.systemShuttingDown() ?? false;
   /**
    * This Mac's runner (VC-671): host-core's Session runtime composition,
    * over the host built above. Desktop answers what
@@ -2478,6 +2620,7 @@ const appStartup = app.whenReady().then(async () => {
   const firstPaintMirror = firstPaintMirrorWriter(firstPaintMirrorPath(dbPath), (error) =>
     log.warn("couldn't save the first paint beside the database", { error }),
   );
+  settleFirstPaintMirror = firstPaintMirror.settled;
   registerThemeIpcHandlers(
     dbHandle,
     { fs: fsDeps, now: Date.now, appearance: currentAppearance },
@@ -3906,12 +4049,14 @@ app.on("window-all-closed", () => {
   // On macOS it's common for applications to stay active until the user
   // quits explicitly with Cmd + Q.
   if (process.platform !== "darwin") {
+    quitAfterLastWindow = true;
     app.quit();
   }
 });
 
 registerAgentSocketWillQuit({
   lifecycle: quittingApp,
+  timeline: quitTimeline,
   shutdownAgentSocket,
   reportFailure: (error) => {
     log.error("failed to close the agent socket during app shutdown", { error });

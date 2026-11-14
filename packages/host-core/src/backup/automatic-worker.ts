@@ -17,6 +17,7 @@ import { basename, dirname, join } from "node:path";
 import { setTimeout as delay, setImmediate as yieldNow } from "node:timers/promises";
 import Database from "better-sqlite3";
 import { platform, totalmem } from "node:os";
+import { declareWorkerExitKind } from "@volli/shared";
 import { parseFreePercentage } from "../process/memory-pressure";
 import { runInventoryTool } from "../process/inventory";
 import { profileMaintenanceActive, profileOwnerAlive } from "./profile-maintenance";
@@ -35,6 +36,13 @@ export interface AutomaticBackupRequest {
   appVersion: string;
   outputPath: string;
   now: number;
+  /**
+   * Smokes only (`VOLLI_SMOKE_BACKUP_HOLD_ROWS`, VC-1208): with the live
+   * database open read-only, one SQLite statement counts this many rows
+   * before the copy, so a smoke can quit while the worker is inside a long
+   * native call. It marks the moment with a `held` file in its work directory.
+   */
+  holdRows?: number | undefined;
   /** Only the move's own backup bypasses its whole-flow maintenance pause. */
   move?: {
     exportRoot: string;
@@ -71,6 +79,12 @@ export function runAutomaticBackupWorker(
       ...(execArgv ? { execArgv } : {}),
       resourceLimits: { maxOldGenerationSizeMb: 192 },
     });
+    // The daily backup reads the live database only through the read-only
+    // connection in `createAutomaticBackup`; it writes its own work directory
+    // and archive, which the next run reclaims. A quit may end the process
+    // under it (VC-1208). A move's backup belongs to the move's own flow and
+    // stays undeclared, so a quit waits for it.
+    if (request.move === undefined) declareWorkerExitKind(worker, "automatic-backup");
     let result: BackupWorkerResult | undefined;
     let failure: Error | undefined;
     let terminateTimer: ReturnType<typeof setTimeout> | undefined;
@@ -197,6 +211,14 @@ export async function createAutomaticBackup(
     const snapshotPath = join(workDir, "snapshot.db");
     try {
       source.pragma("cache_size = -2048");
+      if (request.holdRows !== undefined) {
+        await writeFile(join(workDir, "held"), "", { mode: 0o600 });
+        source
+          .prepare(
+            "WITH RECURSIVE counted(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM counted WHERE n < ?) SELECT count(*) FROM counted",
+          )
+          .get(request.holdRows);
+      }
       // One native copy step cannot be restarted indefinitely by concurrent
       // Session writes. SQLite WAL writers still proceed on their own connection.
       await source.backup(snapshotPath, { progress: () => 0x7fff_ffff });

@@ -1,14 +1,19 @@
 /**
- * Two environment-only seams that let a smoke take a small profile through a
+ * Environment-only seams that let a smoke take a small profile through a
  * large one's launch (VC-1203): the database check off main, the app's window
  * opened on the check's page, and the app loaded into that same window. Every
  * smoke profile is far under the size that sends the check off main, and a
  * small check answers long before the window's 400 ms, so without them no
  * lane would ever take that path.
  *
- * Neither changes what is checked. One moves the size from which the check
- * runs in the worker; the other holds the launch, after the worker has
- * answered, until the smoke releases it from main. Both are inert unless set,
+ * Three more, for VC-1208's quit, keep a worker inside long read-only SQLite
+ * statements: the launch's database worker before its open (a count of rows,
+ * or until a file exists), and the automatic backup before its copy, so a
+ * smoke can quit while one is there.
+ *
+ * None changes what is checked. One moves the size from which the check
+ * runs in the worker; another holds the launch, after the worker has
+ * answered, until the smoke releases it from main. All are inert unless set,
  * in the style of `VOLLI_SKIP_CLOSE_CONFIRM`.
  */
 
@@ -17,6 +22,23 @@ export const SMOKE_DATABASE_CHECK_OFF_MAIN_BYTES_ENV = "VOLLI_SMOKE_DATABASE_CHE
 
 /** `1` holds the launch after the check answers, until the smoke releases it. */
 export const SMOKE_HOLD_DATABASE_CHECK_ENV = "VOLLI_SMOKE_HOLD_DATABASE_CHECK";
+
+/**
+ * A whole number of rows: before its open, the launch's database worker counts
+ * that many in one SQLite statement on a read-only connection, so a smoke can
+ * quit while the worker is inside a long native call (VC-1208).
+ */
+export const SMOKE_DATABASE_WORKER_HOLD_ROWS_ENV = "VOLLI_SMOKE_DATABASE_WORKER_HOLD_ROWS";
+
+/**
+ * A whole number of rows: the automatic backup's worker, with the live
+ * database open read-only, counts that many in one statement before its copy
+ * (VC-1208), so a smoke can quit with the host's own connection open.
+ */
+export const SMOKE_BACKUP_HOLD_ROWS_ENV = "VOLLI_SMOKE_BACKUP_HOLD_ROWS";
+
+/** A file path: the worker keeps holding inside SQLite until the smoke creates it. */
+export const SMOKE_DATABASE_WORKER_HOLD_UNTIL_ENV = "VOLLI_SMOKE_DATABASE_WORKER_HOLD_UNTIL";
 
 /** What a held launch exposes on main's global object for the smoke to call. */
 export interface DatabaseCheckSmokeGlobal {
@@ -28,6 +50,26 @@ export function smokeDatabaseCheckOffMainBytes(env: NodeJS.ProcessEnv): number |
   const value = env[SMOKE_DATABASE_CHECK_OFF_MAIN_BYTES_ENV];
   if (value === undefined || !/^\d+$/.test(value)) return undefined;
   return Number(value);
+}
+
+/** The smoke's held-step size, or `undefined` (the shipped default: no hold) unless set to a whole number. */
+export function smokeDatabaseWorkerHoldRows(env: NodeJS.ProcessEnv): number | undefined {
+  const value = env[SMOKE_DATABASE_WORKER_HOLD_ROWS_ENV];
+  if (value === undefined || !/^\d+$/.test(value)) return undefined;
+  return Number(value);
+}
+
+/** The backup's held-step size, or `undefined` (the shipped default: no hold) unless set to a whole number. */
+export function smokeBackupHoldRows(env: NodeJS.ProcessEnv): number | undefined {
+  const value = env[SMOKE_BACKUP_HOLD_ROWS_ENV];
+  if (value === undefined || !/^\d+$/.test(value)) return undefined;
+  return Number(value);
+}
+
+/** The smoke's release file, or `undefined` (the shipped default: no hold) unless an absolute path is set. */
+export function smokeDatabaseWorkerHoldUntil(env: NodeJS.ProcessEnv): string | undefined {
+  const value = env[SMOKE_DATABASE_WORKER_HOLD_UNTIL_ENV];
+  return value !== undefined && value.startsWith("/") ? value : undefined;
 }
 
 /**

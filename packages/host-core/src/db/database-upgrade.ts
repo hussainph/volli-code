@@ -31,8 +31,16 @@
  *
  * The worker's log lines go to the host's log: each record is posted to the
  * parent and written there under its own component.
+ *
+ * A quit during this work (VC-1208): an upgrade is never cut short, and the
+ * quit waits for it. A routine check reads only until its open is about to
+ * write (`beforeFirstWrite`); until then a quit may claim it
+ * (`process/live-workers.ts`) and end the process without waiting for its
+ * SQLite call, and a claimed check then writes nothing at all.
  */
-import type { LogLevel, LogRecord } from "@volli/shared";
+import Database from "better-sqlite3";
+import { declareWorkerExitKind, type LogLevel, type LogRecord } from "@volli/shared";
+import { existsSync } from "node:fs";
 import { parentPort, Worker, workerData } from "node:worker_threads";
 
 import {
@@ -42,6 +50,11 @@ import {
   type DbOpenFailure,
 } from "../db-open-failure";
 import { hostLogger, installHostLog } from "../log/root";
+import {
+  attachReadOnlyGate,
+  createReadOnlyGate,
+  leaveReadOnlyPhase,
+} from "../process/live-workers";
 import { checkedDatabaseFile, type CheckedDatabaseFile } from "./checked-file";
 import { openVolliDb } from "./database-file";
 import { logTransactionViolation } from "./transaction-gate";
@@ -52,6 +65,30 @@ export interface DatabaseUpgradeRequest {
   readonly logLevel: LogLevel;
   /** A development build: the refusal is worded for its developer. */
   readonly dev: boolean;
+  /**
+   * What the launch asked for (`databaseStartupWork`). A `check` is read-only
+   * until its open is about to write, and a quit may end the process during
+   * that phase (VC-1208); an `upgrade`, the default, is never cut short.
+   */
+  readonly work?: "check" | "upgrade";
+  /**
+   * Smokes only (`VOLLI_SMOKE_DATABASE_WORKER_HOLD_ROWS`): before the open,
+   * one SQLite statement on a read-only connection to the file counts this
+   * many rows, so a smoke can quit while the worker is inside a long native
+   * call. Changes nothing the open does.
+   */
+  readonly holdRows?: number;
+  /**
+   * Smokes only (`VOLLI_SMOKE_DATABASE_WORKER_HOLD_UNTIL`): after `holdRows`,
+   * the worker keeps counting rows in such statements until this file
+   * exists, so a smoke decides when the open goes on.
+   */
+  readonly holdUntil?: string;
+}
+
+/** What the worker receives: the request, and a check's phase. */
+interface DatabaseUpgradeWorkerData extends DatabaseUpgradeRequest {
+  readonly readOnlyGate?: SharedArrayBuffer;
 }
 
 /** A refusal, prepared where the error object still exists. */
@@ -86,8 +123,14 @@ export function prepareDbOpenFailure(error: unknown, dev: boolean): PreparedDbOp
  * Opens (upgrading) and closes `dbPath` on the calling thread, checkpointed,
  * and returns the file it left. Throws whatever {@link openVolliDb} throws.
  */
-export function upgradeVolliDb(dbPath: string): CheckedDatabaseFile | null {
-  const db = openVolliDb(dbPath, { onTransactionViolation: logTransactionViolation });
+export function upgradeVolliDb(
+  dbPath: string,
+  beforeFirstWrite?: () => void,
+): CheckedDatabaseFile | null {
+  const db = openVolliDb(dbPath, {
+    onTransactionViolation: logTransactionViolation,
+    ...(beforeFirstWrite === undefined ? {} : { beforeFirstWrite }),
+  });
   try {
     db.pragma("wal_checkpoint(TRUNCATE)");
   } finally {
@@ -100,19 +143,44 @@ export function upgradeVolliDb(dbPath: string): CheckedDatabaseFile | null {
 export function serveDatabaseUpgradeWorker(): void {
   const port = parentPort;
   if (port === null) throw new Error("The database upgrade must run in a worker.");
-  const request = workerData as DatabaseUpgradeRequest;
+  const request = workerData as DatabaseUpgradeWorkerData;
   installHostLog({
     level: request.logLevel,
     sink: { write: (record) => port.postMessage({ log: record } satisfies WorkerMessage) },
   });
   let outcome: DatabaseUpgradeOutcome;
   try {
-    outcome = { ok: true, checked: upgradeVolliDb(request.dbPath) };
+    if (request.holdRows !== undefined || request.holdUntil !== undefined)
+      holdInsideSqlite(request.dbPath, request.holdRows ?? 0, request.holdUntil);
+    const gate = request.readOnlyGate;
+    outcome = {
+      ok: true,
+      checked: upgradeVolliDb(
+        request.dbPath,
+        gate === undefined ? undefined : () => leaveReadOnlyPhase(gate),
+      ),
+    };
   } catch (error) {
     outcome = { ok: false, ...prepareDbOpenFailure(error, request.dev) };
   }
   port.postMessage({ outcome } satisfies WorkerMessage);
   port.close();
+}
+
+/** The smokes' hold: long native calls that only read (see `holdRows`, `holdUntil`). */
+function holdInsideSqlite(dbPath: string, rows: number, until: string | undefined): void {
+  const db = new Database(dbPath, { readonly: true, fileMustExist: true });
+  try {
+    const count = db.prepare(
+      "WITH RECURSIVE counted(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM counted WHERE n < ?) SELECT count(*) FROM counted",
+    );
+    count.get(rows);
+    if (until !== undefined) {
+      while (!existsSync(until)) count.get(1_000_000);
+    }
+  } finally {
+    db.close();
+  }
 }
 
 /** Writes a worker's record into this thread's host log, under its own component. */
@@ -136,8 +204,16 @@ export function runDatabaseUpgradeWorker(
   return new Promise((resolve) => {
     let outcome: DatabaseUpgradeOutcome | null = null;
     let worker: Worker;
+    const check = request.work === "check";
+    const readOnlyGate = check ? createReadOnlyGate() : undefined;
+    const data: DatabaseUpgradeWorkerData = {
+      ...request,
+      ...(readOnlyGate === undefined ? {} : { readOnlyGate }),
+    };
     try {
-      worker = new Worker(entry, { workerData: request, ...(execArgv ? { execArgv } : {}) });
+      worker = new Worker(entry, { workerData: data, ...(execArgv ? { execArgv } : {}) });
+      declareWorkerExitKind(worker, check ? "database-check" : "database-upgrade");
+      if (readOnlyGate !== undefined) attachReadOnlyGate(worker, readOnlyGate);
     } catch (error) {
       log.error("database upgrade worker did not start", { error });
       resolve(null);

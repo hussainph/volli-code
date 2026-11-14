@@ -24,6 +24,7 @@ export * from "./operation-unavailable";
 export * from "./handler-refused";
 export * from "./handler-keys";
 export * from "./desktop-entries";
+export * from "./quit-exit";
 export * from "./environment-recipe";
 export * from "./account";
 export * from "./preview-legal";

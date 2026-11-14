@@ -238,6 +238,23 @@ export function observedChildExit(child, expectedPid) {
  * no failed close step. A bounded close that had to terminate or kill it is
  * not a clean quit, whatever the leftovers say.
  */
+/**
+ * A quit the app ended itself with SIGKILL because only read-only workers
+ * were left (VC-1208, `src/main/quit-exit.ts`): clean when the bounded close
+ * sent no signal and the app's own log, written since the quit began, says
+ * it made that exit.
+ */
+export function immediateQuit(close, logSinceQuit) {
+  return (
+    close?.exit?.code === null &&
+    close?.exit?.signal === "SIGKILL" &&
+    ["graceful", "natural-after-close"].includes(close?.kind) &&
+    Array.isArray(close?.closeFailures) &&
+    close.closeFailures.length === 0 &&
+    /\[quit\] exit call \{[^}]*mode: ['"]immediate['"]/s.test(logSinceQuit)
+  );
+}
+
 export function cleanQuitProblems(close) {
   if (!close) return ["no close record"];
   const problems = [];

@@ -34,6 +34,7 @@
 import { Worker, parentPort, type MessagePort } from "node:worker_threads";
 
 import { extractReadableMarkdown, type ExtractedDocument } from "./extract";
+import { declareStatelessWorker } from "./stateless-worker";
 
 /** One document to read. The signal withdraws it. */
 export interface WebExtractRequest {
@@ -107,6 +108,8 @@ export function createWorkerWebExtractor(
 
   const start = (): Worker => {
     const worker = new Worker(entry);
+    // Parses HTML in memory and writes nothing: a quit may end the process under it (VC-1208).
+    declareStatelessWorker(worker);
     // A read hears its worker's failure through its own listener. This one is
     // for a failure with no read listening — a kept worker between reads —
     // which as an unheard `error` event would be an uncaught exception on the

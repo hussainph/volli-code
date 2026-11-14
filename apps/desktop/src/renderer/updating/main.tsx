@@ -8,7 +8,13 @@ import "@renderer/globals.css";
 
 import { createRoot } from "react-dom/client";
 
-import { UpdatingPage, updatingAppearance, updatingBackground, updatingWork } from "./page";
+import {
+  UpdatingPage,
+  updatingAppearance,
+  updatingBackground,
+  updatingThenQuit,
+  updatingWork,
+} from "./page";
 
 // The page is the window's own background, as main named it: left
 // transparent, Chromium paints its default canvas for the mode instead. The
@@ -21,5 +27,8 @@ document.body.style.margin = "0";
 document.body.style.background = "transparent";
 
 createRoot(document.getElementById("root")!).render(
-  <UpdatingPage work={updatingWork(window.location.search)} />,
+  <UpdatingPage
+    work={updatingWork(window.location.search)}
+    thenQuit={updatingThenQuit(window.location.search)}
+  />,
 );

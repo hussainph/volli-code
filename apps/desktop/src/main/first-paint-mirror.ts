@@ -90,7 +90,11 @@ function serialize(mirror: FirstPaintMirror): string {
 export function firstPaintMirrorWriter(
   path: string,
   onError: (error: unknown) => void,
-): { write(mirror: FirstPaintMirror): Promise<void> } {
+): {
+  write(mirror: FirstPaintMirror): Promise<void>;
+  /** Resolves once every write handed so far has landed or failed (VC-1208's immediate exit). */
+  settled(): Promise<void>;
+} {
   let written: Promise<string | null> = readFile(path, "utf8").catch(() => null);
   return {
     write(mirror) {
@@ -109,5 +113,6 @@ export function firstPaintMirrorWriter(
       });
       return written.then(() => undefined);
     },
+    settled: () => written.then(() => undefined),
   };
 }

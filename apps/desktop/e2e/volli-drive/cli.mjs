@@ -87,6 +87,9 @@ const HELP = `volli-drive — drive an isolated, keychain-free live Volli build
   restart <id>                     supervised cloud restart on the same isolated profile
   relaunch <id>                    quit a local instance and launch it again on the same
                                    profile and database (a routine relaunch)
+  quit-during-launch <id> --work check|upgrade [--database /abs/older.db] [--second-launch]
+                                   relaunch, quit on the database page, time the exit,
+                                   then launch again normally (VC-1208)
   list [--json]                    instances on this machine (max 3 live)
   doctor [<id>] [--json]           no id: is the build about to launch guarded? (static)
                                    with id: up? right build? guard active? isolated?
@@ -717,6 +720,22 @@ async function main() {
       break;
     case "relaunch":
       out(JSON.stringify(await call(id, "relaunch", {}, 300_000)));
+      break;
+    case "quit-during-launch":
+      out(
+        JSON.stringify(
+          await call(
+            id,
+            "quit-during-launch",
+            {
+              work: flags.work,
+              ...(flags.database === undefined ? {} : { database: String(flags.database) }),
+              secondLaunch: flags.secondLaunch === true,
+            },
+            3_600_000,
+          ),
+        ),
+      );
       break;
     case "windows":
       for (const w of await call(id, "windows")) out(`${w.name}  "${w.title}"  ${w.url}`);

@@ -21,6 +21,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
+import { quitExitDecision, watchLiveWorkers } from "../process/live-workers";
 import { captureHostLog, type CapturedHostLog } from "../testing/log";
 import { recoveryPendingPath } from "./recovery-pending";
 import { checkedDatabaseFile } from "./checked-file";
@@ -176,6 +177,58 @@ describe("a routine launch's check in the worker (VC-1203)", () => {
     expect(outcome?.ok === false && outcome.message).toMatch(/malformed|integrity check/);
     expect(readFileSync(dbPath).equals(before)).toBe(true);
   });
+});
+
+describe("a quit during the launch's database work (VC-1208)", () => {
+  it("claims a check before its first write: it then writes nothing and answers a refusal", async () => {
+    watchLiveWorkers();
+    const dbPath = olderDatabase();
+    openVolliDb(dbPath).close();
+    const before = { db: readFileSync(dbPath), mtimeMs: statSync(dbPath).mtimeMs };
+    const running = runDatabaseUpgradeWorker(
+      ENTRY,
+      { dbPath, logLevel: "info", dev: false, work: "check", holdRows: 200_000 },
+      ARGS,
+    );
+    // The worker has not reached its first write: the quit claims it.
+    expect(quitExitDecision({ claim: true })).toBe("exit-now");
+    const outcome = await running;
+    expect(outcome).toMatchObject({ ok: false });
+    expect(outcome?.ok === false && outcome.logLine).toMatch(/Volli is quitting/);
+    expect(readFileSync(dbPath).equals(before.db)).toBe(true);
+    expect(statSync(dbPath).mtimeMs).toBe(before.mtimeMs);
+    expect(statSync(`${dbPath}-wal`, { throwIfNoEntry: false })?.size ?? 0).toBe(0);
+    expect(quitExitDecision({ claim: true })).toBe("exit");
+  }, 30_000);
+
+  it("checks as before when no quit claims it", async () => {
+    watchLiveWorkers();
+    const dbPath = olderDatabase();
+    openVolliDb(dbPath).close();
+    const outcome = await runDatabaseUpgradeWorker(
+      ENTRY,
+      { dbPath, logLevel: "info", dev: false, work: "check", holdRows: 1000 },
+      ARGS,
+    );
+    expect(outcome).toEqual({ ok: true, checked: checkedDatabaseFile(dbPath) });
+  }, 30_000);
+
+  it("never lets a quit cut an upgrade short, and the upgrade still lands", async () => {
+    watchLiveWorkers();
+    const dbPath = olderDatabase();
+    const release = join(dir!, "release");
+    const running = runDatabaseUpgradeWorker(
+      ENTRY,
+      { dbPath, logLevel: "info", dev: false, holdUntil: release },
+      ARGS,
+    );
+    expect(quitExitDecision({ claim: true })).toBe("finish-upgrade-first");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(quitExitDecision({ claim: true })).toBe("finish-upgrade-first");
+    writeFileSync(release, "");
+    await expect(running).resolves.toMatchObject({ ok: true });
+    expect(pendingDatabaseUpgrade(dbPath)).toBeNull();
+  }, 30_000);
 });
 
 describe("the safety copy an upgrade publishes", () => {

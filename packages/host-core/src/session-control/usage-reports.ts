@@ -2,7 +2,7 @@
 import { Worker } from "node:worker_threads";
 import type Database from "better-sqlite3";
 import type { ReportSessionUsageQuery } from "@volli/session-engine";
-import type { SessionUsageReport } from "@volli/shared";
+import { declareWorkerExitKind, type SessionUsageReport } from "@volli/shared";
 import type { SqliteSessionLedgerScope } from "./sqlite-ledger";
 
 export interface UsageReportJob {
@@ -84,6 +84,8 @@ export function installSqliteUsageWorker(
     idle = undefined;
     if (worker === undefined) {
       const current = new Worker(entry, { workerData: { dbPath: db.name } });
+      // Its only connection is read-only (`usage-report-worker.ts`): a quit may end the process under it.
+      declareWorkerExitKind(current, "database-reader");
       worker = current;
       current.on("error", (error) => {
         if (worker === current) retire(error instanceof Error ? error : new Error(String(error)));

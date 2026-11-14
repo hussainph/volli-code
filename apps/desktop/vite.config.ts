@@ -810,6 +810,7 @@ export default defineConfig(({ mode, command }) => ({
         // that walks every branch of it.
         "**/src/main/support-info.ts",
         "**/src/main/quit-gate.ts",
+        "**/src/main/quit-exit.ts",
         // Which product store a launch uses, its marker, and the restart into
         // the other one through the quit gates (VC-889).
         "**/src/main/cloud-launch.ts",
