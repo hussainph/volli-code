@@ -17,7 +17,5 @@ it("fades bounded transcript pixels but keeps an opaque native scrollbar lane", 
   const scrollbar = css.match(/\*::-webkit-scrollbar \{([^}]+)\}/)?.[1];
   expect(scrollbar).toContain("width: var(--scrollbar-size)");
   expect(css).toContain("--scrollbar-size: 10px");
-  expect(css).toContain(
-    '.chat-transcript:has([data-slot="conversation-scroll-button"]) [data-conversation-viewport]',
-  );
+  expect(css).toContain(".chat-transcript [data-conversation-viewport][data-scroll-button]");
 });

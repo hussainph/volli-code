@@ -16,7 +16,8 @@
  * `@renderer/*` imports, the scroll-chaining bridge below, both
  * `StickToBottom` props forced to `instant` where upstream animates, and
  * `ConversationEmptyState` reduced to its shell (no default title or copy),
- * and `ConversationContent`'s masked viewport, reachable through `viewportRef`.
+ * and `ConversationContent`'s masked viewport, reachable through `viewportRef`,
+ * which `ConversationScrollButton` marks while it is up.
  *
  * Apache-2.0 §4(b) requires a modified file to say so. See `./PROVENANCE.md`.
  */
@@ -305,13 +306,28 @@ export const ConversationScrollButton = ({
     };
   }, [scrollRef, contentRef, isAtBottom]);
 
+  const shown = !isAtBottom && awayFromBottom;
+  // While the button is up, the masked viewport lifts its bottom fade above it
+  // (`[data-scroll-button]` in globals.css). Marked here rather than read back
+  // with `.chat-transcript:has(<this button>)`: a `:has()` whose argument
+  // reaches every descendant of the transcript makes each row, page or tool
+  // card inserted anywhere in it restyle thousands of elements (VC-1231).
+  useLayoutEffect(() => {
+    if (!shown) return;
+    const viewport = scrollRef.current?.closest<HTMLElement>("[data-conversation-viewport]");
+    if (!viewport) return;
+    viewport.dataset.scrollButton = "";
+    return () => {
+      delete viewport.dataset.scrollButton;
+    };
+  }, [shown, scrollRef]);
+
   const handleScrollToBottom = useCallback(() => {
     scrollToBottom();
   }, [scrollToBottom]);
 
   return (
-    !isAtBottom &&
-    awayFromBottom && (
+    shown && (
       <Button
         // Icon-only, so it needs a name of its own — there is no text to borrow.
         aria-label="Scroll to latest"

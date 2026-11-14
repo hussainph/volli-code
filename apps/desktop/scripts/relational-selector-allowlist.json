@@ -1,0 +1,55 @@
+{
+  "note": "Reviewed :has() arguments that reach every descendant (scripts/check-relational-selectors.mjs). Each reason says why the element the :has() is tested on cannot hold the chat transcript. Add an entry only with that reason; prefer a `>` argument or a data attribute set by the component.",
+  "entries": [
+    {
+      "path": "apps/desktop/src/renderer/src/components/board/new-ticket/composer-chips.tsx",
+      "argument": ":checked",
+      "reason": "Tested on one working-copy choice label, which holds only its own radio input and icon."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/board/new-ticket/composer-chips.tsx",
+      "argument": ":focus-visible",
+      "reason": "Tested on one working-copy choice label, which holds only its own radio input and icon."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/chat/interaction-ui.tsx",
+      "argument": ":focus-visible",
+      "reason": "Tested on one ask-user option label inside a card; it holds only its own input and text, never transcript rows."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/ui/alert-dialog.tsx",
+      "argument": "[data-slot=alert-dialog-media]",
+      "reason": "Tested on an alert dialog's header, which holds its media, title and description."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/ui/button-group.tsx",
+      "argument": "select[aria-hidden=true]:last-child",
+      "reason": "Tested on a ButtonGroup, which holds a handful of buttons, fields and selects."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/ui/input-group.tsx",
+      "argument": "[data-slot][aria-invalid=true]",
+      "reason": "Tested on an InputGroup, which holds one field and its addons."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/ui/pane-header.tsx",
+      "argument": "[data-state=open]",
+      "reason": "Tested on a pane header's action cluster, which holds only its action buttons and menu triggers."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/ui/tab-strip.css",
+      "argument": "[data-slot=\"tab-close\"]",
+      "reason": "Tested on one workspace tab, which holds its icon, title and close button."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/components/ui/tab-strip.css",
+      "argument": "[data-icon-only=\"true\"]",
+      "reason": "Tested on a tab strip item wrapper, which holds one tab."
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/globals.css",
+      "argument": "textarea:focus-visible",
+      "reason": "Tested on the composer's prompt surface, which sits beside the transcript (not around it) and holds the draft and its controls."
+    }
+  ]
+}
