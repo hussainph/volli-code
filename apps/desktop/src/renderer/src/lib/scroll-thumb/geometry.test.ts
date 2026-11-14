@@ -6,11 +6,16 @@ import {
   hitsThumb,
   inThumbLane,
   laneMetrics,
+  laneWidth,
   overflows,
   scrollForOffset,
   thumbRatio,
   trackLength,
 } from "./geometry";
+
+/** A 200px box over 800px of content, scrolled to `scrollPos`. */
+const at = (scrollPos: number) =>
+  laneMetrics({ clientSize: 200, scrollSize: 800, scrollPos, scale: 1 });
 
 describe("scroll thumb geometry", () => {
   it("treats a sub-pixel difference as no overflow", () => {
@@ -38,15 +43,22 @@ describe("scroll thumb geometry", () => {
 
   it("places the thumb at the scroll progress along the track less the thumb", () => {
     // 200px box, 800px content: track 196, thumb 49, travel 147.
-    const at = (scrollPos: number) =>
-      laneMetrics({ clientSize: 200, scrollSize: 800, scrollPos, scale: 1 });
-    expect(at(0)).toEqual({ overflow: true, track: 196, length: 49, travel: 147, offset: 0, range: 600 });
+    expect(at(0)).toEqual({
+      overflow: true,
+      track: 196,
+      length: 49,
+      travel: 147,
+      offset: 0,
+      range: 600,
+    });
     expect(at(300).offset).toBe(73.5);
     expect(at(600).offset).toBe(147);
     // Overscroll pins it.
     expect(at(900).offset).toBe(147);
     expect(at(-20).offset).toBe(0);
-    expect(laneMetrics({ clientSize: 200, scrollSize: 200, scrollPos: 10, scale: 1 })).toMatchObject({
+    expect(
+      laneMetrics({ clientSize: 200, scrollSize: 200, scrollPos: 10, scale: 1 }),
+    ).toMatchObject({
       overflow: false,
       offset: 0,
       range: 0,
@@ -78,6 +90,14 @@ describe("scroll thumb geometry", () => {
     expect(inThumbLane(box, "y", 195, 101)).toBe(false);
     expect(inThumbLane(box, "x", 100, 96)).toBe(true);
     expect(inThumbLane(box, "x", 100, 80)).toBe(false);
+  });
+
+  it("widens the grab lane with the pill's inset", () => {
+    expect(laneWidth(3)).toBe(8);
+    const box = { left: 0, top: 0, right: 200, bottom: 100 };
+    // Drawn 5px in (the sidebar): the pill is at 191–195, and its inner pixel is grabbable.
+    expect(inThumbLane(box, "y", 191, 50)).toBe(false);
+    expect(inThumbLane(box, "y", 191, 50, laneWidth(5))).toBe(true);
   });
 
   it("hits only within the thumb's extent along the scroll axis", () => {

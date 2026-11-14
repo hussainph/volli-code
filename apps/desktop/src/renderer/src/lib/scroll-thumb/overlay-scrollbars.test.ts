@@ -70,6 +70,7 @@ const track = (axis: "x" | "y") =>
 const thumb = (axis: "x" | "y") =>
   track(axis)!.querySelector<HTMLElement>('[data-slot="scroll-thumb"]')!;
 const state = (axis: "x" | "y") => track(axis)?.getAttribute("data-state");
+const dragging = () => document.documentElement.hasAttribute(DRAGGING_ATTR);
 
 /**
  * ResizeObservers whose callbacks the test fires, standing in for the browser's
@@ -403,13 +404,16 @@ describe("overlay scroll thumb", () => {
     expect(code.hasAttribute(TARGET_ATTR)).toBe(false);
     expect(state("y")).toBe("visible");
 
-    // Another code block slides under the still pointer: the transcript keeps the thumb...
+    // Another code block slides under the STILL pointer (a pointerover where the
+    // pointer last moved): the transcript keeps the thumb...
     const next = scroller({ client: 100, scroll: 400 });
     transcript.append(next);
-    next.firstElementChild!.dispatchEvent(pointer("pointerover"));
+    transcript.dispatchEvent(pointer("pointermove", { clientX: 50, clientY: 50 }));
+    next.firstElementChild!.dispatchEvent(pointer("pointerover", { clientX: 50, clientY: 50 }));
     settle();
     expect(transcript.getAttribute(TARGET_ATTR)).toBe("y");
-    // ...until the burst ends, when the pointer is resolved again.
+    // ...until the burst ends, when the pointer is resolved again. A pointer that
+    // MOVED onto it would have been resolved at once.
     vi.advanceTimersByTime(HIDE_AFTER_MS);
     settle();
     expect(next.getAttribute(TARGET_ATTR)).toBe("y");
@@ -546,8 +550,8 @@ describe("overlay scroll thumb", () => {
     row.dispatchEvent(pointer("pointerover"));
     settle();
     vi.spyOn(thumb("y"), "getBoundingClientRect").mockReturnValue(rect(193, 2, 197, 26));
-    const press = () => row.dispatchEvent(pointer("pointerdown", { clientX: 198, clientY: 10, button: 0 }));
-    const dragging = () => document.documentElement.hasAttribute(DRAGGING_ATTR);
+    const press = () =>
+      row.dispatchEvent(pointer("pointerdown", { clientX: 198, clientY: 10, button: 0 }));
 
     press();
     settle();

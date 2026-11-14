@@ -2152,10 +2152,12 @@ section:has(> div > div > [data-slot="pref-section-title"]) > .bg-card {
   scrollbar-width: none;
 }
 [data-slot="scroll-thumb-track"] {
+  /* Script places it, and sets its z-index to its target's own stacking
+   * layer: above the target, below anything stacked over it (a popover, a
+   * dialog's scrim). */
   position: fixed;
   top: 0;
   left: 0;
-  z-index: 2147483647;
   pointer-events: none;
   /* Shown and hidden without a fade, as the native bar was: an opacity
    * transition kept style dirty for its whole run and made the transcript's
@@ -2177,6 +2179,11 @@ section:has(> div > div > [data-slot="pref-section-title"]) > .bg-card {
 }
 [data-axis="x"] > [data-slot="scroll-thumb"] {
   height: 100%;
+}
+/* The sidebar's resize grip lies over its scrollers' right edge (4px, 5 at
+ * 125% zoom): its thumbs are drawn clear of it. */
+[data-volli-sidebar] {
+  --scroll-thumb-edge-inset: 5px;
 }
 /* Pointer in the thumb's lane, or the thumb grabbed. */
 [data-slot="scroll-thumb-track"][data-lane] > [data-slot="scroll-thumb"],

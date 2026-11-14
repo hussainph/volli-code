@@ -14,9 +14,14 @@
 /** Gap between the thumb's track and the scroller's edges, on every side, in viewport px. */
 export const TRACK_INSET = 2;
 
-/** The pill's thickness, and how far in from the scroller's far edge it is drawn. */
+/**
+ * The pill's thickness, and how far in from the scroller's far edge it is drawn
+ * by default. A subtree can draw its thumbs further in with the inherited
+ * `--scroll-thumb-edge-inset` (the sidebar does, to clear its resize grip).
+ */
 export const THUMB_THICKNESS = 4;
 export const THUMB_EDGE_INSET = 3;
+export const EDGE_INSET_PROPERTY = "--scroll-thumb-edge-inset";
 
 /** A very long list would shrink a proportional thumb to nothing; this is the floor. */
 export const THUMB_MIN_LENGTH = 20;
@@ -117,11 +122,25 @@ export interface Box {
  * {@link THUMB_LANE} of the right edge for the vertical thumb, of the bottom
  * edge for the horizontal one, and inside the box along the other axis.
  */
-export function inThumbLane(box: Box, axis: "x" | "y", x: number, y: number): boolean {
+export function inThumbLane(
+  box: Box,
+  axis: "x" | "y",
+  x: number,
+  y: number,
+  lane: number = THUMB_LANE,
+): boolean {
   if (axis === "y") {
-    return x <= box.right && x >= box.right - THUMB_LANE && y >= box.top && y <= box.bottom;
+    return x <= box.right && x >= box.right - lane && y >= box.top && y <= box.bottom;
   }
-  return y <= box.bottom && y >= box.bottom - THUMB_LANE && x >= box.left && x <= box.right;
+  return y <= box.bottom && y >= box.bottom - lane && x >= box.left && x <= box.right;
+}
+
+/**
+ * The lane for a pill drawn `edgeInset` in from the edge: everything from the
+ * edge to a pixel past the pill. {@link THUMB_LANE} at the default inset.
+ */
+export function laneWidth(edgeInset: number): number {
+  return edgeInset + THUMB_THICKNESS + 1;
 }
 
 /**
@@ -135,7 +154,8 @@ export function hitsThumb(
   axis: "x" | "y",
   x: number,
   y: number,
+  lane: number = THUMB_LANE,
 ): boolean {
-  if (!inThumbLane(scroller, axis, x, y)) return false;
+  if (!inThumbLane(scroller, axis, x, y, lane)) return false;
   return axis === "y" ? y >= thumb.top && y <= thumb.bottom : x >= thumb.left && x <= thumb.right;
 }

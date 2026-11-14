@@ -46,8 +46,8 @@
  * LAYERING. A track is drawn last in `<body>` at the z-index of its target's
  * outermost stacking layer: above the target, below anything stacked over it
  * (a popover, a dialog's scrim). A scroller under a modal — inside an
- * `aria-hidden` or `inert` subtree, as Radix marks the page behind one — is
- * never a target.
+ * `aria-hidden` or `inert` subtree, or one that cannot take the pointer, as
+ * Radix leaves the page behind one — is never a target.
  *
  * The thumbs are presentational: `aria-hidden`, never focusable, and
  * `pointer-events: none`. Wheel, trackpad, keyboard, find-in-page, focus
@@ -65,12 +65,14 @@
  * scroller's far edge — is the thumb's, not the content's.
  */
 import {
+  EDGE_INSET_PROPERTY,
   THUMB_EDGE_INSET,
   THUMB_THICKNESS,
   TRACK_INSET,
   hitsThumb,
   inThumbLane,
   laneMetrics,
+  laneWidth,
   scrollForOffset,
   type Box,
   type LaneMetrics,
@@ -92,7 +94,13 @@ export const DRAGGING_ATTR = "data-scroll-thumb-dragging";
  * a native bar, so turning native bars off leaves neither without one.
  */
 export const EXCLUDED_SELECTOR = ".xterm, .monaco-editor";
-/** The page behind a modal: Radix's `hideOthers` marks it `aria-hidden`; `inert` is the platform's own. */
+/**
+ * The page behind a modal. Radix's `hideOthers` marks it `aria-hidden` — but
+ * skips a subtree holding a live region, which the app root does — and its
+ * layer sets `pointer-events: none` on `<body>` with `auto` on the modal
+ * itself, which every Radix modal does. So: either marker, or a scroller that
+ * cannot take the pointer.
+ */
 export const BLOCKED_SELECTOR = '[aria-hidden="true"], [inert]';
 /** How long a thumb stays up after the last scroll event. */
 export const HIDE_AFTER_MS = 700;
@@ -135,6 +143,10 @@ interface Lane {
   metrics: LaneMetrics | null;
   /** The z-index of the target's outermost stacking layer, read when the target is taken. */
   layer: number | null;
+  /** How far in from the edge the pill is drawn, in the target's CSS px; read with the layer. */
+  edgeInset: number;
+  /** The grab lane's width in viewport px, at the last measure. */
+  lane: number;
   /** Where the track sits and how big it is, the thumb's length and offset: viewport px. */
   geometry: LaneGeometry;
   /** What {@link flush} last wrote, to skip writes that would change nothing. */
@@ -187,10 +199,36 @@ function createLane(doc: Document, axis: Axis): Lane {
     box: null,
     metrics: null,
     layer: null,
+    edgeInset: THUMB_EDGE_INSET,
+    lane: laneWidth(THUMB_EDGE_INSET),
     geometry: { ...NO_GEOMETRY },
     written: { ...NO_GEOMETRY },
     aimed: false,
   };
+}
+
+function axisPointer(lane: Lane, event: { clientX: number; clientY: number }): number {
+  return lane.axis === "y" ? event.clientY : event.clientX;
+}
+
+function dragOffset(current: Drag, metrics: LaneMetrics): number {
+  const offset = current.startOffset + (current.pointer - current.startPointer);
+  return Math.min(metrics.travel, Math.max(0, offset));
+}
+
+/**
+ * The scroll for a drag's thumb offset. At either end it asks for the end
+ * itself rather than a number measured a frame ago, so a drag held at the
+ * bottom of a growing transcript is at the true bottom — where
+ * `use-stick-to-bottom` takes over again on release.
+ */
+function writeDragScroll(current: Drag, offset: number, metrics: LaneMetrics): void {
+  const scroll =
+    metrics.travel > 0 && offset >= metrics.travel
+      ? Number.MAX_SAFE_INTEGER
+      : scrollForOffset(offset, metrics.travel, metrics.range);
+  if (current.lane.axis === "y") current.target.scrollTop = scroll;
+  else current.target.scrollLeft = scroll;
 }
 
 /**
@@ -277,7 +315,10 @@ export function installOverlayScrollbars(doc: Document): () => void {
   }
 
   function blocked(element: Element): boolean {
-    return element.closest(BLOCKED_SELECTOR) !== null;
+    return (
+      element.closest(BLOCKED_SELECTOR) !== null ||
+      win.getComputedStyle(element).pointerEvents === "none"
+    );
   }
 
   function eligible(element: HTMLElement): boolean {
@@ -323,6 +364,7 @@ export function installOverlayScrollbars(doc: Document): () => void {
       lane.box = null;
       lane.metrics = null;
       lane.layer = null;
+      lane.edgeInset = THUMB_EDGE_INSET;
       lane.aimed = false;
       lane.geometry = { ...NO_GEOMETRY };
       if (drag !== null && drag.lane === lane) endDrag();
@@ -377,22 +419,31 @@ export function installOverlayScrollbars(doc: Document): () => void {
       }
       const box = element.getBoundingClientRect();
       lane.box = box;
-      if (lane.layer === null) lane.layer = layerOf(element);
+      if (lane.layer === null) {
+        lane.layer = layerOf(element);
+        const inset = Number.parseFloat(
+          win.getComputedStyle(element).getPropertyValue(EDGE_INSET_PROPERTY),
+        );
+        lane.edgeInset = Number.isFinite(inset) && inset >= 0 ? inset : THUMB_EDGE_INSET;
+      }
       const vertical = lane.axis === "y";
       const layoutSize = vertical ? element.offsetHeight : element.offsetWidth;
       const drawnSize = vertical ? box.height : box.width;
+      const scale = layoutSize > 0 ? drawnSize / layoutSize : 1;
+      const edgeInset = lane.edgeInset * scale;
+      lane.lane = laneWidth(edgeInset);
       const metrics = laneMetrics({
         clientSize: vertical ? element.clientHeight : element.clientWidth,
         scrollSize: vertical ? element.scrollHeight : element.scrollWidth,
         scrollPos: vertical ? element.scrollTop : Math.abs(element.scrollLeft),
-        scale: layoutSize > 0 ? drawnSize / layoutSize : 1,
+        scale,
       });
       lane.metrics = metrics;
       const offset =
         drag !== null && drag.lane === lane ? dragOffset(drag, metrics) : metrics.offset;
       lane.geometry = vertical
         ? {
-            x: box.right - THUMB_EDGE_INSET - THUMB_THICKNESS,
+            x: box.right - edgeInset - THUMB_THICKNESS,
             y: box.top + TRACK_INSET,
             width: THUMB_THICKNESS,
             height: metrics.track,
@@ -402,7 +453,7 @@ export function installOverlayScrollbars(doc: Document): () => void {
           }
         : {
             x: box.left + TRACK_INSET,
-            y: box.bottom - THUMB_EDGE_INSET - THUMB_THICKNESS,
+            y: box.bottom - edgeInset - THUMB_THICKNESS,
             width: metrics.track,
             height: THUMB_THICKNESS,
             length: metrics.length,
@@ -618,7 +669,7 @@ export function installOverlayScrollbars(doc: Document): () => void {
       const aimed =
         lane.metrics?.overflow === true &&
         lane.box !== null &&
-        inThumbLane(lane.box, lane.axis, event.clientX, event.clientY);
+        inThumbLane(lane.box, lane.axis, event.clientX, event.clientY, lane.lane);
       if (lane.aimed !== aimed) {
         lane.aimed = aimed;
         requestUpdate();
@@ -667,15 +718,6 @@ export function installOverlayScrollbars(doc: Document): () => void {
     if (lanes.y.target !== null || lanes.x.target !== null) requestUpdate();
   }
 
-  function axisPointer(lane: Lane, event: { clientX: number; clientY: number }): number {
-    return lane.axis === "y" ? event.clientY : event.clientX;
-  }
-
-  function dragOffset(current: Drag, metrics: LaneMetrics): number {
-    const offset = current.startOffset + (current.pointer - current.startPointer);
-    return Math.min(metrics.travel, Math.max(0, offset));
-  }
-
   function handlePointerDown(event: PointerEvent): void {
     swallowClick = false;
     if (event.button !== 0 || drag !== null) return;
@@ -688,9 +730,10 @@ export function installOverlayScrollbars(doc: Document): () => void {
       // Only a press on the scroller's own content can be a grab: whatever lies
       // over its edge (a resize grip, a floating control) keeps its presses.
       if (!target.contains(pressed)) continue;
-      if (!inThumbLane(lane.box, lane.axis, event.clientX, event.clientY)) continue;
+      if (!inThumbLane(lane.box, lane.axis, event.clientX, event.clientY, lane.lane)) continue;
       const scroller: Box = target.getBoundingClientRect();
-      if (!hitsThumb(scroller, lane.thumb.getBoundingClientRect(), lane.axis, event.clientX, event.clientY)) {
+      const thumbBox = lane.thumb.getBoundingClientRect();
+      if (!hitsThumb(scroller, thumbBox, lane.axis, event.clientX, event.clientY, lane.lane)) {
         continue;
       }
       // Ours: no text selection, no focus move, and no outside-press for a menu.
@@ -736,21 +779,6 @@ export function installOverlayScrollbars(doc: Document): () => void {
     writeDragScroll(current, offset, metrics);
     lane.geometry = { ...lane.geometry, offset };
     writeGeometry(lane);
-  }
-
-  /**
-   * The scroll for a drag's thumb offset. At either end it asks for the end
-   * itself rather than a number measured a frame ago, so a drag held at the
-   * bottom of a growing transcript is at the true bottom — where
-   * `use-stick-to-bottom` takes over again on release.
-   */
-  function writeDragScroll(current: Drag, offset: number, metrics: LaneMetrics): void {
-    const scroll =
-      metrics.travel > 0 && offset >= metrics.travel
-        ? Number.MAX_SAFE_INTEGER
-        : scrollForOffset(offset, metrics.travel, metrics.range);
-    if (current.lane.axis === "y") current.target.scrollTop = scroll;
-    else current.target.scrollLeft = scroll;
   }
 
   function handleDragMove(event: PointerEvent): void {

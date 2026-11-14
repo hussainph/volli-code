@@ -144,11 +144,13 @@ export function SidebarResizeHandle({ onResizingChange }: SidebarResizeHandlePro
     // Absolute pulls it out of the sidebar's flex row; it anchors to the fixed
     // sidebar container, hugging the outer edge over the full height.
     //
-    // 4px wide. The app's scroll thumb (`lib/scroll-thumb`) draws 5–9px in
-    // from this edge, so the two never share a pixel, and its grab lane only
-    // takes presses that land on the scroller's own content — a press on this
-    // grip is never the thumb's, whatever the geometry does next. The visible
-    // hairline below is unmoved; 4px is enough for a narrow, aimable target.
+    // 4px wide, over the right edge of the sidebar's scrollers. Their scroll
+    // thumbs (`lib/scroll-thumb`) are drawn 5–9px in from that edge here
+    // (`--scroll-thumb-edge-inset` on `[data-volli-sidebar]`, globals.css) so
+    // the grip never covers one — at the default 3px it covered the pill's
+    // outer pixel at 100% and its centre at 125%. A press on the grip is never
+    // the thumb's either way: the thumb only takes presses that land on its
+    // scroller's own content. The visible hairline below is unmoved.
     <div
       role="separator"
       aria-orientation="vertical"
