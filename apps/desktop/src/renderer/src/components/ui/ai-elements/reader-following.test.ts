@@ -118,14 +118,19 @@ describe("thumbMoved", () => {
 
 describe("followingOnLift", () => {
   it("follows a thumb brought down and let go within the zone", () => {
-    expect(followingOnLift(at(8_000, 1_000), at(9_000, 0))).toBe("follow");
-    expect(followingOnLift(at(8_000, 1_000), at(8_930, 70))).toBe("follow");
+    const grabbed = at(8_000, 1_000);
+    expect(followingOnLift(grabbed, at(9_000, 0), at(9_000, 0))).toBe("follow");
+    expect(followingOnLift(grabbed, at(8_930, 70), at(8_930, 70))).toBe("follow");
+    // Its last write is in the scroller but not yet in a scroll event.
+    expect(followingOnLift(grabbed, at(8_800, 200), at(8_980, 20))).toBe("follow");
+    // A line landed after its last move.
+    expect(followingOnLift(grabbed, at(8_960, 40), at(8_960, 76))).toBe("follow");
   });
 
   it("leaves a thumb let go outside the zone, or taken up into it", () => {
-    expect(followingOnLift(at(8_000, 1_000), at(8_929, 71))).toBeNull();
+    expect(followingOnLift(at(8_000, 1_000), at(8_929, 71), at(8_929, 71))).toBeNull();
     // Up 40 from the end: within the zone, but the reader went up.
-    expect(followingOnLift(at(9_000, 1), at(8_960, 41))).toBeNull();
+    expect(followingOnLift(at(9_000, 1), at(8_960, 41), at(8_960, 41))).toBeNull();
   });
 });
 

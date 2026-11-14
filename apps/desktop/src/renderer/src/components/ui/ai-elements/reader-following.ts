@@ -162,13 +162,20 @@ export function thumbMoved(previous: ScrollPlace, current: ScrollPlace): boolean
 }
 
 /**
- * What a thumb drag means for following when it lets go: grabbed at
- * `grabbed`, last moved to `rest`. A drag that brought the thumb down and
- * rested within the zone follows; one that took it up stays released.
+ * What a thumb drag means for following when it lets go. `grabbed` is where it
+ * was grabbed, `moved` where a scroll event last saw the reader move it, and
+ * `lifted` the scroller as it lets go. That includes the drag's last write,
+ * whose scroll event only comes a frame later, and any growth since the last
+ * move. A drag that brought the thumb down and stopped within the zone follows;
+ * one that took it up stays released.
  */
-export function followingOnLift(grabbed: ScrollPlace, rest: ScrollPlace): FollowingChange {
-  const down = towardEnd(grabbed, rest, "thumb") > MOVED_PX;
-  return down && rest.fromEnd <= FOLLOW_ZONE_PX ? "follow" : null;
+export function followingOnLift(
+  grabbed: ScrollPlace,
+  moved: ScrollPlace,
+  lifted: ScrollPlace,
+): FollowingChange {
+  const down = towardEnd(grabbed, lifted, "thumb") > MOVED_PX;
+  return down && Math.min(moved.fromEnd, lifted.fromEnd) <= FOLLOW_ZONE_PX ? "follow" : null;
 }
 
 /**

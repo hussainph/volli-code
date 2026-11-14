@@ -373,8 +373,7 @@ function useReaderFollowing() {
       // A drag ends with its pointer capture; a touch with its touchend; both with blur.
       if (thumbUntil === Infinity && !touch) {
         thumbUntil = lifted;
-        // Where the reader last moved the thumb, not where it was kept since.
-        const change = followingOnLift(grabbed, thumbRest);
+        const change = followingOnLift(grabbed, thumbRest, scrollPlace(scroller));
         if (change === "follow" && !state.isAtBottom) {
           void latest.current.scrollToBottom("instant");
         }
