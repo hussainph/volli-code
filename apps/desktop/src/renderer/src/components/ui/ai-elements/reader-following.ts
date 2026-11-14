@@ -178,10 +178,38 @@ export function followingOnLift(
   return down && Math.min(moved.fromEnd, lifted.fromEnd) <= FOLLOW_ZONE_PX ? "follow" : null;
 }
 
+/** One scroll event's judgement, waiting for the library's own. */
+export interface PendingJudgement {
+  readonly change: FollowingChange;
+  readonly hand: ReaderHand;
+  /** The library's state when the event arrived. */
+  readonly wasFollowing: boolean;
+}
+
+/**
+ * Folds a newer scroll event's judgement into one still waiting. Only one
+ * waits: the newest event's timer runs after the library has judged every
+ * event before it. A newer event's decision wins; an event that decided
+ * nothing leaves the older decision standing, so a held thumb keeping its
+ * place cannot undo an arrival the moment before. Whether the library was
+ * following is kept from the first waiting event, the state none of them had
+ * changed yet.
+ */
+export function foldJudgement(
+  waiting: PendingJudgement | null,
+  next: PendingJudgement,
+): PendingJudgement {
+  if (waiting === null) return next;
+  return {
+    change: next.change ?? waiting.change,
+    hand: next.hand,
+    wasFollowing: waiting.wasFollowing,
+  };
+}
+
 /**
  * What to make true once the library has judged the same scroll event, which
- * it does a millisecond after it. `wasFollowing` is the library's state when
- * the event arrived, `following` its state now.
+ * it does a millisecond after it.
  *
  * - An arrival the library discarded is followed.
  * - A release the library undid is released again.
@@ -191,12 +219,12 @@ export function followingOnLift(
  * - With no hand, the library's own re-attach stands. That includes the
  *   re-lock near the end when content shrinks.
  */
-export function followingSettled(input: {
-  readonly change: FollowingChange;
-  readonly hand: ReaderHand;
-  readonly wasFollowing: boolean;
-  readonly following: boolean;
-}): FollowingChange {
+export function followingSettled(
+  input: PendingJudgement & {
+    /** The library's state now. */
+    readonly following: boolean;
+  },
+): FollowingChange {
   const { change, hand, wasFollowing, following } = input;
   if (change === "follow") return following ? null : "follow";
   if (change === "release") return following ? "release" : null;

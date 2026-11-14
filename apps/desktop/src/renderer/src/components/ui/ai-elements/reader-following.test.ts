@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   FOLLOW_ZONE_PX,
+  foldJudgement,
   followingAfterScroll,
   followingOnLift,
   followingSettled,
@@ -131,6 +132,25 @@ describe("followingOnLift", () => {
     expect(followingOnLift(at(8_000, 1_000), at(8_929, 71), at(8_929, 71))).toBeNull();
     // Up 40 from the end: within the zone, but the reader went up.
     expect(followingOnLift(at(9_000, 1), at(8_960, 41), at(8_960, 41))).toBeNull();
+  });
+});
+
+describe("foldJudgement", () => {
+  it("takes the first waiting judgement as it is", () => {
+    const first = { change: "follow" as const, hand: "none" as const, wasFollowing: false };
+    expect(foldJudgement(null, first)).toBe(first);
+  });
+
+  it("lets a newer decision win, and a newer non-decision leave the older one", () => {
+    const arrived = { change: "follow" as const, hand: "thumb" as const, wasFollowing: false };
+    expect(
+      foldJudgement(arrived, { change: "release", hand: "direct", wasFollowing: true }),
+    ).toEqual({ change: "release", hand: "direct", wasFollowing: false });
+    expect(foldJudgement(arrived, { change: null, hand: "thumb", wasFollowing: true })).toEqual({
+      change: "follow",
+      hand: "thumb",
+      wasFollowing: false,
+    });
   });
 });
 

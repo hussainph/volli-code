@@ -47,10 +47,12 @@ import { SCROLL_THUMB_GRAB_EVENT } from "@renderer/lib/scroll-thumb/overlay-scro
 import {
   followingAfterScroll,
   followingOnLift,
+  foldJudgement,
   followingSettled,
   keyScrollsUp,
   scrollPlace,
   thumbMoved,
+  type PendingJudgement,
 } from "./reader-following";
 import { wheelDetachesFollowing } from "./scroll-chaining";
 import { glideToLatest } from "./scroll-to-latest";
@@ -312,7 +314,17 @@ function useReaderFollowing() {
     // Where the thumb was grabbed, and where the reader last moved it.
     let grabbed = place;
     let thumbRest = place;
-    const timers = new Set<number>();
+    // The judgement waiting for the library's, and the timer that applies it.
+    let waiting: PendingJudgement | null = null;
+    let settleTimer = 0;
+    const settle = () => {
+      const judgement = waiting;
+      waiting = null;
+      if (judgement === null) return;
+      const change = followingSettled({ ...judgement, following: state.isAtBottom });
+      if (change === "follow") void latest.current.scrollToBottom("instant");
+      else if (change === "release") latest.current.stopScroll();
+    };
     // The library's own writes are not the reader's, and their scroll event
     // can arrive a frame late: after a wheel up has already released, where it
     // would read as a move toward the end. The library marks each write with
@@ -332,19 +344,10 @@ function useReaderFollowing() {
       const change = followingAfterScroll(previous, place, hand);
       const wasFollowing = state.isAtBottom;
       if (change === "release" && wasFollowing) latest.current.stopScroll();
-      if (change === null && hand === "none") return;
-      const timer = view.setTimeout(() => {
-        timers.delete(timer);
-        const settle = followingSettled({
-          change,
-          hand,
-          wasFollowing,
-          following: state.isAtBottom,
-        });
-        if (settle === "follow") void latest.current.scrollToBottom("instant");
-        else if (settle === "release") latest.current.stopScroll();
-      }, 1);
-      timers.add(timer);
+      if (change === null && hand === "none" && waiting === null) return;
+      waiting = foldJudgement(waiting, { change, hand, wasFollowing });
+      view.clearTimeout(settleTimer);
+      settleTimer = view.setTimeout(settle, 1);
     };
     const onKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
@@ -373,9 +376,11 @@ function useReaderFollowing() {
       // A drag ends with its pointer capture; a touch with its touchend; both with blur.
       if (thumbUntil === Infinity && !touch) {
         thumbUntil = lifted;
-        const change = followingOnLift(grabbed, thumbRest, scrollPlace(scroller));
-        if (change === "follow" && !state.isAtBottom) {
-          void latest.current.scrollToBottom("instant");
+        if (followingOnLift(grabbed, thumbRest, scrollPlace(scroller)) === "follow") {
+          // The drag's last word: whatever its scroll events left waiting is moot.
+          waiting = null;
+          view.clearTimeout(settleTimer);
+          if (!state.isAtBottom) void latest.current.scrollToBottom("instant");
         }
       }
       if (directUntil === Infinity && event.type !== "lostpointercapture") directUntil = lifted;
@@ -393,7 +398,7 @@ function useReaderFollowing() {
       scroller.removeEventListener("touchstart", onTouch);
       view.removeEventListener("keydown", onKey);
       for (const name of LIFT_EVENTS) view.removeEventListener(name, onLift);
-      for (const timer of timers) view.clearTimeout(timer);
+      view.clearTimeout(settleTimer);
     };
   }, [scrollRef, state]);
 }
