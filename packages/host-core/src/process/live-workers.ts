@@ -27,6 +27,7 @@ import {
 
 const live = new Set<Worker>();
 const gates = new WeakMap<Worker, Int32Array>();
+const startListeners = new Set<() => void>();
 let watching = false;
 
 /** The gate's word: the worker has written nothing yet. */
@@ -47,7 +48,20 @@ export function watchLiveWorkers(): void {
     const { worker } = message as { worker: Worker };
     live.add(worker);
     worker.once("exit", () => live.delete(worker));
+    // A listener may unsubscribe itself while this runs; a Set iteration allows that.
+    for (const listener of startListeners) listener();
   });
+}
+
+/**
+ * Calls `listener` each time a worker starts from now on (VC-652: an exit
+ * armed with no worker running is disarmed by one). Returns the unsubscribe.
+ */
+export function onWorkerStarted(listener: () => void): () => void {
+  startListeners.add(listener);
+  return () => {
+    startListeners.delete(listener);
+  };
 }
 
 /** How many workers this thread has running now. */

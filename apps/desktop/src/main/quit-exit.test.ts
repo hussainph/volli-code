@@ -15,10 +15,20 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function ports(overrides: Partial<QuitExitPorts> = {}): QuitExitPorts & { order: string[] } {
+function ports(
+  overrides: Partial<QuitExitPorts> = {},
+): QuitExitPorts & { order: string[]; disarm: ReturnType<typeof vi.fn>; startWorker(): void } {
   const order: string[] = [];
+  const listeners = new Set<() => void>();
+  const disarm = vi.fn(() => {
+    order.push("disarm");
+  });
   return {
     order,
+    disarm,
+    startWorker: () => {
+      for (const listener of listeners) listener();
+    },
     now: () => 1000,
     liveWorkers: () => 0,
     endReadOnlyWorkers: vi.fn(() => {
@@ -41,6 +51,16 @@ function ports(overrides: Partial<QuitExitPorts> = {}): QuitExitPorts & { order:
     kill: vi.fn(() => {
       order.push("kill");
     }),
+    watchExit: vi.fn(() => {
+      order.push("watch");
+      return { disarm };
+    }),
+    onWorkerStarted: vi.fn((listener: () => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    }),
     ...overrides,
   };
 }
@@ -60,7 +80,7 @@ function app(order: string[]) {
 const settled = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 describe("createQuitExit: the exit", () => {
-  it("exits as before when no worker is running, and says so", async () => {
+  it("with no worker running, writes first, then watches the ordinary exit, and says so", async () => {
     log = captureHostLog("info");
     const p = ports();
     const target = app(p.order);
@@ -68,7 +88,8 @@ describe("createQuitExit: the exit", () => {
     quit.accepted("update-install");
     quit.exitingApp(target).exit(0);
     await settled();
-    expect(p.order).toEqual(["app.exit(0)"]);
+    // The watch starts in the same tick as the exit, after the last count.
+    expect(p.order).toEqual(["flush", "watch", "app.exit(0)"]);
     expect(p.settleWorkers).not.toHaveBeenCalled();
     expect(p.endReadOnlyWorkers).not.toHaveBeenCalled();
     expect(p.decide).toHaveBeenCalledWith({ claim: true });
@@ -87,17 +108,97 @@ describe("createQuitExit: the exit", () => {
         liveWorkers: 0,
         sinceQuitMs: 0,
         afterDeadline: false,
+        watch: "armed",
       }),
     );
   });
 
-  it("gives live workers the grace first, and exits as before if they wait", async () => {
+  it("gives live workers the grace first, and exits as before if they wait: no write, no watch", async () => {
     const p = ports({ liveWorkers: () => 1 });
     const quit = createQuitExit(p);
     quit.exitingApp(app(p.order)).exit(3);
     await settled();
     expect(p.settleWorkers).toHaveBeenCalledWith(WORKER_SETTLE_GRACE_MS);
     expect(p.order).toEqual(["end", "settle", "app.exit(3)"]);
+    expect(p.watchExit).not.toHaveBeenCalled();
+  });
+
+  it("never watches an exit while an upgrade runs", async () => {
+    const p = ports({ liveWorkers: () => 1, decide: vi.fn(() => "finish-upgrade-first" as const) });
+    createQuitExit(p).exitingApp(app(p.order)).exit(0);
+    await settled();
+    expect(p.watchExit).not.toHaveBeenCalled();
+    expect(p.kill).not.toHaveBeenCalled();
+    expect(p.order.at(-1)).toBe("app.exit(0)");
+  });
+
+  it("watches the exit when the live workers ended during the grace", async () => {
+    let live = 1;
+    const p = ports({
+      liveWorkers: () => live,
+      settleWorkers: vi.fn(async () => {
+        live = 0;
+      }),
+    });
+    createQuitExit(p).exitingApp(app(p.order)).exit(0);
+    await settled();
+    expect(p.order).toEqual(["end", "flush", "watch", "app.exit(0)"]);
+  });
+
+  it("does not watch when a worker starts during its writes, and says the exit changed", async () => {
+    log = captureHostLog("info");
+    let live = 0;
+    const p = ports({
+      liveWorkers: () => live,
+      flush: vi.fn(async () => {
+        live = 1;
+      }),
+    });
+    createQuitExit(p).exitingApp(app(p.order)).exit(0);
+    await settled();
+    expect(p.watchExit).not.toHaveBeenCalled();
+    expect(p.order.at(-1)).toBe("app.exit(0)");
+    expect(log.records).toContainEqual(
+      expect.objectContaining({ msg: "exit call", mode: "normal", changed: true, liveWorkers: 1 }),
+    );
+  });
+
+  it("exits unwatched, and says so, when the watch does not start", async () => {
+    log = captureHostLog("info");
+    const p = ports({ watchExit: vi.fn(() => null) });
+    const target = app(p.order);
+    createQuitExit(p).exitingApp(target).exit(0);
+    await settled();
+    expect(target.exit).toHaveBeenCalledExactlyOnceWith(0);
+    expect(p.onWorkerStarted).not.toHaveBeenCalled();
+    expect(log.records).toContainEqual(
+      expect.objectContaining({ msg: "exit call", mode: "normal", watch: "unavailable" }),
+    );
+  });
+
+  it("disarms the watch once when a worker starts after the exit call", async () => {
+    log = captureHostLog("info");
+    const p = ports();
+    createQuitExit(p).exitingApp(app(p.order)).exit(0);
+    await settled();
+    expect(p.disarm).not.toHaveBeenCalled();
+    p.startWorker();
+    p.startWorker();
+    expect(p.disarm).toHaveBeenCalledOnce();
+    expect(log.records).toContainEqual(
+      expect.objectContaining({ msg: "exit watch disarmed", reason: "worker-started" }),
+    );
+  });
+
+  it("never lets its writes hold the ordinary exit either", async () => {
+    vi.useFakeTimers();
+    const p = ports({ flush: () => new Promise(() => undefined) });
+    const target = app(p.order);
+    createQuitExit(p).exitingApp(target).exit(0);
+    await vi.advanceTimersByTimeAsync(IMMEDIATE_EXIT_FLUSH_MS - 1);
+    expect(target.exit).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(p.order).toEqual(["watch", "app.exit(0)"]);
   });
 
   it("ends the process itself once only read-only workers remain, after its own writes", async () => {

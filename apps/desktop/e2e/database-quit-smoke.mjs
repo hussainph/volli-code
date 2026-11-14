@@ -48,6 +48,7 @@ import {
   goToBoard,
   launch,
   launchEnvFor,
+  quitEndedByApp,
   makeGitRepo,
   seedProjects,
   smokeExecutableFor,
@@ -124,19 +125,21 @@ async function open(config, label, extraEnv = {}) {
 }
 
 /**
- * An ordinary quit with no worker left. Its native exit can still take tens
- * of seconds on a loaded machine (VC-652's family: after `app.exit`, with the
- * drain done), which is not what this smoke measures, so it gets a minute.
+ * An ordinary quit with no worker left. Electron's own teardown after
+ * `app.exit` can outlive it on a loaded machine, and the app's exit watch
+ * then ends the process 5 s after the exit call (VC-652). So the quit is
+ * bounded by the drain's own deadline (15 s, `quit-gate.ts`), the exit's
+ * writes (at most 2 s), the watch's 5 s and a margin: 25 s. Ended by the app
+ * either way: exit 0, or the watch's SIGKILL its exit line armed.
  */
+const ORDINARY_QUIT_MS = 25_000;
+
 async function close(run) {
-  const exit = await closeAppBounded(run.app, { closeGraceMs: 60000 });
-  console.log(`CLEANUP: ${run.label}: ${JSON.stringify(exit)}`);
+  const started = Date.now();
+  const exit = await closeAppBounded(run.app, { closeGraceMs: ORDINARY_QUIT_MS });
+  console.log(`CLEANUP: ${run.label}: ${Date.now() - started} ms ${JSON.stringify(exit)}`);
   runs.delete(run);
-  assert.equal(exit.exit.code, 0, `${run.label} did not quit cleanly`);
-  assert.ok(
-    ["graceful", "already-exited", "natural-after-close"].includes(exit.kind),
-    `${run.label}: cleanup required a forced signal`,
-  );
+  assert.ok(quitEndedByApp(exit, run.output), `${run.label} did not quit cleanly`);
 }
 
 /** Resolves with the child's exit once it has exited. */

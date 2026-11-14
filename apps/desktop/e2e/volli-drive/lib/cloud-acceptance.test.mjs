@@ -365,4 +365,8 @@ test("an immediate exit counts only when the app's own log says it made one (VC-
   assert.equal(immediateQuit({ ...close, closeFailures: ["timed out"] }, said), false);
   assert.equal(immediateQuit({ ...close, exit: { code: 0, signal: null } }, said), false);
   assert.equal(immediateQuit(undefined, said), false);
+  // The exit watch's kill (VC-652) is the app's own too, and only when its exit line armed one.
+  const watched = "[quit] exit call {\n  mode: 'normal',\n  liveWorkers: 0,\n  watch: 'armed'\n}\n";
+  assert.equal(immediateQuit(close, watched), true);
+  assert.equal(immediateQuit(close, watched.replace("armed", "unavailable")), false);
 });

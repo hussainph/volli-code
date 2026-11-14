@@ -37,6 +37,7 @@ import {
   goToBoard,
   launch,
   makeGitRepo,
+  quitEndedByApp,
   seedProjects,
   waitUntil,
   writeFakeLoginShell,
@@ -103,9 +104,14 @@ async function profile() {
 
 async function open(config, label, extraEnv = {}) {
   const app = await launch({ ...config, extraEnv: { ...config.extraEnv, ...extraEnv } });
-  const run = { app, label, stderr: "" };
+  const run = { app, label, stderr: "", output: "" };
   runs.add(run);
+  // Main's log, both streams: the quit's exit line says how it ended.
+  app.process().stdout?.on("data", (chunk) => {
+    run.output = `${run.output}${chunk}`.slice(-64000);
+  });
   app.process().stderr?.on("data", (chunk) => {
+    run.output = `${run.output}${chunk}`.slice(-64000);
     run.stderr = `${run.stderr}${chunk}`.slice(-24000);
   });
   await bounded(`${label}: profile isolation`, () =>
@@ -114,15 +120,13 @@ async function open(config, label, extraEnv = {}) {
   return run;
 }
 
+/** Ended by the app: exit 0, or its exit watch's SIGKILL 5 s after the exit call (VC-652). */
 async function close(run) {
+  const started = Date.now();
   const exit = await closeAppBounded(run.app, { closeGraceMs: 20000 });
-  console.log(`CLEANUP: ${run.label}: ${JSON.stringify(exit)}`);
+  console.log(`CLEANUP: ${run.label}: ${Date.now() - started} ms ${JSON.stringify(exit)}`);
   runs.delete(run);
-  assert.equal(exit.exit.code, 0, `${run.label} did not quit cleanly`);
-  assert.ok(
-    ["graceful", "already-exited", "natural-after-close"].includes(exit.kind),
-    `${run.label}: cleanup required a forced signal`,
-  );
+  assert.ok(quitEndedByApp(exit, run.output), `${run.label} did not quit cleanly`);
 }
 
 /** Every Electron window main holds, with the page each shows. */

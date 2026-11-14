@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 
 import {
+  quitEndedByApp,
   CLOSE_APP_BOUNDED_MAX_MS,
   closeAppBounded,
   createDeadline,
@@ -569,4 +570,29 @@ test("closeAppBounded rejects when the child survives every shutdown attempt", a
     /remained live after SIGKILL/,
   );
   assert.deepEqual(child.signals, ["SIGTERM", "SIGKILL"]);
+});
+
+test("quitEndedByApp: exit 0, or a SIGKILL the app's own exit line names (VC-1208, VC-652)", () => {
+  const clean = { kind: "graceful", exit: { code: 0, signal: null }, closeFailures: [] };
+  const killed = { kind: "graceful", exit: { code: null, signal: "SIGKILL" }, closeFailures: [] };
+  const watched = "[quit] exit call {\n  mode: 'normal',\n  watch: 'armed'\n}\n";
+  const immediate = "[quit] exit call {\n  mode: 'immediate',\n  liveWorkers: 1\n}\n";
+  assert.equal(quitEndedByApp(clean, ""), true);
+  assert.equal(quitEndedByApp({ ...clean, kind: "already-exited" }, ""), true);
+  assert.equal(quitEndedByApp(killed, watched), true);
+  assert.equal(quitEndedByApp(killed, immediate), true);
+  assert.equal(quitEndedByApp({ ...killed, kind: "natural-after-close" }, watched), true);
+  // A kill the app's log does not name, or one the close sent, is not the app's quit.
+  assert.equal(quitEndedByApp(killed, "[quit] exit call {\n  mode: 'normal'\n}\n"), false);
+  assert.equal(quitEndedByApp(killed, watched.replace("armed", "unavailable")), false);
+  assert.equal(quitEndedByApp(killed, undefined), false);
+  assert.equal(quitEndedByApp({ ...killed, kind: "sigkill" }, watched), false);
+  assert.equal(quitEndedByApp({ ...killed, kind: "sigterm" }, watched), false);
+  assert.equal(quitEndedByApp({ ...killed, closeFailures: ["timed out"] }, watched), false);
+  assert.equal(quitEndedByApp({ ...clean, exit: { code: 1, signal: null } }, watched), false);
+  assert.equal(
+    quitEndedByApp({ ...killed, exit: { code: null, signal: "SIGSEGV" } }, watched),
+    false,
+  );
+  assert.equal(quitEndedByApp(null, watched), false);
 });

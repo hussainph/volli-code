@@ -17,7 +17,8 @@
  *   3. macOS reopen (`activate`) with no window brings a window back with the
  *      renderer loaded and leaves the mode — the same in-process host.
  *   4. Entering again with no live work drains then exits on its own: today's
- *      quit path, exit 0, socket removed — and no sooner than the settle.
+ *      quit path, exit 0 (or the exit watch's kill 5 s after the exit call,
+ *      VC-652), socket removed — and no sooner than the settle.
  *
  * Nothing is live, so each entry starts the drain-exit's settle window at
  * once, and checks 2 and 3 must finish inside it. A release's 5 s is less
@@ -47,6 +48,8 @@ import {
   createRunner,
   launch,
   pathExists,
+  quitEndedByApp,
+  settleExitWatch,
   waitForChildExit,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
@@ -99,6 +102,13 @@ async function main() {
     },
   });
   const child = app.process();
+  // Main's log, both streams: the exit line says how the drain-exit ended.
+  let output = "";
+  const capture = (chunk) => {
+    output = `${output}${chunk}`.slice(-64000);
+  };
+  child.stdout?.on("data", capture);
+  child.stderr?.on("data", capture);
   try {
     await assertProfileIsolated(app, userDataDir);
     const page = await app.firstWindow();
@@ -213,13 +223,21 @@ async function main() {
         timeout: DRAIN_EXIT_TIMEOUT_MS,
       });
       const exitAfterMs = Date.now() - before;
+      // The exit watch writes into the profile once the process is gone (VC-652).
+      await settleExitWatch(child.pid);
       const socketGone = await waitUntil(
         "socket removal",
         async () => (!(await pathExists(socketPath)) ? true : null),
         { timeout: 10000 },
       ).catch(() => false);
+      // Exit 0, or the app's exit watch ending a native teardown that
+      // outlived the exit call by 5 s (VC-652): its exit line armed one.
+      const ended = quitEndedByApp(
+        { kind: "natural-after-close", exit, closeFailures: [] },
+        output,
+      );
       return {
-        ok: exit.code === 0 && socketGone === true && exitAfterMs >= SETTLE_MS,
+        ok: ended && socketGone === true && exitAfterMs >= SETTLE_MS,
         detail:
           `exit=${exit.code} signal=${exit.signal ?? "none"} socketGone=${socketGone === true} ` +
           `exitAfterMs=${exitAfterMs} settleMs=${SETTLE_MS}`,

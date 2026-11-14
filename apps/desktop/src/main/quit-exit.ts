@@ -40,6 +40,15 @@
  * An upgrade is never cut short: a quit asked during one is held, its window
  * stays up saying so, and the quit runs once the upgrade's worker has exited.
  *
+ * The ordinary exit, with no worker running (VC-652), makes the same writes
+ * first (the browser sessions and the first-paint mirror, same bound), then
+ * starts the exit watch (`exit-watch.ts`) in the same tick as its last count
+ * of zero workers and the `app.exit`: Electron's own teardown can outlive the
+ * exit by minutes on a loaded Mac, and the watch ends the process 5 s after
+ * the exit call. It is never started while a worker runs, and a worker that
+ * starts after it disarms it, so the worker rules above stay the only ones
+ * that apply to a live worker.
+ *
  * Electron-free: `app`, the workers and the writes are ports.
  */
 import { hostLogger } from "@volli/host-core/log";
@@ -48,7 +57,7 @@ import type { QuitExitDecision, QuitReasonCode } from "@volli/shared";
 /** How long an exit waits for live workers to end by themselves, the ordinary way. */
 const WORKER_SETTLE_GRACE_MS = 1_000;
 
-/** The bound on the writes an immediate exit makes itself. */
+/** The bound on the writes an exit makes itself (immediate, or ordinary with no worker). */
 const IMMEDIATE_EXIT_FLUSH_MS = 2_000;
 
 export interface QuitExitPorts {
@@ -74,6 +83,13 @@ export interface QuitExitPorts {
   runExitHandlers(code: number): void;
   /** Ends the process at once. */
   kill(): void;
+  /**
+   * Starts the exit watch for an exit with no worker running; null when it
+   * did not start (another platform, or the spawn failed).
+   */
+  watchExit(): { disarm(): void } | null;
+  /** Calls `listener` whenever a worker starts from now on; returns the unsubscribe. */
+  onWorkerStarted(listener: () => void): () => void;
 }
 
 /** What the quit holds while an upgrade finishes. */
@@ -119,14 +135,31 @@ export function createQuitExit(ports: QuitExitPorts): QuitExit {
   };
 
   /** The exit's line: how it ends, what still runs, and whether the drain ran out of time. */
-  const exitLine = (mode: "immediate" | "normal", changed: boolean): void => {
+  const exitLine = (
+    mode: "immediate" | "normal",
+    changed: boolean,
+    watch?: "armed" | "unavailable",
+  ): void => {
     log.info("exit call", {
       mode,
       liveWorkers: ports.liveWorkers(),
       sinceQuitMs: sinceQuitMs(),
       afterDeadline: deadlineExpired,
       ...(changed ? { changed: true } : {}),
+      ...(watch === undefined ? {} : { watch }),
     });
+  };
+
+  /** The writes a normal exit leaves to the teardown, made now, bounded. */
+  const flushBounded = async (): Promise<void> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      ports.flush().catch(() => undefined),
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, IMMEDIATE_EXIT_FLUSH_MS);
+      }),
+    ]);
+    clearTimeout(timer);
   };
 
   /**
@@ -137,14 +170,7 @@ export function createQuitExit(ports: QuitExitPorts): QuitExit {
   const stillExitNow = (): boolean => ports.decide({ claim: true }) === "exit-now";
 
   const exitNow = async (app: { exit(code?: number): void }, code: number): Promise<void> => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    await Promise.race([
-      ports.flush().catch(() => undefined),
-      new Promise((resolve) => {
-        timer = setTimeout(resolve, IMMEDIATE_EXIT_FLUSH_MS);
-      }),
-    ]);
-    clearTimeout(timer);
+    await flushBounded();
     if (!stillExitNow()) {
       exitLine("normal", true);
       app.exit(code);
@@ -167,6 +193,24 @@ export function createQuitExit(ports: QuitExitPorts): QuitExit {
     ports.kill();
   };
 
+  /**
+   * The ordinary exit with no worker running, watched. Called in the same
+   * tick as the last count of zero workers: nothing starts between that count,
+   * the watch and the exit. A worker that starts later disarms the watch.
+   */
+  const watchedExit = (app: { exit(code?: number): void }, code: number): void => {
+    const watch = ports.watchExit();
+    exitLine("normal", false, watch === null ? "unavailable" : "armed");
+    if (watch !== null) {
+      const stop = ports.onWorkerStarted(() => {
+        stop();
+        watch.disarm();
+        log.info("exit watch disarmed", { reason: "worker-started" });
+      });
+    }
+    app.exit(code);
+  };
+
   const exit = async (app: { exit(code?: number): void }, code: number): Promise<void> => {
     if (exiting) return;
     exiting = true;
@@ -176,6 +220,17 @@ export function createQuitExit(ports: QuitExitPorts): QuitExit {
     }
     if (stillExitNow()) {
       await exitNow(app, code);
+      return;
+    }
+    if (ports.liveWorkers() === 0) {
+      await flushBounded();
+      // Windows and IPC are alive until the exit: a worker may have started.
+      if (ports.liveWorkers() === 0) {
+        watchedExit(app, code);
+        return;
+      }
+      exitLine("normal", true);
+      app.exit(code);
       return;
     }
     exitLine("normal", false);
