@@ -174,15 +174,20 @@ export function followingAfterScroll(
   current: ScrollPlace,
   hand: ReaderHand,
 ): FollowingChange {
+  // Nobody at the end itself has left it: a scrollTop that fell there is the
+  // browser clamping it to content that got shorter.
+  const atEnd = current.fromEnd <= AT_END_PX;
   if (hand === "thumb") {
     const moved = thumbTowardEnd(previous, current);
-    if (current.fromEnd <= AT_END_PX && moved > MOVED_PX) return "follow";
+    if (atEnd) return moved > MOVED_PX ? "follow" : null;
     return moved < -MOVED_PX ? "release" : null;
   }
   const nearer = previous.fromEnd - current.fromEnd > MOVED_PX;
   const rose = current.top > previous.top + MOVED_PX;
   const away =
-    current.top < previous.top - MOVED_PX && current.fromEnd > previous.fromEnd + MOVED_PX;
+    !atEnd &&
+    current.top < previous.top - MOVED_PX &&
+    current.fromEnd > previous.fromEnd + MOVED_PX;
   switch (hand) {
     case "none":
       return nearer && inZone(current) ? "follow" : null;

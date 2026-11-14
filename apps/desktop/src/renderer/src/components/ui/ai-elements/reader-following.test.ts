@@ -113,6 +113,14 @@ describe("followingAfterScroll", () => {
     }
   });
 
+  it("does not release a reader the browser clamped to the end of content that got shorter", () => {
+    // The library wrote 9,466; the turn's rows shrank the content by 315 in
+    // the same frame and the browser clamped scrollTop to the new end.
+    for (const hand of ["up", "direct", "select", "app", "thumb"] as const) {
+      expect(followingAfterScroll(at(9_466, -314), at(9_152, 0), hand)).toBeNull();
+    }
+  });
+
   it("does not release without a hand that can leave", () => {
     // Anchoring and a line below in one frame look like a scroll up.
     expect(followingAfterScroll(at(9_000, 1), at(8_954, 19), "none")).toBeNull();

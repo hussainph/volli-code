@@ -455,6 +455,37 @@ it("keeps following through a turn start whose row swap lowers scrollTop with no
   expect(await rest()).toBeLessThanOrEqual(1);
 });
 
+it("keeps following when content shrinks under the end just after a click in the transcript", async () => {
+  // A click (no drag) in the transcript: a pointer was held there a moment ago.
+  await act(async () => {
+    const text = scroller.querySelector("p")!;
+    text.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
+    text.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, button: 0 }));
+  });
+  // A line lands and the library writes the end; in the frame of that write
+  // the content gets 315px shorter and the browser clamps scrollTop to the new
+  // end: one scroll event whose scrollTop fell below the library's write.
+  await frame(LINE);
+  await animationCallbacksOnly();
+  contentHeight -= 315;
+  position = Math.min(position, end());
+  await act(async () => {
+    lastReported = position;
+    scroller.dispatchEvent(new Event("scroll"));
+    // The observer reports the shrink in the same frame, before any timer.
+    for (const callback of resizeCallbacks) {
+      callback(
+        [{ contentRect: { height: contentHeight } } as ResizeObserverEntry],
+        {} as ResizeObserver,
+      );
+    }
+    await microtasks();
+    await settle();
+  });
+  await stream(10);
+  expect(await rest()).toBeLessThanOrEqual(1);
+});
+
 it("does not capture a reader selecting text when the selection auto-scrolls into the zone", async () => {
   await readUp();
   await act(async () => {
