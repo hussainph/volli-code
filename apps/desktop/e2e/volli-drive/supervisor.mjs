@@ -1053,7 +1053,10 @@ async function quitDuringLaunch(args) {
   try {
     const logFrom = mainLogSize();
     const { close } = await closeLocalInstance();
-    if (!immediateQuit(close, mainLogSince(logFrom)) && cleanQuitProblems(close).length > 0)
+    if (
+      !immediateQuit(close, mainLogSince(logFrom), { userDataDir: L.userDataDir }) &&
+      cleanQuitProblems(close).length > 0
+    )
       throw new Error(`Electron did not quit cleanly first: ${JSON.stringify(close)}`);
     await waitUntil(
       "the quit Electron's processes to exit",
@@ -1210,7 +1213,7 @@ async function restartElectron(reason, closeInstance) {
     const { trayQuit, close } = await closeInstance();
     const quitMs = Math.round(performance.now() - started);
     // The app may end itself at once when only read-only workers are left (VC-1208).
-    const immediate = immediateQuit(close, mainLogSince(logFrom));
+    const immediate = immediateQuit(close, mainLogSince(logFrom), { userDataDir: L.userDataDir });
     const unclean = immediate ? [] : cleanQuitProblems(close);
     if (unclean.length > 0) {
       throw new Error(

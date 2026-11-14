@@ -68,7 +68,7 @@
  * These smokes are NOT wired into `vp test`; they need a display + the built app.
  */
 import { execFile, execFileSync } from "node:child_process";
-import { mkdirSync, promises as fs, rmSync } from "node:fs";
+import { mkdirSync, promises as fs, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -379,27 +379,72 @@ export function launch({ dbPath, userDataDir, extraEnv = {}, extraArgs = [], bef
     environment,
   });
   beforeLaunch?.();
-  return _electron.launch({
-    executablePath,
-    // A test profile is not permission to consult the person's OS keychain.
-    // volli-drive also installs fail-closed traps; these switches keep legacy
-    // single-smoke launches away from Chromium's native password backend.
-    args: packagedBinary
-      ? [
-          `--user-data-dir=${userDataDir}`,
-          "--use-mock-keychain",
-          "--password-store=basic",
-          ...extraArgs,
-        ]
-      : [
-          APP_DIR,
-          `--user-data-dir=${userDataDir}`,
-          "--use-mock-keychain",
-          "--password-store=basic",
-          ...extraArgs,
-        ],
-    env: environment,
-  });
+  return _electron
+    .launch({
+      executablePath,
+      // A test profile is not permission to consult the person's OS keychain.
+      // volli-drive also installs fail-closed traps; these switches keep legacy
+      // single-smoke launches away from Chromium's native password backend.
+      args: packagedBinary
+        ? [
+            `--user-data-dir=${userDataDir}`,
+            "--use-mock-keychain",
+            "--password-store=basic",
+            ...extraArgs,
+          ]
+        : [
+            APP_DIR,
+            `--user-data-dir=${userDataDir}`,
+            "--use-mock-keychain",
+            "--password-store=basic",
+            ...extraArgs,
+          ],
+      env: environment,
+    })
+    .then(closeSettlesExitWatch);
+}
+
+/**
+ * The app's ordinary exit starts a detached exit watch (VC-652,
+ * `src/main/exit-watch.ts`) that writes its record into the profile directory
+ * just after the process is gone. A smoke that deletes its scratch profile
+ * right after `app.close()` would race that write (ENOTEMPTY), so `close`
+ * also waits, bounded, for the watch of this exact pid to end.
+ */
+function closeSettlesExitWatch(app) {
+  const pid = app.process()?.pid;
+  const close = app.close.bind(app);
+  app.close = async () => {
+    try {
+      await close();
+    } finally {
+      if (pid !== undefined) await settleExitWatch(pid);
+    }
+  };
+  return app;
+}
+
+/**
+ * Resolves true once no exit watch for `pid` is running (`volli-exit-watch
+ * watch <pid>` in the process table), false after `timeoutMs`. A watch ends
+ * within its poll of the process being gone, so this is milliseconds.
+ */
+export async function settleExitWatch(pid, { timeoutMs = 3000 } = {}) {
+  if (process.platform !== "darwin") return true;
+  const marker = `volli-exit-watch watch ${pid} `;
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    let table = "";
+    try {
+      table = (await execFileAsync("/bin/ps", ["-axo", "command="], { maxBuffer: 16 << 20 }))
+        .stdout;
+    } catch {
+      return false;
+    }
+    if (!table.includes(marker)) return true;
+    if (Date.now() >= deadline) return false;
+    await sleep(50);
+  }
 }
 
 /**
@@ -547,6 +592,44 @@ export function createRunner() {
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Whether a bounded close (`closeAppBounded`'s result) ended with the app's
+ * own quit: exit code 0, or a SIGKILL the app chose. The close sent no signal
+ * and no close step failed, and:
+ *
+ * - an immediate exit (VC-1208): the app's log since the quit began says
+ *   `exit call { mode: 'immediate' }`;
+ * - the exit watch's kill (VC-652): the log says `exit call { watch: 'arming' }`
+ *   AND the watch's own record for this exact pid, in the profile, says it
+ *   killed it. Any other SIGKILL (out of memory, someone else's) is not the
+ *   app's quit.
+ *
+ * `userDataDir` is the profile the app ran on; read after the close, which
+ * waits for the watch to finish (`settleExitWatch`).
+ */
+export function quitEndedByApp(close, logSinceQuit, { userDataDir } = {}) {
+  if (!close || !["graceful", "natural-after-close", "already-exited"].includes(close.kind)) {
+    return false;
+  }
+  if (!Array.isArray(close.closeFailures) || close.closeFailures.length > 0) return false;
+  if (close.exit?.code === 0 && close.exit?.signal === null) return true;
+  if (close.exit?.code !== null || close.exit?.signal !== "SIGKILL") return false;
+  const line = /\[quit\] exit call \{[^}]*\}/s.exec(logSinceQuit ?? "")?.[0] ?? "";
+  if (/mode: ['"]immediate['"]/.test(line)) return true;
+  if (!/watch: ['"]arming['"]/.test(line) || typeof userDataDir !== "string") return false;
+  return exitWatchRecord(userDataDir, close.pid)?.outcome === "killed";
+}
+
+/** The exit watch's record for `pid` in `userDataDir` (VC-652), or null. */
+export function exitWatchRecord(userDataDir, pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return null;
+  try {
+    return JSON.parse(readFileSync(join(userDataDir, `exit-watch-${pid}.json`), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
 export const CLOSE_APP_BOUNDED_DEFAULTS = Object.freeze({
   closeGraceMs: 2500,
   termGraceMs: 1500,
@@ -689,6 +772,13 @@ const boundedCloseChildren = new WeakMap();
  * also exited; graceful Electron shutdown remains the helper cleanup path.
  */
 export async function closeAppBounded(app, options = {}) {
+  const closed = await closeAppBoundedUnsettled(app, options);
+  // However it ended, the profile is the smoke's again only once the exit watch has written.
+  if (typeof closed.pid === "number") await settleExitWatch(closed.pid);
+  return closed;
+}
+
+async function closeAppBoundedUnsettled(app, options) {
   const { closeGraceMs, termGraceMs, killGraceMs, naturalExitRaceMs } = {
     ...CLOSE_APP_BOUNDED_DEFAULTS,
     ...options,

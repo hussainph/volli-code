@@ -32,6 +32,8 @@
  * server started through `npx` or `uvx` takes its wrapper's children with it.
  * It also SIGTERMs every live group when the host process exits.
  */
+import { execFile } from "node:child_process";
+
 import {
   McpAbortError,
   McpAuthRequiredError,
@@ -650,6 +652,88 @@ export function classifyMcpConnectionError(
 }
 
 /**
+ * The stdio servers this process started and has not seen close, by process
+ * group id, with the leader's start time as `ps` reports it (VC-652). pi-mcp's
+ * own `exit` listener SIGTERMs its groups, but only if Node's teardown runs;
+ * the quit's exit watch can end the process before it, so the quit stops them
+ * itself first ({@link stopMcpServerProcessGroups}).
+ *
+ * A group id is its leader's pid, so it cannot belong to anyone else while
+ * that leader runs. An id is forgotten the moment its transport closes (the
+ * leader is gone; what it left behind is ended by the attachment's own close,
+ * as before), and at the quit an id is signalled only when the process with
+ * that pid still has the start time recorded here ({@link ownsStdioGroup}): a
+ * reused pid never matches, so nobody else's process is ever signalled.
+ */
+const liveStdioGroups = new Map<number, string>();
+
+/**
+ * Whether a tracked group is still certainly ours: the pid that leads it is
+ * running and started when the recorded leader did. Pure: the recorded start
+ * against what `ps` reports now (`null` when no process has that pid).
+ */
+export function ownsStdioGroup(recordedStart: string, observedStart: string | null): boolean {
+  return observedStart !== null && observedStart.length > 0 && observedStart === recordedStart;
+}
+
+/** The start time `ps` reports for `pid` (C locale, spaces collapsed), or null. */
+function processStartedAt(pid: number): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile(
+      "ps",
+      ["-o", "lstart=", "-p", String(pid)],
+      { env: { LC_ALL: "C", PATH: process.env["PATH"] ?? "/usr/bin:/bin" }, timeout: 2_000 },
+      (error, stdout) => {
+        const started = String(stdout ?? "")
+          .trim()
+          .replace(/\s+/g, " ");
+        resolve(error === null && started.length > 0 ? started : null);
+      },
+    );
+  });
+}
+
+async function trackStdioServerGroup(transport: StdioTransport, group: number): Promise<void> {
+  if (process.platform === "win32") return;
+  let closed = false;
+  transport.onClose(() => {
+    closed = true;
+    liveStdioGroups.delete(group);
+  });
+  const started = await processStartedAt(group);
+  // Closed meanwhile, or no start to know it by: never tracked.
+  if (closed || started === null) return;
+  liveStdioGroups.set(group, started);
+}
+
+/**
+ * Ends every stdio MCP server process group that is still certainly ours, as
+ * pi-mcp's `exit` listener would, but without waiting for Node's teardown:
+ * SIGTERM to the whole group (what the library sends, so a server can clean
+ * up), then, for a group still alive after `graceMs`, SIGKILL, so a server
+ * that ignores both stdin closing and SIGTERM (an `npx`/`uvx` wrapper, a
+ * server holding other handles) cannot outlive the app. A group whose leader
+ * is no longer the process recorded at its start is forgotten, not
+ * signalled. Resolves with how many groups it ended. The quit calls it before
+ * an exit the watch may cut short (VC-652).
+ */
+export async function stopMcpServerProcessGroups(graceMs = 700): Promise<number> {
+  const tracked = [...liveStdioGroups];
+  const observed = await Promise.all(tracked.map(([group]) => processStartedAt(group)));
+  const owned: number[] = [];
+  tracked.forEach(([group, started], index) => {
+    if (ownsStdioGroup(started, observed[index] ?? null)) owned.push(group);
+    else liveStdioGroups.delete(group);
+  });
+  await Promise.all(
+    owned.map((group) =>
+      endProcessGroup(group, graceMs).finally(() => liveStdioGroups.delete(group)),
+    ),
+  );
+  return owned.length;
+}
+
+/**
  * After a stdio client has closed, end whatever is still in the server's
  * process group.
  *
@@ -732,9 +816,16 @@ export function createMcpProtocolClientOpener(
       deadline.signal.throwIfAborted();
       credentials.onConnected?.(server);
       const group = transport instanceof StdioTransport ? transport.pid : undefined;
+      if (transport instanceof StdioTransport && group !== undefined) {
+        await trackStdioServerGroup(transport, group);
+      }
       return protocolClientForConnectedClient(client, {
         dropped: () => dropped,
-        ...(group === undefined ? {} : { afterClose: () => endProcessGroup(group) }),
+        ...(group === undefined
+          ? {}
+          : {
+              afterClose: () => endProcessGroup(group).finally(() => liveStdioGroups.delete(group)),
+            }),
       });
     } catch (error) {
       await client.close().catch(() => undefined);

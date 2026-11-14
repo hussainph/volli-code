@@ -15,10 +15,20 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function ports(overrides: Partial<QuitExitPorts> = {}): QuitExitPorts & { order: string[] } {
+function ports(
+  overrides: Partial<QuitExitPorts> = {},
+): QuitExitPorts & { order: string[]; disarm: ReturnType<typeof vi.fn>; startWorker(): void } {
   const order: string[] = [];
+  const listeners = new Set<() => void>();
+  const disarm = vi.fn(() => {
+    order.push("disarm");
+  });
   return {
     order,
+    disarm,
+    startWorker: () => {
+      for (const listener of listeners) listener();
+    },
     now: () => 1000,
     liveWorkers: () => 0,
     endReadOnlyWorkers: vi.fn(() => {
@@ -41,6 +51,23 @@ function ports(overrides: Partial<QuitExitPorts> = {}): QuitExitPorts & { order:
     kill: vi.fn(() => {
       order.push("kill");
     }),
+    stopChildren: vi.fn(() => {
+      order.push("stopChildren");
+    }),
+    watchAvailable: vi.fn(() => true),
+    watchSkipped: vi.fn(() => {
+      order.push("skipped");
+    }),
+    watchExit: vi.fn(() => {
+      order.push("watch");
+      return { disarm };
+    }),
+    onWorkerStarted: vi.fn((listener: () => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    }),
     ...overrides,
   };
 }
@@ -60,7 +87,7 @@ function app(order: string[]) {
 const settled = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 describe("createQuitExit: the exit", () => {
-  it("exits as before when no worker is running, and says so", async () => {
+  it("with no worker running, writes first, then watches the ordinary exit, and says so", async () => {
     log = captureHostLog("info");
     const p = ports();
     const target = app(p.order);
@@ -68,7 +95,9 @@ describe("createQuitExit: the exit", () => {
     quit.accepted("update-install");
     quit.exitingApp(target).exit(0);
     await settled();
-    expect(p.order).toEqual(["app.exit(0)"]);
+    // Everything that awaits first; the watch and the REAL exit last, in one tick,
+    // so its grace is Electron's native shutdown only.
+    expect(p.order).toEqual(["flush", "stopChildren", "flushLog", "watch", "app.exit(0)"]);
     expect(p.settleWorkers).not.toHaveBeenCalled();
     expect(p.endReadOnlyWorkers).not.toHaveBeenCalled();
     expect(p.decide).toHaveBeenCalledWith({ claim: true });
@@ -87,17 +116,195 @@ describe("createQuitExit: the exit", () => {
         liveWorkers: 0,
         sinceQuitMs: 0,
         afterDeadline: false,
+        watch: "arming",
       }),
     );
   });
 
-  it("gives live workers the grace first, and exits as before if they wait", async () => {
+  it("gives live workers the grace first, and exits as before if they wait: no write, no watch", async () => {
     const p = ports({ liveWorkers: () => 1 });
     const quit = createQuitExit(p);
     quit.exitingApp(app(p.order)).exit(3);
     await settled();
     expect(p.settleWorkers).toHaveBeenCalledWith(WORKER_SETTLE_GRACE_MS);
-    expect(p.order).toEqual(["end", "settle", "app.exit(3)"]);
+    expect(p.order).toEqual(["end", "settle", "flushLog", "app.exit(3)"]);
+    expect(p.watchExit).not.toHaveBeenCalled();
+    expect(p.stopChildren).not.toHaveBeenCalled();
+  });
+
+  it("never watches an exit while an upgrade runs", async () => {
+    const p = ports({ liveWorkers: () => 1, decide: vi.fn(() => "finish-upgrade-first" as const) });
+    createQuitExit(p).exitingApp(app(p.order)).exit(0);
+    await settled();
+    expect(p.watchExit).not.toHaveBeenCalled();
+    expect(p.kill).not.toHaveBeenCalled();
+    expect(p.order.at(-1)).toBe("app.exit(0)");
+  });
+
+  it("watches the exit when the live workers ended during the grace", async () => {
+    let live = 1;
+    const p = ports({
+      liveWorkers: () => live,
+      settleWorkers: vi.fn(async () => {
+        live = 0;
+      }),
+    });
+    createQuitExit(p).exitingApp(app(p.order)).exit(0);
+    await settled();
+    expect(p.order).toEqual(["end", "flush", "stopChildren", "flushLog", "watch", "app.exit(0)"]);
+  });
+
+  it("does not watch when a worker starts during its writes, and says the exit changed", async () => {
+    log = captureHostLog("info");
+    let live = 0;
+    const p = ports({
+      liveWorkers: () => live,
+      flush: vi.fn(async () => {
+        live = 1;
+      }),
+    });
+    createQuitExit(p).exitingApp(app(p.order)).exit(0);
+    await settled();
+    expect(p.watchExit).not.toHaveBeenCalled();
+    expect(p.order.at(-1)).toBe("app.exit(0)");
+    expect(log.records).toContainEqual(
+      expect.objectContaining({ msg: "exit call", mode: "normal", changed: true, liveWorkers: 1 }),
+    );
+  });
+
+  it("exits when the watch does not start, logging nothing after its last flush", async () => {
+    log = captureHostLog("info");
+    const p = ports({ watchExit: vi.fn(() => null) });
+    const target = app(p.order);
+    createQuitExit(p).exitingApp(target).exit(0);
+    await settled();
+    expect(target.exit).toHaveBeenCalledExactlyOnceWith(0);
+    expect(p.onWorkerStarted).not.toHaveBeenCalled();
+    // The exit line says what was known when the log was written: arming.
+    const lines = log.records.filter((r) => r.component === "quit").map((r) => r.msg);
+    expect(lines.at(-1)).toBe("exit call");
+    expect(log.records).toContainEqual(
+      expect.objectContaining({ msg: "exit call", watch: "arming" }),
+    );
+  });
+
+  it("on a platform without the watch, still writes and stops children, and says unavailable", async () => {
+    log = captureHostLog("info");
+    const p = ports({ watchAvailable: vi.fn(() => false) });
+    createQuitExit(p).exitingApp(app(p.order)).exit(0);
+    await settled();
+    expect(p.order).toEqual(["flush", "stopChildren", "flushLog", "app.exit(0)"]);
+    expect(p.watchExit).not.toHaveBeenCalled();
+    expect(log.records).toContainEqual(
+      expect.objectContaining({ msg: "exit call", mode: "normal", watch: "unavailable" }),
+    );
+  });
+
+  it("does not arm when a worker starts while the log is written, and leaves the note instead", async () => {
+    log = captureHostLog("info");
+    let live = 0;
+    const p = ports({
+      liveWorkers: () => live,
+      flushLog: vi.fn(async () => {
+        p.order.push("flushLog");
+        live = 1;
+      }),
+    });
+    const target = app(p.order);
+    createQuitExit(p).exitingApp(target).exit(0);
+    await settled();
+    expect(p.watchExit).not.toHaveBeenCalled();
+    expect(p.watchSkipped).toHaveBeenCalledExactlyOnceWith("worker-started");
+    expect(p.order.slice(-3)).toEqual(["flushLog", "skipped", "app.exit(0)"]);
+    expect(log.records.findLast((r) => r.component === "quit")?.msg).toBe("exit call");
+  });
+
+  it("stops children after the browser writes, and waits for them at most 1 s", async () => {
+    vi.useFakeTimers();
+    const p = ports({
+      stopChildren: vi.fn(() => {
+        p.order.push("stopChildren");
+        return new Promise(() => undefined);
+      }),
+    });
+    const target = app(p.order);
+    createQuitExit(p).exitingApp(target).exit(0);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p.order).toEqual(["flush", "stopChildren"]);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(p.watchExit).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(p.order.slice(-3)).toEqual(["flushLog", "watch", "app.exit(0)"]);
+  });
+
+  it("goes on to the exit when stopping children rejects", async () => {
+    const p = ports({ stopChildren: vi.fn(() => Promise.reject(new Error("EPERM"))) });
+    const target = app(p.order);
+    createQuitExit(p).exitingApp(target).exit(0);
+    await settled();
+    expect(target.exit).toHaveBeenCalledExactlyOnceWith(0);
+  });
+
+  it.each([0, 1])("exits though the log's write fails (%i live workers)", async (liveWorkers) => {
+    const p = ports({
+      liveWorkers: () => liveWorkers,
+      flushLog: () => Promise.reject(new Error("disk gone")),
+    });
+    const target = app(p.order);
+    createQuitExit(p).exitingApp(target).exit(0);
+    await settled();
+    expect(target.exit).toHaveBeenCalledExactlyOnceWith(0);
+  });
+
+  it("goes on to the exit when stopping children throws", async () => {
+    const p = ports({
+      stopChildren: vi.fn(() => {
+        throw new Error("EPERM");
+      }),
+    });
+    const target = app(p.order);
+    createQuitExit(p).exitingApp(target).exit(0);
+    await settled();
+    expect(p.watchExit).toHaveBeenCalledOnce();
+    expect(target.exit).toHaveBeenCalledExactlyOnceWith(0);
+  });
+
+  it.each([2, 3])(
+    "writes the log after the line of an exit that falls back from the immediate one (answer %i)",
+    async (changesAt) => {
+      let asked = 0;
+      const p = ports({
+        liveWorkers: () => 1,
+        decide: vi.fn(() => (++asked >= changesAt ? ("exit" as const) : ("exit-now" as const))),
+      });
+      createQuitExit(p).exitingApp(app(p.order)).exit(0);
+      await settled();
+      expect(p.order.slice(-2)).toEqual(["flushLog", "app.exit(0)"]);
+    },
+  );
+
+  it("disarms the watch once when a worker starts after the exit call, and logs nothing then", async () => {
+    log = captureHostLog("info");
+    const p = ports();
+    createQuitExit(p).exitingApp(app(p.order)).exit(0);
+    await settled();
+    const logged = log.records.length;
+    expect(p.disarm).not.toHaveBeenCalled();
+    p.startWorker();
+    p.startWorker();
+    expect(p.disarm).toHaveBeenCalledOnce();
+    expect(log.records).toHaveLength(logged);
+  });
+
+  it("never lets its writes hold the ordinary exit either", async () => {
+    vi.useFakeTimers();
+    const p = ports({ flush: () => new Promise(() => undefined) });
+    const target = app(p.order);
+    createQuitExit(p).exitingApp(target).exit(0);
+    await vi.advanceTimersByTimeAsync(IMMEDIATE_EXIT_FLUSH_MS - 1);
+    expect(target.exit).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(p.order).toEqual(["stopChildren", "flushLog", "watch", "app.exit(0)"]);
   });
 
   it("ends the process itself once only read-only workers remain, after its own writes", async () => {

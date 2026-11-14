@@ -77,7 +77,11 @@ import {
   uninstallAllHarnessSkills,
   userCliLinkPath,
 } from "@volli/host-core/agents";
-import { codeModeSandboxAssets, describeWebSealing } from "@volli/host-core/integrations";
+import {
+  codeModeSandboxAssets,
+  describeWebSealing,
+  stopMcpServerProcessGroups,
+} from "@volli/host-core/integrations";
 import {
   abandonAcceptedUpdateInstall,
   beginAcceptedUpdateInstall,
@@ -96,6 +100,7 @@ import {
   updatingPageUrl,
   type UpdatingWindow,
 } from "./updating-window";
+import { createExitWatch, nodeExitWatchPorts } from "./exit-watch";
 import { createQuitExit } from "./quit-exit";
 import {
   holdDatabaseCheckForSmoke,
@@ -131,6 +136,7 @@ import {
   runDatabaseUpgradeWorker,
   endReadOnlyWorkers,
   liveWorkerCount,
+  onWorkerStarted,
   quitExitDecision,
   settleLiveWorkers,
   watchLiveWorkers,
@@ -342,6 +348,7 @@ import {
   releaseAgentSites as releaseWorktreeAgentSites,
   type AgentSiteReleaseReport,
   orphanCleanupEngine,
+  stopRunningWorktreeSetups,
 } from "@volli/host-core/worktree";
 import { registerHarnessIpcHandlers } from "./harness-ipc";
 import { ensureHarnessRuntime, harnessLaunchArgv } from "./harness-runtime";
@@ -399,7 +406,7 @@ import {
 } from "./browser/cursor-overlay";
 import { closeHeadlessTabsOnTicketArchive } from "./browser/lifecycle";
 import { hostLogger, hostLogLevel } from "@volli/host-core/log";
-import { exitAfterLogFlush, logPowerTransitions, startDesktopLog } from "./log/desktop-log";
+import { logPowerTransitions, startDesktopLog } from "./log/desktop-log";
 import { startDesktopPerfStore } from "./log/perf-store";
 import { registerRendererLogForwarding } from "./log/renderer-log";
 import { registerRendererStallForwarding } from "./log/renderer-stall";
@@ -516,7 +523,23 @@ const desktopLog = ownsAppProfile
       terminal: isDev || isSmokeBootCapture(process.env),
     })
   : null;
-/** After the browser sessions' flush, before an immediate exit: DOM storage's write is not awaitable. */
+/**
+ * The exit watch (VC-652): bounds how long Electron's own teardown keeps the
+ * process alive after an ordinary exit, and records how long it lived; the
+ * next launch logs that. Only the instance that owns the profile has one.
+ */
+const exitWatch = ownsAppProfile
+  ? createExitWatch(
+      nodeExitWatchPorts({
+        platform: process.platform,
+        pid: process.pid,
+        directory: app.getPath("userData"),
+      }),
+    )
+  : null;
+void exitWatch?.logPreviousExit();
+void exitWatch?.probe();
+/** After the browser sessions' flush, before an exit: DOM storage's write is not awaitable. */
 const DOM_STORAGE_SETTLE_MS = 100;
 /** The first-paint mirror's pending writes, once boot has a writer (VC-1208's immediate exit). */
 let settleFirstPaintMirror: () => Promise<void> = () => Promise.resolve();
@@ -534,7 +557,8 @@ const currentQuitReason = () =>
   });
 /**
  * The quit's last step and its timeline (VC-1208): once only read-only
- * workers remain, the process ends without waiting for them.
+ * workers remain, the process ends without waiting for them; with none, the
+ * ordinary exit is watched (VC-652).
  */
 const quitExit = createQuitExit({
   now: () => performance.now(),
@@ -559,15 +583,27 @@ const quitExit = createQuitExit({
     process.emit("exit", code);
   },
   kill: () => process.kill(process.pid, "SIGKILL"),
+  stopChildren: async () => {
+    // What Node's `exit` listeners would stop or write (ours, and pi-mcp's for
+    // its stdio servers), done before a watched exit whose teardown a kill can
+    // skip (VC-652). Each on its own: one that throws does not skip the others.
+    await Promise.allSettled([
+      (async () => stopRunningWorktreeSetups())(),
+      (async () => desktopPerf?.store.flush())(),
+      stopMcpServerProcessGroups(),
+    ]);
+  },
+  watchAvailable: () => exitWatch?.available() ?? false,
+  watchExit: () => exitWatch?.arm() ?? null,
+  watchSkipped: (reason) => exitWatch?.skipped(reason),
+  onWorkerStarted,
 });
 const quitTimeline = {
   accepted: () => quitExit.accepted(currentQuitReason()),
   drained: (deadlineExpired: boolean) => quitExit.drained(deadlineExpired),
 };
-/** `app`, whose `exit` writes the log's tail first: every accepted quit ends in it. */
-const quittingApp = quitExit.exitingApp(
-  desktopLog === null ? app : exitAfterLogFlush(app, desktopLog),
-);
+/** `app`, whose `exit` is the quit's last step (`quit-exit.ts`, which writes the log's tail first): every accepted quit ends in it. */
+const quittingApp = quitExit.exitingApp(app);
 /** Electron main's own composition lines; the areas below log under their own names. */
 const log = hostLogger("desktop");
 const repackLog = hostLogger("transcript-repack");

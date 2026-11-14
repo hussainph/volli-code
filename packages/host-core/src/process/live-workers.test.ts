@@ -8,6 +8,7 @@ import {
   endReadOnlyWorkers,
   leaveReadOnlyPhase,
   liveWorkerCount,
+  onWorkerStarted,
   quitExitDecision,
   settleLiveWorkers,
   watchLiveWorkers,
@@ -44,6 +45,27 @@ describe("watchLiveWorkers", () => {
     expect(liveWorkerCount()).toBe(1);
     await exited(worker);
     expect(liveWorkerCount()).toBe(0);
+  });
+});
+
+describe("onWorkerStarted", () => {
+  it("tells a listener about each worker started until it unsubscribes", () => {
+    let seen = 0;
+    const stop = onWorkerStarted(() => {
+      seen += 1;
+    });
+    start();
+    expect(seen).toBe(1);
+    // A listener may unsubscribe from inside its own call.
+    const once = onWorkerStarted(() => {
+      once();
+      seen += 10;
+    });
+    start();
+    expect(seen).toBe(12);
+    stop();
+    start();
+    expect(seen).toBe(12);
   });
 });
 

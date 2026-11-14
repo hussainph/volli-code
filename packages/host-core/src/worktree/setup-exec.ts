@@ -139,16 +139,42 @@ export function isWorktreeSetupRunning(worktreePath: string): boolean {
   return inflight.has(canonicalize(worktreePath));
 }
 
-/** Process groups of the setup commands running now, stopped if the host exits first. */
-const liveGroups = new Set<number>();
+/**
+ * Process groups of the setup commands running now, by group id, with the
+ * shell that leads each, stopped if the host exits first. An id is added at
+ * the spawn and deleted when the run settles, which can be up to the drain
+ * grace after the shell exits; it is signalled only while that shell is
+ * still running (VC-652), because a group id is its leader's pid and cannot
+ * belong to anyone else while the leader lives. Once the leader is gone the
+ * group may be empty and its id free for an unrelated process: never touched.
+ */
+const liveGroups = new Map<number, { readonly leaderRunning: () => boolean }>();
 let exitHookInstalled = false;
 
 function stopLiveGroupsOnExit(): void {
   if (exitHookInstalled) return;
   exitHookInstalled = true;
-  process.once("exit", () => {
-    for (const pgid of liveGroups) killGroup(pgid, "SIGKILL");
-  });
+  process.once("exit", stopRunningWorktreeSetups);
+}
+
+/**
+ * Stops every setup command running now, with its whole process group
+ * (SIGKILL), and returns how many it stopped. The quit calls it before an exit
+ * whose teardown may never run (VC-652: the exit watch can end the process
+ * before Node's `exit` listeners), so a setup such as `pnpm install` cannot
+ * outlive the app in the working copy. Only a group whose shell is still
+ * running is signalled: that is what makes the id certainly ours. The `exit`
+ * listener stays installed for a setup started later. A stopped run settles
+ * as `signalled`; its claim is spent, as for any setup that dies.
+ */
+export function stopRunningWorktreeSetups(): number {
+  let stopped = 0;
+  for (const [pgid, group] of liveGroups) {
+    if (!group.leaderRunning()) continue;
+    killGroup(pgid, "SIGKILL");
+    stopped += 1;
+  }
+  return stopped;
 }
 
 function killGroup(pgid: number, signal: NodeJS.Signals): void {
@@ -374,7 +400,9 @@ function spawnSetup(
     });
     const pgid = child.pid;
     if (pgid !== undefined) {
-      liveGroups.add(pgid);
+      liveGroups.set(pgid, {
+        leaderRunning: () => child.exitCode === null && child.signalCode === null,
+      });
       stopLiveGroupsOnExit();
     }
     const settle = (result: ExecResult): void => {

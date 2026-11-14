@@ -42,6 +42,7 @@ export { settleShutdownBeforeDeadline } from "../shutdown-deadline";
 export {
   endReadOnlyWorkers,
   liveWorkerCount,
+  onWorkerStarted,
   quitExitDecision,
   settleLiveWorkers,
   watchLiveWorkers,
