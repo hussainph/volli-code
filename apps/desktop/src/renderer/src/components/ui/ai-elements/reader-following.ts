@@ -89,21 +89,32 @@ export function scrollPlace(geometry: ScrollGeometry): ScrollPlace {
 export type FollowingChange = "follow" | "release" | null;
 
 /**
+ * The reader's hand on the transcript: none, a scrolling key or a lifted drag
+ * moments ago, or a thumb drag or touch still held.
+ */
+export type ReaderHand = "none" | "recent" | "holding";
+
+/**
  * What one scroll event means for following, given where the previous scroll
- * event left the reader and whether the reader's hand is on the transcript.
- * `null` is no change.
+ * event left the reader and their hand. `null` is no change.
+ *
+ * A thumb held still is the one place `scrollTop` grows with no move toward
+ * the end. The drag keeps the thumb's share of the scroll range as the reply
+ * lengthens (VC-1217), so while a hand holds it only a shorter distance to the
+ * end counts as nearer.
  */
 export function followingAfterScroll(
   previous: ScrollPlace,
   current: ScrollPlace,
-  readerHand: boolean,
+  hand: ReaderHand,
 ): FollowingChange {
   const nearer =
-    current.fromEnd < previous.fromEnd - MOVED_PX || current.top > previous.top + MOVED_PX;
+    current.fromEnd < previous.fromEnd - MOVED_PX ||
+    (hand !== "holding" && current.top > previous.top + MOVED_PX);
   if (nearer) return current.fromEnd <= FOLLOW_ZONE_PX ? "follow" : null;
   const away =
     current.top < previous.top - MOVED_PX && current.fromEnd > previous.fromEnd + MOVED_PX;
-  return readerHand && away ? "release" : null;
+  return hand !== "none" && away ? "release" : null;
 }
 
 /** A key press, as far as scrolling is concerned. */

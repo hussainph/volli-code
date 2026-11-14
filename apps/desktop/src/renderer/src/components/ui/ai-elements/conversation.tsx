@@ -300,8 +300,8 @@ function useReaderFollowing() {
     const onScroll = () => {
       const previous = place;
       place = scrollPlace(scroller);
-      const readerHand = held || performance.now() < handUntil;
-      const change = followingAfterScroll(previous, place, readerHand);
+      const hand = held ? "holding" : performance.now() < handUntil ? "recent" : "none";
+      const change = followingAfterScroll(previous, place, hand);
       if (change === "release") {
         if (state.isAtBottom) latest.current.stopScroll();
       } else if (change === "follow") {
