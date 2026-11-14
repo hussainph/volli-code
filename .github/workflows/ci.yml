@@ -400,6 +400,10 @@ jobs:
       #                          colour, geometry and motion. File/rule ceilings
       #                          in glass-design-shrinking-allowlist.json must shrink
       #                          with repairs; growth or stale ceilings fail.
+      #                          check:glass-design also fails on an unreviewed
+      #                          :has() that reaches every descendant (VC-1231):
+      #                          on an element holding the chat transcript it
+      #                          makes every insertion restyle the transcript.
       #   check:node-version   — self-tests the dev-preflight's range matcher
       #                          (VC-76): an engines.node shape the matcher
       #                          cannot read fails HERE, instead of silently

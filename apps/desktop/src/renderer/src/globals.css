@@ -3618,7 +3618,8 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   mask-repeat: no-repeat;
   mask-composite: add;
 }
-.chat-transcript:has([data-slot="conversation-scroll-button"]) [data-conversation-viewport] {
+/* Marked by the scroll button itself, never `:has()` on the transcript (VC-1231). */
+.chat-transcript [data-conversation-viewport][data-scroll-button] {
   --scroll-edge-clearance: calc(48px + var(--island-clearance));
 }
 /* The Activity Island's bead, drawn above its layout box (VC-1210). The island
