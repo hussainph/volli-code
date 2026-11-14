@@ -5,6 +5,7 @@ import {
   DRAGGING_ATTR,
   EXCLUDED_SELECTOR,
   HIDE_AFTER_MS,
+  SCROLL_THUMB_GRAB_EVENT,
   TARGET_ATTR,
   UPDATE_FAILED_CODE,
   installOverlayScrollbars,
@@ -69,7 +70,8 @@ const track = (axis: "x" | "y") =>
   document.querySelector<HTMLElement>(`[data-slot="scroll-thumb-track"][data-axis="${axis}"]`);
 const thumb = (axis: "x" | "y") =>
   track(axis)!.querySelector<HTMLElement>('[data-slot="scroll-thumb"]')!;
-const state = (axis: "x" | "y") => track(axis)?.getAttribute("data-state");
+/** A lane's state; a track is only put in the document once it first shows. */
+const state = (axis: "x" | "y") => track(axis)?.getAttribute("data-state") ?? "hidden";
 const dragging = () => document.documentElement.hasAttribute(DRAGGING_ATTR);
 
 /**
@@ -162,7 +164,7 @@ describe("overlay scroll thumb", () => {
     expect(track("y")).toBeNull();
   });
 
-  it("follows a scroll burst: target marked, tracks last in body, length measured, hidden after idle", () => {
+  it("follows a scroll burst: target marked, track after its layer, length measured, hidden after idle", () => {
     const list = scroller({ client: 200, scroll: 800 });
     document.body.append(list);
     list.dispatchEvent(new Event("scroll"));
@@ -171,8 +173,9 @@ describe("overlay scroll thumb", () => {
 
     settle();
     expect(list.getAttribute(TARGET_ATTR)).toBe("y");
-    expect(document.body.lastElementChild).toBe(track("x"));
-    expect(track("x")!.previousElementSibling).toBe(track("y"));
+    // Right after the body child the target is painted in; the hidden x lane is not mounted.
+    expect(track("y")!.previousElementSibling).toBe(list);
+    expect(track("x")).toBeNull();
     // A 196px track (200 less two 2px insets) at the box's right edge; a quarter of it is thumb.
     expect(track("y")!.style.transform).toBe("translate(193px, 2px)");
     expect(track("y")!.style.height).toBe("196px");
@@ -485,11 +488,11 @@ describe("overlay scroll thumb", () => {
   });
 
   it("re-measures when children are added and lets go of a target that left the document", async () => {
-    const list = scroller({ client: 100, scroll: 100 });
+    const list = scroller({ client: 100, scroll: 200 });
     document.body.append(list);
     list.dispatchEvent(new Event("scroll"));
     settle();
-    expect(state("y")).toBe("hidden");
+    expect(state("y")).toBe("visible");
 
     const row = document.createElement("p");
     list.append(row);
@@ -604,6 +607,129 @@ describe("overlay scroll thumb", () => {
     expect(String(logged.mock.calls[0]![0])).toContain(UPDATE_FAILED_CODE);
   });
 
+  it("puts a track after its target's layer, so a layer portalled later paints above it", () => {
+    const page = document.createElement("div");
+    const list = scroller({ client: 200, scroll: 800 });
+    page.append(list);
+    document.body.append(page);
+    list.dispatchEvent(new Event("scroll"));
+    settle();
+    expect(track("y")!.previousElementSibling).toBe(page);
+    const tooltip = document.createElement("div");
+    document.body.append(tooltip);
+    list.dispatchEvent(new Event("scroll"));
+    settle();
+    // Unmoved: the tooltip, portalled later, stays after it in tree order.
+    expect(track("y")!.nextElementSibling).toBe(tooltip);
+  });
+
+  it("paints at the layer of a z-indexed flex item, not only a positioned one", () => {
+    const row = document.createElement("div");
+    row.style.display = "flex";
+    const item = document.createElement("div");
+    item.style.zIndex = "30";
+    const list = scroller({ client: 200, scroll: 800 });
+    item.append(list);
+    row.append(item);
+    document.body.append(row);
+    list.dispatchEvent(new Event("scroll"));
+    settle();
+    expect(track("y")!.style.zIndex).toBe("30");
+  });
+
+  it("clips a track to what its clipping ancestors leave visible, and hides one clipped away", () => {
+    const outer = document.createElement("div");
+    outer.style.overflowX = "hidden";
+    outer.style.overflowY = "hidden";
+    vi.spyOn(outer, "getBoundingClientRect").mockReturnValue(rect(0, 0, 200, 50));
+    const list = scroller({ client: 100, scroll: 400, clientWidth: 200, scrollWidth: 600 });
+    list.style.overflowX = "auto";
+    outer.append(list);
+    document.body.append(outer);
+    list.dispatchEvent(new Event("scroll"));
+    settle();
+    // The 96px y track starts at 2 and is visible to 50: the bottom 48px is clipped.
+    expect(state("y")).toBe("visible");
+    expect(track("y")!.style.clipPath).toBe("inset(0px 0px 48px 0px)");
+    // The x track runs along y 93–97, wholly below the visible 50.
+    expect(state("x")).toBe("hidden");
+  });
+
+  it("never targets a scroller that is not visible", () => {
+    const list = scroller({ client: 200, scroll: 800 });
+    list.style.visibility = "hidden";
+    document.body.append(list);
+    list.firstElementChild!.dispatchEvent(pointer("pointerover"));
+    settle();
+    list.dispatchEvent(new Event("scroll"));
+    settle();
+    expect(list.hasAttribute(TARGET_ATTR)).toBe(false);
+  });
+
+  it("tells the scroller a drag of its thumb began, since the press itself never reaches it", () => {
+    const list = scroller({ client: 100, scroll: 400 });
+    document.body.append(list);
+    const row = list.firstElementChild!;
+    row.dispatchEvent(pointer("pointerover"));
+    settle();
+    vi.spyOn(thumb("y"), "getBoundingClientRect").mockReturnValue(rect(193, 2, 197, 26));
+    const grabbed = vi.fn();
+    const pressed = vi.fn();
+    list.addEventListener(SCROLL_THUMB_GRAB_EVENT, grabbed);
+    list.addEventListener("pointerdown", pressed);
+    row.dispatchEvent(pointer("pointerdown", { clientX: 198, clientY: 10, button: 0 }));
+    expect(grabbed).toHaveBeenCalledTimes(1);
+    expect(pressed).not.toHaveBeenCalled();
+  });
+
+  it("stops watching a target once its thumb hides, and watches it again when it shows", () => {
+    const list = scroller({ client: 200, scroll: 800 });
+    document.body.append(list);
+    list.dispatchEvent(new Event("scroll"));
+    settle();
+    const watching = () => observers.some((observer) => observer.targets.has(list));
+    expect(watching()).toBe(true);
+    vi.advanceTimersByTime(HIDE_AFTER_MS);
+    settle();
+    expect(state("y")).toBe("hidden");
+    expect(watching()).toBe(false);
+    // Growth out of sight runs nothing.
+    const before = observers.length;
+    setSizes(list, { client: 200, scroll: 1600 });
+    settle();
+    expect(observers.length).toBe(before);
+    list.dispatchEvent(new Event("scroll"));
+    settle();
+    expect(watching()).toBe(true);
+    expect(Number.parseFloat(thumb("y").style.height)).toBeCloseTo((196 * 200) / 1600);
+  });
+
+  it("observes a bounded set of children, adding new ones without rebuilding", async () => {
+    const list = scroller({ client: 200, scroll: 8000 });
+    for (let index = 0; index < 300; index += 1) list.append(document.createElement("p"));
+    document.body.append(list);
+    list.dispatchEvent(new Event("scroll"));
+    settle();
+    const watched = () => observers.reduce((count, observer) => count + observer.targets.size, 0);
+    // The list, its first 64 children and its last.
+    expect(watched()).toBe(1 + 64 + 1);
+    const disconnects = vi.fn();
+    for (const observer of observers) {
+      const targets = observer.targets;
+      const clear = targets.clear.bind(targets);
+      targets.clear = () => {
+        disconnects();
+        clear();
+      };
+    }
+    const row = document.createElement("p");
+    list.append(row);
+    await Promise.resolve();
+    settle();
+    expect(observers.some((observer) => observer.targets.has(row))).toBe(true);
+    expect(disconnects).not.toHaveBeenCalled();
+  });
+
   it("tears down completely", () => {
     const list = scroller({ client: 200, scroll: 800 });
     document.body.append(list);
@@ -619,7 +745,8 @@ describe("overlay scroll thumb", () => {
   });
 
   it("is presentational: hidden from assistive technology and never focusable", () => {
-    const list = scroller({ client: 200, scroll: 800 });
+    const list = scroller({ client: 200, scroll: 800, clientWidth: 200, scrollWidth: 600 });
+    list.style.overflowX = "auto";
     document.body.append(list);
     list.dispatchEvent(new Event("scroll"));
     settle();

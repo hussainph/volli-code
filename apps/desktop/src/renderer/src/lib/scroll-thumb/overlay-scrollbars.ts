@@ -22,10 +22,13 @@
  *
  *   - it runs after layout, so its reads find layout clean;
  *   - its observer is the newest, and callbacks run in creation order, so it is
- *     the LAST callback of the frame's first delivery: its writes land after
- *     every other component's post-layout reads and cannot force them. The
- *     writes are transforms and sizes on two fixed elements; the browser lays
- *     them out again before paint, so a scroll is drawn in the same frame.
+ *     the last callback of the frame's first delivery: its writes land after
+ *     the post-layout reads of every observer that already existed and cannot
+ *     force them. An observer some component creates LATER in the same frame
+ *     runs after it, and a read there pays a small forced pass over the two
+ *     track elements. The writes are transforms, sizes and a clip on two
+ *     fixed elements; the browser lays them out again before paint, so a
+ *     scroll is drawn in the same frame.
  *
  * A request can never be made from INSIDE a ResizeObserver delivery: a new
  * observation of `<html>` there is shallower than what was just delivered, so
@@ -34,7 +37,10 @@
  * and the MutationObserver that watches their children, only schedule a request
  * for the next animation frame; the content-driven update lands one frame
  * later. Observations are only added from an update (whose own observation is
- * `<html>`, the shallowest there is), so they never trip that rule either.
+ * `<html>`, the shallowest there is) or from that next frame, so they never
+ * trip that rule either. They cost little: each target, its first 64
+ * children and its last one, added to as children arrive and never rebuilt
+ * for a child-list change; and none at all while every thumb is hidden.
  *
  * CSS scroll-driven animation and anchor positioning would have needed no
  * script for position, and were measured and rejected (a Chrome trace of the
@@ -43,11 +49,16 @@
  * `use-stick-to-bottom`'s own `scrollTop` reads force a layout (7 → 31), and an
  * anchored track doubled the layout time of the whole run.
  *
- * LAYERING. A track is drawn last in `<body>` at the z-index of its target's
- * outermost stacking layer: above the target, below anything stacked over it
- * (a popover, a dialog's scrim). A scroller under a modal — inside an
- * `aria-hidden` or `inert` subtree, or one that cannot take the pointer, as
- * Radix leaves the page behind one — is never a target.
+ * LAYERING AND CLIPPING. A track sits right after the body child its target is
+ * painted in, at the z-index of the target's outermost stacking layer: above
+ * the target, below anything stacked over it (a dialog's scrim) and below any
+ * layer at the same level portalled later (a tooltip, a hover card). It is
+ * clipped to what of the target its clipping ancestors leave visible — less
+ * their scroll-padding, which is where they keep fixed chrome such as the
+ * transcript's composer — and hidden when that leaves nothing of it. A
+ * scroller under a modal — inside an `aria-hidden` or `inert` subtree, or one
+ * that cannot take the pointer, as Radix leaves the page behind one — or one
+ * that is not visible, is never a target.
  *
  * The thumbs are presentational: `aria-hidden`, never focusable, and
  * `pointer-events: none`. Wheel, trackpad, keyboard, find-in-page, focus
@@ -108,8 +119,21 @@ export const HIDE_AFTER_MS = 700;
 export const UPDATE_FAILED_CODE = "SCROLL_THUMB_UPDATE_FAILED";
 /** Geometry changes smaller than this are not worth a style write. */
 const PX_EPSILON = 0.1;
-/** Children observed for content growth. Beyond this, growth is caught when the child list changes. */
-const MAX_OBSERVED_CHILDREN = 2000;
+/**
+ * Children observed for content growth: the first this many, plus the last.
+ * Content that grows by adding children is caught by the child-list mutation
+ * itself, so a long flat list never needs thousands of observations; a child
+ * past these that changes height in place is re-measured on the next scroll or
+ * hover.
+ */
+const OBSERVED_CHILDREN = 64;
+/**
+ * Dispatched (not bubbling) on a scroller when a drag of its thumb begins. The
+ * press itself is swallowed before it reaches the scroller, so anything that
+ * gives the reader back control on a press there — "Scroll to latest"'s trip —
+ * listens for this too.
+ */
+export const SCROLL_THUMB_GRAB_EVENT = "scroll-thumb-grab";
 
 type Axis = "x" | "y";
 
@@ -147,6 +171,12 @@ interface Lane {
   edgeInset: number;
   /** The grab lane's width in viewport px, at the last measure. */
   lane: number;
+  /** Ancestors that clip the target (overflow or paint containment), found when the target is taken. */
+  clippers: HTMLElement[] | null;
+  /** The body child the target is painted in: the track goes right after it. */
+  host: Element | null;
+  /** The track's part that is visible, as a `clip-path` inset; `null` when it is wholly clipped away. */
+  clip: string | null;
   /** Where the track sits and how big it is, the thumb's length and offset: viewport px. */
   geometry: LaneGeometry;
   /** What {@link flush} last wrote, to skip writes that would change nothing. */
@@ -201,6 +231,9 @@ function createLane(doc: Document, axis: Axis): Lane {
     layer: null,
     edgeInset: THUMB_EDGE_INSET,
     lane: laneWidth(THUMB_EDGE_INSET),
+    clippers: null,
+    host: null,
+    clip: "none",
     geometry: { ...NO_GEOMETRY },
     written: { ...NO_GEOMETRY },
     aimed: false,
@@ -229,6 +262,17 @@ function writeDragScroll(current: Drag, offset: number, metrics: LaneMetrics): v
       : scrollForOffset(offset, metrics.travel, metrics.range);
   if (current.lane.axis === "y") current.target.scrollTop = scroll;
   else current.target.scrollLeft = scroll;
+}
+
+/** The track's visible part as a `clip-path` inset, `none` when whole, `null` when clipped away. */
+function clipFor(geometry: LaneGeometry, visible: Box): string | null {
+  const top = Math.max(0, visible.top - geometry.y);
+  const left = Math.max(0, visible.left - geometry.x);
+  const bottom = Math.max(0, geometry.y + geometry.height - visible.bottom);
+  const right = Math.max(0, geometry.x + geometry.width - visible.right);
+  if (top + bottom >= geometry.height || left + right >= geometry.width) return null;
+  if (top + bottom + left + right < 0.5) return "none";
+  return `inset(${top}px ${right}px ${bottom}px ${left}px)`;
 }
 
 /**
@@ -274,10 +318,20 @@ export function installOverlayScrollbars(doc: Document): () => void {
   /** Size changes of the targets and their children. Runs inside a delivery: only schedules. */
   const resizes = new win.ResizeObserver(requestUpdateNextFrame);
   /** Child lists of the targets. May run inside a delivery: only schedules. */
-  const mutations = new win.MutationObserver(() => {
-    observationsStale = true;
+  const mutations = new win.MutationObserver((records) => {
+    for (const record of records) {
+      for (const node of record.addedNodes) if (node instanceof win.Element) pendingAdded.add(node);
+      for (const node of record.removedNodes) {
+        if (node instanceof win.Element && observedChildren.delete(node)) resizes.unobserve(node);
+      }
+    }
     requestUpdateNextFrame();
   });
+  /** The targets' children being observed, and children added since, observed from the next frame. */
+  const observedChildren = new Set<Element>();
+  const pendingAdded = new Set<Element>();
+  /** Whether the targets are being observed at all: released while every thumb is hidden. */
+  let observing = false;
 
   function requestUpdate(): void {
     if (update !== null || updating) return;
@@ -290,6 +344,8 @@ export function installOverlayScrollbars(doc: Document): () => void {
     if (nextFrameRequest !== null) return;
     nextFrameRequest = win.requestAnimationFrame(() => {
       nextFrameRequest = null;
+      // Outside any ResizeObserver delivery: safe to add observations.
+      observeAdded();
       requestUpdate();
     });
   }
@@ -315,10 +371,9 @@ export function installOverlayScrollbars(doc: Document): () => void {
   }
 
   function blocked(element: Element): boolean {
-    return (
-      element.closest(BLOCKED_SELECTOR) !== null ||
-      win.getComputedStyle(element).pointerEvents === "none"
-    );
+    if (element.closest(BLOCKED_SELECTOR) !== null) return true;
+    const style = win.getComputedStyle(element);
+    return style.pointerEvents === "none" || style.visibility !== "visible";
   }
 
   function eligible(element: HTMLElement): boolean {
@@ -365,6 +420,9 @@ export function installOverlayScrollbars(doc: Document): () => void {
       lane.metrics = null;
       lane.layer = null;
       lane.edgeInset = THUMB_EDGE_INSET;
+      lane.clippers = null;
+      lane.host = null;
+      lane.clip = "none";
       lane.aimed = false;
       lane.geometry = { ...NO_GEOMETRY };
       if (drag !== null && drag.lane === lane) endDrag();
@@ -373,36 +431,142 @@ export function installOverlayScrollbars(doc: Document): () => void {
   }
 
   /**
-   * Rebuilds what the observers watch. Called only from an update, whose own
-   * observation (`<html>`) is the shallowest possible, so these deeper ones are
-   * delivered in the same frame rather than skipped.
+   * Rebuilds what the observers watch, for new targets only. Called from an
+   * update, whose own observation (`<html>`) is the shallowest possible, so
+   * these deeper ones are delivered in the same frame rather than skipped.
    */
   function syncObservations(): void {
     observationsStale = false;
     resizes.disconnect();
     mutations.disconnect();
+    observedChildren.clear();
+    pendingAdded.clear();
+    observing = false;
     for (const element of targets()) {
+      observing = true;
       resizes.observe(element);
       const children = element.children;
-      for (let index = 0; index < children.length && index < MAX_OBSERVED_CHILDREN; index += 1) {
-        resizes.observe(children[index]!);
+      for (let index = 0; index < children.length && index < OBSERVED_CHILDREN; index += 1) {
+        observeChild(children[index]!);
       }
+      if (element.lastElementChild !== null) observeChild(element.lastElementChild);
       mutations.observe(element, { childList: true });
     }
   }
 
-  /** The z-index of the outermost positioned, z-indexed ancestor: the layer the target is painted in. */
+  function observeChild(child: Element): void {
+    if (observedChildren.has(child)) return;
+    observedChildren.add(child);
+    resizes.observe(child);
+  }
+
+  /** Children added since: the first few of a short list, and each target's new last child. */
+  function observeAdded(): void {
+    if (pendingAdded.size === 0) return;
+    pendingAdded.clear();
+    if (!observing) return;
+    for (const element of targets()) {
+      const children = element.children;
+      for (let index = 0; index < children.length && index < OBSERVED_CHILDREN; index += 1) {
+        observeChild(children[index]!);
+      }
+      if (element.lastElementChild !== null) observeChild(element.lastElementChild);
+    }
+  }
+
+  /** Stops watching targets whose thumbs are all hidden: a stream there costs nothing until shown again. */
+  function releaseObservations(): void {
+    if (!observing) return;
+    resizes.disconnect();
+    mutations.disconnect();
+    observedChildren.clear();
+    pendingAdded.clear();
+    observing = false;
+    observationsStale = true;
+  }
+
+  /**
+   * The z-index of the outermost z-indexed stacking context above the target —
+   * a positioned element, or a flex or grid item, with a z-index — which is
+   * the layer it is painted in. Read once per newly taken target.
+   */
   function layerOf(element: HTMLElement): number {
     let layer = 0;
     for (let node: HTMLElement | null = element; node !== null; node = node.parentElement) {
       if (node === doc.body) break;
       const style = win.getComputedStyle(node);
-      if (style.position !== "static" && style.zIndex !== "auto") {
+      if (style.zIndex === "auto") continue;
+      const parent = node.parentElement;
+      const itemOfFlexOrGrid =
+        parent !== null && /(flex|grid)$/.test(win.getComputedStyle(parent).display);
+      if (style.position !== "static" || itemOfFlexOrGrid) {
         const z = Number.parseInt(style.zIndex, 10);
         if (Number.isFinite(z)) layer = z;
       }
     }
     return layer;
+  }
+
+  /**
+   * The ancestors that can clip the target: an overflow other than `visible`,
+   * or paint containment. A fixed-position ancestor escapes everything above
+   * it, so the walk stops there. Read once per newly taken target.
+   */
+  function clippersOf(element: HTMLElement): HTMLElement[] {
+    const found: HTMLElement[] = [];
+    for (let node = element.parentElement; node !== null; node = node.parentElement) {
+      if (node === doc.body || node === doc.documentElement) break;
+      const style = win.getComputedStyle(node);
+      const contain = style.contain;
+      if (
+        style.overflowX !== "visible" ||
+        style.overflowY !== "visible" ||
+        /paint|strict|content/.test(contain)
+      ) {
+        found.push(node);
+      }
+      if (style.position === "fixed") break;
+    }
+    return found;
+  }
+
+  /**
+   * What of `box` is visible through its clipping ancestors. A scrolling
+   * ancestor's scroll-padding counts as clipped: it is what that ancestor
+   * declares hidden behind its own fixed chrome (the transcript's composer).
+   */
+  function visibleRect(box: DOMRect, clippers: HTMLElement[]): Box {
+    let top = Math.max(box.top, 0);
+    let left = Math.max(box.left, 0);
+    let bottom = Math.min(box.bottom, win.innerHeight);
+    let right = Math.min(box.right, win.innerWidth);
+    for (const clipper of clippers) {
+      const r = clipper.getBoundingClientRect();
+      let padTop = 0;
+      let padBottom = 0;
+      let padLeft = 0;
+      let padRight = 0;
+      const axes = scrollAxes(clipper);
+      if (axes !== null) {
+        const style = win.getComputedStyle(clipper);
+        padTop = Number.parseFloat(style.scrollPaddingTop) || 0;
+        padBottom = Number.parseFloat(style.scrollPaddingBottom) || 0;
+        padLeft = Number.parseFloat(style.scrollPaddingLeft) || 0;
+        padRight = Number.parseFloat(style.scrollPaddingRight) || 0;
+      }
+      top = Math.max(top, r.top + padTop);
+      left = Math.max(left, r.left + padLeft);
+      bottom = Math.min(bottom, r.bottom - padBottom);
+      right = Math.min(right, r.right - padRight);
+    }
+    return { top, left, bottom, right };
+  }
+
+  /** The body child the target is painted in. */
+  function hostOf(element: Element): Element | null {
+    let node: Element | null = element;
+    while (node !== null && node.parentElement !== doc.body) node = node.parentElement;
+    return node;
   }
 
   /** Reads each target's box, sizes and scroll position. Updates only: layout is clean. */
@@ -421,6 +585,8 @@ export function installOverlayScrollbars(doc: Document): () => void {
       lane.box = box;
       if (lane.layer === null) {
         lane.layer = layerOf(element);
+        lane.clippers = clippersOf(element);
+        lane.host = hostOf(element);
         const inset = Number.parseFloat(
           win.getComputedStyle(element).getPropertyValue(EDGE_INSET_PROPERTY),
         );
@@ -460,6 +626,7 @@ export function installOverlayScrollbars(doc: Document): () => void {
             offset,
             layer: lane.layer,
           };
+      lane.clip = clipFor(lane.geometry, visibleRect(box, lane.clippers ?? []));
       // Content grew or shrank under a held drag: keep the content where the
       // thumb is — at the end, if the thumb was taken to the end. Written here,
       // in the update, where layout is already clean.
@@ -481,9 +648,16 @@ export function installOverlayScrollbars(doc: Document): () => void {
       else if (scroll !== null && drag === null && (!hovered || containsTarget(scroll))) {
         resolveScroll(scroll);
       }
-      if (observationsStale) syncObservations();
       measureLanes();
       flush();
+      // Watch the targets only while a thumb shows (flush releases them when
+      // none does), so hidden updates never churn the observations.
+      if (
+        observationsStale &&
+        laneList.some((lane) => lane.track.getAttribute("data-state") === "visible")
+      ) {
+        syncObservations();
+      }
     } catch (error) {
       // One bad scroller must not freeze every thumb in the window: drop the
       // targets, so the next hover or scroll starts clean.
@@ -541,17 +715,18 @@ export function installOverlayScrollbars(doc: Document): () => void {
     hovered = element.matches(":hover");
   }
 
-  /** Keeps the tracks last in `<body>`, after any portal opened since: equal z-index paints in tree order. */
-  function mountTracks(): void {
-    const body = doc.body;
-    if (body === null) return;
-    if (
-      body.lastElementChild === lanes.x.track &&
-      lanes.x.track.previousElementSibling === lanes.y.track
-    ) {
+  /**
+   * Puts a lane's track right after the body child its target is painted in.
+   * At the same z-index it then paints above the target's layer, and below any
+   * layer portalled later (a tooltip or popover opened over it).
+   */
+  function placeTrack(lane: Lane): void {
+    const host = lane.host;
+    if (host === null || !host.isConnected) {
+      if (lane.track.parentElement !== doc.body) doc.body.append(lane.track);
       return;
     }
-    body.append(lanes.y.track, lanes.x.track);
+    if (lane.track.previousElementSibling !== host) host.after(lane.track);
   }
 
   /** Moves and sizes a lane's track and thumb, touching only what changed. Transforms for position. */
@@ -599,16 +774,23 @@ export function installOverlayScrollbars(doc: Document): () => void {
         applied.set(element, value);
       }
     }
-    if (wanted.size > 0) mountTracks();
     for (const lane of laneList) {
       const show =
         drag !== null
           ? drag.lane === lane
           : hovered || (scrolled !== null && scrolled === lane.target);
       const state =
-        lane.target !== null && lane.metrics?.overflow === true && show ? "visible" : "hidden";
+        lane.target !== null && lane.metrics?.overflow === true && lane.clip !== null && show
+          ? "visible"
+          : "hidden";
       const track = lane.track;
-      if (state === "visible") writeGeometry(lane);
+      if (state === "visible") {
+        placeTrack(lane);
+        writeGeometry(lane);
+        if (track.style.clipPath !== (lane.clip === "none" ? "" : lane.clip)) {
+          track.style.clipPath = lane.clip === "none" ? "" : (lane.clip ?? "");
+        }
+      }
       if (track.getAttribute("data-state") !== state) track.setAttribute("data-state", state);
       if (track.hasAttribute("data-lane") !== lane.aimed) {
         track.toggleAttribute("data-lane", lane.aimed);
@@ -621,6 +803,14 @@ export function installOverlayScrollbars(doc: Document): () => void {
     const dragging = drag !== null;
     if (doc.documentElement.hasAttribute(DRAGGING_ATTR) !== dragging) {
       doc.documentElement.toggleAttribute(DRAGGING_ATTR, dragging);
+    }
+    // Nothing shown and nothing held: stop watching, so a target that keeps
+    // growing out of sight (a stream the pointer left) runs no updates.
+    if (
+      !dragging &&
+      laneList.every((lane) => lane.track.getAttribute("data-state") !== "visible")
+    ) {
+      releaseObservations();
     }
   }
 
@@ -755,6 +945,9 @@ export function installOverlayScrollbars(doc: Document): () => void {
       } catch {
         // A pointer that is already gone ends the drag on its own `pointerup`.
       }
+      // The press never reaches the scroller: say so, so whatever is moving it
+      // (a trip to the latest message) lets go and the drag wins.
+      target.dispatchEvent(new win.Event(SCROLL_THUMB_GRAB_EVENT));
       requestUpdate();
       return;
     }
