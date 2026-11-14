@@ -18,7 +18,7 @@
  * `streaming.test.ts`, entry for entry.
  *
  * THE SNAPSHOT IS THE CALLER'S. `writeBackupBundleFile` reads `db` only; the
- * production worker hands it a `db.backup()` snapshot opened readonly in its
+ * production worker hands it a `copyLiveDatabase` snapshot opened readonly in its
  * own work directory, so nothing here opens a write transaction on the live
  * profile, and a pause for memory pressure cannot let the data move under the
  * two-pass write. Artifacts (blobs, transcripts) are not snapshotable, so each
@@ -156,7 +156,7 @@ export interface WriteBackupBundleFileOptions {
   /**
    * An immutable snapshot of the profile database.
    *
-   * The caller owns the snapshot (`db.backup()` to a file opened readonly);
+   * The caller owns the snapshot (`copyLiveDatabase` to a file opened readonly);
    * this writer never writes to it, never opens a transaction on it, and never
    * assumes the live database is stable. Rows are read with `iterate()`.
    */

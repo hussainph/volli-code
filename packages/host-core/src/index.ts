@@ -267,6 +267,7 @@ export function createHostCore(ports: HostCorePorts, options: HostCoreOptions): 
                 },
                 signal,
                 onNotice,
+                { liveDatabase: db },
               ),
             reveal: backupPlatform.reveal,
           },

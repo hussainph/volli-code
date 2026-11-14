@@ -6,6 +6,7 @@ import { createFixtureProfile, type FixtureProfile } from "./test-fixture";
 import { AutomaticProfileBackups } from "./automatic";
 import { readBackupBundle } from "./bundle";
 import { withProfileMaintenance } from "./profile-maintenance";
+import { WAL_AUTOCHECKPOINT_PAGES } from "../db/autocheckpoint";
 import {
   automaticBackupDiskRequirement,
   createAutomaticBackup,
@@ -47,6 +48,7 @@ function request() {
 }
 const ENTRY = new URL("./test-support/worker-under-node.mjs", import.meta.url);
 const ARGS = ["--experimental-transform-types", "--disable-warning=ExperimentalWarning"];
+const HOLDING = new URL("./test-support/hold-checkpoints-worker.mjs", import.meta.url);
 
 describe("the automatic backup worker", () => {
   it("checks disk before creating staging or a bundle", async () => {
@@ -161,7 +163,7 @@ describe("the automatic backup worker", () => {
       target,
       new AbortController().signal,
       () => {},
-      ARGS,
+      { execArgv: ARGS },
     );
     expect(result.sizeBytes).toBeGreaterThan(0);
     const read = readBackupBundle(readFileSync(target.outputPath));
@@ -176,6 +178,72 @@ describe("the automatic backup worker", () => {
       ),
     ).toEqual([]);
   }, 30_000);
+  it("holds main's automatic checkpoint only while the worker copies the live database", async () => {
+    profile.db.pragma(`wal_autocheckpoint = ${WAL_AUTOCHECKPOINT_PAGES}`);
+    const settings: unknown[] = [];
+    const pragma = profile.db.pragma.bind(profile.db);
+    vi.spyOn(profile.db, "pragma").mockImplementation((source, options) => {
+      if (source.startsWith("wal_autocheckpoint =")) settings.push(source);
+      return pragma(source, options);
+    });
+    const target = request();
+    const result = await runAutomaticBackupWorker(
+      ENTRY,
+      target,
+      new AbortController().signal,
+      () => {},
+      { execArgv: ARGS, liveDatabase: profile.db },
+    );
+    expect(result.sizeBytes).toBeGreaterThan(0);
+    expect(readBackupBundle(readFileSync(target.outputPath)).ok).toBe(true);
+    expect(settings).toEqual([
+      "wal_autocheckpoint = 0",
+      `wal_autocheckpoint = ${WAL_AUTOCHECKPOINT_PAGES}`,
+    ]);
+    expect(pragma("wal_autocheckpoint", { simple: true })).toBe(WAL_AUTOCHECKPOINT_PAGES);
+  }, 30_000);
+  it("ends the hold when the worker dies holding it", async () => {
+    profile.db.pragma(`wal_autocheckpoint = ${WAL_AUTOCHECKPOINT_PAGES}`);
+    await expect(
+      runAutomaticBackupWorker(
+        HOLDING,
+        { ...request(), appVersion: "exit" },
+        new AbortController().signal,
+        () => {},
+        { liveDatabase: profile.db },
+      ),
+    ).rejects.toThrow("stopped (3)");
+    expect(profile.db.pragma("wal_autocheckpoint", { simple: true })).toBe(
+      WAL_AUTOCHECKPOINT_PAGES,
+    );
+  });
+  it("ends a hold the worker never releases after its limit", async () => {
+    profile.db.pragma(`wal_autocheckpoint = ${WAL_AUTOCHECKPOINT_PAGES}`);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const controller = new AbortController();
+      const flight = runAutomaticBackupWorker(
+        HOLDING,
+        { ...request(), appVersion: "wait" },
+        controller.signal,
+        () => {},
+        { liveDatabase: profile.db },
+      );
+      // Real turns of the loop: the fake clock must not move while the worker starts.
+      while (profile.db.pragma("wal_autocheckpoint", { simple: true }) !== 0)
+        await new Promise((resolve) => setImmediate(resolve));
+      vi.advanceTimersByTime(29_999);
+      expect(profile.db.pragma("wal_autocheckpoint", { simple: true })).toBe(0);
+      vi.advanceTimersByTime(1);
+      expect(profile.db.pragma("wal_autocheckpoint", { simple: true })).toBe(
+        WAL_AUTOCHECKPOINT_PAGES,
+      );
+      controller.abort();
+      await expect(flight).rejects.toThrow("stopped");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it("reports a real verification failure and keeps its failed archive with a receipt", async () => {
     profile.db.pragma("foreign_keys = OFF");
     profile.db
@@ -184,7 +252,9 @@ describe("the automatic backup worker", () => {
     const service = new AutomaticProfileBackups({
       dataDir: profile.root,
       run: (outputPath, signal, notice) =>
-        runAutomaticBackupWorker(ENTRY, { ...request(), outputPath }, signal, notice, ARGS),
+        runAutomaticBackupWorker(ENTRY, { ...request(), outputPath }, signal, notice, {
+          execArgv: ARGS,
+        }),
       reveal: async () => {},
     });
     try {
@@ -226,7 +296,9 @@ describe("the automatic backup worker", () => {
     const deadline = setTimeout(() => controller.abort(), 15_000);
     try {
       const target = request();
-      await runAutomaticBackupWorker(ENTRY, target, controller.signal, () => {}, ARGS);
+      await runAutomaticBackupWorker(ENTRY, target, controller.signal, () => {}, {
+        execArgv: ARGS,
+      });
       expect(writes).toBeGreaterThan(2);
       const read = readBackupBundle(readFileSync(target.outputPath));
       expect(read.ok).toBe(true);
@@ -282,7 +354,7 @@ describe("the automatic backup worker", () => {
           notices.push(notice);
           if (notice?.includes("migration or move")) observed();
         },
-        ARGS,
+        { execArgv: ARGS },
       );
       await paused;
       expect(existsSync(target.outputPath)).toBe(false);
@@ -295,7 +367,7 @@ describe("the automatic backup worker", () => {
     const controller = new AbortController();
     controller.abort();
     await expect(
-      runAutomaticBackupWorker(ENTRY, request(), controller.signal, () => {}, ARGS),
+      runAutomaticBackupWorker(ENTRY, request(), controller.signal, () => {}, { execArgv: ARGS }),
     ).rejects.toThrow("interrupted");
   });
 });
