@@ -587,7 +587,7 @@ test("quitEndedByApp: exit 0, or a SIGKILL the app's own exit line and the watch
       exit: { code: null, signal: "SIGKILL" },
       closeFailures: [],
     };
-    const watched = "[quit] exit call {\n  mode: 'normal',\n  watch: 'armed'\n}\n";
+    const watched = "[quit] exit call {\n  mode: 'normal',\n  watch: 'arming'\n}\n";
     const immediate = "[quit] exit call {\n  mode: 'immediate',\n  liveWorkers: 1\n}\n";
     const at = { userDataDir: dir };
     assert.equal(quitEndedByApp(clean, ""), true);
@@ -610,7 +610,7 @@ test("quitEndedByApp: exit 0, or a SIGKILL the app's own exit line and the watch
     assert.equal(quitEndedByApp({ ...killed, pid: 4243 }, watched, at), false);
     // A kill the app's log does not name, or one the close sent, is not the app's quit.
     assert.equal(quitEndedByApp(killed, "[quit] exit call {\n  mode: 'normal'\n}\n", at), false);
-    assert.equal(quitEndedByApp(killed, watched.replace("armed", "unavailable"), at), false);
+    assert.equal(quitEndedByApp(killed, watched.replace("arming", "unavailable"), at), false);
     assert.equal(quitEndedByApp(killed, undefined, at), false);
     assert.equal(quitEndedByApp({ ...killed, kind: "sigkill" }, watched, at), false);
     assert.equal(quitEndedByApp({ ...killed, kind: "sigterm" }, watched, at), false);

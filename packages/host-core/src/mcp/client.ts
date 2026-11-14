@@ -650,6 +650,57 @@ export function classifyMcpConnectionError(
 }
 
 /**
+ * Process groups of the stdio servers this process started, while anything
+ * in them may still run (VC-652). pi-mcp's own `exit` listener SIGTERMs its
+ * groups, but only if Node's teardown runs; the quit's exit watch can end the
+ * process before it, so the quit stops them itself first
+ * ({@link stopMcpServerProcessGroups}). A group id cannot be reused while it
+ * has a member, so a group is dropped only once it is empty.
+ */
+const liveStdioGroups = new Set<number>();
+
+function processGroupAlive(group: number): boolean {
+  try {
+    process.kill(-group, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function trackStdioServerGroup(transport: StdioTransport, group: number): void {
+  if (process.platform === "win32") return;
+  liveStdioGroups.add(group);
+  // The server exited by itself: forget the group once nothing in it runs.
+  transport.onClose(() => {
+    if (!processGroupAlive(group)) liveStdioGroups.delete(group);
+  });
+}
+
+/**
+ * Ends every stdio MCP server process group still running, as pi-mcp's `exit`
+ * listener would, but without waiting for Node's teardown: SIGTERM to the
+ * whole group (what the library sends, so a server can clean up), then, for a
+ * group still alive after `graceMs`, SIGKILL, so a server that ignores both
+ * stdin closing and SIGTERM (an `npx`/`uvx` wrapper, a server holding other
+ * handles) cannot outlive the app. Resolves with how many groups it ended.
+ * The quit calls it before an exit the watch may cut short (VC-652).
+ */
+export async function stopMcpServerProcessGroups(graceMs = 1_000): Promise<number> {
+  const groups = [...liveStdioGroups].filter((group) => {
+    if (processGroupAlive(group)) return true;
+    liveStdioGroups.delete(group);
+    return false;
+  });
+  await Promise.all(
+    groups.map((group) =>
+      endProcessGroup(group, graceMs).finally(() => liveStdioGroups.delete(group)),
+    ),
+  );
+  return groups.length;
+}
+
+/**
  * After a stdio client has closed, end whatever is still in the server's
  * process group.
  *
@@ -732,9 +783,16 @@ export function createMcpProtocolClientOpener(
       deadline.signal.throwIfAborted();
       credentials.onConnected?.(server);
       const group = transport instanceof StdioTransport ? transport.pid : undefined;
+      if (transport instanceof StdioTransport && group !== undefined) {
+        trackStdioServerGroup(transport, group);
+      }
       return protocolClientForConnectedClient(client, {
         dropped: () => dropped,
-        ...(group === undefined ? {} : { afterClose: () => endProcessGroup(group) }),
+        ...(group === undefined
+          ? {}
+          : {
+              afterClose: () => endProcessGroup(group).finally(() => liveStdioGroups.delete(group)),
+            }),
       });
     } catch (error) {
       await client.close().catch(() => undefined);

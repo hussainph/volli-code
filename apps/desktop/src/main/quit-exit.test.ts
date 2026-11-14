@@ -55,6 +55,9 @@ function ports(
       order.push("stopChildren");
     }),
     watchAvailable: vi.fn(() => true),
+    watchSkipped: vi.fn(() => {
+      order.push("skipped");
+    }),
     watchExit: vi.fn(() => {
       order.push("watch");
       return { disarm };
@@ -113,7 +116,7 @@ describe("createQuitExit: the exit", () => {
         liveWorkers: 0,
         sinceQuitMs: 0,
         afterDeadline: false,
-        watch: "armed",
+        watch: "arming",
       }),
     );
   });
@@ -169,7 +172,7 @@ describe("createQuitExit: the exit", () => {
     );
   });
 
-  it("exits unwatched, and says so, when the watch does not start", async () => {
+  it("exits when the watch does not start, logging nothing after its last flush", async () => {
     log = captureHostLog("info");
     const p = ports({ watchExit: vi.fn(() => null) });
     const target = app(p.order);
@@ -177,8 +180,11 @@ describe("createQuitExit: the exit", () => {
     await settled();
     expect(target.exit).toHaveBeenCalledExactlyOnceWith(0);
     expect(p.onWorkerStarted).not.toHaveBeenCalled();
+    // The exit line says what was known when the log was written: arming.
+    const lines = log.records.filter((r) => r.component === "quit").map((r) => r.msg);
+    expect(lines.at(-1)).toBe("exit call");
     expect(log.records).toContainEqual(
-      expect.objectContaining({ msg: "exit watch failed", code: "spawn-failed" }),
+      expect.objectContaining({ msg: "exit call", watch: "arming" }),
     );
   });
 
@@ -194,12 +200,13 @@ describe("createQuitExit: the exit", () => {
     );
   });
 
-  it("does not arm when a worker starts while the log is written", async () => {
+  it("does not arm when a worker starts while the log is written, and leaves the note instead", async () => {
     log = captureHostLog("info");
     let live = 0;
     const p = ports({
       liveWorkers: () => live,
       flushLog: vi.fn(async () => {
+        p.order.push("flushLog");
         live = 1;
       }),
     });
@@ -207,10 +214,20 @@ describe("createQuitExit: the exit", () => {
     createQuitExit(p).exitingApp(target).exit(0);
     await settled();
     expect(p.watchExit).not.toHaveBeenCalled();
-    expect(target.exit).toHaveBeenCalledExactlyOnceWith(0);
-    expect(log.records).toContainEqual(
-      expect.objectContaining({ msg: "exit watch not armed", reason: "worker-started" }),
-    );
+    expect(p.watchSkipped).toHaveBeenCalledExactlyOnceWith("worker-started");
+    expect(p.order.slice(-3)).toEqual(["flushLog", "skipped", "app.exit(0)"]);
+    expect(log.records.findLast((r) => r.component === "quit")?.msg).toBe("exit call");
+  });
+
+  it("waits for the children's stop, bounded, before the watch", async () => {
+    vi.useFakeTimers();
+    const p = ports({ stopChildren: vi.fn(() => new Promise(() => undefined)) });
+    const target = app(p.order);
+    createQuitExit(p).exitingApp(target).exit(0);
+    await vi.advanceTimersByTimeAsync(IMMEDIATE_EXIT_FLUSH_MS - 1);
+    expect(p.watchExit).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(IMMEDIATE_EXIT_FLUSH_MS);
+    expect(p.order.slice(-3)).toEqual(["flushLog", "watch", "app.exit(0)"]);
   });
 
   it.each([0, 1])("exits though the log's write fails (%i live workers)", async (liveWorkers) => {
@@ -237,29 +254,31 @@ describe("createQuitExit: the exit", () => {
     expect(target.exit).toHaveBeenCalledExactlyOnceWith(0);
   });
 
-  it("writes the log before an exit that falls back from the immediate one", async () => {
-    let asked = 0;
-    const p = ports({
-      liveWorkers: () => 1,
-      decide: vi.fn(() => (++asked >= 2 ? ("exit" as const) : ("exit-now" as const))),
-    });
-    createQuitExit(p).exitingApp(app(p.order)).exit(0);
-    await settled();
-    expect(p.order.slice(-2)).toEqual(["flushLog", "app.exit(0)"]);
-  });
+  it.each([2, 3])(
+    "writes the log after the line of an exit that falls back from the immediate one (answer %i)",
+    async (changesAt) => {
+      let asked = 0;
+      const p = ports({
+        liveWorkers: () => 1,
+        decide: vi.fn(() => (++asked >= changesAt ? ("exit" as const) : ("exit-now" as const))),
+      });
+      createQuitExit(p).exitingApp(app(p.order)).exit(0);
+      await settled();
+      expect(p.order.slice(-2)).toEqual(["flushLog", "app.exit(0)"]);
+    },
+  );
 
-  it("disarms the watch once when a worker starts after the exit call", async () => {
+  it("disarms the watch once when a worker starts after the exit call, and logs nothing then", async () => {
     log = captureHostLog("info");
     const p = ports();
     createQuitExit(p).exitingApp(app(p.order)).exit(0);
     await settled();
+    const logged = log.records.length;
     expect(p.disarm).not.toHaveBeenCalled();
     p.startWorker();
     p.startWorker();
     expect(p.disarm).toHaveBeenCalledOnce();
-    expect(log.records).toContainEqual(
-      expect.objectContaining({ msg: "exit watch disarmed", reason: "worker-started" }),
-    );
+    expect(log.records).toHaveLength(logged);
   });
 
   it("never lets its writes hold the ordinary exit either", async () => {

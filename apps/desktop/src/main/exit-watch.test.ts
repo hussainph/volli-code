@@ -18,6 +18,8 @@ import {
   exitWatchProbeArgv,
   exitWatchRecordFileName,
   exitWatchRecordPid,
+  exitWatchPendingFileName,
+  unrecordedOutcome,
   nodeExitWatchPorts,
   parseExitWatchRecord,
   parseProbeOutput,
@@ -138,7 +140,9 @@ function fakePorts(overrides: Partial<ExitWatchPorts> = {}): ExitWatchPorts {
     spawn: vi.fn(() => ({ signal: vi.fn() })),
     listRecords: vi.fn(async () => []),
     readRecord: vi.fn(async () => null),
+    readPending: vi.fn(async () => null),
     removeRecord: vi.fn(async () => undefined),
+    writePending: vi.fn(),
     isAlive: vi.fn(() => false),
     ...overrides,
   };
@@ -184,6 +188,58 @@ describe("createExitWatch", () => {
     expect(log.records).toContainEqual(
       expect.objectContaining({ msg: "exit watch start unknown", code: "probe-failed" }),
     );
+  });
+
+  it("leaves the pending note: armed on a spawn, spawn-failed on a failure, the reason when skipped", () => {
+    const armed = fakePorts();
+    createExitWatch(armed).arm();
+    expect(armed.writePending).toHaveBeenCalledExactlyOnceWith(4242, '{"v":1,"armed":true}');
+    const failed = fakePorts({ spawn: () => null });
+    expect(createExitWatch(failed).arm()).toBeNull();
+    expect(failed.writePending).toHaveBeenCalledExactlyOnceWith(
+      4242,
+      '{"v":1,"armed":false,"reason":"spawn-failed"}',
+    );
+    const skipped = fakePorts();
+    createExitWatch(skipped).skipped("worker-started");
+    expect(skipped.writePending).toHaveBeenCalledExactlyOnceWith(
+      4242,
+      '{"v":1,"armed":false,"reason":"worker-started"}',
+    );
+    // A note that cannot be written loses only the note.
+    const unwritable = fakePorts({
+      writePending: vi.fn(() => {
+        throw new Error("EROFS");
+      }),
+    });
+    expect(createExitWatch(unwritable).arm()).not.toBeNull();
+    const linux = fakePorts({ platform: "linux" });
+    createExitWatch(linux).skipped("worker-started");
+    expect(linux.writePending).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['{"v":1,"armed":false,"reason":"spawn-failed"}', "spawn-failed"],
+    ['{"v":1,"armed":false,"reason":"worker-started"}', "not-armed"],
+    ['{"v":1,"armed":true}', "no-record"],
+    ["torn", "no-record"],
+    ["null", "no-record"],
+  ])("reads a pending note %s with no record as %s", (note, outcome) => {
+    expect(unrecordedOutcome(note)).toBe(outcome);
+  });
+
+  it("logs a previous exit with a note and no record as what the note says, never as watched", async () => {
+    log = captureHostLog("info");
+    const ports = fakePorts({
+      listRecords: vi.fn(async () => [55, 55]),
+      readPending: vi.fn(async () => '{"v":1,"armed":false,"reason":"spawn-failed"}'),
+    });
+    await createExitWatch(ports).logPreviousExit();
+    expect(log.records).toContainEqual(
+      expect.objectContaining({ msg: "previous exit", outcome: "spawn-failed" }),
+    );
+    // Listed twice (a record name and a note name): read once.
+    expect(ports.removeRecord).toHaveBeenCalledExactlyOnceWith(55);
   });
 
   it("disarms by signalling the watch, and a gone watch is no error", () => {
@@ -558,8 +614,11 @@ describe.runIf(process.platform === "darwin")("the exit watch, for real", () => 
     await writeFile(join(directory, "other.json"), "{}");
     expect(await ports.listRecords()).toEqual([77]);
     expect(await ports.readRecord(77)).toBe("x");
+    ports.writePending(77, "note");
+    expect(await ports.readPending(77)).toBe("note");
     await ports.removeRecord(77);
     expect(await ports.readRecord(77)).toBeNull();
+    expect(await ports.readPending(77)).toBeNull();
     expect(ports.isAlive(process.pid)).toBe(true);
     const gone = target(0.05);
     await exited(gone);
@@ -601,6 +660,53 @@ describe.runIf(process.platform === "darwin")("the exit watch, for real", () => 
     // Not on the first poll: the 10 s jump counts as one step (ten polls, 200 ms
     // here) at most, so the kill waits for the rest of the 1.5 s grace.
     expect(end.at - armedAt).toBeGreaterThanOrEqual(1200);
+  });
+
+  it("outlives a long sleep: its own life is its run time, so it still kills after the wake", async () => {
+    const directory = await profile();
+    const app = target();
+    const ports = nodeExitWatchPorts({ platform: "darwin", pid: app.pid!, directory });
+    const start = parseProbeOutput(
+      await ports.probe(
+        EXIT_WATCH_SHELL,
+        ["-f", "-c", EXIT_WATCH_SCRIPT, ...exitWatchProbeArgv(app.pid!)!],
+        { cwd: directory, env: EXIT_WATCH_ENV, timeoutMs: 5000 },
+      ),
+    );
+    // As if the lid closed right after the exit and opened 10 min later: the
+    // wall clock is past the watch's own 4 s bound, its run time is not.
+    const argv = exitWatchArgv({
+      pid: app.pid!,
+      startedAt: start,
+      exitCallAtMs: Date.now() - 600_000,
+      ...BOUNDS,
+    })!;
+    ports.spawn(EXIT_WATCH_SHELL, ["-f", "-c", EXIT_WATCH_SCRIPT, ...argv], {
+      cwd: directory,
+      env: EXIT_WATCH_ENV,
+    });
+    expect((await exited(app)).signal).toBe("SIGKILL");
+    expect(await record(directory, app.pid!)).toMatchObject({ killed: true, outcome: "killed" });
+  });
+
+  it("never records a negative duration after a backwards clock step", async () => {
+    const directory = await profile();
+    const app = target(0.2);
+    const ports = nodeExitWatchPorts({ platform: "darwin", pid: app.pid!, directory });
+    // An exit time a minute in the future: the clock stepped back after the exit.
+    const argv = exitWatchArgv({
+      pid: app.pid!,
+      startedAt: 0,
+      exitCallAtMs: Date.now() + 60_000,
+      ...BOUNDS,
+    })!;
+    ports.spawn(EXIT_WATCH_SHELL, ["-f", "-c", EXIT_WATCH_SCRIPT, ...argv], {
+      cwd: directory,
+      env: EXIT_WATCH_ENV,
+    });
+    await exited(app);
+    const text = JSON.stringify(await record(directory, app.pid!));
+    expect(parseExitWatchRecord(text)).toMatchObject({ goneMs: 0, outcome: "gone" });
   });
 
   it("checks the disarm last, right before the kill: a disarm at the grace still holds", async () => {
@@ -650,6 +756,7 @@ describe("exitWatchRecordPid", () => {
     expect(exitWatchRecordPid("exit-watch-0.json")).toBeNull();
     expect(exitWatchRecordPid("exit-watch-12.json.99")).toBeNull();
     expect(exitWatchRecordPid("exit-watch.json")).toBeNull();
+    expect(exitWatchRecordPid(exitWatchPendingFileName(9))).toBe(9);
     expect(exitWatchRecordPid("exit-watch-x.json")).toBeNull();
   });
 });

@@ -30,12 +30,24 @@
  * - leaves the background band a throttled app would hand it
  *   (`taskpolicy -B` on itself), so its own clock is not throttled with the
  *   process it watches;
- * - ends itself in every case, at the latest `maxMs` after the exit;
+ * - ends itself in every case: at the latest once it has itself run `maxMs`
+ *   by that same sum (a laptop asleep for hours does not end it before the
+ *   process it watches gets the time to linger), with 24 h of wall clock as
+ *   the backstop; durations it records are never negative (a backwards clock
+ *   step);
  * - writes one record, `exit-watch-<pid>.json` in its working directory (the
  *   profile's), through a temporary file it removes if the rename fails. A
  *   later launch logs and removes the records of pids that are gone, so a
  *   relaunch that starts while the old process lingers never reads a watch
  *   still running, or credits one launch's record to another.
+ *
+ * The quit's own log is written before the watch starts, so it cannot say
+ * how arming went: the exit line says `watch: 'arming'`, and the quit leaves
+ * `exit-watch-<pid>.pending` (written synchronously, in the tick of the exit)
+ * saying whether the watch started. A later launch reads it with the record:
+ * a record wins; a pending note without one is logged as `spawn-failed`,
+ * `not-armed` (a worker started while the log was written) or `no-record`
+ * (the watch started but wrote nothing). The log is never wrong about it.
  *
  * It runs only for an exit with no worker running (`quit-exit.ts` arms it
  * after that decision), so the cases VC-1208 handles keep their own rules and
@@ -52,6 +64,7 @@
  * `nodeExitWatchPorts` are the real ones.
  */
 import { execFile, spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import { readdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -62,9 +75,14 @@ export function exitWatchRecordFileName(pid: number): string {
   return `exit-watch-${pid}.json`;
 }
 
-/** The pid a record file name is for, or null when the name is not a record's. */
+/** A pid's pending note: written by the quit when it armed (or could not arm) the watch. */
+export function exitWatchPendingFileName(pid: number): string {
+  return `exit-watch-${pid}.pending`;
+}
+
+/** The pid a record (or pending note) file name is for, or null when the name is neither. */
 export function exitWatchRecordPid(fileName: string): number | null {
-  const match = /^exit-watch-(\d{1,10})\.json$/.exec(fileName);
+  const match = /^exit-watch-(\d{1,10})\.(?:json|pending)$/.exec(fileName);
   if (match === null) return null;
   const pid = Number(match[1]);
   return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
@@ -122,11 +140,11 @@ else
     (( dt < 0 )) && dt=0
     (( dt > step )) && dt=step
     (( slept += dt ))
-    if (( t - t0 >= max || slept >= max )); then outcome=timeout; break; fi
+    if (( slept >= max || t - t0 >= 86400000 )); then outcome=timeout; break; fi
     if [[ $killed == false ]] && (( t - t0 >= grace && slept >= grace )); then
       if same; then
         if (( nokill == 0 )); then
-          kill -KILL $pid 2>/dev/null && { killed=true; killedAt=$(( t - t0 )); }
+          kill -KILL $pid 2>/dev/null && { killed=true; (( killedAt = t - t0 < 0 ? 0 : t - t0 )); }
         fi
       elif (( start > 0 )) && kill -0 $pid 2>/dev/null; then
         outcome=mismatch; break
@@ -138,6 +156,7 @@ fi
 [[ $killed == true && $outcome == gone ]] && outcome=killed
 (( nokill == 1 )) && [[ $outcome == gone ]] && outcome=disarmed
 (( gone = EPOCHREALTIME * 1000 - t0 ))
+(( gone < 0 )) && gone=0
 record=exit-watch-$pid.json
 print -r -- "{\"v\":1,\"goneMs\":$gone,\"killed\":$killed,\"killedAtMs\":$killedAt,\"outcome\":\"$outcome\",\"graceMs\":$grace}" > $record.$$ 2>/dev/null && mv -f $record.$$ $record 2>/dev/null || rm -f $record.$$ 2>/dev/null
 exit 0
@@ -193,6 +212,30 @@ export function parseExitWatchRecord(text: string): ExitWatchRecord | null {
   if (typeof killed !== "boolean") return null;
   if (typeof outcome !== "string" || !OUTCOMES.has(outcome)) return null;
   return { goneMs, killed, killedAtMs, outcome: outcome as ExitWatchOutcome, graceMs };
+}
+
+/** What the quit leaves about arming, before the watch's record exists. */
+type PendingNote = { armed: true } | { armed: false; reason: "spawn-failed" | "worker-started" };
+
+/**
+ * A previous exit with a pending note and no record: the watch did not start
+ * (`spawn-failed`), the quit chose not to arm it (`not-armed`), or it started
+ * and wrote nothing (`no-record`).
+ */
+export function unrecordedOutcome(pending: string): "spawn-failed" | "not-armed" | "no-record" {
+  let value: unknown;
+  try {
+    value = JSON.parse(pending);
+  } catch {
+    return "no-record";
+  }
+  const note = (typeof value === "object" && value !== null ? value : {}) as Record<
+    string,
+    unknown
+  >;
+  if (note["armed"] === false && note["reason"] === "spawn-failed") return "spawn-failed";
+  if (note["armed"] === false && note["reason"] === "worker-started") return "not-armed";
+  return "no-record";
 }
 
 export interface ExitWatchArgs {
@@ -259,10 +302,14 @@ export interface ExitWatchPorts {
   probe(shell: string, argv: readonly string[], options: ProbeOptions): Promise<string>;
   /** Starts the watch detached, stdio ignored, and returns a way to signal it. */
   spawn(shell: string, argv: readonly string[], options: SpawnOptions): { signal(): void } | null;
-  /** The pids the profile holds records for. */
+  /** The pids the profile holds records or pending notes for. */
   listRecords(): Promise<number[]>;
   readRecord(pid: number): Promise<string | null>;
+  readPending(pid: number): Promise<string | null>;
+  /** Removes a pid's record and pending note. */
   removeRecord(pid: number): Promise<void>;
+  /** Writes a pid's pending note now, synchronously: it runs in the tick of the exit. */
+  writePending(pid: number, text: string): void;
   /** Whether `pid` is running (a watch may still be watching it). */
   isAlive(pid: number): boolean;
 }
@@ -283,9 +330,15 @@ export interface ExitWatch {
   probe(): Promise<void>;
   /** Whether this platform has the watch. */
   available(): boolean;
-  /** Starts the watch, its grace counted from now; null on a platform without it, or when it would not start. */
+  /**
+   * Starts the watch, its grace counted from now, and leaves the pending note
+   * saying whether it started; null on a platform without it, or when it did
+   * not start.
+   */
   arm(): ExitWatchHandle | null;
-  /** Logs the previous exit's record, if there is one, and removes it. */
+  /** Leaves the pending note for an exit the quit chose not to watch. */
+  skipped(reason: "worker-started"): void;
+  /** Logs each previous exit's record (or pending note) of a pid that is gone, and removes them. */
   logPreviousExit(): Promise<void>;
 }
 
@@ -310,8 +363,19 @@ export function createExitWatch(
 ): ExitWatch {
   const supported = ports.platform === "darwin";
   let startedAt = 0;
+  /** The pending note: fixed words only. A failed write only loses the note. */
+  const note = (pending: PendingNote): void => {
+    try {
+      ports.writePending(ports.pid, JSON.stringify({ v: 1, ...pending }));
+    } catch {
+      // The record, if the watch writes one, still says what happened.
+    }
+  };
   return {
     available: () => supported,
+    skipped(reason) {
+      if (supported) note({ armed: false, reason });
+    },
     async probe() {
       if (!supported) return;
       const argv = exitWatchProbeArgv(ports.pid);
@@ -350,6 +414,7 @@ export function createExitWatch(
       } catch {
         child = null;
       }
+      note(child === null ? { armed: false, reason: "spawn-failed" } : { armed: true });
       if (child === null) return null;
       const started = child;
       return {
@@ -371,18 +436,23 @@ export function createExitWatch(
         return;
       }
       // A pid still running may still be watched: its record is a later launch's to read.
-      for (const pid of pids) {
+      for (const pid of new Set(pids)) {
         if (pid === ports.pid || ports.isAlive(pid)) continue;
         let text: string | null;
+        let pending: string | null;
         try {
-          text = await ports.readRecord(pid);
+          [text, pending] = await Promise.all([ports.readRecord(pid), ports.readPending(pid)]);
         } catch {
           continue;
         }
-        if (text === null) continue;
-        const record = parseExitWatchRecord(text);
-        if (record === null) log.warn("previous exit unreadable", { code: "bad-record" });
-        else log.info("previous exit", { ...record });
+        if (text !== null) {
+          const record = parseExitWatchRecord(text);
+          if (record === null) log.warn("previous exit unreadable", { code: "bad-record" });
+          else log.info("previous exit", { ...record });
+        } else if (pending !== null) {
+          // No record: the note says why, so the log never claims a watch that did not run.
+          log.info("previous exit", { outcome: unrecordedOutcome(pending) });
+        }
         await ports.removeRecord(pid).catch(() => undefined);
       }
     },
@@ -396,6 +466,7 @@ export function nodeExitWatchPorts(options: {
   readonly directory: string;
 }): ExitWatchPorts {
   const record = (pid: number) => join(options.directory, exitWatchRecordFileName(pid));
+  const pending = (pid: number) => join(options.directory, exitWatchPendingFileName(pid));
   return {
     ...options,
     now: () => Date.now(),
@@ -434,15 +505,12 @@ export function nodeExitWatchPorts(options: {
       (await readdir(options.directory))
         .map((name) => exitWatchRecordPid(name))
         .filter((pid): pid is number => pid !== null),
-    readRecord: async (pid) => {
-      try {
-        return await readFile(record(pid), "utf8");
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-        throw error;
-      }
+    readRecord: (pid) => readIfPresent(record(pid)),
+    readPending: (pid) => readIfPresent(pending(pid)),
+    removeRecord: async (pid) => {
+      await Promise.all([rm(record(pid), { force: true }), rm(pending(pid), { force: true })]);
     },
-    removeRecord: (pid) => rm(record(pid), { force: true }),
+    writePending: (pid, text) => writeFileSync(pending(pid), text),
     isAlive: (pid) => {
       try {
         process.kill(pid, 0);
@@ -453,4 +521,13 @@ export function nodeExitWatchPorts(options: {
       }
     },
   };
+}
+
+async function readIfPresent(path: string): Promise<string | null> {
+  try {
+    return await readFile(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
 }

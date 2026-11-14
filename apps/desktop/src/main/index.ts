@@ -77,7 +77,11 @@ import {
   uninstallAllHarnessSkills,
   userCliLinkPath,
 } from "@volli/host-core/agents";
-import { codeModeSandboxAssets, describeWebSealing } from "@volli/host-core/integrations";
+import {
+  codeModeSandboxAssets,
+  describeWebSealing,
+  stopMcpServerProcessGroups,
+} from "@volli/host-core/integrations";
 import {
   abandonAcceptedUpdateInstall,
   beginAcceptedUpdateInstall,
@@ -579,14 +583,17 @@ const quitExit = createQuitExit({
     process.emit("exit", code);
   },
   kill: () => process.kill(process.pid, "SIGKILL"),
-  stopChildren: () => {
-    // What Node's `exit` listeners would stop or write, done before a watched
-    // exit whose teardown a kill can skip (VC-652).
+  stopChildren: async () => {
+    // What Node's `exit` listeners would stop or write (ours, and pi-mcp's for
+    // its stdio servers), done before a watched exit whose teardown a kill can
+    // skip (VC-652).
     stopRunningWorktreeSetups();
     desktopPerf?.store.flush();
+    await stopMcpServerProcessGroups();
   },
   watchAvailable: () => exitWatch?.available() ?? false,
   watchExit: () => exitWatch?.arm() ?? null,
+  watchSkipped: (reason) => exitWatch?.skipped(reason),
   onWorkerStarted,
 });
 const quitTimeline = {

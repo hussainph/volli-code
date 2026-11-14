@@ -366,7 +366,8 @@ test("an immediate exit counts only when the app's own log says it made one (VC-
   assert.equal(immediateQuit({ ...close, exit: { code: 0, signal: null } }, said), false);
   assert.equal(immediateQuit(undefined, said), false);
   // The exit watch's kill (VC-652) needs its record too (smoke-kit's quitEndedByApp tests that);
-  // with no profile to read it from, an armed line alone is not enough.
-  const watched = "[quit] exit call {\n  mode: 'normal',\n  liveWorkers: 0,\n  watch: 'armed'\n}\n";
+  // with no profile to read it from, an arming line alone is not enough.
+  const watched =
+    "[quit] exit call {\n  mode: 'normal',\n  liveWorkers: 0,\n  watch: 'arming'\n}\n";
   assert.equal(immediateQuit({ ...close, pid: 7 }, watched), false);
 });

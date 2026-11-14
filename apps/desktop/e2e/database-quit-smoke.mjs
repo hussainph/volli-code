@@ -130,7 +130,7 @@ async function open(config, label, extraEnv = {}) {
  * then ends the process 5 s after the exit call (VC-652). So the quit is
  * bounded by the drain's own deadline (15 s, `quit-gate.ts`), the exit's
  * writes (at most 2 s), the watch's 5 s and a margin: 25 s. Ended by the app
- * either way: exit 0, or the watch's SIGKILL its exit line armed.
+ * either way: exit 0, or the watch's SIGKILL, which its record for the pid confirms.
  */
 const ORDINARY_QUIT_MS = 25_000;
 

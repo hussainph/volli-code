@@ -599,7 +599,7 @@ export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  *
  * - an immediate exit (VC-1208): the app's log since the quit began says
  *   `exit call { mode: 'immediate' }`;
- * - the exit watch's kill (VC-652): the log says `exit call { watch: 'armed' }`
+ * - the exit watch's kill (VC-652): the log says `exit call { watch: 'arming' }`
  *   AND the watch's own record for this exact pid, in the profile, says it
  *   killed it. Any other SIGKILL (out of memory, someone else's) is not the
  *   app's quit.
@@ -616,7 +616,7 @@ export function quitEndedByApp(close, logSinceQuit, { userDataDir } = {}) {
   if (close.exit?.code !== null || close.exit?.signal !== "SIGKILL") return false;
   const line = /\[quit\] exit call \{[^}]*\}/s.exec(logSinceQuit ?? "")?.[0] ?? "";
   if (/mode: ['"]immediate['"]/.test(line)) return true;
-  if (!/watch: ['"]armed['"]/.test(line) || typeof userDataDir !== "string") return false;
+  if (!/watch: ['"]arming['"]/.test(line) || typeof userDataDir !== "string") return false;
   return exitWatchRecord(userDataDir, close.pid)?.outcome === "killed";
 }
 

@@ -23,7 +23,7 @@ import { fileURLToPath } from "node:url";
 import type { McpServerDraft } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
-import { createMcpProtocolClientOpener } from "./client";
+import { createMcpProtocolClientOpener, stopMcpServerProcessGroups } from "./client";
 import { MemoryMcpCredentialStore } from "./credential-store";
 import { closeAllMcpSessionHosts, McpSessionHost } from "./session-host";
 
@@ -213,6 +213,35 @@ describe.skipIf(process.platform === "win32")("stdio MCP server lifecycle", () =
     await expect(attachment.port.call(call, new AbortController().signal)).rejects.toThrow(
       "MCP attachment is closed",
     );
+  });
+
+  it("ends a server that ignores stdin closing and SIGTERM when the quit stops servers, with no exit listener (VC-652)", async () => {
+    const pidFile = join(dir, "stubborn-pids.json");
+    const attachment = host({
+      id: "stdio",
+      name: "Stubborn",
+      enabled: true,
+      transport: {
+        type: "stdio",
+        command: process.execPath,
+        args: [WRAPPER, SERVER, "--pid-file", pidFile, "--ignore-term"],
+      },
+    });
+    await attachment.port.call(call, new AbortController().signal);
+    const { server, sleeper } = pids(pidFile);
+    const group = groupOf(server);
+    expect(membersOf(group).length).toBeGreaterThanOrEqual(3);
+
+    // What the quit does before an exit whose teardown may never run: nothing
+    // here closes the attachment or emits `exit`, so pi-mcp's listener cannot.
+    expect(await stopMcpServerProcessGroups(300)).toBe(1);
+
+    expect(await until(() => membersOf(group).length === 0, 3_000)).toBe(true);
+    expect(alive(server)).toBe(false);
+    expect(alive(sleeper)).toBe(false);
+    // Nothing left to stop; closing the attachment afterwards is harmless.
+    expect(await stopMcpServerProcessGroups(300)).toBe(0);
+    await attachment.close();
   });
 
   it("ends a server's leftover helpers when the server had already exited on its own", async () => {

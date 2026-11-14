@@ -9,9 +9,17 @@ import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 // the shape of a server that leaves helpers running after stdin closes — and
 // write both pids, so a test can check the whole process group is gone after
 // the client detaches (VC-470).
+// `--ignore-term` makes both the server and its child ignore SIGTERM, and the
+// child keeps the server alive after stdin closes: a server only SIGKILL ends
+// (VC-652).
+const ignoreTerm = process.argv.includes("--ignore-term");
+if (ignoreTerm) process.on("SIGTERM", () => {});
 const pidFileIndex = process.argv.indexOf("--pid-file");
 if (pidFileIndex >= 0) {
-  const sleeper = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+  const keepAlive = ignoreTerm
+    ? "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"
+    : "setInterval(() => {}, 1000)";
+  const sleeper = spawn(process.execPath, ["-e", keepAlive], {
     stdio: "ignore",
   });
   writeFileSync(

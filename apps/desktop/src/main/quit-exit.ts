@@ -92,17 +92,21 @@ export interface QuitExitPorts {
   kill(): void;
   /**
    * Stops, before a watched exit, what Node's teardown would otherwise stop
-   * (the setup commands' process groups) and writes what it would write (the
-   * perf store's buffer): a kill can land before that teardown runs.
+   * (the setup commands' and the stdio MCP servers' process groups) and
+   * writes what it would write (the perf store's buffer): a kill can land
+   * before that teardown runs. Bounded like the writes.
    */
-  stopChildren(): void;
+  stopChildren(): Promise<unknown> | void;
   /** Whether this platform has the exit watch (it is armed only after the log is written). */
   watchAvailable(): boolean;
   /**
    * Starts the exit watch, its grace counted from now; null when it did not
-   * start (the spawn failed).
+   * start (the spawn failed). Either way it leaves a note the next launch
+   * reads, as the quit's log is already written.
    */
   watchExit(): { disarm(): void } | null;
+  /** Leaves the next launch a note that this exit was not watched, and why. */
+  watchSkipped(reason: "worker-started"): void;
   /** Calls `listener` whenever a worker starts from now on; returns the unsubscribe. */
   onWorkerStarted(listener: () => void): () => void;
 }
@@ -153,7 +157,7 @@ export function createQuitExit(ports: QuitExitPorts): QuitExit {
   const exitLine = (
     mode: "immediate" | "normal",
     changed: boolean,
-    watch?: "armed" | "unavailable",
+    watch?: "arming" | "unavailable",
   ): void => {
     log.info("exit call", {
       mode,
@@ -165,17 +169,20 @@ export function createQuitExit(ports: QuitExitPorts): QuitExit {
     });
   };
 
-  /** The writes a normal exit leaves to the teardown, made now, bounded. */
-  const flushBounded = async (): Promise<void> => {
+  /** Waits for `work`, at most the writes' bound; its failure is ignored. */
+  const bounded = async (work: () => Promise<unknown> | void): Promise<void> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([
-      ports.flush().catch(() => undefined),
+      (async () => work())().catch(() => undefined),
       new Promise((resolve) => {
         timer = setTimeout(resolve, IMMEDIATE_EXIT_FLUSH_MS);
       }),
     ]);
     clearTimeout(timer);
   };
+
+  /** The writes a normal exit leaves to the teardown, made now, bounded. */
+  const flushBounded = (): Promise<void> => bounded(() => ports.flush());
 
   /**
    * Windows and IPC are still alive until the process ends, so a worker
@@ -208,7 +215,8 @@ export function createQuitExit(ports: QuitExitPorts): QuitExit {
     // No JavaScript runs between this answer and the kill.
     if (!stillExitNow()) {
       exitLine("normal", true);
-      app.exit(code);
+      // This exit waits for its workers as before: writing its line costs nothing.
+      await plainExit(app, code);
       return;
     }
     ports.kill();
@@ -222,11 +230,7 @@ export function createQuitExit(ports: QuitExitPorts): QuitExit {
    */
   const watchedExit = async (app: { exit(code?: number): void }, code: number): Promise<void> => {
     await flushBounded();
-    try {
-      ports.stopChildren();
-    } catch {
-      // One that throws must not keep the process alive.
-    }
+    await bounded(() => ports.stopChildren());
     // Windows and IPC are alive until the exit: a worker may have started.
     if (ports.liveWorkers() > 0) {
       exitLine("normal", true);
@@ -234,7 +238,9 @@ export function createQuitExit(ports: QuitExitPorts): QuitExit {
       return;
     }
     const armable = ports.watchAvailable();
-    exitLine("normal", false, armable ? "armed" : "unavailable");
+    // How arming went cannot be in this log, which is written before it: the
+    // watch's record, or the note it leaves, tells the next launch.
+    exitLine("normal", false, armable ? "arming" : "unavailable");
     await ports.flushLog().catch(() => undefined);
     if (!armable) {
       app.exit(code);
@@ -242,17 +248,16 @@ export function createQuitExit(ports: QuitExitPorts): QuitExit {
     }
     if (ports.liveWorkers() > 0) {
       // Started while the log was written: exit as before, unwatched.
-      log.info("exit watch not armed", { reason: "worker-started" });
+      ports.watchSkipped("worker-started");
       app.exit(code);
       return;
     }
     const watch = ports.watchExit();
-    if (watch === null) log.warn("exit watch failed", { code: "spawn-failed" });
-    else {
+    if (watch !== null) {
+      // Nothing is logged past this point: the watch's record says `disarmed`.
       const stop = ports.onWorkerStarted(() => {
         stop();
         watch.disarm();
-        log.info("exit watch disarmed", { reason: "worker-started" });
       });
     }
     app.exit(code);
