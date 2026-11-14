@@ -12,7 +12,10 @@ import { readAutomationRunAttendance } from "./db/automations-repo";
 import { readSessionProvenance } from "./db/session-provenance-repo";
 import { markSessionUnread, readSessionUnread, writeSessionUnread } from "./db/session-read-repo";
 import { createRunAttentionWatch } from "./automations/run-attention";
-import { createProviderSignInAlert } from "./session-control/provider-sign-in-alert";
+import {
+  createProviderSignInAlert,
+  type ProviderSignInAlert,
+} from "./session-control/provider-sign-in-alert";
 import {
   createSqliteSessionLedger,
   createHostLiveWork,
@@ -100,6 +103,8 @@ export interface HostSessionServices {
   readonly liveWork: HostLiveWorkWatch;
   readonly sessionActivityWatch: SessionActivityWatch;
   readonly sessionEngine: SessionEngine;
+  /** Told when a person signs in to a provider again, which ends its sign-in alert episode. */
+  readonly providerSignIn: Pick<ProviderSignInAlert, "signedIn">;
   readonly [SESSION_RUNTIME]: SessionRuntimeSlot;
 }
 
@@ -258,5 +263,6 @@ export function createHostSessionServices(
     liveWork,
     sessionActivityWatch,
     sessionEngine,
+    providerSignIn: { signedIn: (providerId) => providerSignIn.signedIn(providerId) },
   };
 }

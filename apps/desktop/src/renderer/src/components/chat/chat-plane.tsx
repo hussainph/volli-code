@@ -1317,7 +1317,8 @@ function ChatPlaneContent({
       openSettings: () => setSettingsOpen(true, "model-access"),
       // And when the row knows WHICH provider, straight to its sign-in: the
       // pane auto-starts (or offers) that provider's flow on arrival.
-      signIn: (providerId) => setSettingsOpen(true, "model-access", providerId),
+      signIn: (providerId, reauthenticate) =>
+        setSettingsOpen(true, "model-access", providerId, reauthenticate),
       dismissError: () => dismissError(),
       dismiss: dismissBlocker,
       scheduleResume: (request) => void scheduleResume(request),

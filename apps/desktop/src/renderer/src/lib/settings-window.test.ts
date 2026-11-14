@@ -15,6 +15,7 @@ const seams = vi.hoisted(() => ({
     settingsCategory: null as string | null,
     configureCategory: null as string | null,
     settingsSignInProviderId: null as string | null,
+    settingsSignInReauthenticate: null as string | null,
   },
   projects: { selectedProjectId: "main-project" as string | null },
   workspace: { workspace: { id: "main-workspace", name: "Main" } },
@@ -87,6 +88,7 @@ beforeEach(async () => {
     settingsCategory: null,
     configureCategory: null,
     settingsSignInProviderId: null,
+    settingsSignInReauthenticate: null,
   });
   seams.projects.selectedProjectId = "main-project";
   seams.workspace.workspace = { id: "main-workspace", name: "Main" };
@@ -145,6 +147,7 @@ describe("native Settings renderer routing", () => {
       projectId: "team-project",
       configureCategory: "skills",
       signInProviderId: "provider",
+      reauthenticate: "oauth",
     };
     routing.acceptSettingsNavigation(navigation);
 
@@ -157,6 +160,7 @@ describe("native Settings renderer routing", () => {
       settingsNavigationError: null,
       configureCategory: "skills",
       settingsSignInProviderId: "provider",
+      settingsSignInReauthenticate: "oauth",
     });
     expect(seams.prepare).toHaveBeenCalledWith(navigation, expect.any(AbortSignal));
     expect(seams.projects.selectedProjectId).toBe("main-project");

@@ -116,6 +116,33 @@ describe("provider sign-in alert", () => {
     expect(notified[1]?.target).toMatchObject({ sessionId: "b" });
   });
 
+  it("a sign-in again ends the episode: a later failure is told again", () => {
+    const { alert, notified } = harness();
+    for (const id of ["a", "b", "c"]) alert.observeBirth(id);
+    alert.observe(projection("a", { attention: authStop("a") }));
+    alert.observe(projection("b", { attention: authStop("b") }));
+    expect(notified).toHaveLength(1);
+    alert.signedIn("anthropic");
+    // The stopped chats still hold their stops (nothing resumes them), and a
+    // re-fold of one is not a new failure.
+    alert.observe(projection("a", { attention: authStop("a") }));
+    expect(notified).toHaveLength(1);
+    // A chat that fails after the sign-in is a new episode, told once.
+    alert.observe(projection("c", { attention: authStop("c") }));
+    alert.observe(projection("b"));
+    alert.observe(projection("b", { attention: authStop("b") }));
+    expect(
+      notified.map((request) =>
+        request.target?.kind === "session" ? request.target.sessionId : null,
+      ),
+    ).toEqual(["a", "c"]);
+    // Another provider's sign-in answers nothing here.
+    alert.signedIn("openai-codex");
+    alert.observe(projection("a"));
+    alert.observe(projection("a", { attention: authStop("a") }));
+    expect(notified).toHaveLength(2);
+  });
+
   it("keeps providers apart: one provider's episode does not silence another's", () => {
     const { alert, notified } = harness();
     alert.observeBirth("a");

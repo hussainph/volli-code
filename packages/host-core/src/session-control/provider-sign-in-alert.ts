@@ -11,9 +11,10 @@
  * sign-in stop while no other Session on that provider stands in one posts one
  * alert, pointed at that Session's Attention, whose row carries the provider's
  * own Sign in. Every later Session that stops on the same provider is part of
- * the same episode and stays quiet. The episode ends when no Session on the
- * provider stands stopped on its sign-in any more — each one clears on its next
- * successful turn — and only then can a later expiry speak again.
+ * the same episode and stays quiet. The episode ends when the person signs in
+ * to that provider again ({@link ProviderSignInAlert.signedIn}), or when no
+ * Session on it stands stopped on its sign-in any more — each one clears on its
+ * next successful turn — and only then can a later failure speak again.
  *
  * ── EDGES, NOT STATES; FIRST SIGHTINGS SEED ───────────────────────────────
  * The same rules as `automations/run-attention.ts`, for the same reasons: every
@@ -23,9 +24,9 @@
  * counts toward its provider's episode, so a relaunch does not re-announce a
  * provider whose chats are already stopped.
  *
- * Recovery is the person's: nothing here resumes a Session. After signing in,
- * a message (or the run's Retry, where offered) continues each one from its
- * last settled point; the failed request was never sent, so nothing repeats.
+ * Recovery is the person's: nothing here resumes a Session, a sign-in
+ * included. After signing in, a message continues each one from its last
+ * settled point; the failed request was never sent, so nothing repeats.
  *
  * Observer discipline: never throws into the write path that folded it.
  */
@@ -54,6 +55,13 @@ export interface ProviderSignInAlert {
   observe(projection: SessionProjection): void;
   /** A Session this process just minted: it has no stop, which is a fact. */
   observeBirth(sessionId: string): void;
+  /**
+   * The person signed in to this provider again (VC-1236). The episode the
+   * alert spoke for is over: the chats it stopped still hold their stops until
+   * someone continues them, but they no longer keep a later failure quiet. A
+   * new stop after this is told again.
+   */
+  signedIn(providerId: string): void;
 }
 
 /** What the alert says. Product text only; the provider by its label, else its id. */
@@ -73,15 +81,16 @@ export function createProviderSignInAlert(ports: ProviderSignInAlertPorts): Prov
     ports.onError ?? ((error: unknown) => log.warn("provider sign-in alert failed", { error }));
   /**
    * Per Session this process has seen: the provider it stands stopped on, or
-   * `null`. No entry means never seen, which is what makes a first sighting a
+   * `null`, and whether a sign-in to that provider since has answered the
+   * stop. No entry means never seen, which is what makes a first sighting a
    * seed rather than an edge. Bounded by the Sessions written to in this run,
    * like the run-attention memory beside it.
    */
-  const seen = new Map<string, string | null>();
+  const seen = new Map<string, { providerId: string | null; answered: boolean }>();
 
   const episodeOpen = (providerId: string, except: string): boolean => {
-    for (const [sessionId, stoppedOn] of seen) {
-      if (sessionId !== except && stoppedOn === providerId) return true;
+    for (const [sessionId, entry] of seen) {
+      if (sessionId !== except && entry.providerId === providerId && !entry.answered) return true;
     }
     return false;
   };
@@ -91,10 +100,12 @@ export function createProviderSignInAlert(ports: ProviderSignInAlertPorts): Prov
       try {
         const sessionId = projection.session.id;
         const stop = providerSignInStop(projection);
-        const known = seen.has(sessionId);
-        const previous = seen.get(sessionId) ?? null;
-        seen.set(sessionId, stop?.providerId ?? null);
-        if (!known || stop === null || stop.providerId === previous) return;
+        const previous = seen.get(sessionId);
+        // The same stop re-folded by any later write is not a new edge, and an
+        // answered one stays answered until the Session leaves it.
+        if (previous !== undefined && previous.providerId === (stop?.providerId ?? null)) return;
+        seen.set(sessionId, { providerId: stop?.providerId ?? null, answered: false });
+        if (previous === undefined || stop === null) return;
         if (episodeOpen(stop.providerId, sessionId)) return;
         ports.notify({
           producer: "provider-sign-in-required",
@@ -115,8 +126,13 @@ export function createProviderSignInAlert(ports: ProviderSignInAlertPorts): Prov
         onError(error);
       }
     },
+    signedIn(providerId) {
+      for (const entry of seen.values()) {
+        if (entry.providerId === providerId) entry.answered = true;
+      }
+    },
     observeBirth(sessionId) {
-      if (!seen.has(sessionId)) seen.set(sessionId, null);
+      if (!seen.has(sessionId)) seen.set(sessionId, { providerId: null, answered: false });
     },
   };
 }

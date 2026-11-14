@@ -64,6 +64,12 @@ export interface ModelAccessSignInPorts {
   pi: PiSignIn;
   /** Attempt and prompt ids. Injectable so a test can read its own transcript. */
   newId?: () => string;
+  /**
+   * A login completed and its credential is stored (VC-1236). Told after the
+   * fact and only on success; a throw here never changes the attempt's
+   * outcome.
+   */
+  onSignedIn?: (providerId: string) => void;
 }
 
 /** A failure message longer than this is a stack trace, not an explanation. */
@@ -94,6 +100,7 @@ interface Attempt {
 export class ModelAccessSignInService {
   readonly #pi: PiSignIn;
   readonly #newId: () => string;
+  readonly #onSignedIn: ((providerId: string) => void) | undefined;
   readonly #attempts = new Map<string, Attempt>();
   /** The one-at-a-time rule, indexed by what it is one of. */
   readonly #byProvider = new Map<string, Attempt>();
@@ -101,6 +108,7 @@ export class ModelAccessSignInService {
   constructor(deps: ModelAccessSignInPorts) {
     this.#pi = deps.pi;
     this.#newId = deps.newId ?? (() => crypto.randomUUID());
+    this.#onSignedIn = deps.onSignedIn;
   }
 
   /**
@@ -143,7 +151,14 @@ export class ModelAccessSignInService {
     // Deliberately not awaited: this method's contract is that the caller gets
     // the id, and the flow's whole life is reported on the update channel.
     void this.#pi.login(providerId, type, attempt.abort.signal, this.#steps(attempt)).then(
-      () => this.#settle(attempt, { kind: "signed-in" }),
+      () => {
+        this.#settle(attempt, { kind: "signed-in" });
+        try {
+          this.#onSignedIn?.(providerId);
+        } catch {
+          // A listener's failure is not the sign-in's: the credential is stored.
+        }
+      },
       (error: unknown) => this.#settle(attempt, this.#failure(attempt, error)),
     );
 

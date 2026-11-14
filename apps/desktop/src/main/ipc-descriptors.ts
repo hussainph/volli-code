@@ -221,6 +221,9 @@ export const SETTINGS_WINDOW_IPC: {
         isOptionalString(input, "category") &&
         isOptionalString(input, "configureCategory") &&
         isOptionalString(input, "signInProviderId") &&
+        (input["reauthenticate"] === undefined ||
+          input["reauthenticate"] === "oauth" ||
+          input["reauthenticate"] === "api-key") &&
         isOptionalNullableString(input["projectId"]) &&
         isOptionalWorkspaceId(input["workspaceId"])
       );

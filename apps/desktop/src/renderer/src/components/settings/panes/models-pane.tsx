@@ -93,6 +93,10 @@ export function ModelAccessSettings({
   // auth flow — which is the point. A provider's browser sign-in is an external
   // act and belongs to the press that asked for it, not to the pane's mounting.
   const [deepLinkedProviderId] = React.useState(autoSignInProviderId);
+  // The sign-in-again intent travels beside it and is spent with it (VC-1236).
+  const [deepLinkedReauthenticate] = React.useState(
+    () => useUiStore.getState().settingsSignInReauthenticate ?? undefined,
+  );
   const consumeSignInRequest = useUiStore((state) => state.consumeSettingsSignIn);
   React.useEffect(() => {
     if (deepLinkedProviderId !== undefined) consumeSignInRequest();
@@ -282,6 +286,7 @@ export function ModelAccessSettings({
           key={decisionSignIn?.nonce ?? 0}
           providers={providers}
           autoSignInProviderId={decisionSignIn?.providerId ?? deepLinkedProviderId}
+          reauthenticate={decisionSignIn === null ? deepLinkedReauthenticate : undefined}
           onRecover={() => void retry()}
           onChanged={() => load(true)}
         />

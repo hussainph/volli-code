@@ -154,6 +154,32 @@ describe("ModelAccessSignInService", () => {
     });
   });
 
+  it("tells the host only of a completed sign-in, and a listener's throw changes nothing", async () => {
+    const signedIn: string[] = [];
+    const port = scriptedPort();
+    const service = new ModelAccessSignInService({
+      pi: port.pi,
+      newId: countedIds(),
+      onSignedIn: (providerId) => {
+        signedIn.push(providerId);
+        throw new Error("listener failed");
+      },
+    });
+    const owner = recordingOwner();
+    service.begin("anthropic", "oauth", owner);
+    port.flow().succeed();
+    await flush();
+    expect(signedIn).toEqual(["anthropic"]);
+    expect(owner.updates.at(-1)).toMatchObject({ outcome: { kind: "signed-in" } });
+
+    // A cancelled or failed attempt stored nothing, so nothing is told.
+    service.begin("openai-codex", "oauth", recordingOwner());
+    service.cancel("id-2");
+    port.flow(1).fail(new Error("The operation was aborted."));
+    await flush();
+    expect(signedIn).toEqual(["anthropic"]);
+  });
+
   it("rejects the parked question on cancel and calls the ending cancelled, not failed", async () => {
     const port = scriptedPort();
     const owner = recordingOwner();

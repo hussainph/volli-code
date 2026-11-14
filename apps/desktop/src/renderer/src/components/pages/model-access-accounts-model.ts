@@ -12,6 +12,7 @@ import type {
   ModelAccessProvider,
   ModelAccessSignInEvent,
   ModelAccessSignInPrompt,
+  ModelAccessSignInType,
   ModelAccessSignInUpdate,
 } from "@volli/shared";
 
@@ -184,4 +185,31 @@ export function deepLinkedAction(
   if (requestedProviderId !== provider.id) return "none";
   const action = accountAction(provider);
   return action === "sign-in" || action === "choose" ? action : "none";
+}
+
+/**
+ * The method a "sign in again" request starts on this row, or `null` (VC-1236).
+ *
+ * A different intent from {@link deepLinkedAction}, and deliberately so: that
+ * one is "this provider is blocking me", and it never starts a flow at an
+ * account already connected. This one comes only from a chat stopped because
+ * the provider refused or could not renew the credential it holds — an account
+ * that still reads as connected, because the credential is still stored. The
+ * press that sends it is the person asking to sign in to THIS provider again
+ * with THIS method (a subscription login again, or a new API key), so the row
+ * starts that method even though it is connected. A successful login replaces
+ * the stored credential in place; a cancelled one writes nothing.
+ *
+ * Only the named provider, only a method it offers. A provider whose refresh
+ * failed in the snapshot itself offers Retry, a read rather than an auth flow,
+ * and is left alone exactly as the ordinary deep link leaves it.
+ */
+export function reauthenticationMethod(
+  provider: ModelAccessProvider,
+  requestedProviderId: string | undefined,
+  method: ModelAccessSignInType | undefined,
+): ModelAccessSignInType | null {
+  if (method === undefined || requestedProviderId !== provider.id) return null;
+  if (provider.recovery?.kind === "retry") return null;
+  return provider.signIn.some((offered) => offered.type === method) ? method : null;
 }
