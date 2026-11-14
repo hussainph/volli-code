@@ -17,7 +17,8 @@
  * `StickToBottom` props forced to `instant` where upstream animates, and
  * `ConversationEmptyState` reduced to its shell (no default title or copy),
  * and `ConversationContent`'s masked viewport, reachable through `viewportRef`,
- * which `ConversationScrollButton` marks while it is up.
+ * which `ConversationScrollButton` marks while it is up, and following decided
+ * from the reader's own scrolls (`useReaderFollowing`).
  *
  * Apache-2.0 §4(b) requires a modified file to say so. See `./PROVENANCE.md`.
  */
@@ -43,6 +44,7 @@ import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 
 import { SCROLL_THUMB_GRAB_EVENT } from "@renderer/lib/scroll-thumb/overlay-scrollbars";
 
+import { followingAfterScroll, keyScrollsUp, scrollPlace } from "./reader-following";
 import { wheelDetachesFollowing } from "./scroll-chaining";
 import { glideToLatest } from "./scroll-to-latest";
 
@@ -222,6 +224,7 @@ export const useConversationControl = (): ConversationControl =>
  * The consumers here are every tool row in the transcript.
  */
 function ConversationBridge({ children }: { children: ReactNode }) {
+  useReaderFollowing();
   const { stopScroll, scrollRef } = useStickToBottomContext();
   const latest = useRef({ stopScroll, scrollRef });
   useLayoutEffect(() => {
@@ -241,6 +244,112 @@ function ConversationBridge({ children }: { children: ReactNode }) {
       {children}
     </ConversationControlContext.Provider>
   );
+}
+
+/**
+ * How long a scrolling key press, or a press lifted off the scrollbar, still
+ * counts as the reader's hand on the transcript, in milliseconds. That covers
+ * one smooth keyboard scroll (about 150ms in Chromium) with room to spare, and
+ * a held key's repeats keep renewing it.
+ */
+const READER_HAND_MS = 500;
+
+/** Where a key press types rather than scrolls. */
+const TEXT_ENTRY = "input, textarea, select, [contenteditable]:not([contenteditable='false'])";
+/** Where Space presses a control rather than scrolling. */
+const SPACE_CONTROL = "button, a[href], summary, [role='button'], [role='link']";
+/** The end of a press or touch on the transcript, wherever it lifts. */
+const LIFT_EVENTS = ["pointerup", "pointercancel", "touchend", "touchcancel"] as const;
+
+/**
+ * Following, decided by the reader's own scrolls; the rule and the reason the
+ * library's version of it does not hold up are in `reader-following.ts`.
+ *
+ * A scroll event releases at once when it moves away from the end under the
+ * reader's hand. Releasing synchronously matters: the library's
+ * following loop writes on the frame's animation callbacks, which run after
+ * this event, and once released it stops instead of pulling the reader back
+ * mid-scroll.
+ *
+ * An arrival is applied one millisecond later instead. The library judges the
+ * same event on a one-millisecond timer of its own, which can still read
+ * anchoring as a scroll up and release (VC-1232). Timers with equal delays
+ * run in the order they were set. The library's listener was attached when
+ * its scroller mounted, before this effect ran, so this one runs after it and
+ * has the last word.
+ *
+ * Engaging uses the library's own `scrollToBottom("instant")`, as "Scroll to
+ * latest" does on arrival. It is only called when the library has not already
+ * re-attached by itself, so the move it makes is the one following was about
+ * to make anyway.
+ */
+function useReaderFollowing() {
+  const { scrollRef, state, scrollToBottom, stopScroll } = useStickToBottomContext();
+  const latest = useRef({ scrollToBottom, stopScroll });
+  useLayoutEffect(() => {
+    latest.current = { scrollToBottom, stopScroll };
+  }, [scrollToBottom, stopScroll]);
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    if (scroller === null) return;
+    const view = scroller.ownerDocument.defaultView ?? window;
+    let place = scrollPlace(scroller);
+    let held = false;
+    let handUntil = 0;
+    const timers = new Set<number>();
+    const onScroll = () => {
+      const previous = place;
+      place = scrollPlace(scroller);
+      const readerHand = held || performance.now() < handUntil;
+      const change = followingAfterScroll(previous, place, readerHand);
+      if (change === "release") {
+        if (state.isAtBottom) latest.current.stopScroll();
+      } else if (change === "follow") {
+        const timer = view.setTimeout(() => {
+          timers.delete(timer);
+          if (!state.isAtBottom) void latest.current.scrollToBottom("instant");
+        }, 1);
+        timers.add(timer);
+      }
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      const target = event.target instanceof view.Element ? event.target : null;
+      const up = keyScrollsUp({
+        key: event.key,
+        shiftKey: event.shiftKey,
+        inTextEntry: target?.closest(TEXT_ENTRY) != null,
+        onControl: target?.closest(SPACE_CONTROL) != null,
+      });
+      if (up) handUntil = performance.now() + READER_HAND_MS;
+    };
+    // A press on the scroller itself, not on anything inside it, is a press on
+    // its scrollbar. A touch anywhere in it is a hand on it.
+    const onPress = (event: PointerEvent) => {
+      if (event.target === scroller) held = true;
+    };
+    const onTouch = () => {
+      held = true;
+    };
+    const onLift = () => {
+      if (!held) return;
+      held = false;
+      handUntil = performance.now() + READER_HAND_MS;
+    };
+    scroller.addEventListener("scroll", onScroll, { passive: true });
+    scroller.addEventListener("pointerdown", onPress, { passive: true });
+    scroller.addEventListener("touchstart", onTouch, { passive: true });
+    view.addEventListener("keydown", onKey);
+    for (const name of LIFT_EVENTS) view.addEventListener(name, onLift, { passive: true });
+    return () => {
+      scroller.removeEventListener("scroll", onScroll);
+      scroller.removeEventListener("pointerdown", onPress);
+      scroller.removeEventListener("touchstart", onTouch);
+      view.removeEventListener("keydown", onKey);
+      for (const name of LIFT_EVENTS) view.removeEventListener(name, onLift);
+      for (const timer of timers) view.clearTimeout(timer);
+    };
+  }, [scrollRef, state]);
 }
 
 export type ConversationContentProps = ComponentProps<typeof StickToBottom.Content> & {
