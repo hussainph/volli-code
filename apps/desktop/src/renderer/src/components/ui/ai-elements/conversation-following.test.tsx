@@ -37,9 +37,15 @@ const microtasks = async () => {
   for (let i = 0; i < 10; i++) await Promise.resolve();
 };
 
-/** One browser frame, optionally with content growing (or shrinking) in its layout. */
-async function frame(grow = 0) {
+/**
+ * One browser frame, optionally with content growing (or shrinking) in its
+ * layout. `readFirst`: the growth is already laid out when the scroll event
+ * reads the geometry, as when a scroll handler forces layout over a pending
+ * commit; the observer still reports it after the frame's callbacks.
+ */
+async function frame(grow = 0, { readFirst = false } = {}) {
   await act(async () => {
+    if (readFirst) contentHeight += grow;
     if (position !== lastReported) {
       lastReported = position;
       scroller.dispatchEvent(new Event("scroll"));
@@ -49,7 +55,7 @@ async function frame(grow = 0) {
     for (const callback of callbacks) callback(performance.now());
     await microtasks();
     if (grow !== 0) {
-      contentHeight += grow;
+      if (!readFirst) contentHeight += grow;
       position = Math.min(position, end());
       for (const callback of resizeCallbacks) {
         callback(
@@ -71,6 +77,12 @@ async function stream(frames: number) {
     seen.push(fromEnd());
   }
   return seen;
+}
+
+/** Where the reader rests once the reply stops: at the end if following. */
+async function rest() {
+  for (let i = 0; i < 3; i++) await frame();
+  return fromEnd();
 }
 
 const wheel = (deltaY: number) =>
@@ -201,7 +213,8 @@ it("releases a reader who drags the thumb up in a frame where a line lands", asy
   position -= 100;
   await frame(LINE);
   await act(async () => {
-    window.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+    // The thumb swallows its pointerup; the end of its pointer capture is what is left.
+    document.body.dispatchEvent(new PointerEvent("lostpointercapture", { bubbles: true }));
   });
   const after = await stream(20);
   expect(Math.min(...after)).toBeGreaterThan(100);
@@ -218,10 +231,49 @@ it("follows a reader who holds the thumb at the end while the reply grows, and a
     await frame(i % 2 === 0 ? LINE : 0);
   }
   await act(async () => {
-    window.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+    // The thumb swallows its pointerup; the end of its pointer capture is what is left.
+    document.body.dispatchEvent(new PointerEvent("lostpointercapture", { bubbles: true }));
   });
-  const after = await stream(10);
-  expect(after.at(-1)).toBeLessThanOrEqual(1);
+  await stream(10);
+  expect(await rest()).toBeLessThanOrEqual(1);
+});
+
+it("stays released when the scroll event of the library's last write arrives after a wheel up", async () => {
+  // A line lands; the library writes the end on the next frame's callbacks,
+  // and the scroll event for that write only comes the frame after.
+  await frame(LINE);
+  await act(async () => {
+    const callbacks = animationCallbacks;
+    animationCallbacks = [];
+    for (const callback of callbacks) callback(performance.now());
+    await microtasks();
+  });
+  // The reader wheels up in between: released on the wheel event itself.
+  await wheel(-100);
+  // The late event reports the write: scrollTop grew, with no reader behind it.
+  await frame();
+  position -= 100;
+  const after = await stream(20);
+  expect(Math.min(...after)).toBeGreaterThanOrEqual(100);
+});
+
+it("lets go of the reader's hand when the thumb's drag ends", async () => {
+  await act(async () => {
+    scroller.dispatchEvent(new Event(SCROLL_THUMB_GRAB_EVENT));
+  });
+  await act(async () => {
+    document.body.dispatchEvent(new PointerEvent("lostpointercapture", { bubbles: true }));
+  });
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  // Anchoring and a line in one frame, which looks like a scroll up: with no
+  // hand on the transcript any more, following holds.
+  contentHeight -= 46;
+  position -= 46;
+  // More lines than the block shrank, so the frame grows the column: a shrink
+  // would let the library re-lock a reader near the end by itself.
+  await frame(4 * LINE, { readFirst: true });
+  await stream(10);
+  expect(await rest()).toBeLessThanOrEqual(1);
 });
 
 it("releases one wheel notch up at once, and following never comes back by itself", async () => {
@@ -237,9 +289,11 @@ it("keeps following when anchoring lowers the position with no reader behind it"
   // the frame a line lands below: the position drops as a scroll up would.
   contentHeight -= 46;
   position -= 46;
-  await frame(LINE);
-  const after = await stream(10);
-  expect(after.at(-1)).toBeLessThanOrEqual(1);
+  // More lines than the block shrank, so the frame grows the column: a shrink
+  // would let the library re-lock a reader near the end by itself.
+  await frame(4 * LINE, { readFirst: true });
+  await stream(10);
+  expect(await rest()).toBeLessThanOrEqual(1);
 });
 
 it("does not take a scroll on a key typed into a field as the reader leaving", async () => {
@@ -251,9 +305,9 @@ it("does not take a scroll on a key typed into a field as the reader leaving", a
     });
     contentHeight -= 46;
     position -= 46;
-    await frame(LINE);
-    const after = await stream(10);
-    expect(after.at(-1)).toBeLessThanOrEqual(1);
+    await frame(4 * LINE, { readFirst: true });
+    await stream(10);
+    expect(await rest()).toBeLessThanOrEqual(1);
   } finally {
     field.remove();
   }

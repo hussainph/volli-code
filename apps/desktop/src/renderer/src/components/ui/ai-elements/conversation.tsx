@@ -258,8 +258,13 @@ const READER_HAND_MS = 500;
 const TEXT_ENTRY = "input, textarea, select, [contenteditable]:not([contenteditable='false'])";
 /** Where Space presses a control rather than scrolling. */
 const SPACE_CONTROL = "button, a[href], summary, [role='button'], [role='link']";
-/** The end of a thumb drag or a touch, wherever it lifts; a drag also ends when the window loses focus. */
-const LIFT_EVENTS = ["pointerup", "pointercancel", "touchend", "touchcancel", "blur"] as const;
+/**
+ * The end of a thumb drag or a touch. The thumb swallows its own `pointerup`
+ * before anything else sees it, but it holds the pointer captured for the
+ * drag, and every way a drag ends (a release, Escape, a lost button) ends that
+ * capture. A window losing focus ends both.
+ */
+const LIFT_EVENTS = ["lostpointercapture", "touchend", "touchcancel", "blur"] as const;
 
 /**
  * Following, decided by the reader's own scrolls; the rule and the reason the
@@ -297,9 +302,19 @@ function useReaderFollowing() {
     let held = false;
     let handUntil = 0;
     const timers = new Set<number>();
+    // The library's own writes are not the reader's, and their scroll event
+    // can arrive a frame late: after a wheel up has already released, where it
+    // would read as a move toward the end. The library marks each write with
+    // `ignoreScrollToTop` and clears it in its own listener, so it is read
+    // here in the capture phase, which runs first on the scroller itself.
+    let ownWrite = false;
+    const classify = () => {
+      ownWrite = scroller.scrollTop === state.ignoreScrollToTop;
+    };
     const onScroll = () => {
       const previous = place;
       place = scrollPlace(scroller);
+      if (ownWrite) return;
       const hand = held ? "holding" : performance.now() < handUntil ? "recent" : "none";
       const change = followingAfterScroll(previous, place, hand);
       if (change === "release") {
@@ -333,12 +348,14 @@ function useReaderFollowing() {
       held = false;
       handUntil = performance.now() + READER_HAND_MS;
     };
+    scroller.addEventListener("scroll", classify, { capture: true, passive: true });
     scroller.addEventListener("scroll", onScroll, { passive: true });
     scroller.addEventListener(SCROLL_THUMB_GRAB_EVENT, onHold);
     scroller.addEventListener("touchstart", onHold, { passive: true });
     view.addEventListener("keydown", onKey);
     for (const name of LIFT_EVENTS) view.addEventListener(name, onLift, { passive: true });
     return () => {
+      scroller.removeEventListener("scroll", classify, { capture: true });
       scroller.removeEventListener("scroll", onScroll);
       scroller.removeEventListener(SCROLL_THUMB_GRAB_EVENT, onHold);
       scroller.removeEventListener("touchstart", onHold);
