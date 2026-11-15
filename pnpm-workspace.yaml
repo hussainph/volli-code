@@ -55,9 +55,9 @@ minimumReleaseAge: 60
 # window above; once the release ages out, the exclude does nothing, because an
 # exclude for a version nobody installs is inert. So entries are dropped when
 # the tree no longer holds that exact version, and the list keeps only versions
-# it can still be read against. The vite-plus 0.3.0 bump (VC-212) needed no
-# entries of its own: 0.3.0 published 2026-08-24, days rather than minutes
-# before it landed here, so it cleared the gate unaided.
+# it can still be read against. The vite-plus bumps to 0.3.0 (VC-212) and
+# 1.6.0 (VC-1242) needed no entries of their own: each release was days old,
+# not minutes, when it landed here, so it cleared the gate unaided.
 minimumReleaseAgeExclude:
   - "@typescript/typescript-aix-ppc64@7.0.2"
   - "@typescript/typescript-darwin-arm64@7.0.2"
