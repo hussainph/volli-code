@@ -46,18 +46,19 @@ const readAsDataURL = FileReader.prototype.readAsDataURL;
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   completedReads = 0;
-  vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(
-    function (this: FileReader, blob) {
-      this.addEventListener(
-        "loadend",
-        () => {
-          completedReads += 1;
-        },
-        { once: true },
-      );
-      readAsDataURL.call(this, blob);
-    },
-  );
+  vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function (
+    this: FileReader,
+    blob,
+  ) {
+    this.addEventListener(
+      "loadend",
+      () => {
+        completedReads += 1;
+      },
+      { once: true },
+    );
+    readAsDataURL.call(this, blob);
+  });
   vi.stubGlobal("crypto", webcrypto);
   adoptLaunch({ store: "cloud", backendUrl: "https://backend.test", userId: "person" });
   action = vi.fn(async () => ({

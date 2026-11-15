@@ -187,15 +187,17 @@ describe("the sandbox", () => {
     const release = Promise.withResolvers<void>();
     const once = Worker.prototype.once;
     // Real worker and codec; delay only delivery of its exit/release notification.
-    const observeExit = vi
-      .spyOn(Worker.prototype, "once")
-      .mockImplementation(function (this: Worker, event, listener) {
-        if (event !== "exit") return once.call(this, event, listener);
-        return once.call(this, event, (...args: unknown[]) => {
-          exited.resolve();
-          void release.promise.then(() => listener(...args));
-        });
+    const observeExit = vi.spyOn(Worker.prototype, "once").mockImplementation(function (
+      this: Worker,
+      event,
+      listener,
+    ) {
+      if (event !== "exit") return once.call(this, event, listener);
+      return once.call(this, event, (...args: unknown[]) => {
+        exited.resolve();
+        void release.promise.then(() => listener(...args));
       });
+    });
     let settled = false;
     const pending = run(fixture({ tools: [] }), "return 1;").then((result) => {
       settled = true;

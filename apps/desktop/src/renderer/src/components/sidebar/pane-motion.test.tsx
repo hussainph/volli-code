@@ -55,18 +55,18 @@ beforeEach(() => {
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
-  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
-    function (this: HTMLElement) {
-      if (this.hasAttribute("data-paper"))
-        return new DOMRect(Number.parseFloat(this.style.marginLeft) + paperShift, 46, 800, 700);
-      if (this.hasAttribute("data-trigger"))
-        return new DOMRect(this.dataset.trigger === "left" ? 160 : 970, 8, 28, 28);
-      const side = this.dataset.side ?? this.closest<HTMLElement>("[data-side]")?.dataset.side;
-      if (side) return new DOMRect(side === "left" ? 60 : 700, 46, 240, 700);
-      if (this.hasAttribute("data-pane-pour-shell")) return new DOMRect(80, 50, 150, 450);
-      return new DOMRect();
-    },
-  );
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    if (this.hasAttribute("data-paper"))
+      return new DOMRect(Number.parseFloat(this.style.marginLeft) + paperShift, 46, 800, 700);
+    if (this.hasAttribute("data-trigger"))
+      return new DOMRect(this.dataset.trigger === "left" ? 160 : 970, 8, 28, 28);
+    const side = this.dataset.side ?? this.closest<HTMLElement>("[data-side]")?.dataset.side;
+    if (side) return new DOMRect(side === "left" ? 60 : 700, 46, 240, 700);
+    if (this.hasAttribute("data-pane-pour-shell")) return new DOMRect(80, 50, 150, 450);
+    return new DOMRect();
+  });
   Object.defineProperty(HTMLElement.prototype, "animate", {
     configurable: true,
     value: function (this: HTMLElement, frames: Keyframe[], options: KeyframeAnimationOptions) {

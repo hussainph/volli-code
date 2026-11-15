@@ -490,22 +490,24 @@ describe("DatabaseRecovery", () => {
     seeded.close();
     const pragma = Database.prototype.pragma;
     let intercepted = false;
-    const spy = vi
-      .spyOn(Database.prototype, "pragma")
-      .mockImplementation(function (this: Database.Database, source, options) {
-        if (
-          !intercepted &&
-          !this.readonly &&
-          this.name === dbPath &&
-          source === "journal_mode = WAL"
-        ) {
-          // Constructor has returned, but the current handle has not executed its
-          // first SQLite operation. The adjacent startup mutex is already held.
-          intercepted = true;
-          expect(() => recovery.restore()).toThrow("Close other Volli instances");
-        }
-        return pragma.call(this, source, options);
-      });
+    const spy = vi.spyOn(Database.prototype, "pragma").mockImplementation(function (
+      this: Database.Database,
+      source,
+      options,
+    ) {
+      if (
+        !intercepted &&
+        !this.readonly &&
+        this.name === dbPath &&
+        source === "journal_mode = WAL"
+      ) {
+        // Constructor has returned, but the current handle has not executed its
+        // first SQLite operation. The adjacent startup mutex is already held.
+        intercepted = true;
+        expect(() => recovery.restore()).toThrow("Close other Volli instances");
+      }
+      return pragma.call(this, source, options);
+    });
     try {
       const booted = database.openVolliDb(dbPath);
       expect(intercepted).toBe(true);

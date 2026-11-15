@@ -64,7 +64,7 @@ What was done instead, and what it proves:
    line, the `new Error("Failed to load screen stream")` string, the
    `usePromptInputController()` and `usePromptInputReferencedSources` throw
    messages, and the comments `// Optional variants (do NOT throw). Useful for
-dual-mode components.`, `// e.g., "image/*" or leave undefined for any`,
+   dual-mode components.`, `// e.g., "image/*" or leave undefined for any`,
    `// Note: File input cannot be programmatically set for security reasons`,
    `// Don't clear on error - user may want to retry`, `// e.g: image/* -> image/`.
 

@@ -21,18 +21,18 @@ it("bounds mounted rows without truncating the status model and restores keyboar
   const root = createRoot(host);
   const rect = HTMLElement.prototype.getBoundingClientRect;
   vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(360);
-  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
-    function (this: HTMLElement) {
-      if (this.hasAttribute("data-list-row-body"))
-        return new DOMRect(
-          0,
-          -(this.closest<HTMLElement>("[data-list-ticket-count]")?.scrollTop ?? 0),
-          500,
-          36000,
-        );
-      return rect.call(this);
-    },
-  );
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    if (this.hasAttribute("data-list-row-body"))
+      return new DOMRect(
+        0,
+        -(this.closest<HTMLElement>("[data-list-ticket-count]")?.scrollTop ?? 0),
+        500,
+        36000,
+      );
+    return rect.call(this);
+  });
   const groups: Record<TicketStatus, Ticket[]> = {
     backlog: [],
     todo: [],
