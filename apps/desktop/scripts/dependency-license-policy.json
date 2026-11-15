@@ -10,7 +10,7 @@
     "",
     "A key ending in `*` covers a family of per-platform packages. pnpm installs only the sibling",
     "matching the current os/cpu, so `@img/sharp-libvips-darwin-arm64` on a developer Mac is",
-    "`@img/sharp-libvips-linux-x64` on CI. Three families need it; every other platform-specific",
+    "`@img/sharp-libvips-linux-x64` on CI. Two families need it; every other platform-specific",
     "package in this tree is MIT or Apache-2.0."
   ],
 
@@ -367,30 +367,6 @@
       "summary": ["Dual-licensed; Volli elects BSD-3-Clause."],
       "obligations": ["Notices must state BSD-3-Clause as the elected license."],
       "electedLicense": "BSD-3-Clause",
-      "blocked": null
-    },
-
-    "@yuku-codegen/binding-*": {
-      "license": "MIT",
-      "versions": ["0.5.48"],
-      "disposition": "build-only",
-      "licenseSource": "parent-package",
-      "summary": [
-        "A generated napi platform package with no `license` field and no license file — the shape most",
-        "native-binding sub-packages ship in. Its parent `yuku-codegen@0.5.48` declares MIT, and the",
-        "binding is published from the same repository (yuku-toolchain/yuku) in the same release."
-      ],
-      "obligations": ["MIT attribution, inherited from the parent package."],
-      "blocked": null
-    },
-
-    "@yuku-parser/binding-*": {
-      "license": "MIT",
-      "versions": ["0.5.48"],
-      "disposition": "build-only",
-      "licenseSource": "parent-package",
-      "summary": ["As @yuku-codegen/binding-*; parent `yuku-parser@0.5.48` declares MIT."],
-      "obligations": ["MIT attribution, inherited from the parent package."],
       "blocked": null
     }
   }
