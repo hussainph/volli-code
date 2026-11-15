@@ -505,6 +505,9 @@ describe("bundle persistence and frozen request selection", () => {
           b.provenance.commit = "bad";
         },
         (b) => {
+          delete (b.provenance as Partial<CanaryPeerBundle["provenance"]>).commit;
+        },
+        (b) => {
           b.provenance.distributed = null as unknown as boolean;
         },
         (b) => {
