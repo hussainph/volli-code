@@ -418,6 +418,27 @@ describe("the inbox worker", () => {
     expect(inbox.backend.claim).toHaveBeenCalledTimes(1);
   });
 
+  it("does not start a second copy of a job a later claim hands back while it still runs", async () => {
+    const inbox = fakeInbox([[job("j1")], [job("j1", "workingCopy.refresh", 2)]]);
+    const worker = createInboxWorker({
+      backend: inbox.backend,
+      journal: memoryJournal().store,
+      bootId: BOOT,
+      ...manualTimers(),
+    });
+    let finish!: (outcome: JobOutcome) => void;
+    const executor = vi.fn(() => new Promise<JobOutcome>((done) => (finish = done)));
+    worker.register("workingCopy.refresh", executor);
+    await worker.start();
+    await worker.claimNow();
+    expect(inbox.backend.claim).toHaveBeenCalledTimes(2);
+    expect(executor).toHaveBeenCalledTimes(1);
+    expect(worker.running).toBe(1);
+    worker.stop();
+    finish(DONE);
+    await flush();
+  });
+
   it("a failed claim is logged and tried again later", async () => {
     const inbox = fakeInbox();
     const errors: unknown[] = [];
