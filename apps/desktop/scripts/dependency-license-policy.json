@@ -349,7 +349,7 @@
 
     "node-forge": {
       "license": "(BSD-3-Clause OR GPL-2.0)",
-      "versions": ["1.4.0"],
+      "versions": ["1.4.3"],
       "disposition": "development-only",
       "summary": [
         "Dual-licensed; Volli elects BSD-3-Clause, so the GPL-2.0 half is never exercised. Reaches the",

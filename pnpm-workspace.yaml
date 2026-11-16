@@ -117,6 +117,18 @@ overrides:
   # re-selecting a vulnerable copy. Scoped to the vulnerable range only.
   # Remove once no parent in the tree resolves below 1.2.2 without it.
   "source-map-js@<1.2.2": "1.2.2"
+  # VC-1241 / GHSA-g3hv-75wg-m249: minimatch >=7.0.0 <11.0.1 is vulnerable and
+  # the only patched line is 11.x, while these electron-builder (packaging) and
+  # tuf parents declare ^9 / ^10 — including their latest releases — so neither
+  # re-resolution nor a parent bump can reach it. 11.0 removed makeRe(), the AST
+  # class, `regexp` and the debug/matchOne/slashSplit internals; none of these
+  # parents call them (they use minimatch(), new Minimatch(), .set, .negate and
+  # .match()). Scoped to the three vetted parents rather than the version range
+  # so an unvetted future parent never crosses the major silently. Remove each
+  # entry once its parent declares minimatch >=11.0.1.
+  "app-builder-lib@26.18.0>minimatch": "11.0.8"
+  "@electron/universal@2.0.3>minimatch": "11.0.8"
+  "@tufjs/models@5.0.2>minimatch": "11.0.8"
   # One Radix dismissable layer in the renderer. cmdk (the ⌘K and ⌘P overlays)
   # declares @radix-ui/react-dialog ^1.1.6 and resolved its own older copy
   # beside radix-ui's. Each copy keeps its own layer stack and saves the body's
