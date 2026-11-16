@@ -724,21 +724,11 @@ redeemed only by joining with that token: the operator-code path refuses it.
   address can already use the preview (or was withdrawn, when they still have
   seats). This is accepted for the invite-only preview.
 
-On stable desktop launches, stored flags and environment opt-ins cannot
-bypass preview access. A deliberate sign-in marker permits restoring the
-sealed account and checking the backend before choosing the product store;
-only a fresh grant for that marker's user enables `cloud` for this launch.
-The check has a two-second deadline so unreachable account I/O cannot block
-the local app from opening.
-Missing, waitlisted, expired, deleted, mismatched, or unreachable accounts
-leave every cloud product surface off and the local board unchanged. Offline
-stable launches fail closed (canary's cached-board behavior is unchanged).
-The Account sign-in pane is the sole stable pre-enrollment exception on a
-build with a configured provider and backend: it
-shows the waitlist message without enabling cloud. Signing in or out still
+Desktop launches on every build kind, stable included, read neither the
+account nor the launch marker with the `cloud` flag off; the Account pane,
+sign-in and waitlist exist only with the flag on. Signing in or out still
 requires a restart to change stores; a running window never hot-swaps.
-Dev/canary flag-off launches do not read the account or launch marker.
-Canary sign-ins also require invitation; already invited canary accounts
+Sign-ins require invitation; already invited canary accounts
 retain their existing offline cached-board launch. Invite codes are retained
 only in memory during transient retries, not across app restarts.
 

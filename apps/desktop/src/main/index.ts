@@ -231,7 +231,6 @@ import {
   resolveAccountConfig,
 } from "./account";
 import { ACCOUNT_CLOUD_OFF } from "./account/service";
-import { previewAtLaunch } from "./preview-gate";
 import { CLOUD_SNAPSHOT_DIRECTORY, cloudSnapshotFiles } from "./cloud-snapshot";
 import { createCloudProductStore } from "@volli/host-core/cloud-runner";
 import { createDesktopMoves } from "./cloud-move";
@@ -1222,9 +1221,8 @@ const appStartup = app.whenReady().then(async () => {
   });
   // The Volli Cloud account on this Mac (VC-884): browser sign-in, the sealed
   // refresh token (the harness keyring in harness mode), the backend's
-  // `ensureViewer`. Stable permits enrollment before cloud is enabled; dev
-  // and canary refuse with the flag off. A stable sign-in marker permits a
-  // bounded launch-time check; other account reads are on demand.
+  // `ensureViewer`. Every build kind refuses with the `cloud` flag off, so a
+  // flag-off launch never signs in, restores an account or calls the backend.
   const buildKind = runningBuildKind(app.isPackaged, autoUpdater.currentVersion);
   const buildCloudConfig = VOLLI_PACKAGED_CLOUD_CONFIG;
   const accountConfig = resolveAccountConfig({
@@ -1232,9 +1230,6 @@ const appStartup = app.whenReady().then(async () => {
     packaged: app.isPackaged,
     build: buildCloudConfig,
   });
-  const enrollmentAvailable =
-    buildKind === "stable" && accountConfig.provider !== null && accountConfig.backendUrl !== null;
-  const accountEnrollmentEnabled = () => enrollmentAvailable || isExperimentEnabled("cloud");
   // The next launch's product store (VC-889): written when a sign-in
   // completes, cleared when it ends. A row in this Mac's database, reached
   // once the database below is open; a degraded one launches local.
@@ -1269,7 +1264,7 @@ const appStartup = app.whenReady().then(async () => {
         }
       },
     },
-    enabled: accountEnrollmentEnabled,
+    enabled: () => isExperimentEnabled("cloud"),
     inventory: hostPrivateInventory,
     unlockInventory: unlockHostPrivate,
     openBrowser: openAccountBrowser,
@@ -1478,21 +1473,8 @@ const appStartup = app.whenReady().then(async () => {
   // opens, and fixed for this process: Volli Cloud's board with the flag on,
   // a signed-in marker and a configured backend; this Mac's otherwise.
   launchMarkerDb = watchedDb;
-  const previewGranted = await previewAtLaunch({
-    stable: buildKind === "stable",
-    configured: accountConfig.backendUrl !== null && accountConfig.provider !== null,
-    readMarker: () => launchMarker.read(),
-    restoreAccount: async () => {
-      account.snapshot();
-      await account.settled();
-      return account.previewUserId();
-    },
-  });
   installExperimentalSettings(
-    new ExperimentalSettings(watchedDb, process.env["VOLLI_EXPERIMENTAL"], buildKind, Date.now, {
-      granted: previewGranted,
-      enrollment: enrollmentAvailable,
-    }),
+    new ExperimentalSettings(watchedDb, process.env["VOLLI_EXPERIMENTAL"], buildKind),
   );
   const launch = chooseProductStore({
     cloudFlag: isExperimentEnabled("cloud"),
@@ -2387,12 +2369,13 @@ const appStartup = app.whenReady().then(async () => {
           // may temporarily have no person while the same sign-in recovers.
           beforeSignOut: () => desktopMoves?.signInLost(),
           relaunch: () => {
-            // Stable enrollment may restart before the launch grants cloud access.
-            if (!accountEnrollmentEnabled()) throw new OperationUnavailableError(ACCOUNT_CLOUD_OFF);
+            if (!isExperimentEnabled("cloud"))
+              throw new OperationUnavailableError(ACCOUNT_CLOUD_OFF);
             relaunch.request();
           },
           reportUnsavedWrites: (count) => {
-            if (!accountEnrollmentEnabled()) throw new OperationUnavailableError(ACCOUNT_CLOUD_OFF);
+            if (!isExperimentEnabled("cloud"))
+              throw new OperationUnavailableError(ACCOUNT_CLOUD_OFF);
             recordUnsavedBoardWrites(count, currentRendererId());
           },
           // Only a cloud launch has a board to keep, and only its own account's.

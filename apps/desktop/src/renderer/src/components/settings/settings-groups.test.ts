@@ -71,23 +71,20 @@ function categories(experiments: ReturnType<typeof resolveExperiments> | null) {
 }
 
 describe("Settings → Experimental", () => {
-  it("omits Experimental on stable even with an environment opt-in", () => {
+  it("lists Experimental on every build, and only the registry's flags on stable", () => {
     expect(categories(null).some(({ key }) => key === "experimental")).toBe(false);
-    expect(
-      categories(resolveExperiments({ cloud: true }, [], "stable")).some(
-        ({ key }) => key === "experimental",
-      ),
-    ).toBe(false);
-    for (const kind of ["dev", "canary"] as const) {
+    for (const kind of ["dev", "canary", "stable"] as const) {
       expect(
         categories(resolveExperiments({}, [], kind)).some(({ key }) => key === "experimental"),
       ).toBe(true);
     }
-    expect(
-      categories(resolveExperiments({}, ["cloud"], "stable")).some(
-        ({ key }) => key === "experimental",
-      ),
-    ).toBe(false);
+    // Stable with the flag off adds Experimental and nothing else canary's off state lacks.
+    const keys = (kind: "canary" | "stable") =>
+      categories(resolveExperiments({}, [], kind)).map(({ key }) => key);
+    expect(keys("stable")).toEqual(keys("canary"));
+    expect(keys("stable")).not.toContain("account");
+    expect(keys("stable")).not.toContain("hosts");
+    expect(keys("stable")).not.toContain("runners");
   });
   it("lists the registry in System and makes its flag discoverable from the rail", () => {
     const system = settingsGroups(undefined, {

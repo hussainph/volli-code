@@ -31,22 +31,17 @@ machine-local; this classification is not a plan for a new host authority.
 No schema migration is needed. Device-scoped flags are device-local, never
 portable workspace preferences; the registry carries each flag's scope.
 
-Cloud's experimental switch is available in dev and canary builds. Stable
-builds hide it and ignore stored intent. Only a fresh backend preview grant
-for the signed-in account enables cloud for a stable launch; the Account
-pane is available for enrollment and a waitlist message only when the host
-has a configured sign-in provider and backend. The host advertises that
-capability as `cloud.enrollment`; a hidden switch is not evidence of it. Verification
-has a two-second launch deadline: failure or timeout opens the unchanged
-local board, never a cached grant. An account check that finishes later may
-offer a restart, but never changes stores in a running window. See
-`convex/SCHEMA-NOTES.md` for administration and invite codes. The stored flag
-is not rewritten, so returning to canary restores it. Build kind comes from
-the running version, never the user-selected update channel. On stable,
-`source: default` means launch policy, not a persisted opt-in.
+Cloud's experimental switch is available, off by default, in dev, canary and
+stable builds. On every build kind the stored choice alone decides it: with
+the flag off there is no Account pane, sign-in, waitlist or cloud launch, and
+no request to the cloud backend, whatever sign-in marker an earlier launch
+left behind. A stored value written by canary carries over to stable and back.
+Build kind comes from the running version, never the user-selected update
+channel. Hosts no longer send `cloud.enrollment`; the field stays declared
+because older hosts may still send it.
 
 `VOLLI_EXPERIMENTAL=cloud` opts in at boot in dev/canary builds only, showing
-the environment-locked switch. It never bypasses the stable preview gate.
+the environment-locked switch. Stable builds ignore it.
 The value is a comma-separated list of ids, trimmed and matched case-insensitively
 (`Cloud` enables `cloud`); duplicate ids are accepted. Unknown or retired env ids
 are ignored and logged together in one warning at boot, never a launch failure.
@@ -110,5 +105,4 @@ flag-off suite alongside it; do not use concurrent tests with this global fixtur
   before. Code: `packages/host-core/src/worktree/recipe.ts`.
 
 Settings → Experimental exposes the registry-backed flags. With `cloud` off,
-no cloud product service or cloud-only UI is enabled. The stable Account
-pane is enrollment only.
+no cloud product service or cloud-only UI is enabled.

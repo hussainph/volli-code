@@ -33,7 +33,6 @@ export class ExperimentalSettings {
     environment: string | undefined,
     private readonly buildKind: ExperimentBuildKind,
     private readonly now: () => number = Date.now,
-    private readonly preview: { granted?: boolean; enrollment?: boolean } = {},
   ) {
     const parsed = parseExperimentEnvironment(environment);
     this.#environment = parsed.ids;
@@ -46,14 +45,7 @@ export class ExperimentalSettings {
   }
 
   snapshot(): ExperimentSnapshot {
-    const snapshot = resolveExperiments(
-      this.#stored,
-      this.#environment,
-      this.buildKind,
-      this.preview.granted,
-    );
-    if (this.preview.enrollment === true) snapshot.cloud.enrollment = true;
-    return snapshot;
+    return resolveExperiments(this.#stored, this.#environment, this.buildKind);
   }
 
   isEnabled(id: ExperimentId): boolean {

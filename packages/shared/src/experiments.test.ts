@@ -18,7 +18,7 @@ describe("experimental registry", () => {
           "Before enabling unstable cloud features, read the cloud threat model at https://github.com/hussainph/volli-code/blob/main/SECURITY.md#cloud-threat-model.",
         default: false,
         scope: "host",
-        availableOn: ["dev", "canary"],
+        availableOn: ["dev", "canary", "stable"],
       },
     ]);
     expect(Object.isFrozen(EXPERIMENTS)).toBe(true);
@@ -28,17 +28,17 @@ describe("experimental registry", () => {
     });
   });
 
-  it("requires a fresh preview grant on stable, ignoring storage and environment", () => {
-    expect(resolveExperiments({ cloud: true }, [], "stable")).toEqual({
-      cloud: { enabled: false, source: "default", visible: false },
+  it("keeps cloud off by default on stable and honours only the stored choice there", () => {
+    expect(resolveExperiments({}, [], "stable")).toEqual({
+      cloud: { enabled: false, source: "default" },
     });
-    expect(resolveExperiments({ cloud: true }, ["cloud"], "stable")).toEqual({
-      cloud: { enabled: false, source: "default", visible: false },
+    expect(resolveExperiments({}, ["cloud"], "stable")).toEqual({
+      cloud: { enabled: false, source: "default" },
     });
-    expect(resolveExperiments({}, [], "stable", true)).toEqual({
-      cloud: { enabled: true, source: "default", visible: false },
+    expect(resolveExperiments({ cloud: false }, ["cloud"], "stable")).toEqual({
+      cloud: { enabled: false, source: "storage" },
     });
-    for (const kind of ["dev", "canary"] as const) {
+    for (const kind of ["dev", "canary", "stable"] as const) {
       expect(resolveExperiments({ cloud: true }, [], kind)).toEqual({
         cloud: { enabled: true, source: "storage" },
       });
