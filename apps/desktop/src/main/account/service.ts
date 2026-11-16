@@ -32,9 +32,8 @@
  *
  * **Restore.** The saved sign-in is read when it is first asked for: the
  * window's first snapshot, or the first {@link AccountService.accessToken}.
- * Stable preview launches with a deliberate sign-in marker restore before
- * choosing the product store; other launches read it only on demand, so
- * there is no keychain access before a deliberate sign-in. While the backend is
+ * It is read only on demand, and never with the `cloud` flag off, so there
+ * is no keychain access before a deliberate sign-in. While the backend is
  * unreachable, each new window subscription tries it again.
  *
  * **Sign-out** forgets the tokens and the sealed record, then opens the
@@ -272,8 +271,7 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
     (state === "restoring" ||
       (state === "signed-in" && (backendState === "unreachable" || backendState === "none")));
   // An untouched Account is this launch's known local signed-out mode, not an
-  // implicit request to restore credentials. Markerful startup already asks
-  // through previewAtLaunch; markerless stable enrollment deliberately does not.
+  // implicit request to restore credentials.
 
   const sourceIconOwner = (): string | null => {
     if (decorationDenied || sourceIconRestoring()) return null;

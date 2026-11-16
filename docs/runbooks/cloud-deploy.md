@@ -452,12 +452,10 @@ wired**. The window's Convex client gets a short-lived access token from main on
 ## 10. The gates, and the order
 
 Deploying a backend turns nothing on for anyone. With `cloud` off, no cloud surface is
-enabled and the app behaves exactly as today (`docs/experimental-flags.md`). On a
-**stable** build, stored flags and environment opt-ins cannot bypass preview access:
-only a launch-time check returning `previewAccess: "granted"` enables cloud for that
-launch, and missed, waitlisted or unreachable accounts leave the local board unchanged
-(past its two-second deadline, the local app opens). Canary and dev builds keep the
-switch. Grants are deployment-admin data:
+enabled and the app behaves exactly as today (`docs/experimental-flags.md`). Every
+build kind, stable included, keeps the off-by-default switch; with it on, a sign-in
+still needs `previewAccess: "granted"`, and waitlisted accounts keep the local board.
+Grants are deployment-admin data:
 
 ```sh
 pnpm -C convex exec convex run previewAccess:set '{"kind":"email","value":"person@example.com","enabled":true}' --deployment <ref>

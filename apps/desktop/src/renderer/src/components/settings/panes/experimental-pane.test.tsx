@@ -83,17 +83,30 @@ describe("Settings → Experimental", () => {
       document.body.append(container);
       root = createRoot(container);
       await act(async () => root?.render(<SettingsPage initialCategoryKey="experimental" />));
-      if (kind === "stable") {
-        expect(container.textContent).not.toContain("Experimental");
-        expect(container.textContent).not.toContain("Volli Cloud");
-        expect(document.querySelector('[data-testid="experiment-cloud-switch"]')).toBeNull();
-      } else {
-        expect(container.textContent).toContain("Experimental");
-        expect(experimentSwitch().disabled).toBe(false);
-      }
+      expect(container.textContent).toContain("Experimental");
+      expect(experimentSwitch().disabled).toBe(false);
+      expect(experimentSwitch().getAttribute("aria-checked")).toBe("true");
     },
   );
-  it("renders neither the hidden switch nor an empty Experimental section on stable", async () => {
+  it("keeps Account out of a stable rail until the person turns cloud on", async () => {
+    const off = resolveExperiments({}, [], "stable");
+    useExperimentsStore.getState().receive(off);
+    rpc.query.mockResolvedValue(off);
+    rpc.mutate.mockResolvedValue(resolveExperiments({ cloud: true }, [], "stable"));
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    await act(async () => root?.render(<SettingsPage initialCategoryKey="experimental" />));
+    const rail = () =>
+      [...container!.querySelectorAll("button, a")].map((element) => element.textContent?.trim());
+    expect(experimentSwitch().getAttribute("aria-checked")).toBe("false");
+    expect(rail()).not.toContain("Account");
+    expect(rail()).not.toContain("Hosts");
+    await click(experimentSwitch());
+    expect(rpc.mutate).toHaveBeenCalledWith({ id: "cloud", enabled: true });
+    expect(rail()).toContain("Account");
+  });
+  it("renders neither a hidden switch nor an empty Experimental section", async () => {
     rpc.query.mockResolvedValueOnce({
       cloud: { enabled: false, source: "default", visible: false },
     });

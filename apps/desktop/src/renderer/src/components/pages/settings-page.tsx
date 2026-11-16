@@ -3,7 +3,7 @@ import { SettingsNavigation } from "@renderer/components/settings/settings-navig
 import * as React from "react";
 import { FolderOpenIcon } from "@renderer/components/ui/icon";
 
-import { hasAccountEnrollment, useExperimentsStore } from "@renderer/stores/experiments";
+import { useExperimentsStore } from "@renderer/stores/experiments";
 import { launchStore } from "@renderer/stores/launch";
 import { useUiStore } from "@renderer/stores/ui";
 import { useCloudEnabled } from "@renderer/components/hosts/use-hosts";
@@ -56,8 +56,8 @@ export function SettingsPage({
   // Runners exist only in a Volli Cloud launch, fixed for the process (VC-895).
   const runners = launchStore() === "cloud";
   const experiments = useExperimentsStore((state) => state.snapshot);
-  // Stable hides the experiment, but retains enrollment into the invite-only preview.
-  const account = hosts || hasAccountEnrollment(experiments);
+  // Account exists only with the `cloud` flag on, on every build.
+  const account = hosts;
   React.useEffect(() => {
     void useExperimentsStore.getState().ensure();
   }, []);

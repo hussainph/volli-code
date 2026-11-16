@@ -89,7 +89,7 @@ export interface SettingsGroupsOptions {
   /** Quiet local-project move entry, in either launch, only with cloud on. */
   readonly moves?: boolean;
   /**
-   * Shows Services → Account: with cloud on, or as stable preview enrollment.
+   * Shows Services → Account: only with the `cloud` experiment on.
    */
   readonly account?: boolean;
   /**

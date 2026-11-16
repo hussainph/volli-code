@@ -6,6 +6,7 @@ import {
   requireExperimentId,
   resolveExperiments,
   serializeExperimentUpdate,
+  type ExperimentBuildKind,
 } from "./experiments";
 
 describe("experimental registry", () => {
@@ -18,7 +19,7 @@ describe("experimental registry", () => {
           "Before enabling unstable cloud features, read the cloud threat model at https://github.com/hussainph/volli-code/blob/main/SECURITY.md#cloud-threat-model.",
         default: false,
         scope: "host",
-        availableOn: ["dev", "canary"],
+        availableOn: ["dev", "canary", "stable"],
       },
     ]);
     expect(Object.isFrozen(EXPERIMENTS)).toBe(true);
@@ -28,21 +29,33 @@ describe("experimental registry", () => {
     });
   });
 
-  it("requires a fresh preview grant on stable, ignoring storage and environment", () => {
-    expect(resolveExperiments({ cloud: true }, [], "stable")).toEqual({
-      cloud: { enabled: false, source: "default", visible: false },
+  it("keeps cloud off by default on stable and honours only the stored choice there", () => {
+    expect(resolveExperiments({}, [], "stable")).toEqual({
+      cloud: { enabled: false, source: "default" },
     });
-    expect(resolveExperiments({ cloud: true }, ["cloud"], "stable")).toEqual({
-      cloud: { enabled: false, source: "default", visible: false },
+    expect(resolveExperiments({}, ["cloud"], "stable")).toEqual({
+      cloud: { enabled: false, source: "default" },
     });
-    expect(resolveExperiments({}, [], "stable", true)).toEqual({
-      cloud: { enabled: true, source: "default", visible: false },
+    expect(resolveExperiments({ cloud: false }, ["cloud"], "stable")).toEqual({
+      cloud: { enabled: false, source: "storage" },
     });
-    for (const kind of ["dev", "canary"] as const) {
+    for (const kind of ["dev", "canary", "stable"] as const) {
       expect(resolveExperiments({ cloud: true }, [], kind)).toEqual({
         cloud: { enabled: true, source: "storage" },
       });
     }
+  });
+
+  it("hides a flag on a build kind its registry entry does not list", () => {
+    // Every registered flag lists dev, canary and stable today; an unlisted
+    // kind stands in for a future build-limited flag.
+    const unlisted = "unlisted" as unknown as ExperimentBuildKind;
+    expect(resolveExperiments({ cloud: true }, [], unlisted)).toEqual({
+      cloud: { enabled: false, source: "default", visible: false },
+    });
+    expect(resolveExperiments({}, ["cloud"], unlisted)).toEqual({
+      cloud: { enabled: true, source: "environment" },
+    });
   });
 
   it("rejects unknown ids, including inherited object names, at runtime", () => {

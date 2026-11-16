@@ -11,7 +11,7 @@
  * pending (requesting one revokes GitHub); main follows each browser round
  * trip and this pane follows main's snapshot.
  *
- * Shown with cloud on or for configured stable preview enrollment. Main
+ * Shown only with the `cloud` experiment on. Main
  * owns the sign-in; this pane reads its snapshot and never sees a token.
  *
  * **The launch (VC-889).** Signing in or out restarts Volli into the other

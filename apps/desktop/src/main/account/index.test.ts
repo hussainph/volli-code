@@ -7,8 +7,10 @@ import {
   resolveAccountConfig,
 } from "./index";
 import { tempInventory, testKeyPair } from "./test-support";
-import { previewAtLaunch } from "../preview-gate";
 import { chooseProductStore } from "../cloud-launch";
+import { ExperimentalSettings } from "../experiments";
+import { ACCOUNT_CLOUD_OFF } from "./service";
+import { openTestDb } from "@volli/host-core/testing";
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -120,58 +122,77 @@ describe("desktop main's account composition", () => {
     expect(opened).toHaveLength(1);
   });
 
-  it("initialises local decoration on a markerless stable enrollment launch without opening Account or restoring credentials", async () => {
+  it("keeps a configured stable launch with the flag off local, even with a canary's sign-in marker", async () => {
     const temp = tempInventory();
     cleanups.push(temp.dispose);
     const inventoryRead = vi.spyOn(temp.inventory, "get");
     const unlock = vi.fn(async () => {});
+    const openBrowser = vi.fn();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
     const config = resolveAccountConfig({
       packaged: false,
       env: {
-        VOLLI_WORKOS_CLIENT_ID: "client_markerless",
+        VOLLI_WORKOS_CLIENT_ID: "client_flag_off",
         VOLLI_CONVEX_URL: "http://127.0.0.1:1",
       },
     });
     expect(config.provider).not.toBeNull();
     expect(config.backendUrl).not.toBeNull();
+    // Main's actual wiring: the flag is the only gate, on every build kind.
+    const settings = new ExperimentalSettings(null, undefined, "stable");
     const account = createDesktopAccount({
       config,
-      enabled: () => true,
+      enabled: () => settings.isEnabled("cloud"),
       inventory: temp.inventory,
       unlockInventory: unlock,
-      openBrowser: vi.fn(),
+      openBrowser,
       log: log(),
     });
     cleanups.push(() => account.dispose());
-    const restoreAccount = vi.fn(async () => {
-      account.snapshot();
-      await account.settled();
-      return account.previewUserId();
-    });
-    // Main's actual launch gates: enrollment is available independently of
-    // cloud; a markerless stable launch deliberately never calls restoration.
-    const preview = await previewAtLaunch({
-      stable: true,
-      configured: true,
-      readMarker: () => null,
-      restoreAccount,
-    });
-    expect(preview).toBe(false);
     expect(
       chooseProductStore({
-        cloudFlag: preview,
-        readMarker: () => null,
+        cloudFlag: settings.isEnabled("cloud"),
+        readMarker: () => ({ userId: "user_from_canary" }),
         backendUrl: config.backendUrl,
         signInConfigured: config.provider !== null,
       }),
     ).toEqual({ store: "local" });
+    expect(() => account.snapshot()).toThrow(ACCOUNT_CLOUD_OFF);
+    expect(() => account.subscribe(() => {})).toThrow(ACCOUNT_CLOUD_OFF);
+    await expect(Promise.resolve().then(() => account.signIn("github"))).rejects.toThrow(
+      ACCOUNT_CLOUD_OFF,
+    );
+    expect(await account.accessToken()).toBeNull();
+    await account.settled();
     expect(account.sourceIconRestoring()).toBe(false);
-    expect(account.sourceIconOwner()).toMatch(/^[a-f0-9]{64}$/);
-    expect(account.sourceIconEpoch()).toMatch(/^[a-f0-9]{64}$/);
-    expect(restoreAccount).not.toHaveBeenCalled();
+    expect(openBrowser).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
     expect(inventoryRead).not.toHaveBeenCalled();
     expect(unlock).not.toHaveBeenCalled();
     inventoryRead.mockRestore();
+    fetchSpy.mockRestore();
+  });
+
+  it("opens the cloud launch on stable once the person turns the flag on", async () => {
+    const config = resolveAccountConfig({
+      packaged: false,
+      env: { VOLLI_WORKOS_CLIENT_ID: "client_flag_on", VOLLI_CONVEX_URL: "http://127.0.0.1:1" },
+    });
+    const db = openTestDb();
+    cleanups.push(db.cleanup);
+    const settings = new ExperimentalSettings(db.db, undefined, "stable");
+    const launch = () =>
+      chooseProductStore({
+        cloudFlag: settings.isEnabled("cloud"),
+        readMarker: () => ({ userId: "user_1" }),
+        backendUrl: config.backendUrl,
+        signInConfigured: config.provider !== null,
+      });
+    expect(launch()).toEqual({ store: "local" });
+    await settings.set("cloud", true);
+    // The next launch reads the stored choice through the same resolver.
+    expect(new ExperimentalSettings(db.db, undefined, "stable").isEnabled("cloud")).toBe(true);
+    expect(launch()).toMatchObject({ store: "cloud", userId: "user_1" });
   });
 
   it("logs a configuration it ignored, and answers an unconfigured build", async () => {

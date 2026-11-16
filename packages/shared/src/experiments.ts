@@ -25,7 +25,7 @@ export const EXPERIMENTS = Object.freeze([
       "Before enabling unstable cloud features, read the cloud threat model at https://github.com/hussainph/volli-code/blob/main/SECURITY.md#cloud-threat-model.",
     default: false,
     scope: "host",
-    availableOn: Object.freeze(["dev", "canary"] as const),
+    availableOn: Object.freeze(["dev", "canary", "stable"] as const),
   }),
 ] as const satisfies readonly ExperimentDefinition[]);
 
@@ -38,7 +38,10 @@ export type ExperimentSnapshot = Record<
     source: "default" | "storage" | "environment";
     /** Absent on older hosts means visible; false hides this setting. */
     visible?: boolean;
-    /** Host-configured stable preview enrollment; absent on older or unconfigured hosts. */
+    /**
+     * Retired stable preview enrollment. Current hosts never set it; it stays
+     * declared because older hosts may still send it and the protocol is additive.
+     */
     enrollment?: boolean;
   }
 >;
@@ -111,14 +114,17 @@ export function serializeExperimentUpdate(
   return JSON.stringify({ ...storedExperimentRecord(raw), [id]: enabled });
 }
 
-/** One resolution rule: environment wins on dev/canary; stable requires a fresh preview grant. */
+/**
+ * One resolution rule: environment wins on dev/canary; stored intent, then the
+ * default, applies wherever a flag is available. Stable ignores the environment,
+ * so a stable build turns a flag on only through a person's stored choice.
+ */
 export function resolveExperiments(
   stored: Partial<ExperimentValues>,
   environment: readonly ExperimentId[],
   buildKind: ExperimentBuildKind,
-  previewGranted = false,
 ): ExperimentSnapshot {
-  const snapshot = Object.fromEntries(
+  return Object.fromEntries(
     EXPERIMENTS.map((entry) => {
       const fromEnvironment = buildKind !== "stable" && environment.includes(entry.id);
       const available = (entry.availableOn as readonly ExperimentBuildKind[]).includes(buildKind);
@@ -133,7 +139,4 @@ export function resolveExperiments(
       ];
     }),
   ) as ExperimentSnapshot;
-  // A preview invitation grants cloud, never another experimental feature.
-  if (buildKind === "stable") snapshot.cloud.enabled = previewGranted;
-  return snapshot;
 }

@@ -31,34 +31,32 @@ function boot(environment?: string): ExperimentalSettings {
 }
 
 describe.each(["dev", "canary", "stable"] as const)("%s experimental settings", (kind) => {
-  it("gates stored intent and writes by build, preserving canary intent", async () => {
+  it("honours a canary's stored intent and the person's writes on every build", async () => {
     ctx = openTestDb();
     const raw = '{"cloud":true,"future":true}';
     setAppState(ctx.db, EXPERIMENTS_APP_STATE_KEY, raw, 1);
     const settings = new ExperimentalSettings(ctx.db, undefined, kind);
     restore = installExperimentalSettings(settings);
-    expect(isExperimentEnabled("cloud")).toBe(kind !== "stable");
-    if (kind === "stable") {
-      expect(readExperiments()).toEqual({
-        cloud: { enabled: false, source: "default", visible: false },
-      });
-      for (const enabled of [true, false]) {
-        await expect(setExperiment("cloud", enabled)).rejects.toThrow(
-          "Experiment cloud is unavailable on stable builds",
-        );
-      }
-      expect(getAppState(ctx.db, EXPERIMENTS_APP_STATE_KEY)).toBe(raw);
-      expect(new ExperimentalSettings(ctx.db, undefined, "canary").isEnabled("cloud")).toBe(true);
-    } else {
-      expect(readExperiments().cloud.visible).not.toBe(false);
-      await setExperiment("cloud", false);
-      expect(isExperimentEnabled("cloud")).toBe(false);
-      await setExperiment("cloud", true);
-      expect(isExperimentEnabled("cloud")).toBe(true);
-    }
+    expect(isExperimentEnabled("cloud")).toBe(true);
+    expect(readExperiments()).toEqual({ cloud: { enabled: true, source: "storage" } });
+    await setExperiment("cloud", false);
+    expect(isExperimentEnabled("cloud")).toBe(false);
+    expect(JSON.parse(getAppState(ctx.db, EXPERIMENTS_APP_STATE_KEY)!)).toEqual({
+      cloud: false,
+      future: true,
+    });
+    await setExperiment("cloud", true);
+    expect(isExperimentEnabled("cloud")).toBe(true);
   });
 
-  it("keeps environment opt-ins locked, without bypassing the stable preview gate", async () => {
+  it("starts off and visible on a fresh profile", () => {
+    ctx = openTestDb();
+    restore = installExperimentalSettings(new ExperimentalSettings(ctx.db, undefined, kind));
+    expect(isExperimentEnabled("cloud")).toBe(false);
+    expect(readExperiments()).toEqual({ cloud: { enabled: false, source: "default" } });
+  });
+
+  it("keeps environment opt-ins locked on dev and canary; stable ignores the environment", async () => {
     ctx = openTestDb();
     setAppState(ctx.db, EXPERIMENTS_APP_STATE_KEY, '{"cloud":false}', 1);
     vi.stubEnv("VOLLI_EXPERIMENTAL", "cloud");
@@ -68,9 +66,10 @@ describe.each(["dev", "canary", "stable"] as const)("%s experimental settings", 
     expect(isExperimentEnabled("cloud")).toBe(kind !== "stable");
     expect(readExperiments()).toEqual(
       kind === "stable"
-        ? { cloud: { enabled: false, source: "default", visible: false } }
+        ? { cloud: { enabled: false, source: "storage" } }
         : { cloud: { enabled: true, source: "environment" } },
     );
+    if (kind === "stable") return;
     await expect(setExperiment("cloud", false)).rejects.toThrow("set by environment");
     expect(getAppState(ctx.db, EXPERIMENTS_APP_STATE_KEY)).toBe('{"cloud":false}');
   });
@@ -253,24 +252,21 @@ describe("after the flag-on suite", () => {
   });
 });
 
-describe("stable preview grants", () => {
-  it("enables only the launch-granted account, without changing persisted intent", () => {
-    const settings = new ExperimentalSettings(null, undefined, "stable", Date.now, {
-      granted: true,
-    });
-    expect(settings.snapshot()).toEqual({
-      cloud: { enabled: true, source: "default", visible: false },
-    });
-    expect(new ExperimentalSettings(null, "cloud", "stable").isEnabled("cloud")).toBe(false);
-  });
+it("refuses writes to a flag its build does not list", async () => {
+  ctx = openTestDb();
+  // No registered flag is hidden on dev, canary or stable today; a build kind
+  // outside every flag's list stands in for a future build-limited flag.
+  const unlisted = "unlisted" as unknown as ConstructorParameters<typeof ExperimentalSettings>[2];
+  const settings = new ExperimentalSettings(ctx.db, undefined, unlisted);
+  expect(settings.snapshot().cloud.visible).toBe(false);
+  await expect(settings.set("cloud", true)).rejects.toThrow(
+    "Experiment cloud is unavailable on unlisted builds",
+  );
+  expect(getAppState(ctx.db, EXPERIMENTS_APP_STATE_KEY)).toBeUndefined();
 });
 
-it("exposes enrollment only when the host has configured it", () => {
-  expect(
-    new ExperimentalSettings(null, undefined, "stable").snapshot().cloud.enrollment,
-  ).toBeUndefined();
-  expect(
-    new ExperimentalSettings(null, undefined, "stable", Date.now, { enrollment: true }).snapshot()
-      .cloud,
-  ).toEqual({ enabled: false, source: "default", visible: false, enrollment: true });
+it("never advertises the retired stable enrollment", () => {
+  expect(new ExperimentalSettings(null, undefined, "stable").snapshot()).toEqual({
+    cloud: { enabled: false, source: "default" },
+  });
 });
