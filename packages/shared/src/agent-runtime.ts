@@ -2143,6 +2143,52 @@ export type CompactionRequestOutcome =
  */
 export type RuntimeResumeBoundary = "settled" | "tool-in-flight" | "none";
 
+/**
+ * Why a live attachment closes.
+ *
+ * - `released` — the Session let this attachment go (a stop, a replacement, a
+ *   failed adapter): a turn it cuts short ended here, and says so.
+ * - `shutdown` — the process running it is ending (a quit, an update's
+ *   restart). A turn it cuts short is a process loss, exactly as a crash's is:
+ *   it is left open for the next launch to recover as interrupted, raise the
+ *   process-loss warning on, and continue when that is safe (VC-450, VC-1245).
+ */
+export type RuntimeCloseReason = "released" | "shutdown";
+
+/**
+ * The abort reason a host gives an attachment's signal when its process is
+ * ending (VC-1245).
+ *
+ * The shutdown has to travel WITH the abort, not after it: the abort is what
+ * ends the running turn, and a host may do slow cleanup (MCP, browser, shells)
+ * between aborting and closing. A runtime that learned of the shutdown only at
+ * `close("shutdown")` would already have recorded the turn as stopped. An
+ * `Error` named `AbortError`, so anything that rethrows a signal's reason
+ * reads it as the abort it is.
+ */
+export class RuntimeShutdownAbort extends Error {
+  override readonly name = "AbortError";
+
+  constructor() {
+    super("The process running this attachment is shutting down.");
+  }
+}
+
+/** Whether an abort signal's reason is a {@link RuntimeShutdownAbort}. */
+export function isRuntimeShutdownAbort(reason: unknown): reason is RuntimeShutdownAbort {
+  return reason instanceof RuntimeShutdownAbort;
+}
+
+/**
+ * What cut short the turn a recovered attachment found open (VC-1245).
+ *
+ * - `quit` — the process shut down on purpose (a quit, an update's restart)
+ *   and recorded that it left the turn open for the next launch.
+ * - `process-loss` — no such record: a crash, a force-quit, or a shutdown
+ *   that did not get as far as saying so.
+ */
+export type RuntimeInterruption = "quit" | "process-loss";
+
 /** One live runtime attachment. Closing it never ends Session identity. */
 export interface RuntimeAttachmentHandle {
   submitUserMessage(
@@ -2191,6 +2237,12 @@ export interface RuntimeAttachmentHandle {
    */
   resumeBoundary?(): RuntimeResumeBoundary;
   /**
+   * What cut short the turn this attachment's recovery found open, until the
+   * next turn starts; `null` when it recovered no open turn. Optional: a
+   * runtime that cannot say is read as a process loss.
+   */
+  interruption?(): RuntimeInterruption | null;
+  /**
    * Compact this Session's context now, because someone asked.
    *
    * The third producer of a {@link CompactionObservation} and the only one
@@ -2200,8 +2252,11 @@ export interface RuntimeAttachmentHandle {
   compact(instructions?: string): Promise<CompactionRequestOutcome>;
   /** Abort the current run and settle the resulting state honestly. */
   interrupt(): Promise<void>;
-  /** Release local resources; the Session and its history remain. */
-  close(): Promise<void>;
+  /**
+   * Release local resources; the Session and its history remain. Absent, the
+   * reason is `released`.
+   */
+  close(reason?: RuntimeCloseReason): Promise<void>;
   /** Replays durable semantic markers after an optional sidecar checkpoint. */
   reconcile(cursor: string | null): Promise<{
     cursor: string | null;

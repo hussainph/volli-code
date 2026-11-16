@@ -180,6 +180,7 @@ import type {
   OrphanProcessReapInput,
   OrphanProcessReapResult,
   OrphanProcessPolicyResult,
+  QuitResumeResult,
   OrphanProcessScanResult,
   ProjectCanvasWriteResult,
   ProjectCreateInput,
@@ -511,6 +512,12 @@ const api = {
       invoke("volli:orphan-processes-reap", input),
     setPolicy: (policy: AutoReapPolicy): Promise<OrphanProcessPolicyResult> =>
       invoke("volli:orphan-processes-policy", policy),
+  },
+  /** Whether a turn a deliberate quit cut short resumes on its own at the next launch (VC-1245). */
+  quitResume: {
+    get: (): Promise<QuitResumeResult> => invoke("volli:quit-resume-get"),
+    set: (autoResume: boolean): Promise<QuitResumeResult> =>
+      invoke("volli:quit-resume-set", autoResume),
   },
   /**
    * The Browser Tab door: chrome commands in, chrome snapshots out. Every

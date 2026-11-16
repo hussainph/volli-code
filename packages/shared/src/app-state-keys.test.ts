@@ -129,6 +129,7 @@ describe("app_state key registry", () => {
       "volli:authority-shadow-review-enabled": "retired stays",
       "volli:protection-policy-migration:v1": "retired stays",
       "volli:protection-policy-rollout:v1": "retired stays",
+      "volli:quit-resume": "host stays",
       "volli:runtime-preferences:": "retired stays",
     });
   });

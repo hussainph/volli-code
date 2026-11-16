@@ -45,6 +45,7 @@ export const SETTINGS_ROWS: Readonly<Record<string, readonly string[]>> = {
     "Status",
     "Pick models automatically",
     "Automatic compaction",
+    "Resume after quit",
     "Code Mode",
     "Default",
     "Add model exception",

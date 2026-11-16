@@ -1,6 +1,7 @@
 import {
   LOCAL_RUNNER,
   RECOVERED_TURN_INTERRUPTED_DETAIL,
+  type RuntimeInterruption,
   type RuntimeResumeBoundary,
 } from "@volli/shared";
 import {
@@ -863,6 +864,12 @@ export interface HostedSessionRuntime extends SessionRuntime {
    */
   resumeBoundary(input: { attachmentId: string }): RuntimeResumeBoundary | null;
   /**
+   * What cut short the turn an attachment this process holds recovered open
+   * (VC-1245): read beside {@link resumeBoundary} by the same host. `null`
+   * when nothing here holds the binding or its executor cannot say.
+   */
+  interruption(input: { attachmentId: string }): RuntimeInterruption | null;
+  /**
    * The idle-exit latch's runtime half (VC-577): from now on every NEW turn
    * start is refused before it has any effect — a message, a retry, a
    * compaction, an attach — with {@link SessionRuntimeExitingError}, and a
@@ -1329,6 +1336,10 @@ class DefaultSessionRuntime implements SessionRuntime {
 
   resumeBoundary(input: { attachmentId: string }): RuntimeResumeBoundary | null {
     return this.#bindings.get(input.attachmentId)?.handle.resumeBoundary?.() ?? null;
+  }
+
+  interruption(input: { attachmentId: string }): RuntimeInterruption | null {
+    return this.#bindings.get(input.attachmentId)?.handle.interruption?.() ?? null;
   }
 
   pendingTurnStarts(): ReadonlySet<string> {

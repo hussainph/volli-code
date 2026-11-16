@@ -6,6 +6,7 @@ import {
   RECOVERED_TURN_INTERRUPTED_DETAIL,
   restartResumeCommandId,
   type RuntimeObservation,
+  type RuntimeInterruption,
   type RuntimeResumeBoundary,
   type SessionLedger,
 } from "@volli/shared";
@@ -67,6 +68,7 @@ class Adapter implements NativeHarnessAdapter {
   reconciling = false;
   reconcileStarted?: () => void;
   boundary: RuntimeResumeBoundary | undefined;
+  interruption: RuntimeInterruption | undefined;
   async attach(
     _spec: Parameters<NativeHarnessAdapter["attach"]>[0],
     sink: ObservationSink,
@@ -134,6 +136,7 @@ class Adapter implements NativeHarnessAdapter {
         if (this.releaseFailure) throw this.releaseFailure;
       },
       ...(this.boundary === undefined ? {} : { resumeBoundary: () => this.boundary ?? null }),
+      ...(this.interruption === undefined ? {} : { interruption: () => this.interruption ?? null }),
     };
   }
   emit(observation: RuntimeObservation) {
@@ -2631,6 +2634,20 @@ describe("host follow-ups never strand a row", () => {
       expect(said.runtime.resumeBoundary({ attachmentId: said.attachmentId })).toBe(
         "tool-in-flight",
       );
+      await said.runtime.close();
+    });
+
+    it("reads what cut the turn short, and null where the executor cannot say (VC-1245)", async () => {
+      const silent = fixture();
+      const unsaid = await recovered(silent);
+      expect(unsaid.runtime.interruption({ attachmentId: unsaid.attachmentId })).toBeNull();
+      expect(unsaid.runtime.interruption({ attachmentId: "unknown" })).toBeNull();
+      await unsaid.runtime.close();
+
+      const telling = fixture();
+      telling.adapter.interruption = "quit";
+      const said = await recovered(telling);
+      expect(said.runtime.interruption({ attachmentId: said.attachmentId })).toBe("quit");
       await said.runtime.close();
     });
 

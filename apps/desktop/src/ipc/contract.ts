@@ -2720,6 +2720,20 @@ export interface VolliOrphanProcessIpcContract {
 
 export type OrphanProcessIpcChannel = keyof VolliOrphanProcessIpcContract;
 
+/**
+ * Whether a turn a deliberate quit cut short resumes on its own at the next
+ * launch (VC-1245): one host setting, read and written whole. The decision to
+ * resume stays in the restart-resume verdict; this door only sets its input.
+ */
+export interface VolliQuitResumeIpcContract {
+  "volli:quit-resume-get": { args: []; result: QuitResumeResult };
+  "volli:quit-resume-set": { args: [autoResume: boolean]; result: QuitResumeResult };
+}
+
+export type QuitResumeIpcChannel = keyof VolliQuitResumeIpcContract;
+
+export type QuitResumeResult = Result<{ autoResume: boolean }>;
+
 export type DatabaseRecoveryListResult = Result<{ backups: DatabaseSafetyCopy[] }>;
 export type DatabaseRecoveryRestoreResult = Result<{ restoredBackup: string }>;
 
@@ -2787,6 +2801,7 @@ export interface VolliInvokeContract
     VolliSecretIpcContract,
     VolliPiSessionOrphanIpcContract,
     VolliOrphanProcessIpcContract,
+    VolliQuitResumeIpcContract,
     VolliFileIpcContract,
     VolliHarnessIpcContract,
     VolliCliIpcContract,

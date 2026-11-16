@@ -67,6 +67,8 @@ function input(
     now: LOST_AT + 5_000,
     startPending: false,
     boundary: "settled",
+    interruption: "process-loss",
+    autoResumeAfterQuit: false,
     ticketSessions: [],
     ...rest,
   };
@@ -225,4 +227,35 @@ describe("restartResumeVerdict (VC-450)", () => {
       skip("nothing-to-continue"),
     );
   });
+
+  // VC-1245: the person's setting is this one branch. Off (the default), a
+  // quit's turn waits for Resume; on, it is continued like a crash's. A
+  // crash, or an executor that cannot say, is never touched by it, and a quit
+  // with a tool in flight waits for the person in both positions.
+  it.each([
+    [false, "quit", "quit"],
+    [false, "process-loss", "resume"],
+    [false, null, "resume"],
+    [true, "quit", "resume"],
+    [true, "process-loss", "resume"],
+  ] as const)(
+    "with automatic resume after a quit %s, a %s turn gets %s",
+    (autoResumeAfterQuit, interruption, want) => {
+      const verdict = restartResumeVerdict(input({}, { autoResumeAfterQuit, interruption }));
+      expect(verdict).toEqual(
+        want === "resume" ? expect.objectContaining({ kind: "resume" }) : skip(want),
+      );
+    },
+  );
+
+  it.each([false, true])(
+    "leaves a quit with a tool in flight to the person with automatic resume %s",
+    (autoResumeAfterQuit) => {
+      expect(
+        restartResumeVerdict(
+          input({}, { autoResumeAfterQuit, interruption: "quit", boundary: "tool-in-flight" }),
+        ),
+      ).toEqual(skip("tool-in-flight"));
+    },
+  );
 });

@@ -37,6 +37,7 @@ import {
   restartResumeCommandId,
   sessionContinuedSince,
   ticketSiblingMovedOn,
+  type RuntimeInterruption,
   type RuntimeResumeBoundary,
   type ScheduledResumeSibling,
   type SessionProjection,
@@ -82,7 +83,9 @@ export type RestartResumeSkipReason =
   /** A tool call has no result: its side effects are the person's to judge. */
   | "tool-in-flight"
   /** Nothing is left to continue, or the executor cannot say. */
-  | "nothing-to-continue";
+  | "nothing-to-continue"
+  /** A deliberate quit cut the turn short, and the person's setting leaves it to them. */
+  | "quit";
 
 export type RestartResumeVerdict =
   | { kind: "resume"; sessionId: string; attachmentId: string; commandId: string }
@@ -110,6 +113,16 @@ export interface RestartResumeVerdictInput {
   startPending: boolean;
   /** The executor's answer; `null` when it cannot say. */
   boundary: RuntimeResumeBoundary | null;
+  /** What cut the turn short, as the executor recorded it; `null` when it cannot say. */
+  interruption: RuntimeInterruption | null;
+  /**
+   * The person's setting (VC-1245): whether a turn a deliberate quit cut
+   * short is continued on its own, when every other rule here allows it,
+   * exactly as a crash's is. Off, it waits for the row's Resume. A quit with
+   * a tool in flight waits for the person either way, and a crash's turn is
+   * judged without it.
+   */
+  autoResumeAfterQuit: boolean;
   /** Every Session on the Ticket (it may include this one); empty without one. */
   ticketSessions: readonly ScheduledResumeSibling[];
   /**
@@ -158,6 +171,7 @@ export function restartResumeVerdict(input: RestartResumeVerdictInput): RestartR
   if (input.now - lostAt > RESTART_RESUME_MAX_AGE_MS) return skip("expired");
   if (input.boundary === "tool-in-flight") return skip("tool-in-flight");
   if (input.boundary !== "settled") return skip("nothing-to-continue");
+  if (input.interruption === "quit" && !input.autoResumeAfterQuit) return skip("quit");
   return {
     kind: "resume",
     sessionId: projection.session.id,

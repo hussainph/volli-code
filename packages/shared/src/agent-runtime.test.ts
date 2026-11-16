@@ -9,6 +9,8 @@ import {
   sessionToolBindings,
   sessionToolIds,
   formatShellRuntime,
+  isRuntimeShutdownAbort,
+  RuntimeShutdownAbort,
   shellCommandLine,
   shellStanding,
   UtilityCompletionError,
@@ -534,5 +536,18 @@ describe("UtilityCompletionError", () => {
   // Null means nothing reached a provider, never that a request was free.
   it("carries null for a failure that was never billed", () => {
     expect(new UtilityCompletionError("not in this runtime's catalog", null).usage).toBeNull();
+  });
+});
+
+describe("RuntimeShutdownAbort (VC-1245)", () => {
+  it("is an abort a runtime can tell from any other", () => {
+    const shutdown = new RuntimeShutdownAbort();
+    expect(shutdown).toBeInstanceOf(Error);
+    expect(shutdown.name).toBe("AbortError");
+    expect(isRuntimeShutdownAbort(shutdown)).toBe(true);
+    const ordinary = new AbortController();
+    ordinary.abort();
+    expect(isRuntimeShutdownAbort(ordinary.signal.reason)).toBe(false);
+    expect(isRuntimeShutdownAbort(undefined)).toBe(false);
   });
 });

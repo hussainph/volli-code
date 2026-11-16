@@ -268,6 +268,12 @@ const EXACT = {
     reason:
       "Trim allowlist and auto-trim opt-out over every worktree the host owns (host-core worktree/trim-settings.ts).",
   },
+  "volli:quit-resume": {
+    placement: "host",
+    owner: "stays",
+    reason:
+      "Whether a turn a deliberate quit cut short resumes on its own at the next launch (host-core session-runtime/quit-resume-settings.ts, VC-1245). Read by the host's restart resume.",
+  },
   "volli:orphan-processes": {
     placement: "host",
     owner: "VC-573",

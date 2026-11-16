@@ -88,10 +88,12 @@ import {
   errorMessage,
   isMcpToolId,
   readSkillResources,
+  RuntimeShutdownAbort,
   sessionToolIds,
   verbToolsOf,
   type AgentRuntime,
   type CommandRefusalSeverity,
+  type RuntimeInterruption,
   type CompactionRequestOutcome,
   type DeliveryOutcome,
   type CodeModeSurface,
@@ -1559,6 +1561,13 @@ class PiBinding implements BindingHandle {
     };
   }
 
+  /** What cut short the turn this binding's recovery found open; `null` once releasing. */
+  interruption(): RuntimeInterruption | null {
+    const handle = this.#handle;
+    if (handle === null || this.#releasing) return null;
+    return handle.interruption?.() ?? null;
+  }
+
   /** Where the recovered conversation stands; a closed or releasing binding has nothing to continue. */
   resumeBoundary(): RuntimeResumeBoundary | null {
     const handle = this.#handle;
@@ -1596,14 +1605,14 @@ class PiBinding implements BindingHandle {
    * is harmless either way, because the claim in {@link PiBinding.#take} lets
    * only one path end any of them.
    */
-  release(_reason: ReleaseReason): Promise<void> {
+  release(reason: ReleaseReason): Promise<void> {
     if (this.#releasePromise !== undefined) return this.#releasePromise;
     this.#releasing = true;
-    this.#releasePromise = this.#finishRelease();
+    this.#releasePromise = this.#finishRelease(reason);
     return this.#releasePromise;
   }
 
-  async #finishRelease(): Promise<void> {
+  async #finishRelease(reason: ReleaseReason): Promise<void> {
     const failures: unknown[] = [];
     const cleanup = async (work: () => unknown): Promise<void> => {
       try {
@@ -1612,6 +1621,13 @@ class PiBinding implements BindingHandle {
         failures.push(error);
       }
     };
+    // A shutdown says so WITH the abort, and aborts first (VC-1245): the abort
+    // is what ends the running turn, and everything after it can take real
+    // time before the close that also says so. First, so that a question the
+    // loop below withdraws is a tool the quit cut short, left without a
+    // result for the person, not an answer a restart would continue from.
+    // Withdrawals are still announced: `#released` is not yet set.
+    if (reason === "shutdown") this.#abort.abort(new RuntimeShutdownAbort());
     // Iterated live rather than over a snapshot: a question that slipped in
     // between two awaits here is one this loop still has to withdraw.
     for (const asked of [this.#asked, this.#askedUser]) {
@@ -1629,7 +1645,9 @@ class PiBinding implements BindingHandle {
     // Before close revokes the execution environment's attachment token (VC-270).
     await cleanup(() => this.#shell?.dispose());
     await Promise.all([...this.#mcpPorts].map((port) => cleanup(() => this.#disposeMcpPort(port))));
-    await cleanup(() => this.#handle?.close());
+    // A shutdown is the process ending, not the Session letting go: the turn
+    // it cuts short stays open for the next launch to recover (VC-1245).
+    await cleanup(() => this.#handle?.close(reason === "shutdown" ? "shutdown" : "released"));
     await cleanup(() => this.#secret?.dispose?.());
     if (failures.length > 0) throw new AggregateError(failures, "Attachment cleanup failed.");
   }

@@ -49,6 +49,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import { createSessionEngine, type SessionTranscriptArtifact } from "@volli/session-engine";
 import { backfillProjectionCheckpoints } from "../session-control/checkpoint-backfill";
 import {
+  readAutoResumeAfterQuit,
+  writeAutoResumeAfterQuit,
+} from "../session-runtime/quit-resume-settings";
+import {
   RuntimeObservationTranslator,
   type TranslatedObservation,
 } from "../../../session-engine/src/observation-translation";
@@ -449,6 +453,9 @@ async function headProfile(): Promise<void> {
   const db = openVolliDb(dbPath);
   try {
     insertProject(db, testProject({ id: PROJECT_ID, path: join(root, "repo") }));
+    // A host setting N-1 has never heard of (VC-1245): every N-1 step below
+    // runs with it present, and must leave it as this build wrote it.
+    writeAutoResumeAfterQuit(db, true, NOW);
     // N−1 does not know runner-local paths/provenance. Its ordinary local
     // writes must leave these opaque machine rows untouched (migration 066).
     db.prepare("INSERT INTO project_checkout_paths VALUES (?, ?, ?, ?, 'main', 1)").run(
@@ -975,6 +982,7 @@ describe.skipIf(manifest === null)(
       assertHeadReads(dbPath);
       const db = openVolliDb(dbPath);
       try {
+        expect(readAutoResumeAfterQuit(db)).toBe(true);
         const queued = await createSqliteSessionFollowUpLedger(db).transaction(
           "session-head",
           (state) => state.entries,

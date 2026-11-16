@@ -395,6 +395,7 @@ import {
 import { createBrowserShortcutRelay } from "./browser/app-shortcut-relay";
 import { BrowserTabHost, type BrowserPreviewDiagnostic } from "./browser/tab-host";
 import { registerOrphanProcessIpcHandlers } from "./process/ipc";
+import { registerQuitResumeIpcHandlers } from "./quit-resume/ipc";
 import { registerBackgroundShellIpcHandlers } from "./shell/ipc";
 import { registerBrowserTabIpcHandlers } from "./browser/ipc";
 import { holdNoticeMessage, relayHoldNotices } from "./browser/hold-notices";
@@ -2621,6 +2622,8 @@ const appStartup = app.whenReady().then(async () => {
   // exists.
   const orphanProcesses = liveHost?.maintenance.orphanProcesses ?? null;
   registerOrphanProcessIpcHandlers(dbHandle, orphanProcesses);
+  // Whether a quit's turn resumes on its own at the next launch (VC-1245).
+  registerQuitResumeIpcHandlers(dbHandle);
   // Global-artifacts + @file fs plumbing (file index/read/write, artifact
   // create, reveal, per-tab watch) plus the composer `/` picker's prompt
   // templates; same degraded-DB stance as registerDataIpcHandlers.

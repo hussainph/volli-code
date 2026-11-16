@@ -40,6 +40,7 @@ import type {
   ModelAccessIpcChannel,
   NotificationIpcChannel,
   OrphanProcessIpcChannel,
+  QuitResumeIpcChannel,
   PiSessionOrphanIpcChannel,
   ShellIpcChannel,
   SettingsWindowIpcChannel,
@@ -2143,6 +2144,25 @@ export const DECISION_MODEL_IPC: {
 export const DECISION_MODEL_CHANNELS = Object.keys(
   DECISION_MODEL_IPC,
 ) as readonly DecisionModelIpcChannel[];
+
+// ---- quit resume descriptor table (VC-1245) --------------------------------
+
+export const QUIT_RESUME_IPC: {
+  readonly [C in QuitResumeIpcChannel]: IpcRequestDescriptor<C>;
+} = {
+  "volli:quit-resume-get": {
+    guard: (args): args is [] => args.length === 0,
+    invalidError: "Invalid request",
+  },
+  "volli:quit-resume-set": {
+    guard: (args): args is IpcArgs<"volli:quit-resume-set"> =>
+      args.length === 1 && typeof args[0] === "boolean",
+    invalidError: "Invalid setting",
+  },
+};
+
+/** Every channel the quit resume setting owns, derived — never hand-synced. */
+export const QUIT_RESUME_CHANNELS = Object.keys(QUIT_RESUME_IPC) as readonly QuitResumeIpcChannel[];
 
 // ---- agent observability descriptor table (VC-119) ------------------------
 // The endpoint is deliberately NOT validated here, for the reason the Web

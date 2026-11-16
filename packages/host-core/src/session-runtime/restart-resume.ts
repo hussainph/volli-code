@@ -51,7 +51,7 @@ import {
   type SessionRuntimeCommandRequest,
   type SessionRuntimeCommandResult,
 } from "@volli/session-engine";
-import type { RuntimeResumeBoundary, SessionProjection } from "@volli/shared";
+import type { RuntimeInterruption, RuntimeResumeBoundary, SessionProjection } from "@volli/shared";
 
 import { hostLogger } from "../log/root";
 import type { BootRecoveredTurns } from "./boot-recovery";
@@ -106,6 +106,13 @@ export interface RestartResumePorts {
     ticketId: string;
   }): Promise<readonly SessionProjection[]>;
   resumeBoundary(input: { attachmentId: string }): RuntimeResumeBoundary | null;
+  /** What cut short the recovered turn (VC-1245); absent reads as a process loss. */
+  interruption?(input: { attachmentId: string }): RuntimeInterruption | null;
+  /**
+   * The person's setting: whether a deliberate quit's turn resumes on its own
+   * (VC-1245). Read at each verdict; absent reads as off.
+   */
+  autoResumeAfterQuit?(): boolean;
   /** Sessions this process already holds an accepted, not yet opened turn for. */
   pendingTurnStarts(): ReadonlySet<string>;
   command(request: SessionRuntimeCommandRequest): Promise<SessionRuntimeCommandResult>;
@@ -192,6 +199,8 @@ async function judgeAndRun(
         now: now(),
         startPending: ports.pendingTurnStarts().has(sessionId),
         boundary: ports.resumeBoundary({ attachmentId }),
+        interruption: ports.interruption?.({ attachmentId }) ?? null,
+        autoResumeAfterQuit: ports.autoResumeAfterQuit?.() ?? false,
         ticketSessions,
         // A cloud store's own Sessions are judged here; only a launch without
         // one leaves this Mac's turns for a launch that shows them (VC-889).

@@ -29,6 +29,7 @@ import {
   NOTIFICATION_IPC,
   ORPHAN_PROCESS_IPC,
   PI_SESSION_ORPHAN_IPC,
+  QUIT_RESUME_IPC,
   SETTINGS_WINDOW_IPC,
   SHELL_IPC,
   SUPPORT_IPC,
@@ -190,6 +191,7 @@ describe("CHANNEL_PLACEMENT covers every channel", () => {
       UPDATE_IPC,
       PI_SESSION_ORPHAN_IPC,
       ORPHAN_PROCESS_IPC,
+      QUIT_RESUME_IPC,
       DATABASE_RECOVERY_IPC,
     };
     const missing: string[] = [];

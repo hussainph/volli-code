@@ -58,6 +58,7 @@ import {
   isDeclaredRoute,
   routeOf,
   isPromptResource,
+  isRuntimeShutdownAbort,
   NOOP_OBSERVABILITY_SINK,
   ObservabilityReducer,
   promptResourceBlock,
@@ -76,6 +77,8 @@ import {
   type ProviderReasoningDroppedObservation,
   type ReasoningDropCause,
   type RuntimeAttachmentHandle,
+  type RuntimeCloseReason,
+  type RuntimeInterruption,
   type RuntimeContextCarry,
   type RuntimeActivityObservation,
   type RuntimeActivityValue,
@@ -768,6 +771,28 @@ const VOLLI_OBSERVATION_MARKER = "volli.observation.v1";
  * bound to the stripped replay.
  */
 const VOLLI_CONTEXT_MARKER = "volli.context.v1";
+
+/**
+ * The custom entry type a shutdown writes for the turn it left open (VC-1245):
+ * `{ turnId }`, the frozen on-disk shape. It tells the next launch's recovery
+ * that the turn was cut short by a deliberate quit rather than a crash.
+ *
+ * Its own type for the reason {@link VOLLI_CONTEXT_MARKER} has one: the
+ * observation reader quarantines and counts every entry of its own type it
+ * cannot validate, so an older build reading this sidecar would warn about an
+ * unreadable marker. Every reader of an older build ignores a custom type it
+ * does not know, which is what a build that predates the distinction should
+ * do: treat the quit as the process loss it also is.
+ */
+const VOLLI_SHUTDOWN_MARKER = "volli.shutdown.v1";
+
+/**
+ * The turn a shutdown marker names, read without trusting its shape: whatever
+ * it holds is only ever compared with an open turn's id.
+ */
+function shutdownTurnId(entry: CustomEntry): unknown {
+  return (Object(entry.data) as { turnId?: unknown }).turnId;
+}
 
 /**
  * The room a request leaves for the reply it is about to ask for.
@@ -2026,6 +2051,25 @@ async function attachSession(
       : replayableContext;
     const activeAttentionReasons = new Set<AttentionObservation["reason"]>();
     const openTurnIds = new Set<string>();
+    /** Whether the partial-turn warning this sidecar last held is the plain process-loss one. */
+    let processLossWarningHeld = false;
+    /**
+     * The turn a shutdown recorded leaving open (see {@link VOLLI_SHUTDOWN_MARKER}),
+     * counted only when nothing was observed after it: a quit writes nothing
+     * more, while a turn resumed under the same id and then lost again has
+     * this recovery's own markers, and the resumed run's, after a stale one.
+     */
+    const lastObservationIndex = customEntries.findLastIndex(
+      (entry) => entry.customType === VOLLI_OBSERVATION_MARKER,
+    );
+    const quitTurnIds = new Set(
+      customEntries
+        .filter(
+          (entry, index) =>
+            entry.customType === VOLLI_SHUTDOWN_MARKER && index > lastObservationIndex,
+        )
+        .map(shutdownTurnId),
+    );
     for (const observation of recoveredObservations) {
       if (observation.kind === "turn") {
         if (observation.state === "started") openTurnIds.add(observation.turnId);
@@ -2034,6 +2078,11 @@ async function attachSession(
       if (observation.kind !== "attention") continue;
       if (observation.state === "raised") activeAttentionReasons.add(observation.reason);
       else activeAttentionReasons.delete(observation.reason);
+      if (observation.reason === "partial-turn") {
+        processLossWarningHeld =
+          observation.state === "raised" &&
+          observation.message === RECOVERED_TURN_INTERRUPTED_DETAIL;
+      }
     }
     const persistObservation = async <T extends RecoverableMarker>(
       observation: T,
@@ -2120,12 +2169,30 @@ async function attachSession(
     // nothing is left to resume, so no warning offers a Resume that could do
     // nothing (VC-450). The turn is still recorded as interrupted.
     const replyFinished = resumeBoundary(recoveredMessages, hasFailedStopReason) === "none";
+    /**
+     * What cut short the open turn this recovery found: a quit only when every
+     * open turn was one a shutdown recorded leaving open. Cleared when the
+     * next turn starts.
+     */
+    let recoveredInterruption: RuntimeInterruption | null =
+      openTurnIds.size === 0
+        ? null
+        : [...openTurnIds].every((openTurnId) => quitTurnIds.has(openTurnId))
+          ? "quit"
+          : "process-loss";
+    // A quit's turn gets the process-loss warning even when this sidecar
+    // still holds an earlier one: the engine retires that warning on the
+    // ledger when the person moves on with a message, which the sidecar never
+    // hears, and without a standing warning the row would offer no Resume
+    // (VC-1245). A genuine diagnostic is never replaced, and a crash's
+    // recovery is unchanged.
+    let warnAgain = recoveredInterruption === "quit" && processLossWarningHeld;
     for (const recoveredTurnId of openTurnIds) {
       // Attention identity is frozen per attachment/reason, not per notice.
       // A generic restart warning must not replace an active diagnostic (such
       // as conflicting settled history) with a warning the host may retire.
       // Still interrupt every open turn even when its warning is already held.
-      if (!replyFinished && !activeAttentionReasons.has("partial-turn")) {
+      if (!replyFinished && (!activeAttentionReasons.has("partial-turn") || warnAgain)) {
         await persistObservation({
           kind: "attention",
           state: "raised",
@@ -2133,6 +2200,7 @@ async function attachSession(
           message: RECOVERED_TURN_INTERRUPTED_DETAIL,
         });
         activeAttentionReasons.add("partial-turn");
+        warnAgain = false;
       }
       await persistObservation({ kind: "turn", state: "interrupted", turnId: recoveredTurnId });
     }
@@ -2318,6 +2386,22 @@ async function attachSession(
     let acceptingSteer = false;
     let failure: (RuntimeFailure & { stopDetail: SessionStopDetail }) | undefined;
     let closed = false;
+    /**
+     * Whether the process running this attachment is ending (VC-1245), learned
+     * from the attachment signal's abort reason ({@link RuntimeShutdownAbort})
+     * or from `close("shutdown")`, whichever comes first.
+     *
+     * From that moment the sidecar is left as a crash at that moment would
+     * have left it: no further message, and no end for the running turn. The
+     * next launch then recovers the turn exactly as it recovers a crashed one
+     * — a tool cut short has no result and waits for the person, a settled
+     * point may be continued — instead of reading it as a turn someone
+     * stopped. The one thing added is {@link VOLLI_SHUTDOWN_MARKER}, written
+     * at close, which says the loss was a quit.
+     */
+    let shuttingDown = false;
+    /** The turn a shutdown left open, for the marker close writes. */
+    let turnLeftOpen: string | undefined;
     let cancelled = false;
     /**
      * Whether this runtime ended the turn on purpose, cleared when the next one
@@ -3268,6 +3352,14 @@ async function attachSession(
       // the one way a turn ends without completing, before the failure is
       // thrown. Left open, the next message would carry on the dead turn's id
       // and record its acceptance into it.
+      //
+      // Except under a shutdown: the resumed turn stays open for the next
+      // launch, as `agent_end` leaves it (see `shuttingDown`).
+      if (shuttingDown) {
+        pendingRunDelivery = undefined;
+        turnLeftOpen = turnId;
+        return { kind: "closed" };
+      }
       await recordTurnStart();
       await clearTransportNotice();
       await commitObservation(
@@ -3819,6 +3911,7 @@ async function attachSession(
         acceptingSteer = true;
         failure = undefined;
         interrupting = false;
+        recoveredInterruption = null;
         activityByToolCallId.clear();
         await recordTurnStart();
         // Last, and only here: a `settle: "opened"` caller is released once the
@@ -3884,6 +3977,11 @@ async function attachSession(
               )
             : event.message;
         const acceptedUserMessage = message.role === "user" && acceptedUserMessages.has(message);
+        // A reply or tool result that ended after the shutdown abort is what
+        // the abort made of it ("Command aborted", a cut reply): a crash would
+        // have left none of it, and a tool result here would read as a settled
+        // point a restart may continue unattended (see `shuttingDown`).
+        if (shuttingDown && message.role !== "user") return;
         const entryId = acceptedUserMessage
           ? null
           : await mainBranch.appendMessage(durableMessage(message), piContext());
@@ -3971,6 +4069,11 @@ async function attachSession(
       // runtime's own interruption is authoritative even without an error
       // stop reason: never report that deliberately cut-short turn completed.
       // Teardown may still drain a normal finish; this rule names a live Stop.
+      // A quit ends no turn: the next launch recovers it (see `shuttingDown`).
+      if (shuttingDown) {
+        turnLeftOpen = turnId;
+        return;
+      }
       if (failure === undefined && interrupting && !closed) {
         await clearTransportNotice();
         await commitObservation(
@@ -4065,6 +4168,12 @@ async function attachSession(
           await commitObservation(raised);
         }
       }
+      // A quit ends no turn: the next launch recovers it (see `shuttingDown`).
+      // Re-read here because a shutdown can land during the recovery's wait.
+      if (shuttingDown) {
+        turnLeftOpen = turnId;
+        return;
+      }
       // A Stop during a reconnect ends the wait with the turn.
       await clearTransportNotice();
       await commitObservation(
@@ -4078,6 +4187,7 @@ async function attachSession(
     });
 
     const onAbort = (): void => {
+      if (isRuntimeShutdownAbort(spec.signal?.reason)) shuttingDown = true;
       cancelled = true;
       autoRetryPending = false;
       interruptTurn();
@@ -4378,6 +4488,10 @@ async function attachSession(
         return resumeBoundary(agent.state.messages, hasFailedStopReason);
       },
 
+      interruption() {
+        return recoveredInterruption;
+      },
+
       async retry(commandId): Promise<DeliveryOutcome> {
         if (closed || cancelled) {
           return { kind: "rejected", reason: "closed", message: "This attachment is closed." };
@@ -4507,9 +4621,10 @@ async function attachSession(
         await agent.waitForIdle();
       },
 
-      async close(): Promise<void> {
+      async close(reason: RuntimeCloseReason = "released"): Promise<void> {
         if (closed) return;
         closed = true;
+        if (reason === "shutdown") shuttingDown = true;
         // Withdrawn attachments retry nothing. Cleared rather than tested for at
         // the drain: a decision to retry that was taken while this ran would
         // otherwise start a Pi run against an environment already cleaned up.
@@ -4522,6 +4637,22 @@ async function attachSession(
         await agent.waitForIdle();
         await detachedRunSettled;
         await refreshTail;
+        // Said once the run is idle, so nothing after it writes to the turn.
+        // A failure here is reported after the cleanup still runs: without
+        // the marker the next launch reads the quit as a crash, which is the
+        // safe reading.
+        let markerFailure: { error: unknown } | undefined;
+        if (shuttingDown && turnLeftOpen !== undefined) {
+          try {
+            await mainBranch.appendCustomEntry(
+              VOLLI_SHUTDOWN_MARKER,
+              { turnId: turnLeftOpen },
+              piContext(),
+            );
+          } catch (error) {
+            markerFailure = { error };
+          }
+        }
         unsubscribe?.();
         unsubscribe = undefined;
         stopWatchingResume?.();
@@ -4535,6 +4666,7 @@ async function attachSession(
         toolEnv = undefined;
         await sidecarEnv.cleanup(piContext());
         await observe({ kind: "attachment", state: "closed" });
+        if (markerFailure !== undefined) throw markerFailure.error;
       },
 
       async reconcile(cursor) {

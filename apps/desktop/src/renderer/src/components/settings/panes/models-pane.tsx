@@ -36,6 +36,7 @@ import {
 import { ModelName } from "@renderer/components/models/model-identity";
 import { DecisionModelSettings } from "./decision-model-pane";
 import { CodeModeSettings } from "./code-mode-pane";
+import { QuitResumeSection } from "./quit-resume-section";
 import { ModelAccessAccounts } from "./provider-accounts";
 import {
   refreshOutcome,
@@ -372,6 +373,7 @@ export function ModelAccessSettings({
           )}
         </PrefSection>
       )}
+      {agents && hostName === undefined && <QuitResumeSection />}
       {agents && (
         <CodeModeSettings
           models={models}

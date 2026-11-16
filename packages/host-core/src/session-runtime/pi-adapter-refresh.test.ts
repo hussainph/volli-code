@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
+  isRuntimeShutdownAbort,
   mcpProviderToolName,
   type AgentRuntime,
   type McpToolDefinition,
@@ -196,6 +197,42 @@ describe("Pi adapter refresh lifecycle", () => {
     await h.binding.release("requested");
     for (const port of h.ports) expect(port.dispose).toHaveBeenCalledOnce();
   });
+
+  // A shutdown is the process ending: the executor leaves the turn it cuts
+  // short for the next launch to recover (VC-1245). Every other release ends
+  // it here.
+  it.each([
+    ["shutdown", "shutdown"],
+    ["requested", "released"],
+    ["replaced", "released"],
+    ["adapter_failure", "released"],
+  ] as const)("closes the executor for a %s release as %s", async (reason, closeReason) => {
+    const h = await fixture();
+    await h.binding.release(reason);
+    expect(h.close).toHaveBeenCalledExactlyOnceWith(closeReason);
+  });
+
+  // The shutdown travels WITH the abort, before any slow cleanup: a runtime
+  // that heard of it only at the close would have ended the turn as stopped.
+  it.each([
+    ["shutdown", true],
+    ["requested", false],
+  ] as const)(
+    "aborts a %s release before its slow cleanup, saying whether it is a shutdown",
+    async (reason, shutdown) => {
+      const seen: { aborted: boolean; shutdown: boolean }[] = [];
+      let signal: AbortSignal | undefined;
+      const h = await fixture({
+        releaseRuntimeContext: async () => {
+          seen.push({ aborted: signal!.aborted, shutdown: isRuntimeShutdownAbort(signal!.reason) });
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        },
+      });
+      signal = h.spec.signal;
+      await h.binding.release(reason);
+      expect(seen).toEqual([{ aborted: true, shutdown }]);
+    },
+  );
 
   it("disposes every adopted port exactly once, even with concurrent release calls", async () => {
     const h = await fixture();
