@@ -1,0 +1,178 @@
+---
+title: Move projects to Volli Cloud
+draft: true
+description: Check projects with a dry run, move them with a verified backup, follow progress and failures, and go back to local if you need to.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+Moving a project copies its tickets, board history, comments, attachments,
+Sessions with their full history, Automations and Runs into a Workspace.
+The copy on this Mac stays, read-only, so nothing local is lost.
+
+Before you start:
+
+- [Join the preview](/cloud/join/) and sign in.
+- Be an owner or admin of the Workspace you move into.
+- Let running Sessions, shells and terminals in the project finish.
+
+## Start a move
+
+Use either entry point:
+
+- **One project:** right-click its tile in the rail and choose **Move to
+  Volli Cloud…**.
+- **Every project:** open **Settings → Volli Cloud** and select **Move all
+  projects…**.
+
+The **Move to Volli Cloud** sheet opens and runs a dry run first. If you
+are signed out, it shows the sign-in controls in place.
+
+## Check the dry run
+
+The dry run exports each project without changing it and reports what it
+found.
+
+1. Choose the **Workspace**. Only Workspaces you can manage are listed.
+2. When moving every project, turn on **Include removed projects** to
+   include projects you removed from Volli.
+3. Review each project's card: its ticket, Session and event counts, the
+   size of its attachments and transcripts, and a time estimate.
+4. Under **Needs you first**, resolve each problem. **Open Session** or
+   **Open ticket** takes you to the cause. A project with a problem cannot be
+   selected.
+5. Select **Run a dry run only** to check again after a fix.
+
+The usual problems are unfinished work: a Session mid-turn, queued
+messages, a running shell, or worktree cleanup still in progress. Finish or
+stop them, then run the dry run again.
+
+**Excluded items** lists what will not run straight away, such as armed
+Automations; see [Automations](#automations).
+
+The sheet also says what stays on this Mac:
+
+- **Personal files**: Skills and templates.
+- **Secrets and API keys**: they stay sealed on this Mac. Re-enter them on
+  other machines, or ask teammates to supply their own.
+- **Removed projects**, unless you include them.
+
+After the move, ticket Sessions are visible to everyone in the Workspace,
+and Board and ad-hoc chats stay private. See [Share Sessions](/cloud/sharing/).
+
+## Move
+
+1. Leave **Stop at the first problem** on to halt the queue if one project
+   fails, or turn it off to carry on with the others.
+2. Select the projects to move, then **Move**.
+
+<Aside type="caution">
+  Don't install an older Volli build while a move is running. Older builds
+  do not know the project is read-only.
+</Aside>
+
+### The backup
+
+Before any project changes, Volli writes one full backup of this Mac's data
+and checks it. The sheet shows the backup folder and the space it needs
+beside the free space; **Move** stays disabled when there is not enough.
+Volli keeps the backup until you delete it. If the backup fails its check,
+no project is touched.
+
+### Progress
+
+Projects move one at a time. Each project becomes read-only on this Mac,
+then goes through **Backup**, **Read-only copy**, **Prepare files**,
+**Upload files**, **Copy records**, **Session history**, **Check every
+record**, **Keep folders and worktrees** and **Check in Volli Cloud**.
+
+Follow it from the progress row in the sidebar, from the project's banner
+with **View move**, or from **Settings → Volli Cloud → Progress and local
+copies**. Each project shows **Waiting**, **Moving**, **Needs you**,
+**Check it**, **Moved**, **Rolled back** or **Back on this Mac**.
+
+While a project moves, select **Pause** and **Resume**, or **Cancel move**.
+If a Session in the project becomes busy, the move waits for it; **Skip this
+project** moves on without it. Quitting Volli, or losing the network,
+pauses the move; it continues from the last step when Volli can.
+
+### Finish the move
+
+When the copy is in Volli Cloud, Volli compares every record, file and
+Session with the local copy and stops at **Check it**. Review the checks,
+then:
+
+- **Finish move** completes it. It is available only when every check
+  passed.
+- **Open in Volli Cloud** restarts Volli into the Workspace so you can look
+  at the project first.
+
+Only the person who started a move can act on it.
+
+### When a move fails
+
+- **Before the project is in Volli Cloud**, Volli rolls it back on its own.
+  The message ends **Nothing on this Mac changed.** Fix the cause and select
+  **Retry**; Volli runs the dry run for that project again first.
+- **After it is in Volli Cloud**, the cloud copy stays and the local copy
+  stays read-only. Select **Retry**, **Roll back**, or **Go back to local**.
+
+**Roll back** clears the cloud copy and makes the project writable on this
+Mac again. It lists any changes made in Volli Cloud since the move, which
+are lost; if there are any, type the project name to confirm. **Roll back**
+is no longer offered once you finish the move.
+
+**Report** copies a report of the move for support.
+
+## The local copy
+
+After the move, the project stays in your local board, read-only, with a
+banner such as **Moved to Volli Cloud** and the Workspace name. You can open
+its tickets and Sessions and read their history. You cannot change the
+board, start Sessions, or edit its Automations or MCP settings. Stopping
+work is always allowed.
+
+Volli does not delete the local copy.
+
+## Go back to local
+
+**Go back to local** returns a moved project to this Mac. It is available
+from the project's card in the progress sheet, after the project is in
+Volli Cloud.
+
+1. Select **Go back to local**.
+2. Review **Go back to local?** and the export path, then select **Go back
+   to local**.
+
+Volli unlocks the local copy as it was before the move. Changes made in
+Volli Cloud since then are not applied: Volli saves them as
+`cloud-changes.md` and `cloud-changes.json` at the path shown, and the card
+shows **Cloud changes saved to**. Volli Cloud keeps its copy of the project,
+unchanged.
+
+Once a project has gone back, it cannot be moved again: its dry run reports
+**Volli Cloud keeps a copy of this project. Moving again would not merge its
+changes.**
+
+## Credentials
+
+Credentials never move. Project secrets, API keys, MCP server credentials
+and provider sign-ins stay sealed on this Mac. After a move, the project's
+card lists its secrets under **Credentials kept on this Mac**: re-enter them
+on other machines, and ask teammates to supply their own. A Linux runner
+needs its own provider sign-ins; see [Runners](/runners/).
+
+## Automations
+
+Moved Automations arrive paused: nothing armed on this Mac starts in Volli
+Cloud until someone re-arms it. Waiting arrivals from before the move are
+archived, not run.
+
+After you finish the move, the project's card lists **Paused Automations**,
+each with **Re-arm on this Mac**. This needs this Mac connected to Volli
+Cloud as a runner; until then the card says **Open in Volli Cloud to re-arm
+on this Mac.** You can also re-arm from the board or the Automation editor in
+Volli Cloud; see [Automations in Volli Cloud](/cloud/automations/#moved-automations).
+
+Automations scoped to **All projects** do not run in Volli Cloud. The card
+lists them under **Personal Automations** as **Not armed**.

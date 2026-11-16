@@ -1,0 +1,118 @@
+---
+title: Automations in Volli Cloud
+draft: true
+description: Arm column and schedule Automations on your runner, see what happens while it sleeps, and re-arm Automations moved from this Mac.
+---
+
+Automations in a Volli Cloud project work like [local
+Automations](/guides/automations/), with one difference: an armed Automation
+belongs to the person who armed it and runs on their runner. Volli Cloud
+keeps the schedule and the board; the armer's machine does the work.
+
+## Arming is enabling
+
+There is no **Automatic triggers** switch in Volli Cloud. Arming a column or
+a schedule turns on its automatic starts for the whole Workspace. Each
+arming records who armed it and on which runner, and everyone sees both.
+
+You can arm only on one of your own runners, and only while it is online.
+A teammate's runner never appears in your list.
+
+### Arm a column
+
+1. On the board, select the bolt in the column header.
+2. In **Runner**, keep this Mac or choose another of your runners.
+3. Choose the Automation. Select **No automation** to disarm the column.
+
+The popover reads **Armed by** the armer **· on** their runner, and the
+column header shows the armer's name and runner beside the bolt. A column
+has one arming: arming it again replaces the earlier choice and its armer.
+
+Arriving tickets start the same 3.5-second countdown as a local column,
+with **Cancel**. Holding **Option (⌥)** during a drag to pick an Automation
+for one move also works; that Run starts only on a runner of yours that
+holds the ticket's working copy. If there is none, the board says **The
+picked Automation has nowhere to run yet.**
+
+### Arm a schedule
+
+1. In your project's navigation, open **Automations** and select a scheduled
+   Automation.
+2. In **Trigger**, choose the **Runner**.
+3. Turn on **Armed**.
+
+**Armed by** shows the armer and runner, and the Automation's header shows
+the next time it runs, in the schedule's time zone. Arming starts counting
+from now; it does not run occurrences that came due before. Turn off
+**Armed** to stop it.
+
+**Schedule policy** and the **All projects** scope are not offered in Volli
+Cloud. Every Automation belongs to one project.
+
+## Who runs a Run
+
+| Start | Runs on |
+| --- | --- |
+| A ticket arriving in an armed column | The armer's runner |
+| A scheduled occurrence | The armer's runner |
+| **Run** by hand, or **Run now** | Your own runner: the ticket's, if it is yours, otherwise this Mac |
+
+A Run never moves to a teammate's machine. It uses the armer's model sign-ins
+and credentials on that runner.
+
+## While the runner sleeps
+
+Volli Cloud keeps time, so a schedule comes due whether or not any Mac is
+awake. The Run then waits for the armer's runner instead of being skipped.
+
+- A waiting Run shows **Waiting for** the runner, with **(asleep)** or
+  **(offline)**, in the Run notice or in the panel at the bottom of the
+  window. **Cancel** withdraws it before the runner picks it up; any Member
+  can cancel.
+- A schedule keeps at most one waiting Run. If more occurrences come due
+  while it waits, the Run moves to the latest one and the missed occurrences
+  become one **Skipped** row with a count. A weekend asleep is one skipped
+  row and one Run when the runner wakes.
+- When the runner wakes, it checks the facts again before starting. If the
+  ticket left the column, the column was disarmed, or an earlier Run on the
+  ticket is still active, the Run is skipped with that reason.
+
+To keep schedules on time, arm them on a runner that stays awake, such as a
+plugged-in Mac or a [Linux runner](/runners/).
+
+## Working with teammates
+
+Any Member can edit, arm, re-arm, disarm or delete any Automation in the
+Workspace, cancel a waiting Run, and retry a failed one.
+
+- Editing an Automation keeps its armer and runner.
+- Arming or re-arming someone else's column or schedule makes you the armer,
+  on your runner.
+- **Retry** on someone else's failed Run starts it as your own Run, on your
+  runner.
+
+Every Member sees the Workspace's Run history. A Run whose Session is a
+teammate's private chat reads **Private Session**.
+
+### When the armer leaves
+
+If the armer leaves the Workspace or is removed, or their runner is removed,
+their armings pause. A paused arming never starts; the bolt reads **Paused
+· Re-arm** and a schedule's **Armed** switch is off. It stays paused until
+someone re-arms it on their own runner.
+
+## Moved Automations
+
+Automations [moved from this Mac](/cloud/move-projects/) arrive paused,
+whether or not they were armed or enabled locally. They keep their
+definitions and Run history, but none starts until someone re-arms it.
+
+- **From the move:** after you finish the move, the project's card in the
+  move progress lists **Paused Automations**, each with **Re-arm on this
+  Mac**. This Mac must be connected to Volli Cloud first; if it isn't, the
+  card says **Open in Volli Cloud to re-arm on this Mac.**
+- **In Volli Cloud:** select **Re-arm** on the column's bolt, or in the
+  Automation's **Trigger** section.
+
+Automations scoped to **All projects** do not move into a project. They
+cannot run in Volli Cloud.
