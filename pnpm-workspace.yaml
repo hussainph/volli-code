@@ -38,11 +38,11 @@ catalog:
   "@types/react": ^19.3.0
   "@types/react-dom": ^19.3.0
   typescript: ~7.0.2
-  vite: npm:@voidzero-dev/vite-plus-core@0.3.0
-  vite-plus: 0.3.0
+  vite: npm:@voidzero-dev/vite-plus-core@1.6.0
+  vite-plus: 1.6.0
   # Must match the vitest bundled in vite-plus (vp fails fast on version
   # skew) — bump in lockstep with the vite-plus pin above.
-  "@vitest/coverage-v8": 4.1.11
+  "@vitest/coverage-v8": 5.1.0
 
 # Supply-chain guard: refuse to install any version published within this many
 # minutes (relaxed from the vp default of 1440 = 24h). 60m still blocks the
@@ -55,9 +55,9 @@ minimumReleaseAge: 60
 # window above; once the release ages out, the exclude does nothing, because an
 # exclude for a version nobody installs is inert. So entries are dropped when
 # the tree no longer holds that exact version, and the list keeps only versions
-# it can still be read against. The vite-plus 0.3.0 bump (VC-212) needed no
-# entries of its own: 0.3.0 published 2026-08-24, days rather than minutes
-# before it landed here, so it cleared the gate unaided.
+# it can still be read against. The vite-plus bumps to 0.3.0 (VC-212) and
+# 1.6.0 (VC-1242) needed no entries of their own: each release was days old,
+# not minutes, when it landed here, so it cleared the gate unaided.
 minimumReleaseAgeExclude:
   - "@typescript/typescript-aix-ppc64@7.0.2"
   - "@typescript/typescript-darwin-arm64@7.0.2"
@@ -106,12 +106,6 @@ overrides:
   # the linear selector parser fix, but the lock retains 6.1.4. This path is
   # docs build tooling only. Remove once its parent requires >=6.1.5.
   "postcss-selector-parser@<6.1.5": "6.1.5"
-  # VC-793 / GHSA-85c8-ppgw-ccpr, GHSA-5gmw-xhrv-c9v3: oxfmt 0.64.0 (the
-  # formatter vite-plus 0.3.0 pins exactly) pins vulnerable tinypool 2.1.0
-  # exactly, so re-resolution cannot select patched 2.1.2 without moving the
-  # vite-plus catalog pin (VC-211). Patch-level only, scoped to that parent.
-  # Remove when the vite-plus bump brings an oxfmt that declares >=2.1.2.
-  "oxfmt@0.64.0>tinypool": "2.1.2"
   # VC-793 / GHSA-68fv-2mgg-jv7q: every parent declares ^1.2.1, so this is
   # the same 1.x line; the override keeps a stale lockfile entry from
   # re-selecting a vulnerable copy. Scoped to the vulnerable range only.

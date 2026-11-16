@@ -11287,12 +11287,13 @@ describe("a Stop while a retry refreshes its tools (VC-1199)", () => {
     const internals = Agent.prototype as unknown as PiInternals;
     const finishRun = internals.finishRun;
     const processEvents = internals.processEvents;
-    const settledSpy = vi
-      .spyOn(internals, "processEvents")
-      .mockImplementation(async function (this: unknown, event) {
-        await processEvents.call(this, event);
-        if (armed && event.type === "agent_end") failedRunEnded = true;
-      });
+    const settledSpy = vi.spyOn(internals, "processEvents").mockImplementation(async function (
+      this: unknown,
+      event,
+    ) {
+      await processEvents.call(this, event);
+      if (armed && event.type === "agent_end") failedRunEnded = true;
+    });
     // Pi lets go of the run here, after the turn's own `agent_end` decided to
     // resume it and before the runtime opens the resumed run.
     const spy = vi.spyOn(internals, "finishRun").mockImplementation(function (this: unknown) {

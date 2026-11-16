@@ -226,9 +226,9 @@ function isPermissiveId(id, permissiveIds) {
  * installs only the matching one, so `@img/sharp-libvips-darwin-arm64` here is
  * `@img/sharp-libvips-linux-x64` on CI. Keying the LGPL review to the darwin
  * name would have made the gate pass on macOS and fail on Linux for a reason
- * that has nothing to do with licensing. Three families in this tree need it:
- * the libvips binaries (LGPL), the lightningcss binaries (MPL), and the yuku
- * bindings (no license field). Every other platform family is MIT or Apache.
+ * that has nothing to do with licensing. Two families in this tree need it:
+ * the libvips binaries (LGPL) and the lightningcss binaries (MPL). Every other
+ * platform family is MIT or Apache.
  * @param {string} name
  * @param {string} pattern
  */

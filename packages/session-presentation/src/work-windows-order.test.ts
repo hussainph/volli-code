@@ -506,3 +506,12 @@ it("keeps recorded order when live and durable-only work share no evidence", asy
   // The durable call is laid down before the overlay still being written.
   expect(turn.order()).toEqual([["m", "R"]]);
 });
+
+it("orders live calls sharing a start by observed position before view key", async () => {
+  const turn = live();
+  await turn.send(started("z", 100));
+  turn.advance();
+  // Same clock reading, seen later in the ledger: position decides, not the key.
+  await turn.send(started("a", 100));
+  expect(turn.order()).toEqual([["z", "a"]]);
+});

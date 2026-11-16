@@ -98,6 +98,14 @@ export default defineConfig({
       "react/immutability": "off",
       "react/memo-dependencies": "off",
       "react/preserve-manual-memoization": "off",
+
+      // oxlint 1.82 widened this rule to match Unicorn (oxc #26625): a nested
+      // helper that captures only a more distant ancestor (module imports, an
+      // outer describe's helpers) now reports too. vite-plus 1.6.0 (VC-1242)
+      // brought 507 such findings on code clean under 1.79, 462 of them in
+      // tests. Off by name so the security bump carries no refactor; VC-1243
+      // adopts it. Remove this entry with that work.
+      "unicorn/consistent-function-scoping": "off",
     },
     overrides: [
       {

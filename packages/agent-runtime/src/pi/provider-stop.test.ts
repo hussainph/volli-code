@@ -56,6 +56,16 @@ describe("provider stop facts", () => {
     });
   });
 
+  it("keeps an unrecognised code from a bare error event, with no error object", () => {
+    const capture = new ProviderStopCapture();
+    capture.event({ type: "error", code: "new_provider_code", message: "neutral sentence" });
+    expect(capture.detail(message())).toMatchObject({
+      category: "unknown",
+      providerType: "new_provider_code",
+      message: "neutral sentence",
+    });
+  });
+
   it.each([
     [401, "auth-failed"],
     [403, "auth-failed"],
