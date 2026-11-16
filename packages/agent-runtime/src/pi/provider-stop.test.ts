@@ -110,7 +110,7 @@ describe("provider stop facts", () => {
             '401 {"error":{"type":"invalid_request_error","message":"Wrong key"},"request":{"secret":"private"}}',
         }),
       ),
-    ).toMatchObject({ category: "auth-failed", httpStatus: 401, message: "Wrong key" });
+    ).toMatchObject({ category: "auth-failed", httpStatus: 401, message: "401 Wrong key" });
     expect(
       new ProviderStopCapture().detail(
         message({ errorMessage: "refusal overload auth network context_length_exceeded 429" }),
@@ -124,6 +124,42 @@ describe("provider stop facts", () => {
     expect(new ProviderStopCapture().detail(message({ errorMessage: "{oops}" })).category).toBe(
       "unknown",
     );
+  });
+
+  it("reads an envelope wrapped in SDK prose, keeping the body's own sentence (VC-1244)", () => {
+    expect(
+      new ProviderStopCapture().detail(
+        message({
+          errorMessage:
+            '400 {"error":{"type":"invalid_request_error","message":"bad"}} (request id req_123)',
+        }),
+      ),
+    ).toMatchObject({
+      category: "bad-request",
+      providerType: "invalid_request_error",
+      httpStatus: 400,
+      message: "400 bad (request id req_123)",
+    });
+    expect(
+      new ProviderStopCapture().detail(
+        message({ errorMessage: 'Codex error: {"type":"error","status":400}' }),
+      ),
+    ).toMatchObject({
+      httpStatus: null,
+      message: "Codex error: Provider error (type error, status 400).",
+    });
+    expect(
+      new ProviderStopCapture().detail(
+        message({ errorMessage: '529: {"error":{"type":"overloaded_error"}}' }),
+      ),
+    ).toMatchObject({ category: "provider-overloaded", httpStatus: 529 });
+    // The response this request already read wins over the SDK's restatement.
+    const fetched = new ProviderStopCapture();
+    fetched.response({ status: 400, headers: {} }, 0);
+    fetched.event({ error: { type: "invalid_request_error", message: "from the body" } });
+    expect(
+      fetched.detail(message({ errorMessage: '401 {"error":{"message":"from the SDK"}}' })),
+    ).toMatchObject({ httpStatus: 400, message: "from the body" });
   });
 
   it("accepts direct SDK error bodies and Google's status field", () => {
@@ -171,7 +207,8 @@ describe("provider stop facts", () => {
     expect(detail.providerType!.length).toBeLessThanOrEqual(80);
     for (const secret of ["short", "secret123", "tiny", "abc", "private", "sk-credential"])
       expect(detail.message).not.toContain(secret);
-    expect(safeStopMessage("a plain brace { in text")).toContain("withheld");
+    // A brace is punctuation, not evidence of a request (VC-1244).
+    expect(safeStopMessage("a plain brace { in text")).toBe("a plain brace { in text");
   });
 
   it("keeps only provider-stated retry instants and current-request facts", () => {
@@ -380,7 +417,11 @@ it.each([
     'Rejected request: {"messages":[{"content":"private-request-sentinel"}]}',
     "private-request-sentinel",
   ],
-  ["Request body: private-request-sentinel", "private-request-sentinel"],
+  ["Received request: private-request-sentinel", "private-request-sentinel"],
+  [
+    'Bad input {"model":"x","messages":[{"role":"user","content":"private-request-sentinel"}]',
+    "private-request-sentinel",
+  ],
 ])("withholds secrets and echoed request material in %s", (raw, secret) => {
   expect(safeStopMessage(raw)).not.toContain(secret);
 });

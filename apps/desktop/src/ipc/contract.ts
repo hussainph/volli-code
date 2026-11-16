@@ -1479,6 +1479,15 @@ export interface SupportInfo {
    * message. Absent when the store did not open. Not required.
    */
   perfStalls?: string;
+  /**
+   * This launch's last few failed provider replies (VC-1244), oldest first,
+   * one line each: ISO time, provider/model, stop category, HTTP status, and
+   * the provider's raw error text — credential-redacted and bounded in the
+   * runtime, held in main's memory only. The Session shows the extracted
+   * sentence; this is where the envelope it came from can still be read.
+   * Absent when none failed. Not required.
+   */
+  providerFailures?: string[];
 }
 
 export type SupportInfoResult = Result<{ info: SupportInfo }>;

@@ -3530,6 +3530,9 @@ const appStartup = app.whenReady().then(async () => {
     cloudRunner: () => macRunner?.snapshot() ?? null,
     // Counts, durations and code-owned operation names only (VC-1092).
     perfStalls: () => desktopPerf?.store ?? null,
+    // Raw provider errors, already credential-redacted and bounded by the
+    // runtime, held in memory only (VC-1244).
+    providerFailures: () => runner.piRuntimeHost?.recentProviderFailures() ?? [],
   });
 
   try {

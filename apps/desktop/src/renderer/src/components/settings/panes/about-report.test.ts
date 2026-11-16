@@ -114,6 +114,15 @@ describe("buildAboutReport — support metadata", () => {
     expect(lines[9]).toBe("Stalls: last 24h, 2h observed: main none");
   });
 
+  it("lists the raw provider errors main sent, in their own section (VC-1244)", () => {
+    expect(report()).not.toContain("Provider errors");
+    expect(report({ support: support({ providerFailures: [] }) })).not.toContain("Provider errors");
+    const line =
+      '2026-01-01T00:00:00.000Z anthropic/fixture bad-request 400: 400 {"error":{"message":"bad"}}';
+    const lines = report({ support: support({ providerFailures: [line] }) }).split("\n");
+    expect(lines.slice(9)).toEqual(["", "Provider errors", line]);
+  });
+
   it("puts the metadata ahead of the measurements it describes", () => {
     const text = report({
       rows: cliStatusRows(status()),
@@ -164,6 +173,7 @@ describe("buildAboutReport — support metadata", () => {
       "migrationHistory",
       "perfStalls",
       "platform",
+      "providerFailures",
       "schemaVersion",
     ]);
     expect(text).not.toContain("sentinel-credential-do-not-export");

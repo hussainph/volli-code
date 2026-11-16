@@ -5,7 +5,7 @@ import {
   type SessionStopCategory,
   type SessionStopDetail,
 } from "@volli/shared";
-import { safeStopMessage } from "./safe-diagnostic";
+import { firstJsonObject, safeStopMessage } from "./safe-diagnostic";
 export { safeStopMessage } from "./safe-diagnostic";
 
 type RedactionPort = SessionRuntimeSpec["credentialRedaction"];
@@ -253,17 +253,20 @@ export class ProviderStopCapture {
   }
 
   detail(message: AssistantMessage): SessionStopDetail {
-    // SDK HTTP errors sometimes arrive as a JSON envelope in errorMessage.
-    // Parse that envelope, not its English sentence; plain prose supplies no type.
+    // SDK HTTP errors sometimes arrive as a JSON envelope in errorMessage,
+    // wrapped in the SDK's own prose (`400 {…}`, `Codex error: {…}`, `{…}
+    // (request id …)`). Parse that envelope, not its English sentence; plain
+    // prose supplies no type. The sentence itself is `safeStopMessage`'s to
+    // extract from the whole text, so the envelope's never replaces one this
+    // request's body already gave.
     const raw = message.errorMessage ?? "";
-    const envelope = /^(?:(\d{3})\s*:?[ ]*)?(\{[\s\S]*\})$/.exec(raw);
+    const envelope = firstJsonObject(raw);
     if (envelope !== null) {
-      try {
-        this.event(JSON.parse(envelope[2]!));
-        if (envelope[1] !== undefined && this.#status === null) this.#status = Number(envelope[1]);
-      } catch {
-        /* Malformed prose is not evidence. */
-      }
+      const stated = this.#message;
+      this.event(envelope.value);
+      this.#message = stated;
+      const status = /^(\d{3})\s*:?$/.exec(raw.slice(0, envelope.start).trim())?.[1];
+      if (status !== undefined && this.#status === null) this.#status = Number(status);
     }
     let type =
       message.rawStopReason === "volli.stream-stalled" ||

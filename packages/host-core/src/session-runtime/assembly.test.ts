@@ -86,6 +86,7 @@ async function fixture(): Promise<RuntimeAssemblyOptions> {
     completeUtility: async () => {
       throw new Error("assembly test does not complete");
     },
+    recentProviderFailures: () => [],
   });
   return {
     dbHandle: composed.database,

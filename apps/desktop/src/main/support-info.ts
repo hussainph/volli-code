@@ -5,7 +5,8 @@
  * the migrations that file ran are the ones this build ships (VC-633), and
  * what the updater's last check said (VC-294), what this launch's boot
  * recovery did (VC-926), where this Mac stands as a runner (VC-895), and
- * the last day's stalls from the perf store (VC-1092).
+ * the last day's stalls from the perf store (VC-1092), and this launch's
+ * last failed provider replies (VC-1244).
  *
  * Every one of them lives somewhere the renderer cannot reach — the app
  * version is Electron's, the channel is a row in `app_state`, the schema
@@ -17,7 +18,8 @@
  * issue, so this module is written so that widening it takes an edit here and
  * a new test: it names its fields, reads one pragma, one `app_state` key,
  * the version/fingerprint columns of `migration_history` and the perf store's
- * stall rows (counts, durations, operation names), and imports nothing
+ * stall rows (counts, durations, operation names), and the provider failures
+ * the runtime already credential-redacted and bounded, and imports nothing
  * that could reach the secrets table, the credential store, or the
  * environment. The last update check is handed in from the running updater
  * and only ever leaves here as a redacted one-line summary — never the raw
@@ -35,6 +37,7 @@
 import type Database from "better-sqlite3";
 import { checkMigrationHistory, describeMigrationHistory, SCHEMA_HEAD } from "@volli/host-core/db";
 
+import type { ProviderFailureDiagnostic } from "@volli/agent-runtime";
 import { perfSummary, type PerfStore, type PerfSummary } from "@volli/host-core/perf";
 import type { BootRecoveryReport } from "@volli/host-core/session-runtime";
 import {
@@ -70,6 +73,12 @@ export interface SupportInfoDeps {
   cloudRunner?(): ThisMacRunnerSnapshot | null;
   /** This machine's perf store (VC-1092); `null` when it did not open. */
   perfStalls?(): Pick<PerfStore, "scanStalls" | "runs"> | null;
+  /**
+   * This launch's last failed provider replies (VC-1244) —
+   * `runner.piRuntimeHost.recentProviderFailures()`. Their `raw` text was
+   * credential-redacted and bounded by the runtime before it got here.
+   */
+  providerFailures?(): readonly ProviderFailureDiagnostic[];
   /** The wall clock the stall window ends at; `Date.now` unless a test pins it. */
   now?(): number;
 }
@@ -161,6 +170,17 @@ export function describeCloudRunner(snapshot: ThisMacRunnerSnapshot | null): str
 }
 
 /**
+ * One failed provider reply as the report's line (VC-1244): when, which
+ * provider and model, the stop category and status, then what the provider
+ * actually said. Never a Session id or a path: the line names the request,
+ * not whose it was.
+ */
+export function describeProviderFailure(failure: ProviderFailureDiagnostic): string {
+  const status = failure.httpStatus === null ? "" : ` ${failure.httpStatus}`;
+  return `${new Date(failure.at).toISOString()} ${failure.provider}/${failure.model} ${failure.category}${status}: ${failure.raw}`;
+}
+
+/**
  * SQLite's own migration counter. `pragma` is typed as returning `unknown`, and
  * a value that is not a number is a gap in what we know — reported as one,
  * rather than defaulted to a zero that would read as "unmigrated".
@@ -176,8 +196,10 @@ export function collectSupportInfo(deps: SupportInfoDeps): SupportInfo {
   const db = deps.database();
   if (db === null) throw new Error("Profile database is unavailable");
   const cloudRunner = describeCloudRunner(deps.cloudRunner?.() ?? null);
+  const providerFailures = (deps.providerFailures?.() ?? []).map(describeProviderFailure);
   return {
     ...(cloudRunner === null ? {} : { cloudRunner }),
+    ...(providerFailures.length === 0 ? {} : { providerFailures }),
     appVersion: deps.appVersion(),
     channel: readUpdateChannel(db, deps.buildKind),
     platform: deps.platform,

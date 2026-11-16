@@ -60,7 +60,11 @@
  *    would let either answer end the other's wait.
  */
 
-import { createPiAgentRuntime, type PiRuntimeHostOptions } from "@volli/agent-runtime";
+import {
+  createPiAgentRuntime,
+  type PiRuntimeHostOptions,
+  type ProviderFailureDiagnostic,
+} from "@volli/agent-runtime";
 import type {
   BindingHandle,
   DeliveryReceipt,
@@ -721,19 +725,37 @@ function recoveryEntryId(cursor: SessionNativeDetail | null): string | null {
 const platformUsageFetch: NonNullable<PiRuntimeHostOptions["usageLimits"]>["fetch"] = (url, init) =>
   globalThis.fetch(url, init);
 
+/**
+ * How many failed provider replies the support report can name (VC-1244):
+ * enough for the failure a person is reporting and the few before it.
+ */
+const PROVIDER_FAILURE_HISTORY = 5;
+
 export interface PiRuntimeHost {
   readonly adapter: NativeHarnessAdapter;
   inspectModelAccess: AgentRuntime["inspectModelAccess"];
   /** The utility-completion door (VC-81 auto-titling), passed through unchanged. */
   completeUtility: AgentRuntime["completeUtility"];
+  /**
+   * This process's last {@link PROVIDER_FAILURE_HISTORY} failed provider
+   * replies, oldest first, with the raw envelope the Session's stop sentence
+   * was cut from (VC-1244). Held in memory for the support report only: no
+   * table, no file, no Session fact, nothing that syncs.
+   */
+  recentProviderFailures(): readonly ProviderFailureDiagnostic[];
 }
 
 /** Main-owned singular runtime host; the native adapter remains private migration scaffolding. */
 export function createPiRuntimeHost(options: PiAdapterOptions): PiRuntimeHost {
   const now = options.now ?? Date.now;
   const create = options.createRuntime ?? createPiAgentRuntime;
+  const providerFailures: ProviderFailureDiagnostic[] = [];
   const runtime = create({
     sessionDataDir: options.sessionDataDir,
+    providerDiagnostics: (diagnostic) => {
+      providerFailures.push(diagnostic);
+      if (providerFailures.length > PROVIDER_FAILURE_HISTORY) providerFailures.shift();
+    },
     ...(options.now === undefined ? {} : { now: options.now }),
     ...(options.models === undefined ? {} : { models: options.models }),
     ...(options.credentials === undefined ? {} : { credentials: options.credentials }),
@@ -763,6 +785,7 @@ export function createPiRuntimeHost(options: PiAdapterOptions): PiRuntimeHost {
     adapter: piNativeAdapter(options, runtime, now),
     inspectModelAccess: (input) => runtime.inspectModelAccess(input),
     completeUtility: (input) => runtime.completeUtility(input),
+    recentProviderFailures: () => [...providerFailures],
   };
 }
 

@@ -33,7 +33,7 @@ export interface AboutReportInput {
  * place. What it must never grow is the other direction — no credential or
  * secret-store value, no environment, no database contents beyond the schema
  * number. `support` is an allowlist assembled in main for exactly that reason,
- * and this reader touches only its nine fields.
+ * and this reader touches only its named fields.
  */
 export function buildAboutReport({
   generatedAt,
@@ -56,6 +56,11 @@ export function buildAboutReport({
     ...(support.cloudRunner === undefined ? [] : [`Runner: ${support.cloudRunner}`]),
     ...(support.perfStalls === undefined ? [] : [`Stalls: ${support.perfStalls}`]),
   ];
+
+  // What the provider actually said when a turn stopped (VC-1244).
+  if (support.providerFailures !== undefined && support.providerFailures.length > 0) {
+    lines.push("", "Provider errors", ...support.providerFailures);
+  }
 
   if (rows.length > 0) {
     lines.push("", "CLI status");

@@ -1,6 +1,10 @@
 /** The singular, Node-hostable Agent Runtime backed by Pi core. */
 
-import { safeStopMessage } from "./safe-diagnostic";
+import {
+  localProviderDiagnostic,
+  safeStopMessage,
+  type ProviderDiagnosticSink,
+} from "./safe-diagnostic";
 
 import { ProviderStopCapture, finalStopDetail, safeProviderMessage } from "./provider-stop";
 import {
@@ -375,6 +379,15 @@ export interface PiRuntimeHostOptions {
    * Absent, nothing is timed.
    */
   mainSpan?: PiMainSpan;
+  /**
+   * Where each failed provider reply's raw error goes, credential-redacted and
+   * bounded, for the host's support report (VC-1244). The Session itself only
+   * ever gets the extracted stop sentence; this is the one copy of the
+   * envelope it came from, and it stays on this machine. Called without
+   * awaiting; a sink that throws costs the turn nothing. Absent, the raw text
+   * is dropped as before.
+   */
+  providerDiagnostics?: ProviderDiagnosticSink;
 }
 
 /** Everything {@link attachSession} needs, with the default already chosen. */
@@ -386,6 +399,7 @@ interface PiRuntimeHost {
   parallelMcpReads: boolean;
   codeModeSandbox: CodeModeSandboxAssets | undefined;
   mainSpan: PiMainSpan | undefined;
+  providerDiagnostics: ProviderDiagnosticSink | undefined;
   models: Models;
   credentials: CredentialStore | null;
   catalogReady: Promise<void>;
@@ -447,6 +461,7 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
     parallelMcpReads: options.parallelMcpReads === true,
     codeModeSandbox: options.codeModeSandbox,
     mainSpan: options.mainSpan,
+    providerDiagnostics: options.providerDiagnostics,
     models: access.models,
     credentials: access.credentials,
     catalogReady: access.catalogReady ?? Promise.resolve(),
@@ -3701,6 +3716,24 @@ async function attachSession(
           // Structured provider facts outrank recovery heuristics over prose.
           if (stopDetail.category === "auth-failed") failure.reason = "auth";
           if (stopDetail.category === "context-overflow") failure.reason = "context";
+          // The envelope the sentence above was cut from, for this machine's
+          // support report only (VC-1244). It never joins `failure`, the
+          // sidecar or an observation.
+          const raw = (event.message as AssistantMessage).errorMessage;
+          if (raw !== undefined && raw.length > 0 && host.providerDiagnostics !== undefined) {
+            try {
+              host.providerDiagnostics({
+                at: host.now(),
+                provider: event.message.provider,
+                model: event.message.model,
+                category: stopDetail.category,
+                httpStatus: stopDetail.httpStatus,
+                raw: localProviderDiagnostic(raw, credentialRedaction),
+              });
+            } catch {
+              /* A diagnostics sink is never a reason for a turn to fail differently. */
+            }
+          }
         }
         return;
       }

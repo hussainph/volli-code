@@ -9,6 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import type { ProviderFailureDiagnostic } from "./safe-diagnostic";
 import { join } from "node:path";
 import { branchTip, insertEntry, setValue } from "./harness-session";
 import { DEFAULT_COMPACTION_SETTINGS } from "./harness-compaction";
@@ -12827,6 +12828,66 @@ it("redacts provider failures before sidecar, replay and observations", async ()
   } finally {
     await handle.close();
     for (const log of logs) log.mockRestore();
+  }
+});
+
+it("hands the raw provider error to the local diagnostics sink and nowhere else (VC-1244)", async () => {
+  const { spec, observations, sessionDataDir } = fixture();
+  const stored = "stored-dummy-1244";
+  const marker = "raw-envelope-marker-1244";
+  const telemetry: ObservabilityEvent[] = [];
+  const diagnostics: ProviderFailureDiagnostic[] = [];
+  const runtime = createPiAgentRuntime({
+    sessionDataDir,
+    now: () => 1234,
+    observability: {
+      record: (event) => {
+        telemetry.push(event);
+      },
+    },
+    providerDiagnostics: (diagnostic) => {
+      diagnostics.push(diagnostic);
+      // A sink that throws costs the turn nothing.
+      throw new Error("sink failed");
+    },
+    models: modelsWithStream(
+      scriptedStream([
+        (emit) =>
+          emit.fail(
+            `400 {"error":{"type":"invalid_request_error","message":"messages: text content blocks must be non-empty"},"echo":"${marker}","key":"${stored}"}`,
+          ),
+      ]),
+    ),
+  });
+  const handle = await runtime.startSession({
+    ...spec,
+    credentialRedaction: { redact: (text) => text.replaceAll(stored, "[redacted]") },
+  });
+  try {
+    await handle.submitUserMessage("go");
+    expect(observations.find((o) => o.kind === "attention" && o.state === "raised")).toMatchObject({
+      stopDetail: {
+        category: "bad-request",
+        message: "400 messages: text content blocks must be non-empty",
+      },
+    });
+    expect(diagnostics).toEqual([
+      {
+        at: 1234,
+        provider: PROVIDER_ID,
+        model: MODEL_ID,
+        category: "bad-request",
+        httpStatus: 400,
+        raw: `400 {"error":{"type":"invalid_request_error","message":"messages: text content blocks must be non-empty"},"echo":"${marker}","key":"[redacted]"}`,
+      },
+    ]);
+    const durable =
+      JSON.stringify({ observations, telemetry, replay: await handle.reconcile(null) }) +
+      readFileSync(handle.recovery!.sessionFilePath, "utf8");
+    expect(durable).not.toContain(marker);
+    expect(durable).not.toContain(stored);
+  } finally {
+    await handle.close();
   }
 });
 
