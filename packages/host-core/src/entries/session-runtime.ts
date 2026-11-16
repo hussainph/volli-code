@@ -56,6 +56,10 @@ export {
   writeModelPickerView,
 } from "../session-runtime/model-access-preferences";
 export {
+  readAutoResumeAfterQuit,
+  writeAutoResumeAfterQuit,
+} from "../session-runtime/quit-resume-settings";
+export {
   createPiNativeAdapter,
   createPiRuntimeHost,
   PI_ADAPTER_ID,

@@ -7,11 +7,7 @@ import {
   type SessionCommandIntent,
 } from "@volli/shared";
 
-import {
-  QUIT_RESUME_POLICY,
-  restartResumeVerdict,
-  type RestartResumeVerdictInput,
-} from "./restart-resume";
+import { restartResumeVerdict, type RestartResumeVerdictInput } from "./restart-resume";
 
 const TWELVE_HOURS = 12 * 60 * 60 * 1000;
 
@@ -72,7 +68,7 @@ function input(
     startPending: false,
     boundary: "settled",
     interruption: "process-loss",
-    quitPolicy: QUIT_RESUME_POLICY,
+    autoResumeAfterQuit: false,
     ticketSessions: [],
     ...rest,
   };
@@ -232,34 +228,34 @@ describe("restartResumeVerdict (VC-450)", () => {
     );
   });
 
-  // VC-1245: the owner's pending choice is this one branch. A crash (or an
-  // executor that cannot say) is never touched by it, and a quit with a tool
-  // in flight waits for the person under either policy.
+  // VC-1245: the person's setting is this one branch. Off (the default), a
+  // quit's turn waits for Resume; on, it is continued like a crash's. A
+  // crash, or an executor that cannot say, is never touched by it, and a quit
+  // with a tool in flight waits for the person in both positions.
   it.each([
-    ["resume", "quit", "resume"],
-    ["resume", "process-loss", "resume"],
-    ["offer-resume", "quit", "quit"],
-    ["offer-resume", "process-loss", "resume"],
-    ["offer-resume", null, "resume"],
-  ] as const)("under the %s quit policy, a %s turn gets %s", (quitPolicy, interruption, want) => {
-    const verdict = restartResumeVerdict(input({}, { quitPolicy, interruption }));
-    expect(verdict).toEqual(
-      want === "resume" ? expect.objectContaining({ kind: "resume" }) : skip(want),
-    );
-  });
+    [false, "quit", "quit"],
+    [false, "process-loss", "resume"],
+    [false, null, "resume"],
+    [true, "quit", "resume"],
+    [true, "process-loss", "resume"],
+  ] as const)(
+    "with automatic resume after a quit %s, a %s turn gets %s",
+    (autoResumeAfterQuit, interruption, want) => {
+      const verdict = restartResumeVerdict(input({}, { autoResumeAfterQuit, interruption }));
+      expect(verdict).toEqual(
+        want === "resume" ? expect.objectContaining({ kind: "resume" }) : skip(want),
+      );
+    },
+  );
 
-  it.each(["resume", "offer-resume"] as const)(
-    "leaves a quit with a tool in flight to the person under the %s policy",
-    (quitPolicy) => {
+  it.each([false, true])(
+    "leaves a quit with a tool in flight to the person with automatic resume %s",
+    (autoResumeAfterQuit) => {
       expect(
         restartResumeVerdict(
-          input({}, { quitPolicy, interruption: "quit", boundary: "tool-in-flight" }),
+          input({}, { autoResumeAfterQuit, interruption: "quit", boundary: "tool-in-flight" }),
         ),
       ).toEqual(skip("tool-in-flight"));
     },
   );
-
-  it("ships the policy that continues a quit like a crash", () => {
-    expect(QUIT_RESUME_POLICY).toBe("resume");
-  });
 });

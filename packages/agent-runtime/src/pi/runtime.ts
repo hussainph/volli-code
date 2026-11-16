@@ -2051,6 +2051,8 @@ async function attachSession(
       : replayableContext;
     const activeAttentionReasons = new Set<AttentionObservation["reason"]>();
     const openTurnIds = new Set<string>();
+    /** Whether the partial-turn warning this sidecar last held is the plain process-loss one. */
+    let processLossWarningHeld = false;
     /**
      * The turn a shutdown recorded leaving open (see {@link VOLLI_SHUTDOWN_MARKER}),
      * counted only when nothing was observed after it: a quit writes nothing
@@ -2076,6 +2078,11 @@ async function attachSession(
       if (observation.kind !== "attention") continue;
       if (observation.state === "raised") activeAttentionReasons.add(observation.reason);
       else activeAttentionReasons.delete(observation.reason);
+      if (observation.reason === "partial-turn") {
+        processLossWarningHeld =
+          observation.state === "raised" &&
+          observation.message === RECOVERED_TURN_INTERRUPTED_DETAIL;
+      }
     }
     const persistObservation = async <T extends RecoverableMarker>(
       observation: T,
@@ -2162,22 +2169,6 @@ async function attachSession(
     // nothing is left to resume, so no warning offers a Resume that could do
     // nothing (VC-450). The turn is still recorded as interrupted.
     const replyFinished = resumeBoundary(recoveredMessages, hasFailedStopReason) === "none";
-    for (const recoveredTurnId of openTurnIds) {
-      // Attention identity is frozen per attachment/reason, not per notice.
-      // A generic restart warning must not replace an active diagnostic (such
-      // as conflicting settled history) with a warning the host may retire.
-      // Still interrupt every open turn even when its warning is already held.
-      if (!replyFinished && !activeAttentionReasons.has("partial-turn")) {
-        await persistObservation({
-          kind: "attention",
-          state: "raised",
-          reason: "partial-turn",
-          message: RECOVERED_TURN_INTERRUPTED_DETAIL,
-        });
-        activeAttentionReasons.add("partial-turn");
-      }
-      await persistObservation({ kind: "turn", state: "interrupted", turnId: recoveredTurnId });
-    }
     /**
      * What cut short the open turn this recovery found: a quit only when every
      * open turn was one a shutdown recorded leaving open. Cleared when the
@@ -2189,6 +2180,30 @@ async function attachSession(
         : [...openTurnIds].every((openTurnId) => quitTurnIds.has(openTurnId))
           ? "quit"
           : "process-loss";
+    // A quit's turn gets the process-loss warning even when this sidecar
+    // still holds an earlier one: the engine retires that warning on the
+    // ledger when the person moves on with a message, which the sidecar never
+    // hears, and without a standing warning the row would offer no Resume
+    // (VC-1245). A genuine diagnostic is never replaced, and a crash's
+    // recovery is unchanged.
+    let warnAgain = recoveredInterruption === "quit" && processLossWarningHeld;
+    for (const recoveredTurnId of openTurnIds) {
+      // Attention identity is frozen per attachment/reason, not per notice.
+      // A generic restart warning must not replace an active diagnostic (such
+      // as conflicting settled history) with a warning the host may retire.
+      // Still interrupt every open turn even when its warning is already held.
+      if (!replyFinished && (!activeAttentionReasons.has("partial-turn") || warnAgain)) {
+        await persistObservation({
+          kind: "attention",
+          state: "raised",
+          reason: "partial-turn",
+          message: RECOVERED_TURN_INTERRUPTED_DETAIL,
+        });
+        activeAttentionReasons.add("partial-turn");
+        warnAgain = false;
+      }
+      await persistObservation({ kind: "turn", state: "interrupted", turnId: recoveredTurnId });
+    }
     // A notice that the last process was reconnecting describes a wait no
     // process is running any more. Retired here rather than left for the next
     // turn to clear, so a relaunched Session does not claim to be reconnecting

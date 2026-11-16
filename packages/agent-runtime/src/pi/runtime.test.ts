@@ -14680,6 +14680,54 @@ describe("a quit leaves the running turn for the next launch (VC-1245)", () => {
     expect(kinds(attachment.observations).at(-1)).toBe("attachment:closed");
   });
 
+  // The engine retires the warning on the ledger when the person moves on
+  // with a message; the sidecar never hears it. A second quit must warn again,
+  // or the row would have nothing to offer Resume on.
+  it("warns again for a second quit after the person moved on from the first", async () => {
+    const attachment = fixture();
+    const quit = async (
+      handle: Handle,
+      controller: AbortController,
+      streaming: Promise<void>,
+      text: string,
+    ) => {
+      const delivery = handle.submitUserMessage(text, "queue", `${text}-command`);
+      await streaming;
+      controller.abort(new RuntimeShutdownAbort());
+      await delivery;
+      await handle.close("shutdown");
+    };
+
+    const firstSignal = new AbortController();
+    const firstStreaming = Promise.withResolvers<void>();
+    const first = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([haltOnAbort("one", firstStreaming.resolve)])),
+    }).startSession({ ...attachment.spec, signal: firstSignal.signal });
+    const recovery = first.recovery!;
+    await quit(first, firstSignal, firstStreaming.promise, "first");
+
+    const secondSignal = new AbortController();
+    const secondStreaming = Promise.withResolvers<void>();
+    const second = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([haltOnAbort("two", secondStreaming.resolve)])),
+    }).startSession({ ...attachment.spec, signal: secondSignal.signal, recovery });
+    expect(processLossWarned([...(await second.reconcile(null)).observations])).toBe(true);
+    await quit(second, secondSignal, secondStreaming.promise, "second");
+
+    const { handle, replayed } = await relaunch(attachment, recovery);
+    const warnings = attentions(replayed).filter(
+      (observation) =>
+        observation.kind === "attention" &&
+        observation.state === "raised" &&
+        observation.message === RECOVERED_TURN_INTERRUPTED_DETAIL,
+    );
+    expect(warnings).toHaveLength(2);
+    expect(handle.interruption?.()).toBe("quit");
+    await handle.close();
+  });
+
   it("ends the turn as stopped for every other close", async () => {
     const attachment = fixture();
     const streaming = Promise.withResolvers<void>();

@@ -1198,6 +1198,18 @@ export const CHANNEL_PLACEMENT: { readonly [C in PlacedChannel]: ChannelPlacemen
     reason: "Unlinks Pi session logs on the host.",
   },
 
+  // ---- VolliQuitResumeIpcContract ----------------------------------------
+  "volli:quit-resume-get": {
+    placement: "host",
+    owner: "VC-572",
+    reason: "Whether a quit's turn resumes on its own, host-level app_state volli:quit-resume.",
+  },
+  "volli:quit-resume-set": {
+    placement: "host",
+    owner: "VC-572",
+    reason: "Whether a quit's turn resumes on its own, host-level app_state volli:quit-resume.",
+  },
+
   // ---- VolliOrphanProcessIpcContract -------------------------------------
   "volli:orphan-processes-scan": {
     placement: "host",

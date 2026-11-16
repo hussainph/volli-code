@@ -1157,12 +1157,18 @@ const userTexts = (messages: readonly { role: string }[], text: string) =>
 // The same production path, continued: a relaunch judges each turn it
 // recovered and continues the safe ones through the retry door (VC-450).
 describe("restart resume through the durable Pi binding (VC-450)", () => {
-  async function resume(current: Launch, recovered: BootRecoveredTurns) {
+  async function resume(
+    current: Launch,
+    recovered: BootRecoveredTurns,
+    autoResumeAfterQuit = false,
+  ) {
     await resumeRecoveredTurns(
       {
         projection: async (sessionId) => (await current.host.projection({ sessionId })).projection,
         ticketSessions: async () => [],
         resumeBoundary: (input) => current.host.resumeBoundary(input),
+        interruption: (input) => current.host.interruption(input),
+        autoResumeAfterQuit: () => autoResumeAfterQuit,
         pendingTurnStarts: () => current.host.pendingTurnStarts(),
         command: (request) => current.host.command(request),
         shouldStop: () => false,
@@ -1173,13 +1179,16 @@ describe("restart resume through the durable Pi binding (VC-450)", () => {
   }
 
   // A quit is a process loss like any other (VC-1245): the host's ordinary
-  // close leaves the turn for the next launch exactly as a crash does.
+  // close leaves the turn for the next launch exactly as a crash does. A
+  // crash's turn continues whatever the setting says; a quit's continues only
+  // with automatic resume after a quit on.
   it.each([
-    ["crash", true],
-    ["quit", false],
+    ["crash", true, false],
+    ["crash", true, true],
+    ["quit", false, true],
   ] as const)(
-    "continues a turn a %s cut short while the model was answering, without sending the message again",
-    async (_loss, crash) => {
+    "continues a turn a %s cut short while the model was answering (automatic resume after a quit %s), without sending the message again",
+    async (_loss, crash, autoResumeAfterQuit) => {
       const f = fixture();
       const stalled = Promise.withResolvers<void>();
       f.replies.splice(
@@ -1241,7 +1250,7 @@ describe("restart resume through the durable Pi binding (VC-450)", () => {
         expect.objectContaining({ detail: RECOVERED_TURN_INTERRUPTED_DETAIL }),
       );
       expect(recovered?.turns).toEqual([{ sessionId, attachmentId: interrupted.liveExecutor!.id }]);
-      await resume(current, recovered!);
+      await resume(current, recovered!, autoResumeAfterQuit);
 
       const projection = (await current.host.projection({ sessionId })).projection;
       expect(projection.lastTurnOutcome).toBe("completed");
@@ -1259,6 +1268,81 @@ describe("restart resume through the durable Pi binding (VC-450)", () => {
       ).toHaveLength(1);
     },
   );
+
+  // The default (VC-1245): automatic resume after a quit is off, so a quit's
+  // turn ends at Interrupted, the row offers Resume, and nothing runs until
+  // the person asks.
+  it("leaves a turn a quit cut short for the person while automatic resume after a quit is off", async () => {
+    const f = fixture();
+    const stalled = Promise.withResolvers<void>();
+    f.replies.splice(
+      0,
+      f.replies.length,
+      {
+        wait: (signal) =>
+          new Promise<void>((resolve) => {
+            stalled.resolve();
+            signal?.addEventListener("abort", () => resolve(), { once: true });
+          }),
+        fail: "Request was aborted.",
+      },
+      { text: "Resumed when asked." },
+    );
+    const { sessionId } = await f.host.command({
+      commandId: `create-${clock++}`,
+      command: {
+        kind: "session.create",
+        projectId: "project",
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: "Quit with automatic resume off",
+      },
+    });
+    await f.engine.getOrRecordSessionInput({
+      sessionId,
+      input: { kind: "tool-surface", tools: ["read", "edit", "write", "execute", "ask_user"] },
+      provenance,
+    });
+    await f.host.command({
+      sessionId,
+      commandId: `attach-${clock++}`,
+      command: { kind: "adapter.attach", continuity: "fresh" },
+    });
+    await f.host.command({
+      sessionId,
+      commandId: `submit-${clock++}`,
+      command: {
+        kind: "message.submit",
+        settle: "opened",
+        message: { id: "m", role: "user", parts: [{ type: "text", text: "Build the thing" }] },
+      },
+    });
+    await stalled.promise;
+
+    const current = await f.restart(f, false);
+    let recovered: BootRecoveredTurns | undefined;
+    await f.boot(current, (turns) => (recovered = turns));
+    const requestsBefore = f.script.requests.length;
+    await resume(current, recovered!, false);
+    expect(f.script.requests).toHaveLength(requestsBefore);
+    const waiting = (await current.host.projection({ sessionId })).projection;
+    expect(waiting.lastTurnOutcome).toBe("interrupted");
+    expect(
+      waiting.attention.active.some((attention) =>
+        isProcessLossWarning(attention, waiting.liveExecutor?.id ?? null),
+      ),
+    ).toBe(true);
+
+    const retried = await current.host.command({
+      sessionId,
+      commandId: `resume-${clock++}`,
+      command: { kind: "executor.retry" },
+    });
+    expect(retried.receipt?.status, JSON.stringify(retried.receipt)).toBe("accepted");
+    const answered = (await current.host.projection({ sessionId })).projection;
+    expect(answered.lastTurnOutcome).toBe("completed");
+  });
 
   // VC-926: the production shape. The lost process accepted the message and
   // its executor saved the interruption, but the ledger never heard of it. The
@@ -1398,18 +1482,19 @@ describe("restart resume through the durable Pi binding (VC-450)", () => {
   // crash's is: the question its release withdraws leaves no answer behind
   // that a restart could continue from (VC-1245).
   it.each([
-    ["crash", true],
-    ["quit", false],
+    ["crash", true, false],
+    ["quit", false, false],
+    ["quit", false, true],
   ] as const)(
-    "leaves a turn a %s cut short inside a tool for the person, whose Resume then continues it",
-    async (_loss, crash) => {
+    "leaves a turn a %s cut short inside a tool for the person (automatic resume after a quit %s), whose Resume then continues it",
+    async (_loss, crash, autoResumeAfterQuit) => {
       const f = fixture();
       const { sessionId } = await start(f);
       const current = await f.restart(f, crash);
       let recovered: BootRecoveredTurns | undefined;
       await f.boot(current, (turns) => (recovered = turns));
       const requestsBefore = f.script.requests.length;
-      await resume(current, recovered!);
+      await resume(current, recovered!, autoResumeAfterQuit);
       // Nothing ran: the abandoned question is the person's to answer.
       expect(f.script.requests).toHaveLength(requestsBefore);
       const waiting = (await current.host.projection({ sessionId })).projection;

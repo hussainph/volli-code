@@ -6,6 +6,7 @@
  * port, including the browser backend. Recovery uses the same host engine.
  */
 import { randomUUID } from "node:crypto";
+import type Database from "better-sqlite3";
 import type { HostNotice, HostedSessionRuntime, SessionEngine } from "@volli/session-engine";
 import {
   logErrorSummary,
@@ -22,6 +23,7 @@ import {
   FOLLOW_UP_DOWNGRADE_HOLD_DETAIL,
 } from "../db/session-follow-up-repo";
 import { listScheduledResumeSessionIds } from "../db/scheduled-resume-repo";
+import { readAutoResumeAfterQuit } from "./quit-resume-settings";
 import {
   createScheduledResumeHost,
   createSessionWatchdog,
@@ -350,7 +352,8 @@ export function createSessionRuntimeLifecycle<Services>(options: {
           onRecovered: (recovered) => {
             recoveredTurns = recovered.turns.length;
             if (runtime === null) return;
-            recovery.resume = () => resumeRestartTurns(runtime, sessionEngine, recovered);
+            recovery.resume = () =>
+              resumeRestartTurns(runtime, sessionEngine, recovered, database.db);
           },
         });
         if (!closing) {
@@ -463,6 +466,7 @@ export function createSessionRuntimeLifecycle<Services>(options: {
     hosted: HostedSessionRuntime,
     engine: NonNullable<typeof sessionEngine>,
     recovered: BootRecoveredTurns,
+    db: Database.Database,
   ): Promise<void> {
     return resumeRecoveredTurns(
       {
@@ -470,6 +474,7 @@ export function createSessionRuntimeLifecycle<Services>(options: {
         ticketSessions: (query) => ticketSessionProjections(engine, query),
         resumeBoundary: (input) => hosted.resumeBoundary(input),
         interruption: (input) => hosted.interruption(input),
+        autoResumeAfterQuit: () => readAutoResumeAfterQuit(db),
         pendingTurnStarts: () => hosted.pendingTurnStarts(),
         command: (request) => hosted.command(request),
         shouldStop: () => closing,

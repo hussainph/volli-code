@@ -9,6 +9,7 @@ import { SESSION_RUNTIME } from "../session-services";
 import * as notices from "./durable-host-notice-delivery";
 import { readSqliteHostNotice, scopeSqliteHostNoticeOutbox } from "./sqlite-host-notice-outbox";
 import * as recovery from "./boot-recovery";
+import { readAutoResumeAfterQuit } from "./quit-resume-settings";
 import * as mcp from "../mcp/session-host";
 import * as shell from "../shell/shell-notices";
 import * as resumptions from "./session-resumptions";
@@ -59,6 +60,7 @@ vi.mock("./boot-recovery-reader", () => ({
 vi.mock("./restart-resume", () => ({ resumeRecoveredTurns: vi.fn(async () => {}) }));
 vi.mock("../mcp/session-host", () => ({ closeAllMcpSessionHosts: vi.fn() }));
 vi.mock("./session-resumptions", () => ({ catchUpSessionResumptions: vi.fn(async () => {}) }));
+vi.mock("./quit-resume-settings", () => ({ readAutoResumeAfterQuit: vi.fn(() => false) }));
 // The real VC-618 drain still runs, so its RPC/runtime → MCP → flush order is
 // asserted end to end below; the spy records the owners the lifecycle hands it.
 vi.mock("../host-shutdown", async (original) => {
@@ -1083,6 +1085,11 @@ describe("restart resume after recovery (VC-450)", () => {
     });
     expect(ports.resumeBoundary({ attachmentId: "a" })).toBe("settled");
     expect(ports.interruption?.({ attachmentId: "a" })).toBe("quit");
+    // The person's setting, read from this host's database at each verdict (VC-1245).
+    expect(ports.autoResumeAfterQuit?.()).toBe(false);
+    expect(readAutoResumeAfterQuit).toHaveBeenCalledWith(
+      f.options.host.database.ok && f.options.host.database.db,
+    );
     expect(ports.pendingTurnStarts()).toEqual(new Set(["s"]));
     await ports.command({ commandId: "c", sessionId: "s", command: { kind: "executor.retry" } });
     expect(f.runtime.command).toHaveBeenCalledOnce();

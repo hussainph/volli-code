@@ -46,7 +46,6 @@
  * cloud store judges only its owner's Sessions; the local path is unchanged.
  */
 import {
-  QUIT_RESUME_POLICY,
   restartResumeVerdict,
   type RestartResumeSkipReason,
   type SessionRuntimeCommandRequest,
@@ -109,6 +108,11 @@ export interface RestartResumePorts {
   resumeBoundary(input: { attachmentId: string }): RuntimeResumeBoundary | null;
   /** What cut short the recovered turn (VC-1245); absent reads as a process loss. */
   interruption?(input: { attachmentId: string }): RuntimeInterruption | null;
+  /**
+   * The person's setting: whether a deliberate quit's turn resumes on its own
+   * (VC-1245). Read at each verdict; absent reads as off.
+   */
+  autoResumeAfterQuit?(): boolean;
   /** Sessions this process already holds an accepted, not yet opened turn for. */
   pendingTurnStarts(): ReadonlySet<string>;
   command(request: SessionRuntimeCommandRequest): Promise<SessionRuntimeCommandResult>;
@@ -196,7 +200,7 @@ async function judgeAndRun(
         startPending: ports.pendingTurnStarts().has(sessionId),
         boundary: ports.resumeBoundary({ attachmentId }),
         interruption: ports.interruption?.({ attachmentId }) ?? null,
-        quitPolicy: QUIT_RESUME_POLICY,
+        autoResumeAfterQuit: ports.autoResumeAfterQuit?.() ?? false,
         ticketSessions,
         // A cloud store's own Sessions are judged here; only a launch without
         // one leaves this Mac's turns for a launch that shows them (VC-889).
