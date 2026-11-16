@@ -76,6 +76,7 @@ import {
   type ProviderReasoningDroppedObservation,
   type ReasoningDropCause,
   type RuntimeAttachmentHandle,
+  type RuntimeCloseReason,
   type RuntimeContextCarry,
   type RuntimeActivityObservation,
   type RuntimeActivityValue,
@@ -2318,6 +2319,15 @@ async function attachSession(
     let acceptingSteer = false;
     let failure: (RuntimeFailure & { stopDetail: SessionStopDetail }) | undefined;
     let closed = false;
+    /**
+     * Whether the close is the process ending rather than the Session letting
+     * this attachment go. A turn a shutdown cuts short records no end of its
+     * own: the sidecar keeps it open, so the next launch recovers it as the
+     * process loss it is (VC-1245) — the same warning, Resume and restart
+     * resume a crash gets. Recording it as interrupted here would tell that
+     * recovery the person stopped it.
+     */
+    let shuttingDown = false;
     let cancelled = false;
     /**
      * Whether this runtime ended the turn on purpose, cleared when the next one
@@ -4065,6 +4075,8 @@ async function attachSession(
           await commitObservation(raised);
         }
       }
+      // A quit ends no turn: the next launch recovers it (see `shuttingDown`).
+      if (shuttingDown) return;
       // A Stop during a reconnect ends the wait with the turn.
       await clearTransportNotice();
       await commitObservation(
@@ -4507,9 +4519,10 @@ async function attachSession(
         await agent.waitForIdle();
       },
 
-      async close(): Promise<void> {
+      async close(reason: RuntimeCloseReason = "released"): Promise<void> {
         if (closed) return;
         closed = true;
+        shuttingDown = reason === "shutdown";
         // Withdrawn attachments retry nothing. Cleared rather than tested for at
         // the drain: a decision to retry that was taken while this ran would
         // otherwise start a Pi run against an environment already cleaned up.

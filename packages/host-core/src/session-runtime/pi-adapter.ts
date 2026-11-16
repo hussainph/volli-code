@@ -1596,14 +1596,14 @@ class PiBinding implements BindingHandle {
    * is harmless either way, because the claim in {@link PiBinding.#take} lets
    * only one path end any of them.
    */
-  release(_reason: ReleaseReason): Promise<void> {
+  release(reason: ReleaseReason): Promise<void> {
     if (this.#releasePromise !== undefined) return this.#releasePromise;
     this.#releasing = true;
-    this.#releasePromise = this.#finishRelease();
+    this.#releasePromise = this.#finishRelease(reason);
     return this.#releasePromise;
   }
 
-  async #finishRelease(): Promise<void> {
+  async #finishRelease(reason: ReleaseReason): Promise<void> {
     const failures: unknown[] = [];
     const cleanup = async (work: () => unknown): Promise<void> => {
       try {
@@ -1629,7 +1629,9 @@ class PiBinding implements BindingHandle {
     // Before close revokes the execution environment's attachment token (VC-270).
     await cleanup(() => this.#shell?.dispose());
     await Promise.all([...this.#mcpPorts].map((port) => cleanup(() => this.#disposeMcpPort(port))));
-    await cleanup(() => this.#handle?.close());
+    // A shutdown is the process ending, not the Session letting go: the turn
+    // it cuts short stays open for the next launch to recover (VC-1245).
+    await cleanup(() => this.#handle?.close(reason === "shutdown" ? "shutdown" : "released"));
     await cleanup(() => this.#secret?.dispose?.());
     if (failures.length > 0) throw new AggregateError(failures, "Attachment cleanup failed.");
   }

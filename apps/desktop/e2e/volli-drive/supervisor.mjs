@@ -1028,9 +1028,29 @@ async function restart(reason) {
  * A routine relaunch of a local instance (VC-1203): the app's ordinary quit,
  * then the same restart on the same profile and database.
  */
-async function relaunch() {
+async function relaunch({ kill = false } = {}) {
   if (spec.cloud || spec.deployment) throw new Error("relaunch is local; use restart");
+  if (kill) return restartElectron("relaunch-kill", killLocalInstance, { killed: true });
   return restartElectron("relaunch", closeLocalInstance);
+}
+
+/**
+ * A force-quit (VC-1245): SIGKILL to the exact Electron child this supervisor
+ * started, so nothing of the app's own quit runs. Its helpers go with it or
+ * are reaped by identity before the relaunch.
+ */
+async function killLocalInstance() {
+  const child = electronChild;
+  const pid = electronPid;
+  let close = observedChildExit(child, pid);
+  if (close === null) {
+    const exited = new Promise((settle) => child.once("exit", settle));
+    child.kill("SIGKILL");
+    await exited;
+    close = { ...observedChildExit(child, pid), kind: "killed" };
+  }
+  await killExactly(await owned(), { signal: "SIGKILL", graceMs: 2_000 }).catch(() => []);
+  return { trayQuit: null, close };
 }
 
 /**
@@ -1204,7 +1224,7 @@ function mainLogSince(offset) {
   }
 }
 
-async function restartElectron(reason, closeInstance) {
+async function restartElectron(reason, closeInstance, { killed = false } = {}) {
   if (restarting) throw new Error("a restart is already running");
   restarting = true;
   const started = performance.now();
@@ -1214,7 +1234,7 @@ async function restartElectron(reason, closeInstance) {
     const quitMs = Math.round(performance.now() - started);
     // The app may end itself at once when only read-only workers are left (VC-1208).
     const immediate = immediateQuit(close, mainLogSince(logFrom), { userDataDir: L.userDataDir });
-    const unclean = immediate ? [] : cleanQuitProblems(close);
+    const unclean = immediate || killed ? [] : cleanQuitProblems(close);
     if (unclean.length > 0) {
       throw new Error(
         `Electron did not quit cleanly before the restart (${unclean.join("; ")}): ${JSON.stringify({ close, trayQuit })}`,
@@ -1490,7 +1510,7 @@ async function handle(cmd, args) {
     case "restart":
       return restart(String(args.reason ?? "requested"));
     case "relaunch":
-      return relaunch();
+      return relaunch({ kill: args.kill === true });
     case "quit-during-launch":
       return quitDuringLaunch(args);
     case "restore-restart":

@@ -197,6 +197,20 @@ describe("Pi adapter refresh lifecycle", () => {
     for (const port of h.ports) expect(port.dispose).toHaveBeenCalledOnce();
   });
 
+  // A shutdown is the process ending: the executor leaves the turn it cuts
+  // short for the next launch to recover (VC-1245). Every other release ends
+  // it here.
+  it.each([
+    ["shutdown", "shutdown"],
+    ["requested", "released"],
+    ["replaced", "released"],
+    ["adapter_failure", "released"],
+  ] as const)("closes the executor for a %s release as %s", async (reason, closeReason) => {
+    const h = await fixture();
+    await h.binding.release(reason);
+    expect(h.close).toHaveBeenCalledExactlyOnceWith(closeReason);
+  });
+
   it("disposes every adopted port exactly once, even with concurrent release calls", async () => {
     const h = await fixture();
     const next = await h.spec.refreshTools!(request);

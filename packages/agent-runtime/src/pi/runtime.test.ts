@@ -43,6 +43,7 @@ import {
   mcpProviderToolName,
   codeModeSurfaceFor,
   parseMcpToolKey,
+  RECOVERED_TURN_INTERRUPTED_DETAIL,
   withParallelReadEligibility,
   sessionToolIds,
   skillPromptResource,
@@ -6294,6 +6295,52 @@ describe("startSession", () => {
 
     await handle.close();
     expect(kinds(observations)).toContain("attachment:closed");
+  });
+
+  // A quit is a process loss, not a Stop: the turn it cuts short stays open in
+  // the sidecar, so the next launch recovers it exactly as it recovers a
+  // crashed one — the process-loss warning and a settled point to resume
+  // from — rather than as a turn someone ended (VC-1245).
+  it.each([
+    ["shutdown", true],
+    ["released", false],
+  ] as const)("a %s close mid-turn leaves the turn for recovery: %s", async (reason, recovers) => {
+    const attachment = fixture();
+    const streaming = Promise.withResolvers<void>();
+    const first = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([haltOnAbort("half a thought", streaming.resolve)])),
+    }).startSession(attachment.spec);
+    const recovery = first.recovery!;
+    const delivery = first.submitUserMessage("go", "queue", "before-quit");
+    await streaming.promise;
+    await first.close(reason);
+    await delivery;
+    expect(kinds(attachment.observations).includes("turn:interrupted")).toBe(!recovers);
+
+    const reopened = fixture();
+    const second = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([])),
+    }).startSession({ ...attachment.spec, observer: reopened.spec.observer, recovery });
+    const replay = await second.reconcile(null);
+    const replayed = [...replay.observations];
+    expect(kinds(replayed).filter((kind) => kind.startsWith("turn:"))).toEqual([
+      "turn:started",
+      "turn:interrupted",
+    ]);
+    expect(
+      attentions(replayed).some(
+        (observation) =>
+          observation.kind === "attention" &&
+          observation.state === "raised" &&
+          observation.message === RECOVERED_TURN_INTERRUPTED_DETAIL,
+      ),
+    ).toBe(recovers);
+    // The aborted half-reply is not replayed: the user message is the point
+    // a resume answers.
+    expect(second.resumeBoundary?.()).toBe("settled");
+    await second.close();
   });
 
   it("honors Stop when the provider races the abort with a normal finish (VC-758)", async () => {

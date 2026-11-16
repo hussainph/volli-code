@@ -2143,6 +2143,18 @@ export type CompactionRequestOutcome =
  */
 export type RuntimeResumeBoundary = "settled" | "tool-in-flight" | "none";
 
+/**
+ * Why a live attachment closes.
+ *
+ * - `released` — the Session let this attachment go (a stop, a replacement, a
+ *   failed adapter): a turn it cuts short ended here, and says so.
+ * - `shutdown` — the process running it is ending (a quit, an update's
+ *   restart). A turn it cuts short is a process loss, exactly as a crash's is:
+ *   it is left open for the next launch to recover as interrupted, raise the
+ *   process-loss warning on, and continue when that is safe (VC-450, VC-1245).
+ */
+export type RuntimeCloseReason = "released" | "shutdown";
+
 /** One live runtime attachment. Closing it never ends Session identity. */
 export interface RuntimeAttachmentHandle {
   submitUserMessage(
@@ -2200,8 +2212,11 @@ export interface RuntimeAttachmentHandle {
   compact(instructions?: string): Promise<CompactionRequestOutcome>;
   /** Abort the current run and settle the resulting state honestly. */
   interrupt(): Promise<void>;
-  /** Release local resources; the Session and its history remain. */
-  close(): Promise<void>;
+  /**
+   * Release local resources; the Session and its history remain. Absent, the
+   * reason is `released`.
+   */
+  close(reason?: RuntimeCloseReason): Promise<void>;
   /** Replays durable semantic markers after an optional sidecar checkpoint. */
   reconcile(cursor: string | null): Promise<{
     cursor: string | null;

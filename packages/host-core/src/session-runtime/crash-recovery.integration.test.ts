@@ -1165,82 +1165,93 @@ describe("restart resume through the durable Pi binding (VC-450)", () => {
     );
   }
 
-  it("continues a turn lost while the model was answering, without sending the message again", async () => {
-    const f = fixture();
-    const stalled = Promise.withResolvers<void>();
-    f.replies.splice(
-      0,
-      f.replies.length,
-      {
-        wait: (signal) =>
-          new Promise<void>((resolve) => {
-            stalled.resolve();
-            signal?.addEventListener("abort", () => resolve(), { once: true });
-          }),
-      },
-      { text: "Picked up where the lost process stopped." },
-    );
-    const { sessionId } = await f.host.command({
-      commandId: `create-${clock++}`,
-      command: {
-        kind: "session.create",
-        projectId: "project",
-        ticketId: null,
-        role: "project",
-        parentSessionId: null,
-        title: "Restart resume",
-      },
-    });
-    await f.engine.getOrRecordSessionInput({
-      sessionId,
-      input: { kind: "tool-surface", tools: ["read", "edit", "write", "execute", "ask_user"] },
-      provenance,
-    });
-    await f.host.command({
-      sessionId,
-      commandId: `attach-${clock++}`,
-      command: { kind: "adapter.attach", continuity: "fresh" },
-    });
-    await f.host.command({
-      sessionId,
-      commandId: `submit-${clock++}`,
-      command: {
-        kind: "message.submit",
-        settle: "opened",
-        message: { id: "m", role: "user", parts: [{ type: "text", text: "Build the thing" }] },
-      },
-    });
-    await stalled.promise;
+  // A quit is a process loss like any other (VC-1245): the host's ordinary
+  // close leaves the turn for the next launch exactly as a crash does.
+  it.each([
+    ["crash", true],
+    ["quit", false],
+  ] as const)(
+    "continues a turn a %s cut short while the model was answering, without sending the message again",
+    async (_loss, crash) => {
+      const f = fixture();
+      const stalled = Promise.withResolvers<void>();
+      f.replies.splice(
+        0,
+        f.replies.length,
+        {
+          // A quit's close aborts the request, and the provider answers the
+          // abort as one: the stream ends in an error, not a finished reply.
+          wait: (signal) =>
+            new Promise<void>((resolve) => {
+              stalled.resolve();
+              signal?.addEventListener("abort", () => resolve(), { once: true });
+            }),
+          fail: "Request was aborted.",
+        },
+        { text: "Picked up where the lost process stopped." },
+      );
+      const { sessionId } = await f.host.command({
+        commandId: `create-${clock++}`,
+        command: {
+          kind: "session.create",
+          projectId: "project",
+          ticketId: null,
+          role: "project",
+          parentSessionId: null,
+          title: "Restart resume",
+        },
+      });
+      await f.engine.getOrRecordSessionInput({
+        sessionId,
+        input: { kind: "tool-surface", tools: ["read", "edit", "write", "execute", "ask_user"] },
+        provenance,
+      });
+      await f.host.command({
+        sessionId,
+        commandId: `attach-${clock++}`,
+        command: { kind: "adapter.attach", continuity: "fresh" },
+      });
+      await f.host.command({
+        sessionId,
+        commandId: `submit-${clock++}`,
+        command: {
+          kind: "message.submit",
+          settle: "opened",
+          message: { id: "m", role: "user", parts: [{ type: "text", text: "Build the thing" }] },
+        },
+      });
+      await stalled.promise;
 
-    const current = await f.restart(f, true);
-    let recovered: BootRecoveredTurns | undefined;
-    expect(await f.boot(current, (turns) => (recovered = turns))).toEqual({
-      closed: 0,
-      errors: [],
-    });
-    const interrupted = (await current.host.projection({ sessionId })).projection;
-    expect(interrupted.lastTurnOutcome).toBe("interrupted");
-    expect(interrupted.attention.active).toContainEqual(
-      expect.objectContaining({ detail: RECOVERED_TURN_INTERRUPTED_DETAIL }),
-    );
-    expect(recovered?.turns).toEqual([{ sessionId, attachmentId: interrupted.liveExecutor!.id }]);
-    await resume(current, recovered!);
+      const current = await f.restart(f, crash);
+      let recovered: BootRecoveredTurns | undefined;
+      expect(await f.boot(current, (turns) => (recovered = turns))).toEqual({
+        closed: 0,
+        errors: [],
+      });
+      const interrupted = (await current.host.projection({ sessionId })).projection;
+      expect(interrupted.lastTurnOutcome).toBe("interrupted");
+      expect(interrupted.attention.active).toContainEqual(
+        expect.objectContaining({ detail: RECOVERED_TURN_INTERRUPTED_DETAIL }),
+      );
+      expect(recovered?.turns).toEqual([{ sessionId, attachmentId: interrupted.liveExecutor!.id }]);
+      await resume(current, recovered!);
 
-    const projection = (await current.host.projection({ sessionId })).projection;
-    expect(projection.lastTurnOutcome).toBe("completed");
-    expect(projection.attention.active).toEqual([]);
-    const resumed = projection.commands.at(-1)!;
-    expect(resumed).toMatchObject({
-      id: restartResumeCommandId(interrupted.liveExecutor!.id, interrupted.latestTurnId!),
-      intent: { kind: "executor.retry" },
-    });
-    // The resumed request carries the person's message once, as context.
-    const last = f.script.requests.at(-1)!;
-    expect(userTexts(last, "Build the thing")).toHaveLength(1);
-    expect(
-      projection.commands.filter(({ intent }) => intent.kind === "message.submit"),
-    ).toHaveLength(1);
-  });
+      const projection = (await current.host.projection({ sessionId })).projection;
+      expect(projection.lastTurnOutcome).toBe("completed");
+      expect(projection.attention.active).toEqual([]);
+      const resumed = projection.commands.at(-1)!;
+      expect(resumed).toMatchObject({
+        id: restartResumeCommandId(interrupted.liveExecutor!.id, interrupted.latestTurnId!),
+        intent: { kind: "executor.retry" },
+      });
+      // The resumed request carries the person's message once, as context.
+      const last = f.script.requests.at(-1)!;
+      expect(userTexts(last, "Build the thing")).toHaveLength(1);
+      expect(
+        projection.commands.filter(({ intent }) => intent.kind === "message.submit"),
+      ).toHaveLength(1);
+    },
+  );
 
   // VC-926: the production shape. The lost process accepted the message and
   // its executor saved the interruption, but the ledger never heard of it. The
