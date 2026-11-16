@@ -598,6 +598,41 @@ until its remaining desktop dependencies move.
   startup and a restore's staging handle both set; with file-backed temp
   storage VACUUM needs a third copy on disk. A box's rollback is to that safety copy:
   [hostd README](../../apps/hostd/README.md#upgrading-and-rolling-back).
+- **The upgrade runs off the serving thread (VC-1105).** On a multi-gigabyte
+  profile an upgrade is a minute of synchronous SQLite: integrity checks,
+  the safety copy, the migrations, ANALYZE and retention. Desktop asks
+  `pendingDatabaseUpgrade` (header bytes only) before composing the host and,
+  when it answers, runs the same `openVolliDb` in a worker thread
+  (`src/db/database-upgrade.ts`) while its "Updating your data" window is up;
+  nothing else opens the file until the worker has closed it. The worker's log
+  lines land in the host log with `thread: "database-upgrade"`, and the open
+  logs one `database upgraded` line with milliseconds per step. A refusal
+  comes back classified, so `createHostCore` goes degraded without trying
+  again; an upgrade hands back the closed file's identity, and while the file
+  is still exactly that one the host's own open skips the quick check the
+  worker just ran. A worker that gives no answer leaves the host to open the
+  file itself, as before.
+- **Every launch's check runs there too (VC-1203).** The routine open's
+  preflight `quick_check` reads every page: seconds of main on a large
+  profile. `databaseStartupWork` (header bytes and sizes only) sends every
+  database of 16 MiB or more (with its WAL) through the same worker, not only
+  one that upgrades: with nothing pending the worker's open is that check,
+  unchanged, every launch. A smaller file is checked on main as before: it
+  takes milliseconds there, less than starting the worker, and no window
+  flashes up for it. Its
+  answer is used exactly as an upgrade's is: a clean file's identity lets the
+  host's open skip asking again, a refusal goes straight to the degraded host
+  and its recovery screen, no answer means the host opens on its own thread.
+  No file yet, a pending swap and an unreadable header also stay with the
+  host's own open, which answers each of them at once. Quitting during the check
+  closes the windows at once; the process ends when the check's read does
+  (a native SQLite call cannot be interrupted), and the check's handle is
+  read-only, so the file is left as it was. The safety copy is `cp -c` on macOS
+  (`src/db/file-clone.ts`): an APFS clone, taken after the checkpoint while
+  the open lock is held, restamped with the time it was taken, and still
+  verified before it is published; Node's `COPYFILE_FICLONE` never clones on
+  macOS. Where the volume cannot clone, and on Linux without reflinks, it is
+  the same full copy as before. Names, location and format are unchanged.
 - **N-1 compatibility (VC-633).** CI's `N-1 compatibility` lanes run a
   previous build, from its own shipped sources, against a profile this build
   migrated to head (`src/db/n1-compatibility.test.ts`, driven by

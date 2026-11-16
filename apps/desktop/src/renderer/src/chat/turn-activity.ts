@@ -485,7 +485,13 @@ export function escalateTurnActivity(activity: TurnActivity): TurnActivity {
   return { ...activity, word };
 }
 
-/** Pure middle truncation. Width may be pixels (canvas measureText) or character units in tests. */
+/**
+ * Pure middle truncation. Width may be pixels (a laid-out measuring line) or
+ * character units in tests. The longest fitting cut is found by bisection, so
+ * a payload of N characters costs O(log N) measurements: in the app each one
+ * is a forced layout, and a linear scan over a long heredoc command blocked
+ * the renderer for seconds (VC-1198).
+ */
 export function middleTruncatePayload(
   payload: string,
   maxWidth: number,
@@ -495,10 +501,17 @@ export function middleTruncatePayload(
   if (measure(payload) <= maxWidth) return payload;
   if (measure("…") > maxWidth) return "";
   const chars = Array.from(payload);
-  for (let keep = chars.length - 1; keep > 0; keep -= 1) {
+  const cut = (keep: number) => {
     const head = Math.ceil(keep * 0.35);
-    const candidate = `${chars.slice(0, head).join("")}…${chars.slice(chars.length - (keep - head)).join("")}`;
-    if (measure(candidate) <= maxWidth) return candidate;
+    return `${chars.slice(0, head).join("")}…${chars.slice(chars.length - (keep - head)).join("")}`;
+  };
+  // Invariant: `low` characters fit (0 is the bare ellipsis); more than `high` do not.
+  let low = 0;
+  let high = chars.length - 1;
+  while (low < high) {
+    const keep = Math.ceil((low + high) / 2);
+    if (measure(cut(keep)) <= maxWidth) low = keep;
+    else high = keep - 1;
   }
-  return "…";
+  return low === 0 ? "…" : cut(low);
 }

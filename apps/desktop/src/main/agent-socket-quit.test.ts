@@ -179,4 +179,36 @@ describe("agent socket app quit", () => {
     expect(event.preventDefault).toHaveBeenCalledExactlyOnceWith();
     expect(reportFailure).toHaveBeenCalledExactlyOnceWith(failure);
   });
+
+  it("tells the timeline early startup's quit was accepted, then drained (VC-1208)", async () => {
+    vi.useFakeTimers();
+    try {
+      for (const settles of [true, false]) {
+        const handlers = new Map<string, (event: { preventDefault(): void }) => void>();
+        const order: string[] = [];
+        const exit = vi.fn(() => order.push("exit"));
+        registerAgentSocketWillQuit({
+          lifecycle: {
+            on(event, listener) {
+              handlers.set(event, listener);
+            },
+            exit,
+          },
+          shutdownAgentSocket: settles ? async () => {} : () => new Promise<void>(() => {}),
+          shutdownDeadlineMs: 25,
+          reportFailure: vi.fn(),
+          timeline: {
+            accepted: () => order.push("accepted"),
+            drained: (deadlineExpired) => order.push(`drained:${deadlineExpired}`),
+          },
+        });
+        handlers.get("will-quit")?.({ preventDefault: vi.fn() });
+        await vi.advanceTimersByTimeAsync(25);
+        await vi.runOnlyPendingTimersAsync();
+        expect(order).toEqual(["accepted", `drained:${!settles}`, "exit"]);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

@@ -7,7 +7,7 @@ import { setSettingsWindowOpener, useUiStore } from "@renderer/stores/ui";
 import { toastError } from "@renderer/lib/toast";
 import { prepareWindowNavigation } from "./workspace-window-navigation";
 
-export const isSettingsWindow = (): boolean => window.location?.hash === "#settings";
+export { isSettingsWindow } from "./window-role";
 
 export function installSettingsWindowRouting(): void {
   setSettingsWindowOpener((navigation) => {
@@ -44,6 +44,7 @@ export function acceptSettingsNavigation(navigation: SettingsWindowNavigation): 
     settingsCategory: navigation.category ?? null,
     configureCategory: navigation.configureCategory ?? null,
     settingsSignInProviderId: navigation.signInProviderId ?? null,
+    settingsSignInReauthenticate: navigation.reauthenticate ?? null,
   });
   void prepareWindowNavigation(navigation, request.signal)
     .then(() => {

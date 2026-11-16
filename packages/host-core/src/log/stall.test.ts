@@ -12,6 +12,7 @@ import {
   MAIN_STALL_DEFAULTS,
   startMainStallMonitor,
   type MainStallMonitor,
+  processWaitCounters,
   threadCpuMs,
 } from "./stall";
 
@@ -24,6 +25,8 @@ const monitors: MainStallMonitor[] = [];
 beforeEach(() => {
   clock = 1_000;
   cpuClock = null;
+  majorFaults = 0;
+  involuntarySwitches = 0;
   records = [];
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   vi.spyOn(performance, "now").mockImplementation(() => clock);
@@ -40,6 +43,10 @@ afterEach(() => {
 /** Main's CPU clock when a test freezes it; otherwise it runs with the wall clock. */
 let cpuClock: number | null = null;
 
+/** The process's scripted wait counters: a test bumps them. */
+let majorFaults = 0;
+let involuntarySwitches = 0;
+
 /** Scripted GC pauses: a test reports one with `gcPause`. */
 let gcPause: (startMs: number, durationMs: number, kind: string) => void = () => {};
 const scriptedGc: GcPauseSource = (onPause) => {
@@ -55,6 +62,7 @@ function start(options: Parameters<typeof startMainStallMonitor>[0] = {}): MainS
     observeGc: scriptedGc,
     // On the CPU the whole time, unless a test freezes it.
     threadCpuMs: () => cpuClock ?? clock,
+    waitCounters: () => ({ majorFaults, involuntarySwitches }),
     ...options,
   });
   monitors.push(monitor);
@@ -383,6 +391,87 @@ describe("the main stall monitor", () => {
         { door: "unattributed", count: 1, totalMs: 250 },
       ],
     });
+  });
+
+  it("says why main waited: its own CPU, and the process's page-ins and preemptions, on every line", () => {
+    start();
+    // A door that waited (a checkpoint's fsync, say): long, little CPU, no paging.
+    cpuClock = clock;
+    withTrace(null, { door: "ipc", operation: "volli:app-state-set" }, () => {
+      clock += 400;
+      cpuClock = (cpuClock ?? 0) + 30;
+    });
+    // A span that paged: its window counts the faults since the previous tick.
+    majorFaults += 120;
+    withMainSpan({ door: "runtime", operation: "observe", sessionId: "s-1" }, () => {
+      clock += 300;
+    });
+    // The lag those two caused is already logged.
+    blockThenTick(0);
+    // An unexplained block while the scheduler kept main off the CPU.
+    involuntarySwitches += 900;
+    majorFaults += 3;
+    blockThenTick(500);
+    cpuClock = null;
+    blockThenTick(0);
+    // Many short spans, mostly paging.
+    majorFaults += 40;
+    for (let i = 0; i < 30; i += 1) {
+      withMainSpan({ door: "projection", operation: "get-session" }, () => {
+        clock += 9;
+      });
+    }
+    vi.advanceTimersByTime(50);
+    // A garbage-collection pause, with its window's cost.
+    gcPause(clock + 60, 260, "minor");
+    involuntarySwitches += 5;
+    blockThenTick(300);
+    blockThenTick(0);
+    expect(stalls()).toEqual([
+      expect.objectContaining({
+        attribution: "door",
+        operation: "volli:app-state-set",
+        durationMs: 400,
+        cpuMs: 30,
+        majorFaults: 0,
+        involuntarySwitches: 0,
+      }),
+      expect.objectContaining({
+        attribution: "span",
+        operation: "observe",
+        durationMs: 300,
+        cpuMs: 0,
+        majorFaults: 120,
+        involuntarySwitches: 0,
+      }),
+      expect.objectContaining({
+        attribution: "off-cpu",
+        durationMs: 500,
+        cpuMs: 0,
+        majorFaults: 3,
+        involuntarySwitches: 900,
+      }),
+      expect.objectContaining({
+        attribution: "aggregate",
+        operation: "get-session",
+        cpuMs: 270,
+        majorFaults: 40,
+        involuntarySwitches: 0,
+      }),
+      expect.objectContaining({
+        attribution: "gc",
+        operation: "minor",
+        cpuMs: 350,
+        majorFaults: 0,
+        involuntarySwitches: 5,
+      }),
+    ]);
+  });
+
+  it("reads the process's wait counters by default", () => {
+    const counters = processWaitCounters();
+    expect(counters.majorFaults).toBeGreaterThanOrEqual(0);
+    expect(counters.involuntarySwitches).toBeGreaterThanOrEqual(0);
   });
 
   it("reads main's own thread CPU time by default", () => {

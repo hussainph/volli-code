@@ -1024,7 +1024,6 @@ export function HomeSurface({ visible }: { visible: boolean }) {
               releaseActive();
               useProjectUiStore.getState().ungroupHome(selectedId, groupId);
             }}
-            onTakeOutTab={ungroupLocalTab}
             onHideBrowser={hideBrowser}
             terminalTabs={terminalTabs}
             chatIds={openChatIds}
@@ -1109,11 +1108,6 @@ export function HomeSurface({ visible }: { visible: boolean }) {
                         onReorder={(movedId, ids) => reorderInPane(pane.id, movedId, ids)}
                         onPinFile={(relPath) => pinHomeFile(selectedId, relPath)}
                         onCloseOtherFiles={(relPath) => void requestCloseOtherFiles(relPath)}
-                        onTakeOut={
-                          pane.activeTabId === null
-                            ? undefined
-                            : () => ungroupLocalTab(pane.activeTabId!)
-                        }
                       />
                     )
                   }
@@ -1237,9 +1231,8 @@ function HomeTabs({
   actions,
   label,
   tabIds,
-  onTakeOut,
   ...strip
-}: HomeStripProps & { actions?: HomeStripActions; onTakeOut?: () => void }) {
+}: HomeStripProps & { actions?: HomeStripActions }) {
   const descriptors = useHomeTabDescriptors(strip);
   const byId = new Map(descriptors.map((tab) => [tab.id, tab]));
   const tabs = tabIds.flatMap((id) => {
@@ -1264,7 +1257,7 @@ function HomeTabs({
     onCloseOtherFiles: strip.onCloseOtherFiles,
   };
   return actions === undefined ? (
-    <HomePaneTabStrip {...list} onTakeOut={onTakeOut} />
+    <HomePaneTabStrip {...list} />
   ) : (
     <HomeTabStrip {...list} {...actions} />
   );

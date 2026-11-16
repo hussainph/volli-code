@@ -47,6 +47,7 @@ import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { createSessionEngine, type SessionTranscriptArtifact } from "@volli/session-engine";
+import { backfillProjectionCheckpoints } from "../session-control/checkpoint-backfill";
 import {
   RuntimeObservationTranslator,
   type TranslatedObservation,
@@ -699,6 +700,14 @@ async function expectRefusal(path: string, floor: number): Promise<void> {
   // The db file and its WAL are byte-identical; `-shm` is an index SQLite's
   // read-only reader may rebuild.
   expect([sha256(path), sha256(`${path}-wal`)]).toEqual(before);
+}
+
+/** A `model.selected` payload as the ledger stores it. */
+function modelSelected(providerId: string) {
+  return {
+    kind: "model.selected",
+    selection: { providerId, modelId: `${providerId}-fixture`, reasoningLevel: "off" },
+  };
 }
 
 /** This build's checks on a profile N-1 has written to. */
@@ -1692,6 +1701,103 @@ describe.skipIf(manifest === null)(
           intent: { kind: "session.retitle", title: "Still replayable" },
         });
         expect((await engine.getSession({ sessionId }))?.session.title).toBe("Still replayable");
+      } finally {
+        reopened.close();
+      }
+    });
+
+    it("opens a stopped Session whose head-written checkpoint binds its stop to a provider (VC-1236)", async () => {
+      await headProfile();
+      const { head, guarded } = await probe();
+      if (guarded && headFloor() > head) return;
+      const sessionId = "session-signin-stop";
+      const attentionId = "pi:attention:runtime-attachment:fixture:auth";
+      const raised = {
+        kind: "attention.raised",
+        attention: {
+          id: attentionId,
+          attachmentId: null,
+          kind: "auth_required",
+          detail: "[Provider text withheld: possible request content.]",
+          diagnostic: null,
+          stopDetail: {
+            category: "auth-failed",
+            message: "[Provider text withheld: possible request content.]",
+            providerType: "volli.credential-refresh-failed",
+            httpStatus: null,
+            retry: "not-retried",
+            resetsAt: null,
+          },
+        },
+      };
+      const writer = openVolliDb(dbPath);
+      try {
+        const engine = headEngine(writer, "signin-stop");
+        const created = await engine.createSession({
+          commandId: "signin-stop-create",
+          requestedSessionId: sessionId,
+          projectId: PROJECT_ID,
+          ticketId: null,
+          role: "project",
+          parentSessionId: null,
+          title: "Stopped on a sign-in",
+          provenance,
+        });
+        // The stop on Anthropic, then a switch to another model: this build's
+        // fold binds the stop to Anthropic in the checkpoint it writes.
+        const last = writer
+          .prepare(
+            "SELECT id, sequence FROM session_events WHERE session_id = ? ORDER BY sequence DESC LIMIT 1",
+          )
+          .get(created.session.id) as { id: string; sequence: number };
+        const insert = writer.prepare(`INSERT INTO session_events
+          (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)
+          SELECT ?, session_id, ?, occurred_at + 1, recorded_at + 1, provenance_id, NULL, NULL, ?
+          FROM session_events WHERE id = ?`);
+        [modelSelected("anthropic"), raised, modelSelected("openai-codex")].forEach(
+          (payload, index) =>
+            insert.run(
+              `signin-stop-${index}`,
+              last.sequence + 1 + index,
+              JSON.stringify(payload),
+              last.id,
+            ),
+        );
+        // This build's checkpoint, written by its own production writer (the
+        // launch backfill) through its own codec.
+        await backfillProjectionCheckpoints({ db: writer });
+        const projection = await engine.getSession({ sessionId });
+        expect(projection?.attentionProviders).toEqual({ [attentionId]: "anthropic" });
+        const stored = writer
+          .prepare("SELECT checkpoint FROM session_projection_checkpoints WHERE session_id = ?")
+          .get(sessionId) as { checkpoint: string } | undefined;
+        expect(stored, "this build wrote a checkpoint for the stopped Session").toBeDefined();
+        expect(JSON.parse(stored!.checkpoint).projection.attentionProviders).toEqual({
+          [attentionId]: "anthropic",
+        });
+      } finally {
+        writer.close();
+      }
+      const run = await n1(dbPath, [{ kind: "readSession", sessionId }]);
+      const read = value(run, 0);
+      // N-1 must open the Session and show its stop. Whether it uses the
+      // checkpoint (ignoring the key it does not know) or refolds from the
+      // event log is its own choice; failing the open is not one.
+      expect(read.found).toBe(true);
+      expect(["read", "refold", "unsupported"]).toContain(read.checkpoint);
+      expect(read.attention).toEqual([
+        expect.objectContaining({ id: attentionId, kind: "auth_required" }),
+      ]);
+      expect(read.modelProvider).toBe("openai-codex");
+      assertHeadReads(dbPath);
+      // And this build still reads what N-1 left, its stop still Anthropic's
+      // or, from a checkpoint N-1 rewrote without the key, the Session's model.
+      const reopened = openVolliDb(dbPath);
+      try {
+        const projection = await headEngine(reopened, "signin-stop-reopened").getSession({
+          sessionId,
+        });
+        expect(projection?.attention.active.map((item) => item.id)).toEqual([attentionId]);
       } finally {
         reopened.close();
       }

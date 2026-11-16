@@ -574,6 +574,67 @@ describe("registerAcceptedQuitCoordinator", () => {
     expect(exit).toHaveBeenCalledTimes(2);
   });
 
+  it("says the shutdown drained once, after the drain and before the exit (VC-1208)", async () => {
+    vi.useFakeTimers();
+    let quit!: (event: { preventDefault(): void }) => void;
+    const order: string[] = [];
+    let finish!: () => void;
+    registerAcceptedQuitCoordinator({
+      lifecycle: {
+        on: (_event, listener) => {
+          quit = listener;
+        },
+        exit: () => order.push("exit"),
+      },
+      shutdownNativeSessions: () =>
+        new Promise<void>((resolve) => {
+          finish = () => {
+            order.push("drained");
+            resolve();
+          };
+        }),
+      shutdownAgentSocket: async () => {},
+      reportFailure: vi.fn(),
+      onDrained: () => order.push("onDrained"),
+    });
+    quit({ preventDefault: vi.fn() });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(order).toEqual([]);
+    finish();
+    await vi.runAllTimersAsync();
+    expect(order).toEqual(["drained", "onDrained", "exit"]);
+  });
+
+  it("reports an onDrained that throws, and the exit goes on", async () => {
+    vi.useFakeTimers();
+    let quit!: (event: { preventDefault(): void }) => void;
+    const exit = vi.fn();
+    const failure = new Error("drained line failed");
+    for (const reporterThrows of [false, true]) {
+      const reportFailure = vi.fn(() => {
+        if (reporterThrows) throw new Error("reporter failed");
+      });
+      registerAcceptedQuitCoordinator({
+        lifecycle: {
+          on: (_event, listener) => {
+            quit = listener;
+          },
+          exit,
+        },
+        shutdownNativeSessions: async () => {},
+        shutdownAgentSocket: async () => {},
+        reportFailure,
+        onDrained: () => {
+          throw failure;
+        },
+      });
+      quit({ preventDefault: vi.fn() });
+      await vi.runAllTimersAsync();
+      expect(reportFailure).toHaveBeenCalledWith(failure);
+    }
+    expect(exit).toHaveBeenCalledTimes(2);
+  });
+
   it("still forces an accepted quit when deadline failure reporting throws", async () => {
     vi.useFakeTimers();
     const handlers = new Map<string, (event: { preventDefault(): void }) => void>();

@@ -51,7 +51,15 @@ import {
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { verifyMigrationBackup } from "./backup-integrity";
+import {
+  checkedDatabaseFile,
+  isCheckedDatabaseFile,
+  type CheckedDatabaseFile,
+} from "./checked-file";
+import { WAL_AUTOCHECKPOINT_PAGES } from "./autocheckpoint";
 import { assertMigrationDiskSpace } from "./disk-preflight";
+import { cloneOrCopyFile, type FileCloneDeps } from "./file-clone";
+import { timeStep, type UpgradeTimings } from "./upgrade-timings";
 import { checkMigrationHistory, describeMigrationHistory } from "./migration-history";
 import { migrate, SCHEMA_HEAD } from "./migrations";
 import { acquireDatabaseOpenLock } from "./open-lock";
@@ -273,15 +281,21 @@ function preflight(
   dbPath: string,
   fullCheck: boolean,
   busyTimeoutMs: number,
+  checked: CheckedDatabaseFile | undefined,
 ): { compatibility: SchemaCompatibility; fullyClean: boolean | undefined } {
   assertDatabaseHeader(dbPath);
+  // The quick check reads every page: seconds on a multi-gigabyte profile,
+  // more with a cold cache. An upgrade that has just checked, migrated and
+  // closed this exact file (VC-1105) has already asked it; any change since
+  // (another inode, size, timestamp, or a WAL with frames) asks again.
+  const unchanged = checked !== undefined && isCheckedDatabaseFile(dbPath, checked);
   const check = new Database(dbPath, {
     readonly: true,
     fileMustExist: true,
     timeout: busyTimeoutMs,
   });
   try {
-    if (!checksClean(check)) {
+    if (!unchanged && !checksClean(check)) {
       throw new Error(
         "The local database failed its integrity check. Restore from the last backup that checks clean.",
       );
@@ -295,6 +309,64 @@ function preflight(
     return { compatibility, fullyClean: fullCheck ? checksFullyClean(check, dbPath) : undefined };
   } finally {
     check.close();
+  }
+}
+
+/**
+ * Whether opening `dbPath` would migrate it (VC-1105): an existing database
+ * whose header says it is older than this build. Reads the header bytes only:
+ * no SQLite handle, no lock, no sidecar. Anything else (no file, a pending
+ * swap, a damaged header, a newer or current schema) answers `null`, and the
+ * ordinary open reports it as it always has.
+ */
+export function pendingDatabaseUpgrade(
+  dbPath: string,
+): { fromVersion: number; toVersion: number } | null {
+  try {
+    if (!exists(dbPath) || hasPendingDatabaseRecovery(dbPath)) return null;
+    const fromVersion = stagedSchemaVersion(dbPath);
+    return fromVersion > 0 && fromVersion < SCHEMA_HEAD
+      ? { fromVersion, toVersion: SCHEMA_HEAD }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The size from which a routine launch's check leaves main (VC-1203). The
+ * quick check reads every page; below this it takes milliseconds on main
+ * (about 200 ms at the slowest rate measured, a cold read under heavy swap),
+ * less than starting the worker costs, and a window must not flash up for it.
+ */
+export const ROUTINE_CHECK_OFF_MAIN_BYTES = 16 * 1024 * 1024;
+
+/**
+ * What a launch's database worker does before the host opens `dbPath`
+ * (VC-1203): `upgrade` for a file {@link pendingDatabaseUpgrade} names, `check`
+ * for any other existing file of at least {@link ROUTINE_CHECK_OFF_MAIN_BYTES}
+ * (with its WAL), whose open still runs the full preflight. Reads the header
+ * bytes and sizes only. `null` (a small file, no file yet, a pending swap, an
+ * unreadable header) is left to the host's own open, which runs the same
+ * check, or answers each of the others at once.
+ */
+export function databaseStartupWork(
+  dbPath: string,
+  offMainFromBytes: number = ROUTINE_CHECK_OFF_MAIN_BYTES,
+):
+  | { readonly kind: "upgrade"; readonly fromVersion: number; readonly toVersion: number }
+  | { readonly kind: "check"; readonly bytes: number }
+  | null {
+  const upgrade = pendingDatabaseUpgrade(dbPath);
+  if (upgrade !== null) return { kind: "upgrade", ...upgrade };
+  try {
+    if (!exists(dbPath) || hasPendingDatabaseRecovery(dbPath)) return null;
+    assertDatabaseHeader(dbPath);
+    const bytes =
+      lstatSync(dbPath).size + (lstatSync(`${dbPath}-wal`, { throwIfNoEntry: false })?.size ?? 0);
+    return bytes >= offMainFromBytes ? { kind: "check", bytes } : null;
+  } catch {
+    return null;
   }
 }
 
@@ -366,9 +438,24 @@ export function openVolliDb(
     onTransactionViolation?: TransactionViolationHandler;
     /** SQLite lock wait in milliseconds; tests may shorten the production 5000 ms default. */
     busyTimeoutMs?: number;
+    /** Tests and the upgrade bench only: how the safety copy is made (`file-clone.ts`). */
+    fileClone?: FileCloneDeps;
+    /**
+     * The file a finished upgrade left (`database-upgrade.ts`). While it is
+     * still exactly that file, the routine quick check is not repeated.
+     */
+    checked?: CheckedDatabaseFile;
+    /**
+     * Called once the read-only preflight is done, before the open's first
+     * write of any kind (a removed safety copy, the writable handle, a
+     * migration). A throw ends the open there, with nothing written (VC-1208).
+     */
+    beforeFirstWrite?: () => void;
   } = {},
 ): Database.Database {
   const busyTimeoutMs = options.busyTimeoutMs ?? 5000;
+  const openStarted = performance.now();
+  const timings: UpgradeTimings = {};
   // A crash or full disk during publication must never turn a missing live
   // pathname into an apparently successful, empty first-run database.
   if (!options.allowPendingRecovery) assertNoPendingDatabaseRecovery(dbPath);
@@ -389,7 +476,9 @@ export function openVolliDb(
     let fullyClean: boolean | undefined;
     if (exists(dbPath)) {
       try {
-        ({ compatibility, fullyClean } = preflight(dbPath, abandoned.length > 0, busyTimeoutMs));
+        ({ compatibility, fullyClean } = timeStep(timings, "preflight", () =>
+          preflight(dbPath, abandoned.length > 0, busyTimeoutMs, options.checked),
+        ));
       } catch (error) {
         throw keepingAbandonedCopies(error, abandoned);
       }
@@ -400,6 +489,8 @@ export function openVolliDb(
         `The local database is missing, but an unpublished safety copy of it was kept: ${abandoned.join(", ")}. Nothing was created. Recover the database from that copy before starting Volli again.`,
       );
     }
+    // Everything above reads; everything below may write.
+    options.beforeFirstWrite?.();
     if (fullyClean === true) {
       // The live database exists and passes a full integrity check: the
       // pending copies are redundant now, and never recovery candidates.
@@ -418,7 +509,8 @@ export function openVolliDb(
     // Asked only where the runner would take a safety copy (an existing file
     // with migrations pending); it fails open when the disk cannot be measured.
     const pendingFrom = compatibility?.schemaVersion ?? 0;
-    if (pendingFrom > 0 && pendingFrom < SCHEMA_HEAD) assertMigrationDiskSpace(dbPath);
+    if (pendingFrom > 0 && pendingFrom < SCHEMA_HEAD)
+      timeStep(timings, "disk-check", () => assertMigrationDiskSpace(dbPath));
     // Set the timeout at construction, before even journal_mode can encounter a lock.
     const db = new Database(dbPath, { timeout: busyTimeoutMs });
     try {
@@ -437,14 +529,18 @@ export function openVolliDb(
       // ceiling keeps the WAL file itself from dominating a 260k-event history's
       // disk footprint while the automatic checkpoint still amortizes to a page
       // or two per commit.
-      db.pragma("wal_autocheckpoint = 400");
+      db.pragma(`wal_autocheckpoint = ${WAL_AUTOCHECKPOINT_PAGES}`);
       if (compatibility?.newer === true) {
         log.warn("database schema is newer and declares itself compatible; not migrating", {
           schemaVersion: compatibility.schemaVersion,
           schemaHead: SCHEMA_HEAD,
         });
       }
-      const migrated = migrate(db, dbPath, { diskChecked: true });
+      const migrated = migrate(db, dbPath, {
+        diskChecked: true,
+        timings,
+        ...(options.fileClone === undefined ? {} : { fileClone: options.fileClone }),
+      });
       warnOnDivergedHistory(db);
       // Post-migration, so it sees the final schema. A bounded ANALYZE
       // (`analysis_limit` keeps each table's scan proportional — SQLite's own
@@ -452,8 +548,17 @@ export function openVolliDb(
       // the planner blind. Do not repeat it on a routine open: ANALYZE takes a
       // write lock and changes sqlite_stat1 even when application data did not.
       if (migrated) {
-        db.pragma("analysis_limit = 1000");
-        db.exec("ANALYZE");
+        timeStep(timings, "analyze", () => {
+          db.pragma("analysis_limit = 1000");
+          db.exec("ANALYZE");
+        });
+        if (pendingFrom > 0)
+          log.info("database upgraded", {
+            fromVersion: pendingFrom,
+            toVersion: SCHEMA_HEAD,
+            totalMs: Math.round(performance.now() - openStarted),
+            stepsMs: timings,
+          });
       }
       if (options.normalizeCloudShadows !== false) normalizeCloudShadowPaths(db);
       guardTransactionOwnership(db, options.onTransactionViolation ?? logTransactionViolation);
@@ -692,9 +797,20 @@ function keepingAbandonedCopies(error: unknown, abandoned: readonly string[]): u
 export const MIGRATION_RECOVERY_ACTION =
   "Recovery action: quit Volli and restore the newest integrity-checked clean backup before retrying the upgrade.";
 
+/** A published migration safety copy, and the identity of the file that was verified. */
+export interface PublishedRollbackPoint {
+  readonly path: string;
+  /**
+   * The copy as this function left it, after verification and publication;
+   * `null` when it could not be read. Retention in the same upgrade skips
+   * re-checking the copy while it is still exactly this file (VC-1204).
+   */
+  readonly verified: CheckedDatabaseFile | null;
+}
+
 /**
  * Publishes `<dbPath>.backup-v<version>`: a verified, durable copy of the
- * database as it is before a migration runs, and returns its path.
+ * database as it is before a migration runs, and returns it.
  *
  * Checkpoints first, so the base file alone is the whole database, then
  * copies it to a unique staged name, verifies the copy, fsyncs it, sets any
@@ -707,11 +823,20 @@ export function publishRollbackPoint(
   db: Database.Database,
   dbPath: string,
   version: number,
-  options: { faults?: DatabaseFileFaults } = {},
-): string {
+  options: {
+    faults?: DatabaseFileFaults;
+    timings?: UpgradeTimings;
+    fileClone?: FileCloneDeps;
+  } = {},
+): PublishedRollbackPoint {
   const faults = options.faults ?? noFaults;
+  const timings = options.timings;
   const recovery = MIGRATION_RECOVERY_ACTION;
-  const result = db.pragma("wal_checkpoint(TRUNCATE)") as { busy: number }[];
+  const result = timeStep(
+    timings,
+    "checkpoint",
+    () => db.pragma("wal_checkpoint(TRUNCATE)") as { busy: number }[],
+  );
   if (result.length !== 1 || result[0]?.busy !== 0) {
     throw new Error(`Migration refused: WAL checkpoint did not complete. ${recovery}`);
   }
@@ -720,9 +845,17 @@ export function publishRollbackPoint(
   // clean rollback point at the same version (e.g. after a failed upgrade).
   const stagedPath = `${backupPath}.pending-${randomUUID()}`;
   faults("rollback-point:copy");
-  copyFileSync(dbPath, stagedPath);
+  // The checkpoint above left the whole database in the base file, and this
+  // connection holds the open lock, so nothing writes it until the migration
+  // below. A clone (VC-1105) is that file's bytes at this instant, kept by
+  // copy-on-write however the live file changes afterwards; where the volume
+  // cannot clone it is the same full copy as before.
+  const method = timeStep(timings, "copy", () =>
+    cloneOrCopyFile(dbPath, stagedPath, options.fileClone),
+  );
+  retentionLog.info("safety copy staged", { action: "staged", method, version });
   try {
-    verifyMigrationBackup(stagedPath);
+    timeStep(timings, "verify-copy", () => verifyMigrationBackup(stagedPath));
   } catch (error) {
     const quarantinePath = `${stagedPath}.corrupt`;
     try {
@@ -747,6 +880,7 @@ export function publishRollbackPoint(
   // only to our unique staged snapshot, not to any existing backup family.
   for (const suffix of ["-wal", "-shm"]) rmSync(`${stagedPath}${suffix}`, { force: true });
   let preserved: PreservedFamily | undefined;
+  const publishStarted = performance.now();
   try {
     // The copy's bytes are durable before any name can point at them.
     syncRecoveryPath(stagedPath);
@@ -774,12 +908,28 @@ export function publishRollbackPoint(
       cause: error,
     });
   }
+  if (timings !== undefined) timings["publish"] = Math.round(performance.now() - publishStarted);
   if (preserved?.path !== undefined)
     retentionLog.info("previous rollback family preserved", {
       action: "preserved",
       name: preserved.path,
     });
-  return backupPath;
+  return { path: backupPath, verified: verifiedIdentity(backupPath) };
+}
+
+/**
+ * The identity of the copy just verified, read only now: the rename that
+ * published it changes its ctime (APFS). Since the verifying connection
+ * closed, this function has only removed that connection's own empty
+ * sidecars, fsynced the file and renamed it, under the caller's open lock;
+ * none of that writes its bytes. `null` (check again) when it cannot be read.
+ */
+function verifiedIdentity(backupPath: string): CheckedDatabaseFile | null {
+  try {
+    return checkedDatabaseFile(backupPath);
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------

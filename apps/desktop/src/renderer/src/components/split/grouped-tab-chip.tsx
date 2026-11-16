@@ -1,11 +1,13 @@
 import * as React from "react";
 import "./grouped-tab-chip.css";
-import { type IconComponent as Icon, UnlinkIcon, CloseIcon } from "@renderer/components/ui/icon";
+import { type IconComponent as Icon, UnlinkIcon } from "@renderer/components/ui/icon";
 import { ListRow } from "@renderer/components/ui/list-row";
 import { Button } from "@renderer/components/ui/button";
 import {
   TabActionScope,
+  TabCloseDestructiveContext,
   TabDropdownDismissContext,
+  closeTabAction,
   type TabAction,
 } from "@renderer/components/ui/tab-actions";
 
@@ -54,6 +56,26 @@ type StripItem<T> =
       /** Each pane's whole live stack, in pane order: the popover's rows. */
       stacks: readonly { pane: TabGroupPane; tabs: readonly T[] }[];
     };
+
+/**
+ * Focus follows a tab taken out of its group (VC-1017). The menu that asked
+ * for it lived on the pane strip the tab just left, so its trigger unmounts
+ * and Radix's focus return has nowhere to go but the document body. Instead
+ * focus lands on the tab itself, now selected on its surface's top strip.
+ *
+ * Call it BEFORE the move, while `trigger` is still in its surface: the
+ * surface is found from it then, and the tab after the move has committed.
+ * Without a trigger (the right-click path) the whole document is searched for
+ * the selected tab of that id.
+ */
+export function focusTakenOutTab(trigger: HTMLElement | null, tabId: string): void {
+  const surface = trigger?.closest("[data-split-area]") ?? document;
+  const selector = `[data-strip-tab-id="${CSS.escape(tabId)}"] [role="tab"][aria-selected="true"]`;
+  window.setTimeout(() => {
+    const scope = surface instanceof Element && !surface.isConnected ? document : surface;
+    scope.querySelector<HTMLElement>(selector)?.focus();
+  }, 0);
+}
 
 /**
  * The top strip's items: an ordinary tab is itself; a group is ONE chip, placed
@@ -239,6 +261,7 @@ function hovering(event: React.PointerEvent): boolean {
 
 const EMPTY_ACTIONS: readonly TabAction[] = [];
 const noActions = () => EMPTY_ACTIONS;
+const plainClose = () => false;
 
 function MemberIcon({ description, className }: { description: TabMenuLabel; className: string }) {
   const { icon: Mark, artwork } = description;
@@ -364,6 +387,7 @@ function GroupedTabChip<T extends { id: string }>({
   onUngroup,
   tabStop,
   onClose,
+  closeDestructive,
   actionsFor,
 }: {
   item: Extract<StripItem<T>, { group: TabGroup }>;
@@ -377,6 +401,7 @@ function GroupedTabChip<T extends { id: string }>({
   onUngroup?(groupId: string): void;
   tabStop: boolean;
   onClose?(tab: T): void;
+  closeDestructive(tab: T): boolean;
   actionsFor(tab: T): readonly TabAction[];
 }) {
   const chipRef = React.useRef<HTMLDivElement>(null);
@@ -396,11 +421,11 @@ function GroupedTabChip<T extends { id: string }>({
     description: describe(tab),
   }));
   const [menuOpen, setMenuOpen] = React.useState(false);
+  // Closing the chip closes every member, so it is destructive when any is.
+  const chipCloseDestructive = tabs.some(closeDestructive);
   const memberActions = (tab: T) => [
     ...actionsFor(tab),
-    ...(onClose
-      ? [{ label: "Close", icon: CloseIcon, run: () => onClose(tab), destructive: true }]
-      : []),
+    ...(onClose ? [closeTabAction(() => onClose(tab), closeDestructive(tab))] : []),
   ];
   // Closing hands focus back to the chip's tab when focus was in the list —
   // synchronously, before the list unmounts and leaves it on the document.
@@ -474,25 +499,27 @@ function GroupedTabChip<T extends { id: string }>({
             }
           }}
         >
-          <Tab
-            label={title}
-            hint={head.detail || undefined}
-            active={active}
-            tabStop={tabStop}
-            aria-haspopup="menu"
-            aria-expanded={hover.open}
-            aria-controls={hover.open ? listId : undefined}
-            onActivate={() => onSelect(front)}
-            onClose={onClose ? () => tabs.forEach(onClose) : undefined}
-            leading={
-              <GlyphStack front={head} behind={behind} onOpen={() => hover.show("pointer")} />
-            }
-            actionsContent={rows}
-            onActionsOpenChange={(open) => {
-              setMenuOpen(open);
-              if (open) close();
-            }}
-          />
+          <TabCloseDestructiveContext.Provider value={chipCloseDestructive}>
+            <Tab
+              label={title}
+              hint={head.detail || undefined}
+              active={active}
+              tabStop={tabStop}
+              aria-haspopup="menu"
+              aria-expanded={hover.open}
+              aria-controls={hover.open ? listId : undefined}
+              onActivate={() => onSelect(front)}
+              onClose={onClose ? () => tabs.forEach(onClose) : undefined}
+              leading={
+                <GlyphStack front={head} behind={behind} onOpen={() => hover.show("pointer")} />
+              }
+              actionsContent={rows}
+              onActionsOpenChange={(open) => {
+                setMenuOpen(open);
+                if (open) close();
+              }}
+            />
+          </TabCloseDestructiveContext.Provider>
         </div>
       </PopoverAnchor>
       <PopoverContent
@@ -584,6 +611,7 @@ export function GroupedTabList<T extends { id: string }>({
   onSelect,
   onUngroup,
   onClose,
+  closeDestructive = plainClose,
   actionsFor = noActions,
   children,
 }: {
@@ -597,6 +625,11 @@ export function GroupedTabList<T extends { id: string }>({
   onSelect(tab: T): void;
   onUngroup?: (groupId: string) => void;
   onClose?: (tab: T) => void;
+  /**
+   * The tab kind's answer to whether closing it is destructive, which both of
+   * the tab's menus draw (see `TabCloseDestructiveContext`). Plain by default.
+   */
+  closeDestructive?: (tab: T) => boolean;
   actionsFor?: (tab: T) => readonly TabAction[];
   children: (tab: T, state: GroupedTabState) => React.ReactNode;
 }) {
@@ -621,7 +654,7 @@ export function GroupedTabList<T extends { id: string }>({
           {...(edgeTargets ? { "data-pair-target-id": tab.id } : {})}
           className="relative flex shrink-0"
         >
-          <TabActionScope actions={actionsFor(tab)}>
+          <TabActionScope actions={actionsFor(tab)} closeDestructive={closeDestructive(tab)}>
             {children(tab, {
               active: tab.id === activeTabId,
               tabStop: tab.id === stopId,
@@ -646,6 +679,7 @@ export function GroupedTabList<T extends { id: string }>({
         onUngroup={onUngroup}
         tabStop={front.id === stopId}
         onClose={onClose}
+        closeDestructive={closeDestructive}
         actionsFor={actionsFor}
       />
     );

@@ -8,6 +8,9 @@ import { fileURLToPath } from "node:url";
 
 import { parse } from "yaml";
 
+import { runnerStallTestTimeout, testWorkerExecArgv } from "../vitest.node-flags.ts";
+import { NO_WASM_CODE_GC } from "../wasm-code-gc-workaround.ts";
+
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const workflow = parse(readFileSync(join(root, ".github/workflows/ci.yml"), "utf8"));
 const jobs = workflow.jobs;
@@ -112,7 +115,15 @@ test("gate accepts only success or the precise conditional skip", () => {
     assert.equal(green.status, 0, green.stdout + green.stderr);
     for (const job of jobs.gate.needs) {
       const variable = resultVariable(job);
-      for (const state of ["success", "failure", "cancelled", "skipped", "", "unknown"]) {
+      for (const state of [
+        "success",
+        "failure",
+        "cancelled",
+        "abandoned",
+        "skipped",
+        "",
+        "unknown",
+      ]) {
         const outcome = runGate({ ...env, [variable]: state });
         assert.equal(
           outcome.status === 0,
@@ -620,6 +631,109 @@ test("desktop shards use the same bounded worker diagnostics without altering co
   assert.ok(config.includes('setupFiles: [...diagnosticSetup, "test-setup.ts"]'));
   assert.ok(config.includes('setupFiles: [...diagnosticSetup, "src/main/test-setup.ts"]'));
 });
+
+test("a lane GitHub never assigned a runner fails the gate and says it never started", () => {
+  const env = results("true", "true", n1All, "push");
+  const outcome = runGate({ ...env, SMOKE_BOOT: "abandoned" });
+  assert.notEqual(outcome.status, 0);
+  assert.match(outcome.stdout, /Smoke \(core e2e\) is 'abandoned', expected 'success'/u);
+  assert.match(outcome.stdout, /Smoke \(core e2e\) never started: GitHub assigned it no runner/u);
+  assert.match(outcome.stdout, /CI re-request workflow re-runs it once by itself/u);
+  const failed = runGate({ ...env, SMOKE_BOOT: "failure" });
+  assert.doesNotMatch(failed.stdout, /never started/u);
+});
+
+test("both shard lanes sample runner health beside the suite and keep it with the diagnostics", () => {
+  for (const [job, dir] of [
+    ["test-desktop", ".tmp/desktop-diagnostics/"],
+    ["test-host-core", ".tmp/host-core-diagnostics/"],
+  ]) {
+    const steps = jobs[job].steps;
+    const shard = steps.find((step) => step.name.startsWith("Run shard "));
+    const sampler = shard.run.indexOf(
+      'bash ../../scripts/ci-runner-health.sh "$VOLLI_TEST_DIAGNOSTICS" >/dev/null 2>&1 &',
+    );
+    assert.ok(sampler >= 0, `${job} starts no sampler`);
+    assert.ok(sampler < shard.run.indexOf("vp test run"), `${job} samples after the suite starts`);
+    assert.match(shard.run, /trap 'kill "\$health" 2>\/dev\/null \|\| true' EXIT/u);
+    const upload = steps.find((step) => step.name.endsWith("worker diagnostics"));
+    assert.equal(upload.with.path, dir);
+    assert.equal(upload.if, "always()");
+  }
+});
+
+test("Node 24 test forks run without Wasm code GC, in every project that saw the abort", () => {
+  // nodejs/node#66366: the flag is for V8 13.6 (all of Node 24) and nothing else.
+  assert.deepEqual(testWorkerExecArgv("24.22.1"), ["--no-wasm-code-gc"]);
+  assert.deepEqual(testWorkerExecArgv("22.23.0"), []);
+  assert.deepEqual(testWorkerExecArgv("26.10.0"), []);
+  assert.deepEqual(testWorkerExecArgv("240.1.0"), []);
+  const host = readFileSync(join(root, "packages/host-core/vite.config.ts"), "utf8");
+  assert.equal(host.match(/\.\.\.TEST_WORKER_NODE_FLAGS,/gu)?.length, 1);
+  // Top level (which `renderer` extends) and `main`, which extends nothing.
+  const desktop = readFileSync(join(root, "apps/desktop/vite.config.ts"), "utf8");
+  assert.equal(desktop.match(/\.\.\.TEST_WORKER_NODE_FLAGS,/gu)?.length, 2);
+  const main = desktop.slice(desktop.indexOf('name: "main"'));
+  assert.ok(main.indexOf("...TEST_WORKER_NODE_FLAGS,") < main.indexOf("coverage: {"));
+});
+
+test("host-core takes the runner-stall test timeout in CI only, and no other lane does (VC-1233)", () => {
+  assert.deepEqual(runnerStallTestTimeout({ CI: "true" }), { testTimeout: 15_000 });
+  assert.deepEqual(runnerStallTestTimeout({ CI: "1" }), { testTimeout: 15_000 });
+  // At a desk Vitest keeps its own 5 s default.
+  assert.deepEqual(runnerStallTestTimeout({}), {});
+  assert.deepEqual(runnerStallTestTimeout({ CI: "" }), {});
+  assert.deepEqual(runnerStallTestTimeout({ CI: "false" }), {});
+  assert.deepEqual(runnerStallTestTimeout({ CI: "0" }), {});
+  const host = readFileSync(join(root, "packages/host-core/vite.config.ts"), "utf8");
+  assert.equal(host.match(/\.\.\.RUNNER_STALL_TEST_TIMEOUT,/gu)?.length, 1);
+  // Desktop and the packages showed no five-second stall failure of their own.
+  const desktop = readFileSync(join(root, "apps/desktop/vite.config.ts"), "utf8");
+  assert.doesNotMatch(desktop, /RUNNER_STALL_TEST_TIMEOUT|testTimeout/u);
+});
+
+test("a failed host-core shard summarizes its timed-out tests against runner health", () => {
+  const steps = jobs["test-host-core"].steps;
+  const shard = steps.find((step) => step.name.startsWith("Run shard "));
+  const summary = steps.find(
+    (step) => step.name === "Summarize timed-out tests against runner health",
+  );
+  const upload = steps.find((step) => step.name === "Upload host-core worker diagnostics");
+  assert.ok(steps.indexOf(summary) > steps.indexOf(shard));
+  assert.ok(steps.indexOf(summary) < steps.indexOf(upload));
+  assert.equal(summary.if, "failure()");
+  assert.equal(summary["continue-on-error"], undefined);
+  assert.equal(summary.run, "node scripts/ci-timeout-stall-summary.mjs .tmp/host-core-diagnostics");
+  assert.ok(shard.env.VOLLI_TEST_DIAGNOSTICS.endsWith("/.tmp/host-core-diagnostics"));
+  const policy = jobs.check.steps.find(
+    (step) => step.name === "Check host Electron boundary and CI gate policy",
+  ).run;
+  assert.ok(policy.includes("scripts/ci-timeout-stall-summary.test.mjs"));
+});
+
+for (const [app, bundle, launcher] of [
+  ["runner", "runner/runner.cjs", "volli-runner"],
+  ["hostd", "hostd/hostd.cjs", "volli-hostd"],
+]) {
+  test(`the packaged ${launcher} starts Node without Wasm code GC, and its boot check proves it`, () => {
+    // nodejs/node#66366 in Code Mode's per-program workers; the CLI starts none.
+    assert.equal(NO_WASM_CODE_GC, "--no-wasm-code-gc");
+    const pack = readFileSync(join(root, `apps/${app}/scripts/package.mjs`), "utf8");
+    assert.match(
+      pack,
+      /import \{ NO_WASM_CODE_GC \} from "\.\.\/\.\.\/\.\.\/wasm-code-gc-workaround\.ts";/u,
+    );
+    assert.match(pack, /exec "\$here\/node" \$\{flags\}"\$here\/\.\.\/lib\/\$\{bundle\}" "\$@"/u);
+    assert.ok(pack.includes(`launcher("${bundle}", \`\${NO_WASM_CODE_GC} \`)`));
+    assert.ok(pack.includes('launcher("volli.cjs")'));
+    const boot = readFileSync(join(root, `apps/${app}/scripts/ci-boot-artifact.sh`), "utf8");
+    assert.ok(boot.includes("grep -Fq -- ' --no-wasm-code-gc '"));
+    assert.ok(boot.includes('NODE_OPTIONS="--require=$probe/execargv.cjs"'));
+    assert.ok(boot.includes('argv.includes("--no-wasm-code-gc")'));
+    // hostd also checks its serving process; the runner's run boot is shared with a shell double.
+    if (app === "hostd") assert.ok(boot.includes("grep -Fxq -- --no-wasm-code-gc"));
+  });
+}
 
 test("symbolization runs in the existing Linux job without consuming diagnostic or test failures", () => {
   const steps = jobs["test-host-core"].steps;

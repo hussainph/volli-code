@@ -13,6 +13,10 @@ import { readSessionProvenance } from "./db/session-provenance-repo";
 import { markSessionUnread, readSessionUnread, writeSessionUnread } from "./db/session-read-repo";
 import { createRunAttentionWatch } from "./automations/run-attention";
 import {
+  createProviderSignInAlert,
+  type ProviderSignInAlert,
+} from "./session-control/provider-sign-in-alert";
+import {
   createSqliteSessionLedger,
   createHostLiveWork,
   createSessionReadWatch,
@@ -61,6 +65,11 @@ export interface SessionRuntimeWiring {
   /** The runtime's idle-exit start latch (VC-577). */
   holdTurnStarts(): void;
   releaseTurnStarts(): void;
+  /**
+   * A provider's display name, as Model Access labels it, or `null` when no
+   * runtime knows it. Read for the provider sign-in alert (VC-1236).
+   */
+  providerLabel(providerId: string): string | null;
 }
 
 const NO_PENDING_STARTS: ReadonlySet<string> = new Set();
@@ -94,6 +103,8 @@ export interface HostSessionServices {
   readonly liveWork: HostLiveWorkWatch;
   readonly sessionActivityWatch: SessionActivityWatch;
   readonly sessionEngine: SessionEngine;
+  /** Told when a person signs in to a provider again, which ends its sign-in alert episode. */
+  readonly providerSignIn: Pick<ProviderSignInAlert, "signedIn">;
   readonly [SESSION_RUNTIME]: SessionRuntimeSlot;
 }
 
@@ -146,10 +157,17 @@ export function createHostSessionServices(
     pendingTurnStarts: () => NO_PENDING_STARTS,
     holdTurnStarts: () => undefined,
     releaseTurnStarts: () => undefined,
+    providerLabel: () => null,
   };
   const hostNoticeOutbox = createSqliteHostNoticeOutbox(db, sessionLedger);
   const runAttention = createRunAttentionWatch({
     attendanceOf: (sessionId) => readAutomationRunAttendance(db, sessionId),
+    notify: (request) => {
+      ports.attention.deliver(request);
+    },
+  });
+  const providerSignIn = createProviderSignInAlert({
+    providerLabel: (providerId) => runtime.providerLabel(providerId),
     notify: (request) => {
       ports.attention.deliver(request);
     },
@@ -207,6 +225,7 @@ export function createHostSessionServices(
         report: (error) => ports.log.error("failed to record session resumption", { error }),
       });
       runAttention.observe(projection);
+      providerSignIn.observe(projection);
       runtime.observeScheduledResume(projection);
       sessionReadWatch.observe(projection);
       liveWork.observeSession(projection);
@@ -216,6 +235,7 @@ export function createHostSessionServices(
     observeEvent: (event) => liveWork.observeEvent(event),
     observeBirth: (sessionId) => {
       runAttention.observeBirth(sessionId);
+      providerSignIn.observeBirth(sessionId);
       sessionReadWatch.observeBirth(sessionId);
     },
   });
@@ -243,5 +263,6 @@ export function createHostSessionServices(
     liveWork,
     sessionActivityWatch,
     sessionEngine,
+    providerSignIn: { signedIn: (providerId) => providerSignIn.signedIn(providerId) },
   };
 }

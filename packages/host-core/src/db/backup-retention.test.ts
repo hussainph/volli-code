@@ -6,6 +6,7 @@ import {
   pruneMigrationBackups,
   type BackupRetentionFs,
 } from "./backup-retention";
+import type { CheckedDatabaseFile } from "./checked-file";
 
 interface FakeEntry {
   sizeBytes: number;
@@ -28,10 +29,11 @@ function fakeFilesystem(initial: Record<string, FakeEntry>) {
       if (entry.statError !== undefined) throw entry.statError;
       return { sizeBytes: entry.sizeBytes, isFile: entry.kind !== "directory" };
     },
-    verifyIntegrity: (path) => {
+    verifyIntegrity: vi.fn((path: string) => {
       const entry = entries.get(basename(path));
       if (entry?.integrityError) throw entry.integrityError;
-    },
+    }),
+    isVerifiedFile: vi.fn(() => false),
     quarantineFile: (path, destination) => {
       const name = basename(path);
       const entry = entries.get(name);
@@ -370,5 +372,101 @@ describe("pruneMigrationBackups", () => {
       "volli.db.backup-v56",
     ]);
     expect(fs.removeAttempts).toEqual(["volli.db.backup-v50"]);
+  });
+});
+
+describe("pruneMigrationBackups — this upgrade's verified copy (VC-1204)", () => {
+  const verified: CheckedDatabaseFile = {
+    dev: "1",
+    ino: "2",
+    size: "55",
+    mtimeNs: "3",
+    ctimeNs: "4",
+  };
+  const profile = () =>
+    fakeFilesystem({
+      "volli.db.backup-v50": { sizeBytes: 50 },
+      "volli.db.backup-v51": { sizeBytes: 51 },
+      "volli.db.backup-v55": { sizeBytes: 55 },
+    });
+
+  it("does not re-check this run's copy while it is the verified file, and checks every older copy", () => {
+    const fs = profile();
+    vi.mocked(fs.deps.isVerifiedFile).mockReturnValue(true);
+    const report = pruneMigrationBackups("/profile/volli.db", 55, fs.deps, verified);
+    expect(fs.deps.isVerifiedFile).toHaveBeenCalledExactlyOnceWith(
+      "/profile/volli.db.backup-v55",
+      verified,
+    );
+    expect(vi.mocked(fs.deps.verifyIntegrity).mock.calls.map(([path]) => basename(path))).toEqual([
+      "volli.db.backup-v50",
+      "volli.db.backup-v51",
+    ]);
+    expect(report.kept.map((entry) => entry.name)).toEqual([
+      "volli.db.backup-v51",
+      "volli.db.backup-v55",
+    ]);
+    expect(fs.removeAttempts).toEqual(["volli.db.backup-v50"]);
+  });
+
+  it.each([
+    ["no identity", null, (): boolean => false],
+    ["a different file", verified, (): boolean => false],
+    [
+      "an unreadable identity",
+      verified,
+      (): boolean => {
+        throw new Error("EACCES");
+      },
+    ],
+  ] as const)("checks this run's copy in full given %s", (_label, identity, matches) => {
+    const fs = profile();
+    vi.mocked(fs.deps.isVerifiedFile).mockImplementation(matches);
+    pruneMigrationBackups("/profile/volli.db", 55, fs.deps, identity);
+    expect(vi.mocked(fs.deps.verifyIntegrity).mock.calls.map(([path]) => basename(path))).toEqual([
+      "volli.db.backup-v55",
+      "volli.db.backup-v50",
+      "volli.db.backup-v51",
+    ]);
+    if (identity === null) expect(fs.deps.isVerifiedFile).not.toHaveBeenCalled();
+  });
+
+  it("quarantines this run's copy and deletes nothing when it changed and now fails its check", () => {
+    const fs = fakeFilesystem({
+      "volli.db.backup-v50": { sizeBytes: 50 },
+      "volli.db.backup-v51": { sizeBytes: 51 },
+      "volli.db.backup-v55": { sizeBytes: 55, integrityError: new Error("malformed") },
+    });
+    const report = pruneMigrationBackups("/profile/volli.db", 55, fs.deps, verified);
+    expect(fs.removeAttempts).toEqual([]);
+    expect(fs.names()).not.toContain("volli.db.backup-v55");
+    expect(report.kept.map((entry) => entry.name)).toEqual([
+      "volli.db.backup-v50",
+      "volli.db.backup-v51",
+    ]);
+  });
+
+  it("still quarantines a damaged older copy when this run's copy is not re-checked", () => {
+    const fs = fakeFilesystem({
+      "volli.db.backup-v51": { sizeBytes: 51, integrityError: new Error("malformed") },
+      "volli.db.backup-v55": { sizeBytes: 55 },
+    });
+    vi.mocked(fs.deps.isVerifiedFile).mockReturnValue(true);
+    const report = pruneMigrationBackups("/profile/volli.db", 55, fs.deps, verified);
+    expect(report.quarantined).toHaveLength(1);
+    expect(report.kept.map((entry) => entry.name)).toEqual(["volli.db.backup-v55"]);
+    expect(fs.names()).not.toContain("volli.db.backup-v51");
+  });
+
+  it("refuses this run's copy when it is not a regular file, before any identity test", () => {
+    const fs = fakeFilesystem({
+      "volli.db.backup-v51": { sizeBytes: 51 },
+      "volli.db.backup-v55": { sizeBytes: 55, kind: "directory" },
+    });
+    vi.mocked(fs.deps.isVerifiedFile).mockReturnValue(true);
+    const report = pruneMigrationBackups("/profile/volli.db", 55, fs.deps, verified);
+    expect(fs.deps.isVerifiedFile).not.toHaveBeenCalled();
+    expect(fs.removeAttempts).toEqual([]);
+    expect(report.failed.map((entry) => entry.operation)).toContain("verify");
   });
 });

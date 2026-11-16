@@ -103,11 +103,20 @@ class Executor implements NativeHarnessAdapter {
   }
 }
 
+/** Moves a worktree onto `checkout`, with one commit there. */
+function switchWorktree(worktreePath: string, checkout: string): void {
+  git(worktreePath, ["switch", "-c", checkout]);
+  writeFileSync(join(worktreePath, "venue.txt"), "stacked slice\n");
+  git(worktreePath, ["add", "venue.txt"]);
+  git(worktreePath, ["commit", "-m", "stacked slice"]);
+}
+
 /**
  * A VC-627 ticket whose worktree was materialized on the ticket's branch and
- * then moved onto `checkout`, with one commit there.
+ * then moved onto `checkout`, with one commit there. No `checkout` leaves it on
+ * the ticket's own branch, for a test to move later.
  */
-function ticketLeftOn(checkout: string) {
+function ticketLeftOn(checkout?: string) {
   ctx = openTestDb();
   const projectPath = tempDir("stacked-repo");
   git(projectPath, ["init", "-b", "main"]);
@@ -116,10 +125,7 @@ function ticketLeftOn(checkout: string) {
   git(projectPath, ["commit", "-m", "initial"]);
   const worktreePath = join(tempDir("stacked-home"), "VC-627-hostd-venue");
   git(projectPath, ["worktree", "add", "-b", TICKET_BRANCH, worktreePath, "main"]);
-  git(worktreePath, ["switch", "-c", checkout]);
-  writeFileSync(join(worktreePath, "venue.txt"), "stacked slice\n");
-  git(worktreePath, ["add", "venue.txt"]);
-  git(worktreePath, ["commit", "-m", "stacked slice"]);
+  if (checkout !== undefined) switchWorktree(worktreePath, checkout);
 
   const project = testProject({
     id: "project-1",
@@ -161,7 +167,9 @@ function ticketLeftOn(checkout: string) {
   const sessions = createSessions({
     runtime,
     readDefaultModel: async () => MODEL,
-    readModelAnchor: async () => ({ selection: MODEL, tier: null }),
+    // No anchor: a subagent then runs on the default, like its parent, and
+    // model inheritance is not what this suite is about.
+    readModelAnchor: async () => ({ selection: null, tier: null }),
     ticketBelongsToProject: () => true,
     skills: { resolve: async () => [], index: async () => null, record: async () => undefined },
     toolSurface: {
@@ -177,7 +185,7 @@ function ticketLeftOn(checkout: string) {
   const kickoffs: { sessionId: string; text: string; delivery?: "queue" }[] = [];
   const kickoffSent = Promise.withResolvers<void>();
   const db = ctx.db;
-  const start = () =>
+  const start = (operationId = "caller:tc-1") =>
     startSessionOperation(
       {
         db,
@@ -194,7 +202,7 @@ function ticketLeftOn(checkout: string) {
         now,
       },
       {
-        operationId: "caller:tc-1",
+        operationId,
         project,
         ticket,
         message: "Continue the stacked venue work",
@@ -202,7 +210,26 @@ function ticketLeftOn(checkout: string) {
       },
       { defaultKickoff: DEFAULT_KICKOFF_MESSAGE, autoTitle: autoTitleFromKickoff },
     );
-  return { worktreePath, executor, kickoffs, kickoffSent: kickoffSent.promise, start };
+  /** What `session_delegate` mints: a Subagent Session of `parentSessionId`, on its Ticket. */
+  const delegate = (parentSessionId: string) =>
+    sessions.start({
+      operationId: `${parentSessionId}:tc-delegate`,
+      projectId: project.id,
+      ticketId: ticket.id,
+      role: "subagent",
+      parentSessionId,
+      title: "Review the venue diff",
+      actor: { kind: "session", sessionId: parentSessionId, ticketId: ticket.id },
+    });
+  return {
+    worktreePath,
+    executor,
+    kickoffs,
+    kickoffSent: kickoffSent.promise,
+    start,
+    delegate,
+    runtime,
+  };
 }
 
 describe("starting a Session on a ticket whose worktree is on another branch (VC-659)", () => {
@@ -249,5 +276,68 @@ describe("starting a Session on a ticket whose worktree is on another branch (VC
       "volli/VC-6270-someone-elses",
     );
     expect(getTicketRow(ctx!.db, "ticket-1")?.branch).toBe(TICKET_BRANCH);
+  });
+});
+
+describe("a subagent runs where its parent runs (VC-1015)", () => {
+  const elsewhere = "volli/VC-6270-someone-elses";
+
+  /** A Ticket Session bound to its worktree, which it then moves to another ticket's branch. */
+  async function parentThatSwitched() {
+    const world = ticketLeftOn();
+    const parent = await world.start();
+    await world.kickoffSent;
+    expect(parent.state).toBe("ready");
+    switchWorktree(world.worktreePath, elsewhere);
+    writeFileSync(join(world.worktreePath, "venue.txt"), "edited, not committed\n");
+    return { world, parent };
+  }
+
+  it("attaches a subagent in its parent's directory on the branch checked out there", async () => {
+    const { world, parent } = await parentThatSwitched();
+
+    const child = await world.delegate(parent.sessionId);
+
+    expect(child.state).toBe("ready");
+    // The parent's own directory, as it stands: not re-prepared, not switched.
+    expect(world.executor.directories).toEqual([world.worktreePath, world.worktreePath]);
+    expect(git(world.worktreePath, ["branch", "--show-current"])).toBe(elsewhere);
+    expect(getTicketRow(ctx!.db, "ticket-1")?.branch).toBe(TICKET_BRANCH);
+  });
+
+  it("still refuses an ordinary Ticket Session there, with the reason on its receipt", async () => {
+    const { world } = await parentThatSwitched();
+
+    const started = await world.start("caller:tc-2");
+
+    expect(started.state).toBe("needs-recovery");
+    if (started.state !== "needs-recovery") throw new Error("attached");
+    expect(started.attachFailure).toContain(`on branch ${elsewhere} with uncommitted changes`);
+    expect(started.attachFailure).toContain(`this ticket's branch is ${TICKET_BRANCH}`);
+    // The Session's Attention keeps the kind every build clears on attach,
+    // and carries the same reason for the app to show.
+    const { projection } = await world.runtime.projection({ sessionId: started.sessionId });
+    expect(projection.attention.active).toEqual([
+      expect.objectContaining({
+        kind: "configuration_invalid",
+        detail: started.attachFailure,
+      }),
+    ]);
+    expect(world.executor.directories).toEqual([world.worktreePath]);
+  });
+
+  it("takes the ordinary preparation when the parent's directory is gone", async () => {
+    const world = ticketLeftOn();
+    const parent = await world.start();
+    await world.kickoffSent;
+    rmSync(world.worktreePath, { recursive: true, force: true });
+
+    const child = await world.delegate(parent.sessionId);
+
+    // What the parent's own next turn would do: the Ticket's worktree is made
+    // again at the same path, on the Ticket's branch, and the child runs there.
+    expect(child.state).toBe("ready");
+    expect(world.executor.directories).toEqual([world.worktreePath, world.worktreePath]);
+    expect(git(world.worktreePath, ["branch", "--show-current"])).toBe(TICKET_BRANCH);
   });
 });

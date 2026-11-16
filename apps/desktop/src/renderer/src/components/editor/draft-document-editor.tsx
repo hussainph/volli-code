@@ -107,7 +107,14 @@ export const DraftDocumentEditor = React.forwardRef<
     [ready],
   );
   return (
-    <div className={cn("relative overflow-y-auto", props.className)} style={props.style}>
+    // A flex column so the Monaco host, its only in-flow child once ready,
+    // shrinks with this box when a flex parent gives it less than the host's
+    // content height (VC-1216: the New-ticket body yielding to the footer).
+    // As a block child it kept its own height and overflowed this box instead.
+    <div
+      className={cn("relative flex flex-col overflow-y-auto", props.className)}
+      style={props.style}
+    >
       <textarea
         ref={field}
         hidden={ready}
@@ -131,7 +138,7 @@ export const DraftDocumentEditor = React.forwardRef<
             complete();
           });
         }}
-        className="block field-sizing-content w-full resize-none border-0 bg-transparent py-2 text-body leading-6 text-foreground outline-none placeholder:text-muted-foreground"
+        className="block field-sizing-content w-full shrink-0 resize-none border-0 bg-transparent py-2 text-body leading-6 text-foreground outline-none placeholder:text-muted-foreground"
         style={{ minHeight: "inherit" }}
       />
       {seed !== null ? (

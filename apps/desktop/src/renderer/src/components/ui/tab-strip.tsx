@@ -1,7 +1,12 @@
 import { TabCascadeContext, useTabCascade } from "./tab-cascade";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent } from "./dropdown-menu";
 import { ListRow } from "./list-row";
-import { TabActionDropdown, TabActionsContext } from "./tab-actions";
+import {
+  TabActionDropdown,
+  TabActionsContext,
+  TabCloseDestructiveContext,
+  closeTabAction,
+} from "./tab-actions";
 /**
  * The app's one tab strip.
  *
@@ -495,12 +500,12 @@ export function TabStrip({
           <div
             ref={scrollerRef}
             data-slot="tab-scroll"
+            // The fades and the inventory chevron say where the strip is; a
+            // thumb would sit across the captions.
+            data-scroll-thumb="none"
             data-overflow-left={(overflow.overflowing && !overflow.atStart) || undefined}
             data-overflow-right={(overflow.overflowing && !overflow.atEnd) || undefined}
-            className={cn(
-              "flex min-w-0 flex-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
-              "items-center",
-            )}
+            className={cn("flex min-w-0 flex-1 overflow-x-auto", "items-center")}
           >
             <div
               role="tablist"
@@ -903,6 +908,7 @@ function TabShell({
   ...props
 }: TabProps & { drag?: TabDrag | null }) {
   const extraActions = React.useContext(TabActionsContext);
+  const closeDestructive = React.useContext(TabCloseDestructiveContext);
   const cascade = React.useContext(TabCascadeContext);
   const variant = React.useContext(TabVariantContext);
   const folder = variant === "folder";
@@ -940,15 +946,10 @@ function TabShell({
     ...extraActions,
     ...(showClose
       ? [
-          {
-            label: "Close",
-            icon: CloseIcon,
-            run: (pointer?: boolean) => {
-              cascade?.close(shellRef.current, pointer === true);
-              onClose!();
-            },
-            destructive: true,
-          },
+          closeTabAction((pointer) => {
+            cascade?.close(shellRef.current, pointer === true);
+            onClose!();
+          }, closeDestructive),
         ]
       : []),
   ];

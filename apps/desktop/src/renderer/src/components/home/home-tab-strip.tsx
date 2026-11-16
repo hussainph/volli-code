@@ -14,8 +14,7 @@ import {
   UnpinIcon,
   SunIcon,
   TerminalIcon,
-  CloseIcon,
-  ExternalIcon,
+  UnlinkIcon,
   MinusIcon,
   CloseSquareIcon,
 } from "@renderer/components/ui/icon";
@@ -32,8 +31,13 @@ import { ChatProviderIcon } from "@renderer/components/sessions/chat-provider-ic
 import { projectChatProviders } from "@renderer/lib/session-provider-index";
 import { providerIdentityOf, providerLabelOf } from "@renderer/components/models/model-identity";
 import { useModelCatalogue } from "@renderer/lib/use-model-catalogue";
-import { TabContextActions, type TabAction } from "@renderer/components/ui/tab-actions";
 import {
+  TabContextActions,
+  TabContextClose,
+  type TabAction,
+} from "@renderer/components/ui/tab-actions";
+import {
+  focusTakenOutTab,
   GroupedTabList,
   groupTabItems,
   type TabGroup,
@@ -133,6 +137,12 @@ export interface HomeTabListProps {
   shownGroupId?: string | null;
   /** Dissolve a group from its chip's menu; every tab stays open. */
   onUngroup?(groupId: string): void;
+  /**
+   * Take one tab out of its group, open and full width (VC-1017). Offered on a
+   * PANE strip only, in the tab's own menu: the tab inside the group is the
+   * thing it acts on. The top strip's chip leaves the group only as a whole,
+   * through Ungroup.
+   */
   onTakeOutTab?(tabId: string): void;
   onHideBrowser?(tabId: string): void;
   /**
@@ -246,21 +256,23 @@ export function HomeTabStrip({
 }
 
 /**
- * A pane's strip. The surface's controls stay on the top strip's trailing
- * edge, whichever pane is focused; a group pane's own trailing edge carries
- * only the way out of the group ({@link PaneTakeOutButton}).
+ * Whether closing a Home tab of this kind is destructive, which both of its
+ * menus draw (VC-1229). Closing a Session tab ends what is running in it; a
+ * Browser or File tab is a view that reopens.
  */
-export function HomePaneTabStrip({
-  label,
-  onTakeOut,
-  ...list
-}: HomeTabListProps & { label: string; onTakeOut?: () => void }) {
+function homeTabCloseIsDestructive(tab: HomeTabDescriptor): boolean {
+  return tab.kind === "terminal" || tab.kind === "chat";
+}
+
+/**
+ * A pane's strip. The surface's controls stay on the top strip's trailing
+ * edge, whichever pane is focused; a pane strip's trailing edge carries none.
+ * The way out of the group is each tab's own menu (`onTakeOutTab`).
+ */
+export function HomePaneTabStrip({ label, ...list }: HomeTabListProps & { label: string }) {
   return (
     <TabStrip variant="folder" label={label} reorder={reorderFor(list)}>
-      <HomeTabList
-        {...list}
-        onTakeOutTab={list.onTakeOutTab ?? (onTakeOut ? () => onTakeOut() : undefined)}
-      />
+      <HomeTabList {...list} />
     </TabStrip>
   );
 }
@@ -365,17 +377,17 @@ function HomeTabList({
       onSelect={onSelect}
       onUngroup={onUngroup}
       onClose={onClose}
+      closeDestructive={homeTabCloseIsDestructive}
       actionsFor={(tab) => {
         const actions: TabAction[] = [];
-        if (
-          onTakeOutTab &&
-          (groups === undefined ||
-            groups.some((group) => group.panes.some((pane) => pane.tabIds.includes(tab.id))))
-        )
+        if (onTakeOutTab && groups === undefined)
           actions.push({
             label: "Take out of group",
-            icon: ExternalIcon,
-            run: () => onTakeOutTab(tab.id),
+            icon: UnlinkIcon,
+            run: (_pointer, trigger) => {
+              focusTakenOutTab(trigger ?? null, tab.id);
+              onTakeOutTab(tab.id);
+            },
           });
         const browser =
           tab.kind === "browser" ? useBrowserTabsStore.getState().byId[tab.tabId] : undefined;
@@ -429,9 +441,7 @@ function HomeTabList({
               </ContextMenuTrigger>
               <ContextMenuContent>
                 <TabContextActions />
-                <ContextMenuItem icon={CloseIcon} onSelect={() => onClose(descriptor)}>
-                  Close
-                </ContextMenuItem>
+                <TabContextClose onClose={() => onClose(descriptor)} />
               </ContextMenuContent>
             </ContextMenu>
           );
@@ -547,9 +557,8 @@ function BoardTab({
  * These are main-checkout files, opened out of the same `FileWorkspaceState`
  * reducer ticket File tabs share, and this tab carries its own menu: the two
  * Copy Path items, Word Wrap, then Keep Open (disabled once pinned, so the menu
- * keeps one shape), Close, Close others. The ticket strip differs because a
- * pinned ticket File tab has no menu at all, which would leave Home's keyboard
- * users with no route to Close.
+ * keeps one shape), Close, Close others. The ticket strip's File tab menu
+ * carries no Close; there the chevron's dropdown is the keyboard route to it.
  */
 function HomeFileTab({
   projectId,
@@ -609,9 +618,7 @@ function HomeFileTab({
         <ContextMenuItem icon={PinIcon} disabled={!tab.preview} onSelect={onPin}>
           Keep Open
         </ContextMenuItem>
-        <ContextMenuItem icon={CloseIcon} onSelect={onClose}>
-          Close
-        </ContextMenuItem>
+        <TabContextClose onClose={onClose} />
         <ContextMenuItem icon={CloseSquareIcon} onSelect={onCloseOthers}>
           Close others
         </ContextMenuItem>
@@ -773,9 +780,7 @@ function TerminalTab({
           </>
         )}
         <ContextMenuSeparator />
-        <ContextMenuItem icon={CloseIcon} variant="destructive" onSelect={shell.onClose}>
-          Close
-        </ContextMenuItem>
+        <TabContextClose onClose={shell.onClose} />
       </ContextMenuContent>
     </ContextMenu>
   );
@@ -864,9 +869,7 @@ function ChatTab({
             <ContextMenuSeparator />
           </>
         ) : null}
-        <ContextMenuItem icon={CloseIcon} variant="destructive" onSelect={shell.onClose}>
-          Close
-        </ContextMenuItem>
+        <TabContextClose onClose={shell.onClose} />
       </ContextMenuContent>
     </ContextMenu>
   );

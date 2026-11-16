@@ -13,7 +13,7 @@ import type { ProviderFailureDiagnostic } from "./safe-diagnostic";
 import { join } from "node:path";
 import { branchTip, insertEntry, setValue } from "./harness-session";
 import { DEFAULT_COMPACTION_SETTINGS } from "./harness-compaction";
-import { type StreamFn } from "@earendil-works/pi-agent-core";
+import { Agent, type StreamFn } from "@earendil-works/pi-agent-core";
 import { JsonlSessionRepo } from "./harness-session";
 import { NodeExecutionEnv, type ExecutionEnv, type ShellExecResult } from "./harness-env";
 import {
@@ -51,6 +51,7 @@ import {
   UtilityCompletionError,
   type DecisionCall,
   type DecisionPort,
+  type DeliveryOutcome,
   type RuntimeSessionIdentity,
   type McpToolDefinition,
   type ObservabilityEvent,
@@ -443,6 +444,19 @@ function settlesHolding(text: string, tokens: number): ScriptStep {
   return (emit) => {
     emit.occupies(tokens);
     emit.text(text);
+    emit.finish();
+  };
+}
+
+/**
+ * A long tool-calling reply that fills the window from INSIDE the turn, so a
+ * threshold compaction before the next round cuts the turn and splits it.
+ */
+function longToolRound(label: string, tokens = 200_000): ScriptStep {
+  return (emit) => {
+    emit.occupies(tokens);
+    emit.text(`${label} round notes `.repeat(6_000));
+    emit.toolCall("read", { path: "MARKER.txt" });
     emit.finish();
   };
 }
@@ -8163,6 +8177,135 @@ describe("compacting a context that reached its reserve", () => {
     await handle.close();
   });
 
+  it("records the split turn's billed history summary when its prefix summary fails (VC-805)", async () => {
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, settles("old answer")),
+          recording(calls, (emit) => {
+            // A long reply INSIDE the turn: the cut lands on it, so the turn
+            // is split and compaction sends two summary requests.
+            emit.occupies(200_000);
+            emit.text("long working notes ".repeat(6_000));
+            emit.toolCall("read", { path: "MARKER.txt" });
+            emit.finish();
+          }),
+          recording(calls, settles("## Goal\nthe history summary")),
+          recording(calls, (emit) => emit.fail("prefix summary rate limited")),
+          recording(calls, settles("finished the same turn")),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember this");
+    await handle.submitUserMessage("read the marker");
+
+    expect(calls).toHaveLength(5);
+    expect(calls[2]?.messages).toContain("old answer");
+    // The second request is the split turn's prefix summary: the turn's own
+    // opening, up to the long reply the cut kept.
+    expect(calls[3]?.messages).toContain("PREFIX of a turn");
+    expect(calls[3]?.messages).toContain("read the marker");
+    expect(compactionEntries(handle.recovery!.sessionFilePath)).toEqual([]);
+    expect(compactions(attachment.observations)).toEqual([
+      expect.objectContaining({
+        state: "failed",
+        reason: "threshold",
+        message: expect.stringContaining("Turn prefix summarization failed"),
+      }),
+    ]);
+    // Both summary requests were billed; the failure records them once.
+    const billed = attachment.observations.filter(
+      (observation): observation is Extract<RuntimeObservation, { kind: "usage" }> =>
+        observation.kind === "usage" && observation.usage.cause === "compaction",
+    );
+    expect(billed).toEqual([
+      expect.objectContaining({
+        kind: "usage",
+        turnId: null,
+        usage: expect.objectContaining({ cause: "compaction", inputTokens: 200, outputTokens: 40 }),
+      }),
+    ]);
+    // No compaction entry exists to name it after, so it is named by a fresh
+    // id held in its own recovery marker...
+    const [failedBill] = billed;
+    expect(failedBill?.entryId).toMatch(/^[0-9a-f-]{36}$/u);
+    const recovery = handle.recovery!;
+    await handle.close();
+    // ...which a reattach replays verbatim, so the real translator names the
+    // same `usage.recorded` fact twice and the ledger keeps one bill.
+    const replay = await runtime.startSession({ ...attachment.spec, recovery });
+    const replayed = (await replay.reconcile(null)).observations.filter(
+      (observation) => observation.kind === "usage" && observation.usage.cause === "compaction",
+    );
+    expect(replayed).toEqual(billed);
+    await replay.close();
+    const { RuntimeObservationTranslator } =
+      await import("../../../session-engine/src/observation-translation");
+    const translate = (observation: RuntimeObservation) =>
+      new RuntimeObservationTranslator({
+        namespace: "pi",
+        sessionId: attachment.spec.identity.sessionId,
+        attachmentId: attachment.spec.identity.attachmentId,
+        now: () => 0,
+      }).replay(observation);
+    const live = translate(failedBill!);
+    expect(live).toEqual([
+      expect.objectContaining({
+        id: `pi:usage:${failedBill!.entryId}`,
+        kind: "usage.recorded",
+        turnId: null,
+        usage: failedBill!.usage,
+      }),
+    ]);
+    expect(translate(replayed[0]!)).toEqual(live);
+  });
+
+  it("bills a failed compaction and the success that follows it once each (VC-805)", async () => {
+    const attachment = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          settles("old answer"),
+          longToolRound("first"),
+          settles("## Goal\nthe first history"),
+          (emit) => emit.fail("prefix summary rate limited"),
+          // Grown by another keepRecentTokens, so the failure is tried again
+          // at this round rather than held back (VC-1206).
+          longToolRound("second", 220_000),
+          settles("## Goal\nthe second history"),
+          settles("## Original Request\nthe prefix"),
+          settles("finished the same turn"),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember this");
+    await handle.submitUserMessage("read the marker");
+
+    const [failed, compacted] = compactions(attachment.observations);
+    expect(failed).toMatchObject({ state: "failed", reason: "threshold" });
+    expect(compacted).toMatchObject({ state: "compacted", reason: "threshold" });
+    const entryId = (compacted as Extract<CompactionObservation, { state: "compacted" }>).entryId;
+    // Two requests each: the success carries nothing of the failure before it,
+    // and keeps the entry-named id it always had.
+    const billed = attachment.observations.filter(
+      (observation): observation is Extract<RuntimeObservation, { kind: "usage" }> =>
+        observation.kind === "usage" && observation.usage.cause === "compaction",
+    );
+    expect(billed.map(({ usage }) => [usage.inputTokens, usage.outputTokens])).toEqual([
+      [200, 40],
+      [200, 40],
+    ]);
+    expect(billed[0]?.entryId).not.toBe(entryId);
+    expect(billed[1]?.entryId).toBe(entryId);
+    await handle.close();
+  });
+
   it("caps output against the model-aware size of unmeasured input", async () => {
     const attachment = fixture();
     const script = scriptedStream([settles("answer")]);
@@ -8603,6 +8746,19 @@ describe("compacting a context that reached its reserve", () => {
         recoveryCursor: expect.any(String),
       },
     ]);
+    // The errored summary was billed for its prompt before it failed, so its
+    // usage is recorded once, as compaction spend (VC-805).
+    expect(
+      attachment.observations.filter(
+        (observation) => observation.kind === "usage" && observation.usage.cause === "compaction",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        kind: "usage",
+        turnId: null,
+        usage: expect.objectContaining({ cause: "compaction", inputTokens: 100, outputTokens: 20 }),
+      }),
+    ]);
     await handle.close();
   });
 
@@ -8747,10 +8903,12 @@ describe("provider-native context persistence", () => {
         expect(attachment.observations).toContainEqual(
           expect.objectContaining({
             kind: "usage",
+            // A failed fallback adds the local summary's own billed prompt
+            // (100 in, 20 out) to the native attempt's (VC-805).
             usage: expect.objectContaining({
               cause: "compaction",
-              inputTokens: 1000,
-              outputTokens: 50,
+              inputTokens: success ? 1000 : 1100,
+              outputTokens: success ? 50 : 70,
             }),
           }),
         );
@@ -9105,6 +9263,402 @@ describe("provider-native context persistence", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+/** Summary requests made after each of the first `rounds` turn requests (VC-1206). */
+function perRound(summaries: readonly { afterRound: number }[], rounds: number): number[] {
+  return Array.from(
+    { length: rounds },
+    (_, index) => summaries.filter(({ afterRound }) => afterRound === index + 1).length,
+  );
+}
+
+function compactionBills(observations: RuntimeObservation[]) {
+  return observations.filter(
+    (observation): observation is Extract<RuntimeObservation, { kind: "usage" }> =>
+      observation.kind === "usage" && observation.usage.cause === "compaction",
+  );
+}
+
+describe("backing off a failing threshold compaction (VC-1206)", () => {
+  /** How a provider refuses a payload larger than the model can hold. */
+  const REFUSED = "maximum context length exceeded: 310000 tokens";
+
+  /**
+   * What the summary requests made after a round meet. `refuses-prefix` is
+   * VC-805's storm: the turn is split, the history summary is bought and the
+   * prefix summary is refused, so every failed attempt costs two requests.
+   * `fails` refuses every request, however the attempt is cut.
+   */
+  type Fate = "refuses-prefix" | "fails" | "succeeds" | "halts";
+
+  interface SummaryRequest {
+    /** The turn requests answered before this summary request was made. */
+    afterRound: number;
+    request: "history" | "prefix";
+  }
+
+  /**
+   * One Session's provider: turn requests answered by `turns` in order, and
+   * every summary request answered by the fate the round before it declared,
+   * so a script states the turn and stays indifferent to how many summary
+   * requests an attempt makes.
+   */
+  function provider(turns: ((setFate: (fate: Fate) => void) => ScriptStep)[]): {
+    stream: StreamFn;
+    summaries: SummaryRequest[];
+    summarizing: Promise<void>;
+  } {
+    const summaries: SummaryRequest[] = [];
+    const halted = Promise.withResolvers<void>();
+    let fate: Fate = "fails";
+    const setFate = (next: Fate) => {
+      fate = next;
+    };
+    let round = 0;
+    const step: ScriptStep = async (emit, context, signal, model, reasoning) => {
+      const messages = JSON.stringify(context.messages);
+      if (messages.includes("<conversation>")) {
+        const request = messages.includes("PREFIX of a turn") ? "prefix" : "history";
+        summaries.push({ afterRound: round, request });
+        if (fate === "halts")
+          return haltOnAbort("", () => halted.resolve())(emit, context, signal, model, reasoning);
+        if (fate === "fails" || (fate === "refuses-prefix" && request === "prefix"))
+          return emit.fail("summary rate limited");
+        emit.text(`## Goal\nthe ${request} summary`);
+        return emit.finish();
+      }
+      const next = turns[round++];
+      if (next === undefined) throw new Error(`no turn step for round ${round}`);
+      return next(setFate)(emit, context, signal, model, reasoning);
+    };
+    return {
+      stream: scriptedStream(Array.from({ length: 200 }, () => step)),
+      summaries,
+      summarizing: halted.promise,
+    };
+  }
+
+  /**
+   * A tool round whose reply leaves the model holding `tokens`, long enough
+   * that a compaction before the next round splits the turn. `fate` is what
+   * the compaction it triggers meets.
+   */
+  const round =
+    (tokens: number, fate: Fate = "fails") =>
+    (setFate: (fate: Fate) => void): ScriptStep =>
+    (emit) => {
+      setFate(fate);
+      emit.occupies(tokens);
+      emit.text("working notes ".repeat(7_000));
+      emit.toolCall("read", { path: "MARKER.txt" });
+      emit.finish();
+    };
+  const reply =
+    (text: string, tokens?: number, fate: Fate = "fails") =>
+    (setFate: (fate: Fate) => void): ScriptStep => {
+      setFate(fate);
+      return tokens === undefined ? settles(text) : settlesHolding(text, tokens);
+    };
+  const refusedForLength =
+    (fate: Fate) =>
+    (setFate: (fate: Fate) => void): ScriptStep =>
+    (emit) => {
+      setFate(fate);
+      emit.fail(REFUSED);
+    };
+
+  const failedThreshold = expect.objectContaining({ state: "failed", reason: "threshold" });
+
+  it("buys one failed summary, not one per tool round, while the context does not grow", async () => {
+    const attachment = fixture();
+    const { stream, summaries } = provider([
+      reply("old answer"),
+      round(200_000, "refuses-prefix"),
+      round(200_000, "refuses-prefix"),
+      round(200_000, "refuses-prefix"),
+      reply("finished the turn"),
+    ]);
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(stream),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember this");
+    await handle.submitUserMessage("read the marker");
+
+    // Before VC-1206 this was [2, 2, 2]: three failed compactions and six
+    // summary requests, the history summary bought again at every round.
+    expect(perRound(summaries, 5)).toEqual([0, 2, 0, 0, 0]);
+    expect(compactions(attachment.observations)).toEqual([failedThreshold]);
+    // The one real attempt still records what it was billed (VC-805); the
+    // skipped ones record nothing.
+    expect(compactionBills(attachment.observations)).toHaveLength(1);
+    expect(settledTexts(attachment.observations).at(-1)).toBe("finished the turn");
+    await handle.close();
+  });
+
+  it("tries again once the context has grown by another keepRecentTokens", async () => {
+    const attachment = fixture();
+    const { stream, summaries } = provider([
+      reply("old answer"),
+      round(200_000, "refuses-prefix"),
+      round(210_000, "refuses-prefix"),
+      // One token short of the step: the suffix each round adds is the same
+      // tool result, so the measure moves exactly as the reply's does.
+      round(219_999, "refuses-prefix"),
+      round(220_000, "refuses-prefix"),
+      reply("finished the turn"),
+    ]);
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(stream),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember this");
+    await handle.submitUserMessage("read the marker");
+
+    expect(perRound(summaries, 6)).toEqual([0, 2, 0, 0, 2, 0]);
+    expect(compactions(attachment.observations)).toEqual([failedThreshold, failedThreshold]);
+    expect(compactionBills(attachment.observations)).toHaveLength(2);
+    await handle.close();
+  });
+
+  it("stops after three failures in a run and leaves the overflow to its own recovery", async () => {
+    const attachment = fixture();
+    const { stream, summaries } = provider([
+      reply("old answer"),
+      round(200_000),
+      round(220_000),
+      round(240_000),
+      // Grown far past the step, but the run has spent its three attempts.
+      round(300_000),
+      round(320_000),
+      refusedForLength("succeeds"),
+      reply("finished after recovering"),
+    ]);
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(stream),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember this");
+    await handle.submitUserMessage("read the marker");
+
+    const overflowSummaries = summaries.filter(({ afterRound }) => afterRound === 7);
+    expect(perRound(summaries, 6)).toEqual([0, 1, 1, 1, 0, 0]);
+    expect(overflowSummaries.length).toBeGreaterThan(0);
+    expect(compactions(attachment.observations)).toEqual([
+      failedThreshold,
+      failedThreshold,
+      failedThreshold,
+      expect.objectContaining({ state: "compacted", reason: "overflow" }),
+    ]);
+    expect(settledTexts(attachment.observations).at(-1)).toBe("finished after recovering");
+    expect(attentions(attachment.observations)).toEqual([]);
+    await handle.close();
+  });
+
+  it("starts the count and the mark again after a success", async () => {
+    const attachment = fixture();
+    const { stream, summaries } = provider([
+      reply("old answer"),
+      round(200_000),
+      round(220_000, "succeeds"),
+      // Measured afresh on the compacted context: below the old mark, and
+      // attempted anyway, because the mark went with the failures.
+      round(150_000),
+      round(170_000),
+      // A third failure since the success; before it the count would have
+      // stood at four.
+      round(190_000),
+      round(210_000),
+      reply("finished the turn"),
+    ]);
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(stream),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember this");
+    await handle.submitUserMessage("read the marker");
+
+    expect(perRound(summaries, 7).map((count) => count > 0)).toEqual([
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+    ]);
+    expect(compactions(attachment.observations)).toEqual([
+      failedThreshold,
+      expect.objectContaining({ state: "compacted", reason: "threshold" }),
+      failedThreshold,
+      failedThreshold,
+      failedThreshold,
+    ]);
+    await handle.close();
+  });
+
+  it("never holds back a manual compaction, and a new run starts clean", async () => {
+    const attachment = fixture();
+    const { stream, summaries } = provider([
+      reply("old answer"),
+      round(200_000),
+      round(220_000),
+      round(240_000),
+      round(300_000),
+      // Ends the run at the cap, holding a context that is still over the
+      // threshold when the next message arrives.
+      reply("finished the first turn", 300_000),
+      // The second run's first attempt is the idle one its own message pays
+      // for; the round after it has not grown by the step, the next has.
+      round(310_000),
+      round(320_000),
+      reply("finished the second turn"),
+    ]);
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(stream),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember this");
+    await handle.submitUserMessage("read the marker");
+    expect(compactions(attachment.observations)).toHaveLength(3);
+
+    // At the cap and between runs, `/compact` still runs, failing or not.
+    const beforeManual = summaries.length;
+    await expect(handle.compact()).resolves.toMatchObject({
+      kind: "rejected",
+      reason: "summary-failed",
+    });
+    expect(summaries.length).toBeGreaterThan(beforeManual);
+    expect(compactions(attachment.observations).at(-1)).toMatchObject({
+      state: "failed",
+      reason: "manual",
+    });
+
+    const beforeSecondRun = summaries.length;
+    await handle.submitUserMessage("carry on");
+    const secondRun = summaries.slice(beforeSecondRun);
+    // The idle attempt before round 6, then nothing at round 7 (10k of
+    // growth), then the attempt at round 8 (20k).
+    expect([...new Set(secondRun.map(({ afterRound }) => afterRound))]).toEqual([6, 8]);
+    expect(compactions(attachment.observations).slice(4)).toEqual([
+      failedThreshold,
+      failedThreshold,
+    ]);
+    await handle.close();
+  });
+
+  it("lets a manual compaction succeed at the cap", async () => {
+    const attachment = fixture();
+    const { stream } = provider([
+      reply("old answer"),
+      round(200_000),
+      round(220_000),
+      round(240_000),
+      reply("finished the turn", undefined, "succeeds"),
+    ]);
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(stream),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember this");
+    await handle.submitUserMessage("read the marker");
+
+    await expect(handle.compact()).resolves.toEqual({ kind: "compacted" });
+    expect(compactions(attachment.observations)).toEqual([
+      failedThreshold,
+      failedThreshold,
+      failedThreshold,
+      expect.objectContaining({ state: "compacted", reason: "manual" }),
+    ]);
+    await handle.close();
+  });
+
+  it("counts an attempt that throws after it was decided on", async () => {
+    // The policy is read once to decide and again inside the attempt; this one
+    // breaks on the second read of the first attempt only.
+    const attachment = fixture();
+    let reads: number | undefined;
+    const { stream, summaries } = provider([
+      reply("old answer"),
+      (setFate) => {
+        reads = 0;
+        return round(200_000)(setFate);
+      },
+      round(210_000),
+      round(220_000, "succeeds"),
+      reply("finished the turn"),
+    ]);
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(stream),
+      compactionPolicy: () => {
+        if (reads !== undefined && ++reads === 2) throw new Error("the policy store is unreadable");
+        return { autoCompaction: true };
+      },
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember this");
+    await handle.submitUserMessage("read the marker");
+
+    // No summary request was made for the throw, and none at the round that
+    // grew less than the step after it.
+    expect(perRound(summaries, 5).map((count) => count > 0)).toEqual([
+      false,
+      false,
+      false,
+      true,
+      false,
+    ]);
+    expect(compactions(attachment.observations)).toEqual([
+      expect.objectContaining({
+        state: "failed",
+        reason: "threshold",
+        message: "the policy store is unreadable",
+      }),
+      expect.objectContaining({ state: "compacted", reason: "threshold" }),
+    ]);
+    await handle.close();
+  });
+
+  it("ends the run at a threshold summary the person stopped, without counting it", async () => {
+    // A Stop is not the summarizer failing, so it is not counted; and it ends
+    // the run the count belongs to, so the next run starts clean either way.
+    const attachment = fixture();
+    const { stream, summarizing } = provider([
+      reply("old answer"),
+      round(200_000, "halts"),
+      round(200_000),
+      reply("finished the turn"),
+    ]);
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(stream),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember this");
+    const delivery = handle.submitUserMessage("read the marker");
+    await summarizing;
+    await handle.interrupt();
+    await delivery;
+
+    // The stopped summary is reported as the attempt it was, and the turn it
+    // belonged to ends there.
+    expect(compactions(attachment.observations)).toEqual([failedThreshold]);
+    expect(kinds(attachment.observations).filter((kind) => kind.startsWith("turn:"))).toEqual([
+      "turn:started",
+      "turn:completed",
+      "turn:started",
+      "turn:interrupted",
+    ]);
+    await handle.close();
   });
 });
 
@@ -10103,6 +10657,972 @@ describe("compacting because somebody asked", () => {
  * adapter has done its work; a constant-level comparison would agree with
  * itself while a downstream recomposition changed what reached the wire.
  */
+/** Let every pending callback run, timers and I/O included. */
+async function runPendingCallbacks(): Promise<void> {
+  for (let round = 0; round < 20; round += 1) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+}
+
+/** A promise and whether it has settled yet, read without awaiting it. */
+function tracked<T>(promise: Promise<T>): { promise: Promise<T>; settled: () => boolean } {
+  let settled = false;
+  const settle = () => {
+    settled = true;
+  };
+  promise.then(settle, settle);
+  return { promise, settled: () => settled };
+}
+
+interface HeldRefresh {
+  /** Hold the next tool refresh open; resolves once the runtime is inside it. */
+  arm(): Promise<void>;
+  release(): void;
+  /** End the held refresh with the host refusing it. */
+  fail(error: Error): void;
+}
+
+/** A host whose next tool refresh can be held open. */
+function holdableRefresh(attachment: Attachment): HeldRefresh {
+  let armed: { entered: () => void; release: Promise<void> } | undefined;
+  let release: (() => void) | undefined;
+  let fail: ((error: Error) => void) | undefined;
+  attachment.spec.refreshTools = async () => {
+    const held = armed;
+    armed = undefined;
+    if (held !== undefined) {
+      held.entered();
+      await held.release;
+    }
+    return null;
+  };
+  return {
+    arm() {
+      const entered = Promise.withResolvers<void>();
+      const released = Promise.withResolvers<void>();
+      armed = { entered: entered.resolve, release: released.promise };
+      release = released.resolve;
+      fail = released.reject;
+      return entered.promise;
+    },
+    release: () => release?.(),
+    fail: (error) => fail?.(error),
+  };
+}
+
+/** The next turn's request, which is what the model holds after the retry. */
+async function requestAfterRetry(gap: {
+  handle: { submitUserMessage(text: string): Promise<unknown> };
+  turns: ProviderCall[];
+}): Promise<ProviderCall> {
+  await gap.handle.submitUserMessage("what do you hold now");
+  return gap.turns.at(-1)!;
+}
+
+/**
+ * A retry between deciding to run and Pi owning the run (VC-810).
+ *
+ * A retry finds Pi idle, then refreshes the Session's tools — a host round
+ * trip — and only then starts the run. For that whole span the attachment is
+ * as good as running: a compaction or a model switch admitted inside it
+ * rewrites the context the retried run is about to be sent, and a message
+ * admitted inside it races the retry for Pi's one run. Each of them has to
+ * meet the answer it meets during a live turn instead.
+ *
+ * The gap is held open at the host boundary — the `refreshTools` port the
+ * host answers — so what runs inside it is the real runtime, not a stub of it.
+ */
+describe("a retry still refreshing its tools (VC-810)", () => {
+  type Handle = Awaited<ReturnType<ReturnType<typeof createPiAgentRuntime>["startSession"]>>;
+
+  const OTHER_MODEL_ID = "claude-sonnet-4-5";
+  const SUMMARIZER = "context summarization assistant";
+
+  /**
+   * The conversation, routed by what each request is for: a summary is
+   * answered on its own and counted, so a test can say whether one was made
+   * whatever order it was made in.
+   */
+  function routed(conversation: StreamFn): { stream: StreamFn; summaries: () => number } {
+    let summaries = 0;
+    const summary: StreamFn = scriptedStream(
+      Array.from({ length: 4 }, () => settles("## Goal\nSUMMARY-MARKER")),
+    );
+    return {
+      stream: (model, context, options) => {
+        if (!JSON.stringify(context).includes(SUMMARIZER)) {
+          return conversation(model, context, options);
+        }
+        summaries += 1;
+        return summary(model, context, options);
+      },
+      summaries: () => summaries,
+    };
+  }
+
+  interface RetryInTheGap {
+    attachment: Attachment;
+    handle: Handle;
+    turns: ProviderCall[];
+    summaries: () => number;
+    /** The retry, held inside its tool refresh. */
+    retrying: Promise<unknown>;
+    /** Let the retry's refresh finish. */
+    release: () => void;
+    /** Resolves once the retried request is with the provider. */
+    replying: Promise<void>;
+    /** Let the retried request answer. */
+    reply: () => void;
+  }
+
+  /**
+   * Two turns, the second refused by the provider, and a retry of it held
+   * inside its tool refresh: Pi idle, the failed reply already dropped, and
+   * no run started yet.
+   */
+  async function retryInTheGap(): Promise<RetryInTheGap> {
+    const attachment = fixture();
+    const refresh = holdableRefresh(attachment);
+    const turns: ProviderCall[] = [];
+    const replying = Promise.withResolvers<void>();
+    const reply = Promise.withResolvers<void>();
+    const { stream, summaries } = routed(
+      scriptedStream([
+        recording(turns, settles("first answer")),
+        recording(turns, (emit) => emit.fail("invalid api key")),
+        recording(turns, async (emit) => {
+          replying.resolve();
+          await reply.promise;
+          emit.text("retried answer");
+          emit.finish();
+        }),
+        recording(turns, settles("later answer")),
+      ]),
+    );
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(stream, [
+        { id: MODEL_ID, reasoning: true },
+        { id: OTHER_MODEL_ID, reasoning: true },
+      ]),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember the marker");
+    await handle.submitUserMessage(PASTED);
+    expect(settledTexts(attachment.observations)).toEqual(["first answer"]);
+
+    const entered = refresh.arm();
+    const retrying = handle.retry("retry-in-the-gap");
+    await entered;
+    return {
+      attachment,
+      handle,
+      turns,
+      summaries,
+      retrying,
+      release: refresh.release,
+      replying: replying.promise,
+      reply: reply.resolve,
+    };
+  }
+
+  it("refuses a compaction the way a live turn does", async () => {
+    const gap = await retryInTheGap();
+
+    const compacting = tracked(gap.handle.compact());
+    await runPendingCallbacks();
+    const answeredInTheGap = compacting.settled();
+    gap.release();
+    await gap.replying;
+    // Read while the retried request is still with the provider: a compaction
+    // that was let in writes its summary over the live run's context here.
+    const outcome = await compacting.promise;
+    gap.reply();
+    await expect(gap.retrying).resolves.toMatchObject({ kind: "delivered", delivery: "retry" });
+
+    expect(outcome).toEqual({
+      kind: "rejected",
+      reason: "busy-unsupported",
+      message: "The context cannot be compacted while Pi is running.",
+    });
+    expect(answeredInTheGap).toBe(true);
+    expect(gap.summaries()).toBe(0);
+    expect(compactionEntries(gap.handle.recovery!.sessionFilePath)).toEqual([]);
+    // One retried run, and the context it ran on is the one the next turn
+    // is sent: nothing was summarized out from under it.
+    expect(gap.turns).toHaveLength(3);
+    const next = await requestAfterRetry(gap);
+    expect(next.messages).toContain("first answer");
+    expect(next.messages).toContain("retried answer");
+    expect(next.messages).not.toContain("SUMMARY-MARKER");
+    await gap.handle.close();
+  });
+
+  it("refuses a model switch the way a live turn does", async () => {
+    const gap = await retryInTheGap();
+
+    const selecting = tracked(
+      gap.handle.selectModel({
+        providerId: PROVIDER_ID,
+        modelId: OTHER_MODEL_ID,
+        reasoningLevel: "off",
+      }),
+    );
+    await runPendingCallbacks();
+    const answeredInTheGap = selecting.settled();
+    gap.release();
+    await gap.replying;
+    const outcome = await selecting.promise;
+    gap.reply();
+    await expect(gap.retrying).resolves.toMatchObject({ kind: "delivered", delivery: "retry" });
+
+    expect(outcome).toEqual({
+      kind: "rejected",
+      reason: "busy-unsupported",
+      message: "The model cannot change while Pi is running.",
+    });
+    expect(answeredInTheGap).toBe(true);
+    expect(gap.turns.map(({ model }) => model)).toEqual([
+      `${PROVIDER_ID}/${MODEL_ID}`,
+      `${PROVIDER_ID}/${MODEL_ID}`,
+      `${PROVIDER_ID}/${MODEL_ID}`,
+    ]);
+    const next = await requestAfterRetry(gap);
+    expect(next.model).toBe(`${PROVIDER_ID}/${MODEL_ID}`);
+    expect(next.messages).toContain("first answer");
+    expect(next.messages).toContain("retried answer");
+    await gap.handle.close();
+  });
+
+  it("holds a message until the retried run is Pi's, then queues it there", async () => {
+    const gap = await retryInTheGap();
+
+    const submitting = tracked(gap.handle.submitUserMessage("MESSAGE-IN-THE-GAP"));
+    await runPendingCallbacks();
+    const answeredInTheGap = submitting.settled();
+    gap.release();
+    await gap.replying;
+    const outcome = await submitting.promise.catch((error: unknown) => error);
+    gap.reply();
+    await expect(gap.retrying).resolves.toMatchObject({ kind: "delivered", delivery: "retry" });
+
+    // What a message sent during a live turn gets: queued behind it, not
+    // refused with Pi's own "already processing".
+    expect(outcome).toEqual({ kind: "delivered", delivery: "queue" });
+    expect(answeredInTheGap).toBe(false);
+    // The retried request went out without it, and it followed in the same run.
+    expect(gap.turns).toHaveLength(4);
+    expect(gap.turns[2]?.messages).not.toContain("MESSAGE-IN-THE-GAP");
+    const followed = gap.turns[3]!.messages;
+    expect(followed.indexOf("retried answer")).toBeGreaterThan(-1);
+    expect(followed.indexOf("MESSAGE-IN-THE-GAP")).toBeGreaterThan(
+      followed.indexOf("retried answer"),
+    );
+    expect(settledTexts(gap.attachment.observations)).toEqual([
+      "first answer",
+      "retried answer",
+      "later answer",
+    ]);
+    await gap.handle.close();
+  });
+
+  it("refuses a second retry the way a live turn does", async () => {
+    const gap = await retryInTheGap();
+
+    const second = tracked(gap.handle.retry("retry-twice"));
+    await runPendingCallbacks();
+    const answeredInTheGap = second.settled();
+    gap.release();
+    await gap.replying;
+    gap.reply();
+    const outcome = await second.promise.catch((error: unknown) => error);
+    await expect(gap.retrying).resolves.toMatchObject({ kind: "delivered", delivery: "retry" });
+
+    expect(outcome).toEqual({
+      kind: "rejected",
+      reason: "busy-unsupported",
+      message: "Pi is already running.",
+    });
+    expect(answeredInTheGap).toBe(true);
+    expect(gap.turns).toHaveLength(3);
+    const next = await requestAfterRetry(gap);
+    // The message the failed reply answered was retried once and sent once.
+    expect(next.messages.split(PASTED).length - 1).toBe(1);
+    expect(next.messages).toContain("first answer");
+    expect(next.messages).toContain("retried answer");
+    await gap.handle.close();
+  });
+
+  it("refuses a retry while a compaction is rewriting the context, and keeps its failed reply to retry", async () => {
+    const attachment = fixture();
+    const turns: ProviderCall[] = [];
+    const summarizing = Promise.withResolvers<void>();
+    const summarized = Promise.withResolvers<void>();
+    let summaries = 0;
+    const conversation = scriptedStream([
+      recording(turns, settles("first answer")),
+      recording(turns, (emit) => emit.fail("invalid api key")),
+      recording(turns, settles("retried answer")),
+    ]);
+    const summary = scriptedStream([
+      async (emit) => {
+        summarizing.resolve();
+        await summarized.promise;
+        emit.text("## Goal\nSUMMARY-MARKER");
+        emit.finish();
+      },
+    ]);
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream((model, context, options) => {
+        if (!JSON.stringify(context).includes(SUMMARIZER)) {
+          return conversation(model, context, options);
+        }
+        summaries += 1;
+        return summary(model, context, options);
+      }),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember the marker");
+    await handle.submitUserMessage(PASTED);
+
+    const compacting = handle.compact();
+    await summarizing.promise;
+    await expect(handle.retry("retry-while-compacting")).resolves.toEqual({
+      kind: "rejected",
+      reason: "busy-unsupported",
+      message: "The context is being compacted.",
+    });
+    summarized.resolve();
+    await expect(compacting).resolves.toEqual({ kind: "compacted" });
+    expect(summaries).toBe(1);
+    expect(turns).toHaveLength(2);
+
+    // The refused retry dropped nothing: the failed reply is still there to
+    // retry, and retrying it answers the request it failed on.
+    await expect(handle.retry("retry-after-compacting")).resolves.toMatchObject({
+      kind: "delivered",
+      delivery: "retry",
+    });
+    expect(turns).toHaveLength(3);
+    expect(turns[2]?.messages).toContain("SUMMARY-MARKER");
+    expect(turns[2]?.messages).toContain("retained-paste");
+    expect(settledTexts(attachment.observations)).toEqual(["first answer", "retried answer"]);
+    await handle.close();
+  });
+
+  it("holds an automatic retry's run the same way", async () => {
+    const attachment = fixture();
+    const refresh = holdableRefresh(attachment);
+    const turns: ProviderCall[] = [];
+    let entered: Promise<void> | undefined;
+    const replying = Promise.withResolvers<void>();
+    const reply = Promise.withResolvers<void>();
+    const { stream, summaries } = routed(
+      scriptedStream([
+        recording(turns, settles("first answer")),
+        recording(turns, (emit) => {
+          // The next refresh is the automatic retry's own.
+          entered = refresh.arm();
+          emit.fail(DROPPED_SOCKET);
+        }),
+        recording(turns, async (emit) => {
+          replying.resolve();
+          await reply.promise;
+          emit.text("resumed answer");
+          emit.finish();
+        }),
+        recording(turns, settles("later answer")),
+      ]),
+    );
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      retryBackoffMs: instantBackoff,
+      models: modelsWithStream(stream),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember the marker");
+    const submitting = handle.submitUserMessage(PASTED);
+    await vi.waitFor(() => expect(entered).toBeDefined());
+    await entered;
+
+    const compacting = tracked(handle.compact());
+    await runPendingCallbacks();
+    const answeredInTheGap = compacting.settled();
+    refresh.release();
+    await replying.promise;
+    const outcome = await compacting.promise;
+    reply.resolve();
+    await expect(submitting).resolves.toEqual({ kind: "delivered", delivery: "prompt" });
+
+    expect(outcome).toEqual({
+      kind: "rejected",
+      reason: "busy-unsupported",
+      message: "The context cannot be compacted while Pi is running.",
+    });
+    expect(answeredInTheGap).toBe(true);
+    expect(summaries()).toBe(0);
+    expect(compactionEntries(handle.recovery!.sessionFilePath)).toEqual([]);
+    expect(turns).toHaveLength(3);
+    await handle.submitUserMessage("what do you hold now");
+    expect(turns.at(-1)?.messages).toContain("first answer");
+    expect(turns.at(-1)?.messages).toContain("resumed answer");
+    await handle.close();
+  });
+});
+
+/**
+ * A retry of a failed turn, held inside its tool refresh. Boxed, because an
+ * async function returning the retry itself would wait for it to end.
+ */
+async function retryHeld(
+  failed: { handle: { retry(commandId: string): Promise<DeliveryOutcome> }; refresh: HeldRefresh },
+  commandId: string,
+): Promise<{ retrying: Promise<DeliveryOutcome> }> {
+  const entered = failed.refresh.arm();
+  const retrying = failed.handle.retry(commandId);
+  await entered;
+  return { retrying };
+}
+
+/**
+ * A Stop that lands while a retry is still refreshing its tools (VC-1199).
+ *
+ * Nothing is running yet for the Stop to abort: the retry has found Pi idle
+ * and is waiting on the host. It has to give up when the refresh answers,
+ * rather than start the run the person just stopped, and the Session has to
+ * settle the way a Stop during the retried run would have settled it.
+ *
+ * Held open at the same host boundary the VC-810 tests hold it at.
+ */
+describe("a Stop while a retry refreshes its tools (VC-1199)", () => {
+  type Handle = Awaited<ReturnType<ReturnType<typeof createPiAgentRuntime>["startSession"]>>;
+
+  interface FailedTurn {
+    attachment: Attachment;
+    handle: Handle;
+    refresh: HeldRefresh;
+    turns: ProviderCall[];
+  }
+
+  /** Two turns, the second refused by the provider, nothing retried yet. */
+  async function failedTurn(
+    after: ScriptStep[],
+    overrides: Partial<SessionRuntimeSpec> = {},
+  ): Promise<FailedTurn> {
+    const attachment = fixture(overrides);
+    const refresh = holdableRefresh(attachment);
+    const turns: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(turns, settles("first answer")),
+          recording(turns, (emit) => emit.fail("invalid api key")),
+          ...after.map((step) => recording(turns, step)),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember the marker");
+    await handle.submitUserMessage(PASTED);
+    return { attachment, handle, refresh, turns };
+  }
+
+  /** What the Session was told, without what only a streamed request produces. */
+  function settledShape(observations: RuntimeObservation[]): string[] {
+    return kinds(observations).filter((kind) => kind !== "delta" && kind !== "usage");
+  }
+
+  function attentionStates(observations: RuntimeObservation[]): string[] {
+    return attentions(observations).map((observation) =>
+      observation.kind === "attention" ? `${observation.reason}:${observation.state}` : "",
+    );
+  }
+
+  it("gives the retry up and settles it the way a Stop during the retried run does", async () => {
+    // The comparison: the same retry, stopped once its request is with the provider.
+    const streaming = Promise.withResolvers<void>();
+    const control = await failedTurn([
+      haltOnAbort("half a thought", streaming.resolve),
+      settles("retried answer"),
+    ]);
+    const controlRetry = control.handle.retry("retry-1");
+    await streaming.promise;
+    await control.handle.interrupt();
+    await expect(controlRetry).resolves.toMatchObject({ kind: "delivered", delivery: "retry" });
+
+    const gap = await failedTurn([settles("retried answer")]);
+    const { retrying } = await retryHeld(gap, "retry-1");
+    const stopping = tracked(gap.handle.interrupt());
+    await runPendingCallbacks();
+    // Stop answers once the turn it stopped has settled, not before.
+    const answeredInTheGap = stopping.settled();
+    gap.refresh.release();
+    await stopping.promise;
+    const outcome = await retrying;
+
+    expect(answeredInTheGap).toBe(false);
+    expect(outcome).toEqual({
+      kind: "delivered",
+      delivery: "retry",
+      acceptedAt: expect.any(Number),
+    });
+    // No request went out for the retry the person stopped.
+    expect(gap.turns).toHaveLength(2);
+    expect(kinds(gap.attachment.observations).slice(-2)).toEqual([
+      "turn:started",
+      "turn:interrupted",
+    ]);
+    expect(settledShape(gap.attachment.observations)).toEqual(
+      settledShape(control.attachment.observations),
+    );
+    // The failed turn's Attention stands, as it does after any stopped retry.
+    expect(attentionStates(gap.attachment.observations)).toEqual(["auth:raised"]);
+    expect(attentionStates(gap.attachment.observations)).toEqual(
+      attentionStates(control.attachment.observations),
+    );
+    // The retry was accepted once, into the turn the Stop ended.
+    const turnIds = gap.attachment.observations.flatMap((observation) =>
+      observation.kind === "turn" ? [observation.turnId] : [],
+    );
+    expect((await gap.handle.reconcile(null)).receipts).toEqual([
+      { commandId: "retry-1", acceptedAt: (outcome as { acceptedAt: number }).acceptedAt },
+    ]);
+    expect(turnIds.slice(-2)).toEqual([turnIds.at(-1), turnIds.at(-1)]);
+
+    // The failed reply is still there to retry, and retrying it answers the
+    // request it failed on, sent once.
+    await expect(gap.handle.retry("retry-2")).resolves.toMatchObject({
+      kind: "delivered",
+      delivery: "retry",
+    });
+    expect(gap.turns).toHaveLength(3);
+    expect(gap.turns[2]!.messages.split(PASTED).length - 1).toBe(1);
+    expect(settledTexts(gap.attachment.observations)).toEqual(["first answer", "retried answer"]);
+    await control.handle.close();
+    await gap.handle.close();
+  });
+
+  it("ends an automatic retry's turn the way a Stop during its backoff does", async () => {
+    const attachment = fixture();
+    const refresh = holdableRefresh(attachment);
+    const turns: ProviderCall[] = [];
+    let entered: Promise<void> | undefined;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      retryBackoffMs: instantBackoff,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(turns, (emit) => {
+            // The next refresh is the automatic retry's own.
+            entered = refresh.arm();
+            emit.fail(DROPPED_SOCKET);
+          }),
+          recording(turns, settles("later answer")),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    const submitting = handle.submitUserMessage("GO-MARKER");
+    await vi.waitFor(() => expect(entered).toBeDefined());
+    await entered;
+
+    const stopping = tracked(handle.interrupt());
+    await runPendingCallbacks();
+    const answeredInTheGap = stopping.settled();
+    refresh.release();
+    await stopping.promise;
+
+    expect(answeredInTheGap).toBe(false);
+    await expect(submitting).resolves.toEqual({ kind: "delivered", delivery: "prompt" });
+    expect(turns).toHaveLength(1);
+    // Exactly what "abandons the wait when the turn is interrupted" records.
+    expect(kinds(attachment.observations)).toEqual([
+      "attachment:started",
+      "turn:started",
+      "usage",
+      "turn:interrupted",
+    ]);
+
+    // The next message is a turn of its own, sent the message the stopped
+    // turn answered once.
+    await handle.submitUserMessage("again");
+    expect(turns).toHaveLength(2);
+    expect(turns[1]!.messages.split("GO-MARKER").length - 1).toBe(1);
+    const turnStates = attachment.observations.flatMap((observation) =>
+      observation.kind === "turn" ? [[observation.state, observation.turnId] as const] : [],
+    );
+    expect(turnStates.map(([state]) => state)).toEqual([
+      "started",
+      "interrupted",
+      "started",
+      "completed",
+    ]);
+    expect(turnStates[2]![1]).not.toBe(turnStates[1]![1]);
+    await handle.close();
+  });
+
+  it("honours a Stop between an automatic retry's decision and its opening", async () => {
+    let refreshes = 0;
+    const attachment = fixture({
+      refreshTools: async () => {
+        refreshes += 1;
+        return null;
+      },
+    });
+    const turns: ProviderCall[] = [];
+    let handle: Handle | undefined;
+    let armed = false;
+    let failedRunEnded = false;
+    // Where the hook fired, read when it fired: the failed run's `agent_end`
+    // observers had settled, and they had not ended the turn — so they had
+    // decided to resume it. A Pi that let go of the run any earlier would
+    // land this Stop before that decision, where an older check answers it,
+    // and this test would prove nothing; it fails instead.
+    let atHook: { agentEndSettled: boolean; kinds: string[]; refreshes: number } | undefined;
+    type PiInternals = {
+      finishRun: () => void;
+      processEvents: (event: { type: string }) => Promise<void>;
+    };
+    const internals = Agent.prototype as unknown as PiInternals;
+    const finishRun = internals.finishRun;
+    const processEvents = internals.processEvents;
+    const settledSpy = vi.spyOn(internals, "processEvents").mockImplementation(async function (
+      this: unknown,
+      event,
+    ) {
+      await processEvents.call(this, event);
+      if (armed && event.type === "agent_end") failedRunEnded = true;
+    });
+    // Pi lets go of the run here, after the turn's own `agent_end` decided to
+    // resume it and before the runtime opens the resumed run.
+    const spy = vi.spyOn(internals, "finishRun").mockImplementation(function (this: unknown) {
+      finishRun.call(this);
+      if (!armed) return;
+      armed = false;
+      atHook = {
+        agentEndSettled: failedRunEnded,
+        kinds: kinds(attachment.observations),
+        refreshes,
+      };
+      void handle!.interrupt();
+    });
+    try {
+      const runtime = createPiAgentRuntime({
+        sessionDataDir: attachment.sessionDataDir,
+        retryBackoffMs: instantBackoff,
+        models: modelsWithStream(
+          scriptedStream([
+            recording(turns, (emit) => {
+              armed = true;
+              emit.fail(DROPPED_SOCKET);
+            }),
+            recording(turns, settles("later answer")),
+          ]),
+        ),
+      });
+      handle = await runtime.startSession(attachment.spec);
+      await expect(handle.submitUserMessage("go")).resolves.toEqual({
+        kind: "delivered",
+        delivery: "prompt",
+      });
+
+      expect(atHook).toEqual({
+        agentEndSettled: true,
+        kinds: ["attachment:started", "turn:started", "usage"],
+        refreshes: expect.any(Number),
+      });
+      expect(turns).toHaveLength(1);
+      expect(kinds(attachment.observations)).toEqual([
+        "attachment:started",
+        "turn:started",
+        "usage",
+        "turn:interrupted",
+      ]);
+      // A retry already stopped does not refresh for a run that never starts.
+      expect(refreshes).toBe(atHook!.refreshes);
+      await handle.close();
+    } finally {
+      spy.mockRestore();
+      settledSpy.mockRestore();
+    }
+  });
+
+  it("lets a message sent after the Stop open a turn of its own", async () => {
+    const gap = await failedTurn([settles("answer to the message")]);
+    const { retrying } = await retryHeld(gap, "retry-1");
+    const stopping = gap.handle.interrupt();
+    const submitting = gap.handle.submitUserMessage("MESSAGE-AFTER-STOP");
+    await runPendingCallbacks();
+    gap.refresh.release();
+    await stopping;
+
+    await expect(submitting).resolves.toEqual({ kind: "delivered", delivery: "prompt" });
+    await expect(retrying).resolves.toMatchObject({ kind: "delivered", delivery: "retry" });
+    expect(gap.turns).toHaveLength(3);
+    expect(gap.turns[2]!.messages).toContain("MESSAGE-AFTER-STOP");
+    expect(gap.turns[2]!.messages.split(PASTED).length - 1).toBe(1);
+    const turnStates = gap.attachment.observations.flatMap((observation) =>
+      observation.kind === "turn" ? [`${observation.state}:${observation.turnId}`] : [],
+    );
+    const [retried, message] = [turnStates.at(-4)!.split(":")[1], turnStates.at(-1)!.split(":")[1]];
+    expect(turnStates.slice(-4)).toEqual([
+      `started:${retried}`,
+      `interrupted:${retried}`,
+      `started:${message}`,
+      `completed:${message}`,
+    ]);
+    expect(message).not.toBe(retried);
+    expect(settledTexts(gap.attachment.observations)).toEqual([
+      "first answer",
+      "answer to the message",
+    ]);
+    await gap.handle.close();
+  });
+
+  it("settles the stopped retry once for a second Stop", async () => {
+    const gap = await failedTurn([settles("retried answer")]);
+    const { retrying } = await retryHeld(gap, "retry-1");
+    const first = tracked(gap.handle.interrupt());
+    const second = tracked(gap.handle.interrupt());
+    await runPendingCallbacks();
+    const answeredInTheGap = first.settled() || second.settled();
+    gap.refresh.release();
+    await Promise.all([first.promise, second.promise]);
+
+    expect(answeredInTheGap).toBe(false);
+    await expect(retrying).resolves.toMatchObject({ kind: "delivered", delivery: "retry" });
+    expect(gap.turns).toHaveLength(2);
+    expect(kinds(gap.attachment.observations).filter((kind) => kind.startsWith("turn:"))).toEqual([
+      "turn:started",
+      "turn:completed",
+      "turn:started",
+      "turn:interrupted",
+      "turn:started",
+      "turn:interrupted",
+    ]);
+    await gap.handle.close();
+  });
+
+  it("refuses a retry its attachment closed under, and keeps its failed reply", async () => {
+    const gap = await failedTurn([]);
+    const before = kinds(gap.attachment.observations);
+    const { retrying } = await retryHeld(gap, "retry-1");
+    const closing = tracked(gap.handle.close());
+    await runPendingCallbacks();
+    gap.refresh.release();
+    await closing.promise;
+
+    await expect(retrying).resolves.toEqual({
+      kind: "rejected",
+      reason: "closed",
+      message: "This attachment is closed.",
+    });
+    expect(gap.turns).toHaveLength(2);
+    expect(kinds(gap.attachment.observations)).toEqual([...before, "attachment:closed"]);
+    expect((await gap.handle.reconcile(null)).receipts ?? []).toEqual([]);
+    expect(gap.handle.resumeBoundary?.()).toBe("settled");
+  });
+
+  it("leaves a manual retry whose refresh failed retryable, with nothing on the ledger", async () => {
+    const gap = await failedTurn([settles("retried answer")]);
+    const before = kinds(gap.attachment.observations);
+    const { retrying } = await retryHeld(gap, "retry-1");
+    gap.refresh.fail(new Error("The host could not refresh the tools."));
+
+    await expect(retrying).rejects.toThrow("The host could not refresh the tools.");
+    expect(gap.turns).toHaveLength(2);
+    expect(kinds(gap.attachment.observations)).toEqual(before);
+    expect((await gap.handle.reconcile(null)).receipts ?? []).toEqual([]);
+    expect(gap.handle.resumeBoundary?.()).toBe("settled");
+
+    // Nothing of the failed retry rides into the next one: it answers the
+    // request the reply failed on, sent once, and is the only acceptance.
+    await expect(gap.handle.retry("retry-2")).resolves.toMatchObject({
+      kind: "delivered",
+      delivery: "retry",
+    });
+    expect(gap.turns).toHaveLength(3);
+    expect(gap.turns[2]!.messages.split(PASTED).length - 1).toBe(1);
+    expect(
+      ((await gap.handle.reconcile(null)).receipts ?? []).map(({ commandId }) => commandId),
+    ).toEqual(["retry-2"]);
+    await gap.handle.close();
+  });
+
+  it("answers a Stop waiting on a manual retry whose refresh failed", async () => {
+    const gap = await failedTurn([settles("retried answer")]);
+    const before = kinds(gap.attachment.observations);
+    const { retrying } = await retryHeld(gap, "retry-1");
+    const stopping = gap.handle.interrupt();
+    gap.refresh.fail(new Error("The host could not refresh the tools."));
+
+    await stopping;
+    await expect(retrying).rejects.toThrow("The host could not refresh the tools.");
+    // The retry never opened a turn, so there was none for the Stop to end:
+    // the failed turn is still the last thing on the ledger.
+    expect(gap.turns).toHaveLength(2);
+    expect(kinds(gap.attachment.observations)).toEqual(before);
+    expect((await gap.handle.reconcile(null)).receipts ?? []).toEqual([]);
+    await expect(gap.handle.retry("retry-2")).resolves.toMatchObject({ kind: "delivered" });
+    expect(settledTexts(gap.attachment.observations)).toEqual(["first answer", "retried answer"]);
+    await gap.handle.close();
+  });
+
+  it("ends an automatic retry's turn when its refresh fails, so the next message opens its own", async () => {
+    const attachment = fixture();
+    const refresh = holdableRefresh(attachment);
+    const turns: ProviderCall[] = [];
+    let entered: Promise<void> | undefined;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      retryBackoffMs: instantBackoff,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(turns, (emit) => {
+            entered = refresh.arm();
+            emit.fail(DROPPED_SOCKET);
+          }),
+          recording(turns, settles("later answer")),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    const submitting = handle.submitUserMessage("GO-MARKER");
+    await vi.waitFor(() => expect(entered).toBeDefined());
+    await entered;
+    refresh.fail(new Error("The host could not refresh the tools."));
+
+    await expect(submitting).rejects.toThrow("The host could not refresh the tools.");
+    expect(turns).toHaveLength(1);
+    expect(kinds(attachment.observations)).toEqual([
+      "attachment:started",
+      "turn:started",
+      "usage",
+      "turn:interrupted",
+    ]);
+
+    await expect(handle.submitUserMessage("again", "queue", "message-2")).resolves.toMatchObject({
+      kind: "delivered",
+      delivery: "prompt",
+    });
+    expect(turns).toHaveLength(2);
+    expect(turns[1]!.messages.split("GO-MARKER").length - 1).toBe(1);
+    const turnStates = attachment.observations.flatMap((observation) =>
+      observation.kind === "turn" ? [[observation.state, observation.turnId] as const] : [],
+    );
+    expect(turnStates.map(([state]) => state)).toEqual([
+      "started",
+      "interrupted",
+      "started",
+      "completed",
+    ]);
+    expect(turnStates[2]![1]).not.toBe(turnStates[1]![1]);
+    // The message is accepted into its own turn, not the dead one.
+    const accepted = entryRecords(handle.recovery!.sessionFilePath).flatMap((entry) => {
+      const data = entry["data"] as { kind?: string; commandId?: string; turnId?: string };
+      return entry["customType"] === "volli.observation.v1" && data.kind === "command-accepted"
+        ? [{ commandId: data.commandId, turnId: data.turnId }]
+        : [];
+    });
+    expect(accepted).toEqual([{ commandId: "message-2", turnId: turnStates[2]![1] }]);
+    await handle.close();
+  });
+
+  it("settles an automatic retry once when a Stop waits on a refresh that fails", async () => {
+    const attachment = fixture();
+    const refresh = holdableRefresh(attachment);
+    let entered: Promise<void> | undefined;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      retryBackoffMs: instantBackoff,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            entered = refresh.arm();
+            emit.fail(DROPPED_SOCKET);
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    const submitting = handle.submitUserMessage("go");
+    await vi.waitFor(() => expect(entered).toBeDefined());
+    await entered;
+    const stopping = handle.interrupt();
+    refresh.fail(new Error("The host could not refresh the tools."));
+
+    await stopping;
+    await expect(submitting).rejects.toThrow("The host could not refresh the tools.");
+    expect(kinds(attachment.observations)).toEqual([
+      "attachment:started",
+      "turn:started",
+      "usage",
+      "turn:interrupted",
+    ]);
+    await handle.close();
+  });
+
+  it("refuses a retry whose attachment was cancelled under it", async () => {
+    const cancel = new AbortController();
+    const gap = await failedTurn([], { signal: cancel.signal });
+    const before = kinds(gap.attachment.observations);
+    const { retrying } = await retryHeld(gap, "retry-1");
+    cancel.abort();
+    gap.refresh.release();
+
+    await expect(retrying).resolves.toEqual({
+      kind: "rejected",
+      reason: "closed",
+      message: "This attachment is closed.",
+    });
+    expect(gap.turns).toHaveLength(2);
+    expect(kinds(gap.attachment.observations)).toEqual(before);
+    expect((await gap.handle.reconcile(null)).receipts ?? []).toEqual([]);
+    await gap.handle.close();
+  });
+
+  it("ends an automatic retry's turn its attachment closed under", async () => {
+    const attachment = fixture();
+    const refresh = holdableRefresh(attachment);
+    const turns: ProviderCall[] = [];
+    let entered: Promise<void> | undefined;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      retryBackoffMs: instantBackoff,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(turns, (emit) => {
+            entered = refresh.arm();
+            emit.fail(DROPPED_SOCKET);
+          }),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    const submitting = handle.submitUserMessage("go");
+    await vi.waitFor(() => expect(entered).toBeDefined());
+    await entered;
+
+    const closing = handle.close();
+    await runPendingCallbacks();
+    refresh.release();
+    await closing;
+    await submitting;
+
+    expect(turns).toHaveLength(1);
+    // Exactly what "abandons the wait when the attachment closes" records.
+    expect(kinds(attachment.observations)).toEqual([
+      "attachment:started",
+      "turn:started",
+      "usage",
+      "turn:interrupted",
+      "attachment:closed",
+    ]);
+  });
+});
+
 /**
  * The Role bundle as tools the model can actually call (VC-162).
  *

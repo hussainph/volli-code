@@ -149,6 +149,34 @@ test("every restore lifecycle marker published by the suite reaches the retained
   );
 });
 
+test("a failed test's trace reaches the retained JSONL bounded, strings only (VC-1220)", (t) => {
+  const source = readFileSync(
+    join(host, "src/session-runtime/crash-recovery.integration.test.ts"),
+    "utf8",
+  );
+  assert.ok(source.includes('event: "test-trace"'), "the crash-recovery fixture publishes it");
+  const { result, events } = fixture(
+    t,
+    `
+      import { channel } from 'node:diagnostics_channel';
+      const lines = [42, { argv: 'not-for-diagnostics' }, 'x'.repeat(300)];
+      lines.push(...Array.from({ length: 450 }, (_, index) => 'mark ' + index));
+      channel('volli.test').publish({ event: 'test-trace', id: 'test-1',
+        file: 'fixture.test.ts', name: 'failed case', trace: lines });
+      channel('volli.test').publish({ event: 'test-start', id: 'test-2',
+        file: 'fixture.test.ts', name: 'other', trace: ['not-for-diagnostics'] });
+    `,
+  );
+  assert.equal(result.status, 0, result.stderr);
+  const traced = events.find((event) => event.event === "test-trace");
+  assert.equal(traced.name, "failed case");
+  assert.equal(traced.trace.length, 398);
+  assert.equal(traced.trace[0], "x".repeat(256));
+  assert.equal(traced.trace.at(-1), "mark 396");
+  assert.equal(events.find((event) => event.event === "test-start").trace, undefined);
+  assert.doesNotMatch(JSON.stringify(events), /not-for-diagnostics/);
+});
+
 test("observes real worker termination without changing its exit code", (t) => {
   const { result, events } = fixture(
     t,

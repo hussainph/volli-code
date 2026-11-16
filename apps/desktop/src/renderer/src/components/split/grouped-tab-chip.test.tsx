@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import * as React from "react";
 import { act } from "react";
 
 import { createRoot, type Root } from "react-dom/client";
@@ -26,7 +27,8 @@ import {
 import { seedSlice } from "@volli/session-presentation";
 import { ChatProviderIcon } from "@renderer/components/sessions/chat-provider-icon";
 import { projectChatProviders, ticketChatProviders } from "@renderer/lib/session-provider-index";
-import { ChatIcon } from "@renderer/components/ui/icon";
+import { ChatIcon, UnlinkIcon } from "@renderer/components/ui/icon";
+import { renderToStaticMarkup } from "react-dom/server";
 import { Tab, TabStrip } from "@renderer/components/ui/tab-strip";
 import { GroupedTabList, groupTabItems, type TabGroup } from "./grouped-tab-chip";
 
@@ -768,7 +770,7 @@ describe("the chip's action dropdown", () => {
     expect(popover()).toBeNull();
   });
 
-  it("puts Take out inside the pane tab dropdown, claims pointer-down, and preserves context parity", async () => {
+  it("puts Take out inside the pane tab dropdown, claims pointer-down, and preserves context parity (VC-1017)", async () => {
     const takeOut = vi.fn();
     act(() =>
       root.render(
@@ -786,7 +788,8 @@ describe("the chip's action dropdown", () => {
         />,
       ),
     );
-    expect(container.querySelector('[data-slot="pane-take-out"]')).toBeNull();
+    // No standalone control on the pane strip: the tab's own menu is the way out.
+    expect(container.querySelector('[data-slot="tab-actions"]')).toBeNull();
     const trigger = container.querySelector('[aria-label="Actions for Chat"]')!;
     const down = new MouseEvent("pointerdown", { bubbles: true, button: 0, cancelable: true });
     await act(async () => trigger.dispatchEvent(down));
@@ -802,9 +805,160 @@ describe("the chip's action dropdown", () => {
         new MouseEvent("contextmenu", { bubbles: true, clientX: 10, clientY: 10 }),
       ),
     );
-    expect(document.querySelector('[data-slot="context-menu-content"]')?.textContent).toContain(
+    const item = [...document.querySelectorAll('[data-slot="context-menu-item"]')].find((row) =>
+      row.textContent?.includes("Take out of group"),
+    )!;
+    // The group-leaving glyph Ungroup draws, not the open-externally square.
+    expect(item.querySelector("svg")?.outerHTML).toBe(
+      renderToStaticMarkup(<UnlinkIcon aria-hidden />),
+    );
+  });
+
+  it("keeps Take out off the chip's member rows: the chip leaves a group whole, by Ungroup (VC-1017)", async () => {
+    const takeOut = vi.fn();
+    act(() =>
+      root.render(
+        <HomePaneTabStrip
+          label="Home tabs"
+          projectId="project"
+          tabs={[HOME_BOARD_TAB, chat, file, browser, term]}
+          activeTabId={chat.id}
+          groups={[group]}
+          shownGroupId={group.id}
+          onUngroup={noop}
+          onTakeOutTab={takeOut}
+          onSelect={noop}
+          onClose={noop}
+          onRename={noop}
+          onPinFile={noop}
+          onCloseOtherFiles={noop}
+        />,
+      ),
+    );
+    await rightClickChip();
+    const list = popover()!;
+    expect(list.querySelector('[aria-label="Close: Page"]')).not.toBeNull();
+    expect(list.querySelector('[aria-label^="Take out of group"]')).toBeNull();
+    expect(list.querySelector('[data-slot="grouped-tab-ungroup"]')).not.toBeNull();
+    // An ordinary top-strip tab is in no group, so it has nothing to leave.
+    await act(async () =>
+      tab("a.ts").dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, clientX: 10, clientY: 10 }),
+      ),
+    );
+    expect(document.querySelector('[data-slot="context-menu-content"]')?.textContent).not.toContain(
       "Take out of group",
     );
+    expect(takeOut).not.toHaveBeenCalled();
+  });
+
+  it("offers Take out on a Ticket pane strip's tab and not on its top strip's chip (VC-1017)", async () => {
+    const takeOut = vi.fn();
+    const body: TicketTabDescriptor = { id: "body", kind: "body", label: "Body" };
+    const page: TicketTabDescriptor = { id: browser.id, kind: "browser", label: "Page" };
+    const ticketStrip = (groups?: readonly TabGroup[]) =>
+      act(() =>
+        root.render(
+          <TicketPaneTabStrip
+            label="Ticket tabs"
+            projectId="project"
+            ticketId="ticket"
+            tabs={[body, page]}
+            activeTabId={page.id}
+            groups={groups}
+            shownGroupId={groups?.[0]?.id ?? null}
+            onTakeOutTab={takeOut}
+            onSelectTab={noop}
+            onCloseTab={noop}
+            onRenameSessionTab={noop}
+          />,
+        ),
+      );
+    ticketStrip();
+    await act(async () =>
+      container
+        .querySelector('[aria-label="Actions for Page"]')!
+        .dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })),
+    );
+    const action = [...document.querySelectorAll('[data-slot="dropdown-menu-item"]')].find((row) =>
+      row.textContent?.includes("Take out of group"),
+    )!;
+    click(action);
+    expect(takeOut).toHaveBeenCalledExactlyOnceWith(page.id);
+    // A Browser tab has no other right-click items, yet still carries the strip's own.
+    await act(async () =>
+      tab("Page").dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, clientX: 10, clientY: 10 }),
+      ),
+    );
+    const item = [...document.querySelectorAll('[data-slot="context-menu-item"]')].find((row) =>
+      row.textContent?.includes("Take out of group"),
+    )!;
+    click(item);
+    expect(takeOut).toHaveBeenCalledTimes(2);
+    ticketStrip([
+      {
+        id: "body-group",
+        panes: [
+          { paneId: "a", tabIds: [body.id], activeTabId: body.id },
+          { paneId: "b", tabIds: [page.id], activeTabId: page.id },
+        ],
+      },
+    ]);
+    await rightClickChip();
+    expect(popover()!.querySelector('[aria-label^="Take out of group"]')).toBeNull();
+  });
+
+  it("hands focus to the taken-out tab on its surface's top strip, not the document body (VC-1017)", async () => {
+    function Surface() {
+      const [out, setOut] = React.useState(false);
+      const strip = {
+        projectId: "project",
+        activeTabId: chat.id,
+        onSelect: noop,
+        onClose: noop,
+        onRename: noop,
+        onPinFile: noop,
+        onCloseOtherFiles: noop,
+      };
+      return (
+        <div data-split-area>
+          {out ? (
+            // A different strip, as in the app: the pane strip and its trigger unmount.
+            <HomePaneTabStrip
+              key="top"
+              label="Home tabs"
+              tabs={[file, chat]}
+              groups={[]}
+              {...strip}
+            />
+          ) : (
+            <HomePaneTabStrip
+              key="pane"
+              label="Pane tabs"
+              tabs={[chat]}
+              onTakeOutTab={() => setOut(true)}
+              {...strip}
+            />
+          )}
+        </div>
+      );
+    }
+    act(() => root.render(<Surface />));
+    const trigger = container.querySelector<HTMLElement>('[aria-label="Actions for Chat"]')!;
+    act(() => trigger.focus());
+    await act(async () =>
+      trigger.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })),
+    );
+    const action = [...document.querySelectorAll('[data-slot="dropdown-menu-item"]')].find((row) =>
+      row.textContent?.includes("Take out of group"),
+    )!;
+    click(action);
+    await act(async () => new Promise((done) => setTimeout(done, 10)));
+    expect(container.querySelector('[role="tablist"]')?.getAttribute("aria-label")).toBe(
+      "Home tabs",
+    );
+    expect(document.activeElement).toBe(tab("Chat"));
   });
 
   it("owns the pointer while open: the hover list stands down and a member action dismisses it", async () => {

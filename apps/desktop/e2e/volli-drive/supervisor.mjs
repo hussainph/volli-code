@@ -15,16 +15,22 @@
  * Electron child by pid AND start time, that child's process group and its
  * descendants — never anything matched by name or path.
  */
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, createReadStream, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 
+import { spawn } from "node:child_process";
 import {
+  APP_DIR,
+  ELECTRON,
   assertProfileIsolated,
   closeAppBounded,
   launch,
+  launchEnvFor,
   pathExists,
+  smokeExecutableFor,
   waitUntil,
   writeFakeLoginShell,
 } from "../lib/smoke-kit.mjs";
@@ -55,6 +61,7 @@ import {
   CLOUD_LAUNCH_KEY,
   CLOUD_RUNNER_KEY,
   cleanQuitProblems,
+  immediateQuit,
   cloudElectronEnv,
   cloudFixtureFromSupervisorEnv,
   completeDevSignIn,
@@ -66,6 +73,12 @@ import {
   recordedRunnerId,
 } from "./lib/cloud-acceptance.mjs";
 import { seedFixture } from "./lib/fixtures.mjs";
+import {
+  isCheckingPage,
+  isUpdatingPage,
+  seedDatabase,
+  seedDatabaseProblems,
+} from "./lib/seed-database.mjs";
 import { serve } from "./lib/protocol.mjs";
 import { quitNativeWindow, reopenNativeWindow } from "./lib/native-window-lifecycle.mjs";
 import { settingsNative } from "./lib/settings-native.mjs";
@@ -262,6 +275,9 @@ async function act(args) {
     throw new Error(`generation ${gen} was taken of window ${current.window}, not ${name}`);
   const target = ref ? page.locator(`aria-ref=${ref}`) : null;
   const timeout = 10_000;
+  // Motion evidence: consecutive compositor frames of this window from just
+  // before the action until recordMs after it, never a screen capture.
+  const recording = args.recordMs === undefined ? null : await startFrames(page, name);
   const started = performance.now();
   switch (kind) {
     case "click":
@@ -296,12 +312,21 @@ async function act(args) {
       break;
   }
   const actionMs = Math.round(performance.now() - started);
+  const frames =
+    recording === null
+      ? undefined
+      : await recording.stop(Math.min(Math.max(Number(args.recordMs) || 0, 0), 5_000));
   // Let the renderer commit what the action caused before re-reading it.
   await page.waitForTimeout(Number(args.settleMs ?? 250));
   const fresh = await snapshot({ window: name });
-  const result = { action: { kind, ref, key, text, direction, ms: actionMs }, snapshot: fresh };
+  const result = {
+    action: { kind, ref, key, text, direction, ms: actionMs },
+    frames,
+    snapshot: fresh,
+  };
   transcript({
     cmd: "act",
+    frames,
     gen,
     kind,
     ref,
@@ -311,6 +336,35 @@ async function act(args) {
     nextGeneration: fresh.generation,
   });
   return result;
+}
+
+/** Page.startScreencast frames, written as PNGs beside the screenshots. */
+async function startFrames(page, windowName) {
+  shotCounter += 1;
+  const dir = join(
+    L.screenshotsDir,
+    `${String(shotCounter).padStart(3, "0")}-frames-${windowName}`,
+  );
+  mkdirSync(dir, { recursive: true });
+  const cdp = await page.context().newCDPSession(page);
+  const writes = [];
+  const begin = performance.now();
+  cdp.on("Page.screencastFrame", ({ data, sessionId }) => {
+    const at = Math.round(performance.now() - begin);
+    const path = join(dir, `${String(writes.length).padStart(4, "0")}-${at}ms.png`);
+    writes.push(fs.writeFile(path, Buffer.from(data, "base64")));
+    void cdp.send("Page.screencastFrameAck", { sessionId }).catch(() => {});
+  });
+  await cdp.send("Page.startScreencast", { format: "png", everyNthFrame: 1 });
+  return {
+    async stop(afterMs) {
+      await page.waitForTimeout(afterMs);
+      await cdp.send("Page.stopScreencast").catch(() => {});
+      await Promise.all(writes);
+      await cdp.detach().catch(() => {});
+      return { dir, count: writes.length };
+    },
+  };
 }
 
 async function waitFor({ text, gone = false, timeout = 15_000, window }) {
@@ -705,6 +759,15 @@ async function boot() {
     ...(cloud ? cloudElectronEnv(cloud, spec.cloud.subject, spec.cloud.email) : {}),
     ...(spec.deployment ? deploymentElectronEnv(spec.deployment) : {}),
   };
+  if (spec.database) {
+    // A real-sized profile to upgrade (VC-1105): cloned in before the first
+    // launch, so the app's own open is what upgrades it.
+    const problems = await seedDatabaseProblems(spec.database);
+    if (problems.length > 0) throw new Error(problems.join("; "));
+    await seedDatabase(spec.database, L.dbPath);
+    mark("databaseSeeded");
+    slog(`database seeded from ${spec.database}`);
+  }
   mark("launchStart");
   launchEnv = extraEnv;
   const { page, live, record } = await startElectron(extraEnv);
@@ -779,7 +842,13 @@ async function boot() {
  * live process; the first launch and every supervised restart come through
  * here, with the same environment, profile, database and harness directory.
  */
-async function startElectron(extraEnv) {
+/**
+ * Launches Electron. With `databasePage` (VC-1208's quit-during-launch) it
+ * returns as soon as the launch shows that database page (`check` or
+ * `upgrade`), undriven and before the guard is proved; the launch after it
+ * proves the guard as every launch does.
+ */
+async function startElectron(extraEnv, { databasePage } = {}) {
   // Quit evidence belongs to one launch, never the process that replaces it.
   lastTrayQuit = null;
   lastCloudClose = null;
@@ -815,8 +884,17 @@ async function startElectron(extraEnv) {
       ).then(() => process.exit(1));
     }
   });
+  if (databasePage !== undefined) {
+    const shown = await app.firstWindow({ timeout: 240_000 });
+    await shown.waitForURL(
+      (url) => (databasePage === "check" ? isCheckingPage(url.href) : isUpdatingPage(url.href)),
+      { timeout: 240_000 },
+    );
+    await shown.getByRole("status").waitFor({ timeout: 30_000 });
+    return { page: shown, live: null, record: null };
+  }
   app.on("window", wireWindow);
-  const page = await app.firstWindow();
+  const page = await firstAppWindow();
   mainPage = page;
   wireWindow(page);
   await page.waitForLoadState("domcontentloaded");
@@ -845,6 +923,93 @@ async function startElectron(extraEnv) {
 }
 
 /**
+ * The app's own first window. A launch that upgrades its database shows the
+ * upgrade window first (VC-1105): that one is captured as evidence, with when
+ * it appeared and closed, and never driven. A long routine check opens the
+ * app's window on its check page (VC-1203): captured the same way, and the
+ * window is the app's once the app has loaded into it.
+ */
+async function firstAppWindow() {
+  const seen = new Set();
+  for (;;) {
+    for (const page of app.windows()) {
+      if (seen.has(page)) continue;
+      try {
+        await page.waitForLoadState("domcontentloaded");
+        if (isCheckingPage(page.url())) {
+          await captureCheckingWindow(page);
+          await page.waitForURL((url) => !isCheckingPage(url.href), {
+            waitUntil: "domcontentloaded",
+            timeout: 240_000,
+          });
+          mark("checkingWindowLoadedApp");
+        }
+      } catch {
+        seen.add(page);
+        continue;
+      }
+      if (!isUpdatingPage(page.url())) return page;
+      seen.add(page);
+      await captureUpdatingWindow(page);
+    }
+    await app.waitForEvent("window", { timeout: 240_000 });
+  }
+}
+
+async function captureCheckingWindow(page) {
+  mark("checkingWindowShown");
+  try {
+    await page.getByRole("status").waitFor({ timeout: 10_000 });
+    const path = join(L.screenshotsDir, "000-checking-window.png");
+    await page.screenshot({ path });
+    // The native edge it was built with: what the window paints around and
+    // under the page, which a page screenshot does not show.
+    const native = await app.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows().find((candidate) =>
+        candidate.webContents.getURL().includes("work=check"),
+      );
+      return window === undefined
+        ? null
+        : {
+            background: window.getBackgroundColor(),
+            bounds: window.getBounds(),
+            mediaSourceId: window.getMediaSourceId(),
+          };
+    });
+    transcript({
+      cmd: "checking-window",
+      event: "shown",
+      path,
+      text: await page.innerText("body"),
+      native,
+    });
+  } catch (error) {
+    transcript({ cmd: "checking-window", event: "capture-failed", error: String(error) });
+  }
+}
+
+async function captureUpdatingWindow(page) {
+  mark("updatingWindowShown");
+  page.once("close", () => {
+    mark("updatingWindowClosed");
+    transcript({ cmd: "updating-window", event: "closed" });
+  });
+  try {
+    await page.getByRole("status").waitFor({ timeout: 10_000 });
+    const path = join(L.screenshotsDir, "000-updating-window.png");
+    await page.screenshot({ path });
+    transcript({
+      cmd: "updating-window",
+      event: "shown",
+      path,
+      text: await page.innerText("body"),
+    });
+  } catch (error) {
+    transcript({ cmd: "updating-window", event: "capture-failed", error: String(error) });
+  }
+}
+
+/**
  * A supervised restart (Volli Cloud journeys): what the app's "Restart to
  * open Volli Cloud" does, without `app.relaunch()`, which under the harness
  * would start an Electron nobody drives. Electron closes through its normal
@@ -854,14 +1019,202 @@ async function startElectron(extraEnv) {
  */
 async function restart(reason) {
   requireCloudLaunch();
+  // Through the Tray's Quit Volli, as a person would (a cloud launch stays
+  // resident on an ordinary quit), proven from the exact child handle.
+  return restartElectron(reason, async () => await closeCloudInstance());
+}
+
+/**
+ * A routine relaunch of a local instance (VC-1203): the app's ordinary quit,
+ * then the same restart on the same profile and database.
+ */
+async function relaunch() {
+  if (spec.cloud || spec.deployment) throw new Error("relaunch is local; use restart");
+  return restartElectron("relaunch", closeLocalInstance);
+}
+
+/**
+ * VC-1208: a relaunch that quits while the launch's database work runs, then
+ * launches again normally. `work` is the page to quit on: `check` (a routine
+ * launch's check) or `upgrade` (`database`, an absolute path to a closed
+ * older copy, is cloned in first so the launch has one to run). With
+ * `secondLaunch`, a second Electron starts on the same profile while an
+ * upgrade's quit waits, and the waiting window must come forward.
+ *
+ * The quitting launch is never driven and its guard is not re-proved: it is
+ * the same bundle and environment, and quits on the database page. The
+ * launch after it is the ordinary one, guard and all.
+ */
+async function quitDuringLaunch(args) {
+  const work = args.work === "upgrade" ? "upgrade" : "check";
+  if (spec.cloud || spec.deployment) throw new Error("quit-during-launch is local");
+  if (restarting) throw new Error("a restart is already running");
+  restarting = true;
+  try {
+    const logFrom = mainLogSize();
+    const { close } = await closeLocalInstance();
+    if (
+      !immediateQuit(close, mainLogSince(logFrom), { userDataDir: L.userDataDir }) &&
+      cleanQuitProblems(close).length > 0
+    )
+      throw new Error(`Electron did not quit cleanly first: ${JSON.stringify(close)}`);
+    await waitUntil(
+      "the quit Electron's processes to exit",
+      async () => (await owned()).length === 0,
+      {
+        timeout: 10_000,
+        interval: 200,
+      },
+    );
+    await fs.rm(L.appSocket, { force: true });
+    if (work === "upgrade") {
+      const problems = await seedDatabaseProblems(args.database);
+      if (problems.length > 0) throw new Error(problems.join("; "));
+      for (const suffix of ["", "-wal", "-shm"])
+        await fs.rm(`${L.dbPath}${suffix}`, { force: true });
+      await seedDatabase(args.database, L.dbPath);
+    }
+    // The closed database file before the launch, to compare after its exit.
+    const dbBefore = work === "check" ? await databaseFileState(L.dbPath) : null;
+    electronExit = null;
+    mainPage = null;
+    const launchStarted = performance.now();
+    const { page } = await startElectron(launchEnv, { databasePage: work });
+    const exited = new Promise((done) =>
+      electronChild.once("exit", (code, signal) => done({ code, signal })),
+    );
+    const windowMs = Math.round(performance.now() - launchStarted);
+    const quitLogFrom = mainLogSize();
+    const asked = performance.now();
+    // The process may be gone before Playwright hears back: that is the answer, not a fault.
+    await app
+      .evaluate(({ app: electronApp }) => setTimeout(() => electronApp.quit(), 0))
+      .catch((error) => slog(`quit asked; no reply (${error.message})`));
+    let second = null;
+    if (work === "upgrade") {
+      await page
+        .getByRole("status")
+        .getByText("Updating your data before quitting", { exact: true })
+        .waitFor({ timeout: 30_000 });
+      await page
+        .screenshot({ path: join(L.screenshotsDir, "000-quit-waits-for-upgrade.png") })
+        .catch((error) => slog(`quit-wait screenshot failed (${error.message})`));
+      if (args.secondLaunch === true) second = await secondLaunchDuringWait();
+    }
+    const exit = await exited;
+    const quitMs = Math.round(performance.now() - asked);
+    const dbAfter = work === "check" ? await databaseFileState(L.dbPath) : null;
+    const log = mainLogSince(quitLogFrom);
+    const mode = /\[quit\] exit call \{[^}]*mode: '(\w+)'/s.exec(log)?.[1] ?? null;
+    const database =
+      dbBefore === null
+        ? null
+        : {
+            before: dbBefore,
+            after: dbAfter,
+            unchanged: JSON.stringify(dbBefore) === JSON.stringify(dbAfter),
+          };
+    transcript({ cmd: "quit-during-launch", work, windowMs, quitMs, exit, mode, second, database });
+    slog(
+      `quit during ${work}: process gone ${quitMs} ms after the quit (${mode ?? "no exit line"})`,
+    );
+    // The launch after it: the ordinary one, guard re-proved.
+    electronExit = null;
+    mainPage = null;
+    current = { generation: ++generation, window: null, refs: new Set() };
+    for (const key of ["checkingWindowShown", "checkingWindowLoadedApp", "firstWindow"])
+      delete timings[key];
+    await fs.rm(L.appSocket, { force: true });
+    const { live } = await startElectron(launchEnv);
+    await waitUntil("the app's agent socket", () => pathExists(L.appSocket), { timeout: 30_000 });
+    restarts += 1;
+    await recordMembers();
+    return {
+      work,
+      windowMs,
+      quitMs,
+      exit,
+      mode,
+      second,
+      database,
+      guard: Object.keys(live.trapped).length,
+    };
+  } finally {
+    restarting = false;
+  }
+}
+
+/** A database file's digest, size and stamp, and its WAL's size. */
+async function databaseFileState(path) {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(path)) hash.update(chunk);
+  const info = await fs.stat(path);
+  const wal = await fs.stat(`${path}-wal`).catch(() => null);
+  return {
+    sha256: hash.digest("hex"),
+    size: info.size,
+    mtimeMs: info.mtimeMs,
+    walBytes: wal?.size ?? 0,
+  };
+}
+
+/** A second launch on this profile while the quit waits: the waiting window must come forward. */
+async function secondLaunchDuringWait() {
+  const id = await app.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0];
+    window?.hide();
+    return window?.id ?? null;
+  });
+  const environment = launchEnvFor(L.dbPath, launchEnv);
+  const started = performance.now();
+  const child = spawn(
+    smokeExecutableFor(ELECTRON, L.userDataDir, { environment }),
+    [APP_DIR, `--user-data-dir=${L.userDataDir}`, "--use-mock-keychain", "--password-store=basic"],
+    { env: environment, stdio: "ignore" },
+  );
+  const exited = new Promise((done) => child.once("exit", (code) => done(code)));
+  await waitUntil(
+    "the waiting window shown again",
+    () =>
+      app.evaluate(
+        ({ BrowserWindow }, windowId) => BrowserWindow.fromId(windowId)?.isVisible() === true,
+        id,
+      ),
+    { timeout: 60_000, interval: 100 },
+  );
+  const shownMs = Math.round(performance.now() - started);
+  const code = await exited;
+  return { shownMs, exitCode: code };
+}
+
+/** The Electron main log's size now, to read only what a quit writes after it. */
+function mainLogSize() {
+  try {
+    return readFileSync(L.mainLog).length;
+  } catch {
+    return 0;
+  }
+}
+
+function mainLogSince(offset) {
+  try {
+    return readFileSync(L.mainLog).subarray(offset).toString("utf8");
+  } catch {
+    return "";
+  }
+}
+
+async function restartElectron(reason, closeInstance) {
   if (restarting) throw new Error("a restart is already running");
   restarting = true;
   const started = performance.now();
   try {
-    // Through the Tray's Quit Volli, as a person would (a cloud launch stays
-    // resident on an ordinary quit), proven from the exact child handle.
-    const { trayQuit, close } = await closeCloudInstance();
-    const unclean = cleanQuitProblems(close);
+    const logFrom = mainLogSize();
+    const { trayQuit, close } = await closeInstance();
+    const quitMs = Math.round(performance.now() - started);
+    // The app may end itself at once when only read-only workers are left (VC-1208).
+    const immediate = immediateQuit(close, mainLogSince(logFrom), { userDataDir: L.userDataDir });
+    const unclean = immediate ? [] : cleanQuitProblems(close);
     if (unclean.length > 0) {
       throw new Error(
         `Electron did not quit cleanly before the restart (${unclean.join("; ")}): ${JSON.stringify({ close, trayQuit })}`,
@@ -892,14 +1245,40 @@ async function restart(reason) {
     electronExit = null;
     mainPage = null;
     current = { generation: ++generation, window: null, refs: new Set() };
+    // This launch's own window marks, from its start (VC-1203).
+    for (const key of ["checkingWindowShown", "checkingWindowLoadedApp", "firstWindow"])
+      delete timings[key];
+    const launchStart = Math.round(performance.now() - t0);
     const { live } = await startElectron(launchEnv);
     await waitUntil("the app's agent socket", () => pathExists(L.appSocket), { timeout: 30_000 });
     restarts += 1;
     const ms = Math.round(performance.now() - started);
+    const windows = Object.fromEntries(
+      ["checkingWindowShown", "checkingWindowLoadedApp", "firstWindow"]
+        .filter((key) => timings[key] !== undefined)
+        .map((key) => [key, timings[key] - launchStart]),
+    );
     slog(`restart ${restarts} (${reason}): pid ${electronPid}, guard re-verified`);
-    transcript({ cmd: "restart", reason, restarts, electronPid, ms, close: close.kind });
+    transcript({
+      cmd: "restart",
+      reason,
+      restarts,
+      electronPid,
+      ms,
+      quitMs,
+      close: immediate ? "immediate" : close.kind,
+      windows,
+    });
     await recordMembers();
-    return { restarts, electronPid, ms, guard: Object.keys(live.trapped).length };
+    return {
+      restarts,
+      electronPid,
+      ms,
+      quitMs,
+      close: immediate ? "immediate" : close.kind,
+      windows,
+      guard: Object.keys(live.trapped).length,
+    };
   } finally {
     restarting = false;
   }
@@ -1110,6 +1489,10 @@ async function handle(cmd, args) {
     }
     case "restart":
       return restart(String(args.reason ?? "requested"));
+    case "relaunch":
+      return relaunch();
+    case "quit-during-launch":
+      return quitDuringLaunch(args);
     case "restore-restart":
       return restoreRestart(args);
     case "runner-power": {
@@ -1182,6 +1565,29 @@ async function handle(cmd, args) {
       return waitFor(args);
     case "screenshot":
       return screenshot(args);
+    case "ui-zoom": {
+      // The View menu's addressed zoom event, delivered to one window's page.
+      if (!["in", "out", "reset"].includes(args.step))
+        throw new Error("ui-zoom step must be in, out or reset");
+      const { page, name } = await pickWindow(args.window);
+      const url = page.url();
+      await app.evaluate(
+        ({ BrowserWindow }, input) => {
+          const target = BrowserWindow.getAllWindows().find(
+            (w) => w.webContents.getURL() === input.url,
+          );
+          if (!target) throw new Error("window not found");
+          target.webContents.send("volli:ui-zoom-command", input.step);
+        },
+        { url, step: args.step },
+      );
+      await page.waitForTimeout(300);
+      const scale = await page.evaluate(
+        () => getComputedStyle(document.querySelector("[style*=zoom]") ?? document.body).zoom,
+      );
+      transcript({ cmd: "ui-zoom", window: name, step: args.step, scale });
+      return { window: name, scale };
+    }
     case "windows":
       return windowsList();
     case "doctor":
@@ -1221,6 +1627,24 @@ async function cloudTrayQuit() {
  * still running is closed the bounded way, while Playwright can reach it. A
  * missing or mismatched handle throws: never read as a clean quit.
  */
+/** A local instance's ordinary quit, proven from the exact child handle. */
+async function closeLocalInstance() {
+  const child = electronChild;
+  const pid = electronPid;
+  let close = observedChildExit(child, pid);
+  if (close === null) {
+    try {
+      // A large profile's ordinary quit (host stop, WAL checkpoint) can take
+      // seconds; it is given them before any signal.
+      close = await closeAppBounded(app, { closeGraceMs: 30_000 });
+    } catch (error) {
+      close = observedChildExit(child, pid);
+      if (close === null) throw error;
+    }
+  }
+  return { trayQuit: null, close };
+}
+
 async function closeCloudInstance() {
   requireCloudLaunch();
   const child = electronChild;

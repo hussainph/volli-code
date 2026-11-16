@@ -15,6 +15,7 @@ vi.mock("use-stick-to-bottom", () => ({
   StickToBottom: Object.assign(() => null, { Content: () => null }),
 }));
 let host: HTMLDivElement;
+let viewport: HTMLDivElement;
 let scroller: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
 let top = 800;
@@ -27,11 +28,19 @@ beforeEach(() => {
       disconnect() {}
     },
   );
+  viewport = document.createElement("div");
+  viewport.dataset.conversationViewport = "";
   scroller = document.createElement("div");
+  viewport.append(scroller);
   Object.defineProperties(scroller, {
     scrollHeight: { get: () => 1000 },
     clientHeight: { get: () => 200 },
-    scrollTop: { get: () => top },
+    scrollTop: {
+      get: () => top,
+      set: (value: number) => {
+        top = value;
+      },
+    },
   });
   state.scrollRef.current = scroller;
   state.contentRef.current = document.createElement("div");
@@ -56,12 +65,43 @@ it("appears only when detached, and goes away on reaching the latest line", asyn
   await act(async () => root.render(<ConversationScrollButton />));
   const button = host.querySelector<HTMLButtonElement>("button")!;
   expect(button.getAttribute("data-slot")).toBe("conversation-scroll-button");
+  // From the keyboard: at the end on the next frame, and following again.
   await act(async () => button.click());
-  expect(state.scrollToBottom).toHaveBeenCalledOnce();
-  top = 800;
+  expect(host.querySelector("button")).toBeNull();
+  await act(async () => {
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  });
+  expect(top).toBe(800);
+  expect(state.scrollToBottom).toHaveBeenCalledExactlyOnceWith("instant");
   await act(async () => {
     scroller.dispatchEvent(new Event("scroll"));
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
   });
   expect(host.querySelector("button")).toBeNull();
+});
+it("marks the viewport while it is up, so the fade clears it without a :has() on the transcript", async () => {
+  await act(async () => root.render(<ConversationScrollButton />));
+  expect(viewport.hasAttribute("data-scroll-button")).toBe(false);
+  top = 500;
+  await act(async () => {
+    scroller.dispatchEvent(new Event("scroll"));
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  });
+  expect(host.querySelector("button")).not.toBeNull();
+  expect(viewport.hasAttribute("data-scroll-button")).toBe(true);
+  top = 800;
+  await act(async () => {
+    scroller.dispatchEvent(new Event("scroll"));
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  });
+  expect(viewport.hasAttribute("data-scroll-button")).toBe(false);
+  top = 500;
+  await act(async () => {
+    scroller.dispatchEvent(new Event("scroll"));
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  });
+  expect(viewport.hasAttribute("data-scroll-button")).toBe(true);
+  await act(async () => root.unmount());
+  expect(viewport.hasAttribute("data-scroll-button")).toBe(false);
+  root = createRoot(host);
 });

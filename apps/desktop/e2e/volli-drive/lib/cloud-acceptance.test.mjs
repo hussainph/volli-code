@@ -12,6 +12,7 @@ import {
   DEV_ISSUER,
   DEV_KEY_ID,
   cleanQuitProblems,
+  immediateQuit,
   cloudElectronEnv,
   cloudFixtureFromEnv,
   cloudFixtureFromSupervisorEnv,
@@ -352,4 +353,21 @@ test("a quit Electron's exit is read from the exact child launched, never assume
   assert.throws(() => observedChildExit(exited, null), /not the recorded pid/u);
   assert.throws(() => observedChildExit({ ...exited, pid: 0 }, 0), /not the recorded pid/u);
   assert.throws(() => observedChildExit({ ...exited, pid: -1 }, -1), /not the recorded pid/u);
+});
+
+test("an immediate exit counts only when the app's own log says it made one (VC-1208)", () => {
+  const close = { kind: "graceful", exit: { code: null, signal: "SIGKILL" }, closeFailures: [] };
+  const said = "[quit] exit call {\n  mode: 'immediate',\n  liveWorkers: 1\n}\n";
+  assert.equal(immediateQuit(close, said), true);
+  assert.equal(immediateQuit(close, "[quit] exit call {\n  mode: 'normal'\n}\n"), false);
+  assert.equal(immediateQuit(close, ""), false);
+  assert.equal(immediateQuit({ ...close, kind: "sigkill" }, said), false);
+  assert.equal(immediateQuit({ ...close, closeFailures: ["timed out"] }, said), false);
+  assert.equal(immediateQuit({ ...close, exit: { code: 0, signal: null } }, said), false);
+  assert.equal(immediateQuit(undefined, said), false);
+  // The exit watch's kill (VC-652) needs its record too (smoke-kit's quitEndedByApp tests that);
+  // with no profile to read it from, an arming line alone is not enough.
+  const watched =
+    "[quit] exit call {\n  mode: 'normal',\n  liveWorkers: 0,\n  watch: 'arming'\n}\n";
+  assert.equal(immediateQuit({ ...close, pid: 7 }, watched), false);
 });

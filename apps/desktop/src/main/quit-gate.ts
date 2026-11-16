@@ -230,6 +230,12 @@ export function registerAcceptedQuitCoordinator(options: {
    */
   onQuitAccepted?(): void;
   onQuitRefused?(): void;
+  /**
+   * Told once the shutdown has drained (or its deadline passed), just before
+   * the exit: the quit timeline's line (VC-1208). A throw is reported and the
+   * exit goes on unchanged.
+   */
+  onDrained?(): void;
 }): void {
   let shutdownInFlight = false;
   options.lifecycle.on("before-quit", (event) => {
@@ -271,6 +277,15 @@ export function registerAcceptedQuitCoordinator(options: {
         }
       }
       const exitAfterCheckpoint = () => {
+        try {
+          options.onDrained?.();
+        } catch (error) {
+          try {
+            options.reportFailure(error);
+          } catch {
+            // A reporter that throws cannot hold the quit open either.
+          }
+        }
         // app.exit destroys native windows synchronously. VC-536 captured
         // macOS compositor teardown waiting on synchronous Viz IPC while
         // entered from this shutdown checkpoint. Defer teardown until the

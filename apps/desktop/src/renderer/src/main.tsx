@@ -69,6 +69,9 @@ async function main() {
   installRendererStallSignals();
   const root = createRoot(document.getElementById("root")!);
   const settingsWindow = isSettingsWindow();
+  // Settings is a plain native pane (VC-1228); globals.css keys its palette
+  // and opaque overlays on this, including overlays portalled outside it.
+  if (settingsWindow) document.documentElement.dataset.window = "settings";
   installSettingsWindowRouting();
   const preferences = startWindowPreferenceSync();
   window.addEventListener("pagehide", preferences.stop, { once: true });

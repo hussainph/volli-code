@@ -1,0 +1,849 @@
+{
+  "recorded": "GET /repos/hussainph/volli-code/actions/runs/41853107014 and /attempts/2/jobs, trimmed to the fields the predicate reads",
+  "attempt": 2,
+  "run": {
+    "id": 41853107014,
+    "name": "CI",
+    "path": ".github/workflows/ci.yml",
+    "event": "push",
+    "status": "completed",
+    "conclusion": "failure",
+    "run_attempt": 2,
+    "run_number": 3388,
+    "head_branch": "main",
+    "head_sha": "28d3a3d13a393c07f19b4a485d5e787c2a62f9df",
+    "head_repository": {
+      "id": 1293485448,
+      "full_name": "hussainph/volli-code"
+    }
+  },
+  "jobs": [
+    {
+      "id": 126668805913,
+      "name": "Smoke (core e2e)",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "runner_id": 0,
+      "runner_name": "",
+      "run_attempt": 2,
+      "labels": ["macos-15"],
+      "started_at": "2026-11-04T15:23:09Z",
+      "completed_at": "2026-11-04T15:54:29Z",
+      "steps": []
+    },
+    {
+      "id": 126668808172,
+      "name": "Scope",
+      "status": "completed",
+      "conclusion": "success",
+      "runner_id": 1000040000,
+      "runner_name": "GitHub Actions 1000040000",
+      "run_attempt": 2,
+      "labels": ["ubuntu-24.04"],
+      "started_at": "2026-11-04T15:00:53Z",
+      "completed_at": "2026-11-04T15:01:03Z",
+      "steps": [
+        {
+          "number": 1,
+          "conclusion": "success"
+        },
+        {
+          "number": 2,
+          "conclusion": "success"
+        },
+        {
+          "number": 3,
+          "conclusion": "success"
+        },
+        {
+          "number": 6,
+          "conclusion": "success"
+        },
+        {
+          "number": 7,
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 126668808469,
+      "name": "Test (desktop 1/3)",
+      "status": "completed",
+      "conclusion": "success",
+      "runner_id": 1000040003,
+      "runner_name": "GitHub Actions 1000040003",
+      "run_attempt": 2,
+      "labels": ["ubuntu-24.04"],
+      "started_at": "2026-11-04T15:00:52Z",
+      "completed_at": "2026-11-04T15:05:13Z",
+      "steps": [
+        {
+          "number": 1,
+          "conclusion": "success"
+        },
+        {
+          "number": 2,
+          "conclusion": "success"
+        },
+        {
+          "number": 3,
+          "conclusion": "success"
+        },
+        {
+          "number": 4,
+          "conclusion": "success"
+        },
+        {
+          "number": 5,
+          "conclusion": "success"
+        },
+        {
+          "number": 9,
+          "conclusion": "success"
+        },
+        {
+          "number": 10,
+          "conclusion": "success"
+        },
+        {
+          "number": 11,
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 126668809650,
+      "name": "Coverage (desktop)",
+      "status": "completed",
+      "conclusion": "success",
+      "runner_id": 1000040015,
+      "runner_name": "GitHub Actions 1000040015",
+      "run_attempt": 2,
+      "labels": ["ubuntu-24.04"],
+      "started_at": "2026-11-04T15:08:06Z",
+      "completed_at": "2026-11-04T15:08:47Z",
+      "steps": [
+        {
+          "number": 1,
+          "conclusion": "success"
+        },
+        {
+          "number": 2,
+          "conclusion": "success"
+        },
+        {
+          "number": 3,
+          "conclusion": "success"
+        },
+        {
+          "number": 4,
+          "conclusion": "success"
+        },
+        {
+          "number": 5,
+          "conclusion": "success"
+        },
+        {
+          "number": 6,
+          "conclusion": "success"
+        },
+        {
+          "number": 11,
+          "conclusion": "success"
+        },
+        {
+          "number": 12,
+          "conclusion": "success"
+        },
+        {
+          "number": 13,
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 126668809698,
+      "name": "N-1 compatibility (release)",
+      "status": "completed",
+      "conclusion": "success",
+      "runner_id": 1000040010,
+      "runner_name": "GitHub Actions 1000040010",
+      "run_attempt": 2,
+      "labels": ["ubuntu-24.04"],
+      "started_at": "2026-11-04T15:01:05Z",
+      "completed_at": "2026-11-04T15:02:39Z",
+      "steps": [
+        {
+          "number": 1,
+          "conclusion": "success"
+        },
+        {
+          "number": 2,
+          "conclusion": "success"
+        },
+        {
+          "number": 3,
+          "conclusion": "success"
+        },
+        {
+          "number": 4,
+          "conclusion": "success"
+        },
+        {
+          "number": 5,
+          "conclusion": "success"
+        },
+        {
+          "number": 9,
+          "conclusion": "success"
+        },
+        {
+          "number": 10,
+          "conclusion": "success"
+        },
+        {
+          "number": 11,
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 126668809987,
+      "name": "N-1 compatibility (base)",
+      "status": "completed",
+      "conclusion": "success",
+      "runner_id": 1000040006,
+      "runner_name": "GitHub Actions 1000040006",
+      "run_attempt": 2,
+      "labels": ["ubuntu-24.04"],
+      "started_at": "2026-11-04T15:01:05Z",
+      "completed_at": "2026-11-04T15:02:36Z",
+      "steps": [
+        {
+          "number": 1,
+          "conclusion": "success"
+        },
+        {
+          "number": 2,
+          "conclusion": "success"
+        },
+        {
+          "number": 3,
+          "conclusion": "success"
+        },
+        {
+          "number": 4,
+          "conclusion": "success"
+        },
+        {
+          "number": 5,
+          "conclusion": "success"
+        },
+        {
+          "number": 9,
+          "conclusion": "success"
+        },
+        {
+          "number": 10,
+          "conclusion": "success"
+        },
+        {
+          "number": 11,
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 126668809989,
+      "name": "Build (host container)",
+      "status": "completed",
+      "conclusion": "success",
+      "runner_id": 1000040005,
+      "runner_name": "GitHub Actions 1000040005",
+      "run_attempt": 2,
+      "labels": ["ubuntu-24.04"],
+      "started_at": "2026-11-04T15:01:04Z",
+      "completed_at": "2026-11-04T15:03:00Z",
+      "steps": [
+        {
+          "number": 1,
+          "conclusion": "success"
+        },
+        {
+          "number": 2,
+          "conclusion": "success"
+        },
+        {
+          "number": 3,
+          "conclusion": "success"
+        },
+        {
+          "number": 4,
+          "conclusion": "success"
+        },
+        {
+          "number": 5,
+          "conclusion": "success"
+        },
+        {
+          "number": 6,
+          "conclusion": "success"
+        },
+        {
+          "number": 7,
+          "conclusion": "success"
+        },
+        {
+          "number": 8,
+          "conclusion": "success"
+        },
+        {
+          "number": 16,
+          "conclusion": "success"
+        },
+        {
+          "number": 17,
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 126668810148,
+      "name": "N-1 compatibility (v0.2.1)",
+      "status": "completed",
+      "conclusion": "success",
+      "runner_id": 1000040007,
+      "runner_name": "GitHub Actions 1000040007",
+      "run_attempt": 2,
+      "labels": ["ubuntu-24.04"],
+      "started_at": "2026-11-04T15:01:05Z",
+      "completed_at": "2026-11-04T15:02:11Z",
+      "steps": [
+        {
+          "number": 1,
+          "conclusion": "success"
+        },
+        {
+          "number": 2,
+          "conclusion": "success"
+        },
+        {
+          "number": 3,
+          "conclusion": "success"
+        },
+        {
+          "number": 4,
+          "conclusion": "success"
+        },
+        {
+          "number": 5,
+          "conclusion": "success"
+        },
+        {
+          "number": 9,
+          "conclusion": "success"
+        },
+        {
+          "number": 10,
+          "conclusion": "success"
+        },
+        {
+          "number": 11,
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 126668810436,
+      "name": "N-1 compatibility (v0.2.2-canary.1)",
+      "status": "completed",
+      "conclusion": "success",
+      "runner_id": 1000040008,
+      "runner_name": "GitHub Actions 1000040008",
+      "run_attempt": 2,
+      "labels": ["ubuntu-24.04"],
+      "started_at": "2026-11-04T15:01:05Z",
+      "completed_at": "2026-11-04T15:02:05Z",
+      "steps": [
+        {
+          "number": 1,
+          "conclusion": "success"
+        },
+        {
+          "number": 2,
+          "conclusion": "success"
+        },
+        {
+          "number": 3,
+          "conclusion": "success"
+        },
+        {
+          "number": 4,
+          "conclusion": "success"
+        },
+        {
+          "number": 5,
+          "conclusion": "success"
+        },
+        {
+          "number": 9,
+          "conclusion": "success"
+        },
+        {
+          "number": 10,
+          "conclusion": "success"
+        },
+        {
+          "number": 11,
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 126668810686,
+      "name": "N-1 compatibility (latest-canary)",
+      "status": "completed",
+      "conclusion": "success",
+      "runner_id": 1000040009,
+      "runner_name": "GitHub Actions 1000040009",
+      "run_attempt": 2,
+      "labels": ["ubuntu-24.04"],
+      "started_at": "2026-11-04T15:01:05Z",
+      "completed_at": "2026-11-04T15:02:41Z",
+      "steps": [
+        {
+          "number": 1,
+          "conclusion": "success"
+        },
+        {
+          "number": 2,
+          "conclusion": "success"
+        },
+        {
+          "number": 3,
+          "conclusion": "success"
+        },
+        {
+          "number": 4,
+          "conclusion": "success"
+        },
+        {
+          "number": 5,
+          "conclusion": "success"
+        },
+        {
+          "number": 9,
+          "conclusion": "success"
+        },
+        {
+          "number": 10,
+          "conclusion": "success"
+        },
+        {
+          "number": 11,
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 126668874221,
+      "name": "Test (packages)",
+      "status": "completed",
+      "conclusion": "success",
+      "runner_id": 1000039999,
+      "runner_name": "GitHub Actions 1000039999",
+      "run_attempt": 2,
+      "labels": ["ubuntu-24.04"],
+      "started_at": "2026-11-04T15:00:53Z",
+      "completed_at": "2026-11-04T15:08:38Z",
+      "steps": [
+        {
+          "number": 1,
+          "conclusion": "success"
+        },
+        {
+          "number": 2,
+          "conclusion": "success"
+        },
+        {
+          "number": 3,
+          "conclusion": "success"
+        },
+        {
+          "number": 4,
+          "conclusion": "success"
+        },
+        {
+          "number": 5,
+          "conclusion": "success"
+        },
+        {
+          "number": 6,
+          "conclusion": "success"
+        },
+        {
+          "number": 7,
+          "conclusion": "success"
+        },
+        {
+          "number": 8,
+          "conclusion": "success"
+        },
+        {
+          "number": 9,
+          "conclusion": "success"
+        },
+        {
+          "number": 16,
+          "conclusion": "success"
+        },
+        {
+          "number": 17,
+          "conclusion": "success"
+        },
+        {
+          "number": 18,
+          "conclusion": "success"
+        },
+        {
+          "number": 19,
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 126668887126,
+      "name": "Test (desktop 3/3)",
+      "status": "completed",
+      "conclusion": "success",
+      "runner_id": 1000040002,
+      "runner_name": "GitHub Actions 1000040002",
+      "run_attempt": 2,
+      "labels": ["ubuntu-24.04"],
+      "started_at": "2026-11-04T15:00:52Z",
+      "completed_at": "2026-11-04T15:06:28Z",
+      "steps": [
+        {
+          "number": 1,
+          "conclusion": "success"
+        },
+        {
+          "number": 2,
+          "conclusion": "success"
+        },
+        {
+          "number": 3,
+          "conclusion": "success"
+        },
+        {
+          "number": 4,
+          "conclusion": "success"
+        },
+        {
+          "number": 5,
+          "conclusion": "success"
+        },
+        {
+          "number": 9,
+          "conclusion": "success"
+        },
+        {
+          "number": 10,
+          "conclusion": "success"
+        },
+        {
+          "number": 11,
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 126668905402,
+      "name": "Check + Build",
+      "status": "completed",
+      "conclusion": "success",
+      "runner_id": 1000040001,
+      "runner_name": "GitHub Actions 1000040001",
+      "run_attempt": 2,
+      "labels": ["ubuntu-24.04"],
+      "started_at": "2026-11-04T15:00:52Z",
+      "completed_at": "2026-11-04T15:04:39Z",
+      "steps": [
+        {
+          "number": 1,
+          "conclusion": "success"
+        },
+        {
+          "number": 2,
+          "conclusion": "success"
+        },
+        {
+          "number": 3,
+          "conclusion": "success"
+        },
+        {
+          "number": 4,
+          "conclusion": "success"
+        },
+        {
+          "number": 5,
+          "conclusion": "success"
+        },
+        {
+          "number": 6,
+          "conclusion": "success"
+        },
+        {
+          "number": 7,
+          "conclusion": "success"
+        },
+        {
+          "number": 8,
+          "conclusion": "success"
+        },
+        {
+          "number": 9,
+          "conclusion": "success"
+        },
+        {
+          "number": 10,
+          "conclusion": "success"
+        },
+        {
+          "number": 11,
+          "conclusion": "success"
+        },
+        {
+          "number": 12,
+          "conclusion": "skipped"
+        },
+        {
+          "number": 13,
+          "conclusion": "success"
+        },
+        {
+          "number": 14,
+          "conclusion": "success"
+        },
+        {
+          "number": 15,
+          "conclusion": "success"
+        },
+        {
+          "number": 16,
+          "conclusion": "success"
+        },
+        {
+          "number": 17,
+          "conclusion": "success"
+        },
+        {
+          "number": 18,
+          "conclusion": "success"
+        },
+        {
+          "number": 19,
+          "conclusion": "success"
+        },
+        {
+          "number": 20,
+          "conclusion": "success"
+        },
+        {
+          "number": 21,
+          "conclusion": "success"
+        },
+        {
+          "number": 22,
+          "conclusion": "success"
+        },
+        {
+          "number": 23,
+          "conclusion": "success"
+        },
+        {
+          "number": 24,
+          "conclusion": "success"
+        },
+        {
+          "number": 25,
+          "conclusion": "success"
+        },
+        {
+          "number": 26,
+          "conclusion": "success"
+        },
+        {
+          "number": 27,
+          "conclusion": "success"
+        },
+        {
+          "number": 28,
+          "conclusion": "success"
+        },
+        {
+          "number": 55,
+          "conclusion": "success"
+        },
+        {
+          "number": 56,
+          "conclusion": "success"
+        },
+        {
+          "number": 57,
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 126668907461,
+      "name": "Convex (codegen + backend)",
+      "status": "completed",
+      "conclusion": "success",
+      "runner_id": 1000040004,
+      "runner_name": "GitHub Actions 1000040004",
+      "run_attempt": 2,
+      "labels": ["ubuntu-24.04"],
+      "started_at": "2026-11-04T15:00:53Z",
+      "completed_at": "2026-11-04T15:07:15Z",
+      "steps": [
+        {
+          "number": 1,
+          "conclusion": "success"
+        },
+        {
+          "number": 2,
+          "conclusion": "success"
+        },
+        {
+          "number": 3,
+          "conclusion": "success"
+        },
+        {
+          "number": 4,
+          "conclusion": "success"
+        },
+        {
+          "number": 5,
+          "conclusion": "success"
+        },
+        {
+          "number": 6,
+          "conclusion": "success"
+        },
+        {
+          "number": 7,
+          "conclusion": "skipped"
+        },
+        {
+          "number": 8,
+          "conclusion": "success"
+        },
+        {
+          "number": 9,
+          "conclusion": "success"
+        },
+        {
+          "number": 10,
+          "conclusion": "success"
+        },
+        {
+          "number": 11,
+          "conclusion": "success"
+        },
+        {
+          "number": 12,
+          "conclusion": "success"
+        },
+        {
+          "number": 13,
+          "conclusion": "success"
+        },
+        {
+          "number": 25,
+          "conclusion": "success"
+        },
+        {
+          "number": 26,
+          "conclusion": "success"
+        },
+        {
+          "number": 27,
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 126668907736,
+      "name": "Test (desktop 2/3)",
+      "status": "completed",
+      "conclusion": "success",
+      "runner_id": 1000039998,
+      "runner_name": "GitHub Actions 1000039998",
+      "run_attempt": 2,
+      "labels": ["ubuntu-24.04"],
+      "started_at": "2026-11-04T15:00:52Z",
+      "completed_at": "2026-11-04T15:08:04Z",
+      "steps": [
+        {
+          "number": 1,
+          "conclusion": "success"
+        },
+        {
+          "number": 2,
+          "conclusion": "success"
+        },
+        {
+          "number": 3,
+          "conclusion": "success"
+        },
+        {
+          "number": 4,
+          "conclusion": "success"
+        },
+        {
+          "number": 5,
+          "conclusion": "success"
+        },
+        {
+          "number": 9,
+          "conclusion": "success"
+        },
+        {
+          "number": 10,
+          "conclusion": "success"
+        },
+        {
+          "number": 11,
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 126687829235,
+      "name": "CI gate",
+      "status": "completed",
+      "conclusion": "failure",
+      "runner_id": 1000040080,
+      "runner_name": "GitHub Actions 1000040080",
+      "run_attempt": 2,
+      "labels": ["ubuntu-24.04"],
+      "started_at": "2026-11-04T15:54:32Z",
+      "completed_at": "2026-11-04T15:54:38Z",
+      "steps": [
+        {
+          "number": 1,
+          "conclusion": "success"
+        },
+        {
+          "number": 2,
+          "conclusion": "failure"
+        },
+        {
+          "number": 3,
+          "conclusion": "success"
+        }
+      ]
+    }
+  ]
+}

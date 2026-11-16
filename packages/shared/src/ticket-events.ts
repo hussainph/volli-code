@@ -58,8 +58,10 @@ export const TICKET_EVENT_KINDS = [
   "pr_opened",
   // Retention merge-watch (CONCEPT #16, issue #76): the background poll's FIRST
   // observation that the ticket's PR merged. Written with an `automation` actor
-  // (no session — the system-level watch), exactly once per branch (a dedup set
-  // guards re-firing), and paired with the single native "PR merged" notification.
+  // (no session — the system-level watch), exactly once per PR url (a dedup set
+  // guards re-firing; a later PR on the same ticket gets its own record, VC-1156),
+  // and the ticket's first is paired with the single native "PR merged"
+  // notification.
   "pr_merged",
   // Retention reclaim (VC-113): the background watch removed a Done ticket's
   // worktree DIRECTORY after it sat clean and finished for the whole retention
@@ -157,7 +159,13 @@ export type TicketEventPayload =
   | { kind: "worktree_failed"; stage: WorktreeFailureStage; stderr: string }
   | { kind: "worktree_committed"; message: string }
   | { kind: "pr_opened"; url: string }
-  | { kind: "pr_merged"; url: string }
+  /**
+   * `mergedAt` (VC-1156) is GitHub's merge time in epoch ms, when the read
+   * that saw the merge carried one: the record itself is dated when the watch
+   * SAW the merge, which can be long after it happened. Optional, and absent on
+   * every record written before it existed; readers must tolerate that.
+   */
+  | { kind: "pr_merged"; url: string; mergedAt?: number }
   /**
    * The retention watch reclaimed the worktree directory (VC-113). `branch` is
    * what survived it — the checkout can be put back on that branch at any time,
@@ -171,9 +179,17 @@ export type TicketEventPayload =
    * `entries` is how many ignored paths were removed and `bytes` their apparent
    * size; `kept` is how many ignored paths were KEPT (preserved configuration,
    * nested git repositories), because that number is the difference between a
-   * trim and a blind `git clean -fdX`.
+   * trim and a blind `git clean -fdX`. `trigger` (VC-1156) is the finish that
+   * earned it, so a trim can be attributed from the event alone; events written
+   * before it existed have none, and readers must tolerate its absence.
    */
-  | { kind: "worktree_trimmed"; entries: number; bytes: number; kept: number }
+  | {
+      kind: "worktree_trimmed";
+      entries: number;
+      bytes: number;
+      kept: number;
+      trigger?: WorktreeTrimTrigger;
+    }
   | { kind: "attachment_added"; attachmentId: string; label: string }
   | { kind: "attachment_removed"; attachmentId: string; label: string }
   | { kind: "session_started"; sessionId: string; origin?: SessionOrigin }
@@ -183,6 +199,17 @@ export type TicketEventPayload =
       attachmentId: string;
       origin: SessionOrigin | null;
     };
+
+/**
+ * Which finish a `worktree_trimmed` event acted on (VC-1156): the ticket sat in
+ * Done, was archived, or the watch observed this PR merged with no column move
+ * recorded after it. Additive and optional on the event; a reader that meets a
+ * `kind` it does not know shows the trim without a reason.
+ */
+export type WorktreeTrimTrigger =
+  | { kind: "done" }
+  | { kind: "archived" }
+  | { kind: "pr_merged"; url: string };
 
 /**
  * The `ensure`-pipeline stage a `worktree_failed` event aborted at

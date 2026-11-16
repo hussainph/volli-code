@@ -168,12 +168,15 @@ export const ProjectRail = React.memo(function ProjectRail({
           <div
             ref={scrollRef}
             data-slot="project-rail-scroll"
+            // The icon column keeps no scroll thumb: its edge fades say where
+            // it is, and a thumb would crowd the tiles. The menu keeps one.
+            data-scroll-thumb={presentation === "menu" ? undefined : "none"}
             onScroll={measureEdges}
             style={{ maskImage: scrollEdgeMask(edges) }}
             className={
               presentation === "menu"
                 ? "flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-1"
-                : "flex min-h-0 flex-1 flex-col items-center gap-3 overflow-y-auto px-2 pt-0.5 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                : "flex min-h-0 flex-1 flex-col items-center gap-3 overflow-y-auto px-2 pt-0.5 pb-2"
             }
           >
             {cloudLaunch ? <CloudWorkspaceHead /> : null}

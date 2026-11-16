@@ -35,7 +35,8 @@ import {
   MENU_SHORTCUT,
   MENU_SURFACE,
   MENU_SURFACE_MOTION,
-  MENU_SURFACE_PAD,
+  MENU_SURFACE_FRAME,
+  MENU_VIEWPORT,
 } from "@renderer/components/ui/menu-classes";
 
 function ContextMenu({ ...props }: React.ComponentProps<typeof ContextMenuPrimitive.Root>) {
@@ -112,6 +113,7 @@ function ContextMenuSubTrigger({
  */
 function ContextMenuSubContent({
   className,
+  children,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.SubContent>) {
   const motion = useMotionOriginProps("context-menu", props, false, true);
@@ -123,14 +125,18 @@ function ContextMenuSubContent({
           className={cn(
             MENU_SURFACE,
             "material-floating",
-            MENU_SURFACE_PAD,
+            MENU_SURFACE_FRAME,
             MENU_SURFACE_MOTION,
-            "max-h-[min(var(--radix-context-menu-content-available-height),20rem)] origin-(--radix-context-menu-content-transform-origin) overflow-x-hidden overflow-y-auto overscroll-contain",
+            "max-h-[min(var(--radix-context-menu-content-available-height),20rem)] origin-(--radix-context-menu-content-transform-origin)",
             className,
           )}
           {...props}
           {...motion}
-        />
+        >
+          <div data-slot="context-menu-viewport" className={MENU_VIEWPORT}>
+            {children}
+          </div>
+        </ContextMenuPrimitive.SubContent>
       </GlassSurface>
     </ContextMenuPrimitive.Portal>
   );
@@ -138,6 +144,7 @@ function ContextMenuSubContent({
 
 function ContextMenuContent({
   className,
+  children,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Content>) {
   const motion = useMotionOriginProps("context-menu", props, false, true);
@@ -149,14 +156,18 @@ function ContextMenuContent({
           className={cn(
             MENU_SURFACE,
             "material-floating",
-            MENU_SURFACE_PAD,
+            MENU_SURFACE_FRAME,
             MENU_SURFACE_MOTION,
-            "max-h-[min(var(--radix-context-menu-content-available-height),20rem)] origin-(--radix-context-menu-content-transform-origin) overflow-x-hidden overflow-y-auto overscroll-contain",
+            "max-h-[min(var(--radix-context-menu-content-available-height),20rem)] origin-(--radix-context-menu-content-transform-origin)",
             className,
           )}
           {...props}
           {...motion}
-        />
+        >
+          <div data-slot="context-menu-viewport" className={MENU_VIEWPORT}>
+            {children}
+          </div>
+        </ContextMenuPrimitive.Content>
       </GlassSurface>
     </ContextMenuPrimitive.Portal>
   );

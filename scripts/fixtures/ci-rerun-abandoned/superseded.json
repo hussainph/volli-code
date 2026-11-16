@@ -1,0 +1,191 @@
+{
+  "recorded": "GET /repos/hussainph/volli-code/actions/runs/42616473309 and /attempts/1/jobs, trimmed to the fields the predicate reads",
+  "attempt": 1,
+  "run": {
+    "id": 42616473309,
+    "name": "CI",
+    "path": ".github/workflows/ci.yml",
+    "event": "pull_request",
+    "status": "completed",
+    "conclusion": "cancelled",
+    "run_attempt": 1,
+    "run_number": 3533,
+    "head_branch": "volli/VC-1166-docs-refresh-document-everything-shipped-on-main",
+    "head_sha": "054f288d32dfbbc7249327137272f2feeaaadac3",
+    "head_repository": {
+      "id": 1293485448,
+      "full_name": "hussainph/volli-code"
+    }
+  },
+  "jobs": [
+    {
+      "id": 129157468790,
+      "name": "Convex (codegen + backend)",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "runner_id": 0,
+      "runner_name": "",
+      "run_attempt": 1,
+      "labels": ["ubuntu-24.04"],
+      "started_at": "2026-11-09T12:22:30Z",
+      "completed_at": "2026-11-09T12:25:41Z",
+      "steps": []
+    },
+    {
+      "id": 129157469026,
+      "name": "Test (desktop 1/3)",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "runner_id": 0,
+      "runner_name": "",
+      "run_attempt": 1,
+      "labels": ["ubuntu-24.04"],
+      "started_at": "2026-11-09T12:22:30Z",
+      "completed_at": "2026-11-09T12:25:41Z",
+      "steps": []
+    },
+    {
+      "id": 129157469091,
+      "name": "Test (desktop 3/3)",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "runner_id": 0,
+      "runner_name": "",
+      "run_attempt": 1,
+      "labels": ["ubuntu-24.04"],
+      "started_at": "2026-11-09T12:22:30Z",
+      "completed_at": "2026-11-09T12:25:41Z",
+      "steps": []
+    },
+    {
+      "id": 129157469119,
+      "name": "Scope",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "runner_id": 0,
+      "runner_name": "",
+      "run_attempt": 1,
+      "labels": ["ubuntu-24.04"],
+      "started_at": "2026-11-09T12:22:30Z",
+      "completed_at": "2026-11-09T12:25:41Z",
+      "steps": []
+    },
+    {
+      "id": 129157469205,
+      "name": "Check + Build",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "runner_id": 0,
+      "runner_name": "",
+      "run_attempt": 1,
+      "labels": ["ubuntu-24.04"],
+      "started_at": "2026-11-09T12:22:30Z",
+      "completed_at": "2026-11-09T12:25:41Z",
+      "steps": []
+    },
+    {
+      "id": 129157469224,
+      "name": "Test (desktop 2/3)",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "runner_id": 0,
+      "runner_name": "",
+      "run_attempt": 1,
+      "labels": ["ubuntu-24.04"],
+      "started_at": "2026-11-09T12:22:30Z",
+      "completed_at": "2026-11-09T12:25:41Z",
+      "steps": []
+    },
+    {
+      "id": 129157469281,
+      "name": "Test (packages)",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "runner_id": 0,
+      "runner_name": "",
+      "run_attempt": 1,
+      "labels": ["ubuntu-24.04"],
+      "started_at": "2026-11-09T12:22:30Z",
+      "completed_at": "2026-11-09T12:25:41Z",
+      "steps": []
+    },
+    {
+      "id": 129158960418,
+      "name": "CI gate",
+      "status": "completed",
+      "conclusion": "failure",
+      "runner_id": 1000043252,
+      "runner_name": "GitHub Actions 1000043252",
+      "run_attempt": 1,
+      "labels": ["ubuntu-24.04"],
+      "started_at": "2026-11-09T12:26:05Z",
+      "completed_at": "2026-11-09T12:26:07Z",
+      "steps": [
+        {
+          "number": 1,
+          "conclusion": "success"
+        },
+        {
+          "number": 2,
+          "conclusion": "failure"
+        },
+        {
+          "number": 3,
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 129158961944,
+      "name": "Smoke (core e2e)",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "runner_id": null,
+      "runner_name": null,
+      "run_attempt": 1,
+      "labels": ["macos-15"],
+      "started_at": "2026-11-09T12:25:41Z",
+      "completed_at": "2026-11-09T12:25:41Z",
+      "steps": []
+    },
+    {
+      "id": 129158962408,
+      "name": "Build (host container)",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "runner_id": null,
+      "runner_name": null,
+      "run_attempt": 1,
+      "labels": ["ubuntu-24.04"],
+      "started_at": "2026-11-09T12:25:41Z",
+      "completed_at": "2026-11-09T12:25:41Z",
+      "steps": []
+    },
+    {
+      "id": 129158962819,
+      "name": "N-1 compatibility (${{ matrix.lane }})",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "runner_id": null,
+      "runner_name": null,
+      "run_attempt": 1,
+      "labels": ["ubuntu-24.04"],
+      "started_at": "2026-11-09T12:25:41Z",
+      "completed_at": "2026-11-09T12:25:41Z",
+      "steps": []
+    },
+    {
+      "id": 129158962827,
+      "name": "Coverage (desktop)",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "runner_id": null,
+      "runner_name": null,
+      "run_attempt": 1,
+      "labels": ["ubuntu-24.04"],
+      "started_at": "2026-11-09T12:25:41Z",
+      "completed_at": "2026-11-09T12:25:41Z",
+      "steps": []
+    }
+  ]
+}

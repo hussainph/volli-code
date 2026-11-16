@@ -412,7 +412,10 @@ export type CompactionOutcome =
     }
   /** Pi found nothing to compact — an empty path, or one already ending in a compaction. */
   | { kind: "skipped" }
-  /** The summarization call failed or was aborted. Nothing was written. */
+  /**
+   * The summarization call failed or was aborted. Nothing was written, but
+   * `usage` is what every request the attempt made was billed, when any was.
+   */
   | { kind: "failed"; message: string; usage?: SessionUsage | null };
 
 export interface CompactionInput {
@@ -593,7 +596,22 @@ export async function compactSession(input: CompactionInput): Promise<Compaction
       usage: native.usage,
     };
   }
-  if (input.signal?.aborted) return { kind: "failed", message: "Compaction aborted." };
+  // A native attempt that was tried and refused still made a request, and its
+  // bill goes wherever this attempt ends: beside the local summary's on
+  // either arm, or alone when the person aborts in between (VC-805).
+  const nativeUsage = native.kind === "failed" ? native.rawUsage : undefined;
+  const failed = (message: string, usage: Usage | undefined): CompactionOutcome => {
+    // `sessionUsageFrom` answers null when nothing was reported or every
+    // figure is zero — a request that failed before the provider billed it.
+    // Nothing is estimated here: an unreported bill records nothing.
+    const billed = sessionUsageFrom(
+      usage,
+      { provider: input.model.provider, model: input.model.id, api: input.model.api },
+      "compaction",
+    );
+    return { kind: "failed", message, ...(billed ? { usage: billed } : {}) };
+  };
+  if (input.signal?.aborted) return failed("Compaction aborted.", nativeUsage);
   // A native checkpoint is opaque, not a portable prose summary. If native
   // compaction is unavailable, rebuild the ORIGINAL history before asking Pi
   // to summarize; never summarize an empty placeholder and lose the state.
@@ -618,21 +636,15 @@ export async function compactSession(input: CompactionInput): Promise<Compaction
     undefined,
     context,
   );
-  const nativeUsage = native.kind === "failed" ? native.rawUsage : undefined;
+  // Every request this attempt made was billed whether or not it produced a
+  // summary: a local summary that errored or was aborted after its prompt was
+  // sent, and a split turn's history summary that succeeded before its prefix
+  // summary failed. Pi's failure arm carries their sum (VC-805).
   if (!result.ok)
-    return {
-      kind: "failed",
-      message: safeStopMessage(result.error.message, input.credentialRedaction),
-      ...(nativeUsage
-        ? {
-            usage: sessionUsageFrom(
-              nativeUsage,
-              { provider: input.model.provider, model: input.model.id, api: input.model.api },
-              "compaction",
-            ),
-          }
-        : {}),
-    };
+    return failed(
+      safeStopMessage(result.error.message, input.credentialRedaction),
+      combinedUsage(result.error.usage, nativeUsage),
+    );
 
   const compacted = { ...result.value, usage: combinedUsage(result.value.usage, nativeUsage) };
   // A native attempt that was tried and refused is recorded beside the local

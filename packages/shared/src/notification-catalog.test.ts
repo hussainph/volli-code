@@ -65,6 +65,7 @@ describe("producer catalog", () => {
       "session-watchdog",
       "harness-input-needed",
       "scheduled-resume-skipped",
+      "provider-sign-in-required",
     ]);
     expect([...producersForNotificationEvent("finished")]).toEqual(["pull-request-merged"]);
     // Maintenance that takes back a resource nobody is using: the folder

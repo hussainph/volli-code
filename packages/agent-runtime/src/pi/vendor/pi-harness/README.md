@@ -168,6 +168,15 @@ branch-summary execution. `Agent`/agent loop are **not** vendored.
     Chord's no-op parent, with no exporter or network telemetry. The former
     context-key helper is removed; cancellation and request routing are unchanged.
 
+12. **Billed compaction failures (VC-805):** an aborted or errored summary
+    response still returns the `usage` it reported, on a `BilledCompactionError`
+    (`CompactionError` plus `usage`) that `generateSummaryWithRequest`,
+    `generateTurnPrefixSummary`, `compactWithRequest` and `compact` now return
+    on their failure arm. A split turn whose prefix summary fails adds the
+    history summary it already paid for. Upstream returned the bare error, so
+    a failed compaction left no trace of its spend. Prompts, retries, the
+    success result and its usage sum are unchanged.
+
 ## Compatibility evidence
 
 `fixtures/pi-0.99.2-sidecar.jsonl` was produced by the saved, patched 0.99.2

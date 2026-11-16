@@ -30,7 +30,12 @@
 
 import type { SessionOrigin } from "../session-origin";
 import type { HarnessId, TicketPriority, TicketStatus } from "../ticket";
-import type { TicketSignalKind, TicketSignalVerdict, WorktreeFailureStage } from "../ticket-events";
+import type {
+  TicketSignalKind,
+  TicketSignalVerdict,
+  WorktreeFailureStage,
+  WorktreeTrimTrigger,
+} from "../ticket-events";
 import type { Actor } from "./actor";
 import type {
   AutomationId,
@@ -180,7 +185,8 @@ export type BoardEventPayload =
       detail: string | null;
     }
   | { kind: "pr_opened"; url: string }
-  | { kind: "pr_merged"; url: string }
+  /** `mergedAt`: GitHub's merge time in epoch ms (VC-1156); absent on older events. */
+  | { kind: "pr_merged"; url: string; mergedAt?: number }
   | { kind: "attachment_added"; attachmentId: string; label: string }
   | { kind: "attachment_removed"; attachmentId: string; label: string }
   | { kind: "session_started"; sessionId: SessionId; origin?: SessionOrigin }
@@ -193,7 +199,14 @@ export type BoardEventPayload =
   | ({ kind: "worktree_failed"; stage: WorktreeFailureStage; stderr: string } & WorkingCopyRef)
   | ({ kind: "worktree_committed"; message: string } & WorkingCopyRef)
   | ({ kind: "worktree_reclaimed"; branch: string | null; daysInDone: number } & WorkingCopyRef)
-  | ({ kind: "worktree_trimmed"; entries: number; bytes: number; kept: number } & WorkingCopyRef)
+  | ({
+      kind: "worktree_trimmed";
+      entries: number;
+      bytes: number;
+      kept: number;
+      /** The finish the trim acted on (VC-1156); absent on older events. */
+      trigger?: WorktreeTrimTrigger;
+    } & WorkingCopyRef)
   | ({
       kind: "working_copy_changed";
       projectRepoId: ProjectRepoId;

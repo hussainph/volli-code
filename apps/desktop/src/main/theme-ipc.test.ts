@@ -6,6 +6,7 @@ import type { BrowserWindow } from "electron";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { THEME_CHANNELS } from "./ipc-descriptors";
 import type { Canvas, ProjectThemeOverride, ResolvedAppearance } from "@volli/shared";
+import { settingsWindowBackground } from "@volli/shared";
 import type {
   ProjectCanvasWriteResult,
   Result,
@@ -608,7 +609,8 @@ describe("canvas writes (migration 014)", () => {
     ).toEqual({ ok: true });
     expect(getFirstPaintHint(ctx.db)).toEqual({ appearance: "dark", background: "#141210" });
     expect(windows[0]?.setBackgroundColor).not.toHaveBeenCalled();
-    expect(windows[1]?.setBackgroundColor).toHaveBeenCalledWith(EDGE);
+    // Settings' edge is its plain rung in the reported appearance, not the canvas (VC-1228).
+    expect(windows[1]?.setBackgroundColor).toHaveBeenCalledWith(settingsWindowBackground("light"));
     expect(browserTabs.setThemeBackground).not.toHaveBeenCalled();
   });
 
@@ -629,8 +631,35 @@ describe("canvas writes (migration 014)", () => {
         planeBackground: PLANE,
       }),
     ).toEqual({ ok: true });
-    expect(windows[1]?.setBackgroundColor).toHaveBeenCalledWith(EDGE);
+    expect(windows[1]?.setBackgroundColor).toHaveBeenCalledWith(settingsWindowBackground("light"));
     expect(browserTabs.setThemeBackground).not.toHaveBeenCalled();
+  });
+
+  it("tells main once the workbench's hint is stored, never for Settings (VC-1203)", () => {
+    const stored = vi.fn();
+    const { hooks } = setupDesktopSurfaces();
+    // Re-register with the extra hook over the same surfaces.
+    registerThemeIpcHandlers(
+      { ok: true, db: ctx.db },
+      {
+        fs: { ...defaultFsDeps(userDataDir), homeDir: join(userDataDir, "fake-home"), env: {} },
+        now: Date.now,
+        appearance: () => "dark" as const,
+      },
+      { ...hooks, onFirstPaintStored: stored },
+    );
+    invokeFrom<Result>(2, "volli:theme-first-paint-set", {
+      appearance: "light",
+      background: EDGE,
+      planeBackground: PLANE,
+    });
+    expect(stored).not.toHaveBeenCalled();
+    invoke<Result>("volli:theme-first-paint-set", {
+      appearance: "light",
+      background: EDGE,
+      planeBackground: PLANE,
+    });
+    expect(stored).toHaveBeenCalledExactlyOnceWith({ appearance: "light", background: EDGE });
   });
 
   it("rejects unowned renderers without painting or persisting", () => {

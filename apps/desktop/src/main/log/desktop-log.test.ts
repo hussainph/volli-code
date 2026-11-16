@@ -8,7 +8,6 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
   desktopLogDirectory,
-  exitAfterLogFlush,
   mainStallSummaryMs,
   mainStallThresholdMs,
   startDesktopLog,
@@ -158,30 +157,6 @@ describe("the desktop's log", () => {
     logs.push(log);
     hostLogger("desktop").info("harness runtime ready");
     expect(terminal.info).toHaveBeenCalledWith("[desktop] harness runtime ready");
-  });
-
-  it("flushes the log before the app exits, within a deadline", async () => {
-    const exits: (number | undefined)[] = [];
-    const app = {
-      name: "volli",
-      exit(code?: number) {
-        exits.push(code);
-      },
-      getName() {
-        return this.name;
-      },
-    };
-    let release!: () => void;
-    const wrapped = exitAfterLogFlush(app, {
-      flush: () => new Promise<void>((resolve) => (release = resolve)),
-    });
-    expect(wrapped.getName()).toBe("volli");
-    expect(wrapped.name).toBe("volli");
-    wrapped.exit(0);
-    await Promise.resolve();
-    expect(exits).toEqual([]);
-    release();
-    await vi.waitFor(() => expect(exits).toEqual([0]));
   });
 
   it("stops waiting on a disk that never answers", async () => {

@@ -10,7 +10,7 @@ import { ATTACH_CANCELLED_CODE } from "@volli/session-engine";
  * The other statuses have no such sentence, so they are named as what they
  * are rather than dressed up as one. Shared by every door that starts a
  * Session and reports an attach it could not complete (Automation Runs,
- * `session.start`).
+ * `session.start`, `session.delegate`).
  */
 export function attachRefusal(receipt: CommandReceipt | null): string {
   if (receipt === null) return "the attach reported no receipt";

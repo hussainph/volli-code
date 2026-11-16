@@ -61,6 +61,7 @@ const NAVIGATION: SettingsWindowNavigation = {
   category: "connections",
   configureCategory: "model-access",
   signInProviderId: "provider-id",
+  reauthenticate: "oauth",
   projectId: "project-id",
   workspaceId: "workspace-id",
 };
@@ -108,7 +109,12 @@ describe("Settings window guarded desktop transport", () => {
     expect([...handlers.keys()].toSorted()).toEqual(Object.keys(SETTINGS_WINDOW_IPC).toSorted());
   });
 
-  it.each([{}, NAVIGATION, { projectId: null }])(
+  it.each([
+    {},
+    NAVIGATION,
+    { projectId: null },
+    { signInProviderId: "anthropic", reauthenticate: "api-key" },
+  ])(
     "forwards the presentation intent and invoking WebContents, not a copied sender",
     async (input) => {
       const ports = register();
@@ -131,6 +137,8 @@ describe("Settings window guarded desktop transport", () => {
     [{ category: 5 }],
     [{ configureCategory: false }],
     [{ signInProviderId: {} }],
+    [{ signInProviderId: "anthropic", reauthenticate: "password" }],
+    [{ signInProviderId: "anthropic", reauthenticate: true }],
     [{ projectId: 7 }],
     [{ workspaceId: "" }],
     [{ workspaceId: null }],

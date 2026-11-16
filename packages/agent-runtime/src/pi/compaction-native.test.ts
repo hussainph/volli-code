@@ -177,6 +177,13 @@ describe("native compaction fallback", () => {
       kind: "failed",
       usage: { inputTokens: 100, costUsd: 0.13 },
     });
+    // A local summary that errored after its prompt was billed adds its own
+    // bill to the native attempt's (VC-805).
+    const billed = await run(measured, "error");
+    expect(billed.outcome).toMatchObject({
+      kind: "failed",
+      usage: { inputTokens: 200, outputTokens: 20, costUsd: 0.26 },
+    });
   });
 
   it("keeps native output and the caller-independent tail with a durable usage block", async () => {
@@ -212,14 +219,14 @@ describe("native compaction fallback", () => {
     // The same native failure, twice, differing only in whether the caller's
     // signal aborted. Without that difference the assertion would pass on an
     // implementation that never read the signal at all.
-    const attempt = async (abort: boolean) => {
+    const attempt = async (abort: boolean, rawUsage?: Usage) => {
       const controller = new AbortController();
       const local = {
         completeSimple: vi.fn(async () => summary("stop", measured)),
       } as unknown as typeof models;
       native.mockImplementation(async () => {
         if (abort) controller.abort();
-        return { kind: "failed", message: "native unavailable" };
+        return { kind: "failed", message: "native unavailable", ...(rawUsage ? { rawUsage } : {}) };
       });
       const sidecar = await new MemorySessionRepo().create({}, piContext());
       const outcome = await compactSession({
@@ -235,6 +242,15 @@ describe("native compaction fallback", () => {
     const aborted = await attempt(true);
     expect(aborted.outcome).toEqual({ kind: "failed", message: "Compaction aborted." });
     expect(aborted.localCalls).toBe(0);
+    // A native attempt the provider billed before the abort keeps its bill
+    // (VC-805).
+    const billed = await attempt(true, measured);
+    expect(billed.outcome).toMatchObject({
+      kind: "failed",
+      message: "Compaction aborted.",
+      usage: { cause: "compaction", inputTokens: 100, costUsd: 0.13 },
+    });
+    expect(billed.localCalls).toBe(0);
     // An unaborted signal takes the fallback, so the abort is what stopped it.
     const carriedOn = await attempt(false);
     expect(carriedOn.outcome.kind).toBe("compacted");

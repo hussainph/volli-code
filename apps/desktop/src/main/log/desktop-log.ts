@@ -146,30 +146,6 @@ export function startDesktopLog(options: DesktopLogOptions): DesktopLog {
   };
 }
 
-/**
- * `app` with an `exit` that writes the log's tail first (bounded): Electron's
- * `app.exit` ends the process at once, and the lines a quit just wrote are
- * the ones a person reading the log wants most.
- */
-export function exitAfterLogFlush<App extends { exit(code?: number): void }>(
-  app: App,
-  log: Pick<DesktopLog, "flush">,
-): App {
-  return new Proxy(app, {
-    get(target, property, receiver) {
-      if (property === "exit") {
-        return (code?: number) => {
-          void log.flush().finally(() => target.exit(code));
-        };
-      }
-      const value: unknown = Reflect.get(target, property, receiver);
-      return typeof value === "function"
-        ? (value as (...args: unknown[]) => unknown).bind(target)
-        : value;
-    },
-  });
-}
-
 /** The power transitions a lid close and reopen make, and what this log calls them. */
 const POWER_EVENTS = {
   suspend: "system sleeping",

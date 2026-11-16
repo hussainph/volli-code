@@ -135,6 +135,31 @@ describe("stall lines", () => {
     expect(signals.main.unattributedShare).toBe(0);
   });
 
+  it("keeps an off-CPU wait's hint and what its window cost, when the line has them", () => {
+    const parsed = parseStallLines([
+      [
+        mainLine(0, 600, {
+          attribution: "off-cpu",
+          door: "off-cpu",
+          operation: "wait",
+          lastOperation: "volli:app-state-set",
+          cpuMs: 12,
+          majorFaults: 340,
+          involuntarySwitches: 9,
+        }),
+        mainLine(1, 300, { attribution: "door", door: "ipc", operation: "x", cpuMs: "?" }),
+      ].join("\n"),
+    ]);
+    expect(parsed.main[0]).toMatchObject({
+      lastOperation: "volli:app-state-set",
+      cpuMs: 12,
+      majorFaults: 340,
+      involuntarySwitches: 9,
+    });
+    expect(parsed.main[1]).not.toHaveProperty("cpuMs");
+    expect(parsed.main[1]).not.toHaveProperty("lastOperation");
+  });
+
   it("puts each main stall in the window it landed in, with the probe's grace", () => {
     const { main } = parseStallLines([LOG]);
     const byWindow = mainStallsByWindow(main, [

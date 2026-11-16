@@ -1,3 +1,18 @@
+/**
+ * The activity island's A/B arms for a streaming run (VC-1198). Each removes
+ * one cost from the live island through page CSS only, never product code:
+ * `hidden` takes the whole island out of paint; `shimmer-off` stops the
+ * verb's background-position shimmer; `filters-off` drops the material's two
+ * drop-shadow filters.
+ */
+const ISLAND_ARMS = ["on", "hidden", "shimmer-off", "filters-off"];
+/**
+ * The Volli Glass A/B arms (VC-1145), page CSS only like the island's:
+ * `backdrop-off` drops every backdrop blur, `masks-off` the transcript's fade
+ * masks, `off` both and the glass rims. Applied before any plane mounts.
+ */
+const MATERIALS_ARMS = ["on", "backdrop-off", "masks-off", "off"];
+
 /** The same normalized recipe is sent to each fresh guarded instance. */
 const defaults = {
   sessions: 10,
@@ -8,6 +23,8 @@ const defaults = {
   streamSteps: 120,
   streamTokenRate: 30,
   streamContent: "code",
+  island: "on",
+  materials: "on",
   diagramSampleMs: null,
   draftPlanes: 2,
   draftBallast: 8000,
@@ -33,6 +50,10 @@ export function benchSettings(input = {}) {
     throw new Error("--arm is transcript, draft, reveal or stream");
   if (!["code", "diagram"].includes(result.streamContent))
     throw new Error("--stream-content is code or diagram");
+  if (!ISLAND_ARMS.includes(result.island))
+    throw new Error(`--island is ${ISLAND_ARMS.join(", ")}`);
+  if (!MATERIALS_ARMS.includes(result.materials))
+    throw new Error(`--materials is ${MATERIALS_ARMS.join(", ")}`);
   if (result.streamContent === "diagram" && !["stream", "transcript"].includes(result.arm))
     throw new Error("diagram content requires --arm stream or transcript");
   if (result.diagramSampleMs !== null) {

@@ -34,6 +34,18 @@ saturated backdrops, keeping lightness and hue. The painted focus ring is one so
 glass, navigation glass and the rail footer wash together; contrast tests hold it at 3:1 across
 the canvas matrix. `deriveCanvasTokens` alone carries the paper-side ring.
 
+### Settings is the plain exception
+
+The Settings window is a native-style pane, the one deliberate exception to the three
+layers. It never wears the authored canvas: `paintSettingsCanvas` paints generated system
+greys (`SETTINGS_CANVAS`, one achromatic stop at zero vibrancy and grain) with the system
+blue accent (`SETTINGS_ACCENT_CANVAS`), in the resolved appearance. Toolbar and sidebar sit
+on the opaque `--sidebar` rung; content is paper. No canvas mesh, no glass, no backdrop blur:
+every glass or floating material in that window, including overlays portalled to `<body>`,
+renders on its solid fill (`:root[data-window="settings"]`). The native window has no
+`vibrancy`. Appearance's canvas pad and swatches remain previews of the authored canvas.
+The main window's theming is unaffected.
+
 ### Canvas sampling is a surface boolean
 
 `GlassSurface tint` selects canvas-sampling navigation glass, not whether generated neutrals
@@ -216,8 +228,9 @@ never grows with attachment count. Inspector labels show two bounded pills and a
 `+N` searchable editor. Sessions and Automations own independent overflow so their
 headings cannot be buried by metadata. Board label pills are neutral; colour stays
 in label editors and pickers. A card's animated live ring is separate from its
-neutral selection border. Renderer scroll thumbs are trackless and visible only
-on scroll or hover.
+neutral selection border. Renderer scroll thumbs are trackless, take no layout
+width (one app-drawn overlay; native scrollbars are off) and show only on scroll
+or hover.
 
 ### Measure and rhythm
 
@@ -245,7 +258,7 @@ monospace; terminals retain the person's Ghostty font.
 
 | Rung | Utility | Size / line height | Job |
 |---|---|---|---|
-| Label | `text-label` | 11 / 16px | Compact metadata, not section eyebrows |
+| Label | `text-label` | 11 / 16px | Compact metadata and menu group headers, not section eyebrows |
 | UI | `text-ui` | 13 / 20px | Controls, lists, menu rows |
 | Body | `text-sm` | 14 / 20px | Prose, inputs, comments |
 | Heading | `text-heading` | 18 / 26px | Reading headings |
@@ -253,6 +266,8 @@ monospace; terminals retain the person's Ghostty font.
 
 No sixth 12px rung and no arbitrary `text-[Npx]`. Use regular for reading, medium for controls,
 semibold for titles. Section names use sentence-case `SectionHeading`, not tracked uppercase.
+Menu and palette group headers (`MENU_LABEL`) sit a rung below their rows: sentence case,
+semibold, secondary ink, no tracking, and never focusable, so a header never reads as a choice.
 
 Hugeicons free Stroke Rounded (MIT) is the symbol baseline, behind the semantic
 `components/ui/icon.tsx` seam. Import a concept (`SearchIcon`, `BoardIcon`) or use
@@ -356,6 +371,8 @@ The current turn lives on the island, not in a transcript “Working” line. Wi
 clusters it is one plain pill. Clusters grow beneath it before concave fillets
 form a sessile bead on the rim; emptying reverses the same path. A wide bead may
 overhang a narrow island. The former transcript row reserves 40px of clearance.
+The jump-to-latest button and its clear band ride above the bead, following its
+drawn rise rather than the island's layout box.
 With neither clusters nor a turn, there is no island.
 
 The shell is a drawn union in `--card`, outlined in `--border`, with a shadow

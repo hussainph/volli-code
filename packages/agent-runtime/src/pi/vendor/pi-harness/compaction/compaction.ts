@@ -101,6 +101,20 @@ export interface CompactResult<T = JsonValue> {
   details?: T;
 }
 
+/**
+ * A failed compaction and what its provider requests had already been billed.
+ *
+ * Volli divergence (VC-805): upstream returns only the error, so a summary
+ * request that failed after its prompt was billed — and, in a split turn, the
+ * history summary that succeeded before the prefix summary failed — leaves no
+ * trace of its spend. `usage` is the sum of every request the attempt made.
+ */
+type BilledCompactionError = CompactionError & { usage: Usage };
+
+function billed(error: CompactionError, usage: Usage): BilledCompactionError {
+  return Object.assign(error, { usage });
+}
+
 export type SummaryRequest = (
   aiContext: AiContext,
   options: SimpleStreamOptions,
@@ -505,7 +519,7 @@ export async function generateSummaryWithRequest(
   options: SummaryGenerationOptions,
   request: SummaryRequest,
   context: Context,
-): Promise<Result<{ text: string; usage: Usage }, CompactionError>> {
+): Promise<Result<{ text: string; usage: Usage }, BilledCompactionError>> {
   const { model, reserveTokens, customInstructions, previousSummary, thinkingLevel } = options;
   const maxTokens = Math.min(
     Math.floor(0.8 * reserveTokens),
@@ -542,13 +556,21 @@ export async function generateSummaryWithRequest(
     context,
   );
   if (response.stopReason === "aborted") {
-    return err(new CompactionError("aborted", response.errorMessage || "Summarization aborted"));
+    return err(
+      billed(
+        new CompactionError("aborted", response.errorMessage || "Summarization aborted"),
+        response.usage,
+      ),
+    );
   }
   if (response.stopReason === "error") {
     return err(
-      new CompactionError(
-        "summarization_failed",
-        `Summarization failed: ${response.errorMessage || "Unknown error"}`,
+      billed(
+        new CompactionError(
+          "summarization_failed",
+          `Summarization failed: ${response.errorMessage || "Unknown error"}`,
+        ),
+        response.usage,
       ),
     );
   }
@@ -689,7 +711,7 @@ export function compact(
   retry: RetryPolicy | undefined,
   callbacks: RetryCallbacks | undefined,
   context: Context,
-): Promise<Result<CompactResult, CompactionError>> {
+): Promise<Result<CompactResult, BilledCompactionError>> {
   return compactWithRequest(
     preparation,
     { model, customInstructions, thinkingLevel },
@@ -719,7 +741,7 @@ export async function compactWithRequest(
   options: CompactGenerationOptions,
   request: SummaryRequest,
   context: Context,
-): Promise<Result<CompactResult, CompactionError>> {
+): Promise<Result<CompactResult, BilledCompactionError>> {
   const { model, customInstructions, thinkingLevel } = options;
   const {
     messagesToSummarize,
@@ -763,7 +785,11 @@ export async function compactWithRequest(
       request,
       context,
     );
-    if (!turnPrefixResult.ok) return err(turnPrefixResult.error);
+    if (!turnPrefixResult.ok) {
+      // The history summary already completed and was billed (VC-805).
+      const { error } = turnPrefixResult;
+      return err(billed(error, historyUsage ? addUsage(historyUsage, error.usage) : error.usage));
+    }
     summary = `${historyText}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult.value.text}`;
     summaryUsage = historyUsage
       ? addUsage(historyUsage, turnPrefixResult.value.usage)
@@ -799,7 +825,7 @@ async function generateTurnPrefixSummary(
   thinkingLevel: ThinkingLevel | undefined,
   request: SummaryRequest,
   context: Context,
-): Promise<Result<{ text: string; usage: Usage }, CompactionError>> {
+): Promise<Result<{ text: string; usage: Usage }, BilledCompactionError>> {
   const maxTokens = Math.min(
     Math.floor(0.5 * reserveTokens),
     model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,
@@ -826,14 +852,23 @@ async function generateTurnPrefixSummary(
   );
   if (response.stopReason === "aborted") {
     return err(
-      new CompactionError("aborted", response.errorMessage || "Turn prefix summarization aborted"),
+      billed(
+        new CompactionError(
+          "aborted",
+          response.errorMessage || "Turn prefix summarization aborted",
+        ),
+        response.usage,
+      ),
     );
   }
   if (response.stopReason === "error") {
     return err(
-      new CompactionError(
-        "summarization_failed",
-        `Turn prefix summarization failed: ${response.errorMessage || "Unknown error"}`,
+      billed(
+        new CompactionError(
+          "summarization_failed",
+          `Turn prefix summarization failed: ${response.errorMessage || "Unknown error"}`,
+        ),
+        response.usage,
       ),
     );
   }

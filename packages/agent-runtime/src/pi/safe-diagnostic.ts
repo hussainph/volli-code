@@ -70,7 +70,15 @@ const DOCUMENTATION_HOSTS = [
   "learn.microsoft.com",
   "docs.aws.amazon.com",
 ];
-const URL_TEXT = /(https?:\/\/\S+)/i;
+/** `file://` too: a stack frame's URL names a home directory, never a fix. */
+const URL_TEXT = /((?:https?|file):\/\/\S+)/i;
+/**
+ * Where a stack trace starts inside a provider or SDK sentence: Pi's OAuth
+ * errors append `stack=Error: …`, and a stringified error appends `\n    at
+ * fn (file:///Users/…)`. A stop sentence ends there; frames name this
+ * machine's paths and say nothing a person can act on.
+ */
+const STACK_TRACE = /(?:[;,]?\s*\bstack=|\n\s*at\s)[\s\S]*$/;
 const URL_TRAILING_PUNCTUATION = /[.,;:!?)\]'"`>]+$/;
 
 /**
@@ -208,6 +216,7 @@ function envelopeMessage(body: Record<string, unknown>): string {
  * provider naming a request path is not (VC-1244).
  */
 export function safeStopMessage(raw: string, port?: RedactionPort): string {
+  raw = raw.replace(STACK_TRACE, "");
   let text = raw;
   const envelope = firstJsonObject(raw);
   if (envelope !== null) {

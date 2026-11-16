@@ -183,11 +183,11 @@ beforeEach(() => {
       disconnect() {}
     },
   );
-  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
-    function (this: HTMLElement) {
-      return geometry(this);
-    },
-  );
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    return geometry(this);
+  });
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(() => width);
   Object.defineProperty(HTMLElement.prototype, "animate", {
     configurable: true,

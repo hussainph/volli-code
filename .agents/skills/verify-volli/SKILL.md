@@ -25,7 +25,15 @@ volli-drive launch --fake-script replies.json  # scripted tool-enabled fake turn
 volli-drive launch --fake-script replies.json --fake-tool-free-text "Board demo"
         # same, but tool-free requests (auto-title) answer with that text instead of the echo
 volli-drive launch --reduced-motion     # force reduced motion for this isolated Electron only
+volli-drive launch --fixture empty --database /abs/path/volli.db.backup-v68
+        # start on a clone of a closed database (a safety copy) to replay its schema upgrade
 ```
+
+`--database` clones (`cp -c`) a closed, checkpointed database into the instance before Electron starts; a file with WAL frames beside it (a live profile) is refused. A launch that upgrades shows the "Updating your data" window first: the supervisor never drives it, saves `screenshots/000-updating-window.png`, and records `updatingWindowShown`/`updatingWindowClosed` in the launch timings. A routine launch whose database check is still running after 400 ms opens the app's own window on a "Checking your data" page, and the app then loads into that same window (VC-1203): the supervisor saves `screenshots/000-checking-window.png`, records the window's native background in the transcript, and marks `checkingWindowShown`/`checkingWindowLoadedApp`. A clone of a real profile holds private data: keep the evidence local and never attach screenshots of the app's own window from it.
+
+`volli-drive relaunch <id>` quits a local instance through the app's ordinary quit and launches it again on the same profile and database, re-proving the guard: a routine relaunch, with that launch's window marks in its answer. Its answer carries `quitMs` and `close`; `close: "immediate"` is the app ending itself with SIGKILL, accepted only when the app's own exit line says so: because only read-only workers were left (VC-1208, `mode: 'immediate'`), or because its exit watch ended a native teardown still running 5 s after the exit (VC-652, `watch: 'arming'`, and the watch's own `exit-watch-<pid>.json` in the profile says `killed`; a later launch logs `previous exit` with the outcome).
+
+`volli-drive quit-during-launch <id> --work check|upgrade [--database /abs/older.db] [--second-launch]` relaunches, quits on the launch's database page (the routine check's, or the upgrade's; `--database` clones a closed older copy in first so the launch has an upgrade to run), times the exit, then launches again normally. For a check it hashes the database before the launch and after the exit; with `--second-launch` a second Electron starts on the profile while an upgrade's quit waits, and the waiting window must come forward.
 
 `launch` builds first if the bundle is missing or predates the guard (`--no-build` refuses instead), then prints the instance id (`vd-xxxxxx`), the evidence dir, timings, memory and the guard status. 10–16 s to ready on an M-series Mac. Fixture `basic`: project **Drive Project** (prefix `DRV`), tickets DRV-1 (Todo), DRV-2 (Backlog), DRV-3 (Doing), DRV-4 (Needs Review), fake model pinned for `global` and `ticket` purposes.
 
@@ -87,6 +95,8 @@ volli-drive act vd-xxxxxx --gen N --kind scroll --ref … --direction up
 volli-drive wait vd-xxxxxx --text "fake-agent: hello" [--gone] [--timeout 30000]
 volli-drive restore-restart vd-xxxxxx --gen N --ref f2e75 # real Restart and restore click, supervised local relaunch
 volli-drive screenshot vd-xxxxxx --name after-move   # prints the PNG path
+volli-drive act vd-xxxxxx --gen N --ref f2e75 --kind click --record-ms 800  # + renderer screencast frames (not native vibrancy)
+volli-drive ui-zoom vd-xxxxxx in|out|reset --window window-1   # the View menu's UI zoom, to one window
 volli-drive windows vd-xxxxxx                       # #settings is a separate window
 volli-drive settings-native vd-xxxxxx --action watch # observe hidden creation → first reveal
 volli-drive settings-native vd-xxxxxx               # native bounds, menu and scoped paint

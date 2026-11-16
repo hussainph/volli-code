@@ -451,6 +451,8 @@ function ScopeChip({
 
 function Caption({ mode, venue, project }: { mode: CaptionMode; venue: Venue; project: boolean }) {
   const [cycle, setCycle] = React.useState(0);
+  // Read the clock once, at mount: render stays pure (react/purity).
+  const [hour] = React.useState(() => new Date().getHours());
   if (mode === "none") return null;
 
   if (mode === "path") {
@@ -481,7 +483,7 @@ function Caption({ mode, venue, project }: { mode: CaptionMode; venue: Venue; pr
     );
   }
 
-  const lines = greeters(project, new Date().getHours());
+  const lines = greeters(project, hour);
   return (
     <button
       type="button"

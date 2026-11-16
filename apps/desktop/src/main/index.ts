@@ -35,6 +35,7 @@ import {
   makeAgentError,
   memoizedPathExists,
   resolveShell,
+  settingsWindowBackground,
   ticketBranchName,
   NEW_TICKET_DRAFT_APP_STATE_KEY,
   OperationUnavailableError,
@@ -42,6 +43,7 @@ import {
   runnerStaysAvailable,
   VOLLI_USER_ZDOTDIR_ENV,
   workspaceInstallCommand,
+  quitReason,
 } from "@volli/shared";
 import type { SessionEnvRepair } from "@volli/shared";
 import type { HarnessAdapter, HarnessId, ResolvedAppearance } from "@volli/shared";
@@ -75,7 +77,11 @@ import {
   uninstallAllHarnessSkills,
   userCliLinkPath,
 } from "@volli/host-core/agents";
-import { codeModeSandboxAssets, describeWebSealing } from "@volli/host-core/integrations";
+import {
+  codeModeSandboxAssets,
+  describeWebSealing,
+  stopMcpServerProcessGroups,
+} from "@volli/host-core/integrations";
 import {
   abandonAcceptedUpdateInstall,
   beginAcceptedUpdateInstall,
@@ -88,6 +94,26 @@ import {
   updateInstallQuitInFlight,
 } from "./quit-gate";
 import { isInternalNavigationTarget } from "./navigation";
+import {
+  launchWindowPage,
+  openUpdatingWindow,
+  updatingPageUrl,
+  type UpdatingWindow,
+} from "./updating-window";
+import { createExitWatch, nodeExitWatchPorts } from "./exit-watch";
+import { createQuitExit } from "./quit-exit";
+import {
+  holdDatabaseCheckForSmoke,
+  smokeDatabaseCheckOffMainBytes,
+  smokeBackupHoldRows,
+  smokeDatabaseWorkerHoldRows,
+  smokeDatabaseWorkerHoldUntil,
+} from "./database-check-smoke";
+import {
+  firstPaintMirrorPath,
+  firstPaintMirrorWriter,
+  readFirstPaintMirror,
+} from "./first-paint-mirror";
 import { onRawIpc } from "./raw-ipc";
 import { currentRendererId } from "./renderer-call";
 import {
@@ -105,6 +131,15 @@ import {
   handoffInterruptedBackupRestore,
   cancelScheduledBackupRestore,
   runRestoreWorker,
+  databaseStartupWork,
+  ROUTINE_CHECK_OFF_MAIN_BYTES,
+  runDatabaseUpgradeWorker,
+  endReadOnlyWorkers,
+  liveWorkerCount,
+  onWorkerStarted,
+  quitExitDecision,
+  settleLiveWorkers,
+  watchLiveWorkers,
   startOrphanScan,
   createLoginPathBootstrap,
   ADOPTION_PROBE,
@@ -279,6 +314,7 @@ import { registerIpcHandlers } from "./ipc";
 import { registerAppMenu } from "./menu";
 import {
   createSettingsWindowOwner,
+  settleSettingsNavigation,
   restoreSettingsFrame,
   SETTINGS_WINDOW_SIZE,
 } from "./settings-window";
@@ -312,6 +348,7 @@ import {
   releaseAgentSites as releaseWorktreeAgentSites,
   type AgentSiteReleaseReport,
   orphanCleanupEngine,
+  stopRunningWorktreeSetups,
 } from "@volli/host-core/worktree";
 import { registerHarnessIpcHandlers } from "./harness-ipc";
 import { ensureHarnessRuntime, harnessLaunchArgv } from "./harness-runtime";
@@ -368,8 +405,8 @@ import {
   type CursorOverlay,
 } from "./browser/cursor-overlay";
 import { closeHeadlessTabsOnTicketArchive } from "./browser/lifecycle";
-import { hostLogger } from "@volli/host-core/log";
-import { exitAfterLogFlush, logPowerTransitions, startDesktopLog } from "./log/desktop-log";
+import { hostLogger, hostLogLevel } from "@volli/host-core/log";
+import { logPowerTransitions, startDesktopLog } from "./log/desktop-log";
 import { startDesktopPerfStore } from "./log/perf-store";
 import { registerRendererLogForwarding } from "./log/renderer-log";
 import { registerRendererStallForwarding } from "./log/renderer-stall";
@@ -436,6 +473,14 @@ installSmokeBootCapture(process.env, app, process.stdout, process.stderr);
 const nativeWindowPolicy = quietWindowPolicy(process.env, process.platform);
 applyQuietAppPolicy(app, nativeWindowPolicy);
 
+// Every worker thread from here on is seen by the quit's last step (VC-1208):
+// one the quit does not know to be read-only is waited for, as before.
+watchLiveWorkers();
+// Every browser session, so an exit that cannot wait for Chromium's own
+// teardown can still write their cookies and storage first (`quit-exit.ts`).
+const browserSessions = new Set<Electron.Session>();
+app.on("session-created", (created) => browserSessions.add(created));
+
 const isDev = !app.isPackaged;
 const agentSocket = createHostAgentSocket();
 const shutdownAgentSocket = agentSocket.shutdown;
@@ -478,19 +523,162 @@ const desktopLog = ownsAppProfile
       terminal: isDev || isSmokeBootCapture(process.env),
     })
   : null;
-/** `app`, whose `exit` writes the log's tail first: every accepted quit ends in it. */
-const quittingApp = desktopLog === null ? app : exitAfterLogFlush(app, desktopLog);
+/**
+ * The exit watch (VC-652): bounds how long Electron's own teardown keeps the
+ * process alive after an ordinary exit, and records how long it lived; the
+ * next launch logs that. Only the instance that owns the profile has one.
+ */
+const exitWatch = ownsAppProfile
+  ? createExitWatch(
+      nodeExitWatchPorts({
+        platform: process.platform,
+        pid: process.pid,
+        directory: app.getPath("userData"),
+      }),
+    )
+  : null;
+void exitWatch?.logPreviousExit();
+void exitWatch?.probe();
+/** After the browser sessions' flush, before an exit: DOM storage's write is not awaitable. */
+const DOM_STORAGE_SETTLE_MS = 100;
+/** The first-paint mirror's pending writes, once boot has a writer (VC-1208's immediate exit). */
+let settleFirstPaintMirror: () => Promise<void> = () => Promise.resolve();
+/** Why a quit happens, as far as main knows it when the quit is accepted (VC-1208). */
+let quitAfterLastWindow = false;
+let relaunchAsked = false;
+let relaunchPending: () => boolean = () => false;
+let systemShuttingDown: () => boolean = () => false;
+const currentQuitReason = () =>
+  quitReason({
+    updateInstall: updateInstallQuitInFlight(),
+    relaunch: relaunchAsked || relaunchPending(),
+    systemShutdown: systemShuttingDown(),
+    lastWindowClosed: quitAfterLastWindow,
+  });
+/**
+ * The quit's last step and its timeline (VC-1208): once only read-only
+ * workers remain, the process ends without waiting for them; with none, the
+ * ordinary exit is watched (VC-652).
+ */
+const quitExit = createQuitExit({
+  now: () => performance.now(),
+  liveWorkers: liveWorkerCount,
+  settleWorkers: settleLiveWorkers,
+  decide: quitExitDecision,
+  endReadOnlyWorkers,
+  flush: async () => {
+    await Promise.allSettled([
+      ...[...browserSessions].map(async (browserSession) => {
+        // Returns before the write lands; the cookie round trip and the
+        // wait below give it time (best-effort, see quit-exit.ts).
+        browserSession.flushStorageData();
+        await browserSession.cookies.flushStore();
+      }),
+      settleFirstPaintMirror(),
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, DOM_STORAGE_SETTLE_MS));
+  },
+  flushLog: () => desktopLog?.flush() ?? Promise.resolve(),
+  runExitHandlers: (code) => {
+    process.emit("exit", code);
+  },
+  kill: () => process.kill(process.pid, "SIGKILL"),
+  stopChildren: async () => {
+    // What Node's `exit` listeners would stop or write (ours, and pi-mcp's for
+    // its stdio servers), done before a watched exit whose teardown a kill can
+    // skip (VC-652). Each on its own: one that throws does not skip the others.
+    await Promise.allSettled([
+      (async () => stopRunningWorktreeSetups())(),
+      (async () => desktopPerf?.store.flush())(),
+      stopMcpServerProcessGroups(),
+    ]);
+  },
+  watchAvailable: () => exitWatch?.available() ?? false,
+  watchExit: () => exitWatch?.arm() ?? null,
+  watchSkipped: (reason) => exitWatch?.skipped(reason),
+  onWorkerStarted,
+});
+const quitTimeline = {
+  accepted: () => quitExit.accepted(currentQuitReason()),
+  drained: (deadlineExpired: boolean) => quitExit.drained(deadlineExpired),
+};
+/** `app`, whose `exit` is the quit's last step (`quit-exit.ts`, which writes the log's tail first): every accepted quit ends in it. */
+const quittingApp = quitExit.exitingApp(app);
 /** Electron main's own composition lines; the areas below log under their own names. */
 const log = hostLogger("desktop");
 const repackLog = hostLogger("transcript-repack");
 const worktreeLog = hostLogger("worktree");
+// The launch's half of the update timeline (VC-1208): when the person first
+// sees a window, counted from the process's start, and which one it is.
+let firstWindowShown = false;
+app.on("browser-window-created", (_event, created) => {
+  const shown = () => {
+    if (firstWindowShown || created.isDestroyed() || !created.isVisible()) return;
+    firstWindowShown = true;
+    log.info("first window shown", {
+      sinceStartMs: Math.round(process.uptime() * 1000),
+      page: launchWindowPage(created.webContents.getURL()),
+    });
+  };
+  // `show` can come late for a window macOS counts as occluded (the quiet
+  // windows a harness keeps below every other); every window here is revealed
+  // from its `ready-to-show`, so it is asked there too, once that has run.
+  created.once("show", shown);
+  created.once("ready-to-show", () => setImmediate(shown));
+});
 /**
  * Brings a window back for a launch that found none (VC-577). Bound once the
  * window factory exists; until then a second launch has nothing to open.
  */
 let revealWindowForLaunch: (() => void) | null = null;
+/**
+ * How long a launch's database work runs before a window says so (VC-1105,
+ * VC-1203). A small profile's check or upgrade is done well before this, and
+ * nothing flashes up for it.
+ */
+const DATABASE_WAIT_WINDOW_DELAY_MS = 400;
+/** The schema-upgrade window (VC-1105), while a launch has one up. */
+let updatingWindow: UpdatingWindow | null = null;
+function closeUpdatingWindow(): void {
+  updatingWindow?.close();
+  updatingWindow = null;
+}
+/**
+ * The app's own window, opened while a routine launch's database check is
+ * still running (VC-1203), until the app loads into it.
+ */
+let checkingWindow: BrowserWindow | null = null;
+/** The upgrade window, opened now if the launch has not opened it yet. */
+function upgradeWindow(quitPending = false): UpdatingWindow {
+  updatingWindow ??= openUpdatingWindow({
+    devRendererUrl: isDev ? process.env["ELECTRON_RENDERER_URL"] : undefined,
+    policy: nativeWindowPolicy,
+    quitPending,
+  });
+  return updatingWindow;
+}
 if (ownsAppProfile) {
+  // A quit during a schema upgrade waits for it with its window up, saying so
+  // (VC-1208); the launch stops there, and the quit runs once it is done.
+  app.on("before-quit", (event) => {
+    quitExit.holdForUpgrade(event, {
+      reason: currentQuitReason,
+      showWaiting: () => {
+        if (updatingWindow === null) upgradeWindow(true);
+        else updatingWindow.quitting();
+      },
+      quit: () => app.quit(),
+    });
+  });
+  // While the upgrade window is up it is the app's window: a Dock click or
+  // a second launch brings it forward instead of doing nothing.
+  app.on("activate", () => updatingWindow?.reveal());
   app.on("second-instance", () => {
+    if (updatingWindow !== null) {
+      updatingWindow.reveal();
+      sealQuietAppActivation(app, nativeWindowPolicy);
+      return;
+    }
     answerSecondInstance(mainWindows()[0], {
       cloudEnabled: () => isExperimentEnabled("cloud"),
       hasSettingsWindow: () =>
@@ -605,10 +793,31 @@ interface CreateWindowOptions {
   readonly revealOnReady?: boolean;
   readonly role?: "main" | "settings";
   readonly bounds?: Partial<Electron.Rectangle>;
+  /**
+   * `check`: the database check's page, until {@link loadAppPage} loads the
+   * app in its place (VC-1203). The app's page otherwise.
+   */
+  readonly page?: "app" | "check";
+}
+
+/**
+ * Loads the app's renderer: in dev, scripts/dev.mjs injects
+ * ELECTRON_RENDERER_URL and runs the Vite dev server there for HMR. Otherwise
+ * the built renderer, through the secure, app-owned origin (including local
+ * packaged-runtime smoke launches). DevTools is not auto-opened — toggle it
+ * with ⌥⌘I when needed.
+ */
+function loadAppPage(window: BrowserWindow, settings: boolean): void {
+  if (isDev && process.env["ELECTRON_RENDERER_URL"]) {
+    void window.loadURL(`${process.env["ELECTRON_RENDERER_URL"]}${settings ? "#settings" : ""}`);
+  } else {
+    void window.loadURL(`${PACKAGED_RENDERER_ENTRY_URL}${settings ? "#settings" : ""}`);
+  }
 }
 
 function createWindow(
-  ptyManager: PtyManager,
+  /** The terminals, once they exist: a window opened before the host has none (VC-1203). */
+  terminals: () => PtyManager | undefined,
   firstPaint: FirstPaintHint,
   options: CreateWindowOptions = {},
 ): BrowserWindow {
@@ -624,8 +833,9 @@ function createWindow(
           ...SETTINGS_WINDOW_SIZE,
           ...options.bounds,
           title: "Settings",
-          vibrancy: "sidebar" as const,
-          visualEffectState: "followWindow" as const,
+          // A plain, opaque native pane (VC-1228). No `vibrancy`: the page
+          // paints every pixel, so the material was never seen, and Chromium's
+          // backdrop-filter misrenders over a vibrant window (electron#44720).
           fullscreenable: false,
         }
       : {}),
@@ -647,7 +857,9 @@ function createWindow(
     // painted) — prevents the white flash before first paint, and keeps the
     // window edge from flashing the OLD palette during a resize after a canvas
     // change.
-    backgroundColor: firstPaint.background,
+    backgroundColor: settings
+      ? settingsWindowBackground(firstPaint.appearance)
+      : firstPaint.background,
     webPreferences: {
       preload: join(__dirname, "preload.cjs"),
       // Two facts the renderer needs before it can run a line of its own: the
@@ -716,7 +928,7 @@ function createWindow(
       names: unsaved,
       skipConfirm: process.env["VOLLI_SKIP_CLOSE_CONFIRM"] === "1",
     });
-    const busy = ptyManager.busySessions(clientEventSink(mainWindow.webContents));
+    const busy = terminals()?.busySessions(clientEventSink(mainWindow.webContents)) ?? [];
     if (unsavedStep === "quit" && busy.length === 0) return;
 
     // Something is at stake, so hold the close while the questions are asked;
@@ -783,14 +995,17 @@ function createWindow(
     openExternal(target);
   });
 
-  // In dev, scripts/dev.mjs injects ELECTRON_RENDERER_URL and runs the Vite dev
-  // server there for HMR. Otherwise load the built renderer through the secure,
-  // app-owned origin (including local packaged-runtime smoke launches).
-  // DevTools is not auto-opened — toggle it with ⌥⌘I when needed.
-  if (isDev && process.env["ELECTRON_RENDERER_URL"]) {
-    mainWindow.loadURL(`${process.env["ELECTRON_RENDERER_URL"]}${settings ? "#settings" : ""}`);
+  if (options.page === "check") {
+    // The paint this window was built with, so the page and the app after it agree.
+    void mainWindow.loadURL(
+      updatingPageUrl(
+        firstPaint,
+        isDev ? process.env["ELECTRON_RENDERER_URL"] : undefined,
+        "check",
+      ),
+    );
   } else {
-    mainWindow.loadURL(`${PACKAGED_RENDERER_ENTRY_URL}${settings ? "#settings" : ""}`);
+    loadAppPage(mainWindow, settings);
   }
   return mainWindow;
 }
@@ -1104,6 +1319,87 @@ const appStartup = app.whenReady().then(async () => {
     // The same http(s)-only gate as the window's own links: a host names the page.
     openExternal: (url) => openExternal(url),
   });
+  // An older database, or any large one, is opened in a worker before anything
+  // here opens it (VC-1105, VC-1203): the same open, holding the open lock,
+  // with the same checks. An older one is upgraded there; a large one gets the
+  // routine quick check, which reads every page and is seconds on a large
+  // profile. A small one is checked on main by the host's own open, as before.
+  // Main stays responsive throughout, and nothing here reads or writes the
+  // database until the worker has closed it. Work still running after a beat
+  // gets a window: an upgrade its small one, a routine check the app's own.
+  const startupWork = databaseStartupWork(
+    dbPath,
+    smokeDatabaseCheckOffMainBytes(process.env) ?? ROUTINE_CHECK_OFF_MAIN_BYTES,
+  );
+  let databaseUpgrade: Awaited<ReturnType<typeof runDatabaseUpgradeWorker>> = null;
+  if (startupWork !== null) {
+    const { kind, ...versions } = startupWork;
+    const started = performance.now();
+    log.info(kind === "upgrade" ? "database upgrade started" : "database check started", versions);
+    const holdRows = smokeDatabaseWorkerHoldRows(process.env);
+    const holdUntil = smokeDatabaseWorkerHoldUntil(process.env);
+    const running = runDatabaseUpgradeWorker(join(__dirname, "database-upgrade-worker.cjs"), {
+      dbPath,
+      logLevel: hostLogLevel(),
+      dev: isDev,
+      work: kind,
+      ...(holdRows === undefined ? {} : { holdRows }),
+      ...(holdUntil === undefined ? {} : { holdUntil }),
+    });
+    // A login launch may be headed for the menu bar, which cannot be known
+    // until the database is open: it gets no window early.
+    const mayEnterMenuBar = launchedIntoMenuBar({
+      cloud: true,
+      platform: process.platform,
+      argv: process.argv,
+      openedAtLogin: app.getLoginItemSettings().wasOpenedAtLogin,
+    });
+    const showWaiting = setTimeout(() => {
+      if (kind === "upgrade") {
+        // A quit during the beat may have opened it already (VC-1208).
+        if (updatingWindow !== null) return;
+        upgradeWindow();
+      } else if (!mayEnterMenuBar) {
+        // Painted from the file beside the database, never the database
+        // itself: the look the app will open in (first-paint-mirror.ts).
+        checkingWindow = createWindow(
+          () => ptyManagerRef,
+          resolveFirstPaint({
+            ...readFirstPaintMirror(firstPaintMirrorPath(dbPath)),
+            systemPrefersDark: nativeTheme.shouldUseDarkColors,
+          }),
+          { page: "check" },
+        );
+      } else {
+        return;
+      }
+      log.info("database wait window opened", { work: kind });
+    }, DATABASE_WAIT_WINDOW_DELAY_MS);
+    databaseUpgrade = await running;
+    // A smoke may hold the launch here, after the answer, to watch the wait
+    // window (database-check-smoke.ts); inert unless it asked, and never over
+    // a quit that waited for the upgrade.
+    if (!quitExit.quitting()) await holdDatabaseCheckForSmoke(process.env);
+    clearTimeout(showWaiting);
+    log.info(kind === "upgrade" ? "database upgrade finished" : "database check finished", {
+      ...versions,
+      outcome:
+        databaseUpgrade === null
+          ? "no-answer"
+          : databaseUpgrade.ok
+            ? kind === "upgrade"
+              ? "upgraded"
+              : "clean"
+            : "refused",
+      durationMs: Math.round(performance.now() - started),
+    });
+    // A quit during the database work (VC-1208) ends the launch here: the
+    // worker has closed the database, and nothing may open it again for a
+    // quit already under way. A quit held for an upgrade runs now.
+    if (quitExit.quitting()) return;
+  }
+  // A smoke may hold the automatic backup inside SQLite (VC-1208); inert unless set.
+  const backupHoldRows = smokeBackupHoldRows(process.env);
   const hostCore = createHostCore(hostPorts, {
     dataDir: app.getPath("userData"),
     stopPolicy: "desktop-quit",
@@ -1113,6 +1409,7 @@ const appStartup = app.whenReady().then(async () => {
     backups: {
       workerEntry: join(__dirname, "automatic-backup-worker.cjs"),
       appVersion: app.getVersion(),
+      ...(backupHoldRows === undefined ? {} : { holdRows: backupHoldRows }),
       reveal: async (directory) => {
         const error = await shell.openPath(directory);
         if (error) throw new Error(error);
@@ -1124,6 +1421,7 @@ const appStartup = app.whenReady().then(async () => {
     sourceIconWorker: join(__dirname, "source-icon-worker.cjs"),
     usageReportWorker: join(__dirname, "usage-report-worker.cjs"),
     devDiagnostics: isDev,
+    ...(databaseUpgrade === null ? {} : { databaseUpgrade }),
     secretKey: harnessPorts?.secretKey ?? keychainSecretCodec(keychainUse.keychain),
     webKeySealing: {
       keyring: credentialKeyring,
@@ -1168,6 +1466,7 @@ const appStartup = app.whenReady().then(async () => {
       // Let the IPC reply paint success before restarting the entire service
       // graph; degraded handlers must not be replaced with partially live ones.
       setTimeout(() => {
+        relaunchAsked = true;
         app.relaunch();
         app.quit();
       }, 750);
@@ -1218,6 +1517,7 @@ const appStartup = app.whenReady().then(async () => {
       relaunch: () => {
         try {
           restore?.acceptRestart();
+          relaunchAsked = true;
           app.relaunch();
         } catch (error) {
           dialog.showErrorBox(
@@ -1744,7 +2044,10 @@ const appStartup = app.whenReady().then(async () => {
         relaunch.quitRefused();
       },
     },
+    timeline: quitTimeline,
   });
+  relaunchPending = relaunch.pending;
+  systemShuttingDown = () => runnerEdge.menuBar()?.systemShuttingDown() ?? false;
   /**
    * This Mac's runner (VC-671): host-core's Session runtime composition,
    * over the host built above. Desktop answers what
@@ -2128,6 +2431,11 @@ const appStartup = app.whenReady().then(async () => {
     piModelAccess === null
       ? null
       : new ModelAccessSignInService({
+          // A completed sign-in ends that provider's sign-in alert episode
+          // (VC-1236); it resumes nothing.
+          ...(liveHost === undefined
+            ? {}
+            : { onSignedIn: (providerId: string) => liveHost.providerSignIn.signedIn(providerId) }),
           // Sign in with ChatGPT names this installation to OpenAI (Pi 0.99).
           pi: piSignIn(piModelAccess.models, {
             deviceId: () => {
@@ -2355,10 +2663,26 @@ const appStartup = app.whenReady().then(async () => {
   // it actually painted rather than re-deriving them and hoping the two agree.
   // Browser Tab planes composite above the renderer, so its theme cannot show
   // through them; their app-owned states repaint to the plane rung (VC-302).
+  const firstPaintMirror = firstPaintMirrorWriter(firstPaintMirrorPath(dbPath), (error) =>
+    log.warn("couldn't save the first paint beside the database", { error }),
+  );
+  settleFirstPaintMirror = firstPaintMirror.settled;
   registerThemeIpcHandlers(
     dbHandle,
     { fs: fsDeps, now: Date.now, appearance: currentAppearance },
-    desktopThemeHooks({ windows: () => BrowserWindow.getAllWindows(), browserTabs }),
+    {
+      ...desktopThemeHooks({ windows: () => BrowserWindow.getAllWindows(), browserTabs }),
+      // The next launch's window may open before the database can be read
+      // (VC-1203): it is painted from this copy of the first paint's inputs.
+      onFirstPaintStored: (hint) => {
+        if (!dbHandle.ok) return;
+        void firstPaintMirror.write({
+          hint,
+          canvas: getGlobalCanvas(dbHandle.db),
+          appearance: getGlobalAppearance(dbHandle.db),
+        });
+      },
+    },
   );
   const automationExecution =
     runtimeAutomations.kind === "live" ? runtimeAutomations.execution : { kind: "idle" as const };
@@ -2638,8 +2962,8 @@ const appStartup = app.whenReady().then(async () => {
   );
   const pendingWorkspaceNavigation = new Map<number, WorkspaceWindowNavigation>();
   const workspaceRendererReady = new Set<number>();
-  const createOwnedWindow = (options: CreateWindowOptions = {}): BrowserWindow => {
-    const window = createWindow(ptyManager, currentFirstPaint(), options);
+  /** Binds an app window to this host's Browser Tabs, notifications and navigation. */
+  const ownWindow = (window: BrowserWindow): BrowserWindow => {
     // Browser Tabs are live machine resources, not durable documents. Once the
     // app window that can place them closes, keeping invisible remote pages
     // running would leave network/timers with no reachable owner.
@@ -2682,6 +3006,20 @@ const appStartup = app.whenReady().then(async () => {
     });
     return window;
   };
+  const createOwnedWindow = (options: CreateWindowOptions = {}): BrowserWindow =>
+    ownWindow(createWindow(() => ptyManager, currentFirstPaint(), options));
+  /**
+   * The window a routine launch opened during its database check (VC-1203)
+   * becomes the app's: owned like any other, its edge repainted from the
+   * database, and the app loaded in place of the check's page. Its renderer
+   * loads only now, after every handler above, exactly as a new window's does.
+   */
+  const adoptCheckingWindow = (window: BrowserWindow): BrowserWindow => {
+    ownWindow(window);
+    window.setBackgroundColor(currentFirstPaint().background);
+    loadAppPage(window, false);
+    return window;
+  };
   // Settings has no parent: it is movable between displays and never blocks the workbench.
   const settingsFramePath = join(app.getPath("userData"), "settings-window-frame.json");
   let settingsNavigation: SettingsWindowNavigation | null = null;
@@ -2718,7 +3056,7 @@ const appStartup = app.whenReady().then(async () => {
             systemPrefersDark: nativeTheme.shouldUseDarkColors,
           })
         : currentFirstPaint();
-      const window = createWindow(ptyManager, paint, {
+      const window = createWindow(() => ptyManager, paint, {
         role: "settings",
         revealOnReady: false,
         bounds,
@@ -2804,7 +3142,11 @@ const appStartup = app.whenReady().then(async () => {
       assertSettingsRequester(sender);
       // An opening command can supersede the bootstrap read. Do not expose
       // the old scope; return the new intent and wait for its committed frame.
-      if (settingsNavigation !== null && appliedRevision === settingsNavigation.revision) {
+      // Acknowledging also spends the one-shot sign-in request, so a reload
+      // of the page cannot start that auth flow again (VC-1236).
+      const settled = settleSettingsNavigation(settingsNavigation, appliedRevision);
+      settingsNavigation = settled.navigation;
+      if (settled.acknowledged) {
         settingsRendererReady = true;
         const window = settingsWindow.current();
         if (window !== null) showSettings(window);
@@ -2837,7 +3179,17 @@ const appStartup = app.whenReady().then(async () => {
     argv: process.argv,
     openedAtLogin: app.getLoginItemSettings().wasOpenedAtLogin,
   });
-  const mainWindow = createOwnedWindow({ revealOnReady: !startInMenuBar });
+  // The person may have closed the check's window: the app opens a new one.
+  const waiting = checkingWindow?.isDestroyed() === false ? checkingWindow : null;
+  checkingWindow = null;
+  if (waiting !== null && startInMenuBar) waiting.destroy();
+  const mainWindow =
+    waiting !== null && !startInMenuBar
+      ? adoptCheckingWindow(waiting)
+      : createOwnedWindow({ revealOnReady: !startInMenuBar });
+  // The upgrade window gives way to the app's own, once that has painted.
+  if (startInMenuBar) closeUpdatingWindow();
+  else mainWindow.once("ready-to-show", closeUpdatingWindow);
   const transcriptRepackAbort = new AbortController();
   runnerEdge.bind({ repack: transcriptRepackAbort });
   mainWindow.webContents.once("did-finish-load", () => {
@@ -3737,6 +4089,11 @@ const appStartup = app.whenReady().then(async () => {
   app.on("activate", () => appWindows.activated(menuBar));
 });
 void appStartup.catch((error: unknown) => {
+  // A boot that stopped part way must not leave the upgrade window, or the
+  // check's, claiming work.
+  closeUpdatingWindow();
+  if (checkingWindow?.isDestroyed() === false) checkingWindow.destroy();
+  checkingWindow = null;
   if (error instanceof SessionRuntimeClosingError) return;
   log.error("failed to finish app startup", { error });
 });
@@ -3745,12 +4102,14 @@ app.on("window-all-closed", () => {
   // On macOS it's common for applications to stay active until the user
   // quits explicitly with Cmd + Q.
   if (process.platform !== "darwin") {
+    quitAfterLastWindow = true;
     app.quit();
   }
 });
 
 registerAgentSocketWillQuit({
   lifecycle: quittingApp,
+  timeline: quitTimeline,
   shutdownAgentSocket,
   reportFailure: (error) => {
     log.error("failed to close the agent socket during app shutdown", { error });

@@ -15,7 +15,6 @@
 
 import { cn } from "@renderer/lib/utils";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
-import { SECTION_HEADING, SECTION_HEADING_CMDK } from "@renderer/components/ui/section-heading";
 
 /**
  * The popover box, shared by root menus, sub-menus and the select surface —
@@ -26,11 +25,30 @@ export const MENU_SURFACE =
   "z-50 min-w-[8rem] max-w-[calc(100vw-2rem)] rounded-menu border border-border bg-popover text-ui text-foreground shadow-overlay";
 
 /**
- * The 4px the rows sit inside. Separate from {@link MENU_SURFACE} because the
- * select surface puts it on the scroll viewport instead — its scroll buttons
- * are siblings of the rows, not part of the padded column.
+ * The 4px the rows sit inside. Separate from {@link MENU_SURFACE} because it
+ * belongs to the scroller, never the box: menus take it through
+ * {@link MENU_VIEWPORT}, and the select surface puts it on Radix's viewport,
+ * whose scroll buttons are siblings of the rows, not part of the padded column.
  */
 export const MENU_SURFACE_PAD = "p-1";
+
+/**
+ * A Radix menu box never scrolls itself; its rows scroll in
+ * {@link MENU_VIEWPORT} inside it. The box carries the glass, and the glass's
+ * rim is an absolutely placed `::after` — painted on a scroller, it is
+ * scrolled content and leaves with the first rows (VC-1222). `overflow-clip`
+ * rather than `overflow-hidden`: a clipped box is not a scroll container, so
+ * no focus or scroll-into-view can ever move it, and it still trims the rows
+ * to the rounded corners. The select surface needs neither: Radix's own
+ * viewport is its scroller.
+ */
+export const MENU_SURFACE_FRAME = "flex flex-col overflow-clip";
+
+/** The one element that scrolls in a menu: the padded column of rows. */
+export const MENU_VIEWPORT = cn(
+  "min-h-0 overflow-x-hidden overflow-y-auto overscroll-contain",
+  MENU_SURFACE_PAD,
+);
 
 /**
  * The half of the open/close every menu surface can always run: the keyframe
@@ -119,19 +137,25 @@ export const MENU_INDICATOR =
 export const MENU_INDICATOR_MARK = "text-current";
 
 /**
- * Sentence-case group header on the section-heading rung.
- * The shared heading recipe owns type; menus add their row inset.
+ * A menu's group header: sentence case, on the label rung, in secondary ink.
+ *
+ * NOT A ROW (VC-1212). A header used to sit at the row inset on the row's own
+ * rung in body ink, one weight step heavier than the rows under it, so every
+ * heading read as one more choice. Two cues now set it apart, and both are
+ * ones the menu's rows never take: the smaller rung and the secondary ink —
+ * the AppKit menu section header. It stays sentence case with the rung's caps
+ * tracking taken off: a header names a group, it is not an eyebrow. Radix and
+ * cmdk already keep it out of focus and type-ahead.
  */
-export const MENU_LABEL = cn("pr-2 pl-6 py-1", SECTION_HEADING, "font-semibold");
+export const MENU_LABEL =
+  "pr-2 pl-6 py-1 text-label font-semibold tracking-normal text-muted-foreground";
 
 /**
  * {@link MENU_LABEL} again, as the variant cmdk needs — it renders the group
  * heading itself, so the classes can only reach it through a selector.
  */
-export const MENU_LABEL_CMDK = cn(
-  SECTION_HEADING_CMDK,
-  "[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:font-semibold",
-);
+export const MENU_LABEL_CMDK =
+  "[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:text-label [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:tracking-normal [&_[cmdk-group-heading]]:text-muted-foreground";
 
 /**
  * The shortcut column. No `tracking-widest` (stock shadcn's): letter spacing is

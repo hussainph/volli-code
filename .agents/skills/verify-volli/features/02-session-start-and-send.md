@@ -53,6 +53,13 @@ also proves the live media query is true. Evidence stays in `.scratch/volli-driv
 images belong on the PR, never in git. The older proof below predates the bead
 and calls its predecessor “Working”; it is not evidence for the new drawing.
 
+Caption fit and long commands (VC-1198): a `--fake-script` of `todo_write`,
+`shell_start` (its flash), a long `bash` heredoc and a short `sleep` drives
+long, flashed, narrow/wide-cluster and standalone captions; repeat with
+`launch --reduced-motion`. Read frames with
+`volli-drive state <id> cli perf stalls --process renderer --json`: a
+12.7k-character heredoc command must record no long animation frame.
+
 ## Tool call rows and work groups
 
 Verified live (VC-1182, `vd-0348f5`, built `f225d36a7`), using only the scripted

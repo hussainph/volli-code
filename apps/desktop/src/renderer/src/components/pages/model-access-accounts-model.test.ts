@@ -10,6 +10,7 @@ import {
   applySignInUpdate,
   deepLinkedAction,
   IDLE_SIGN_IN_VIEW,
+  reauthenticationMethod,
   orderedAccounts,
   partitionAccounts,
   providerAccessLabel,
@@ -342,5 +343,47 @@ describe("what a deep-linked arrival presses", () => {
   it("never runs the Retry a failed refresh offers", () => {
     const stale = provider({ ...blocked, recovery: { kind: "retry" } });
     expect(deepLinkedAction(stale, "openai-codex")).toBe("none");
+  });
+});
+
+// A different intent from the deep link above (VC-1236): a chat stopped because
+// the provider refused or could not renew the credential it holds asks to sign
+// in AGAIN, and that account still reads as connected.
+describe("what a sign-in-again request presses", () => {
+  const OAUTH = { type: "oauth", label: "Sign in with Claude", isSubscription: true } as const;
+  const API_KEY = { type: "api-key", label: "API key", isSubscription: false } as const;
+  const connected = provider({
+    id: "anthropic",
+    label: "Anthropic",
+    state: "available",
+    recovery: null,
+    hasStoredCredential: true,
+    billingSource: "subscription",
+    signIn: [API_KEY, OAUTH],
+  });
+
+  it("starts the named method at an account that still reads as connected", () => {
+    expect(reauthenticationMethod(connected, "anthropic", "oauth")).toBe("oauth");
+    expect(reauthenticationMethod(connected, "anthropic", "api-key")).toBe("api-key");
+    // The ordinary deep link to the same row still presses nothing.
+    expect(deepLinkedAction(connected, "anthropic")).toBe("none");
+  });
+
+  it("is not the ordinary deep link: no intent, another row, or no such method presses nothing", () => {
+    expect(reauthenticationMethod(connected, "anthropic", undefined)).toBeNull();
+    expect(reauthenticationMethod(connected, "openai-codex", "oauth")).toBeNull();
+    expect(
+      reauthenticationMethod(provider({ ...connected, signIn: [API_KEY] }), "anthropic", "oauth"),
+    ).toBeNull();
+  });
+
+  it("never runs the Retry a failed refresh offers", () => {
+    expect(
+      reauthenticationMethod(
+        provider({ ...connected, recovery: { kind: "retry" } }),
+        "anthropic",
+        "oauth",
+      ),
+    ).toBeNull();
   });
 });

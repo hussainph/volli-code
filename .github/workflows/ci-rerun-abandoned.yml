@@ -1,0 +1,125 @@
+name: CI re-request
+
+# When GitHub never starts a CI lane, ask it once more (VC-1221).
+#
+# GitHub sometimes assigns no runner to a ci.yml job, so far always the macOS
+# `Smoke (core e2e)` lane while GitHub reported limited macOS arm64 capacity.
+# The job ends `cancelled` after 15 to 35 minutes with no runner and no steps,
+# and `CI gate` goes red on a commit nothing is wrong with. When a CI run
+# completes, this workflow re-requests that run's failed jobs ONCE, and only
+# when GitHub's own record shows that every job that did not pass either never
+# started or is the gate. The predicate and its tests are in
+# scripts/ci-rerun-abandoned.mjs and scripts/ci-rerun-abandoned.test.mjs.
+#
+# It applies to PR, main push, scheduled and dispatched runs alike: a lane that
+# never ran says nothing about any of them, and the release guard needs a green
+# ci.yml on the exact commit it ships. Fork PR runs are included: the re-run
+# executes the same commit with the original actor's privileges (for a fork, a
+# read-only token and no secrets), so it can run nothing the first attempt was
+# not already allowed to run, and this workflow never touches fork code.
+#
+# Security. `workflow_run` runs with this repository's token on a public
+# repository, so:
+#   - Nothing from the triggering run is checked out, downloaded or executed:
+#     no artifacts, no logs, no outputs. The only event fields read are the
+#     run id, its attempt and its conclusion, and they reach a shell only
+#     through `env` and are checked to be numbers there.
+#   - The predicate script comes from the default branch: a `workflow_run`
+#     workflow always runs from the default branch, and the checkout below
+#     takes no ref, so it is the default branch's commit (GITHUB_SHA).
+#   - Every string the API returns about the run (job and branch names) can
+#     be chosen by a PR's author. The script compares them and prints them only
+#     JSON-quoted; none is interpolated into a shell.
+#   - Permissions are split. `decide` runs repository code and may only read.
+#     `rerun` holds the one write permission, runs no repository code and makes
+#     one API call with a numeric id.
+# Proven by test: the predicate against recorded payloads, the workflow's
+# shape and permissions, and the rerun step's shell. Not provable until it
+# happens: GitHub delivering the event and accepting the re-run from this
+# token on a real never-started lane.
+
+on:
+  workflow_run:
+    # ci.yml's `name`. A workflow elsewhere that borrows the name is rejected
+    # by the script's path check.
+    workflows: [CI]
+    types: [completed]
+  # A dry run against any past run: reports the decision, never re-runs.
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "ci.yml run id to judge (dry run; nothing is re-run)"
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: ci-rerun-abandoned-${{ github.event.workflow_run.id || inputs.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  decide:
+    name: Decide
+    # Most CI runs pass or were cancelled; only a failed first attempt can
+    # qualify, so the rest end here without a runner. The script re-reads
+    # every one of these facts from the API rather than trusting the event.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.run_attempt == 1)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      # Read the run, its attempt's jobs and newer runs of ci.yml.
+      actions: read
+      # Check out the predicate script from the default branch.
+      contents: read
+    outputs:
+      rerun: ${{ steps.decide.outputs.rerun }}
+    steps:
+      - name: Check out the predicate from the default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/ci-rerun-abandoned.mjs
+          sparse-checkout-cone-mode: false
+
+      - name: Judge the run from GitHub's record of its jobs
+        id: decide
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
+          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+        run: node scripts/ci-rerun-abandoned.mjs
+
+  rerun:
+    name: Re-request failed jobs
+    needs: decide
+    if: github.event_name == 'workflow_run' && needs.decide.outputs.rerun == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      # POST rerun-failed-jobs, and GET the run to confirm it is still on its
+      # first attempt. Nothing else.
+      actions: write
+    steps:
+      - name: Re-request the run's failed jobs once
+        id: rerun
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$RUN_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::workflow_run id is not a number"
+            exit 1
+          fi
+          # A person may have re-run it since Decide read it; theirs wins.
+          attempt="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" --jq .run_attempt)"
+          if [[ "$attempt" != 1 ]]; then
+            echo "run $RUN_ID is already on attempt $attempt; not re-requesting"
+            exit 0
+          fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/rerun-failed-jobs"
+          echo "Re-requested the failed jobs of $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$RUN_ID: a lane never started." >> "$GITHUB_STEP_SUMMARY"

@@ -48,7 +48,17 @@ type Activity = {
   start: number | null;
   order: number;
   slot: number;
+  /** One past the last boundary of its own message recorded before it: it may not move above that. */
+  lower: number;
 };
+
+/**
+ * Boundaries per block when searching for the first one an entry precedes.
+ * This runs on every streamed chunk over the whole transcript (VC-1145), so the
+ * search skips a block whose largest clock and ledger position cannot follow
+ * the entry instead of asking every boundary.
+ */
+const BLOCK = 32;
 
 /**
  * One slot's work, in an order that is a function of its entries, not of how
@@ -178,8 +188,12 @@ export function projectWorkWindows(
   const boundaries: Boundary[] = [];
   const activities: Activity[] = [];
   const owned = new Set<string>();
+  // Each message's latest boundary so far: an activity's lower bound is read
+  // here once rather than searched for over every boundary.
+  const lastBoundaryOf = new Map<string, number>();
   let order = 0;
   const boundary = (row: Boundary["row"], messageId: string | null, sequence: number | null) => {
+    if (messageId !== null) lastBoundaryOf.set(messageId, boundaries.length);
     boundaries.push({
       row,
       messageId,
@@ -246,6 +260,7 @@ export function projectWorkWindows(
           positionKey: key,
           order: order++,
           slot: boundaries.length,
+          lower: (lastBoundaryOf.get(message.id) ?? -1) + 1,
           sequence: evidence?.activityFirstOverlaySequence.get(key) ?? null,
           start:
             activity.kind === "tool" ? clock(activityDescriptor(activity.part).startedAt) : null,
@@ -253,6 +268,14 @@ export function projectWorkWindows(
       }
     }
   }
+  // The largest clock and ledger position in each block of boundaries.
+  const blockTime: number[] = [];
+  const blockSequence: number[] = [];
+  boundaries.forEach((item, index) => {
+    const block = Math.floor(index / BLOCK);
+    blockTime[block] = Math.max(blockTime[block] ?? -Infinity, item.time ?? -Infinity);
+    blockSequence[block] = Math.max(blockSequence[block] ?? -Infinity, item.sequence ?? -Infinity);
+  });
   const slots = new Map<number, Activity[]>();
   // Unplaced work (neither a start nor an observed position) keeps its recorded
   // slot, and nothing placed may cross it between slots either: the nearest one
@@ -267,13 +290,7 @@ export function projectWorkWindows(
   for (const [position, entry] of activities.entries()) {
     if (unplaced(entry)) previousUnplacedSlot = entry.slot;
     else {
-      const lower =
-        boundaries.findLastIndex(
-          (item) => item.messageId === entry.messageId && item.order < entry.order,
-        ) + 1;
-      const follows = (item: Boundary, index: number): boolean | null => {
-        // Preserve within-message part order even when its clock is settlement.
-        if (index < lower) return false;
+      const follows = (item: Boundary): boolean | null => {
         // A recorded start is stronger than a delayed reconnect baseline, but
         // equal-millisecond clocks prove no order at all. Resolve their tie
         // with retained ledger evidence, else keep the original placement.
@@ -284,15 +301,35 @@ export function projectWorkWindows(
         if (entry.start !== null && entry.start === item.time) return item.order > entry.order;
         return null;
       };
-      const candidate = boundaries.findIndex((item, index) => follows(item, index) === true);
-      const target = candidate < 0 ? boundaries.length : candidate;
-      const from = Math.min(target, entry.slot);
-      const crossed = boundaries.slice(from, Math.max(target, entry.slot));
-      if (
-        target >= previousUnplacedSlot &&
-        target <= nextUnplacedSlot[position]! &&
-        crossed.every((item, index) => follows(item, from + index) !== null)
-      )
+      // The first boundary it precedes. The search starts below its own
+      // message's last boundary, preserving within-message part order even
+      // when its clock is settlement. A boundary can follow only by a later
+      // (or equal, then ordered) clock or a later ledger position, so a block
+      // whose largest of both cannot is skipped whole.
+      const mayFollow = (block: number): boolean =>
+        (entry.start !== null && blockTime[block]! >= entry.start) ||
+        (entry.sequence !== null && blockSequence[block]! > entry.sequence);
+      let target = boundaries.length;
+      for (let index = entry.lower; index < boundaries.length; index += 1) {
+        if (index % BLOCK === 0 && !mayFollow(index / BLOCK)) index += BLOCK - 1;
+        else if (follows(boundaries[index]!) === true) {
+          target = index;
+          break;
+        }
+      }
+      // Every boundary it would cross must be ordered against it. Neither end
+      // is above `lower`: the target is searched from there and the recorded
+      // slot is past its own message's boundaries.
+      const crosses = (): boolean => {
+        for (
+          let index = Math.min(target, entry.slot);
+          index < Math.max(target, entry.slot);
+          index += 1
+        )
+          if (follows(boundaries[index]!) === null) return false;
+        return true;
+      };
+      if (target >= previousUnplacedSlot && target <= nextUnplacedSlot[position]! && crosses())
         entry.slot = target;
     }
     const group = slots.get(entry.slot);

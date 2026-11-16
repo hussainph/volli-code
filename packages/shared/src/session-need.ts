@@ -66,6 +66,7 @@ import {
   type SessionProjection,
 } from "./session-ledger";
 import { NO_SESSION_NOTIFICATION_ITEM, type SessionNotificationItem } from "./notification-catalog";
+import { sessionStopCause } from "./session-stop";
 
 /**
  * The Attention kinds that mean the Session's own plumbing failed — VC-112's
@@ -263,4 +264,44 @@ export function sessionNotificationItem(projection: {
   return asking && primary !== null
     ? { interactionId: null, attentionId: primary.id }
     : NO_SESSION_NOTIFICATION_ITEM;
+}
+
+/** A Session stopped because its provider sign-in must be redone. */
+export interface ProviderSignInStop {
+  /** The provider of the Session's model: the credential every stop shares. */
+  providerId: string;
+  /** The Attention that reports it, which a notification click lands on. */
+  attentionId: string;
+}
+
+/**
+ * Whether this Session stands stopped on its provider's sign-in, and on which
+ * provider (VC-1236).
+ *
+ * Read from structured facts only: an active `auth_required` Attention whose
+ * stop detail's cause is a sign-in (`sessionStopCause`). The provider is the
+ * one that failed — the model in force when the Attention was raised
+ * (`attentionProviders`) — not the model the Session was switched to since;
+ * only a projection an older build folded falls back to the current model.
+ * Every Session on one provider shares one credential, so this is what lets
+ * the host tell a person once, for the provider. A Session stopped by a
+ * person, an archived one, or one with no provider to name answers `null`.
+ */
+export function providerSignInStop(
+  projection: Pick<
+    SessionProjection,
+    "attention" | "attentionProviders" | "modelSelection" | "stopped" | "status"
+  >,
+): ProviderSignInStop | null {
+  if (projection.stopped != null || projection.status === "archived") return null;
+  const attention = projection.attention.active.find(
+    (candidate) =>
+      candidate.kind === "auth_required" &&
+      candidate.stopDetail !== undefined &&
+      sessionStopCause(candidate.stopDetail) === "sign-in",
+  );
+  if (attention === undefined) return null;
+  const providerId =
+    projection.attentionProviders?.[attention.id] ?? projection.modelSelection?.providerId;
+  return providerId === undefined ? null : { providerId, attentionId: attention.id };
 }

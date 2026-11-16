@@ -1,5 +1,6 @@
 /** One bounded background decode, using the host's shipped worker entry. */
 import { Worker } from "node:worker_threads";
+import { declareStatelessWorker } from "./stateless-worker";
 
 const MAX_INPUT_BYTES = 256 * 1024;
 const MAX_OUTPUT_BYTES = 64 * 1024;
@@ -35,6 +36,8 @@ export function createWorkerSourceIconDecoder(entry: string | URL): SourceIconDe
     let worker: Worker;
     try {
       worker = new Worker(entry);
+      // Decodes bytes in memory and writes nothing: a quit may end the process under it (VC-1208).
+      declareStatelessWorker(worker);
     } catch {
       return null;
     }

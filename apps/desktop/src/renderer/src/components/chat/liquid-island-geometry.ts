@@ -106,3 +106,31 @@ export function liquidIslandGeometry(s: LiquidGeometry) {
     clusterOpacity: clamp(cluster * 2 - 1, 0, 1),
   };
 }
+
+/**
+ * How far the bead rises above the island's 32px layout box, for the neighbour
+ * that must stay clear of it (VC-1210). Layout only sees the box; the bead on
+ * the rim is drawn above it, into the band the jump-to-latest button keeps.
+ *
+ * Arrival and departure only, never the wobble: a caption change kicks
+ * `squash` and `stretch`, and a swallow kicks `gulp`, and following those would
+ * bob the button and its transcript band a few pixels on every caption while
+ * the reader is scrolled up. So the rise is taken from the resting bead at the
+ * same presence and cluster. The one stretch kept is a pinching exit's syrup
+ * thread, a departure that lifts the bead well past its rest. A wobble may
+ * close a few pixels of the button's 12px band; it cannot close all of it.
+ *
+ * Below a quarter presence the rise eases to nothing, so the last of a
+ * draining bead does not drop the button in one step; the band is wider than
+ * the bead's rise at that presence, so the two still never meet.
+ */
+export function liquidIslandRise(s: LiquidGeometry, departing: boolean, hidden: boolean): number {
+  if (hidden) return 0;
+  const rest = liquidIslandGeometry({
+    ...s,
+    squash: 0,
+    gulp: 0,
+    stretch: departing ? s.stretch : 0,
+  });
+  return Math.max(0, -rest.top) * clamp(s.presence * 4, 0, 1);
+}

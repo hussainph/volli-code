@@ -29,6 +29,8 @@ import { promises as fs } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
+import { quitEndedByApp } from "../../lib/smoke-kit.mjs";
+
 import { exactOrigin } from "../../../src/main/deployment-config.ts";
 
 const exec = promisify(execFile);
@@ -238,6 +240,17 @@ export function observedChildExit(child, expectedPid) {
  * no failed close step. A bounded close that had to terminate or kill it is
  * not a clean quit, whatever the leftovers say.
  */
+/**
+ * A quit the app ended itself with SIGKILL: an immediate exit because only
+ * read-only workers were left (VC-1208), or its exit watch ending a native
+ * teardown that outlived the exit call by 5 s (VC-652). Clean when the
+ * bounded close sent no signal and the app's own log, written since the quit
+ * began, says it made that exit (`quitEndedByApp`).
+ */
+export function immediateQuit(close, logSinceQuit, { userDataDir } = {}) {
+  return close?.exit?.signal === "SIGKILL" && quitEndedByApp(close, logSinceQuit, { userDataDir });
+}
+
 export function cleanQuitProblems(close) {
   if (!close) return ["no close record"];
   const problems = [];

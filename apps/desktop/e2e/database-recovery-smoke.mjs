@@ -22,6 +22,7 @@ import {
   APP_DIR,
   REPO,
   assertBuiltRendererLoaded,
+  firstAppWindow,
   assertProfileIsolated,
   closeAppBounded,
   createDeadline,
@@ -141,7 +142,7 @@ async function openApp(config, label) {
     await bounded(`${label}: isolated HOME`, () => app.evaluate(() => process.env.HOME)),
     config.extraEnv.HOME,
   );
-  const page = await app.firstWindow({ timeout: 15000 });
+  const page = await firstAppWindow(app, { timeout: 15000 });
   run.page = page;
   page.setDefaultTimeout(5000);
   await page.waitForLoadState("domcontentloaded", { timeout: 15000 });

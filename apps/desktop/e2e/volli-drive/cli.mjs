@@ -40,6 +40,7 @@ import {
   supervisorEnv,
 } from "./lib/core.mjs";
 import { request } from "./lib/protocol.mjs";
+import { seedDatabaseProblems } from "./lib/seed-database.mjs";
 import { readDeployment } from "./lib/deployment.mjs";
 import { assertAcceptanceRunner, acceptanceTarballs } from "./lib/remote-acceptance.mjs";
 import {
@@ -55,6 +56,9 @@ const HELP = `volli-drive — drive an isolated, keychain-free live Volli build
 
   launch [--fixture basic|empty|move|empty-pane-left|empty-pane-right] [--model fake|env] [--idle-min 20]
          [--reduced-motion]       emulate browser prefers-reduced-motion: reduce
+         [--database /abs/file.db] start on a clone of a closed database (a
+                                   safety copy), to replay its schema upgrade;
+                                   the upgrade window is captured as evidence
          [--fake-script file.json] deterministic fake-provider reply sequence
          [--fake-tool-free-text t] tool-free requests (auto-title) answer t while
                                    a script runs, instead of the echo; needs --fake-script
@@ -81,6 +85,11 @@ const HELP = `volli-drive — drive an isolated, keychain-free live Volli build
   restore-restart <id> --gen N --ref eN
                                    click Restart and restore; supervise its local relaunch
   restart <id>                     supervised cloud restart on the same isolated profile
+  relaunch <id>                    quit a local instance and launch it again on the same
+                                   profile and database (a routine relaunch)
+  quit-during-launch <id> --work check|upgrade [--database /abs/older.db] [--second-launch]
+                                   relaunch, quit on the database page, time the exit,
+                                   then launch again normally (VC-1208)
   list [--json]                    instances on this machine (max 3 live)
   doctor [<id>] [--json]           no id: is the build about to launch guarded? (static)
                                    with id: up? right build? guard active? isolated?
@@ -89,9 +98,12 @@ const HELP = `volli-drive — drive an isolated, keychain-free live Volli build
   find <id> <text> [--window w]    fresh snapshot, only matching nodes (+ ancestors)
   act <id> --gen N --kind click|type|press|select|hover|scroll|wait
           [--ref eN] [--text t] [--key Enter] [--direction up|down] [--wait-ms n]
+          [--record-ms n]          also keep the window's screencast frames until n ms after
           [--find text]            one synthetic action, then a fresh snapshot
   wait <id> --text t [--gone] [--timeout ms] [--find text]
   screenshot <id> [--name label] [--window w]
+  ui-zoom <id> in|out|reset [--window w]
+                                   the View menu's UI zoom command, sent to one window
   windows <id>
   settings-native <id> [--action state|watch|menu|close|frame] [--bounds JSON]
                                    native Settings boundary; never activates a quiet window
@@ -200,6 +212,12 @@ async function launch(flags) {
   if (flags.reducedMotion !== undefined && flags.reducedMotion !== true)
     fail("--reduced-motion is a boolean flag; omit it to use the system preference");
   const deployment = await readDeployment(flags, REPO);
+  let database;
+  if (flags.database !== undefined) {
+    database = String(flags.database);
+    const problems = await seedDatabaseProblems(database);
+    if (problems.length > 0) fail(problems.join("; "));
+  }
   const fixture = flags.fixture ?? "basic";
   const model = flags.model ?? "fake";
   const build = flags.build ?? "dev";
@@ -289,6 +307,7 @@ async function launch(flags) {
     build,
     appBinary: null,
     reducedMotion: flags.reducedMotion === true,
+    ...(database === undefined ? {} : { database }),
     remoteAcceptance,
     ...(fakeScript === undefined ? {} : { fakeScript }),
     ...(fakeToolFreeText === undefined ? {} : { fakeToolFreeText }),
@@ -658,12 +677,14 @@ async function main() {
         key: flags.key,
         direction: flags.direction,
         waitMs: flags.waitMs,
+        recordMs: flags.recordMs,
         window: flags.window,
       });
       const a = result.action;
       out(
         `acted: ${a.kind}${a.ref ? ` ${a.ref}` : ""}${a.key ? ` ${a.key}` : ""}${a.text !== undefined ? ` "${a.text}"` : ""} (${a.ms}ms)`,
       );
+      if (result.frames) out(`frames: ${result.frames.count} in ${result.frames.dir}`);
       printSnapshot(result.snapshot, flags.find);
       break;
     }
@@ -690,6 +711,11 @@ async function main() {
       out(result.path);
       break;
     }
+    case "ui-zoom": {
+      const result = await call(id, "ui-zoom", { step: rest[0], window: flags.window });
+      out(`${result.window}: zoom ${result.scale}`);
+      break;
+    }
     case "sign-in-url":
       out(await call(id, "sign-in-url"));
       break;
@@ -701,6 +727,25 @@ async function main() {
       break;
     case "restart":
       out(JSON.stringify(await call(id, "restart", {}, 120_000)));
+      break;
+    case "relaunch":
+      out(JSON.stringify(await call(id, "relaunch", {}, 300_000)));
+      break;
+    case "quit-during-launch":
+      out(
+        JSON.stringify(
+          await call(
+            id,
+            "quit-during-launch",
+            {
+              work: flags.work,
+              ...(flags.database === undefined ? {} : { database: String(flags.database) }),
+              secondLaunch: flags.secondLaunch === true,
+            },
+            3_600_000,
+          ),
+        ),
+      );
       break;
     case "windows":
       for (const w of await call(id, "windows")) out(`${w.name}  "${w.title}"  ${w.url}`);

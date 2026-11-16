@@ -2,7 +2,12 @@ import { existsSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import type { SessionLocation, SessionLocationResolver } from "@volli/session-engine";
-import { displayTicketId, LOCAL_RUNNER, type Session } from "@volli/shared";
+import {
+  displayTicketId,
+  LOCAL_RUNNER,
+  WORKTREE_PREPARATION_FAILED,
+  type Session,
+} from "@volli/shared";
 import {
   normalizeGitRemoteUrl,
   type CheckoutMode,
@@ -392,7 +397,7 @@ export function createCloudSessionLocationResolver(options: CloudSessionLocation
         };
         const result = await ensureExplicit(ensurePorts, input);
         if (!result.ok)
-          throw new Error(`Couldn't prepare the worktree at ${directory} — ${result.error}`);
+          throw new Error(`${WORKTREE_PREPARATION_FAILED} at ${directory} — ${result.error}`);
         baseBranch = result.value.identity.baseBranch;
         registry.workingCopies.register({
           ticketId: ticket.id,

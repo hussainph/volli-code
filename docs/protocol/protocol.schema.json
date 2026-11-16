@@ -25248,6 +25248,15 @@
                   ],
                   "type": "object"
                 },
+                "attentionProviders": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
                 "bornTicketless": {
                   "type": "boolean"
                 },
@@ -31084,6 +31093,15 @@
                     "active",
                     "primary"
                   ],
+                  "type": "object"
+                },
+                "attentionProviders": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
                   "type": "object"
                 },
                 "bornTicketless": {

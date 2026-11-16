@@ -43,6 +43,10 @@ export {
   deriveLabelInk,
   focusRing,
   readingBackings,
+  deriveSettingsTokens,
+  SETTINGS_ACCENT_CANVAS,
+  SETTINGS_CANVAS,
+  settingsWindowBackground,
   tintCanvasNeutral,
   windowBackground,
 } from "./derive";

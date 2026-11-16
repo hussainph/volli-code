@@ -292,5 +292,9 @@ export function useIslandAgents(
     [api, flash, labelOf, openSession, peekSession, projectId],
   );
 
-  return React.useMemo(() => ({ model: { agents }, actions }), [agents, actions]);
+  // The model keeps its identity while the agents do, whatever the verbs do: a
+  // mount that hands a fresh callback each render (the peek's `onOpenSession`)
+  // must not make the island read as new content (VC-1215).
+  const model = React.useMemo(() => ({ agents }), [agents]);
+  return React.useMemo(() => ({ model, actions }), [model, actions]);
 }

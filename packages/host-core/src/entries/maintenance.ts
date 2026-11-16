@@ -39,12 +39,22 @@ export {
 } from "../quiet-windows";
 export { getRetentionWatcher, type RetentionReclaimSeams } from "../retention-runtime";
 export { settleShutdownBeforeDeadline } from "../shutdown-deadline";
+export {
+  endReadOnlyWorkers,
+  liveWorkerCount,
+  onWorkerStarted,
+  quitExitDecision,
+  settleLiveWorkers,
+  watchLiveWorkers,
+} from "../process/live-workers";
 
 export { serveAutomaticBackupWorker } from "../backup/automatic-worker";
 export { withProfileMaintenance } from "../backup/profile-maintenance";
 
 export { ProfileRestoreService } from "../backup/restore-service";
 export { runRestoreWorker, serveRestoreWorker } from "../backup/restore-worker";
+export { databaseStartupWork, ROUTINE_CHECK_OFF_MAIN_BYTES } from "../db/database-file";
+export { runDatabaseUpgradeWorker, serveDatabaseUpgradeWorker } from "../db/database-upgrade";
 export {
   hasScheduledBackupRestore,
   hasInterruptedBackupRestore,

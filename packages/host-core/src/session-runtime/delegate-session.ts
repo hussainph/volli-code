@@ -159,6 +159,7 @@ import {
   readSessionAnswer,
 } from "@volli/session-engine";
 
+import { attachRefusal, attachStopped } from "./attach-refusal";
 import type { DelegationRef } from "./delegation-policy";
 import { deliverHostNotice, errorText } from "./host-notice-delivery";
 import type { NoticeDelivery } from "./host-notice-delivery";
@@ -234,6 +235,19 @@ export type DelegateSessionOutcome = {
   | {
       /** The attach failed, so no task was sent. */
       state: "needs-recovery";
+      /**
+       * Why the attach was not ready, in words (VC-780), as `session_start`
+       * carries it since VC-659: a worktree that cannot be prepared names its
+       * path and branches, so the parent can act on it rather than read a
+       * bare "needs recovery".
+       */
+      attachFailure: string;
+      /**
+       * A stop reached the child before it finished starting (VC-1072): an
+       * outcome someone asked for, worded as that. Absent for every attach
+       * that failed on its own.
+       */
+      stopped?: true;
       /**
        * Whether the task waits in the child's queue for its next ready attach
        * (VC-799); its notice then arrives under the delegation's own ids once
@@ -724,6 +738,8 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
           title,
           model: started.model,
           state: "needs-recovery",
+          attachFailure: attachRefusal(started.receipt),
+          ...(attachStopped(started.receipt) ? { stopped: true as const } : {}),
           taskHeld,
         };
       }

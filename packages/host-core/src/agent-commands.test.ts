@@ -52,6 +52,7 @@ import {
 } from "./db/tickets-repo";
 import { listTicketEvents, recordTicketEvent } from "./db/events-repo";
 import { openTestDb, testProject, testSession, testTicket } from "./db/test-helpers";
+import { withTransaction } from "./db/transaction-gate";
 import type { TestDb } from "./db/test-helpers";
 import {
   CHAT_PEEK_ENTRIES,
@@ -6389,20 +6390,27 @@ describe("agent command service", () => {
       }),
     );
     const statuses = ["backlog", "todo", "doing", "needs_review"] as const;
-    for (let number = 1; number <= done + active; number += 1) {
-      insertTicket(
-        ctx.db,
-        testTicket("project-one", {
-          id: `ticket-${number}`,
-          ticketNumber: number,
-          status: number <= done ? "done" : statuses[number % statuses.length]!,
-          order: number,
-          worktreePath: `/wt/VC-${number}`,
-          branch: `volli/VC-${number}-work`,
-          baseBranch: "main",
-        }),
-      );
-    }
+    // One commit, not one per ticket (VC-1205): the temp-file fixture runs a
+    // rollback journal at synchronous=FULL, so hundreds of autocommit inserts
+    // are hundreds of journal fsyncs, which a busy CI disk stretched past the
+    // 5 s test budget. The rows the scan reads are identical.
+    const db = ctx.db;
+    withTransaction(db, () => {
+      for (let number = 1; number <= done + active; number += 1) {
+        insertTicket(
+          db,
+          testTicket("project-one", {
+            id: `ticket-${number}`,
+            ticketNumber: number,
+            status: number <= done ? "done" : statuses[number % statuses.length]!,
+            order: number,
+            worktreePath: `/wt/VC-${number}`,
+            branch: `volli/VC-${number}-work`,
+            baseBranch: "main",
+          }),
+        );
+      }
+    });
     return scriptedReadOnlyGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
       if (args[0] === "merge-base") return "base-sha\n";

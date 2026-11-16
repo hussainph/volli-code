@@ -19,6 +19,7 @@ import { BrowserChrome } from "@renderer/components/browser/browser-chrome";
 import { BrowserPlaneController } from "@renderer/components/browser/browser-plane";
 import {
   hasNativePlaneOverlay,
+  ignoredByNativePlane,
   nativePlaneOverlayCandidates,
   planeVisibility,
   shouldPaintPlanePixels,
@@ -151,7 +152,18 @@ function useRendererOverlayActive(
     ];
     read();
     const resizeSettled = onPaneResizeSettled(schedule);
-    const observer = new MutationObserver(schedule);
+    // A scroll thumb's writes (a transform every scroll frame) are not a
+    // surface opening: they never wake this check.
+    const observer = new MutationObserver((records) => {
+      for (const record of records) {
+        if (record.type === "childList") {
+          const nodes = [...record.addedNodes, ...record.removedNodes];
+          if (nodes.length === 0 || !nodes.every(ignoredByNativePlane)) return schedule();
+        } else if (!ignoredByNativePlane(record.target)) {
+          return schedule();
+        }
+      }
+    });
     observer.observe(document.body, { attributes: true, childList: true, subtree: true });
     const resize = new ResizeObserver(schedule);
     resize.observe(anchor);

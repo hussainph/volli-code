@@ -1599,6 +1599,15 @@ export interface SessionProjection {
   readonly attachments: readonly SessionAttachmentProjection[];
   readonly liveExecutor: SessionAttachmentProjection | null;
   readonly attention: SessionAttentionProjection;
+  /**
+   * For each active Attention, the provider of the model in force when it was
+   * raised (VC-1236), read off this Session's own `model.selected` history.
+   * A stop belongs to the provider that failed, not to whatever model the
+   * Session was switched to afterwards. Derived, never written: absent on a
+   * checkpoint an older build folded, and missing for an Attention raised
+   * before any model was selected.
+   */
+  readonly attentionProviders?: Readonly<Record<string, string>>;
   readonly interactions: SessionInteractionProjection;
   /** Latest explicit generic outcome signal, independent of planner history. */
   readonly signal: {
@@ -1920,6 +1929,9 @@ function foldSessionProjection(
   const attention = new Map<string, SessionAttention>(
     base?.attention.active.map((item) => [item.id, item]) ?? [],
   );
+  const attentionProviders = new Map<string, string>(
+    Object.entries(base?.attentionProviders ?? {}),
+  );
   const interactions = new Map<string, SessionInteraction>(
     base?.interactions.active.map((interaction) => [interaction.id, interaction]) ?? [],
   );
@@ -2146,9 +2158,12 @@ function foldSessionProjection(
       case "attention.raised":
         attention.delete(event.payload.attention.id);
         attention.set(event.payload.attention.id, event.payload.attention);
+        if (modelSelection === null) attentionProviders.delete(event.payload.attention.id);
+        else attentionProviders.set(event.payload.attention.id, modelSelection.providerId);
         break;
       case "attention.cleared":
         attention.delete(event.payload.attentionId);
+        attentionProviders.delete(event.payload.attentionId);
         break;
       case "interaction.opened":
         interactions.delete(event.payload.interaction.id);
@@ -2297,6 +2312,7 @@ function foldSessionProjection(
       active: activeAttention,
       primary: activeAttention.at(-1) ?? null,
     },
+    ...attentionProvidersOf(activeAttention, attentionProviders),
     interactions: { active: [...interactions.values()], resolved: resolvedInteractions },
     signal,
     stopped,
@@ -2343,6 +2359,18 @@ function foldSessionProjection(
     })),
     ...(baselineComplete ? { baselineComplete: true as const } : {}),
   };
+}
+
+/** Present only when some active Attention has a provider, so most projections are unchanged. */
+function attentionProvidersOf(
+  active: readonly SessionAttention[],
+  providers: ReadonlyMap<string, string>,
+): Pick<SessionProjection, "attentionProviders"> {
+  const entries = active.flatMap((item) => {
+    const providerId = providers.get(item.id);
+    return providerId === undefined ? [] : [[item.id, providerId] as const];
+  });
+  return entries.length === 0 ? {} : { attentionProviders: Object.fromEntries(entries) };
 }
 
 export function sameSessionCommand(left: SessionCommand, right: SessionCommand): boolean {

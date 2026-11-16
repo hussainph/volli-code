@@ -1994,6 +1994,8 @@ function schemaOf(verb: VerbToolKey): VerbResultDetailsSchema {
 
 describe("verb result details match the registry (VC-471)", () => {
   const CHILD = "cccccccc-0000-0000-0000-000000000000";
+  const DELEGATE_ATTACH_FAILURE =
+    "Couldn't prepare the worktree at /repo/wt — A worktree already exists at /repo/wt on branch volli/VC-2-other; this ticket's branch is volli/VC-1-auth.";
   const WATCHED = "dddddddd-0000-0000-0000-000000000000";
 
   /**
@@ -2003,7 +2005,7 @@ describe("verb result details match the registry (VC-471)", () => {
    */
   function fanOutDoor(
     state: "ready" | "needs-recovery" = "ready",
-    options: { holds?: boolean; watches?: Watches } = {},
+    options: { holds?: boolean; watches?: Watches; stopped?: true } = {},
   ) {
     ctx = openTestDb();
     insertProject(
@@ -2078,7 +2080,12 @@ describe("verb result details match the registry (VC-471)", () => {
           model,
           ...(state === "ready"
             ? { state: "running" as const }
-            : { state: "needs-recovery" as const, taskHeld: options.holds !== false }),
+            : {
+                state: "needs-recovery" as const,
+                attachFailure: DELEGATE_ATTACH_FAILURE,
+                ...(options.stopped === undefined ? {} : { stopped: options.stopped }),
+                taskHeld: options.holds !== false,
+              }),
         }),
         liveChildren: () => [],
         recover: async () => ({ answered: 0, reported: 0, skipped: 0 }),
@@ -2172,7 +2179,36 @@ describe("verb result details match the registry (VC-471)", () => {
     expect(watches.sessions).toEqual([]);
 
     const delegated = await call("session.delegate", { task: "Find the token refresh" });
-    expect(delegated.text).toContain("nothing was sent, and no notice will arrive");
+    expect(delegated.text).toContain(
+      `its attachment failed, so the task was not sent: ${DELEGATE_ATTACH_FAILURE}`,
+    );
+    expect(delegated.text).toContain("so no notice will arrive");
+  });
+
+  it("hands a delegating caller the attach's own diagnosis, never a bare 'needs recovery' (VC-780)", async () => {
+    const delegated = await fanOutDoor("needs-recovery")("session.delegate", {
+      task: "Review the diff",
+    });
+
+    // The registry's shape is unchanged: the state is still `needs-recovery`.
+    expect(delegated.details).toMatchObject({ handle: CHILD.slice(0, 8), state: "needs-recovery" });
+    expect(delegated.text).toContain(
+      `It was created but its attachment failed, so the task is held as its first message: ${DELEGATE_ATTACH_FAILURE}`,
+    );
+    expect(delegated.text).toContain("a person can retry it from the app");
+    expect(delegated.text).not.toContain("needs recovery");
+  });
+
+  it("words a delegation stopped before it started as the stop it was (VC-780)", async () => {
+    const delegated = await fanOutDoor("needs-recovery", { stopped: true })("session.delegate", {
+      task: "Review the diff",
+    });
+
+    expect(delegated.details).toMatchObject({ state: "needs-recovery" });
+    expect(delegated.text).toContain("It was stopped before it finished starting");
+    expect(delegated.text).toContain("the task is held as its first message");
+    expect(delegated.text).not.toContain("failed");
+    expect(delegated.text).not.toContain("needs recovery");
   });
 
   it("sends no details with a refusal, so a program can tell the two apart", async () => {

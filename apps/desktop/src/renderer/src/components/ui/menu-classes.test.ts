@@ -61,13 +61,21 @@ describe("destination-result row composition", () => {
 });
 
 describe("overlay hierarchy", () => {
-  it("names menu and composer provider groups with sentence-case heading type", () => {
-    expect(MENU_LABEL).toContain("text-ui");
-    expect(MENU_LABEL_CMDK).toContain("[&_[cmdk-group-heading]]:text-ui");
+  it("sets group headers apart from rows: smaller rung, secondary ink, sentence case", () => {
+    // VC-1212: a header on the row's own rung in body ink read as one more row.
+    expect(MENU_LABEL.split(" ")).toEqual(
+      expect.arrayContaining(["text-label", "text-muted-foreground", "tracking-normal"]),
+    );
+    expect(MENU_LABEL.split(" ")).not.toContain("text-ui");
+    expect(MENU_LABEL.split(" ")).not.toContain("text-foreground");
+    expect(MENU_ROW).toContain("text-ui");
+    // The cmdk spelling is the same recipe, reached through its heading selector.
+    for (const token of MENU_LABEL.split(" ").filter((part) => !/^p[lrxy]?-/.test(part))) {
+      expect(MENU_LABEL_CMDK).toContain(`[&_[cmdk-group-heading]]:${token}`);
+    }
     for (const recipe of [MENU_LABEL, MENU_LABEL_CMDK]) {
       expect(recipe).not.toContain("uppercase");
-      expect(recipe).not.toContain("tracking-");
-      expect(recipe).not.toContain("text-label");
+      expect(recipe).not.toContain("tracking-wide");
     }
   });
   it("insets native dividers and shows unboxed, non-shrinking key equivalents", () => {

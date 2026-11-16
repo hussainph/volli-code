@@ -31,6 +31,7 @@ import {
   APP_DIR,
   REPO,
   assertBuiltRendererLoaded,
+  firstAppWindow,
   assertProfileIsolated,
   closeAppBounded,
   createDeadline,
@@ -149,7 +150,7 @@ async function openApp(config, label) {
   await bounded(`${label}: profile isolation`, () =>
     assertProfileIsolated(app, config.userDataDir),
   );
-  const page = await app.firstWindow({ timeout: 15000 });
+  const page = await firstAppWindow(app, { timeout: 15000 });
   run.page = page;
   page.setDefaultTimeout(8000);
   await page.waitForLoadState("domcontentloaded", { timeout: 15000 });

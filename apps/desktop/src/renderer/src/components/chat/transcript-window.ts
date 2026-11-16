@@ -35,9 +35,29 @@ export const TRANSCRIPT_TAIL_ROWS = 60;
 /** Rows one "Show earlier" reveals. A page, not the whole history. */
 export const TRANSCRIPT_PAGE_ROWS = 40;
 
+/**
+ * Rows inside the window that are not mounted yet, `[start, end)` (VC-1226).
+ *
+ * A far jump lands on its message without mounting everything between it and
+ * the rows that were already mounted below. Those rows wait here and are
+ * filled in behind the reader a step at a time. The rows from `end` on stay
+ * mounted throughout, so the last row in the document is always the last row
+ * of the conversation. Being at the bottom therefore means the same thing it
+ * always did, for the scroller, its "Scroll to latest" button and a reply
+ * being followed, and a row that arrives during the fill lands after it, at
+ * the true end.
+ */
+export interface HeldRows {
+  readonly start: number;
+  readonly end: number;
+}
+
 /** Which rows the transcript mounts, and what is still above them. */
 export interface TranscriptWindow {
-  /** First mounted row. The window runs from here to the end of the rows. */
+  /**
+   * First mounted row. The window runs from here to the end of the rows, less
+   * any rows still {@link held}.
+   */
   readonly start: number;
   /** How many rows sit above the window, unmounted. Zero means all of it. */
   readonly earlier: number;
@@ -48,6 +68,8 @@ export interface TranscriptWindow {
    * that was actually drawn at the top edge.
    */
   readonly earlierStart: number;
+  /** Rows inside the window not mounted yet, or `null` when it is whole. */
+  readonly held: HeldRows | null;
 }
 
 /**
@@ -60,17 +82,88 @@ export interface TranscriptWindow {
  *
  * An anchor BELOW the tail start is clamped to the tail: revealing a page near
  * the end must never mount fewer rows than the plane shows at rest.
+ *
+ * `held` is the caller's rows still waiting after a jump, resolved from row
+ * keys like the anchor. It applies only inside an anchored window, and only
+ * while it lies wholly below the window's first row and above the last row:
+ * anything else (the tail with no anchor, a retired key, a range that closed)
+ * mounts the window whole. Mounting too much costs time. Mounting too little
+ * would hide rows.
  */
 export function transcriptWindow(
   rowCount: number,
   anchor: number,
   tail: number = TRANSCRIPT_TAIL_ROWS,
   page: number = TRANSCRIPT_PAGE_ROWS,
+  held: HeldRows | null = null,
 ): TranscriptWindow {
   const tailStart = Math.max(0, rowCount - tail);
   const start = anchor < 0 ? tailStart : Math.min(anchor, tailStart);
-  if (start <= 0) return { start: 0, earlier: 0, earlierStart: -1 };
-  return { start, earlier: start, earlierStart: Math.max(0, start - page) };
+  const holding =
+    anchor >= 0 &&
+    held !== null &&
+    start < held.start &&
+    held.start < held.end &&
+    held.end < rowCount
+      ? { start: held.start, end: held.end }
+      : null;
+  if (start === 0) return { start: 0, earlier: 0, earlierStart: -1, held: holding };
+  return { start, earlier: start, earlierStart: Math.max(0, start - page), held: holding };
+}
+
+/* ------------------------------------------------------------- the far jump */
+
+/**
+ * Rows a jump mounts from its message down before the rest fills in. One
+ * page, the size of a "Show earlier" (VC-1226): the same cost a reader
+ * already accepts, and screens more than the message needs to sit at the top.
+ */
+export const TRANSCRIPT_LANDING_ROWS = TRANSCRIPT_PAGE_ROWS;
+
+/** Rows one fill step mounts behind a jump: one page again, for the same reason. */
+export const TRANSCRIPT_FILL_ROWS = TRANSCRIPT_PAGE_ROWS;
+
+/**
+ * The rows to hold back when the window moves its start to `target`, a row
+ * above the window or inside its held rows. Everything already mounted below
+ * the landing stays mounted. Only the rows between the landing and that wait,
+ * so a jump costs {@link TRANSCRIPT_LANDING_ROWS} however far it goes. `null`
+ * when the landing reaches rows already mounted: a near jump mounts the gap
+ * outright, as "Show earlier" would.
+ *
+ * The rows mounted above a hold that the landing does not reach are given
+ * up. Keeping them would leave two holds, and the reader just left them.
+ */
+export function landingHeld(
+  target: number,
+  shown: Pick<TranscriptWindow, "start" | "held">,
+  landing: number = TRANSCRIPT_LANDING_ROWS,
+): HeldRows | null {
+  // The hold runs to the first row of the mounted rows that stay.
+  const end = shown.held === null ? shown.start : shown.held.end;
+  // A landing that runs into the window's first mounted rows keeps them, so
+  // the hold starts no earlier than where they end.
+  const kept = shown.held === null ? shown.start : shown.held.start;
+  const landed = target + landing;
+  const start = landed >= shown.start ? Math.max(landed, kept) : landed;
+  return start < end ? { start, end } : null;
+}
+
+/**
+ * The held rows after one fill step: `null` once the step meets the mounted
+ * rows on its far side. A step fills from the end nearer the reader: from the
+ * top when they are above the hold (where a jump leaves them), from the bottom
+ * when they are below it, so a reader scrolling up out of the tail meets rows
+ * rather than the spacer.
+ */
+export function fillHeld(
+  held: HeldRows,
+  fromEnd: boolean,
+  step: number = TRANSCRIPT_FILL_ROWS,
+): HeldRows | null {
+  const start = fromEnd ? held.start : held.start + step;
+  const end = fromEnd ? held.end - step : held.end;
+  return start < end ? { start, end } : null;
 }
 
 /* ------------------------------------------------------------- the remount */

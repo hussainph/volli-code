@@ -209,6 +209,23 @@ describe("the common diagnostic redaction boundary", () => {
     expect(safe).not.toContain(secret);
   });
 
+  it("ends a stop sentence where its stack trace starts, and never keeps a file URL", () => {
+    expect(
+      safeStopMessage(
+        "token refresh failed. status=400; stack=Error: failed\n    at post (file:///Users/someone/app.js:1:2)",
+      ),
+    ).toBe("token refresh failed. status=400");
+    expect(
+      safeStopMessage("Error: socket closed\n    at TLSSocket.onClose (node:internal/tls:1:2)"),
+    ).toBe("Error: socket closed");
+    expect(safeStopMessage("could not load file:///Users/someone/app.js")).toBe(
+      "could not load [redacted URL]",
+    );
+    expect(localProviderDiagnostic("at post (file:///Users/someone/app.js:1:2)")).toBe(
+      "at post ([redacted URL]",
+    );
+  });
+
   it("keeps the whole envelope for the local diagnostic, credentials still redacted", () => {
     const raw = `400 {"error":{"message":"bad"},"request_id":"req_011CVK9vX3mF7pQwLtRs2ZbN","request":{"password":"dummy-password","api_key": 12345,"messages":[{"role":"user","content":"Bearer dummy-bearer ${STORED_DIAGNOSTIC_SECRET}"}]}}`;
     const local = localProviderDiagnostic(raw, diagnosticCredentialRedaction);

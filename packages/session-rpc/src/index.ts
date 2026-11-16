@@ -1536,6 +1536,7 @@ export function createSessionRouter() {
           rendererSnapshot(
             await ctx.handlers["session.snapshot"](input, ctx.call),
             ctx.operations === undefined || ctx.operations.has("session.cancelQueued"),
+            ctx.operations === undefined,
           ),
         ),
       // Older transcript, a bounded page at a time, for a surface scrolling
@@ -1581,6 +1582,7 @@ export function createSessionRouter() {
           rendererProjection(
             await ctx.handlers["session.projection"](input, ctx.call),
             ctx.operations === undefined || ctx.operations.has("session.cancelQueued"),
+            ctx.operations === undefined,
           ),
         ),
       subscribe: subscription("session.subscribe"),
@@ -1791,6 +1793,7 @@ export type RendererSessionProjection = SessionPresentationProjection &
 function rendererProjection(
   snapshot: SessionRuntimeProjectionSnapshot,
   includeQueue: boolean,
+  includeAttentionProviders: boolean,
 ): {
   projection: RendererSessionProjection;
   throughSequence: number;
@@ -1816,6 +1819,12 @@ function rendererProjection(
       primary:
         source.attention.primary === null ? null : scrubSessionAttention(source.attention.primary),
     };
+  }
+  // Which provider each stop belongs to (VC-1236). Only for a reader built with
+  // this field — this host's own renderer — so a remote peer's strict reader
+  // keeps its frozen shape; without it a stop falls back to the Session's model.
+  if (includeAttentionProviders && source.attentionProviders !== undefined) {
+    projection.attentionProviders = source.attentionProviders;
   }
   if (source.interactions !== undefined) {
     projection.interactions = {
@@ -1877,6 +1886,7 @@ function rendererHistoryPage(page: SessionHistoryPage): RendererSessionHistoryPa
 function rendererSnapshot(
   snapshot: SessionRuntimeSnapshot,
   includeQueue: boolean,
+  includeAttentionProviders: boolean,
 ): {
   projection: RendererSessionProjection;
   throughSequence: number;
@@ -1885,7 +1895,7 @@ function rendererSnapshot(
   latestReply?: SessionLatestReply;
 } {
   return {
-    ...rendererProjection(snapshot, includeQueue),
+    ...rendererProjection(snapshot, includeQueue, includeAttentionProviders),
     frames: snapshot.frames.map(rendererFrame),
     ...(snapshot.before === null ? {} : { before: snapshot.before }),
     ...(snapshot.latestReply === null ? {} : { latestReply: snapshot.latestReply }),

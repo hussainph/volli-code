@@ -29,7 +29,10 @@ function directives(csp: string): Map<string, string> {
 }
 
 describe("renderer CSP", () => {
-  it.each(["index.html", "cursor.html"])("%s forbids every form submission", (page: string) => {
-    expect(directives(cspOf(page)).get("form-action")).toBe("'none'");
-  });
+  it.each(["index.html", "cursor.html", "updating.html"])(
+    "%s forbids every form submission",
+    (page: string) => {
+      expect(directives(cspOf(page)).get("form-action")).toBe("'none'");
+    },
+  );
 });

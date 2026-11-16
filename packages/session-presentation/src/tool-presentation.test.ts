@@ -435,6 +435,13 @@ it("keeps session acceptance and recorded titles distinct from completion", () =
       sessionIds: new Map([["child", "mapped-id"]]),
     })?.sessionId,
   ).toBe("mapped-id");
+  // No id mapping and no delivery receipt: the recorded id is the Session's own.
+  expect(
+    presentTranscriptTool(call("session_delegate", {}, { details: { sessionId: "child" } }), {
+      sessionNames: context.sessionNames,
+      sessionIds: new Map(),
+    })?.sessionId,
+  ).toBe("child");
   expect(
     presentTranscriptTool(call("session_send", { session: "alias" }, "unknown"), {
       sessionNames: new Map([["alias", "Audit"]]),

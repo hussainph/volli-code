@@ -13,6 +13,7 @@ export {
   MCP_HTTP_MESSAGE_MAX_BYTES,
   MCP_STDIO_BUFFER_MAX_BYTES,
   openMcpProtocolClient,
+  stopMcpServerProcessGroups,
 } from "../mcp/client";
 export { MemoryMcpCredentialStore } from "../mcp/credential-store";
 export { McpCredentialRejectedError, McpProtocolEraError } from "../mcp/credentials";

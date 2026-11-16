@@ -9,6 +9,7 @@ import type { PackUserConfig } from "vite-plus/pack";
 
 import { RENDERER_DEV_PORT } from "./scripts/dev-constants.mjs";
 import DesktopTestSequencer from "./scripts/test-sequencer";
+import { TEST_WORKER_NODE_FLAGS } from "../../vitest.node-flags";
 import { SHARED_MACHINE_TEST_WORKERS } from "../../vitest.workers";
 import { rendererConnectSources, withConnectSources } from "./src/main/renderer-csp";
 import { packagedCloudConfig } from "./src/main/deployment-config";
@@ -188,6 +189,9 @@ export default defineConfig(({ mode, command }) => ({
     // once at the top level rather than per project: the worker pool is global
     // to the invocation, and both projects below draw from it.
     ...SHARED_MACHINE_TEST_WORKERS,
+    // Node 24's Wasm wrapper double free killed forks mid-shard (VC-1209).
+    // `renderer` inherits this; `main` states it again below.
+    ...TEST_WORKER_NODE_FLAGS,
     sequence: { sequencer: DesktopTestSequencer },
     projects: [
       // Inherits root src/renderer, plugins, @renderer alias — existing store
@@ -230,6 +234,7 @@ export default defineConfig(({ mode, command }) => ({
           // (VC-339). Both projects say the same thing; the flag then
           // governs the pool they share.
           ...SHARED_MACHINE_TEST_WORKERS,
+          ...TEST_WORKER_NODE_FLAGS,
         },
       },
     ],
@@ -357,6 +362,13 @@ export default defineConfig(({ mode, command }) => ({
         // a window that walks out from under a reader while the Session
         // streams. Neither is visible in a screenshot of a short transcript.
         "src/components/chat/transcript-window.ts",
+        // The checkpoint rail's rules (VC-1211): which rows are the person's
+        // messages, what a card previews, which exchange the reader is in, and
+        // the list held stable through streamed tokens. A wrong answer is a
+        // mark that jumps to the wrong message, or a rail that redraws per
+        // token; neither shows in a still screenshot.
+        "src/components/chat/message-checkpoints.ts",
+        "src/components/chat/checkpoint-navigator.ts",
         // ⌘K's list-shape decisions (VC-205): which section an @scope narrows
         // to, where it truncates behind "Show all", and the Ticket-priority
         // score wrapped around cmdk's matcher. One shared filter scores both
@@ -585,6 +597,13 @@ export default defineConfig(({ mode, command }) => ({
         // is a pure `.ts` beside `ui/ai-elements/conversation.tsx` so the
         // gate can reach it; the `.tsx` glue that calls it stays outside.
         "src/components/ui/ai-elements/scroll-chaining.ts",
+        // "Scroll to latest" (VC-1232): the trip that must end at the true end
+        // however the content changes on the way. A wrong answer stops short.
+        "src/components/ui/ai-elements/scroll-to-latest.ts",
+        // Following a streaming reply (VC-1234): whether a reader's own scroll
+        // turns it on or off. A wrong answer leaves the reply running below
+        // the fold, or pulls a reader who scrolled up back to the end.
+        "src/components/ui/ai-elements/reader-following.ts",
         "src/lib/boundary-timer.ts",
         // Where a chat-named path opens (VC-120): the raw-tool-path translation
         // both transcript surfaces trust before touching any store or IPC.
@@ -798,6 +817,7 @@ export default defineConfig(({ mode, command }) => ({
         // that walks every branch of it.
         "**/src/main/support-info.ts",
         "**/src/main/quit-gate.ts",
+        "**/src/main/quit-exit.ts",
         // Which product store a launch uses, its marker, and the restart into
         // the other one through the quit gates (VC-889).
         "**/src/main/cloud-launch.ts",
@@ -859,14 +879,17 @@ export default defineConfig(({ mode, command }) => ({
     // Absolute — `outDir` otherwise resolves relative to `root` (src/renderer).
     outDir: fileURLToPath(new URL("./dist", import.meta.url)),
     emptyOutDir: true,
-    // Two pages, one build: the app, and the Session cursor overlay (VC-239)
-    // main places over a Browser Tab. A second ENTRY rather than a second
-    // build so the overlay shares the app's tokens and components by
-    // construction; it is served from the same volli-app://bundle/ root.
+    // Pages of one build: the app, the Session cursor overlay (VC-239)
+    // main places over a Browser Tab, and the schema-upgrade window. Further
+    // ENTRIES rather than further builds so each shares the app's tokens and
+    // components by construction; all are served from the same
+    // volli-app://bundle/ root.
     rollupOptions: {
       input: {
         index: fileURLToPath(new URL("./src/renderer/index.html", import.meta.url)),
         cursor: fileURLToPath(new URL("./src/renderer/cursor.html", import.meta.url)),
+        // The schema-upgrade window (VC-1105), shown while the database is upgraded off main.
+        updating: fileURLToPath(new URL("./src/renderer/updating.html", import.meta.url)),
       },
     },
     // STATIC ASSETS (established with the grain tile; PR 5's curated canvas
@@ -905,6 +928,8 @@ export default defineConfig(({ mode, command }) => ({
         main: "src/main/index.ts",
         "automatic-backup-worker": "src/main/automatic-backup-worker.ts",
         "restore-worker": "src/main/restore-worker.ts",
+        // The schema upgrade (VC-1105): migrations run here, never on main.
+        "database-upgrade-worker": "src/main/database-upgrade-worker.ts",
         "migration-export-worker": "src/main/cloud-move/export-worker.ts",
         // web_fetch's HTML extraction (jsdom → Readability → Turndown), so a
         // large page is parsed off the thread that serves the app.

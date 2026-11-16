@@ -68,6 +68,11 @@ The preload writes synchronous JSONL by PID and thread id, independently of
 Vitest's buffered output:
 
 - `test-start` / `test-finished` identify the test active through teardown.
+- `test-trace` is a failed test's own phase trace, published by suites that keep
+  one (today `crash-recovery.integration.test.ts`, VC-1220): the awaits still
+  pending when it failed, then its newest marks. At most 400 lines of 256
+  characters, strings only; the suite keeps them to step names, bound reads,
+  error names and timings, never messages or payloads.
 - `child-exit` records the child's PID, raw exit code and signal in its surviving
   parent. Match that PID to the child's event file; nearby suite output is not
   attribution. A parent-local `childId` also correlates spawn failures where no
@@ -110,6 +115,102 @@ Nearest preceding symbols and stripped binaries are explicitly not treated as
 cause attribution. A diagnostic failure keeps the job red while still allowing
 the real coverage step to run and report its own result. The pin is specific
 to those retained frames, not a promise that addresses survive a Node update.
+
+**Known cause of the fork exits.** On Node 24 every retained "Worker exited
+unexpectedly" in these lanes has been V8's `Check failed: jit_page.has_value()`
+(SIGTRAP in the child's parent record). Its frames run from
+`Runtime_TierUpWasmToJSWrapper` through `WasmImportWrapperCache::Free` to
+`ThreadIsolation::UnregisterWasmAllocation`. That is nodejs/node#66366: V8 13.6
+can free a shared Wasm import wrapper twice when Wasm code GC races a thread
+that is adding it to its ref scope. The backport, nodejs/node#66376, is in no
+24.x release yet. Desktop and host-core forks therefore run with
+`--no-wasm-code-gc` on Node 24 (`vitest.node-flags.ts`), which removes the race.
+Remove the flag when `.nvmrc` moves to a Node with the backport. Another
+package whose forks abort the same way spreads `TEST_WORKER_NODE_FLAGS` the same
+way. The aborting forks' Wasm was Node's own TypeScript transformer, loaded by
+workers that run `.ts` sources under `--experimental-transform-types`.
+
+**Shipped processes carry the same flag.** The packaged `volli-runner` and
+`volli-hostd` run Node 24 and start one Code Mode worker with a QuickJS Wasm
+instance per program, so their launchers start Node with `--no-wasm-code-gc`
+too. Their boot checks fail without it, both in the launcher and in the
+running process's arguments. The `volli` CLI launcher starts no workers and
+does not get the flag. The desktop app is not affected: Electron's V8 already
+has the fix. `wasm-code-gc-workaround.ts` holds the flag and the reason, and
+both sides use it. Remove it once the packaged Node's V8 contains V8
+9b8ca54d5a.
+
+**Runner health.** Each shard also writes `runner-health.log` into its
+diagnostics artifact (`scripts/ci-runner-health.sh`): every 5 s, the CPU split
+including steal and I/O wait, runnable and blocked tasks, available memory and
+`/proc/pressure` averages. A stall that shows steal, I/O wait or pressure is the
+VM. A stall on an idle machine is the test. A degraded runner also shows before
+any test runs: compare the job's `Checkout` and `Setup Vite+` durations with
+other jobs in the same workflow run.
+
+**Runner disk stalls and the CI test timeout.** GitHub's Linux runners stall
+on disk for a few seconds at a time, several times a week, in green runs as
+well as red ones. In the artifacts a stall is one or two `runner-health.log`
+samples at 50 to 55% `iowait` with `blocked` at 4 to 6 and `io_full` rising
+(it is a 10 s average, so it peaks a sample later), while the rest of the job
+stays at 25% or less. In the `events-*.jsonl` files, tests in every fork of the
+shard run 10 to 60 times slower over the same seconds and recover together. A
+test caught inside a synchronous better-sqlite3 or `fs` call cannot run its
+continuation until the disk answers, so its timeout fires late (5,160 ms on a
+5,000 ms limit) and a test with nothing wrong fails. host-core failed that way
+at 5,010 to 7,023 ms; the longest stalled window seen was about 8 s.
+So `Test (host-core i/2)` runs with a 15 s per-test timeout when `CI` is set
+(`RUNNER_STALL_TEST_TIMEOUT` in `vitest.node-flags.ts`). Locally Vitest keeps
+its 5 s default, so a slow test is still noticed at a desk. A test or file that
+sets its own timeout keeps it. The timeout is for stalls of a few seconds. A test
+that hangs still fails, 15 s in. The desktop shards and `Test (packages)` showed
+no failure of this kind, so they keep 5 s.
+
+When a host-core shard fails, `Summarize timed-out tests against runner
+health` (`scripts/ci-timeout-stall-summary.mjs`) adds a line to the job summary
+for each test that failed on its timeout. The line gives the test's limit, how
+long it ran and when, and whether any runner-health sample over those seconds
+reached 30% `iowait`. It also lists the awaits the test's `test-trace` left
+pending, for suites that keep one. A stall beside a test that ran a few seconds
+past its limit is the runner. A test that ran its whole 15 s with no stall, or
+with a pending await, is the test.
+
+**`abandoned`.** `CI gate` prints this when GitHub never assigned a lane a
+runner. The job has no steps and no log, and its annotations say "The job was
+not acquired by Runner of type hosted even after multiple attempts". GitHub
+gives up after 15 to 35 minutes. This has hit the macOS lane while GitHub
+reported limited macOS arm64 capacity. No step ran, so the result says nothing
+about the commit.
+
+**`CI re-request`** (`ci-rerun-abandoned.yml`) handles it. When a `ci.yml`
+run completes, it re-runs that run's failed jobs once, but only if all of
+these hold:
+
+- the run is attempt 1 and still on attempt 1;
+- it concluded `failure`, not `cancelled`;
+- at least one job never started: `cancelled`, no runner (`runner_id` 0 or
+  empty, empty runner name) and zero steps;
+- every other job that did not pass is `CI gate` and the gate ran;
+- outside push runs, no newer `ci.yml` run exists for the same event, branch
+  and head repository, because a re-run would cancel the newer PR run.
+
+If any other job failed, timed out or was cancelled after it ran, nothing is
+re-requested and the run stays red for a person. The re-run executes the same
+commit and the gate judges every lane again, so it cannot hide a result. It
+applies to PR (fork PRs included), main-push, scheduled and dispatched runs.
+The release guard is unchanged: it still needs a `success` conclusion on the
+shipped commit, and a run that went green on its second attempt has one. If
+the second attempt is not acquired either, the run stays red: re-run it by
+hand, or wait for the next run.
+
+The predicate is `scripts/ci-rerun-abandoned.mjs`, tested against recorded
+run payloads. It reads only GitHub's run and job records, never logs,
+artifacts or code from the run. Its `Decide` job (`actions: read`,
+`contents: read`) checks out that one script from the default branch. A
+separate job holds `actions: write`, runs no repository code and makes the
+re-run call. Dispatching the workflow with a `run_id` reports the decision for
+any past run without re-running it. A `workflow_run` workflow only runs from
+the default branch, so a change to it takes effect only after it merges.
 
 For a focused local capture, set `VOLLI_TEST_DIAGNOSTICS` to an absolute
 workspace-local directory under `.tmp/` and append

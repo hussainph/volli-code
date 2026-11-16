@@ -15,7 +15,10 @@
  * expression, which is why the notice is here. Changed: shared semantic icons,
  * `@renderer/*` imports, the scroll-chaining bridge below, both
  * `StickToBottom` props forced to `instant` where upstream animates, and
- * `ConversationEmptyState` reduced to its shell (no default title or copy).
+ * `ConversationEmptyState` reduced to its shell (no default title or copy),
+ * and `ConversationContent`'s masked viewport, reachable through `viewportRef`,
+ * which `ConversationScrollButton` marks while it is up, and following decided
+ * from the reader's own scrolls (`useReaderFollowing`).
  *
  * Apache-2.0 §4(b) requires a modified file to say so. See `./PROVENANCE.md`.
  */
@@ -24,11 +27,13 @@ import { ArrowDownIcon } from "@renderer/components/ui/icon";
 
 import { Button } from "@renderer/components/ui/button";
 import { cn } from "@renderer/lib/utils";
-import type { ComponentProps, ReactNode } from "react";
+import { prefersReducedMotion } from "@renderer/hooks/use-reduced-motion";
+import type { ComponentProps, MouseEvent, ReactNode, Ref } from "react";
 import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -37,7 +42,23 @@ import {
 import type { StickToBottomContext } from "use-stick-to-bottom";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 
+import { SCROLL_THUMB_GRAB_EVENT } from "@renderer/lib/scroll-thumb/overlay-scrollbars";
+
+import {
+  foldJudgement,
+  followingAfterScroll,
+  followingOnLift,
+  followingSettled,
+  keyHand,
+  placeBefore,
+  scrollPlace,
+  thumbMoved,
+  wheelHand,
+  type PendingJudgement,
+  type ReaderHand,
+} from "./reader-following";
 import { wheelDetachesFollowing } from "./scroll-chaining";
+import { glideToLatest } from "./scroll-to-latest";
 
 /**
  * The render-prop form of `StickToBottom`'s children is deliberately dropped.
@@ -89,6 +110,10 @@ export type ConversationProps = Omit<ComponentProps<typeof StickToBottom>, "chil
  *
  * Reduced motion needs no branch now: there is no motion left to reduce. The
  * prop stays open so the lab can put `smooth` back and re-run the comparison.
+ *
+ * The one scroll that does move is the one a person asks for: "Scroll to
+ * latest" ({@link ConversationScrollButton}), and its motion is not the
+ * library's either.
  */
 export const Conversation = ({ className, resize, children, ...props }: ConversationProps) => {
   // Held by ref, not context, because this handler lives OUTSIDE the provider:
@@ -211,16 +236,20 @@ export const useConversationControl = (): ConversationControl =>
  * The consumers here are every tool row in the transcript.
  */
 function ConversationBridge({ children }: { children: ReactNode }) {
+  const letGo = useReaderFollowing();
   const { stopScroll, scrollRef } = useStickToBottomContext();
-  const latest = useRef({ stopScroll, scrollRef });
+  const latest = useRef({ stopScroll, scrollRef, letGo });
   useLayoutEffect(() => {
-    latest.current = { stopScroll, scrollRef };
+    latest.current = { stopScroll, scrollRef, letGo };
     const scroller = scrollRef.current;
     if (scroller) scroller.dataset.conversationScroller = "";
-  }, [scrollRef, stopScroll]);
+  }, [scrollRef, stopScroll, letGo]);
   const control = useMemo<ConversationControl>(
     () => ({
-      stopFollowing: () => latest.current.stopScroll(),
+      stopFollowing: () => {
+        latest.current.stopScroll();
+        latest.current.letGo();
+      },
       scroller: () => latest.current.scrollRef.current,
     }),
     [],
@@ -232,10 +261,269 @@ function ConversationBridge({ children }: { children: ReactNode }) {
   );
 }
 
-export type ConversationContentProps = ComponentProps<typeof StickToBottom.Content>;
+/**
+ * How long a wheel or key, or a thumb, touch or press just lifted, still counts
+ * as the reader's hand on the transcript, in milliseconds. That covers one
+ * smooth keyboard scroll (about 150ms in Chromium) with room to spare; a held
+ * key's repeats and a trackpad's momentum keep renewing it.
+ */
+const READER_HAND_MS = 500;
 
-export const ConversationContent = ({ className, ...props }: ConversationContentProps) => (
+/** Where a key press types rather than scrolls. */
+const TEXT_ENTRY = "input, textarea, select, [contenteditable]:not([contenteditable='false'])";
+/** Where Space presses a control rather than scrolling. */
+const SPACE_CONTROL = "button, a[href], summary, [role='button'], [role='link']";
+/** How a held hand ends: a thumb's lost capture, a press lifted, a touch ended, or the window losing focus. */
+const LIFT_EVENTS = [
+  "lostpointercapture",
+  "pointerup",
+  "pointercancel",
+  "touchend",
+  "touchcancel",
+  "blur",
+] as const;
+
+/**
+ * Following, decided by the reader's own scrolls; the rule and the reason the
+ * library's version of it does not hold up are in `reader-following.ts`.
+ *
+ * A scroll event releases at once when it moves away from the end under the
+ * reader's hand. Releasing synchronously matters: the library's following
+ * loop writes on the frame's animation callbacks, which run after this event,
+ * and once released it stops instead of pulling the reader back mid-scroll.
+ *
+ * The rest waits one millisecond (`followingSettled`). The library judges the
+ * same event on a one-millisecond timer of its own: it can discard an arrival,
+ * read anchoring as a scroll up and release, or re-attach on a thumb keeping
+ * its place. Timers with equal delays run in the order they were set. The
+ * library's listener was attached when its scroller mounted, before this
+ * effect ran, so this one runs after it and has the last word.
+ *
+ * While following, the scroller opts out of scroll anchoring. Following means
+ * the end is pinned, which anchoring works against: when a turn starts, the
+ * window adds a row at the end and drops one of the same height from the top,
+ * and anchoring would lower `scrollTop` by that row and leave the new reply
+ * below the fold. Released, a reader keeps anchoring's steady view.
+ *
+ * Engaging uses the library's own `scrollToBottom("instant")`, as "Scroll to
+ * latest" does on arrival. It is only called when the library has not already
+ * re-attached by itself, so the move it makes is the one following was about
+ * to make anyway.
+ *
+ * Returns what to call when the transcript lets go of following itself
+ * (`stopFollowing`): for a moment, the writes that come with it (a jump, a
+ * reading place put back) are its, not an arrival.
+ */
+function useReaderFollowing(): () => void {
+  const { scrollRef, contentRef, state, scrollToBottom, stopScroll } = useStickToBottomContext();
+  const latest = useRef({ scrollToBottom, stopScroll });
+  const sync = useRef<() => void>(() => {});
+  const letGo = useRef<() => void>(() => {});
+  useLayoutEffect(() => {
+    latest.current = { scrollToBottom, stopScroll };
+  }, [scrollToBottom, stopScroll]);
+  // Every render: following changes through the library's own state too.
+  useLayoutEffect(() => sync.current());
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    if (scroller === null) return;
+    const view = scroller.ownerDocument.defaultView ?? window;
+    const doc = scroller.ownerDocument;
+    const syncAnchor = () => {
+      const wanted = state.isAtBottom ? "none" : "";
+      if (scroller.style.overflowAnchor !== wanted) scroller.style.overflowAnchor = wanted;
+    };
+    sync.current = syncAnchor;
+    syncAnchor();
+    const follow = () => {
+      if (!state.isAtBottom) void latest.current.scrollToBottom("instant");
+      syncAnchor();
+    };
+    const release = () => {
+      if (state.isAtBottom) latest.current.stopScroll();
+      syncAnchor();
+    };
+
+    let place = scrollPlace(scroller);
+    // A hand held (`Infinity`) or lifted moments ago, and which.
+    let hand: { kind: ReaderHand; until: number } = { kind: "none", until: 0 };
+    const handNow = (): ReaderHand => (performance.now() < hand.until ? hand.kind : "none");
+    const handFor = (kind: ReaderHand, until = performance.now() + READER_HAND_MS) => {
+      // A held thumb or press outranks a wheel or key while it lasts.
+      const held = hand.until === Infinity && (hand.kind === "thumb" || hand.kind === "select");
+      if (held && kind !== hand.kind) return;
+      hand = { kind, until };
+    };
+    // Where the thumb was grabbed, and where the reader last moved it.
+    let grabbed = place;
+    let thumbRest = place;
+    // Whether the last press in the document landed in this transcript: a key
+    // pressed with nothing focused scrolls the scroller pressed last.
+    let pressedHere = false;
+
+    // The judgement waiting for the library's, and the timer that applies it.
+    let waiting: PendingJudgement | null = null;
+    let settleTimer = 0;
+    const settle = () => {
+      const judgement = waiting;
+      waiting = null;
+      if (judgement === null) return;
+      const change = followingSettled({ ...judgement, following: state.isAtBottom });
+      if (change === "follow") follow();
+      else if (change === "release") release();
+      else syncAnchor();
+    };
+
+    // The library marks its own writes with `ignoreScrollToTop` and clears it
+    // in its own listener, so it is read here in the capture phase, which runs
+    // first on the scroller itself.
+    let libraryWrite: number | undefined;
+    const classify = () => {
+      libraryWrite = state.ignoreScrollToTop;
+    };
+    const onScroll = () => {
+      const previous = placeBefore(place, libraryWrite, scroller);
+      place = scrollPlace(scroller);
+      // The library's own write is not the reader's; its scroll event can
+      // arrive a frame late, after a wheel up has already released.
+      if (libraryWrite !== undefined && libraryWrite === scroller.scrollTop) return;
+      const kind = handNow();
+      if (kind === "thumb" && hand.until === Infinity && thumbMoved(previous, place)) {
+        thumbRest = place;
+      }
+      const change = followingAfterScroll(previous, place, kind);
+      const wasFollowing = state.isAtBottom;
+      if (change === "release") release();
+      waiting = foldJudgement(waiting, { change, hand: kind, wasFollowing });
+      view.clearTimeout(settleTimer);
+      settleTimer = view.setTimeout(settle, 1);
+    };
+    // Content that changed size moves the reader's place with it: the next
+    // scroll event is measured from here, and a transcript swapped in place
+    // (another Session in the same plane) starts afresh.
+    const content = contentRef.current;
+    const observer = new ResizeObserver(() => {
+      place = scrollPlace(scroller);
+      syncAnchor();
+    });
+    if (content !== null) observer.observe(content);
+
+    const onWheel = (event: WheelEvent) => {
+      const kind = wheelHand(event.deltaY);
+      if (kind !== "none") handFor(kind);
+      // The library releases on a wheel up in its own listener, before this one.
+      syncAnchor();
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      const target = event.target instanceof view.Element ? event.target : null;
+      // Only a key this transcript takes: pressed inside it, or with nothing
+      // focused after a press in it.
+      const nowhere = target === null || target === doc.body || target === doc.documentElement;
+      if (!(target !== null && scroller.contains(target)) && !(nowhere && pressedHere)) return;
+      const kind = keyHand({
+        key: event.key,
+        shiftKey: event.shiftKey,
+        inTextEntry: target?.closest(TEXT_ENTRY) != null,
+        onControl: target?.closest(SPACE_CONTROL) != null,
+      });
+      if (kind !== "none") handFor(kind);
+    };
+    // A press anywhere: whether it was in this transcript, and if it was, a
+    // pointer held there (a selection, which may auto-scroll).
+    const onPress = (event: PointerEvent) => {
+      const target = event.target instanceof view.Node ? event.target : null;
+      pressedHere = target !== null && scroller.contains(target);
+      if (pressedHere && event.button === 0) handFor("select", Infinity);
+    };
+    // A grab of the scroll thumb: its press never reaches the scroller (the
+    // thumb swallows it), so the thumb says so itself.
+    const onGrab = () => {
+      handFor("thumb", Infinity);
+      grabbed = scrollPlace(scroller);
+      thumbRest = grabbed;
+    };
+    const onTouch = () => handFor("direct", Infinity);
+    // Focus moving into the transcript (Tab from outside it, code calling
+    // `focus()`, assistive technology) scrolls the newly focused element into
+    // view: that scroll is the reader's. Focus on something already in view
+    // scrolls nothing, so a reader following at the end stays there.
+    const onFocus = () => handFor("direct");
+    letGo.current = () => {
+      handFor("app");
+      waiting = null;
+      view.clearTimeout(settleTimer);
+      syncAnchor();
+    };
+    // The thumb swallows its own `pointerup` too, but it holds the pointer
+    // captured for the drag, and every way a drag ends ends that capture.
+    const onLift = (event: Event) => {
+      if (hand.until !== Infinity) return;
+      const kind = hand.kind;
+      // Listening in the capture phase on the window hears every element's
+      // blur: a press in the transcript blurs the composer. Only the window
+      // itself losing focus (a blur whose target is no node) ends a hand.
+      const ends =
+        (event.type === "blur" && !(event.target instanceof view.Node)) ||
+        (kind === "thumb" && event.type === "lostpointercapture") ||
+        (kind === "select" && (event.type === "pointerup" || event.type === "pointercancel")) ||
+        (kind === "direct" && (event.type === "touchend" || event.type === "touchcancel"));
+      if (!ends) return;
+      hand = { kind, until: performance.now() + READER_HAND_MS };
+      if (
+        kind === "thumb" &&
+        followingOnLift(grabbed, thumbRest, scrollPlace(scroller)) === "follow"
+      ) {
+        // The drag's last word: whatever its scroll events left waiting is moot.
+        waiting = null;
+        view.clearTimeout(settleTimer);
+        follow();
+      }
+    };
+
+    scroller.addEventListener("scroll", classify, { capture: true, passive: true });
+    scroller.addEventListener("scroll", onScroll, { passive: true });
+    scroller.addEventListener("wheel", onWheel, { passive: true });
+    scroller.addEventListener(SCROLL_THUMB_GRAB_EVENT, onGrab);
+    scroller.addEventListener("touchstart", onTouch, { passive: true });
+    scroller.addEventListener("focusin", onFocus);
+    view.addEventListener("keydown", onKey);
+    view.addEventListener("pointerdown", onPress, { capture: true, passive: true });
+    for (const name of LIFT_EVENTS) {
+      view.addEventListener(name, onLift, { capture: true, passive: true });
+    }
+    return () => {
+      scroller.removeEventListener("scroll", classify, { capture: true });
+      scroller.removeEventListener("scroll", onScroll);
+      scroller.removeEventListener("wheel", onWheel);
+      scroller.removeEventListener(SCROLL_THUMB_GRAB_EVENT, onGrab);
+      scroller.removeEventListener("touchstart", onTouch);
+      scroller.removeEventListener("focusin", onFocus);
+      view.removeEventListener("keydown", onKey);
+      view.removeEventListener("pointerdown", onPress, { capture: true });
+      for (const name of LIFT_EVENTS) view.removeEventListener(name, onLift, { capture: true });
+      observer.disconnect();
+      view.clearTimeout(settleTimer);
+      sync.current = () => {};
+      letGo.current = () => {};
+      scroller.style.overflowAnchor = "";
+    };
+  }, [scrollRef, contentRef, state]);
+  return useCallback(() => letGo.current(), []);
+}
+
+export type ConversationContentProps = ComponentProps<typeof StickToBottom.Content> & {
+  /** The masked, non-scrolling viewport around the content. */
+  viewportRef?: Ref<HTMLDivElement>;
+};
+
+export const ConversationContent = ({
+  className,
+  viewportRef,
+  ...props
+}: ConversationContentProps) => (
   <div
+    ref={viewportRef}
     data-conversation-viewport=""
     className="h-full overflow-hidden [contain:layout_paint] isolate"
   >
@@ -264,12 +552,32 @@ export const ConversationEmptyState = ({
 
 export type ConversationScrollButtonProps = ComponentProps<typeof Button>;
 
+/**
+ * The reader's own hand on the transcript during a trip to the end: it is
+ * theirs again at once. A wheel, a press, a touch, or a grab of the scroll
+ * thumb — whose press is swallowed before it reaches the scroller, so the thumb
+ * says so itself (`lib/scroll-thumb`).
+ */
+const TAKE_BACK_EVENTS = ["wheel", "pointerdown", "touchstart", SCROLL_THUMB_GRAB_EVENT] as const;
+
+/**
+ * "Scroll to latest". The trip is `glideToLatest`'s, not the library's spring,
+ * which stopped short whenever content above the reader changed height on the
+ * way (VC-1232; the argument is in `scroll-to-latest.ts`). The library is told
+ * on arrival, with an instant `scrollToBottom`, so following a streamed reply
+ * starts from the end. The trip outlives the button's own hiding: this
+ * component stays mounted while the transcript has messages and only its
+ * button comes and goes.
+ */
 export const ConversationScrollButton = ({
   className,
   ...props
 }: ConversationScrollButtonProps) => {
   const { isAtBottom, scrollToBottom, scrollRef, contentRef } = useStickToBottomContext();
   const [awayFromBottom, setAwayFromBottom] = useState(false);
+  const [travelling, setTravelling] = useState(false);
+  const stopTrip = useRef<(() => void) | null>(null);
+  useEffect(() => () => stopTrip.current?.(), []);
   useLayoutEffect(() => {
     const scroller = scrollRef.current;
     if (scroller === null) return;
@@ -296,13 +604,55 @@ export const ConversationScrollButton = ({
     };
   }, [scrollRef, contentRef, isAtBottom]);
 
-  const handleScrollToBottom = useCallback(() => {
-    scrollToBottom();
-  }, [scrollToBottom]);
+  // Gone the moment it is pressed, as it was when the library's spring
+  // claimed the bottom on the press.
+  const shown = !isAtBottom && awayFromBottom && !travelling;
+  // While the button is up, the masked viewport lifts its bottom fade above it
+  // (`[data-scroll-button]` in globals.css). Marked here rather than read back
+  // with `.chat-transcript:has(<this button>)`: a `:has()` whose argument
+  // reaches every descendant of the transcript makes each row, page or tool
+  // card inserted anywhere in it restyle thousands of elements (VC-1231).
+  useLayoutEffect(() => {
+    if (!shown) return;
+    const viewport = scrollRef.current?.closest<HTMLElement>("[data-conversation-viewport]");
+    if (!viewport) return;
+    viewport.dataset.scrollButton = "";
+    return () => {
+      delete viewport.dataset.scrollButton;
+    };
+  }, [shown, scrollRef]);
+
+  const handleScrollToBottom = useCallback(
+    (event: MouseEvent<HTMLButtonElement>) => {
+      const scroller = scrollRef.current;
+      if (scroller === null) return;
+      stopTrip.current?.();
+      const end = () => {
+        for (const name of TAKE_BACK_EVENTS) scroller.removeEventListener(name, takeBack);
+        stopTrip.current = null;
+        setTravelling(false);
+      };
+      // Keyboard activation (a click with no pointer behind it) and reduced
+      // motion arrive at once; a pointer press glides.
+      const cancel = glideToLatest(scroller, event.detail === 0 || prefersReducedMotion(), () => {
+        end();
+        scrollToBottom("instant");
+      });
+      function takeBack() {
+        cancel();
+        end();
+      }
+      for (const name of TAKE_BACK_EVENTS) {
+        scroller.addEventListener(name, takeBack, { passive: true });
+      }
+      stopTrip.current = takeBack;
+      setTravelling(true);
+    },
+    [scrollRef, scrollToBottom],
+  );
 
   return (
-    !isAtBottom &&
-    awayFromBottom && (
+    shown && (
       <Button
         // Icon-only, so it needs a name of its own — there is no text to borrow.
         aria-label="Scroll to latest"

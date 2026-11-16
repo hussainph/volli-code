@@ -3,7 +3,12 @@ import type { DynamicToolUIPart, UIMessage } from "ai";
 import { ACTIVITY_METADATA_KEY } from "@volli/shared";
 import { groupTurns } from "./activity";
 import { projectTranscriptRows } from "./transcript-rows";
-import { projectWorkWindows, workDurationLabel, type TranscriptWorkWindow } from "./work-windows";
+import {
+  projectWorkWindows,
+  workDurationLabel,
+  type TranscriptWorkWindow,
+  type WorkTranscriptRow,
+} from "./work-windows";
 
 function tool(
   id: string,
@@ -208,6 +213,57 @@ it("never lets a stale running overlay replace a settled result of the same call
   expect(rows).toHaveLength(1);
   expect(rows[0]!.kind === "work" && rows[0]!.work.rows).toHaveLength(1);
   expect(rows[0]!.kind === "work" && rows[0]!.work.rows[0]!.part.state).toBe("output-available");
+});
+
+/** Where the work window holding one activity sits among the rows. */
+function owner(rows: readonly WorkTranscriptRow[], key: string): number {
+  return rows.findIndex(
+    (row) => row.kind === "work" && row.work.rows.some((entry) => entry.key === key),
+  );
+}
+
+// The search skips whole blocks of boundaries that cannot follow a call
+// (VC-1145); placement across many of them must match asking every boundary.
+it("places work across a long transcript exactly as a boundary-by-boundary search would", () => {
+  const filler = Array.from({ length: 150 }, (_, index) =>
+    msg(`said-${index}`, "assistant", text(`Line ${index}`)),
+  );
+  const messages = [
+    msg("prompt", "user", text("Start")),
+    // Started after every line below was said: it moves down to the answer.
+    msg("late", "assistant", [tool("late", 9000)]),
+    ...filler,
+    // Started before the first line was said: it moves up to the prompt.
+    msg("early", "assistant", [tool("early", 50)]),
+    msg("answer", "assistant", text("Done")),
+  ];
+  const source = projectTranscriptRows(groupTurns(messages), [], []);
+  const timed = projectWorkWindows(
+    source,
+    new Map<string, number>([
+      ["prompt", 0],
+      ...filler.map((message, index): [string, number] => [message.id, 100 + index]),
+      ["answer", 10000],
+    ]),
+    false,
+  );
+  expect(timed).toHaveLength(154);
+  expect(owner(timed, "tool:early")).toBe(1);
+  expect(owner(timed, "tool:late")).toBe(152);
+  expect(timed[153]!.kind === "turn" && timed[153]!.messages[0]!.id).toBe("answer");
+
+  // With the lines' clocks unknown, nothing between orders either call, so
+  // both keep the places they were recorded in.
+  const unknown = projectWorkWindows(
+    source,
+    new Map([
+      ["prompt", 0],
+      ["answer", 10000],
+    ]),
+    false,
+  );
+  expect(owner(unknown, "tool:late")).toBe(1);
+  expect(owner(unknown, "tool:early")).toBe(152);
 });
 
 describe("never deriving execution duration from boundary clocks", () => {

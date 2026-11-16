@@ -80,8 +80,8 @@
     var(--wash-ink) 10%,
     transparent
   );
-  /* Monaco draws its own scrollbar out of divs, so the app's global
-     `::-webkit-scrollbar` treatment cannot reach it — same three tokens, same
+  /* Monaco draws its own scrollbar out of divs, and the app's overlay thumb
+     skips `.monaco-editor` so the two never stack — same three tokens, same
      rest → hover → grabbed progression (globals.css). */
   --vscode-scrollbarSlider-background: var(--border);
   --vscode-scrollbarSlider-hoverBackground: var(--border-strong);

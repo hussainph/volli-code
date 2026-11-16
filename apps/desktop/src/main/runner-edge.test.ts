@@ -54,6 +54,8 @@ function harness(
     renderer?: { answerAfterMs: number } | "silent";
     /** A restart into another product store waiting on this quit (VC-889). */
     relaunch?: { pending(): boolean; quitAccepted(): void; quitRefused(): void };
+    /** The quit's timeline in the log (VC-1208). */
+    timeline?: { accepted(): void; drained(deadlineExpired: boolean): void };
   } = {},
 ) {
   const calls: string[] = [];
@@ -105,6 +107,7 @@ function harness(
     createSessionRpc,
     closeSocket,
     ...(options.relaunch === undefined ? {} : { relaunch: options.relaunch }),
+    ...(options.timeline === undefined ? {} : { timeline: options.timeline }),
   });
 
   // The one window, through the real draft flush (VC-577): its renderer is
@@ -240,6 +243,38 @@ describe("the accepted-quit hold the runner installs", () => {
     expect(await h.exited).toBe(0);
     // No gate bound yet: nothing asks, nothing is torn down but the host.
     expect(h.calls).toEqual(["web-sealing.stop", "host.stop", "remote-hosts.close"]);
+  });
+
+  it("tells the timeline the quit was accepted, then that it drained, before the exit (VC-1208)", async () => {
+    const order: string[] = [];
+    const h = harness({
+      timeline: {
+        accepted: () => order.push("accepted"),
+        drained: (deadlineExpired) => order.push(`drained:${deadlineExpired}`),
+      },
+    });
+    h.edge.installQuitHold();
+    h.quit();
+    expect(await h.exited).toBe(0);
+    expect(order).toEqual(["accepted", "drained:false"]);
+  });
+
+  it("tells the timeline when the drain ran out of time", async () => {
+    vi.useFakeTimers();
+    const captured = captureHostLog();
+    try {
+      const drained = vi.fn();
+      const h = harness({ timeline: { accepted: vi.fn(), drained } });
+      h.boot();
+      h.host.stop.mockImplementation(() => new Promise<never>(() => {}));
+      h.quit();
+      await vi.advanceTimersByTimeAsync(15_000);
+      await vi.runOnlyPendingTimersAsync();
+      expect(await h.exited).toBe(0);
+      expect(drained).toHaveBeenCalledExactlyOnceWith(true);
+    } finally {
+      captured.restore();
+    }
   });
 
   it("routes the 15-second shutdown deadline to the host's one-time watermark warning", async () => {

@@ -1,10 +1,17 @@
-import type { Result } from "@volli/shared";
+import type { ModelAccessSignInType, Result } from "@volli/shared";
 
 /** Desktop-local presentation intent, never provider configuration or credentials. */
 export interface SettingsWindowOpenInput {
   category?: string;
   configureCategory?: string;
   signInProviderId?: string;
+  /**
+   * With `signInProviderId`: sign in to that provider AGAIN with this method,
+   * even though it reads as connected (VC-1236). Sent only by a chat stopped
+   * on the provider's sign-in; the ordinary deep link never starts a flow at a
+   * connected account.
+   */
+  reauthenticate?: ModelAccessSignInType;
   projectId?: string | null;
   workspaceId?: string;
 }

@@ -30,7 +30,7 @@ import type Database from "better-sqlite3";
 import type { WebContents } from "electron";
 import { broadcastAppStateChanged, broadcastDataChanged } from "./broadcast";
 import { getAppContentsRole, isSettingsContents } from "./window-roles";
-import { isHexColor } from "@volli/shared";
+import { isHexColor, settingsWindowBackground } from "@volli/shared";
 import { THEME_CHANNELS, THEME_IPC } from "./ipc-descriptors";
 import type { GhosttyAppearancePayload, ResolvedAppearance } from "@volli/shared";
 import type {
@@ -112,6 +112,11 @@ export interface ThemeIpcHooks {
    * regardless of, the hint's persistent write.
    */
   onPlaneBackgroundChanged?(color: string, sender: WebContents): void;
+  /**
+   * The workbench's hint was stored: the next launch's first paint. Called
+   * after the row is written, never for Settings' previews.
+   */
+  onFirstPaintStored?(hint: FirstPaintHint): void;
 }
 
 /** The desktop surfaces {@link desktopThemeHooks} repaints, as ports. */
@@ -257,8 +262,13 @@ export function registerThemeIpcHandlers(
       const hint: FirstPaintHint = { appearance: input.appearance, background: input.background };
       if (isSettingsContents(sender)) {
         // Settings can preview App or any project without changing the next
-        // workbench's first paint or the workbench's Browser Tab planes.
-        hooks.onFirstPaintChanged?.(hint, sender);
+        // workbench's first paint or the workbench's Browser Tab planes. Its
+        // own edge is its plain sidebar rung in that appearance, never the
+        // authored canvas it may be editing (VC-1228).
+        hooks.onFirstPaintChanged?.(
+          { appearance: hint.appearance, background: settingsWindowBackground(hint.appearance) },
+          sender,
+        );
         return { ok: true };
       }
       // First and on its own: a failed hint write must not leave Browser Tabs
@@ -266,6 +276,7 @@ export function registerThemeIpcHandlers(
       const plane = input.planeBackground;
       if (plane !== undefined && isHexColor(plane)) hooks.onPlaneBackgroundChanged?.(plane, sender);
       setFirstPaintHint(db, hint, deps.now());
+      hooks.onFirstPaintStored?.(hint);
       hooks.onFirstPaintChanged?.(hint, sender);
       return { ok: true };
     },

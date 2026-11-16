@@ -540,6 +540,7 @@ export const fullProjectionSchema = z.object({
   lastActivityAt: integer,
   bornTicketless: z.boolean(),
   todoList: todoList.optional(),
+  attentionProviders: z.record(text, text).optional(),
   liveExecutor: z.object({ id: text }).nullable(),
   scheduledResume: z.object({ id: text, attentionId: text, resumeAt: integer }).nullable(),
 }) satisfies z.ZodType<SessionPresentationProjection>;

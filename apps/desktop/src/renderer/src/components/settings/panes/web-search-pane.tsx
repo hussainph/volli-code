@@ -108,6 +108,9 @@ export function WebSearchPane() {
               items={PROVIDERS}
               keyOf={(p) => p.id}
               rows={4}
+              // Four short columns fit the narrowest Settings window (720pt,
+              // ~450pt of table) without the default 560pt scroll floor.
+              minWidth={440}
               empty="No search providers"
               emptyIllustration="search"
               columns={[
@@ -126,7 +129,7 @@ export function WebSearchPane() {
                 {
                   key: "status",
                   header: "Status",
-                  width: "9rem",
+                  width: "8.5rem",
                   cell: (p) => (
                     <Health state={ready(p.id) ? "ready" : "idle"}>
                       {ready(p.id)

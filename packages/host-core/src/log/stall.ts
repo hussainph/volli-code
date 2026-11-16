@@ -34,7 +34,16 @@
  *   its time in CPU is logged as `attribution: "off-cpu"` (`door: "off-cpu"`,
  *   `cpuMs`): main was waiting in a blocking call (a synchronous file or
  *   process call, a lock) or was not scheduled at all, not running code a
- *   label could name. Every unexplained line carries `cpuMs`.
+ *   label could name.
+ * - **Why it waited** (VC-1103). Every stall line carries what the window
+ *   since the previous tick cost: main's own CPU (`cpuMs`) and, process-wide,
+ *   page faults that needed I/O (`majorFaults`) and preemptions
+ *   (`involuntarySwitches`). Off the CPU with many major faults is paging
+ *   (memory pressure, or SQLite's mmap reading cold pages); with many
+ *   preemptions, a machine too busy to schedule main; with neither, a blocking
+ *   call. On a door or span line `cpuMs` bounds the span's own CPU from above
+ *   (it may include what ran since the previous tick): a span far longer than
+ *   its `cpuMs` waited in a syscall (an fsync, a WAL checkpoint, a lock).
  * - **Many short spans, summed.** Lag no single span explains, but which
  *   short spans since the previous tick account for at least half of, is
  *   logged as `attribution: "aggregate"` naming the operation that ran
@@ -88,6 +97,25 @@ export interface MainStallMonitorOptions {
   readonly observeGc?: GcPauseSource;
   /** Main's own CPU time in milliseconds; `process.threadCpuUsage` unless a test pins it. */
   readonly threadCpuMs?: () => number;
+  /** The process's wait counters; `process.resourceUsage` unless a test pins them. */
+  readonly waitCounters?: () => WaitCounters;
+}
+
+/** Process-wide counters that say why a thread waited instead of running. */
+export interface WaitCounters {
+  /** Page faults that needed I/O to resolve (`ru_majflt`), across every thread. */
+  readonly majorFaults: number;
+  /** Times the scheduler took the CPU from a runnable thread (`ru_nivcsw`), across every thread. */
+  readonly involuntarySwitches: number;
+}
+
+/** This process's {@link WaitCounters}, from `getrusage`. */
+export function processWaitCounters(): WaitCounters {
+  const usage = process.resourceUsage();
+  return {
+    majorFaults: usage.majorPageFault,
+    involuntarySwitches: usage.involuntaryContextSwitches,
+  };
 }
 
 /** This thread's CPU time (user and system) in milliseconds. */
@@ -171,13 +199,29 @@ interface GcPause {
   readonly kind: string;
 }
 
+/** What a window of main's time cost: its own CPU, and the process's waits. */
+interface WindowCost {
+  readonly cpuMs: number;
+  readonly majorFaults: number;
+  readonly involuntarySwitches: number;
+}
+
+/** A window's cost as log fields: whole numbers, counters as counted. */
+function costFields(cost: WindowCost): WindowCost {
+  return {
+    cpuMs: Math.round(cost.cpuMs),
+    majorFaults: cost.majorFaults,
+    involuntarySwitches: cost.involuntarySwitches,
+  };
+}
+
 /** A block no span explained, held one tick so the GC pauses inside it can arrive. */
 interface PendingBlock {
   readonly from: number;
   readonly to: number;
   readonly lateMs: number;
-  /** Main's CPU time across the late tick. */
-  readonly cpuMs: number;
+  /** What the late tick cost: main's CPU time, and the process's waits. */
+  readonly cost: WindowCost;
   readonly hint: Readonly<Record<string, string | number>>;
 }
 
@@ -213,9 +257,22 @@ export function startMainStallMonitor(options: MainStallMonitorOptions = {}): Ma
   const now = options.now ?? (() => performance.now());
   const observeGc = options.observeGc ?? V8_GC_PAUSES;
   const cpu = options.threadCpuMs ?? threadCpuMs;
+  const counters = options.waitCounters ?? processWaitCounters;
 
   let lastTick = now();
-  let lastCpu = cpu();
+  /** The counters when the current window began: the previous tick, or the last logged span stall. */
+  let mark = { cpuMs: cpu(), ...counters() };
+  /** What the window since {@link mark} cost; starts the next window here. */
+  const closeWindow = (): WindowCost => {
+    const at = { cpuMs: cpu(), ...counters() };
+    const cost = {
+      cpuMs: at.cpuMs - mark.cpuMs,
+      majorFaults: at.majorFaults - mark.majorFaults,
+      involuntarySwitches: at.involuntarySwitches - mark.involuntarySwitches,
+    };
+    mark = at;
+    return cost;
+  };
   /** When the most recent logged span stall ended: the lag it caused is already logged. */
   let spanStallAt = Number.NEGATIVE_INFINITY;
   /** The most recent span to finish its synchronous part: a reference, never a copy. */
@@ -285,9 +342,11 @@ export function startMainStallMonitor(options: MainStallMonitorOptions = {}): Ma
     if (syncMs < thresholdMs || span.nestedStall) return false;
     spanStallAt = lastSpanAt;
     const durationMs = Math.round(syncMs);
+    // No tick ran inside the span, so the window since the last one holds it whole.
+    const cost = costFields(closeWindow());
     if (span.kind === "door") {
       // Inside the call's own context: the line carries its trace, door and operation.
-      log.warn("main stall", { durationMs, attribution: "door", thresholdMs, ...parent });
+      log.warn("main stall", { durationMs, attribution: "door", thresholdMs, ...cost, ...parent });
     } else {
       log.warn("main stall", {
         durationMs,
@@ -296,6 +355,7 @@ export function startMainStallMonitor(options: MainStallMonitorOptions = {}): Ma
         door: span.door,
         operation: span.operation,
         ...(span.sessionId === undefined ? {} : { sessionId: span.sessionId }),
+        ...cost,
         ...parent,
       });
     }
@@ -353,7 +413,7 @@ export function startMainStallMonitor(options: MainStallMonitorOptions = {}): Ma
     return found;
   };
 
-  const unexplained = (at: number, lateMs: number, cpuMs: number): void => {
+  const unexplained = (at: number, lateMs: number, cost: WindowCost): void => {
     const durationMs = Math.round(lateMs);
     const top = busiest();
     // Short spans that together held at least half the block explain it.
@@ -370,6 +430,7 @@ export function startMainStallMonitor(options: MainStallMonitorOptions = {}): Ma
           ? {}
           : { parentDoor: top.parentDoor, parentOperation: top.parentOperation }),
         coveredMs: Math.round(tickCoveredMs),
+        ...costFields(cost),
       });
       count(top.door, top.operation, durationMs);
       return;
@@ -378,7 +439,7 @@ export function startMainStallMonitor(options: MainStallMonitorOptions = {}): Ma
       from: at - lateMs,
       to: at,
       lateMs,
-      cpuMs,
+      cost,
       hint: {
         ...(lastSpan === null
           ? {}
@@ -420,20 +481,20 @@ export function startMainStallMonitor(options: MainStallMonitorOptions = {}): Ma
         door: "gc",
         operation: longest.kind,
         gcMs: Math.round(gcMs),
+        ...costFields(block.cost),
       });
       count("gc", longest.kind, durationMs);
       return;
     }
-    const cpuMs = Math.round(block.cpuMs);
     // Main was not running for most of it: waiting in a blocking call, or not scheduled.
-    const offCpu = block.cpuMs < block.lateMs / 2;
+    const offCpu = block.cost.cpuMs < block.lateMs / 2;
     log.warn("main stall", {
       durationMs,
       attribution: offCpu ? OFF_CPU : UNATTRIBUTED,
       thresholdMs,
       // Filed as the roll-up files it; an unattributed line names no door at all.
       ...(offCpu ? { door: OFF_CPU, operation: "wait" } : {}),
-      cpuMs,
+      ...costFields(block.cost),
       ...block.hint,
       ...(gcMs > 0 ? { gcMs: Math.round(gcMs) } : {}),
     });
@@ -446,13 +507,11 @@ export function startMainStallMonitor(options: MainStallMonitorOptions = {}): Ma
     const lateMs = Math.max(0, at - lastTick - tickMs);
     const previousTick = lastTick;
     lastTick = at;
-    const cpuAt = cpu();
-    const cpuMs = cpuAt - lastCpu;
-    lastCpu = cpuAt;
+    const cost = closeWindow();
     // A histogram holds integers from 1: a punctual tick is its floor.
     lag.record(Math.max(1, Math.round(lateMs)));
     resolvePending();
-    if (lateMs >= thresholdMs && spanStallAt <= previousTick) unexplained(at, lateMs, cpuMs);
+    if (lateMs >= thresholdMs && spanStallAt <= previousTick) unexplained(at, lateMs, cost);
     tickLoads.clear();
     tickCoveredMs = 0;
     if (at - windowStartedAt >= summaryIntervalMs) summarize(at);

@@ -93,6 +93,11 @@ const preparation = (overrides: Partial<CompactionPreparation> = {}): Compaction
   ...overrides,
 });
 
+/** A response usage block that billed `input` prompt tokens. */
+function billed(input: number) {
+  return { ...emptyUsage(), input, totalTokens: input };
+}
+
 describe("vendored compaction usage and cut-point edges", () => {
   it("ignores failed, missing and zero usage and adds estimates after the last valid reply", () => {
     const valid = assistant();
@@ -436,6 +441,48 @@ describe("vendored compaction generation boundaries", () => {
         });
         expect(second).toHaveBeenCalledTimes(2);
       }
+    }
+  });
+
+  it("carries every billed request on a failed compaction (VC-805)", async () => {
+    for (const stopReason of ["aborted", "error"] as const) {
+      // One request, failed after its prompt was billed.
+      const single = await compactWithRequest(
+        preparation({ isSplitTurn: false, turnPrefixMessages: [] }),
+        { model },
+        vi.fn<SummaryRequest>().mockResolvedValue(assistant({ stopReason, usage: billed(7) })),
+        context,
+      );
+      expect(single).toMatchObject({ ok: false, error: { usage: { input: 7 } } });
+      // A split turn whose history summary fails never sends the prefix request.
+      const historyRequest = vi
+        .fn<SummaryRequest>()
+        .mockResolvedValue(assistant({ stopReason, usage: billed(5) }));
+      const history = await compactWithRequest(preparation(), { model }, historyRequest, context);
+      expect(history).toMatchObject({ ok: false, error: { usage: { input: 5 } } });
+      expect(historyRequest).toHaveBeenCalledTimes(1);
+      // A split turn whose prefix summary fails still paid for its history summary.
+      const prefix = await compactWithRequest(
+        preparation(),
+        { model },
+        vi
+          .fn<SummaryRequest>()
+          .mockResolvedValueOnce(assistant({ usage: billed(1000) }))
+          .mockResolvedValueOnce(assistant({ stopReason, usage: billed(3) })),
+        context,
+      );
+      expect(prefix).toMatchObject({
+        ok: false,
+        error: { usage: { input: 1003, totalTokens: 1003 } },
+      });
+      // No history to summarize: only the failed prefix request was made.
+      const prefixOnly = await compactWithRequest(
+        preparation({ messagesToSummarize: [] }),
+        { model },
+        vi.fn<SummaryRequest>().mockResolvedValue(assistant({ stopReason, usage: billed(3) })),
+        context,
+      );
+      expect(prefixOnly).toMatchObject({ ok: false, error: { usage: { input: 3 } } });
     }
   });
 

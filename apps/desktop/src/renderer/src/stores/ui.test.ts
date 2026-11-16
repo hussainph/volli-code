@@ -283,6 +283,20 @@ describe("setSettingsOpen", () => {
     expect(store.getState().settingsSignInProviderId).toBeNull();
   });
 
+  it("carries a stopped chat's sign-in-again intent beside the provider, spent with it", () => {
+    const store = createUiStore(createMemoryStorage());
+    store.getState().setSettingsOpen(true, "model-access", "anthropic", "oauth");
+    expect(store.getState().settingsSignInReauthenticate).toBe("oauth");
+
+    store.getState().consumeSettingsSignIn();
+    expect(store.getState().settingsSignInProviderId).toBeNull();
+    expect(store.getState().settingsSignInReauthenticate).toBeNull();
+
+    // The ordinary deep link carries no such intent.
+    store.getState().setSettingsOpen(true, "model-access", "anthropic");
+    expect(store.getState().settingsSignInReauthenticate).toBeNull();
+  });
+
   it("forgets the category on the next opening that names none", () => {
     // Read once per opening and never written back by the shell, so a stale one
     // would send the NEXT visitor somewhere the surface that opened it never
@@ -384,6 +398,20 @@ describe("native Settings window opener", () => {
     });
     expect(store.getState().settingsCategory).toBeNull();
     expect(store.getState().settingsSignInProviderId).toBeNull();
+  });
+
+  it("carries the sign-in-again intent in the transport input only when a stop sent it", () => {
+    const store = createUiStore(createMemoryStorage());
+    const opener = recordingOpener();
+    setSettingsWindowOpener(opener);
+
+    store.getState().setSettingsOpen(true, "model-access", "anthropic", "api-key");
+
+    expect(opener).toHaveBeenCalledExactlyOnceWith({
+      category: "model-access",
+      signInProviderId: "anthropic",
+      reauthenticate: "api-key",
+    });
   });
 
   it("never routes a close: closing an in-app route must not close the independent native window", () => {

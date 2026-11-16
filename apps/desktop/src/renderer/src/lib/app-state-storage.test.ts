@@ -671,10 +671,20 @@ describe("shared preferences in separate windows", () => {
     finish({ ok: true, value: accepted });
     await Promise.all([older, firstClear]);
     await expect(flushPendingAppStateKey("volli:ui")).resolves.toBe(true);
+    // Both clears queued behind the first write leave as one, when it settles.
     expect(setMock).toHaveBeenNthCalledWith(1, "volli:ui", local, base);
     expect(setMock).toHaveBeenNthCalledWith(2, "volli:ui", "");
-    expect(setMock).toHaveBeenNthCalledWith(3, "volli:ui", "");
-    expect(setMock).toHaveBeenCalledTimes(3);
+    expect(setMock).toHaveBeenCalledTimes(2);
+    expect(appStateStorage.getItem("volli:ui")).toBeNull();
+  });
+
+  it("lets a peer's value replace a refused edit it cannot compare field by field", async () => {
+    seedAppStateCache({ "volli:ui": base });
+    setMock.mockResolvedValue({ ok: false, error: "database locked" });
+    appStateStorage.setItem("volli:ui", "legacy");
+    await expect(flushPendingAppStateKey("volli:ui")).resolves.toBe(false);
+    expect(acceptAppStateValue("volli:ui", accepted)).toBe(true);
+    expect(appStateStorage.getItem("volli:ui")).toBe(accepted);
   });
 
   it("adopts accepted preference removals and non-snapshot appearance values without echoing them", () => {
@@ -696,5 +706,340 @@ describe("shared preferences in separate windows", () => {
     await settle();
     expect(acceptAppStateValue("volli:ui", accepted)).toBe(true);
     expect(appStateStorage.getItem("volli:ui")).toBe(accepted);
+  });
+});
+
+/**
+ * Two renderer windows, each its own module instance of the real storage
+ * path, writing one shared preference through a fake main that mirrors the
+ * `volli:app-state-set` handler: requests wait in an ordered inbox until the
+ * test delivers them, main merges against its current row, replies to the
+ * sender and broadcasts the accepted row to every other window. Replies
+ * reach a renderer before any broadcast main sends after them, as on one
+ * Electron IPC pipe, so every step drains microtasks before the next.
+ */
+const tick = () => vi.advanceTimersByTimeAsync(0);
+const snapshot = (state: Record<string, unknown>) => JSON.stringify({ state, version: 1 });
+
+describe("two windows racing one shared preference through main", () => {
+  const KEY = "volli:ui";
+  type Prefs = Record<string, unknown>;
+  interface Request {
+    from: RaceWindow;
+    value: string;
+    base: string | undefined;
+    reply(result: { ok: boolean; error?: string; value?: string }): void;
+  }
+  interface RaceWindow {
+    name: string;
+    storage: typeof import("./app-state-storage");
+    store: ReturnType<typeof createRaceStore>;
+    /** The renderer's own view: what its store holds after every repaint. */
+    prefs(): Prefs;
+    edit(change: Prefs): void;
+  }
+  let windowModule = 0;
+  let inbox: Request[];
+  let stored: string;
+  /**
+   * The window whose code is running: requests carry no sender, so each step
+   * names the window it drives (its edit, or the acknowledgement it receives).
+   */
+  let acting: RaceWindow | undefined;
+  async function as(window: RaceWindow, step: () => Promise<unknown>): Promise<void> {
+    acting = window;
+    try {
+      await step();
+    } finally {
+      acting = undefined;
+    }
+  }
+  let windows: RaceWindow[];
+
+  function createRaceStore(storage: typeof import("./app-state-storage"), defaults: Prefs) {
+    return createStore<Prefs>()(
+      persist(() => ({ ...defaults }), {
+        name: KEY,
+        version: 1,
+        storage: createJSONStorage(() => storage.appStateStorage),
+        skipHydration: true,
+      }),
+    );
+  }
+
+  async function openWindow(name: string, defaults: Prefs): Promise<RaceWindow> {
+    vi.stubGlobal("window", { addEventListener: vi.fn(), api: { appState: { set: setMock } } });
+    const path = `./app-state-storage?race-window=${++windowModule}`;
+    const storage: typeof import("./app-state-storage") = await import(/* @vite-ignore */ path);
+    storage.seedAppStateCache({ [KEY]: stored });
+    const store = createRaceStore(storage, defaults);
+    storage.registerSharedPreferenceDefaults(store);
+    await store.persist.rehydrate();
+    // window-preferences.ts: an accepted merge repaints its writer.
+    storage.onPreferenceValueAccepted(() => void store.persist.rehydrate());
+    return {
+      name,
+      storage,
+      store,
+      prefs: () => ({ ...store.getState() }),
+      edit: (change) => store.setState(change),
+    };
+  }
+
+  /** window-preferences.ts: a peer broadcast repaints only when storage accepts it. */
+  function broadcast(sender: RaceWindow, value: string): void {
+    for (const window of windows) {
+      if (window !== sender && window.storage.acceptAppStateValue(KEY, value)) {
+        void window.store.persist.rehydrate();
+      }
+    }
+  }
+
+  /** Main handles `from`'s oldest outstanding request. */
+  async function deliver(from: RaceWindow, outcome: "accept" | "refuse" = "accept") {
+    const index = inbox.findIndex((request) => request.from === from);
+    if (index === -1) throw new Error(`${from.name} has no request at main.`);
+    const [request] = inbox.splice(index, 1);
+    if (outcome === "refuse") {
+      request.reply({ ok: false, error: "database locked" });
+    } else {
+      stored = mergePreferenceSnapshot(stored, request.base, request.value);
+      request.reply(request.base === undefined ? { ok: true } : { ok: true, value: stored });
+      broadcast(from, stored);
+    }
+    await as(from, tick);
+    return request;
+  }
+
+  /** A window edits and sends now, the way a quit or a Settings close flushes. */
+  async function send(window: RaceWindow, change: Prefs): Promise<void> {
+    await as(window, async () => {
+      window.edit(change);
+      void window.storage.flushPendingAppStateKey(KEY);
+      await tick();
+    });
+  }
+
+  /** A peer edit main accepts at once. */
+  async function peer(window: RaceWindow, change: Prefs): Promise<void> {
+    await send(window, change);
+    await deliver(window);
+  }
+
+  const authoritative = () => (JSON.parse(stored) as { state: Prefs }).state;
+  async function expectConverged(): Promise<void> {
+    await tick();
+    expect(inbox).toEqual([]);
+    for (const window of windows) {
+      expect({ [window.name]: window.prefs() }).toEqual({ [window.name]: authoritative() });
+      expect(window.storage.appStateStorage.getItem(KEY)).toBe(stored);
+    }
+  }
+
+  async function open(initial: Prefs) {
+    inbox = [];
+    stored = snapshot(initial);
+    setMock.mockImplementation(
+      (_key, value, base) =>
+        new Promise((resolve) => {
+          if (acting === undefined) throw new Error("A request left no acting window.");
+          inbox.push({ from: acting, value, base, reply: resolve });
+        }),
+    );
+    const a = await openWindow("main window", initial);
+    const b = await openWindow("Settings", initial);
+    windows = [a, b];
+    return { a, b };
+  }
+
+  it("never restores a peer value that a queued write learnt from an earlier acknowledgement", async () => {
+    const { a, b } = await open({ sidebarWidth: 300, costVisible: true });
+    await send(a, { sidebarWidth: 310 });
+    await send(a, { sidebarWidth: 320 });
+    await peer(b, { costVisible: false });
+    await deliver(a); // ACK1 carries costVisible: false; the queued write leaves.
+    expect(a.prefs()).toEqual({ sidebarWidth: 320, costVisible: false });
+    await peer(b, { costVisible: true });
+    await deliver(a);
+    expect(authoritative()).toEqual({ sidebarWidth: 320, costVisible: true });
+    await expectConverged();
+  });
+
+  it("rebases every write of a longer queue onto the acknowledgement before it", async () => {
+    const { a, b } = await open({ sidebarWidth: 300, costVisible: true, uiScale: 1 });
+    await send(a, { sidebarWidth: 310 });
+    await send(a, { sidebarWidth: 320 });
+    await peer(b, { costVisible: false });
+    await deliver(a); // the second write leaves, rebased onto this ack
+    await send(a, { sidebarWidth: 330 }); // queued behind the second
+    await peer(b, { costVisible: true, uiScale: 1.25 });
+    await deliver(a);
+    await send(a, { sidebarWidth: 340 }); // queued behind the third
+    await peer(b, { costVisible: false });
+    await deliver(a);
+    await peer(b, { uiScale: 1.5 });
+    await deliver(a);
+    expect(authoritative()).toEqual({ sidebarWidth: 340, costVisible: false, uiScale: 1.5 });
+    await expectConverged();
+  });
+
+  it("coalesces writes queued behind one acknowledgement into a single rebased write", async () => {
+    const { a, b } = await open({ sidebarWidth: 300, costVisible: true });
+    await send(a, { sidebarWidth: 310 });
+    await send(a, { sidebarWidth: 320 });
+    await send(a, { sidebarWidth: 330 });
+    await peer(b, { costVisible: false });
+    await deliver(a);
+    await peer(b, { costVisible: true });
+    const queued = await deliver(a);
+    expect(queued.value).toBe(snapshot({ sidebarWidth: 330, costVisible: false }));
+    expect(authoritative()).toEqual({ sidebarWidth: 330, costVisible: true });
+    await expectConverged();
+  });
+
+  it("keeps a debounced burst to its own edits across acknowledgements", async () => {
+    const { a, b } = await open({ sidebarWidth: 300, costVisible: true });
+    await send(a, { sidebarWidth: 310 });
+    a.edit({ sidebarWidth: 320 }); // debounced, not yet sent
+    await peer(b, { costVisible: false });
+    await deliver(a);
+    a.edit({ sidebarWidth: 330 }); // same burst, after the repaint
+    await peer(b, { costVisible: true });
+    await as(a, () => vi.advanceTimersByTimeAsync(DEBOUNCE_MS));
+    await deliver(a);
+    expect(authoritative()).toEqual({ sidebarWidth: 330, costVisible: true });
+    await expectConverged();
+  });
+
+  it("does not resurrect a key a peer added and then removed while a write was queued", async () => {
+    const { a, b } = await open({ sidebarWidth: 300, collapsed: {} });
+    await send(a, { sidebarWidth: 310 });
+    await send(a, { sidebarWidth: 320 });
+    await peer(b, { collapsed: { notes: true } });
+    await deliver(a);
+    expect(a.prefs()).toEqual({ sidebarWidth: 320, collapsed: { notes: true } });
+    // Removed, not merely absent: the row drops the key.
+    await peer(b, { collapsed: {} });
+    await deliver(a);
+    expect(authoritative()).toEqual({ sidebarWidth: 320, collapsed: {} });
+    await expectConverged();
+  });
+
+  it("removes a key locally without dropping a peer's concurrent change", async () => {
+    const { a, b } = await open({ sidebarWidth: 300, collapsed: { notes: true, board: true } });
+    await send(a, { sidebarWidth: 310 });
+    await send(a, { collapsed: { board: true } });
+    await peer(b, { collapsed: { notes: true, board: true, chat: true } });
+    await deliver(a);
+    expect(a.prefs()).toEqual({ sidebarWidth: 310, collapsed: { board: true, chat: true } });
+    await peer(b, { sidebarWidth: 290 });
+    await deliver(a);
+    // The queued removal carries only its own change, so b's later width stands.
+    expect(authoritative()).toEqual({ sidebarWidth: 290, collapsed: { board: true, chat: true } });
+    await expectConverged();
+  });
+
+  it.each([
+    { later: "main window", expected: 310 },
+    { later: "Settings", expected: 420 },
+  ])(
+    "lets the later accepted write to the same field win ($later)",
+    async ({ later, expected }) => {
+      const { a, b } = await open({ sidebarWidth: 300, costVisible: true });
+      await send(a, { costVisible: false });
+      await send(a, { sidebarWidth: 310 });
+      await deliver(a);
+      if (later === "main window") {
+        await peer(b, { sidebarWidth: 420 });
+        await deliver(a);
+      } else {
+        await deliver(a);
+        await peer(b, { sidebarWidth: 420 });
+      }
+      expect(authoritative()).toEqual({ sidebarWidth: expected, costVisible: false });
+      await expectConverged();
+    },
+  );
+
+  it("surfaces a refused write, keeps its edit, and sends it only with the next edit", async () => {
+    const { a, b } = await open({ sidebarWidth: 300, costVisible: true, uiScale: 1 });
+    await send(a, { sidebarWidth: 310 });
+    await deliver(a, "refuse");
+    expect(vi.mocked(toast.error)).toHaveBeenCalledExactlyOnceWith(
+      `Couldn't save "${KEY}": database locked`,
+      { duration: 8000, closeButton: true },
+    );
+    expect(a.prefs()).toEqual({ sidebarWidth: 310, costVisible: true, uiScale: 1 });
+    // Not acknowledged, and never retried in the background or by a flush.
+    await as(a, async () => {
+      await expect(a.storage.flushPendingAppStateKey(KEY)).resolves.toBe(false);
+      await expect(a.storage.flushAllPendingAppState()).resolves.toBe(true);
+      await vi.advanceTimersByTimeAsync(DEBOUNCE_MS * 10);
+    });
+    expect(inbox).toEqual([]);
+    // A peer's accepted change repaints the window without erasing the edit.
+    await peer(b, { costVisible: false });
+    expect(a.prefs()).toEqual({ sidebarWidth: 310, costVisible: false, uiScale: 1 });
+    await send(a, { uiScale: 1.25 });
+    await deliver(a);
+    expect(authoritative()).toEqual({ sidebarWidth: 310, costVisible: false, uiScale: 1.25 });
+    await expectConverged();
+    expect(vi.mocked(toast.error)).toHaveBeenCalledOnce();
+  });
+
+  it("lets a peer's later accepted change supersede a refused edit to the same field", async () => {
+    const { a, b } = await open({
+      sidebarWidth: 300,
+      costVisible: true,
+      uiScale: 1,
+      collapsed: { notes: true, chat: true },
+    });
+    // Flips notes and removes chat inside the record.
+    await send(a, { sidebarWidth: 310, costVisible: false, collapsed: { notes: false } });
+    await deliver(a, "refuse");
+    await peer(b, { sidebarWidth: 420, collapsed: { notes: true, chat: true, board: true } });
+    // The peer's width and new key win; refused edits it left alone stay.
+    expect(a.prefs()).toEqual({
+      sidebarWidth: 420,
+      costVisible: false,
+      uiScale: 1,
+      collapsed: { notes: false, board: true },
+    });
+    await send(a, { uiScale: 1.25 });
+    await deliver(a);
+    expect(authoritative()).toEqual({
+      sidebarWidth: 420,
+      costVisible: false,
+      uiScale: 1.25,
+      collapsed: { notes: false, board: true },
+    });
+    await expectConverged();
+  });
+
+  it("drops a refused edit a peer has fully superseded, or cleared", async () => {
+    const { a, b } = await open({ sidebarWidth: 300, costVisible: true });
+    await send(a, { sidebarWidth: 310 });
+    await deliver(a, "refuse");
+    await peer(b, { sidebarWidth: 420 });
+    expect(a.prefs()).toEqual({ sidebarWidth: 420, costVisible: true });
+    await expect(a.storage.flushPendingAppStateKey(KEY)).resolves.toBe(false);
+    await expectConverged();
+    await send(a, { costVisible: false });
+    await deliver(a, "refuse");
+    stored = "";
+    broadcast(b, "");
+    expect(a.storage.appStateStorage.getItem(KEY)).toBeNull();
+  });
+
+  it("carries a refused write into the write already queued behind it", async () => {
+    const { a, b } = await open({ sidebarWidth: 300, costVisible: true, uiScale: 1 });
+    await send(a, { sidebarWidth: 310 });
+    await send(a, { uiScale: 1.25 });
+    await peer(b, { costVisible: false });
+    await deliver(a, "refuse");
+    await deliver(a);
+    expect(authoritative()).toEqual({ sidebarWidth: 310, costVisible: false, uiScale: 1.25 });
+    await expectConverged();
+    expect(vi.mocked(toast.error)).toHaveBeenCalledOnce();
   });
 });

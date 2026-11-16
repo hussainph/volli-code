@@ -754,6 +754,46 @@ describe("Session tRPC router", () => {
     },
   );
 
+  it.each([false, true])(
+    "gives each stop's provider only to this host's own renderer (network peer=%s)",
+    async (network) => {
+      const fixture = runtimeFixture();
+      const base = snapshot();
+      const bound = {
+        ...base,
+        projection: { ...base.projection, attentionProviders: { "attention-1": "anthropic" } },
+      };
+      const caller = createSessionRouter().createCaller({
+        ...sessionContext({
+          caller: LOCAL_DESKTOP_CALLER,
+          diagnostics: new RpcDiagnosticLog(),
+          runtime: {
+            ...fixture.runtime,
+            snapshot: async () => bound,
+            projection: async () => bound,
+          },
+        }),
+        ...(network
+          ? {
+              operations: new Set([
+                "session.snapshot",
+                "session.projection",
+                "session.cancelQueued",
+              ]),
+            }
+          : {}),
+      });
+      for (const read of [caller.session.snapshot, caller.session.projection]) {
+        const answer = await read({ sessionId: "session-1" });
+        if (network) expect(answer.projection).not.toHaveProperty("attentionProviders");
+        else
+          expect(answer.projection).toMatchObject({
+            attentionProviders: { "attention-1": "anthropic" },
+          });
+      }
+    },
+  );
+
   it("preserves a minimal runtime projection without inventing attachment state", async () => {
     const fixture = runtimeFixture();
     const runtime: SessionRuntime = {

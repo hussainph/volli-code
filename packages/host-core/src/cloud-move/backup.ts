@@ -65,7 +65,7 @@ export function createMoveBackupPort(options: MoveBackupOptions) {
           },
           signal,
           options.onNotice ?? (() => {}),
-          options.workerExecArgv,
+          options.workerExecArgv ? { execArgv: options.workerExecArgv } : {},
         );
         if (!result.sha256) throw new Error("Move backup worker did not return a digest.");
         // No expiry. Do not throw on a late cancellation after publication: the

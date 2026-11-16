@@ -168,6 +168,22 @@ describe("tinted material consumers", () => {
     expect(bubble).not.toContain("var(--fill-secondary)");
   });
 
+  it("keeps the Settings window plain: no canvas, no blur, opaque overlays outside its tree", () => {
+    // VC-1228. Overlays portal to <body>, so the root attribute scopes them.
+    const plain = rule(css, ':root[data-window="settings"],\n.settings-window');
+    expect(plain).toContain("background: var(--sidebar)");
+    expect(plain).not.toContain("--canvas");
+    const start = css.indexOf(':root[data-window="settings"]\n  :is(');
+    expect(start).toBeGreaterThanOrEqual(0);
+    const overlays = css.slice(start, css.indexOf("}", start));
+    for (const surface of [".glass", ".material-floating", "[cmdk-dialog]", ".material-regular"])
+      expect(overlays).toContain(surface);
+    expect(overlays).toContain("backdrop-filter: none !important");
+    expect(overlays).toContain(
+      "background: var(--material-solid-fill, var(--glass-fill)) !important",
+    );
+  });
+
   it("wires paper wells without replacing translucent navigation and pressed layers", () => {
     for (const selector of [".board-column", '.settings-window [data-slot="pref-group"]']) {
       expect(rule(css, selector)).toContain("background: var(--surface-quaternary)");

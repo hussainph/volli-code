@@ -10,6 +10,8 @@ import { ProviderStopCapture, finalStopDetail, safeProviderMessage } from "./pro
 import {
   decodeSessionStopDetail,
   RECOVERED_TURN_INTERRUPTED_DETAIL,
+  SESSION_CREDENTIAL_STOP_TYPES,
+  sessionStopCause,
   type SessionStopDetail,
 } from "@volli/shared";
 
@@ -41,6 +43,7 @@ import { JsonlSessionRepo } from "./harness-session";
 import { NodeExecutionEnv, type ExecutionEnv } from "./harness-env";
 import {
   getSupportedThinkingLevels,
+  lazyStream,
   type AssistantMessage,
   type CredentialStore,
   type Models,
@@ -104,6 +107,7 @@ import {
   type CompactionOutcome,
   type ConversationReader,
 } from "./compaction";
+import { THRESHOLD_COMPACTION_FAILURE_CAP, thresholdCompactionAllowed } from "./compaction-backoff";
 import { createContextTokenProjector } from "./token-counting";
 import {
   ABANDONED_QUESTION_RESULT,
@@ -2379,6 +2383,29 @@ async function attachSession(
      */
     let overflowRecoveryUsed = false;
     /**
+     * This run's failed threshold compactions, and the context the threshold
+     * check measured at the last of them (VC-1206).
+     *
+     * What {@link thresholdCompactionAllowed} decides from: a failure is tried
+     * again only once the context has grown by another `keepRecentTokens`, and
+     * not at all after three. "A run" is the Turn the overflow budget belongs
+     * to: it starts when a Turn starts for its own reason and a Turn resumed in
+     * place carries on spending it. The one difference from that budget is
+     * where a prompt's run begins: at its own delivery, before the idle
+     * compaction that message pays for, so that attempt counts against the run
+     * it opens rather than the one before it — see `agent_start`.
+     *
+     * Any successful compaction clears it, whatever asked for it. Held in this
+     * attachment only: a reattach starts clean, so nothing durable can leave a
+     * Session with threshold compaction silently switched off.
+     */
+    let thresholdFailures = 0;
+    let thresholdFailedAt: number | undefined;
+    const resetThresholdBackoff = (): void => {
+      thresholdFailures = 0;
+      thresholdFailedAt = undefined;
+    };
+    /**
      * Whether this turn has already dropped the conversation's reasoning.
      *
      * The same shape as the overflow budget, for the same reason: a turn the
@@ -2418,6 +2445,34 @@ async function attachSession(
      */
     let contextRewrite: Promise<void> = Promise.resolve();
     let rewritingContext = false;
+    /**
+     * Whether a retry has decided to run while Pi does not own the run yet, and
+     * what to wait for (VC-810).
+     *
+     * A retry finds Pi idle, then refreshes the Session's tools — a host round
+     * trip — before `continue()` sets `isStreaming`. Across that span the
+     * attachment is running in everything but Pi's own flag, so each door
+     * answers as it does during a live turn: a compaction, a model switch and
+     * a second retry refuse with their "while Pi is running" answer, and a
+     * delivery waits, then joins the run Pi now owns. Kept apart from
+     * {@link contextRewrite} because those doors word a summary in progress
+     * differently from a turn about to be sent.
+     *
+     * Released only after `continue()` has been called, and Pi sets
+     * `isStreaming` synchronously inside that call, so there is no moment at
+     * which neither this nor `isStreaming` holds.
+     *
+     * `stopped` is a Stop (or a close) that landed inside the span, when there
+     * was no run yet for `agent.abort()` to reach (VC-1199). The retry reads it
+     * before refreshing (a stopped retry skips the refresh) and again once the
+     * refresh answers, and instead of starting the run it settles the
+     * turn the way that Stop would have settled the run, all before letting
+     * go — so a message waiting on {@link runOpening} opens a turn of its own
+     * after the stopped one, and a Stop waiting on it answers on the settled
+     * turn.
+     */
+    let openingRun: { stopped: boolean } | undefined;
+    let runOpening: Promise<void> = Promise.resolve();
     /**
      * Set only while a backoff or a network wait is being waited out; see
      * {@link interruptTurn}.
@@ -2590,7 +2645,7 @@ async function attachSession(
       const capture = new ProviderStopCapture(credentialRedaction);
       providerStop = capture;
       const maxTokens = outputCeiling(requestModel, context);
-      return models.streamSimple(requestModel, context, {
+      const requestOptions: Parameters<Models["streamSimple"]>[2] = {
         ...options,
         // Google/Bedrock cannot accept custom fetch. Missing SDK fields on
         // those routes remain unknown rather than inferred from their prose.
@@ -2618,6 +2673,26 @@ async function attachSession(
               },
             }
           : {}),
+      };
+      // The credential is resolved before the request so a failure to obtain
+      // one stays a typed fact (`ProviderStopCapture.credential`). A refresh
+      // this performs is persisted before it returns, so the resolution inside
+      // `streamSimple` reads the fresh credential back instead of refreshing.
+      return lazyStream(requestModel, async () => {
+        await capture.credential(async () => {
+          // The same overrides Pi's own resolution inside `streamSimple` reads.
+          const auth = await models.getAuth(requestModel, {
+            apiKey: options?.apiKey,
+            env: options?.env,
+            signal: options?.signal,
+          });
+          // `getAuth` answers nothing for an unknown provider too. Only a
+          // known provider's empty answer is the "not configured" Pi refuses.
+          return {
+            missing: auth === undefined && models.getProvider(requestModel.provider) !== undefined,
+          };
+        });
+        return models.streamSimple(requestModel, context, requestOptions);
       });
     };
     // A provider request that goes silent — most often a socket that died
@@ -2891,6 +2966,9 @@ async function attachSession(
     // is why one flag answers for all three downstream.
     interruptTurn = () => {
       interrupting = true;
+      // A retry still opening its run has nothing for `abort` to reach; it
+      // reads this when its refresh answers and never starts the run (VC-1199).
+      if (openingRun !== undefined) openingRun.stopped = true;
       cancelBackoff?.();
       agent.abort();
     };
@@ -3034,11 +3112,109 @@ async function attachSession(
     };
 
     /**
+     * What the ledger records when a run opens: a Turn starting for its own
+     * reason gets a fresh id and fresh budgets and says it started, a resumed
+     * attempt carries on the Turn it belongs to, and the Command that opened
+     * the run is durably accepted into it.
+     *
+     * Pi's `agent_start` is the one place a run opens. The other caller is a
+     * retry a Stop reached before Pi ran it (VC-1199), which records exactly
+     * the opening a Stop one moment later would have found.
+     */
+    const recordTurnStart = async (): Promise<void> => {
+      // A resumed attempt is the same turn continuing, so it neither starts one
+      // nor refreshes the budget it is spending.
+      const resumed = resumingTurn;
+      resumingTurn = false;
+      if (!resumed) {
+        turnId = randomUUID();
+        autoRetryAttempts = 0;
+        autoRetryWaitedMs = 0;
+        overflowRecoveryUsed = false;
+        reasoningRecoveryUsed = false;
+        // A prompt's run was opened at its delivery, ahead of the idle
+        // compaction it paid for (see {@link thresholdFailures}); every other
+        // Turn that starts for its own reason — a retry, a late follow-up —
+        // opens its run here.
+        if (pendingRunDelivery?.delivery !== "prompt") resetThresholdBackoff();
+        await commitObservation(
+          await persistObservation({ kind: "turn", state: "started", turnId }),
+        );
+      }
+      const delivery = pendingRunDelivery;
+      pendingRunDelivery = undefined;
+      if (await persistAcceptedDelivery(delivery, turnId)) {
+        if (delivery?.operation === "message.submit") {
+          acceptedUserMessages.add(delivery.message);
+        }
+      }
+    };
+
+    /**
      * Run the failed attempt again without re-delivering anything the user said:
      * the assistant message Pi settled as a failure is dropped, and the run
      * continues from the user or tool-result message it answered.
+     *
+     * `stopped` is whether a Stop already landed after the decision to retry
+     * and before this call — which only the automatic drain can say: a manual
+     * retry decides and claims in the same synchronous step.
      */
-    const retryFailedTurn = async (commandId: string | null): Promise<DeliveryOutcome> => {
+    const retryFailedTurn = async (
+      commandId: string | null,
+      stopped: boolean,
+    ): Promise<DeliveryOutcome> => {
+      // Claimed before the first await and held until Pi owns the run, or until
+      // a Stop has been settled — see {@link openingRun}. Both callers have just
+      // found Pi idle: `retry()` checked, and the drain runs between runs.
+      const opened = Promise.withResolvers<void>();
+      const opening = { stopped };
+      openingRun = opening;
+      runOpening = opened.promise;
+      let outcome: RetryOpening;
+      try {
+        outcome = await openRetriedRun(commandId, opening);
+      } finally {
+        openingRun = undefined;
+        opened.resolve();
+      }
+      switch (outcome.kind) {
+        case "unavailable":
+          return {
+            kind: "rejected",
+            reason: "retry-unavailable",
+            message: "There is no failed Pi turn to retry.",
+          };
+        case "closed":
+          return { kind: "rejected", reason: "closed", message: "This attachment is closed." };
+        case "stopped":
+          return { kind: "delivered", delivery: "retry" };
+        case "run":
+          await outcome.run;
+          return { kind: "delivered", delivery: "retry" };
+      }
+    };
+
+    /**
+     * How a retry's opening ended: the run Pi now owns, boxed and unawaited so
+     * the caller lets go of {@link openingRun} once Pi holds `isStreaming`
+     * rather than once the run is over; no failed turn to retry; a Stop
+     * settled in place of the run; or an attachment closed under it.
+     */
+    type RetryOpening =
+      | { kind: "run"; run: Promise<void> }
+      | { kind: "unavailable" }
+      | { kind: "stopped" }
+      | { kind: "closed" };
+
+    /**
+     * Everything a retry does before Pi owns its run, ending in the call that
+     * hands it over — or, when a Stop reached it first, in settling the turn
+     * the way that Stop would have settled the run (VC-1199).
+     */
+    const openRetriedRun = async (
+      commandId: string | null,
+      opening: { stopped: boolean },
+    ): Promise<RetryOpening> => {
       const messages = [...agent.state.messages];
       // A turn cut short with a tool in flight — a lost process, or a Stop
       // partway through a batch, once a reattach drops the aborted reply — can
@@ -3051,24 +3227,69 @@ async function attachSession(
         agent.state.messages = [...messages];
       }
       const tail = messages.at(-1);
+      // Where the failed reply sat, so a Stop can put it back: at most one.
+      const droppedAt = messages.length - 1;
+      const dropped: AgentMessage[] = [];
       if (tail?.role === "assistant" && hasFailedStopReason(tail as AssistantMessage)) {
-        messages.pop();
+        dropped.push(messages.pop()!);
         agent.state.messages = messages;
       } else if (tail?.role !== "user" && tail?.role !== "toolResult") {
-        return {
-          kind: "rejected",
-          reason: "retry-unavailable",
-          message: "There is no failed Pi turn to retry.",
-        };
+        return { kind: "unavailable" };
       }
       pendingRunDelivery = {
         commandId,
         operation: "executor.retry" as const,
         delivery: "retry" as const,
       };
-      await refreshTools(turnRefreshTrigger());
-      await agent.continue();
-      return { kind: "delivered", delivery: "retry" };
+      // A retry a Stop already reached will not run, so it does not refresh:
+      // that would only delay the Stop's settle and announce tools to a run
+      // that never happens. A refresh that answers after the attachment
+      // closed refuses with the closed sentence; closing is a Stop (see
+      // {@link interruptTurn}), settled below with the others. Any other
+      // refusal is this retry failing, kept to be thrown once the opening is
+      // undone.
+      const refreshFailed = opening.stopped
+        ? undefined
+        : await refreshTools(turnRefreshTrigger()).then(
+            () => undefined,
+            (error: unknown) => (closed ? undefined : { error }),
+          );
+      if (!opening.stopped && refreshFailed === undefined) {
+        return { kind: "run", run: agent.continue() };
+      }
+      // No run will start. The failed reply goes back where it was — after
+      // it, the refresh may have appended announcements, which the ledger
+      // already holds in that order — so the next retry finds it to drop, and
+      // the context is the one the ledger rebuilds.
+      const live = [...agent.state.messages];
+      live.splice(droppedAt, 0, ...dropped);
+      agent.state.messages = live;
+      // A manual retry that failed or was closed under opened nothing, so it
+      // leaves nothing on the ledger: the failed turn is still the last one,
+      // and still retryable.
+      if (!resumingTurn && (refreshFailed !== undefined || closed || cancelled)) {
+        pendingRunDelivery = undefined;
+        if (refreshFailed !== undefined) throw refreshFailed.error;
+        return { kind: "closed" };
+      }
+      // The ledger a Stop during the run would have left: the retry accepted
+      // into the turn it opened (or the resumed turn carrying on), and that
+      // turn interrupted — the bottom of `agent_end` for a stopped run, less the
+      // aborted reply no request produced. Its Attention stays, as it does
+      // after any stopped retry, for the next retry to clear.
+      //
+      // An automatic retry whose refresh failed ends here too: its turn is
+      // open on the ledger and nothing will ever resume it, so it is ended
+      // the one way a turn ends without completing, before the failure is
+      // thrown. Left open, the next message would carry on the dead turn's id
+      // and record its acceptance into it.
+      await recordTurnStart();
+      await clearTransportNotice();
+      await commitObservation(
+        await persistObservation({ kind: "turn", state: "interrupted", turnId }),
+      );
+      if (refreshFailed !== undefined) throw refreshFailed.error;
+      return { kind: "stopped" };
     };
 
     /**
@@ -3089,7 +3310,10 @@ async function attachSession(
       while (autoRetryPending) {
         autoRetryPending = false;
         resumingTurn = true;
-        await retryFailedTurn(null);
+        // `agent_end` decided to resume only while nothing had interrupted the
+        // turn, and only `interruptTurn` sets it again before the next run
+        // opens: so a set flag here is a Stop that landed after the decision.
+        await retryFailedTurn(null, interrupting);
       }
     };
 
@@ -3322,9 +3546,12 @@ async function attachSession(
           // {@link contextRewrite} across both, the manual path holds it and
           // refuses rather than waits, and the overflow path runs inside its own
           // run's `agent_end`, where every other caller has already been turned
-          // away. Take that away and a turn started mid-summary is one this line
-          // overwrites — its message and its reply gone from the model's context
-          // while both remain in the ledger and on screen.
+          // away. Nothing starts a turn under that hold: a message waits it out
+          // and a retry is refused. Nor can the hold begin while a retry is
+          // opening its run, which counts as Pi running — see {@link
+          // openingRun} (VC-810). Take that away and a turn started mid-summary
+          // is one this line overwrites — its message and its reply gone from
+          // the model's context while both remain in the ledger and on screen.
           //
           // Already whole: the summary, the restored resources and the kept
           // turns without their reasoning, all read off the entry just written
@@ -3334,6 +3561,9 @@ async function attachSession(
           const announcements = agent.state.messages.slice(messageCount);
           agent.state.messages = withSystemHead(head, [...outcome.messages, ...announcements]);
           nativeCompactionState = providerCompactionFromDetails(outcome.entry.details);
+          // Whatever asked for it: a summary that worked says the summarizer
+          // works, and the mark measured a context this one replaced.
+          resetThresholdBackoff();
         }
         // Recorded before the compaction fact, so a crash between the two
         // loses the summary rather than the bill: the summary is recoverable
@@ -3390,12 +3620,27 @@ async function attachSession(
       }
     };
 
+    /** One failed threshold attempt, measured as the check measured it (VC-1206). */
+    const countThresholdFailure = (occupied: number, signal: AbortSignal | undefined): void => {
+      if (signal?.aborted) return;
+      thresholdFailures += 1;
+      thresholdFailedAt = occupied;
+    };
+
     /**
      * Make room before a request, using the last provider measurement plus the
      * unmeasured suffix (including an incoming user message or tool results).
      * The idle path holds the context rewrite lock; the tool-loop path runs at
      * Pi's prepareNextTurn boundary, where no provider request is in flight.
      * Maintenance failures are durable notices, not rejected user messages.
+     *
+     * Those two are every place a threshold compaction starts, and both come
+     * through here, so the backoff after a failure ({@link
+     * thresholdCompactionAllowed}) is applied once, after the threshold check
+     * and to the same measure it compared. A held-back attempt is not an
+     * attempt: no summary request, no notice, no usage. An attempt that
+     * failed is counted unless the person stopped it — a Stop ends the run
+     * the count belongs to, and is not the summarizer failing.
      */
     const compactBeforeTurn = async (
       additional: readonly AgentMessage[] = [],
@@ -3406,6 +3651,9 @@ async function attachSession(
       // whole history — there is no reason to pay it for an answer already known.
       const contextWindow = contextWindowOf(agent.state.model);
       if (contextWindow === undefined) return false;
+      // Set once the backoff has let an attempt start, so a throw from inside
+      // it is counted and one from the policy read before it is not.
+      let attemptedAt: number | undefined;
       try {
         const settings = compactionSettings();
         if (!settings.enabled) return false;
@@ -3422,10 +3670,23 @@ async function attachSession(
           agent.state.model,
         );
         if (!compactionDue(occupied, contextWindow, thresholdSettings)) return false;
+        if (
+          !thresholdCompactionAllowed({
+            occupied,
+            failedAt: thresholdFailedAt,
+            failures: thresholdFailures,
+            step: settings.keepRecentTokens,
+            cap: THRESHOLD_COMPACTION_FAILURE_CAP,
+          })
+        )
+          return false;
+        attemptedAt = occupied;
         const path = await conversationBranch();
         const outcome = await compactContext({ reason: "threshold", path, signal });
+        if (outcome.kind === "failed") countThresholdFailure(occupied, signal);
         return outcome.kind === "compacted";
       } catch (error) {
+        if (attemptedAt !== undefined) countThresholdFailure(attemptedAt, signal);
         // Reported through the channel a refused summary already uses. If THIS
         // throws the sidecar itself is unwritable, which is not a maintenance
         // failure to absorb — it is the attachment's own durability gone, and it
@@ -3571,30 +3832,10 @@ async function attachSession(
     unsubscribe = subscribe(async (event, runSignal) => {
       if (event.type === "agent_start") {
         acceptingSteer = true;
-        // A resumed attempt is the same turn continuing, so it neither starts one
-        // nor refreshes the budget it is spending.
-        const resumed = resumingTurn;
-        resumingTurn = false;
         failure = undefined;
         interrupting = false;
         activityByToolCallId.clear();
-        if (!resumed) {
-          turnId = randomUUID();
-          autoRetryAttempts = 0;
-          autoRetryWaitedMs = 0;
-          overflowRecoveryUsed = false;
-          reasoningRecoveryUsed = false;
-          await commitObservation(
-            await persistObservation({ kind: "turn", state: "started", turnId }),
-          );
-        }
-        const delivery = pendingRunDelivery;
-        pendingRunDelivery = undefined;
-        if (await persistAcceptedDelivery(delivery, turnId)) {
-          if (delivery?.operation === "message.submit") {
-            acceptedUserMessages.add(delivery.message);
-          }
-        }
+        await recordTurnStart();
         // Last, and only here: a `settle: "opened"` caller is released once the
         // turn's own start is committed and its Command is durably accepted
         // (VC-324). Everything it was promised has happened; the run has not
@@ -3716,6 +3957,16 @@ async function attachSession(
           // Structured provider facts outrank recovery heuristics over prose.
           if (stopDetail.category === "auth-failed") failure.reason = "auth";
           if (stopDetail.category === "context-overflow") failure.reason = "context";
+          // A model the provider does not serve this account is fixed in
+          // Settings, not by running the same request again.
+          if (sessionStopCause(stopDetail) === "model-unavailable")
+            failure.reason = "configuration";
+          // A renewal that never got an answer is the wire's, not the
+          // credential's, whatever words ("token refresh") its sentence holds:
+          // the transport retry answers it, and if that is spent it is a
+          // failed run, not a request to sign in.
+          if (stopDetail.providerType === SESSION_CREDENTIAL_STOP_TYPES.refreshUnreachable)
+            failure.reason = "model";
           // The envelope the sentence above was cut from, for this machine's
           // support report only (VC-1244). It never joins `failure`, the
           // sidecar or an observation.
@@ -3895,6 +4146,12 @@ async function attachSession(
         // someone their message. Every question below is asked after it,
         // because the answers can change while it is held.
         await contextRewrite;
+        // A retry that has decided to run is a live turn in all but Pi's flag
+        // — see {@link openingRun}. Waited out like the rewrite, so the checks
+        // below find the run streaming and this message joins it, rather than
+        // racing it to `prompt` and losing to Pi's "already processing".
+        // eslint-disable-next-line no-unmodified-loop-condition -- a retry sets it across the await
+        while (openingRun) await runOpening;
         if (closed || cancelled) {
           return { kind: "rejected", reason: "closed", message: "This attachment is closed." };
         }
@@ -3961,6 +4218,11 @@ async function attachSession(
           return { kind: "delivered", delivery, ...acceptanceTime(commandId) };
         }
         consumeRunFailure();
+        // This message opens a run, and the idle compaction below is that run's
+        // first chance to make room — so the run's backoff starts here, not at
+        // `agent_start`, and an attempt this message pays for is counted
+        // against the run it opens.
+        resetThresholdBackoff();
         // Before the message is composed, not after: compaction can change what
         // the context holds, and the Brief is prepended on an empty one. Held
         // as a rewrite so an explicit `/compact` arriving meanwhile is refused
@@ -4049,7 +4311,7 @@ async function attachSession(
         if (closed || cancelled) {
           return { kind: "rejected", reason: "closed", message: "This attachment is closed." };
         }
-        if (agent.state.isStreaming) {
+        if (agent.state.isStreaming || openingRun) {
           return {
             kind: "rejected",
             reason: "busy-unsupported",
@@ -4087,13 +4349,20 @@ async function attachSession(
             message: "The selected reasoning level is not supported by this model.",
           };
         }
-        // Availability can resolve asynchronously. Recheck the idle boundary
-        // immediately before changing the pair so neither half is applied to
-        // a turn that started while credentials were being inspected.
+        // Opaque state is model-bound. Reconstruct from durable original history
+        // on a model switch rather than pretending its placeholder is a summary.
+        // The new pair's own resolved route decides: the same catalog model
+        // reached through OAuth or an endpoint override cannot replay a
+        // checkpoint the metered public API minted (VC-331).
+        const selectedRoute = await nativeCompactionAvailable(selected, models, spec.signal);
+        // Availability and the route both resolve asynchronously. Recheck the
+        // idle boundary after the last of them, immediately before claiming the
+        // context, so neither half of the pair is applied to a turn that
+        // started — or a retry that began opening one (VC-810) — meanwhile.
         if (closed || cancelled) {
           return { kind: "rejected", reason: "closed", message: "This attachment is closed." };
         }
-        if (agent.state.isStreaming) {
+        if (agent.state.isStreaming || openingRun) {
           return {
             kind: "rejected",
             reason: "busy-unsupported",
@@ -4106,12 +4375,6 @@ async function attachSession(
             reason: "busy-unsupported",
             message: "The context is being compacted.",
           };
-        // Opaque state is model-bound. Reconstruct from durable original history
-        // on a model switch rather than pretending its placeholder is a summary.
-        // The new pair's own resolved route decides: the same catalog model
-        // reached through OAuth or an endpoint override cannot replay a
-        // checkpoint the metered public API minted (VC-331).
-        const selectedRoute = await nativeCompactionAvailable(selected, models, spec.signal);
         const refreshTrigger =
           selected.provider === agent.state.model.provider &&
           selected.id === agent.state.model.id &&
@@ -4152,15 +4415,28 @@ async function attachSession(
         if (closed || cancelled) {
           return { kind: "rejected", reason: "closed", message: "This attachment is closed." };
         }
-        if (agent.state.isStreaming) {
+        // Asked synchronously, the way `compact` asks, and before anything is
+        // dropped from the context: a refused retry leaves its failed reply
+        // where it was, for the next retry to take. A retry already opening its
+        // run is Pi running (see {@link openingRun}). A context being rewritten
+        // refuses it the way it refuses a compaction or a model switch: a
+        // retry is a command its caller can repeat, not a message to keep.
+        if (agent.state.isStreaming || openingRun) {
           return {
             kind: "rejected",
             reason: "busy-unsupported",
             message: "Pi is already running.",
           };
         }
+        if (rewritingContext) {
+          return {
+            kind: "rejected",
+            reason: "busy-unsupported",
+            message: "The context is being compacted.",
+          };
+        }
         observationDelivery.consumeFailure();
-        const outcome = await retryFailedTurn(commandId ?? null);
+        const outcome = await retryFailedTurn(commandId ?? null, false);
         await settleRun();
         const failed = observationDelivery.consumeFailure();
         if (failed !== undefined) throw failed;
@@ -4210,7 +4486,7 @@ async function attachSession(
         // One refusal, two sentences. A person told "while Pi is running" about
         // a Session that is plainly idle would go looking for a turn that is not
         // there; the wait they are actually in is a summary, and it ends.
-        if (agent.state.isStreaming) {
+        if (agent.state.isStreaming || openingRun) {
           return {
             kind: "rejected",
             reason: "busy-unsupported",
@@ -4251,6 +4527,16 @@ async function attachSession(
 
       async interrupt(): Promise<void> {
         interruptTurn();
+        // A retry still opening its run answers this Stop by never starting it.
+        // Waited for that settle and no further: once it lets go, a message
+        // that was waiting may open a run of its own, which this Stop predates.
+        //
+        // The settle waits out the retry's tool refresh. That is the host's
+        // own work — its refresh queue, local SQLite reads, recording the
+        // refresh, MCP and secret port setup, durable appends; no network —
+        // and `close()` already waits on the same refresh, so a refresh that
+        // never answered would wedge this attachment either way.
+        if (openingRun !== undefined) return runOpening;
         await agent.waitForIdle();
       },
 
@@ -4263,6 +4549,9 @@ async function attachSession(
         autoRetryPending = false;
         spec.signal?.removeEventListener("abort", onAbort);
         interruptTurn();
+        // A retry opening its run settles what it opened before the
+        // attachment says it closed (VC-1199).
+        await runOpening;
         await agent.waitForIdle();
         await detachedRunSettled;
         await refreshTail;

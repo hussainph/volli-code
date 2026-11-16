@@ -27,6 +27,7 @@ import {
   shortSessionId,
   redactPayloadSecrets,
   isAttachTimeoutAttention,
+  isWorktreePreparationAttention,
   isProcessLossWarning,
 } from "@volli/shared";
 import type {
@@ -609,6 +610,11 @@ export function sessionPeekAttention(
   // An attach that ran out of time keeps the kind older builds clear on attach,
   // and says what it is rather than "Runtime stopped" (VC-1072).
   if (isAttachTimeoutAttention(attention)) return { message: "Start timed out", recovery: "Retry" };
+  // A worktree that could not be prepared keeps the kind older builds clear on
+  // attach, and is not something Settings fixes (VC-1015).
+  if (isWorktreePreparationAttention(attention)) {
+    return { message: "Worktree unavailable", recovery: "Retry" };
+  }
   const copy = PEEK_ATTENTION[attention.kind];
   return !projection.turnActive &&
     isProcessLossWarning(attention, projection.liveExecutor?.id ?? null)
