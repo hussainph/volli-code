@@ -85,9 +85,8 @@ const HELP = `volli-drive — drive an isolated, keychain-free live Volli build
   restore-restart <id> --gen N --ref eN
                                    click Restart and restore; supervise its local relaunch
   restart <id>                     supervised cloud restart on the same isolated profile
-  relaunch <id> [--kill]           quit a local instance and launch it again on the same
-                                   profile and database (a routine relaunch); --kill
-                                   force-quits it with SIGKILL instead
+  relaunch <id>                    quit a local instance and launch it again on the same
+                                   profile and database (a routine relaunch)
   quit-during-launch <id> --work check|upgrade [--database /abs/older.db] [--second-launch]
                                    relaunch, quit on the database page, time the exit,
                                    then launch again normally (VC-1208)
@@ -730,7 +729,7 @@ async function main() {
       out(JSON.stringify(await call(id, "restart", {}, 120_000)));
       break;
     case "relaunch":
-      out(JSON.stringify(await call(id, "relaunch", { kill: flags.kill === true }, 300_000)));
+      out(JSON.stringify(await call(id, "relaunch", {}, 300_000)));
       break;
     case "quit-during-launch":
       out(
