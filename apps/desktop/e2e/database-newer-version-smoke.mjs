@@ -35,7 +35,9 @@ import {
   assertProfileIsolated,
   closeAppBounded,
   createDeadline,
+  exitWatchRecord,
   launch,
+  quitEndedByApp,
   waitUntil,
   writeFakeLoginShell,
 } from "./lib/smoke-kit.mjs";
@@ -125,6 +127,7 @@ async function openApp(config, label) {
     app,
     child: app.process(),
     label,
+    userDataDir: config.userDataDir,
     stdout: "",
     stderr: "",
     debuggerWaitTraced: false,
@@ -174,8 +177,16 @@ async function closeRun(run) {
         `SHUTDOWN TRACE: ${run.label}:\n${await fs.readFile(run.tracePath, "utf8").catch((error) => `unavailable: ${error.message}`)}`,
       );
   }
-  console.log(`CLEANUP: ${run.label}: ${JSON.stringify(exit)}`);
-  assert.equal(exit.exit.code, 0, `${run.label} did not quit cleanly`);
+  // The exit watch's record (VC-652): how long Electron's native teardown
+  // lingered after the exit call, and whether the watch had to end it.
+  const watch = typeof exit.pid === "number" ? exitWatchRecord(run.userDataDir, exit.pid) : null;
+  console.log(`CLEANUP: ${run.label}: ${JSON.stringify(exit)} watch=${JSON.stringify(watch)}`);
+  // Ended by the app: exit 0, or its own exit watch's SIGKILL once the native
+  // teardown outlived the 5 s bound. Any other signal is not a clean quit.
+  assert.ok(
+    quitEndedByApp(exit, `${run.stdout}${run.stderr}`, { userDataDir: run.userDataDir }),
+    `${run.label} did not quit cleanly`,
+  );
   assert.ok(
     ["graceful", "already-exited", "natural-after-close"].includes(exit.kind),
     "cleanup required a forced signal",

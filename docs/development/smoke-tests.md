@@ -37,7 +37,12 @@ until green.
 The runner's `SERIAL` set runs one probe at a time after its lane's concurrent
 work drains.
 Do not quarantine a sole core journey based on historical flakes or weaken
-graceful-exit assertions.
+graceful-exit assertions. A quit the app ended itself is still graceful: after
+an ordinary exit, the app's exit watch (VC-652) SIGKILLs a native teardown
+still running 5 s later, which busy CI runners hit. A smoke that asserts a
+clean quit accepts that SIGKILL only through smoke-kit's `quitEndedByApp` (the
+exit line says `watch: 'arming'` and the watch's record for that exact pid says
+`killed`), and logs the record so the linger stays visible.
 
 ## Consolidated journeys
 
