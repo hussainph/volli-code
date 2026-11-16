@@ -543,9 +543,9 @@ it("sends the optional preview invite code and leaves a waitlisted sign-in witho
   expect(container.textContent).not.toContain("Restart to open");
 });
 
-it("does not read GitHub before stable enrollment restarts into cloud", () => {
+it("does not read GitHub while cloud is off", () => {
   useExperimentsStore.setState({
-    snapshot: { cloud: { enabled: false, source: "default", visible: false, enrollment: true } },
+    snapshot: { cloud: { enabled: false, source: "default" } },
   });
   const tier = standIn();
   act(() => root.render(<AccountPane rpc={tier.rpc} />));

@@ -6,6 +6,7 @@ import {
   requireExperimentId,
   resolveExperiments,
   serializeExperimentUpdate,
+  type ExperimentBuildKind,
 } from "./experiments";
 
 describe("experimental registry", () => {
@@ -43,6 +44,18 @@ describe("experimental registry", () => {
         cloud: { enabled: true, source: "storage" },
       });
     }
+  });
+
+  it("hides a flag on a build kind its registry entry does not list", () => {
+    // Every registered flag lists dev, canary and stable today; an unlisted
+    // kind stands in for a future build-limited flag.
+    const unlisted = "unlisted" as unknown as ExperimentBuildKind;
+    expect(resolveExperiments({ cloud: true }, [], unlisted)).toEqual({
+      cloud: { enabled: false, source: "default", visible: false },
+    });
+    expect(resolveExperiments({}, ["cloud"], unlisted)).toEqual({
+      cloud: { enabled: true, source: "environment" },
+    });
   });
 
   it("rejects unknown ids, including inherited object names, at runtime", () => {

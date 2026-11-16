@@ -252,6 +252,19 @@ describe("after the flag-on suite", () => {
   });
 });
 
+it("refuses writes to a flag its build does not list", async () => {
+  ctx = openTestDb();
+  // No registered flag is hidden on dev, canary or stable today; a build kind
+  // outside every flag's list stands in for a future build-limited flag.
+  const unlisted = "unlisted" as unknown as ConstructorParameters<typeof ExperimentalSettings>[2];
+  const settings = new ExperimentalSettings(ctx.db, undefined, unlisted);
+  expect(settings.snapshot().cloud.visible).toBe(false);
+  await expect(settings.set("cloud", true)).rejects.toThrow(
+    "Experiment cloud is unavailable on unlisted builds",
+  );
+  expect(getAppState(ctx.db, EXPERIMENTS_APP_STATE_KEY)).toBeUndefined();
+});
+
 it("never advertises the retired stable enrollment", () => {
   expect(new ExperimentalSettings(null, undefined, "stable").snapshot()).toEqual({
     cloud: { enabled: false, source: "default" },
