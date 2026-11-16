@@ -88,10 +88,12 @@ import {
   errorMessage,
   isMcpToolId,
   readSkillResources,
+  RuntimeShutdownAbort,
   sessionToolIds,
   verbToolsOf,
   type AgentRuntime,
   type CommandRefusalSeverity,
+  type RuntimeInterruption,
   type CompactionRequestOutcome,
   type DeliveryOutcome,
   type CodeModeSurface,
@@ -1559,6 +1561,13 @@ class PiBinding implements BindingHandle {
     };
   }
 
+  /** What cut short the turn this binding's recovery found open; `null` once releasing. */
+  interruption(): RuntimeInterruption | null {
+    const handle = this.#handle;
+    if (handle === null || this.#releasing) return null;
+    return handle.interruption?.() ?? null;
+  }
+
   /** Where the recovered conversation stands; a closed or releasing binding has nothing to continue. */
   resumeBoundary(): RuntimeResumeBoundary | null {
     const handle = this.#handle;
@@ -1612,6 +1621,13 @@ class PiBinding implements BindingHandle {
         failures.push(error);
       }
     };
+    // A shutdown says so WITH the abort, and aborts first (VC-1245): the abort
+    // is what ends the running turn, and everything after it can take real
+    // time before the close that also says so. First, so that a question the
+    // loop below withdraws is a tool the quit cut short, left without a
+    // result for the person, not an answer a restart would continue from.
+    // Withdrawals are still announced: `#released` is not yet set.
+    if (reason === "shutdown") this.#abort.abort(new RuntimeShutdownAbort());
     // Iterated live rather than over a snapshot: a question that slipped in
     // between two awaits here is one this loop still has to withdraw.
     for (const asked of [this.#asked, this.#askedUser]) {

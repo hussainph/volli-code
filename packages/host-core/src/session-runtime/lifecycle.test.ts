@@ -1068,6 +1068,7 @@ describe("restart resume after recovery (VC-450)", () => {
     const ports = given!;
     Object.assign(f.runtime, {
       resumeBoundary: vi.fn(() => "settled"),
+      interruption: vi.fn(() => "quit"),
       pendingTurnStarts: vi.fn(() => new Set(["s"])),
     });
     vi.mocked(f.runtime.projection).mockResolvedValueOnce({
@@ -1081,6 +1082,7 @@ describe("restart resume after recovery (VC-450)", () => {
       ticketId: "t",
     });
     expect(ports.resumeBoundary({ attachmentId: "a" })).toBe("settled");
+    expect(ports.interruption?.({ attachmentId: "a" })).toBe("quit");
     expect(ports.pendingTurnStarts()).toEqual(new Set(["s"]));
     await ports.command({ commandId: "c", sessionId: "s", command: { kind: "executor.retry" } });
     expect(f.runtime.command).toHaveBeenCalledOnce();

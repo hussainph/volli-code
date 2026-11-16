@@ -469,6 +469,7 @@ export function createSessionRuntimeLifecycle<Services>(options: {
         projection: async (sessionId) => (await hosted.projection({ sessionId })).projection,
         ticketSessions: (query) => ticketSessionProjections(engine, query),
         resumeBoundary: (input) => hosted.resumeBoundary(input),
+        interruption: (input) => hosted.interruption(input),
         pendingTurnStarts: () => hosted.pendingTurnStarts(),
         command: (request) => hosted.command(request),
         shouldStop: () => closing,

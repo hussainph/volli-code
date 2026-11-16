@@ -4,6 +4,7 @@ import type {
   ModelSelection,
   RuntimeMessageSettle,
   RuntimeObservation,
+  RuntimeInterruption,
   RuntimeResumeBoundary,
   SessionAttachmentContinuity,
   SessionInteraction,
@@ -211,6 +212,12 @@ export interface BindingHandle {
    * when the executor cannot say: either way nothing is continued on its own.
    */
   resumeBoundary?(): RuntimeResumeBoundary | null;
+  /**
+   * What cut short the turn this binding's recovery found open (VC-1245): a
+   * deliberate quit or a process loss. Optional, and `null` when the executor
+   * cannot say; absent is read as a process loss.
+   */
+  interruption?(): RuntimeInterruption | null;
   release(reason: ReleaseReason): Promise<void>;
 }
 

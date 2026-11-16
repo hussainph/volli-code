@@ -7,7 +7,11 @@ import {
   type SessionCommandIntent,
 } from "@volli/shared";
 
-import { restartResumeVerdict, type RestartResumeVerdictInput } from "./restart-resume";
+import {
+  QUIT_RESUME_POLICY,
+  restartResumeVerdict,
+  type RestartResumeVerdictInput,
+} from "./restart-resume";
 
 const TWELVE_HOURS = 12 * 60 * 60 * 1000;
 
@@ -67,6 +71,8 @@ function input(
     now: LOST_AT + 5_000,
     startPending: false,
     boundary: "settled",
+    interruption: "process-loss",
+    quitPolicy: QUIT_RESUME_POLICY,
     ticketSessions: [],
     ...rest,
   };
@@ -224,5 +230,36 @@ describe("restartResumeVerdict (VC-450)", () => {
     expect(restartResumeVerdict(input({}, { boundary: null }))).toEqual(
       skip("nothing-to-continue"),
     );
+  });
+
+  // VC-1245: the owner's pending choice is this one branch. A crash (or an
+  // executor that cannot say) is never touched by it, and a quit with a tool
+  // in flight waits for the person under either policy.
+  it.each([
+    ["resume", "quit", "resume"],
+    ["resume", "process-loss", "resume"],
+    ["offer-resume", "quit", "quit"],
+    ["offer-resume", "process-loss", "resume"],
+    ["offer-resume", null, "resume"],
+  ] as const)("under the %s quit policy, a %s turn gets %s", (quitPolicy, interruption, want) => {
+    const verdict = restartResumeVerdict(input({}, { quitPolicy, interruption }));
+    expect(verdict).toEqual(
+      want === "resume" ? expect.objectContaining({ kind: "resume" }) : skip(want),
+    );
+  });
+
+  it.each(["resume", "offer-resume"] as const)(
+    "leaves a quit with a tool in flight to the person under the %s policy",
+    (quitPolicy) => {
+      expect(
+        restartResumeVerdict(
+          input({}, { quitPolicy, interruption: "quit", boundary: "tool-in-flight" }),
+        ),
+      ).toEqual(skip("tool-in-flight"));
+    },
+  );
+
+  it("ships the policy that continues a quit like a crash", () => {
+    expect(QUIT_RESUME_POLICY).toBe("resume");
   });
 });

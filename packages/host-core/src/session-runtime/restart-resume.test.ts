@@ -99,6 +99,17 @@ describe("resumeRecoveredTurns (VC-450)", () => {
     expect(commands).toContainEqual(expect.objectContaining({ sessionId: "b" }));
   });
 
+  // VC-1245: the executor's answer reaches the verdict. Under the shipped
+  // policy a quit continues like a crash; the other policy is the verdict's.
+  it("asks the executor what cut each turn short, and continues a quit like a crash", async () => {
+    const interruption = vi.fn(() => "quit" as const);
+    const { port, sessions, commands } = ports({ interruption });
+    sessions.set("a", projection("a"));
+    await resumeRecoveredTurns(port, { turns: [turn("a")], lostAt: LOST_AT });
+    expect(interruption).toHaveBeenCalledWith({ attachmentId: "a-attachment" });
+    expect(commands).toEqual([expect.objectContaining({ sessionId: "a" })]);
+  });
+
   it("leaves a skipped turn, and every turn when the moment of loss is unknown", async () => {
     const { port, sessions, commands } = ports({ resumeBoundary: () => "tool-in-flight" });
     sessions.set("a", projection("a"));

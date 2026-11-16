@@ -10,6 +10,7 @@ import {
   type NativeAttachmentSpec,
 } from "@volli/session-engine";
 import {
+  isProcessLossWarning,
   readSessionOrigin,
   RECOVERED_TURN_INTERRUPTED_DETAIL,
   scrubSessionEvent,
@@ -310,6 +311,12 @@ function fixture() {
     const adapter = createPiNativeAdapter({
       sessionDataDir,
       models: script.models,
+      // Released between the attachment's abort and its close, and slow the
+      // way a real one (MCP, browser, shells) is, so a quit's close cannot
+      // reach the runtime before the aborted run settles (VC-1245).
+      releaseRuntimeContext: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      },
       usageLimits: {
         fetch: async () => {
           throw new Error("Fixture has no network");
@@ -1387,30 +1394,46 @@ describe("restart resume through the durable Pi binding (VC-450)", () => {
     }
   });
 
-  it("leaves a turn lost inside a tool for the person, whose Resume then continues it", async () => {
-    const f = fixture();
-    const { sessionId } = await start(f);
-    const current = await f.restart(f, true);
-    let recovered: BootRecoveredTurns | undefined;
-    await f.boot(current, (turns) => (recovered = turns));
-    const requestsBefore = f.script.requests.length;
-    await resume(current, recovered!);
-    // Nothing ran: the abandoned question is the person's to answer.
-    expect(f.script.requests).toHaveLength(requestsBefore);
-    const waiting = (await current.host.projection({ sessionId })).projection;
-    expect(waiting.lastTurnOutcome).toBe("interrupted");
+  // A quit with a tool in flight is the person's to resume, exactly as a
+  // crash's is: the question its release withdraws leaves no answer behind
+  // that a restart could continue from (VC-1245).
+  it.each([
+    ["crash", true],
+    ["quit", false],
+  ] as const)(
+    "leaves a turn a %s cut short inside a tool for the person, whose Resume then continues it",
+    async (_loss, crash) => {
+      const f = fixture();
+      const { sessionId } = await start(f);
+      const current = await f.restart(f, crash);
+      let recovered: BootRecoveredTurns | undefined;
+      await f.boot(current, (turns) => (recovered = turns));
+      const requestsBefore = f.script.requests.length;
+      await resume(current, recovered!);
+      // Nothing ran: the abandoned question is the person's to answer.
+      expect(f.script.requests).toHaveLength(requestsBefore);
+      const waiting = (await current.host.projection({ sessionId })).projection;
+      expect(waiting.lastTurnOutcome).toBe("interrupted");
+      // And the row offers Resume: the plain process-loss warning stands on the
+      // live attachment (`isProcessLossWarning`).
+      expect(
+        waiting.attention.active.some((attention) =>
+          isProcessLossWarning(attention, waiting.liveExecutor?.id ?? null),
+        ),
+      ).toBe(true);
 
-    const retried = await current.host.command({
-      sessionId,
-      commandId: `resume-${clock++}`,
-      command: { kind: "executor.retry" },
-    });
-    expect(retried.receipt?.status, JSON.stringify(retried.receipt)).toBe("accepted");
-    expect(f.script.requests).toHaveLength(requestsBefore + 1);
-    const answered = (await current.host.projection({ sessionId })).projection;
-    expect(answered.lastTurnOutcome).toBe("completed");
-    expect(
-      answered.attention.active.filter(({ kind }) => kind === "partial_turn_interrupted"),
-    ).toEqual([]);
-  });
+      const retried = await current.host.command({
+        sessionId,
+        commandId: `resume-${clock++}`,
+        command: { kind: "executor.retry" },
+      });
+      expect(retried.receipt?.status, JSON.stringify(retried.receipt)).toBe("accepted");
+      expect(f.script.requests).toHaveLength(requestsBefore + 1);
+      const answered = (await current.host.projection({ sessionId })).projection;
+      expect(answered.lastTurnOutcome).toBe("completed");
+      expect(
+        answered.attention.active.filter(({ kind }) => kind === "partial_turn_interrupted"),
+      ).toEqual([]);
+    },
+  );
 });

@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  rmSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -44,6 +45,7 @@ import {
   codeModeSurfaceFor,
   parseMcpToolKey,
   RECOVERED_TURN_INTERRUPTED_DETAIL,
+  RuntimeShutdownAbort,
   withParallelReadEligibility,
   sessionToolIds,
   skillPromptResource,
@@ -6295,52 +6297,6 @@ describe("startSession", () => {
 
     await handle.close();
     expect(kinds(observations)).toContain("attachment:closed");
-  });
-
-  // A quit is a process loss, not a Stop: the turn it cuts short stays open in
-  // the sidecar, so the next launch recovers it exactly as it recovers a
-  // crashed one — the process-loss warning and a settled point to resume
-  // from — rather than as a turn someone ended (VC-1245).
-  it.each([
-    ["shutdown", true],
-    ["released", false],
-  ] as const)("a %s close mid-turn leaves the turn for recovery: %s", async (reason, recovers) => {
-    const attachment = fixture();
-    const streaming = Promise.withResolvers<void>();
-    const first = await createPiAgentRuntime({
-      sessionDataDir: attachment.sessionDataDir,
-      models: modelsWithStream(scriptedStream([haltOnAbort("half a thought", streaming.resolve)])),
-    }).startSession(attachment.spec);
-    const recovery = first.recovery!;
-    const delivery = first.submitUserMessage("go", "queue", "before-quit");
-    await streaming.promise;
-    await first.close(reason);
-    await delivery;
-    expect(kinds(attachment.observations).includes("turn:interrupted")).toBe(!recovers);
-
-    const reopened = fixture();
-    const second = await createPiAgentRuntime({
-      sessionDataDir: attachment.sessionDataDir,
-      models: modelsWithStream(scriptedStream([])),
-    }).startSession({ ...attachment.spec, observer: reopened.spec.observer, recovery });
-    const replay = await second.reconcile(null);
-    const replayed = [...replay.observations];
-    expect(kinds(replayed).filter((kind) => kind.startsWith("turn:"))).toEqual([
-      "turn:started",
-      "turn:interrupted",
-    ]);
-    expect(
-      attentions(replayed).some(
-        (observation) =>
-          observation.kind === "attention" &&
-          observation.state === "raised" &&
-          observation.message === RECOVERED_TURN_INTERRUPTED_DETAIL,
-      ),
-    ).toBe(recovers);
-    // The aborted half-reply is not replayed: the user message is the point
-    // a resume answers.
-    expect(second.resumeBoundary?.()).toBe("settled");
-    await second.close();
   });
 
   it("honors Stop when the provider races the abort with a normal finish (VC-758)", async () => {
@@ -14640,3 +14596,241 @@ it.each(DIAGNOSTIC_SECRET_CASES)(
     }
   },
 );
+
+/**
+ * A quit is a process loss, not a Stop (VC-1245). The shutdown arrives with
+ * the attachment signal's abort, and the host may do slow cleanup before it
+ * also closes with "shutdown": nothing after the abort may end the turn or
+ * write what the abort made of it. The next attach then finds the turn open,
+ * exactly as a crash leaves it, plus the record that it was a quit.
+ */
+describe("a quit leaves the running turn for the next launch (VC-1245)", () => {
+  type Handle = Awaited<ReturnType<ReturnType<typeof createPiAgentRuntime>["startSession"]>>;
+
+  /** Attach again from the sidecar the first attachment left, as a relaunch does. */
+  async function relaunch(attachment: Attachment, recovery: Handle["recovery"]) {
+    const reopened = fixture();
+    const handle = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([])),
+    }).startSession({
+      ...attachment.spec,
+      signal: undefined,
+      observer: reopened.spec.observer,
+      recovery,
+    });
+    const replayed = [...(await handle.reconcile(null)).observations];
+    return { handle, replayed };
+  }
+
+  const processLossWarned = (observations: RuntimeObservation[]) =>
+    attentions(observations).some(
+      (observation) =>
+        observation.kind === "attention" &&
+        observation.state === "raised" &&
+        observation.message === RECOVERED_TURN_INTERRUPTED_DETAIL,
+    );
+
+  const turnStates = (observations: RuntimeObservation[]) =>
+    kinds(observations).filter((kind) => kind.startsWith("turn:"));
+
+  it("leaves the turn open when the shutdown abort lands before the close", async () => {
+    const controller = new AbortController();
+    const attachment = fixture({ signal: controller.signal });
+    const streaming = Promise.withResolvers<void>();
+    const first = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([haltOnAbort("half a thought", streaming.resolve)])),
+    }).startSession(attachment.spec);
+    const recovery = first.recovery!;
+    const delivery = first.submitUserMessage("go", "queue", "before-quit");
+    await streaming.promise;
+    // The host aborts first and closes only after its slow cleanup: the run
+    // has fully settled by the time the close says "shutdown".
+    controller.abort(new RuntimeShutdownAbort());
+    await delivery;
+    await first.close("shutdown");
+    expect(turnStates(attachment.observations)).toEqual(["turn:started"]);
+
+    const { handle, replayed } = await relaunch(attachment, recovery);
+    expect(turnStates(replayed)).toEqual(["turn:started", "turn:interrupted"]);
+    expect(processLossWarned(replayed)).toBe(true);
+    expect(handle.resumeBoundary?.()).toBe("settled");
+    expect(handle.interruption?.()).toBe("quit");
+    await handle.close();
+  });
+
+  it("still releases everything when the quit cannot record itself, and says so", async () => {
+    const controller = new AbortController();
+    const attachment = fixture({ signal: controller.signal });
+    const streaming = Promise.withResolvers<void>();
+    const first = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([haltOnAbort("half a thought", streaming.resolve)])),
+    }).startSession(attachment.spec);
+    const recovery = first.recovery!;
+    const delivery = first.submitUserMessage("go", "queue", "before-quit");
+    await streaming.promise;
+    controller.abort(new RuntimeShutdownAbort());
+    await delivery;
+    // The sidecar cannot be written by the time the quit tries to say it was one.
+    rmSync(recovery.sessionFilePath);
+    mkdirSync(recovery.sessionFilePath);
+    await expect(first.close("shutdown")).rejects.toThrow();
+    expect(kinds(attachment.observations).at(-1)).toBe("attachment:closed");
+  });
+
+  it("ends the turn as stopped for every other close", async () => {
+    const attachment = fixture();
+    const streaming = Promise.withResolvers<void>();
+    const first = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([haltOnAbort("half a thought", streaming.resolve)])),
+    }).startSession(attachment.spec);
+    const recovery = first.recovery!;
+    const delivery = first.submitUserMessage("go", "queue", "before-close");
+    await streaming.promise;
+    await first.close();
+    await delivery;
+    expect(turnStates(attachment.observations)).toEqual(["turn:started", "turn:interrupted"]);
+
+    const { handle, replayed } = await relaunch(attachment, recovery);
+    expect(processLossWarned(replayed)).toBe(false);
+    expect(handle.interruption?.()).toBeNull();
+    await handle.close();
+  });
+
+  it("reads a turn nobody closed as a process loss, not a quit", async () => {
+    const attachment = fixture();
+    const streaming = Promise.withResolvers<void>();
+    const first = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([haltOnAbort("half a thought", streaming.resolve)])),
+    }).startSession(attachment.spec);
+    const recovery = first.recovery!;
+    void first.submitUserMessage("go", "queue", "before-crash");
+    await streaming.promise;
+    // The sidecar as the process left it mid-turn, before any close ran.
+    const crashed = readFileSync(recovery.sessionFilePath, "utf8");
+    await first.close();
+    writeFileSync(recovery.sessionFilePath, crashed);
+
+    const { handle, replayed } = await relaunch(attachment, recovery);
+    expect(processLossWarned(replayed)).toBe(true);
+    expect(handle.interruption?.()).toBe("process-loss");
+    await handle.close();
+  });
+
+  it("leaves the turn open when the quit lands while it waits to reconnect", async () => {
+    const controller = new AbortController();
+    const attachment = fixture({
+      signal: controller.signal,
+      observer: async (observation) => {
+        attachment.observations.push(observation);
+        // "Reconnecting" is on screen: the turn now sits in its backoff.
+        if (observation.kind === "attention" && observation.state === "raised") {
+          controller.abort(new RuntimeShutdownAbort());
+        }
+      },
+    });
+    const first = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      retryBackoffMs: (attempt) =>
+        attempt + 1 >= TRANSPORT_NOTICE_AFTER_ATTEMPTS ? 10 * 60_000 : 0,
+      models: modelsWithStream(scriptedStream(drops(TRANSPORT_NOTICE_AFTER_ATTEMPTS))),
+    }).startSession(attachment.spec);
+    const recovery = first.recovery!;
+    await first.submitUserMessage("go", "queue", "before-quit");
+    await first.close("shutdown");
+    expect(turnStates(attachment.observations)).toEqual(["turn:started"]);
+
+    const { handle, replayed } = await relaunch(attachment, recovery);
+    expect(turnStates(replayed)).toEqual(["turn:started", "turn:interrupted"]);
+    expect(processLossWarned(replayed)).toBe(true);
+    expect(handle.interruption?.()).toBe("quit");
+    await handle.close();
+  });
+
+  it("leaves the turn open when the quit lands while an automatic retry opens its run", async () => {
+    const controller = new AbortController();
+    const attachment = fixture({ signal: controller.signal });
+    const refresh = holdableRefresh(attachment);
+    let entered: Promise<void> | undefined;
+    const first = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      retryBackoffMs: instantBackoff,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            // The next refresh is the automatic retry's own.
+            entered = refresh.arm();
+            emit.fail(DROPPED_SOCKET);
+          },
+          settles("never sent"),
+        ]),
+      ),
+    }).startSession(attachment.spec);
+    const recovery = first.recovery!;
+    const submitting = first.submitUserMessage("go", "queue", "before-quit");
+    await vi.waitFor(() => expect(entered).toBeDefined());
+    await entered;
+    controller.abort(new RuntimeShutdownAbort());
+    refresh.release();
+    await submitting;
+    await first.close("shutdown");
+    expect(turnStates(attachment.observations)).toEqual(["turn:started"]);
+
+    const { handle, replayed } = await relaunch(attachment, recovery);
+    expect(turnStates(replayed)).toEqual(["turn:started", "turn:interrupted"]);
+    expect(handle.interruption?.()).toBe("quit");
+    await handle.close();
+  });
+
+  // Pi answers the aborted tool ("Command aborted"), and that result would
+  // read as a settled point a restart continues unattended. A quit with a tool
+  // in flight is the person's to resume, exactly as a crash's is.
+  it("leaves a tool the quit cut short without a result, for the person", async () => {
+    const controller = new AbortController();
+    const attachment = fixture({ tools: { tools: ["execute"] }, signal: controller.signal });
+    const running = Promise.withResolvers<void>();
+    const containedEnv = {
+      cwd: attachment.worktreePath,
+      exec: async (_command: string, options?: { signal?: AbortSignal }) => {
+        running.resolve();
+        await new Promise<void>((resolve) => {
+          if (options?.signal?.aborted) resolve();
+          options?.signal?.addEventListener("abort", () => resolve(), { once: true });
+          controller.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        return { ok: true as const, value: { stdout: "", stderr: "aborted", exitCode: 130 } };
+      },
+      cleanup: async () => undefined,
+    } as unknown as ExecutionEnv;
+    const first = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      executionEnvFactory: async () => containedEnv,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.toolCall("bash", { command: "sleep 600" });
+            emit.finish();
+          },
+          settles("never sent"),
+        ]),
+      ),
+    }).startSession(attachment.spec);
+    const recovery = first.recovery!;
+    const delivery = first.submitUserMessage("run it", "queue", "before-quit");
+    await running.promise;
+    controller.abort(new RuntimeShutdownAbort());
+    await delivery;
+    await first.close("shutdown");
+    expect(turnStates(attachment.observations)).toEqual(["turn:started"]);
+
+    const { handle, replayed } = await relaunch(attachment, recovery);
+    expect(processLossWarned(replayed)).toBe(true);
+    expect(handle.resumeBoundary?.()).toBe("tool-in-flight");
+    expect(handle.interruption?.()).toBe("quit");
+    await handle.close();
+  });
+});
