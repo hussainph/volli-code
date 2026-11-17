@@ -8,15 +8,15 @@
  *
  * `hydrate` is the ONE place `ticketsByProject`/`labelsByProject` are seeded
  * wholesale, from the boot payload (see lib/boot.ts); every mutation after
- * that is an async write-through via `gateway` that reconciles the
- * authoritative result or reverts on failure, surfacing every failure via a
- * toast (CLAUDE.md: never silently swallow a failed mutation).
+ * that goes through the project's board source (`board-source.ts`): this
+ * Mac's IPC (`local-board-source.ts`), which paints, writes through and
+ * reconciles or reverts against these slices, or a source that delivers its
+ * own rows and paints them here (`paintBoard`). Every failure is surfaced
+ * (CLAUDE.md: never silently swallow a failed mutation).
  */
 import {
   EMPTY_TICKET_FILTER,
   errorMessage,
-  moveTicket as moveTicketOp,
-  moveTickets as moveTicketsOp,
   setTicketPriority as setTicketPriorityOp,
   type ArchivedTicket,
   type DataChangeKind,
@@ -29,75 +29,19 @@ import {
   type TicketStatus,
   type TicketSummary,
 } from "@volli/shared";
-import type {
-  ArchivedTicketsResult,
-  LabelResult,
-  Result,
-  TicketResult,
-  TicketsResult,
-} from "../../../ipc/contract";
-import { create } from "zustand";
+import { create, type StoreApi } from "zustand";
 
 import { toastError } from "@renderer/lib/toast";
 import { killTicketSessions } from "@renderer/terminal/session-lifecycle";
 
-import { boardSourceFor } from "./board-source";
+import { boardSourceFor, installLocalBoardSource, type BoardSource } from "./board-source";
 import { useChatSessionsStore } from "./chat-sessions";
-import { writeThrough } from "./mutate";
-
-/** The subset of the preload API the board store needs — narrow and fake-able for tests. */
-export interface BoardGateway {
-  createTicket(input: {
-    projectId: string;
-    status: TicketStatus;
-    title: string;
-    priority?: TicketPriority;
-    /** Markdown; becomes the agent prompt on kickoff. Defaults to `""` in main. */
-    body?: string;
-    /** Label names; created per project (name-deduped, `color: null`). Defaults to `[]`. */
-    labels?: string[];
-    /** Whether the ticket boots its agent in an isolated worktree. Defaults to `true`. */
-    usesWorktree?: boolean;
-    /** The ticket's persisted default harness (kickoff choice). Defaults to the DB default. */
-    preferredHarnessId?: HarnessId;
-    /**
-     * The ref the ticket's worktree branches from (the composer's base-branch
-     * chip). Omitted leaves it unset and `resolveBaseBranch` detects the
-     * project default at worktree time, as it always has.
-     */
-    baseBranch?: string | null;
-  }): Promise<TicketResult>;
-  moveTicket(input: {
-    projectId: string;
-    ticketId: string;
-    toStatus: TicketStatus;
-    toIndex: number;
-    choice?: DeliberateMoveChoice;
-  }): Promise<TicketsResult>;
-  moveTickets(input: {
-    projectId: string;
-    ticketIds: string[];
-    toStatus: TicketStatus;
-    toIndex: number;
-    choice?: DeliberateMoveChoice;
-  }): Promise<TicketsResult>;
-  setTicketPriority(input: { ticketId: string; priority: TicketPriority }): Promise<TicketResult>;
-  updateTicket(input: {
-    ticketId: string;
-    title?: string;
-    body?: string;
-    worktreePath?: string | null;
-    branch?: string | null;
-    baseBranch?: string | null;
-    usesWorktree?: boolean;
-  }): Promise<TicketResult>;
-  setLabels(input: { ticketId: string; labels: string[] }): Promise<TicketResult>;
-  setLabelColor(input: { labelId: string; color: string | null }): Promise<LabelResult>;
-  archiveTicket(input: { ticketId: string }): Promise<Result>;
-  unarchiveTicket(input: { ticketId: string }): Promise<TicketResult>;
-  deleteTicket(input: { ticketId: string }): Promise<Result>;
-  listArchived(projectId: string): Promise<ArchivedTicketsResult>;
-}
+import {
+  LocalBoardSource,
+  restoreAt,
+  type BoardGateway,
+  type LocalBoardView,
+} from "./local-board-source";
 
 /**
  * The scope of the last planning refresh the board published — see
@@ -142,20 +86,6 @@ export function planningChangeAffects(change: PlanningChange, ticketId: string):
 export function isTicketBodyLoaded(state: BoardState, ticketId: string): boolean {
   return state.unloadedTicketBodies[ticketId] === undefined;
 }
-
-const defaultGateway: BoardGateway = {
-  createTicket: (input) => window.api.tickets.create(input),
-  moveTicket: (input) => window.api.tickets.move(input),
-  moveTickets: (input) => window.api.tickets.moveMany(input),
-  setTicketPriority: (input) => window.api.tickets.setPriority(input),
-  updateTicket: (input) => window.api.tickets.update(input),
-  setLabels: (input) => window.api.tickets.setLabels(input),
-  setLabelColor: (input) => window.api.labels.setColor(input),
-  archiveTicket: (input) => window.api.tickets.archive(input),
-  unarchiveTicket: (input) => window.api.tickets.unarchive(input),
-  deleteTicket: (input) => window.api.tickets.delete(input),
-  listArchived: (projectId) => window.api.tickets.listArchived(projectId),
-};
 
 export interface BoardState {
   ticketsByProject: Record<string, Ticket[]>;
@@ -325,7 +255,7 @@ export interface BoardState {
     choice?: DeliberateMoveChoice,
   ): Promise<void>;
   /**
-   * Creates a ticket in `status`'s column via `gateway`. Returns the created
+   * Creates a ticket in `status`'s column via its board source. Returns the created
    * {@link Ticket}, or `null` when the trimmed title is empty (no-op, no IPC
    * call) or the creation failed (already toasted) — callers that need the
    * new ticket (e.g. the global New-ticket dialog, to toast its display id)
@@ -347,18 +277,18 @@ export interface BoardState {
   ): Promise<Ticket | null>;
   setTicketPriority(projectId: string, ticketId: string, priority: TicketPriority): Promise<void>;
   /**
-   * Patches a ticket's title/body/worktree-identity fields via `api.tickets.update`
+   * Patches a ticket's title/body/branch fields through its board source
    * (ticket-detail-mvp step 3). Ticket-scoped, not project-scoped — the ticket's
    * project is located by scanning `ticketsByProject` for it, so callers (the
-   * properties rail's branch/baseBranch fields today; step 4's title/body
-   * autosave next) only need the ticket's id. Optimistic; reverts to the
-   * pre-patch ticket on failure. A no-op (no IPC) for an unknown ticket id.
+   * properties rail's branch/baseBranch fields, the title/body autosave) only
+   * need the ticket's id. Optimistic; reverts to the pre-patch ticket on
+   * failure. A no-op for an unknown ticket id. A worktree's path is the
+   * host's to stamp, never this call's.
    */
   updateTicket(input: {
     ticketId: string;
     title?: string;
     body?: string;
-    worktreePath?: string | null;
     branch?: string | null;
     baseBranch?: string | null;
     /** Worktree scoping — honored by main only while no worktree has materialized (VC-16). */
@@ -425,33 +355,6 @@ function uniqueIds(ids: readonly string[]): string[] {
 
 function sameIds(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((id, index) => id === right[index]);
-}
-
-/**
- * The `authoritative` list, plus any ticket in `current` it doesn't mention —
- * a ticket created (in another action) while the mutation that produced
- * `authoritative` was in flight, not yet reflected in its snapshot. Preserving
- * those "extras" is what keeps a concurrent create (or a revert) from silently
- * dropping a ticket SQLite already holds. Returns `authoritative` unchanged
- * (same reference) when there are no extras — the common case.
- */
-function mergeAuthoritative(authoritative: Ticket[], current: Ticket[]): Ticket[] {
-  const ids = new Set(authoritative.map((ticket) => ticket.id));
-  const extras = current.filter((ticket) => !ids.has(ticket.id));
-  return extras.length === 0 ? authoritative : [...authoritative, ...extras];
-}
-
-/**
- * `slice` with `ticket` restored at `index` (clamped into range) — the shared
- * failure-revert shape, a no-op when a concurrent mutation already put the
- * ticket back. Restoring at the ORIGINAL index (not appending) matters for the
- * Archive slice, whose array order (newest-archived first) the Archive view
- * renders verbatim — an appended revert would sink the ticket to the bottom.
- */
-function restoreAt<T extends { id: string }>(slice: T[], ticket: T, index: number): T[] {
-  if (slice.some((existing) => existing.id === ticket.id)) return slice;
-  const at = Math.max(0, Math.min(index, slice.length));
-  return [...slice.slice(0, at), ticket, ...slice.slice(at)];
 }
 
 /**
@@ -534,18 +437,86 @@ function sameLabel(left: Label, right: Label): boolean {
   );
 }
 
-/** Factory so tests can inject a fake gateway instead of the real preload bridge. */
-export function createBoardStore(gateway: BoardGateway = defaultGateway) {
+/**
+ * The `unloadedTicketBodies` record with `ticketId` removed, or `undefined`
+ * when it was not marked — so a caller can skip writing an identical record
+ * and leave the reference (and every subscriber reading it) untouched.
+ */
+function withoutMark(
+  unloaded: Record<string, true>,
+  ticketId: string,
+): Record<string, true> | undefined {
+  if (unloaded[ticketId] === undefined) return undefined;
+  const next = { ...unloaded };
+  delete next[ticketId];
+  return next;
+}
+
+/** A board store: the singleton below, or a test's. */
+export type BoardStore = ReturnType<typeof createBoardStore>;
+
+/**
+ * The board store's slices as this Mac's board writes paint and reconcile
+ * them ({@link LocalBoardSource}).
+ */
+function localBoardView(
+  store: Pick<StoreApi<BoardState>, "getState" | "setState">,
+): LocalBoardView {
+  const get = store.getState;
+  const set = store.setState;
+  return {
+    tickets: (projectId) => get().ticketsByProject[projectId],
+    setTickets(projectId, tickets) {
+      set({ ticketsByProject: { ...get().ticketsByProject, [projectId]: tickets } });
+    },
+    reconcileTickets(projectId, update) {
+      // Read FRESH from state (so a mutation that landed on another card
+      // mid-flight isn't clobbered), guarding a slice the project's removal
+      // (`forget`) dropped while the IPC was in flight — never resurrect a
+      // slice SQLite no longer has. The single reconcile path behind every
+      // ticket mutation's success and revert.
+      const byProject = get().ticketsByProject;
+      const slice: Ticket[] | undefined = byProject[projectId];
+      if (!slice) return;
+      const next = update(slice);
+      set({ ticketsByProject: { ...byProject, [projectId]: next } });
+      reconcileTicketChatTabOwners(projectId, slice, next);
+    },
+    labels: (projectId) => get().labelsByProject[projectId],
+    reconcileLabels(projectId, update) {
+      // The label-slice analog: never resurrect label data `forget` dropped
+      // while a color IPC was in flight.
+      const byProject = get().labelsByProject;
+      const slice: Label[] | undefined = byProject[projectId];
+      if (!slice) return;
+      set({ labelsByProject: { ...byProject, [projectId]: update(slice) } });
+    },
+    findTicket(ticketId) {
+      for (const [projectId, tickets] of Object.entries(get().ticketsByProject)) {
+        const ticket = tickets.find((candidate) => candidate.id === ticketId);
+        if (ticket) return { projectId, ticket };
+      }
+      return undefined;
+    },
+    markBodyLoaded(ticketId) {
+      const loaded = withoutMark(get().unloadedTicketBodies, ticketId);
+      if (loaded !== undefined) set({ unloadedTicketBodies: loaded });
+    },
+  };
+}
+
+/** Puts this Mac's board, over its own IPC (or a test's `gateway`), behind `store`'s slices. */
+export function installLocalBoard(store: BoardStore, gateway?: BoardGateway): void {
+  installLocalBoardSource(new LocalBoardSource(localBoardView(store), gateway));
+}
+
+/**
+ * Factory so tests can hand the store their own board sources; by default
+ * every project's goes where `board-source.ts` says.
+ */
+export function createBoardStore(sourceFor: (projectId: string) => BoardSource = boardSourceFor) {
   return create<BoardState>()((set, get) => {
-    interface MoveLane {
-      /** Requests execute in commit order even when several optimistic drops overlap. */
-      tail: Promise<void>;
-      /** The newest optimistic move currently represented on screen. */
-      revision: number;
-      /** Last authoritative slice, used if the newest queued move fails. */
-      confirmed: Ticket[];
-    }
-    const moveLanes = new Map<string, MoveLane>();
+    const view = localBoardView({ getState: get, setState: set });
 
     /**
      * Merges a change into the project's filter record (initializing from
@@ -567,57 +538,10 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
     }
 
     /**
-     * Applies `update` to the project's ticket slice read FRESH from state (so
-     * a mutation that landed on another card mid-flight isn't clobbered),
-     * guarding a slice the project's removal (`forget`) dropped while the IPC
-     * was in flight — never resurrect a slice SQLite no longer has. The single
-     * reconcile path behind every ticket mutation's success and revert.
-     */
-    function reconcileSlice(projectId: string, update: (slice: Ticket[]) => Ticket[]): void {
-      const byProject = get().ticketsByProject;
-      const slice: Ticket[] | undefined = byProject[projectId];
-      if (!slice) return;
-      const next = update(slice);
-      set({ ticketsByProject: { ...byProject, [projectId]: next } });
-      reconcileTicketChatTabOwners(projectId, slice, next);
-    }
-
-    /**
-     * Locates `ticketId` across every project's slice — the lookup behind
-     * {@link BoardState.updateTicket}/{@link BoardState.setLabels}, whose
-     * signatures (deliberately) take no `projectId`: both are ticket-scoped
-     * mutations reachable from a context (the ticket detail view) that already
-     * has the ticket in hand, not the project id. `undefined` for an unknown
-     * ticket id.
-     */
-    /**
-     * The `unloadedTicketBodies` record with `ticketId` removed, or `undefined`
-     * when it was not marked — so a caller can skip writing an identical record
-     * and leave the reference (and every subscriber reading it) untouched.
-     */
-    function markTicketBodyLoaded(ticketId: string): Record<string, true> | undefined {
-      const unloaded = get().unloadedTicketBodies;
-      if (unloaded[ticketId] === undefined) return undefined;
-      const next = { ...unloaded };
-      delete next[ticketId];
-      return next;
-    }
-
-    function findTicketProject(
-      ticketId: string,
-    ): { projectId: string; ticket: Ticket } | undefined {
-      for (const [projectId, tickets] of Object.entries(get().ticketsByProject)) {
-        const ticket = tickets.find((candidate) => candidate.id === ticketId);
-        if (ticket) return { projectId, ticket };
-      }
-      return undefined;
-    }
-
-    /**
-     * The Archive-slice analog of {@link reconcileSlice}: applies `update` to
-     * the project's archived list read FRESH from state, guarding a slice that
-     * was never loaded (or was dropped by `forget` while an IPC was in flight)
-     * — never resurrect Archive data the store isn't holding.
+     * The Archive-slice analog of the view's ticket reconcile: applies
+     * `update` to the project's archived list read FRESH from state, guarding
+     * a slice that was never loaded (or was dropped by `forget` while a write
+     * was in flight) — never resurrect Archive data the store isn't holding.
      */
     function reconcileArchived(
       projectId: string,
@@ -630,77 +554,8 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
     }
 
     /**
-     * The label-slice analog of {@link reconcileSlice}/{@link reconcileArchived}:
-     * applies `update` to the project's label list read FRESH from state,
-     * guarding a slice `forget` dropped while a color IPC was in flight —
-     * never resurrect label data the store isn't holding. The reconcile path
-     * behind {@link BoardState.setLabelColor}'s success and revert.
-     */
-    function reconcileLabels(projectId: string, update: (slice: Label[]) => Label[]): void {
-      const byProject = get().labelsByProject;
-      const slice: Label[] | undefined = byProject[projectId];
-      if (!slice) return;
-      set({ labelsByProject: { ...byProject, [projectId]: update(slice) } });
-    }
-
-    /**
-     * The shared optimistic-patch pipeline behind {@link BoardState.updateTicket}
-     * and {@link BoardState.setLabels} — both are ticket-scoped field edits with
-     * the identical skeleton. Optimistically merges `optimisticFields` into the
-     * ticket, runs the write, and on success patches the authoritative ticket in
-     * by id. On FAILURE it reverts only the keys THIS call touched back to their
-     * pre-mutation values (merged onto the ticket read FRESH from state) — not a
-     * whole-ticket snapshot, which would clobber a field a concurrent successful
-     * edit committed while this write was in flight (e.g. a title save failing
-     * after a body save succeeded must not resurrect the old body). A no-op (no
-     * IPC) for an unknown ticket id.
-     */
-    async function optimisticTicketPatch(
-      ticketId: string,
-      optimisticFields: Partial<Ticket>,
-      verb: string,
-      call: () => Promise<TicketResult>,
-    ): Promise<void> {
-      const found = findTicketProject(ticketId);
-      if (!found) return; // unknown ticket id — nothing to update
-      const { projectId, ticket: original } = found;
-
-      const patchById = (ticket: Ticket) =>
-        reconcileSlice(projectId, (slice) =>
-          slice.map((existing) => (existing.id === ticket.id ? ticket : existing)),
-        );
-
-      // The pre-mutation values of exactly the keys we're about to change — the
-      // field-scoped revert set, captured before the optimistic write.
-      const revertFields: Partial<Ticket> = {};
-      for (const key of Object.keys(optimisticFields) as (keyof Ticket)[]) {
-        (revertFields as Record<keyof Ticket, unknown>)[key] = original[key];
-      }
-
-      patchById({ ...original, ...optimisticFields });
-
-      const result = await writeThrough(verb, call);
-      if (!result) {
-        // Field-scoped revert onto the FRESH ticket: restore only our keys,
-        // leaving any field a concurrent edit changed in between intact.
-        reconcileSlice(projectId, (slice) =>
-          slice.map((existing) =>
-            existing.id === ticketId ? { ...existing, ...revertFields } : existing,
-          ),
-        );
-        return;
-      }
-      // The authoritative ticket main answers with always carries the real body,
-      // whatever field this call edited — so landing it retires any placeholder
-      // mark the roster left on this ticket.
-      patchById(result.ticket);
-      const loaded = markTicketBodyLoaded(ticketId);
-      if (loaded !== undefined) set({ unloadedTicketBodies: loaded });
-    }
-
-    /**
      * What a confirmed archive does after its terminals end and it leaves the
-     * board, on either path: drops the stale Archive slice, and takes the card
+     * board, on every source: drops the stale Archive slice, and takes the card
      * out of the selection.
      */
     function afterArchived(projectId: string, ticketId: string): void {
@@ -723,39 +578,6 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         else next[projectId] = remaining;
         set({ selectedByProject: next });
       }
-    }
-
-    /** Shared optimistic/write-through/reconcile path for one-card and group moves. */
-    async function persistMove(
-      projectId: string,
-      optimisticMove: (previous: Ticket[]) => Ticket[],
-      verb: string,
-      call: () => Promise<TicketsResult>,
-    ): Promise<void> {
-      const previous = get().ticketsByProject[projectId] ?? [];
-      const optimistic = optimisticMove(previous);
-      if (optimistic === previous) return;
-      set({ ticketsByProject: { ...get().ticketsByProject, [projectId]: optimistic } });
-
-      let lane = moveLanes.get(projectId);
-      if (lane === undefined) {
-        lane = { tail: Promise.resolve(), revision: 0, confirmed: previous };
-        moveLanes.set(projectId, lane);
-      }
-      const revision = ++lane.revision;
-      const write = lane.tail.then(async () => {
-        const result = await writeThrough(verb, call);
-        if (result) lane.confirmed = result.tickets;
-
-        // A later optimistic drop is already on screen. Its queued request must
-        // be the one that reconciles; applying this older snapshot would make
-        // the renderer disagree with SQLite until an unrelated refresh.
-        if (revision !== lane.revision) return;
-        reconcileSlice(projectId, (slice) => mergeAuthoritative(lane.confirmed, slice));
-      });
-      lane.tail = write;
-      await write;
-      if (moveLanes.get(projectId) === lane && lane.tail === write) moveLanes.delete(projectId);
     }
 
     return {
@@ -846,7 +668,7 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
       adoptTicketBody(projectId, ticketId, body) {
         // A board source keeps the bodies it has read beside its rows, so its
         // next repaint keeps this one.
-        boardSourceFor(projectId)?.adoptBody(ticketId, body);
+        sourceFor(projectId).adoptBody(ticketId, body);
         const slice = get().ticketsByProject[projectId];
         if (slice === undefined) return;
         const index = slice.findIndex((ticket) => ticket.id === ticketId);
@@ -855,9 +677,8 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         // The mark clears whatever the body turned out to be — BEFORE the
         // unchanged-body return below, because a ticket whose canonical body
         // really is "" has now been read and must not stay a placeholder.
-        const loaded = markTicketBodyLoaded(ticketId);
         if (current.body === body) {
-          if (loaded !== undefined) set({ unloadedTicketBodies: loaded });
+          view.markBodyLoaded(ticketId);
           return;
         }
         // One replaced entry in a copied array, rather than a mapped rebuild:
@@ -865,6 +686,7 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         // cannot re-render the cards beside it.
         const next = [...slice];
         next[index] = { ...current, body };
+        const loaded = withoutMark(get().unloadedTicketBodies, ticketId);
         set({
           ticketsByProject: { ...get().ticketsByProject, [projectId]: next },
           ...(loaded === undefined ? {} : { unloadedTicketBodies: loaded }),
@@ -903,10 +725,11 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
 
       hydrate(bootTickets, bootLabels) {
         const previous = get().ticketsByProject;
-        // This Mac's bootstrap knows nothing of a board a source follows (a
-        // remote host's, VC-711): each such slice stays as its source painted it.
+        // This Mac's bootstrap knows nothing of a board whose source delivers
+        // its own rows (a remote host's, VC-711): each such slice stays as its
+        // source painted it.
         const followed = Object.keys(previous).filter(
-          (projectId) => !(projectId in bootTickets) && boardSourceFor(projectId) !== null,
+          (projectId) => !(projectId in bootTickets) && sourceFor(projectId).deliversOwnRows,
         );
         const ticketsByProject =
           followed.length === 0
@@ -941,7 +764,7 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
           unloadedTicketBodies: kept,
           planningRecoveryNeeded: false,
         });
-        // The removal path `reconcileSlice` cannot see: a CLI archive, a
+        // The removal path a write's reconcile cannot see: a CLI archive, a
         // retention sweep, or another window's mutation reaches this renderer as
         // a wholesale re-hydrate, dropping the ticket without any local action
         // to hang owner reconciliation off. Projects the snapshot no longer
@@ -961,9 +784,9 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
           ticketsByProject: { ...ticketsByProject, [projectId]: [] },
           labelsByProject: { ...labelsByProject, [projectId]: [] },
         });
-        // A board source follows the new project's board.
-        const source = boardSourceFor(projectId);
-        if (source !== null && !source.follows(projectId)) {
+        // Its board source follows the new project's board.
+        const source = sourceFor(projectId);
+        if (!source.follows(projectId)) {
           void source.open(projectId).catch((error: unknown) => {
             toastError(`Couldn't open the board: ${errorMessage(error)}`);
           });
@@ -973,79 +796,22 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
       async addTicket(projectId, status, title, options) {
         const trimmed = title.trim();
         if (trimmed === "") return null;
-        const source = boardSourceFor(projectId);
-        if (source !== null) {
-          // A placeholder shows at once; the confirmed row replaces it (T5).
-          return source.createTicket(projectId, {
-            status,
-            title: trimmed,
-            ...definedOptions(options),
-          });
-        }
-
-        const result = await writeThrough("create ticket", (): Promise<TicketResult> =>
-          gateway.createTicket({
-            projectId,
-            status,
-            title: trimmed,
-            priority: options?.priority,
-            body: options?.body,
-            labels: options?.labels,
-            usesWorktree: options?.usesWorktree,
-            preferredHarnessId: options?.preferredHarnessId,
-            baseBranch: options?.baseBranch,
-          }),
-        );
-        if (!result) return null;
-
-        // Append to the FRESH slice; `reconcileSlice` drops the write if the
-        // project was removed while the create was in flight (the row is
-        // cascade-deleted in SQLite), so we never resurrect a dead slice.
-        reconcileSlice(projectId, (slice) => [...slice, result.ticket]);
-        return result.ticket;
+        // This Mac's appends the confirmed row; a source that delivers its
+        // own rows shows a placeholder at once, replaced when confirmed (T5).
+        return sourceFor(projectId).createTicket(projectId, {
+          status,
+          title: trimmed,
+          ...definedOptions(options),
+        });
       },
 
       async moveTicket(projectId, ticketId, toStatus, toIndex, choice) {
-        const source = boardSourceFor(projectId);
-        if (source !== null) {
-          await source.moveTickets(projectId, [ticketId], toStatus, toIndex, choice);
-          return;
-        }
-        await persistMove(
-          projectId,
-          (previous) => moveTicketOp(previous, ticketId, toStatus, toIndex, Date.now()),
-          "move ticket",
-          () =>
-            gateway.moveTicket({
-              projectId,
-              ticketId,
-              toStatus,
-              toIndex,
-              ...(choice === undefined ? {} : { choice }),
-            }),
-        );
+        await sourceFor(projectId).moveTicket(projectId, ticketId, toStatus, toIndex, choice);
       },
 
       async moveTickets(projectId, ticketIds, toStatus, toIndex, choice) {
         const ids = uniqueIds(ticketIds);
-        const source = boardSourceFor(projectId);
-        if (source !== null) {
-          await source.moveTickets(projectId, ids, toStatus, toIndex, choice);
-          return;
-        }
-        await persistMove(
-          projectId,
-          (previous) => moveTicketsOp(previous, ids, toStatus, toIndex, Date.now()),
-          "move tickets",
-          () =>
-            gateway.moveTickets({
-              projectId,
-              ticketIds: ids,
-              toStatus,
-              toIndex,
-              ...(choice === undefined ? {} : { choice }),
-            }),
-        );
+        await sourceFor(projectId).moveTickets(projectId, ids, toStatus, toIndex, choice);
       },
 
       async setTicketPriority(projectId, ticketId, priority) {
@@ -1053,123 +819,45 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         const original = previous.find((ticket) => ticket.id === ticketId);
         const optimistic = setTicketPriorityOp(previous, ticketId, priority, Date.now());
         if (!original || optimistic === previous) return; // unknown id or unchanged priority (the shared op's no-op guard)
-        const source = boardSourceFor(projectId);
-        if (source !== null) {
-          await source.setPriority(projectId, ticketId, priority);
-          return;
-        }
-        set({ ticketsByProject: { ...get().ticketsByProject, [projectId]: optimistic } });
-
-        // Priority never reorders a column (the shared op only edits the
-        // ticket's fields), so reconcile by patching just this one ticket by id
-        // into the FRESH slice — leaving any sibling a concurrent mutation
-        // touched untouched.
-        const patch = (ticket: Ticket) =>
-          reconcileSlice(projectId, (slice) =>
-            slice.map((existing) => (existing.id === ticket.id ? ticket : existing)),
-          );
-
-        const result = await writeThrough("update priority", (): Promise<TicketResult> =>
-          gateway.setTicketPriority({ ticketId, priority }),
-        );
-        if (!result) {
-          patch(original);
-          return;
-        }
-        patch(result.ticket);
+        await sourceFor(projectId).setPriority(projectId, ticketId, priority);
       },
 
       async updateTicket(input) {
-        const { ticketId, ...changes } = input;
-        // Only the fields the caller actually supplied — `undefined` means
-        // "leave as-is", matching `api.tickets.update`'s own semantics.
-        const optimisticFields: Partial<Ticket> = {};
-        if (changes.title !== undefined) optimisticFields.title = changes.title;
-        if (changes.body !== undefined) optimisticFields.body = changes.body;
-        if (changes.worktreePath !== undefined)
-          optimisticFields.worktreePath = changes.worktreePath;
-        if (changes.branch !== undefined) optimisticFields.branch = changes.branch;
-        if (changes.baseBranch !== undefined) optimisticFields.baseBranch = changes.baseBranch;
-        if (changes.usesWorktree !== undefined)
-          optimisticFields.usesWorktree = changes.usesWorktree;
-
-        const found = findTicketProject(ticketId);
-        const source = boardSourceFor(found?.projectId);
-        if (found !== undefined && source !== null) {
-          // A host path is the host's to stamp: the board router takes no worktreePath.
-          const { worktreePath: _worktreePath, ...fields } = input;
-          const updated = await source.updateTicket(found.projectId, fields);
-          if (updated !== null) {
-            const loaded = markTicketBodyLoaded(ticketId);
-            if (loaded !== undefined) set({ unloadedTicketBodies: loaded });
-          }
-          return;
-        }
-        await optimisticTicketPatch(ticketId, optimisticFields, "update ticket", () =>
-          gateway.updateTicket(input),
-        );
+        const found = view.findTicket(input.ticketId);
+        if (found === undefined) return; // unknown ticket id — nothing to update
+        const updated = await sourceFor(found.projectId).updateTicket(found.projectId, input);
+        // The authoritative ticket always carries the real body, whatever
+        // field this call edited — so landing it retires any placeholder mark.
+        if (updated !== null) view.markBodyLoaded(input.ticketId);
       },
 
       async setLabels(ticketId, labels) {
-        const found = findTicketProject(ticketId);
-        const source = boardSourceFor(found?.projectId);
-        if (found !== undefined && source !== null) {
-          await source.setLabels(found.projectId, ticketId, labels);
-          return;
-        }
-        await optimisticTicketPatch(ticketId, { labels }, "update labels", () =>
-          gateway.setLabels({ ticketId, labels }),
-        );
+        const found = view.findTicket(ticketId);
+        if (found === undefined) return; // unknown ticket id — nothing to update
+        await sourceFor(found.projectId).setLabels(found.projectId, ticketId, labels);
       },
 
       async setLabelColor(projectId, labelId, color) {
         const previous = get().labelsByProject[projectId] ?? [];
         const original = previous.find((label) => label.id === labelId);
         if (!original || original.color === color) return; // unknown id or unchanged color
-        const source = boardSourceFor(projectId);
-        if (source !== null) {
-          await source.setLabelColor(projectId, labelId, color);
-          return;
-        }
-
-        const patch = (label: Label) =>
-          reconcileLabels(projectId, (slice) =>
-            slice.map((existing) => (existing.id === label.id ? label : existing)),
-          );
-        patch({ ...original, color });
-
-        const result = await writeThrough("update label color", (): Promise<LabelResult> =>
-          gateway.setLabelColor({ labelId, color }),
-        );
-        if (!result) {
-          patch(original);
-          return;
-        }
-        patch(result.label);
+        await sourceFor(projectId).setLabelColor(projectId, labelId, color);
       },
 
       async loadArchived(projectId) {
-        const source = boardSourceFor(projectId);
-        const result =
-          source !== null
-            ? await source
-                .archivedTickets(projectId)
-                .then((tickets) => (tickets === null ? null : { ok: true as const, tickets }))
-            : await writeThrough("load archive", (): Promise<ArchivedTicketsResult> =>
-                gateway.listArchived(projectId),
-              );
-        if (!result) return false;
+        const tickets = await sourceFor(projectId).archivedTickets(projectId);
+        if (tickets === null) return false;
         // The project may have been forgotten (removed) while the fetch was in
         // flight — `ticketsByProject` is the liveness signal now that every
         // project's slice is seeded on creation (see `seedProject`) and
         // dropped by `forget`, so this guards the same "never resurrect a
-        // forgotten project's data" invariant `reconcileSlice`/`reconcileArchived`
-        // enforce for mutations.
+        // forgotten project's data" invariant every write's reconcile and
+        // `reconcileArchived` enforce for mutations.
         if (!(projectId in get().ticketsByProject)) return false;
         // Wholesale-set this ONE project's archived slice from the authoritative
         // fetch — the Archive view is a fresh read each open, so a snapshot
         // replace (not a merge) is exactly right here.
-        set({ archivedByProject: { ...get().archivedByProject, [projectId]: result.tickets } });
+        set({ archivedByProject: { ...get().archivedByProject, [projectId]: tickets } });
         return true;
       },
 
@@ -1177,68 +865,30 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         const previous = get().ticketsByProject[projectId] ?? [];
         const target = previous.find((ticket) => ticket.id === ticketId);
         if (!target) return; // unknown id — nothing to archive
-        const source = boardSourceFor(projectId);
-        if (source !== null) {
-          // The source drops the card at once and holds it off the board
-          // until its confirmation (T5); a refusal puts it back.
-          if (!(await source.archiveTicket(projectId, ticketId))) return;
-          killTicketSessions(ticketId);
-          afterArchived(projectId, ticketId);
-          return;
-        }
-        const index = previous.indexOf(target);
-
-        // Optimistically drop the card from the board.
-        reconcileSlice(projectId, (slice) => slice.filter((ticket) => ticket.id !== ticketId));
-
-        const result = await writeThrough("archive ticket", (): Promise<Result> =>
-          gateway.archiveTicket({ ticketId }),
-        );
-        if (!result) {
-          // Revert: restore the card into the FRESH slice, unless a concurrent
-          // mutation already put it back.
-          reconcileSlice(projectId, (slice) => restoreAt(slice, target, index));
-          return;
-        }
+        // The source drops the card at once and keeps it off the board once
+        // confirmed; a failure or refusal puts it back.
+        if (!(await sourceFor(projectId).archiveTicket(projectId, ticketId))) return;
         // The ticket is archived now, so its live terminal sessions must die —
         // an archived ticket has no surface to reach them, and nothing else
         // tears them down (killTicketSessions was only reachable via project
         // removal, which skips archived tickets). Do it on SUCCESS only: a
         // failed archive left the ticket live, so its sessions must survive.
         killTicketSessions(ticketId);
-        // Success — drop it from the board slice AGAIN: a move IPC in flight
-        // when the archive committed returns an authoritative list snapshotted
-        // while this ticket was still live, and mergeAuthoritative would have
-        // resurrected it as an "extra". Responses arrive in send order, so
-        // this later word wins.
-        reconcileSlice(projectId, (slice) => slice.filter((ticket) => ticket.id !== ticketId));
         afterArchived(projectId, ticketId);
       },
 
       async unarchiveTicket(projectId, ticketId) {
         const previousArchived = get().archivedByProject[projectId] ?? [];
         const target = previousArchived.find((ticket) => ticket.id === ticketId);
-        if (!target) return; // not in the loaded Archive slice (e.g. a double-fired Restore) — no IPC
+        if (!target) return; // not in the loaded Archive slice (e.g. a double-fired Restore) — no write
 
         const index = previousArchived.indexOf(target);
         // Optimistically drop it from the Archive slice.
         reconcileArchived(projectId, (slice) => slice.filter((ticket) => ticket.id !== ticketId));
 
-        const source = boardSourceFor(projectId);
-        if (source !== null) {
-          // The board shows it at once, appended to its column (T5).
-          const revived = await source.unarchiveTicket(projectId, target);
-          if (revived === null) {
-            reconcileArchived(projectId, (slice) => restoreAt(slice, target, index));
-            return;
-          }
-          reconcileArchived(projectId, (slice) => slice.filter((ticket) => ticket.id !== ticketId));
-          return;
-        }
-        const result = await writeThrough("unarchive ticket", (): Promise<TicketResult> =>
-          gateway.unarchiveTicket({ ticketId }),
-        );
-        if (!result) {
+        // The source puts the revived ticket on the board, appended to its column.
+        const revived = await sourceFor(projectId).unarchiveTicket(projectId, target);
+        if (revived === null) {
           // Revert: restore it to its old Archive slot unless already back.
           reconcileArchived(projectId, (slice) => restoreAt(slice, target, index));
           return;
@@ -1246,21 +896,15 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         // Success — drop it from the Archive slice AGAIN: a `loadArchived`
         // refetch in flight (snapshotted before the unarchive committed) can
         // have wholesale-set the slice with this ticket still listed; responses
-        // arrive in send order, so this later word wins. Then append the
-        // revived LIVE ticket to the board (reconcileSlice drops it if the
-        // project was forgotten mid-flight — never resurrect a dead slice).
+        // arrive in send order, so this later word wins.
         reconcileArchived(projectId, (slice) => slice.filter((ticket) => ticket.id !== ticketId));
-        const revived = result.ticket;
-        reconcileSlice(projectId, (slice) =>
-          slice.some((ticket) => ticket.id === revived.id) ? slice : [...slice, revived],
-        );
       },
 
       async deleteArchivedTicket(projectId, ticketId) {
         const previousArchived = get().archivedByProject[projectId] ?? [];
         const target = previousArchived.find((ticket) => ticket.id === ticketId);
         // Not in the loaded Archive slice (e.g. a double-fired Delete after the
-        // optimistic drop) — no IPC, which would throw "Unknown ticket" and
+        // optimistic drop) — no write, which would throw "Unknown ticket" and
         // toast a spurious error for an operation that already succeeded.
         if (!target) return;
 
@@ -1268,16 +912,7 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         // Optimistically drop it from the Archive slice.
         reconcileArchived(projectId, (slice) => slice.filter((ticket) => ticket.id !== ticketId));
 
-        const source = boardSourceFor(projectId);
-        const result =
-          source !== null
-            ? (await source.deleteTicket(projectId, ticketId))
-              ? { ok: true as const }
-              : null
-            : await writeThrough("delete ticket", (): Promise<Result> =>
-                gateway.deleteTicket({ ticketId }),
-              );
-        if (!result) {
+        if (!(await sourceFor(projectId).deleteTicket(projectId, ticketId))) {
           // Revert: restore it to its old Archive slot unless already back.
           reconcileArchived(projectId, (slice) => restoreAt(slice, target, index));
           return;
@@ -1375,7 +1010,7 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
           return;
 
         teardownProjectChatTabs(projectId, ticketsByProject[projectId] ?? [], options);
-        boardSourceFor(projectId)?.close(projectId);
+        sourceFor(projectId).close(projectId);
 
         const nextTickets = { ...ticketsByProject };
         delete nextTickets[projectId];
@@ -1401,3 +1036,4 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
 
 /** App-wide singleton; components import this directly. */
 export const useBoardStore = createBoardStore();
+installLocalBoard(useBoardStore);

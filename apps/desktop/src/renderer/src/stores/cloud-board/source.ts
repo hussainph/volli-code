@@ -44,7 +44,7 @@ import {
 
 import type { CloudSession } from "@renderer/lib/cloud-client";
 
-import type { BoardSource, CreateFields, UpdateFields } from "../board-source";
+import type { BoardRowSource, CreateFields, UpdateFields } from "../board-source";
 import {
   optimisticArchive,
   optimisticComment,
@@ -140,7 +140,7 @@ interface Board {
 export const ARCHIVE_PAGE_SIZE = 100;
 export const ARCHIVE_PAGES_MAX = 10;
 
-export class ConvexBoardSource implements BoardSource {
+export class ConvexBoardSource implements BoardRowSource {
   readonly #view: CloudBoardView;
   /** Who this window's writes are by, as an optimistic row names them. */
   readonly #actor: { readonly kind: "person"; readonly userId: string };

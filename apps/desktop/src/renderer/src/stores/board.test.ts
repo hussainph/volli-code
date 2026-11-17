@@ -12,11 +12,12 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { toast } from "sonner";
 import {
   isTicketBodyLoaded,
-  type BoardGateway,
   createBoardStore,
+  installLocalBoard,
   planningChangeAffects,
   preserveIdentities,
 } from "./board";
+import type { BoardGateway } from "./local-board-source";
 import { startBoardProtocol, stopBoardProtocol } from "@renderer/lib/board-protocol";
 import type { BoardSyncTransport } from "./board-sync";
 import { useChatSessionsStore } from "./chat-sessions";
@@ -107,7 +108,6 @@ function fakeGateway(overrides: Partial<BoardGateway> = {}): BoardGateway {
       status: "backlog",
       title: input.title,
       body: input.body,
-      worktreePath: input.worktreePath,
       branch: input.branch,
       baseBranch: input.baseBranch,
     }),
@@ -143,6 +143,16 @@ function fakeGateway(overrides: Partial<BoardGateway> = {}): BoardGateway {
   };
 }
 
+/**
+ * A board store with this Mac's board (the local IPC adapter) over `gateway`
+ * behind it — by default `window.api`, as the app's own store has.
+ */
+function localStore(gateway?: BoardGateway) {
+  const store = createBoardStore();
+  installLocalBoard(store, gateway);
+  return store;
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.clearAllMocks();
@@ -150,7 +160,7 @@ afterEach(() => {
 
 describe("hydrate", () => {
   it("seeds ticketsByProject and labelsByProject wholesale", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     const tickets = [ticket({ status: "backlog" })];
     const labels: Label[] = [{ id: "l1", projectId: "p1", name: "bug", color: null }];
 
@@ -163,7 +173,7 @@ describe("hydrate", () => {
 
 describe("hydrateProjectRoster", () => {
   it("replaces one project's board and leaves every other project's slice untouched", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     const others = [ticket({ id: "o1", projectId: "p2", status: "todo" })];
     store.getState().hydrate({ p1: [ticket({ id: "a", status: "backlog" })], p2: others }, {});
 
@@ -181,7 +191,7 @@ describe("hydrateProjectRoster", () => {
   });
 
   it("carries forward the body the roster no longer carries", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().hydrate({ p1: [ticket({ id: "a", status: "backlog", body: "# Scope" })] }, {});
 
     store.getState().hydrateProjectRoster("p1", [rosterRow({ id: "a", status: "doing" })], []);
@@ -194,7 +204,7 @@ describe("hydrateProjectRoster", () => {
   });
 
   it("gives a ticket it has never seen an empty body until that ticket is opened", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().hydrate({ p1: [] }, {});
 
     store.getState().hydrateProjectRoster("p1", [rosterRow({ id: "new", status: "todo" })], []);
@@ -203,7 +213,7 @@ describe("hydrateProjectRoster", () => {
   });
 
   it("refuses to resurrect a project the board no longer holds", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().hydrate({ p1: [] }, { p1: [] });
 
     store
@@ -218,7 +228,7 @@ describe("hydrateProjectRoster", () => {
 
   it("re-homes the chat tabs of a ticket the roster no longer names", () => {
     resetChatTabs();
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store
       .getState()
       .hydrate(
@@ -235,7 +245,7 @@ describe("hydrateProjectRoster", () => {
 
 describe("adoptTicketBody", () => {
   it("fills in the body the roster did not carry", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().hydrate({ p1: [ticket({ id: "a", status: "doing" })] }, {});
 
     store.getState().adoptTicketBody("p1", "a", "# Scope\n\nDo the thing.");
@@ -244,7 +254,7 @@ describe("adoptTicketBody", () => {
   });
 
   it("mints nothing when the body it read is the one already held", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().hydrate({ p1: [ticket({ id: "a", status: "doing", body: "# Scope" })] }, {});
     const before = store.getState().ticketsByProject.p1;
 
@@ -256,7 +266,7 @@ describe("adoptTicketBody", () => {
   });
 
   it("ignores a body for a ticket the board no longer holds", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().hydrate({ p1: [ticket({ id: "a", status: "doing" })] }, {});
 
     store.getState().adoptTicketBody("p1", "archived-since", "# Gone");
@@ -269,7 +279,7 @@ describe("adoptTicketBody", () => {
   });
 
   it("leaves every OTHER ticket's object identity alone", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().hydrate(
       {
         p1: [
@@ -293,7 +303,7 @@ describe("adoptTicketBody", () => {
   });
 
   it("marks a body loaded even when the body it read is empty", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().hydrate({ p1: [] }, { p1: [] });
     store.getState().hydrateProjectRoster("p1", [rosterRow({ id: "new", status: "todo" })], []);
     expect(isTicketBodyLoaded(store.getState(), "new")).toBe(false);
@@ -309,7 +319,7 @@ describe("adoptTicketBody", () => {
 
 describe("unloaded ticket bodies (VC-387)", () => {
   it("treats every ticket as loaded after a wholesale hydrate", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().hydrate({ p1: [ticket({ id: "a", status: "doing", body: "# Real" })] }, {});
 
     // The boot payload carries every live body, so nothing is a placeholder.
@@ -317,7 +327,7 @@ describe("unloaded ticket bodies (VC-387)", () => {
   });
 
   it("marks only the tickets the roster introduced, never the ones already held", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store
       .getState()
       .hydrate({ p1: [ticket({ id: "known", status: "doing", body: "# Real" })] }, {});
@@ -335,7 +345,7 @@ describe("unloaded ticket bodies (VC-387)", () => {
   });
 
   it("drops the mark of a ticket that leaves the board", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().hydrate({ p1: [] }, { p1: [] });
     store.getState().hydrateProjectRoster("p1", [rosterRow({ id: "gone", status: "todo" })], []);
     expect(store.getState().unloadedTicketBodies).toEqual({ gone: true });
@@ -348,7 +358,7 @@ describe("unloaded ticket bodies (VC-387)", () => {
 
   it("clears the mark when a write-through returns the authoritative ticket", async () => {
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [] }, { p1: [] });
     store.getState().hydrateProjectRoster("p1", [rosterRow({ id: "fresh", status: "todo" })], []);
     expect(isTicketBodyLoaded(store.getState(), "fresh")).toBe(false);
@@ -363,7 +373,7 @@ describe("unloaded ticket bodies (VC-387)", () => {
 
 describe("planningRecoveryNeeded (VC-387)", () => {
   it("starts clear, arms on a failed refresh, and is retired by a wholesale hydrate", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     expect(store.getState().planningRecoveryNeeded).toBe(false);
 
     store.getState().notePlanningRefreshFailed();
@@ -381,7 +391,7 @@ describe("planningRecoveryNeeded (VC-387)", () => {
 
 describe("seedProject", () => {
   it("seeds empty ticket/label slices for a project with none yet", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
 
     store.getState().seedProject("p1");
 
@@ -390,7 +400,7 @@ describe("seedProject", () => {
   });
 
   it("is a no-op — never clobbers an existing ticket slice", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     const tickets = [ticket({ id: "t1", status: "backlog" })];
     store.getState().hydrate({ p1: tickets }, {});
 
@@ -410,7 +420,7 @@ describe("seedProject", () => {
         ticket: created,
       })),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
 
     store.getState().seedProject("p1"); // what addProject now does on success
 
@@ -429,7 +439,7 @@ describe("seedProject", () => {
         ticket: revived,
       })),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
 
     store.getState().seedProject("p1"); // what addProject now does on success
     store.setState({ archivedByProject: { p1: [archivedTicket({ id: "a", status: "done" })] } });
@@ -443,7 +453,7 @@ describe("seedProject", () => {
 describe("addTicket", () => {
   it("is a no-op (no IPC call) when the trimmed title is empty", async () => {
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
 
     const result = await store.getState().addTicket("p1", "backlog", "   ");
 
@@ -454,7 +464,7 @@ describe("addTicket", () => {
 
   it("trims the title before sending it to the gateway", async () => {
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
 
     await store.getState().addTicket("p1", "backlog", "  Padded  ");
 
@@ -463,7 +473,7 @@ describe("addTicket", () => {
 
   it("forwards body, labels, and usesWorktree options to the gateway", async () => {
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
 
     await store.getState().addTicket("p1", "todo", "New", {
       priority: "high",
@@ -491,7 +501,7 @@ describe("addTicket", () => {
         ticket: created,
       })),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [ticket({ status: "backlog" })] }, {});
 
     const result = await store.getState().addTicket("p1", "todo", "New", { priority: "high" });
@@ -508,7 +518,7 @@ describe("addTicket", () => {
         error: "db locked",
       })),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
 
     const result = await store.getState().addTicket("p1", "todo", "New");
 
@@ -526,7 +536,7 @@ describe("addTicket", () => {
         throw new Error("ipc gone");
       }),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
 
     const result = await store.getState().addTicket("p1", "todo", "New");
 
@@ -544,7 +554,7 @@ describe("addTicket", () => {
         () => new Promise((resolve) => (resolveCreate = resolve)),
       ),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [] }, {});
 
     const pending = store.getState().addTicket("p1", "todo", "New");
@@ -570,7 +580,7 @@ describe("moveTicket", () => {
         tickets: authoritative,
       })),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [a, b] }, {});
 
     await store.getState().moveTicket("p1", "a", "doing", 0);
@@ -598,7 +608,7 @@ describe("moveTicket", () => {
         () => new Promise((resolve) => resolvers.push(resolve)),
       ),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [a, b] }, {});
 
     const first = store.getState().moveTicket("p1", "a", "doing", 0);
@@ -628,7 +638,7 @@ describe("moveTicket", () => {
     // move request instead of opening a renderer-local observer afterward.
     const a = ticket({ id: "a", status: "backlog", order: 0 });
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [a] }, {});
 
     await store
@@ -647,7 +657,7 @@ describe("moveTicket", () => {
   it("is a no-op when the shared op reports an unchanged position", async () => {
     const a = ticket({ id: "a", status: "backlog", order: 0 });
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [a] }, {});
 
     await store.getState().moveTicket("p1", "a", "backlog", 0);
@@ -662,7 +672,7 @@ describe("moveTicket", () => {
     const gateway = fakeGateway({
       moveTicket: vi.fn<BoardGateway["moveTicket"]>(async () => ({ ok: false, error: "conflict" })),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: before }, {});
 
     await store.getState().moveTicket("p1", "a", "doing", 0);
@@ -682,7 +692,7 @@ describe("moveTicket", () => {
         throw new Error("ipc gone");
       }),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: before }, {});
 
     await store.getState().moveTicket("p1", "a", "doing", 0);
@@ -696,7 +706,7 @@ describe("moveTicket", () => {
 
   it("is a no-op for an unknown ticket id on an unhydrated project", async () => {
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
 
     await store.getState().moveTicket("p1", "does-not-exist", "doing", 0);
 
@@ -716,7 +726,7 @@ describe("moveTicket", () => {
         ticket: ticket({ id: "c", status: "backlog", order: 1 }),
       })),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [a] }, {});
 
     const move = store.getState().moveTicket("p1", "a", "doing", 0);
@@ -741,7 +751,7 @@ describe("moveTicket", () => {
         () => new Promise((resolve) => (resolveMove = resolve)),
       ),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [a, ticket({ id: "b", status: "backlog", order: 1 })] }, {});
 
     const move = store.getState().moveTicket("p1", "a", "doing", 0);
@@ -770,7 +780,7 @@ describe("moveTickets", () => {
         tickets: authoritative,
       })),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [a, b, c] }, {});
 
     await store.getState().moveTickets("p1", ["b", "a", "a"], "doing", 0);
@@ -788,7 +798,7 @@ describe("moveTickets", () => {
     const a = ticket({ id: "a", status: "backlog", order: 0 });
     const b = ticket({ id: "b", status: "backlog", order: 1 });
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [a, b] }, {});
 
     await store.getState().moveTickets("p1", ["a", "b"], "doing", 0, {
@@ -807,7 +817,7 @@ describe("moveTickets", () => {
 
   it("is a no-op for an unknown group on an unhydrated project", async () => {
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
 
     await store.getState().moveTickets("p1", ["unknown"], "doing", 0);
 
@@ -819,7 +829,7 @@ describe("moveTickets", () => {
     const a = ticket({ id: "a", status: "backlog", order: 0 });
     const b = ticket({ id: "b", status: "backlog", order: 1 });
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [a, b] }, {});
 
     await store.getState().moveTickets("p1", ["a", "b"], "backlog", 0);
@@ -837,7 +847,7 @@ describe("moveTickets", () => {
         error: "conflict",
       })),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: before }, {});
 
     await store.getState().moveTickets("p1", ["a", "b"], "doing", 0);
@@ -861,7 +871,7 @@ describe("setTicketPriority", () => {
         ticket: authoritative,
       })),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [a, b] }, {});
 
     await store.getState().setTicketPriority("p1", "a", "high");
@@ -881,7 +891,7 @@ describe("setTicketPriority", () => {
         () => new Promise((resolve) => (resolvePriority = resolve)),
       ),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     const a = ticket({ id: "a", status: "backlog", priority: "low" });
     store.getState().hydrate({ p1: [a] }, {});
 
@@ -896,7 +906,7 @@ describe("setTicketPriority", () => {
   it("is a no-op when the priority is unchanged", async () => {
     const a = ticket({ id: "a", status: "backlog", priority: "high" });
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [a] }, {});
 
     await store.getState().setTicketPriority("p1", "a", "high");
@@ -913,7 +923,7 @@ describe("setTicketPriority", () => {
         error: "conflict",
       })),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: before }, {});
 
     await store.getState().setTicketPriority("p1", "a", "high");
@@ -927,7 +937,7 @@ describe("setTicketPriority", () => {
 
   it("is a no-op for an unknown ticket id", async () => {
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [ticket({ id: "a", status: "backlog" })] }, {});
 
     await store.getState().setTicketPriority("p1", "does-not-exist", "high");
@@ -937,7 +947,7 @@ describe("setTicketPriority", () => {
 
   it("is a no-op for an unknown ticket id on an unhydrated project", async () => {
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
 
     await store.getState().setTicketPriority("p1", "does-not-exist", "high");
 
@@ -953,7 +963,7 @@ describe("setTicketPriority", () => {
         throw new Error("ipc gone");
       }),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: before }, {});
 
     await store.getState().setTicketPriority("p1", "a", "high");
@@ -983,7 +993,7 @@ describe("updateTicket", () => {
         ticket: authoritative,
       })),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [a, b] }, {});
 
     await store.getState().updateTicket({ ticketId: "a", branch: "volli/VC-1-thing" });
@@ -1007,7 +1017,7 @@ describe("updateTicket", () => {
       // `setTicketPriority`'s own pre-await `set()`).
       updateTicket: vi.fn<BoardGateway["updateTicket"]>(() => new Promise<TicketResult>(() => {})),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [a] }, {});
 
     void store.getState().updateTicket({ ticketId: "a", branch: null });
@@ -1015,24 +1025,22 @@ describe("updateTicket", () => {
     expect(store.getState().ticketsByProject.p1?.[0]?.branch).toBeNull();
   });
 
-  it("optimistically patches body and worktree-identity fields together", () => {
+  it("optimistically patches body and branch fields together", () => {
     const a = ticket({ id: "a", projectId: "p1", status: "backlog", body: "old body" });
     const gateway = fakeGateway({
       updateTicket: vi.fn<BoardGateway["updateTicket"]>(() => new Promise<TicketResult>(() => {})),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [a] }, {});
 
     void store.getState().updateTicket({
       ticketId: "a",
       body: "fresh body",
-      worktreePath: "/tmp/wt",
       baseBranch: "main",
     });
 
     const patched = store.getState().ticketsByProject.p1?.[0];
     expect(patched?.body).toBe("fresh body");
-    expect(patched?.worktreePath).toBe("/tmp/wt");
     expect(patched?.baseBranch).toBe("main");
   });
 
@@ -1045,7 +1053,7 @@ describe("updateTicket", () => {
     const gateway = fakeGateway({
       updateTicket: vi.fn<BoardGateway["updateTicket"]>(() => new Promise<TicketResult>(() => {})),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [a] }, {});
 
     void store.getState().updateTicket({ ticketId: "a", usesWorktree: false });
@@ -1064,7 +1072,7 @@ describe("updateTicket", () => {
     const gateway = fakeGateway({
       updateTicket: vi.fn<BoardGateway["updateTicket"]>(() => new Promise<TicketResult>(() => {})),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [a] }, {});
 
     void store.getState().updateTicket({ ticketId: "a", title: "New" });
@@ -1076,7 +1084,7 @@ describe("updateTicket", () => {
 
   it("is a no-op (no IPC call) for an unknown ticket id", async () => {
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [ticket({ id: "a", status: "backlog" })] }, {});
 
     await store.getState().updateTicket({ ticketId: "does-not-exist", title: "New" });
@@ -1092,7 +1100,7 @@ describe("updateTicket", () => {
         error: "conflict",
       })),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [a] }, {});
 
     await store.getState().updateTicket({ ticketId: "a", title: "New" });
@@ -1111,7 +1119,7 @@ describe("updateTicket", () => {
         throw new Error("ipc gone");
       }),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [a] }, {});
 
     await store.getState().updateTicket({ ticketId: "a", title: "New" });
@@ -1131,7 +1139,7 @@ describe("updateTicket", () => {
         () => new Promise((resolve) => (resolveUpdate = resolve)),
       ),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [a] }, {});
 
     const pending = store.getState().updateTicket({ ticketId: "a", title: "New" });
@@ -1153,7 +1161,7 @@ describe("updateTicket", () => {
     // A sibling in the same slice — the field-scoped revert must leave it be.
     const b = ticket({ id: "b", projectId: "p1", status: "backlog", order: 1 });
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [a, b] }, {});
     // A concurrent body save commits (in SQLite and the store) while this title
     // write is in flight; then the title write fails. The revert must restore
@@ -1187,7 +1195,7 @@ describe("setLabels", () => {
         ticket: authoritative,
       })),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [a, b] }, {});
 
     await store.getState().setLabels("a", ["bug", "urgent"]);
@@ -1200,7 +1208,7 @@ describe("setLabels", () => {
 
   it("is a no-op (no IPC call) for an unknown ticket id", async () => {
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [ticket({ id: "a", status: "backlog" })] }, {});
 
     await store.getState().setLabels("does-not-exist", ["bug"]);
@@ -1213,7 +1221,7 @@ describe("setLabels", () => {
     const gateway = fakeGateway({
       setLabels: vi.fn<BoardGateway["setLabels"]>(async () => ({ ok: false, error: "conflict" })),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [a] }, {});
 
     await store.getState().setLabels("a", ["bug", "urgent"]);
@@ -1232,7 +1240,7 @@ describe("setLabels", () => {
         throw new Error("ipc gone");
       }),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [a] }, {});
 
     await store.getState().setLabels("a", ["bug", "urgent"]);
@@ -1253,7 +1261,7 @@ describe("setLabels", () => {
       labels: ["bug"],
     });
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [a] }, {});
     // A concurrent title save commits while this labels write is in flight; then
     // labels fails. Field-scoped revert must restore only labels, keeping "New".
@@ -1286,7 +1294,7 @@ describe("setLabelColor", () => {
         label: authoritative,
       })),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({}, { p1: [bug, urgent] });
 
     await store.getState().setLabelColor("p1", "l1", "#123456");
@@ -1307,7 +1315,7 @@ describe("setLabelColor", () => {
         label: { ...bug, color: null },
       })),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({}, { p1: [bug] });
 
     await store.getState().setLabelColor("p1", "l1", null);
@@ -1318,7 +1326,7 @@ describe("setLabelColor", () => {
 
   it("is a no-op (no IPC call) for an unknown project id", async () => {
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({}, { p1: [{ id: "l1", projectId: "p1", name: "bug", color: null }] });
 
     await store.getState().setLabelColor("does-not-exist", "l1", "#123456");
@@ -1328,7 +1336,7 @@ describe("setLabelColor", () => {
 
   it("is a no-op (no IPC call) for an unknown label id", async () => {
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({}, { p1: [{ id: "l1", projectId: "p1", name: "bug", color: null }] });
 
     await store.getState().setLabelColor("p1", "does-not-exist", "#123456");
@@ -1339,7 +1347,7 @@ describe("setLabelColor", () => {
   it("is a no-op (no IPC call) when the color is unchanged", async () => {
     const bug: Label = { id: "l1", projectId: "p1", name: "bug", color: "#123456" };
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({}, { p1: [bug] });
 
     await store.getState().setLabelColor("p1", "l1", "#123456");
@@ -1355,7 +1363,7 @@ describe("setLabelColor", () => {
         error: "conflict",
       })),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({}, { p1: [bug] });
 
     await store.getState().setLabelColor("p1", "l1", "#123456");
@@ -1374,7 +1382,7 @@ describe("setLabelColor", () => {
         throw new Error("ipc gone");
       }),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({}, { p1: [bug] });
 
     await store.getState().setLabelColor("p1", "l1", "#123456");
@@ -1394,7 +1402,7 @@ describe("setLabelColor", () => {
         () => new Promise((resolve) => (resolveColor = resolve)),
       ),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [] }, { p1: [bug] });
 
     const pending = store.getState().setLabelColor("p1", "l1", "#123456");
@@ -1415,7 +1423,7 @@ describe("loadArchived", () => {
         tickets: archived,
       })),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [] }, {}); // the project is live — bootstrap/seedProject already ran
 
     const ok = await store.getState().loadArchived("p1");
@@ -1432,7 +1440,7 @@ describe("loadArchived", () => {
         error: "db locked",
       })),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
 
     const ok = await store.getState().loadArchived("p1");
 
@@ -1452,7 +1460,7 @@ describe("loadArchived", () => {
         () => new Promise((resolve) => (resolveList = resolve)),
       ),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [] }, {});
 
     const pending = store.getState().loadArchived("p1");
@@ -1470,7 +1478,7 @@ describe("archiveTicket", () => {
     const a = ticket({ id: "a", status: "doing" });
     const b = ticket({ id: "b", status: "doing", order: 1 });
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [a, b] }, {});
 
     await store.getState().archiveTicket("p1", "a");
@@ -1481,7 +1489,7 @@ describe("archiveTicket", () => {
 
   it("drops any cached Archive slice so it refetches fresh on next open", async () => {
     const a = ticket({ id: "a", status: "done" });
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().hydrate({ p1: [a] }, {});
     // Pretend the Archive view was opened earlier and cached a (now-stale) slice.
     store.setState({ archivedByProject: { p1: [] } });
@@ -1493,7 +1501,7 @@ describe("archiveTicket", () => {
 
   it("is a no-op for an unknown ticket id (no IPC call)", async () => {
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [ticket({ id: "a", status: "doing" })] }, {});
 
     await store.getState().archiveTicket("p1", "does-not-exist");
@@ -1509,7 +1517,7 @@ describe("archiveTicket", () => {
         error: "conflict",
       })),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [a] }, {});
 
     await store.getState().archiveTicket("p1", "a");
@@ -1524,7 +1532,7 @@ describe("archiveTicket", () => {
   it("removes an archived card from the selection while keeping selected siblings", async () => {
     const a = ticket({ id: "a", status: "doing" });
     const b = ticket({ id: "b", status: "doing", order: 1 });
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().hydrate({ p1: [a, b] }, {});
     store.getState().selectTickets("p1", ["a", "b"]);
 
@@ -1535,7 +1543,7 @@ describe("archiveTicket", () => {
 
   it("drops the selection record when its last selected card is archived", async () => {
     const a = ticket({ id: "a", status: "doing" });
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().hydrate({ p1: [a] }, {});
     store.getState().selectTicket("p1", "a");
 
@@ -1547,7 +1555,7 @@ describe("archiveTicket", () => {
   it("keeps the selection when a different card is archived", async () => {
     const a = ticket({ id: "a", status: "doing" });
     const b = ticket({ id: "b", status: "doing", order: 1 });
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().hydrate({ p1: [a, b] }, {});
     store.getState().selectTicket("p1", "b");
 
@@ -1560,7 +1568,7 @@ describe("archiveTicket", () => {
     const a = ticket({ id: "a", status: "doing" });
     const b = ticket({ id: "b", status: "doing", order: 1 });
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [a, b] }, {});
     // A move IPC snapshotted while `a` was still live lands between the
     // optimistic drop and the archive ack — mergeAuthoritative puts `a` back.
@@ -1577,7 +1585,7 @@ describe("archiveTicket", () => {
   it("does not duplicate the card when a concurrent mutation already restored it before a failed archive", async () => {
     const a = ticket({ id: "a", status: "doing" });
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [a] }, {});
     // A concurrent authoritative merge put `a` back before the failure lands —
     // the revert must be a no-op, not a second copy.
@@ -1601,7 +1609,7 @@ describe("unarchiveTicket", () => {
         ticket: revived,
       })),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [] }, {});
     store.setState({ archivedByProject: { p1: [archivedTicket({ id: "a", status: "done" })] } });
 
@@ -1620,7 +1628,7 @@ describe("unarchiveTicket", () => {
         error: "conflict",
       })),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [] }, {});
     store.setState({ archivedByProject: { p1: [archived] } });
 
@@ -1644,7 +1652,7 @@ describe("unarchiveTicket", () => {
         error: "conflict",
       })),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [] }, {});
     store.setState({ archivedByProject: { p1: [x, y, z] } });
 
@@ -1657,7 +1665,7 @@ describe("unarchiveTicket", () => {
     const archived = archivedTicket({ id: "a", status: "done" });
     const revived = ticket({ id: "a", status: "done" });
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     // The board already holds the revived ticket (e.g. the same race healed a
     // moment earlier) — the success append must dedupe, not double it.
     store.getState().hydrate({ p1: [revived] }, {});
@@ -1677,7 +1685,7 @@ describe("unarchiveTicket", () => {
 
   it("is a no-op for a ticket not in the loaded Archive slice (no IPC call)", async () => {
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.setState({ archivedByProject: { p1: [archivedTicket({ id: "a", status: "done" })] } });
 
     await store.getState().unarchiveTicket("p1", "does-not-exist");
@@ -1692,7 +1700,7 @@ describe("unarchiveTicket", () => {
         () => new Promise((resolve) => (settle = resolve)),
       ),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [] }, {});
     store.setState({ archivedByProject: { p1: [archivedTicket({ id: "a", status: "done" })] } });
 
@@ -1708,7 +1716,7 @@ describe("unarchiveTicket", () => {
 describe("deleteArchivedTicket", () => {
   it("optimistically removes the ticket from the Archive slice", async () => {
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.setState({
       archivedByProject: {
         p1: [
@@ -1731,7 +1739,7 @@ describe("deleteArchivedTicket", () => {
         error: "db locked",
       })),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.setState({ archivedByProject: { p1: [archivedTicket({ id: "a", status: "done" })] } });
     useChatSessionsStore.setState({
       openTabs: { p1: ["c1"] },
@@ -1750,7 +1758,7 @@ describe("deleteArchivedTicket", () => {
 
   it("is a no-op for a ticket not in the loaded Archive slice (no second IPC on a double-fire)", async () => {
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.setState({ archivedByProject: { p1: [archivedTicket({ id: "a", status: "done" })] } });
 
     await store.getState().deleteArchivedTicket("p1", "does-not-exist");
@@ -1767,7 +1775,7 @@ describe("archive/delete session teardown", () => {
     const kill = vi.fn().mockResolvedValue({ ok: true });
     vi.stubGlobal("window", { api: { terminal: { kill } } });
     resetSessions();
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().hydrate({ p1: [ticket({ id: "tk", status: "doing" })] }, {});
     useSessionsStore.getState().addSession(ticketScope("p1", "tk"), "s1", shellLaunch("Session 1"));
 
@@ -1787,7 +1795,7 @@ describe("archive/delete session teardown", () => {
         error: "conflict",
       })),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [ticket({ id: "tk", status: "doing" })] }, {});
     useSessionsStore.getState().addSession(ticketScope("p1", "tk"), "s1", shellLaunch("Session 1"));
 
@@ -1801,7 +1809,7 @@ describe("archive/delete session teardown", () => {
     const kill = vi.fn().mockResolvedValue({ ok: true });
     vi.stubGlobal("window", { api: { terminal: { kill } } });
     resetSessions();
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.setState({ archivedByProject: { p1: [archivedTicket({ id: "tk", status: "done" })] } });
     useSessionsStore.getState().addSession(ticketScope("p1", "tk"), "s1", shellLaunch("Session 1"));
 
@@ -1819,7 +1827,7 @@ describe("chat tab re-homing", () => {
   it("moves a departed ticket's open chat tabs onto the project when archived", async () => {
     resetChatTabs();
     const a = ticket({ id: "a", status: "doing" });
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().hydrate({ p1: [a] }, {});
     useChatSessionsStore.setState({ openTabs: { a: ["c1", "c2"] } });
 
@@ -1831,7 +1839,7 @@ describe("chat tab re-homing", () => {
   it("does not touch the chat store when the archived ticket had no open chat tabs", async () => {
     resetChatTabs();
     const a = ticket({ id: "a", status: "doing" });
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().hydrate({ p1: [a] }, {});
     const before = useChatSessionsStore.getState().openTabs;
 
@@ -1849,7 +1857,7 @@ describe("chat tab re-homing", () => {
         error: "conflict",
       })),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [a] }, {});
     useChatSessionsStore.setState({ openTabs: { p1: ["ticketless"], a: ["c1"] } });
 
@@ -1868,7 +1876,7 @@ describe("chat tab re-homing", () => {
     const a = ticket({ id: "a", status: "doing" });
     const b = ticket({ id: "b", status: "doing", order: 1 });
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [a, b] }, {});
     useChatSessionsStore.setState({ openTabs: { a: ["c1"] } });
     // Same race as "re-drops the card..." above: a concurrent move's
@@ -1898,7 +1906,7 @@ describe("chat tab re-homing", () => {
         tickets: [{ ...a, status: "doing" as const, order: 0 }],
       })),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [a, b] }, {});
     useChatSessionsStore.setState({ openTabs: { b: ["c1"] } });
 
@@ -1922,7 +1930,7 @@ describe("chat tab re-homing", () => {
         ticket: revived,
       })),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     const a = ticket({ id: "a", status: "done" });
     const b = ticket({ id: "b", status: "done", order: 1 });
     store.getState().hydrate({ p1: [a, b] }, {});
@@ -1946,7 +1954,7 @@ describe("chat tab re-homing", () => {
 
   it("keeps Board chats but clears only the deleted ticket's restoration provenance", async () => {
     resetChatTabs();
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.setState({ archivedByProject: { p1: [archivedTicket({ id: "a", status: "done" })] } });
     useChatSessionsStore.setState({
       openTabs: { p1: ["c1", "c2"] },
@@ -1961,7 +1969,7 @@ describe("chat tab re-homing", () => {
 
   it("drops the project's and its live tickets' chat tabs when the project is forgotten", () => {
     resetChatTabs();
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().hydrate({ p1: [ticket({ id: "a", status: "doing" })] }, {});
     useChatSessionsStore.setState({ openTabs: { p1: ["c1"], a: ["c2"], other: ["c3"] } });
 
@@ -1972,7 +1980,7 @@ describe("chat tab re-homing", () => {
 
   it("forgets a project-owned chat tab even when the board has no slice for that project", () => {
     resetChatTabs();
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     useChatSessionsStore.setState({
       openTabs: { p1: ["c1"], other: ["c2"] },
       rehomedTicketBySession: { c1: "a" },
@@ -1986,7 +1994,7 @@ describe("chat tab re-homing", () => {
 
   it("leaves the chat store untouched when forgetting a project with no open chat tabs", () => {
     resetChatTabs();
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().hydrate({ p1: [ticket({ id: "a", status: "doing" })] }, {});
     const before = useChatSessionsStore.getState().openTabs;
 
@@ -2003,7 +2011,7 @@ describe("chat tab re-homing", () => {
     resetChatTabs();
     const a = ticket({ id: "a", status: "doing" });
     const b = ticket({ id: "b", status: "doing", order: 1 });
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().hydrate({ p1: [a, b] }, {});
     useChatSessionsStore.setState({ openTabs: { a: ["c1"], b: ["c2"] } });
 
@@ -2016,7 +2024,7 @@ describe("chat tab re-homing", () => {
     resetChatTabs();
     const a = ticket({ id: "a", status: "doing" });
     const b = ticket({ id: "b", status: "doing", order: 1 });
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().hydrate({ p1: [a, b] }, {});
     useChatSessionsStore.setState({
       openTabs: { p1: ["ticketless"], a: ["c1"], b: ["c2"] },
@@ -2034,7 +2042,7 @@ describe("chat tab re-homing", () => {
 
   it("drops the chat tabs of a project an authoritative re-hydrate no longer names at all", () => {
     resetChatTabs();
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().hydrate({ p1: [ticket({ id: "a", status: "doing" })], p2: [] }, {});
     useChatSessionsStore.setState({
       openTabs: { p1: ["c1"], a: ["c2"], p2: ["c3"] },
@@ -2050,7 +2058,7 @@ describe("chat tab re-homing", () => {
   it("leaves the chat store untouched when a re-hydrate drops no ticket", () => {
     resetChatTabs();
     const a = ticket({ id: "a", status: "doing" });
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().hydrate({ p1: [a] }, {});
     useChatSessionsStore.setState({ openTabs: { a: ["c1"] } });
     const before = useChatSessionsStore.getState().openTabs;
@@ -2064,7 +2072,7 @@ describe("chat tab re-homing", () => {
 describe("archive lifecycle on a project with no loaded state", () => {
   it("archive/unarchive/delete all no-op without an IPC call", async () => {
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
 
     await store.getState().archiveTicket("nope", "a");
     await store.getState().unarchiveTicket("nope", "a");
@@ -2078,7 +2086,7 @@ describe("archive lifecycle on a project with no loaded state", () => {
 
 describe("setSearch", () => {
   it("sets the search string verbatim, initializing from EMPTY_TICKET_FILTER", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
 
     store.getState().setSearch("p1", "  widget ");
 
@@ -2091,7 +2099,7 @@ describe("setSearch", () => {
 
 describe("togglePriority", () => {
   it("adds then removes a priority from the facet", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
 
     store.getState().togglePriority("p1", "high" as TicketPriority);
     expect(store.getState().filterByProject.p1!.priorities).toEqual(["high"]);
@@ -2103,7 +2111,7 @@ describe("togglePriority", () => {
 
 describe("toggleLabel", () => {
   it("adds then removes a label from the facet", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
 
     store.getState().toggleLabel("p1", "terminal");
     expect(store.getState().filterByProject.p1!.labels).toEqual(["terminal"]);
@@ -2115,7 +2123,7 @@ describe("toggleLabel", () => {
 
 describe("clearFilter", () => {
   it("drops the project's filter record entirely", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().togglePriority("p1", "high" as TicketPriority);
 
     store.getState().clearFilter("p1");
@@ -2124,7 +2132,7 @@ describe("clearFilter", () => {
   });
 
   it("is a no-op when there is no filter record for the project", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     const before = store.getState();
 
     store.getState().clearFilter("p1");
@@ -2135,7 +2143,7 @@ describe("clearFilter", () => {
 
 describe("ticket selection", () => {
   it("records a single selected ticket as a one-item selection", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
 
     store.getState().selectTicket("p1", "t3");
 
@@ -2143,7 +2151,7 @@ describe("ticket selection", () => {
   });
 
   it("replaces a selection with de-duplicated ticket ids", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
 
     store.getState().selectTickets("p1", ["t1", "t2", "t1"]);
 
@@ -2151,7 +2159,7 @@ describe("ticket selection", () => {
   });
 
   it("replaces one same-sized selection with another", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().selectTickets("p1", ["t1", "t2"]);
 
     store.getState().selectTickets("p1", ["t2", "t3"]);
@@ -2160,7 +2168,7 @@ describe("ticket selection", () => {
   });
 
   it("a single-ticket caller collapses an existing multi-selection", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().selectTickets("p1", ["t1", "t2"]);
 
     store.getState().selectTicket("p1", "t2");
@@ -2169,7 +2177,7 @@ describe("ticket selection", () => {
   });
 
   it("clears via null or an empty list by dropping the project's record entirely", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().selectTickets("p1", ["t1", "t2"]);
 
     store.getState().selectTicket("p1", null);
@@ -2181,7 +2189,7 @@ describe("ticket selection", () => {
   });
 
   it("is a no-op (unchanged identity) when the requested selection already matches", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     const beforeEmpty = store.getState();
     store.getState().selectTicket("p1", null);
     expect(store.getState()).toBe(beforeEmpty);
@@ -2193,7 +2201,7 @@ describe("ticket selection", () => {
   });
 
   it("keeps selections independent across projects", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
 
     store.getState().selectTickets("p1", ["t1", "t2"]);
     store.getState().selectTicket("p2", "o1");
@@ -2206,7 +2214,7 @@ describe("ticket selection", () => {
 
 describe("forget", () => {
   it("keeps owner-keyed chat tabs on a reversible Workspace detach", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().hydrate({ p1: [ticket({ id: "t1", status: "todo" })] }, {});
     useChatSessionsStore.setState({ openTabs: { p1: ["draft-1"], t1: ["chat-1"] } });
     store.getState().forget("p1", { preserveDrafts: true });
@@ -2215,7 +2223,7 @@ describe("forget", () => {
     resetChatTabs();
   });
   it("removes the ticket list, label list, filter record, and selection record", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store
       .getState()
       .hydrate(
@@ -2234,7 +2242,7 @@ describe("forget", () => {
   });
 
   it("removes only the selection record when there is nothing else", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().selectTicket("p1", "t1");
 
     store.getState().forget("p1");
@@ -2243,7 +2251,7 @@ describe("forget", () => {
   });
 
   it("removes only the ticket list when there is nothing else", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().hydrate({ p1: [ticket({ id: "t1", status: "backlog" })] }, {});
 
     store.getState().forget("p1");
@@ -2252,7 +2260,7 @@ describe("forget", () => {
   });
 
   it("drops a loaded Archive slice too", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.setState({ archivedByProject: { p1: [archivedTicket({ id: "a", status: "done" })] } });
 
     store.getState().forget("p1");
@@ -2261,7 +2269,7 @@ describe("forget", () => {
   });
 
   it("removes only the filter record when there is no ticket list", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().togglePriority("p1", "high" as TicketPriority);
 
     store.getState().forget("p1");
@@ -2270,7 +2278,7 @@ describe("forget", () => {
   });
 
   it("is a no-op for a project with no tickets, labels, filter, or selection", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     const before = store.getState();
 
     store.getState().forget("p1");
@@ -2279,7 +2287,7 @@ describe("forget", () => {
   });
 });
 
-describe("createBoardStore() with the default gateway", () => {
+describe("localStore() with the default gateway", () => {
   // No fake gateway injected here — these exercise the real
   // `defaultGateway` wrappers (window.api.tickets.*), which every other
   // test in this file bypasses by always constructing with a fake.
@@ -2294,7 +2302,7 @@ describe("createBoardStore() with the default gateway", () => {
     vi.stubGlobal("window", {
       api: { tickets: { create, move: vi.fn(), setPriority: vi.fn() } },
     });
-    const store = createBoardStore();
+    const store = localStore();
 
     await store.getState().addTicket("p1", "backlog", "New");
 
@@ -2311,7 +2319,7 @@ describe("createBoardStore() with the default gateway", () => {
     vi.stubGlobal("window", {
       api: { tickets: { create: vi.fn(), move, setPriority: vi.fn() } },
     });
-    const store = createBoardStore();
+    const store = localStore();
     const a = ticket({ id: "a", status: "backlog", order: 0 });
     store.getState().hydrate({ p1: [a] }, {});
 
@@ -2330,7 +2338,7 @@ describe("createBoardStore() with the default gateway", () => {
     vi.stubGlobal("window", {
       api: { tickets: { create: vi.fn(), move: vi.fn(), moveMany, setPriority: vi.fn() } },
     });
-    const store = createBoardStore();
+    const store = localStore();
     const a = ticket({ id: "a", status: "backlog", order: 0 });
     const b = ticket({ id: "b", status: "todo", order: 0 });
     store.getState().hydrate({ p1: [a, b] }, {});
@@ -2353,7 +2361,7 @@ describe("createBoardStore() with the default gateway", () => {
     vi.stubGlobal("window", {
       api: { tickets: { create: vi.fn(), move: vi.fn(), setPriority } },
     });
-    const store = createBoardStore();
+    const store = localStore();
     const a = ticket({ id: "a", status: "backlog", priority: "low" });
     store.getState().hydrate({ p1: [a] }, {});
 
@@ -2368,7 +2376,7 @@ describe("createBoardStore() with the default gateway", () => {
       ticket: ticket({ id: "a", status: "backlog", branch: "volli/VC-1-thing" }),
     }));
     vi.stubGlobal("window", { api: { tickets: { update } } });
-    const store = createBoardStore();
+    const store = localStore();
     const a = ticket({ id: "a", projectId: "p1", status: "backlog" });
     store.getState().hydrate({ p1: [a] }, {});
 
@@ -2383,7 +2391,7 @@ describe("createBoardStore() with the default gateway", () => {
       ticket: ticket({ id: "a", status: "backlog", labels: ["bug"] }),
     }));
     vi.stubGlobal("window", { api: { tickets: { setLabels } } });
-    const store = createBoardStore();
+    const store = localStore();
     const a = ticket({ id: "a", projectId: "p1", status: "backlog" });
     store.getState().hydrate({ p1: [a] }, {});
 
@@ -2398,7 +2406,7 @@ describe("createBoardStore() with the default gateway", () => {
       label: { id: "l1", projectId: "p1", name: "bug", color: "#123456" },
     }));
     vi.stubGlobal("window", { api: { labels: { setColor } } });
-    const store = createBoardStore();
+    const store = localStore();
     store.getState().hydrate({}, { p1: [{ id: "l1", projectId: "p1", name: "bug", color: null }] });
 
     await store.getState().setLabelColor("p1", "l1", "#123456");
@@ -2409,7 +2417,7 @@ describe("createBoardStore() with the default gateway", () => {
   it("archiveTicket calls window.api.tickets.archive", async () => {
     const archive = vi.fn(async () => ({ ok: true as const }));
     vi.stubGlobal("window", { api: { tickets: { archive } } });
-    const store = createBoardStore();
+    const store = localStore();
     store.getState().hydrate({ p1: [ticket({ id: "a", status: "doing" })] }, {});
 
     await store.getState().archiveTicket("p1", "a");
@@ -2423,7 +2431,7 @@ describe("createBoardStore() with the default gateway", () => {
       ticket: ticket({ id: "a", status: "done" }),
     }));
     vi.stubGlobal("window", { api: { tickets: { unarchive } } });
-    const store = createBoardStore();
+    const store = localStore();
     store.getState().hydrate({ p1: [] }, {});
     store.setState({ archivedByProject: { p1: [archivedTicket({ id: "a", status: "done" })] } });
 
@@ -2435,7 +2443,7 @@ describe("createBoardStore() with the default gateway", () => {
   it("deleteArchivedTicket calls window.api.tickets.delete", async () => {
     const del = vi.fn(async () => ({ ok: true as const }));
     vi.stubGlobal("window", { api: { tickets: { delete: del } } });
-    const store = createBoardStore();
+    const store = localStore();
     store.setState({ archivedByProject: { p1: [archivedTicket({ id: "a", status: "done" })] } });
 
     await store.getState().deleteArchivedTicket("p1", "a");
@@ -2446,7 +2454,7 @@ describe("createBoardStore() with the default gateway", () => {
   it("loadArchived calls window.api.tickets.listArchived", async () => {
     const listArchived = vi.fn(async () => ({ ok: true as const, tickets: [] }));
     vi.stubGlobal("window", { api: { tickets: { listArchived } } });
-    const store = createBoardStore();
+    const store = localStore();
 
     await store.getState().loadArchived("p1");
 
@@ -2456,7 +2464,7 @@ describe("createBoardStore() with the default gateway", () => {
 
 describe("notePlanningChange", () => {
   it("bumps the version monotonically and records the change scope", () => {
-    const store = createBoardStore();
+    const store = localStore();
     expect(store.getState().lastPlanningChange).toEqual({
       version: 0,
       ticketId: null,
@@ -2480,7 +2488,7 @@ describe("notePlanningChange", () => {
   });
 
   it("carries the change's kind only when the producer named one", () => {
-    const store = createBoardStore();
+    const store = localStore();
     store.getState().notePlanningChange({ projectId: "p1", kind: "worktree" });
     expect(store.getState().lastPlanningChange).toEqual({
       version: 1,
@@ -2570,7 +2578,7 @@ describe("preserveIdentities (VC-447)", () => {
 
 describe("hydrateProjectRoster keeps identities (VC-447)", () => {
   it("mints nothing when the roster reads back the rows already held", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     const labels = [labelNamed("bug")];
     store.getState().hydrate(
       {
@@ -2600,7 +2608,7 @@ describe("hydrateProjectRoster keeps identities (VC-447)", () => {
   });
 
   it("re-mints only the row and label that changed", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store
       .getState()
       .hydrate(
@@ -2629,7 +2637,7 @@ describe("hydrateProjectRoster keeps identities (VC-447)", () => {
   });
 
   it("re-mints a row whose shape differs, and seeds labels for a slice that held none", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().hydrate({ p1: [ticket({ id: "a", status: "doing" })] }, {});
     const [a] = store.getState().ticketsByProject.p1!;
 
@@ -2646,7 +2654,7 @@ describe("hydrateProjectRoster keeps identities (VC-447)", () => {
   });
 
   it("writes nothing at all when the roster reads back what the board holds", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().hydrate(
       {
         p1: [ticket({ id: "a", status: "doing", labels: ["bug"] })],
@@ -2691,7 +2699,7 @@ describe("hydrateProjectRoster keeps identities (VC-447)", () => {
   });
 
   it("replaces only the edited project's entries, and keeps the maps a refresh did not change", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     const others = [ticket({ id: "o", projectId: "p2", status: "todo" })];
     store.getState().hydrate(
       {
@@ -2722,7 +2730,7 @@ describe("hydrateProjectRoster keeps identities (VC-447)", () => {
   });
 
   it("shortens the list and drops the departed mark when a ticket leaves", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().hydrate({ p1: [ticket({ id: "a", status: "doing" })] }, { p1: [] });
     store
       .getState()
@@ -2751,7 +2759,7 @@ describe("hydrateProjectRoster keeps identities (VC-447)", () => {
 
 describe("paintBoard", () => {
   it("seeds a Workspace it has never painted, marking the rows whose body it has not read", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     const tickets = [ticket({ id: "a", status: "doing" }), ticket({ id: "b", status: "todo" })];
 
     store.getState().paintBoard("p1", tickets, [labelNamed("bug")], new Set(["b"]));
@@ -2763,7 +2771,7 @@ describe("paintBoard", () => {
   });
 
   it("seeds empty slices for an empty Workspace", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
 
     store.getState().paintBoard("p1", [], [], new Set());
 
@@ -2772,7 +2780,7 @@ describe("paintBoard", () => {
   });
 
   it("sets nothing at all when a repaint shows what is already held", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store
       .getState()
       .paintBoard(
@@ -2796,7 +2804,7 @@ describe("paintBoard", () => {
   });
 
   it("re-mints only the card that changed, and leaves the labels' slice alone", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     const labels = [labelNamed("bug")];
     store
       .getState()
@@ -2820,7 +2828,7 @@ describe("paintBoard", () => {
   });
 
   it("re-mints only the labels' slice when only a label changed", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store
       .getState()
       .paintBoard("p1", [ticket({ id: "a", status: "doing" })], [labelNamed("bug")], new Set());
@@ -2840,7 +2848,7 @@ describe("paintBoard", () => {
   });
 
   it("moves the unloaded marks alone when only they changed", () => {
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     const tickets = [ticket({ id: "a", status: "doing" }), ticket({ id: "b", status: "todo" })];
     store.getState().paintBoard("p1", tickets, [], new Set(["a"]));
     const ticketsBefore = store.getState().ticketsByProject;
@@ -2858,7 +2866,7 @@ describe("paintBoard", () => {
 
   it("re-homes the chat tabs of a card that left the board, and restores them when it returns", () => {
     resetChatTabs();
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     const a = ticket({ id: "a", status: "doing" });
     const b = ticket({ id: "b", status: "doing", order: 1 });
     store.getState().paintBoard("p1", [a, b], [], new Set());
@@ -2873,7 +2881,7 @@ describe("paintBoard", () => {
 
   it("does not touch the chat tabs when only the labels changed", () => {
     resetChatTabs();
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     const a = ticket({ id: "a", status: "doing" });
     store.getState().paintBoard("p1", [a], [], new Set());
     useChatSessionsStore.setState({ openTabs: { x: ["c1"] } });
@@ -2941,7 +2949,7 @@ describe("the board store for a board the protocol engine follows (a remote host
     const created = ticket({ id: "n", status: "todo", title: "New" });
     const createTicket = vi.spyOn(sync, "createTicket").mockResolvedValue(created);
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
 
     expect(await store.getState().addTicket("p1", "todo", "  New  ")).toBe(created);
     await store
@@ -2960,7 +2968,7 @@ describe("the board store for a board the protocol engine follows (a remote host
     const { sync } = startProtocol();
     const moveTickets = vi.spyOn(sync, "moveTickets").mockResolvedValue();
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     const choice = { kind: "move-only" } as const;
 
     await store.getState().moveTicket("p1", "a", "doing", 2, choice);
@@ -2977,7 +2985,7 @@ describe("the board store for a board the protocol engine follows (a remote host
     const { sync } = startProtocol();
     const setPriority = vi.spyOn(sync, "setPriority").mockResolvedValue();
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [ticket({ id: "a", status: "doing", priority: "low" })] }, {});
 
     await store.getState().setTicketPriority("p1", "a", "low");
@@ -2993,7 +3001,7 @@ describe("the board store for a board the protocol engine follows (a remote host
     const { sync } = startProtocol();
     const updateTicket = vi.spyOn(sync, "updateTicket");
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [] }, { p1: [] });
     store
       .getState()
@@ -3008,9 +3016,7 @@ describe("the board store for a board the protocol engine follows (a remote host
     expect(isTicketBodyLoaded(store.getState(), "a")).toBe(false);
 
     updateTicket.mockResolvedValueOnce(ticket({ id: "a", status: "doing" }));
-    await store
-      .getState()
-      .updateTicket({ ticketId: "a", title: "T", worktreePath: "/wt", branch: "b" });
+    await store.getState().updateTicket({ ticketId: "a", title: "T", branch: "b" });
     expect(isTicketBodyLoaded(store.getState(), "a")).toBe(true);
     // Already read: nothing to clear.
     updateTicket.mockResolvedValueOnce(ticket({ id: "a", status: "doing" }));
@@ -3032,7 +3038,7 @@ describe("the board store for a board the protocol engine follows (a remote host
     const { sync } = startProtocol();
     const setLabels = vi.spyOn(sync, "setLabels").mockResolvedValue();
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [ticket({ id: "a", status: "doing" })] }, {});
 
     await store.getState().setLabels("a", ["bug"]);
@@ -3046,7 +3052,7 @@ describe("the board store for a board the protocol engine follows (a remote host
     const { sync } = startProtocol();
     const setLabelColor = vi.spyOn(sync, "setLabelColor").mockResolvedValue();
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({}, { p1: [labelNamed("bug")] });
 
     await store.getState().setLabelColor("p1", "l-bug", null);
@@ -3062,7 +3068,7 @@ describe("the board store for a board the protocol engine follows (a remote host
     const archived = [archivedTicket({ id: "x", status: "done" })];
     const archivedTickets = vi.spyOn(sync, "archivedTickets");
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [] }, {});
 
     archivedTickets.mockResolvedValueOnce(archived);
@@ -3086,7 +3092,7 @@ describe("the board store for a board the protocol engine follows (a remote host
     const { sync } = startProtocol();
     const archiveTicket = vi.spyOn(sync, "archiveTicket").mockResolvedValue(true);
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate(
       {
         p1: [ticket({ id: "a", status: "doing" }), ticket({ id: "b", status: "doing", order: 1 })],
@@ -3119,7 +3125,7 @@ describe("the board store for a board the protocol engine follows (a remote host
     resetSessions();
     const { sync } = startProtocol();
     vi.spyOn(sync, "archiveTicket").mockResolvedValue(false);
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().hydrate({ p1: [ticket({ id: "a", status: "doing" })] }, {});
     store.setState({ archivedByProject: { p1: [] } });
     store.getState().selectTicket("p1", "a");
@@ -3140,7 +3146,7 @@ describe("the board store for a board the protocol engine follows (a remote host
       .spyOn(sync, "unarchiveTicket")
       .mockResolvedValue(ticket({ id: "x", status: "done" }));
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ p1: [] }, {});
     store.setState({
       archivedByProject: { p1: [archivedTicket({ id: "w", status: "done" }), target] },
@@ -3158,7 +3164,7 @@ describe("the board store for a board the protocol engine follows (a remote host
   it("restores the Archive slice when the engine refuses the unarchive", async () => {
     const { sync } = startProtocol();
     vi.spyOn(sync, "unarchiveTicket").mockResolvedValue(null);
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     const archived = [
       archivedTicket({ id: "w", status: "done" }),
       archivedTicket({ id: "x", status: "done" }),
@@ -3178,7 +3184,7 @@ describe("the board store for a board the protocol engine follows (a remote host
     const { sync } = startProtocol();
     const deleteTicket = vi.spyOn(sync, "deleteTicket").mockResolvedValue(true);
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.setState({ archivedByProject: { p1: [archivedTicket({ id: "x", status: "done" })] } });
     useSessionsStore.getState().addSession(ticketScope("p1", "x"), "s1", shellLaunch("Session 1"));
 
@@ -3193,7 +3199,7 @@ describe("the board store for a board the protocol engine follows (a remote host
   it("restores the Archive slice when the engine refuses the delete", async () => {
     const { sync } = startProtocol();
     vi.spyOn(sync, "deleteTicket").mockResolvedValue(false);
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.setState({
       archivedByProject: {
         p1: [
@@ -3212,9 +3218,9 @@ describe("the board store for a board the protocol engine follows (a remote host
     const { sync } = startProtocol();
     const open = vi.spyOn(sync, "open").mockResolvedValueOnce();
     vi.spyOn(sync, "follows").mockImplementation((projectId) => projectId === "followed");
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
 
-    // This Mac's own project stays on the legacy path, flag on as off (VC-889).
+    // This Mac's own project stays on its own IPC source, flag on as off (VC-889).
     store.getState().seedProject("local");
     const undoP1 = remoteProject("p1");
     store.getState().seedProject("p1");
@@ -3235,7 +3241,7 @@ describe("the board store for a board the protocol engine follows (a remote host
 
   it("keeps a followed board's slices when this Mac's bootstrap re-hydrates", () => {
     startProtocol();
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     const remote = ticket({ id: "r", status: "todo" });
     const read = ticket({ id: "read", status: "todo" });
     store.getState().paintBoard("p1", [remote, read], [labelNamed("bug")], new Set(["r"]));
@@ -3251,12 +3257,31 @@ describe("the board store for a board the protocol engine follows (a remote host
     expect(store.getState().labelsByProject).toEqual({ p1: [] });
   });
 
-  it("keeps this Mac's own projects on the legacy write-through with the flag on (VC-889)", async () => {
+  it("keeps a remote host's board the engine does not follow now when this Mac re-hydrates", () => {
+    const { sync } = startProtocol();
+    vi.spyOn(sync, "follows").mockReturnValue(false);
+    const store = localStore(fakeGateway());
+    const remote = ticket({ id: "r", status: "todo" });
+    store.getState().paintBoard("p2", [remote], [], new Set(["r"]));
+    const undo = remoteProject("p2");
+    try {
+      store.getState().hydrate({ mine: [] }, { mine: [] });
+    } finally {
+      undo();
+    }
+    expect(store.getState().ticketsByProject).toEqual({ mine: [], p2: [remote] });
+    expect(store.getState().unloadedTicketBodies).toEqual({ r: true });
+    // Once neither followed nor a remote host's, it is this Mac's: the boot data wins.
+    store.getState().hydrate({ mine: [] }, { mine: [] });
+    expect(store.getState().ticketsByProject).toEqual({ mine: [] });
+  });
+
+  it("keeps this Mac's own projects on its own IPC source with the flag on (VC-889)", async () => {
     startProtocol();
     const gateway = fakeGateway({
       moveTicket: vi.fn().mockResolvedValue({ ok: true, tickets: [] }),
     });
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().hydrate({ mine: [ticket({ id: "a", status: "todo" })] }, { mine: [] });
     await store.getState().moveTicket("mine", "a", "doing", 0);
     expect(gateway.moveTicket).toHaveBeenCalledOnce();
@@ -3265,7 +3290,7 @@ describe("the board store for a board the protocol engine follows (a remote host
   it("stops following a forgotten Workspace", () => {
     const { sync } = startProtocol();
     const close = vi.spyOn(sync, "close");
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().hydrate({ p1: [ticket({ id: "a", status: "doing" })] }, {});
 
     store.getState().forget("p1");
@@ -3276,7 +3301,7 @@ describe("the board store for a board the protocol engine follows (a remote host
   it("hands a body read on its own to the engine, and clears the placeholder mark it replaces", () => {
     const { sync } = startProtocol();
     const adoptBody = vi.spyOn(sync, "adoptBody");
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().paintBoard("p1", [ticket({ id: "a", status: "doing" })], [], new Set(["a"]));
 
     store.getState().adoptTicketBody("p1", "a", "# Read");
@@ -3289,7 +3314,7 @@ describe("the board store for a board the protocol engine follows (a remote host
   it("hands a body read on its own to the engine, so its repaints keep it", () => {
     const { sync } = startProtocol();
     const adoptBody = vi.spyOn(sync, "adoptBody");
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().hydrate({ p1: [ticket({ id: "a", status: "doing" })] }, {});
 
     store.getState().adoptTicketBody("p1", "a", "# Read");
@@ -3326,7 +3351,7 @@ describe("VC-447: a refresh keeps every unchanged identity and drops no changed 
   ];
   it.each(changed)("does not drop changed ticket field %j", (patch) => {
     stopBoardProtocol();
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     store.getState().hydrate({ p1: [base] }, { p1: [] });
     const { body: _body, ...row } = { ...base, ...patch };
     store.getState().hydrateProjectRoster("p1", [row], []);
@@ -3337,7 +3362,7 @@ describe("VC-447: a refresh keeps every unchanged identity and drops no changed 
     "does not drop label field %j",
     (patch) => {
       stopBoardProtocol();
-      const store = createBoardStore(fakeGateway());
+      const store = localStore(fakeGateway());
       const label = labelNamed("bug");
       store.getState().hydrate({ p1: [base] }, { p1: [label] });
       const { body: _body, ...row } = base;
@@ -3347,7 +3372,7 @@ describe("VC-447: a refresh keeps every unchanged identity and drops no changed 
   );
   it("preserves cloned equal arrays and objects, but updates body through its dedicated read", () => {
     stopBoardProtocol();
-    const store = createBoardStore(fakeGateway());
+    const store = localStore(fakeGateway());
     const label = labelNamed("bug");
     store.getState().hydrate({ p1: [base] }, { p1: [label] });
     const prior = store.getState().ticketsByProject.p1;
@@ -3365,7 +3390,7 @@ describe("VC-447: a refresh keeps every unchanged identity and drops no changed 
 
 it("preserves 599 of 600 ticket identities on both board paths", () => {
   stopBoardProtocol();
-  const store = createBoardStore(fakeGateway());
+  const store = localStore(fakeGateway());
   const rows = Array.from({ length: 600 }, (_, i) =>
     ticket({ id: `card-${i}`, status: "todo", order: i }),
   );
@@ -3414,7 +3439,7 @@ describe("the board store in a cloud launch (VC-889)", () => {
     const move = vi.spyOn(source, "moveTickets");
     const open = vi.spyOn(source, "open");
     const gateway = fakeGateway();
-    const store = createBoardStore(gateway);
+    const store = localStore(gateway);
     store.getState().seedProject("cloud-project");
     await store.getState().moveTicket("cloud-project", "a", "doing", 0);
     expect(open).toHaveBeenCalledWith("cloud-project");
