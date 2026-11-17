@@ -1,0 +1,70 @@
+---
+title: Share Sessions
+draft: true
+description: See which Sessions your Workspace can read, share a private chat with the Workspace, and understand what teammates can and cannot do.
+---
+
+Every Member of a Workspace sees its whole board: every project, ticket,
+comment and label. Sessions follow two rules:
+
+- **Ticket work is shared.** A Session started on a ticket, including an
+  Automation's Run, is visible to every Member from the start. So is ticket
+  history you [moved from this Mac](/cloud/move-projects/).
+- **Chats without a ticket are private.** A project chat or Board Session is
+  visible only to you until you share it.
+
+A subagent has its parent's visibility. A private Session's existence is
+hidden too: teammates do not see it in lists, and a link to it reads as not
+found.
+
+## Share a private chat
+
+Sharing is one-way: a shared Session cannot be made private again.
+
+1. Right-click the Session in the sidebar, on Home, or on its tab, or open
+   the **⋯** menu at the top left of the chat.
+2. Choose **Share with workspace…**.
+3. Review **Share with workspace?** and select **Share**.
+
+Everyone in the Workspace can then read the chat and its subagents. The
+lock beside the Session changes to the team mark.
+
+Only the Session's owner sees **Share with workspace…**, and only while the
+Session is private. A subagent is shared with its parent and has no Share
+action of its own.
+
+## What teammates see
+
+On Session rows, tabs and the chat header:
+
+- the owner's initials, on someone else's Session;
+- a lock for a private Session, or a team mark for one the Workspace can
+  read.
+
+A teammate who opens a shared Session reads its history and follows its
+reply as it streams. They cannot send to it, stop it or answer its
+questions: in place of the composer they see **Only** the owner's name
+**can send to this Session.** To work on the same ticket, a teammate starts
+their own Session there, on their own runner.
+
+If the owner leaves the Workspace while a turn is running, that Session
+reads **Ended ·** and the owner's name, for example **Ended · Sam left**.
+
+Some things stay with one person even inside a shared Workspace:
+
+- **Runners.** Your runners run only your Sessions. Teammates see a runner's
+  name only through a Session they can already read, such as **Running on**
+  that runner.
+- **Credentials.** Each person's model sign-ins and secrets stay on their
+  own machines.
+
+## Make everything shared
+
+Owners and admins can turn on **Settings → Workspace → Sharing → Make
+everything shared**. While it is on, every Member can read every Session in
+the Workspace, including private chats; the team mark's label reads
+**Visible to the workspace (admin setting)**.
+
+The setting changes no Session. Turning it off makes private chats private
+again; ticket Sessions and chats someone shared stay shared. Owners and
+admins have no other way to read a Member's private chat.

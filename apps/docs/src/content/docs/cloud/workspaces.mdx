@@ -1,0 +1,148 @@
+---
+title: Workspaces and members
+draft: true
+description: Create and switch Workspaces, invite people by email or code, choose roles, remove members or leave, and understand the preview sponsor allowance.
+---
+
+A **Workspace** is a group of people, the **Members**, who share projects,
+the board and ticket work. Each Member has a role. Your first sign-in with
+preview access creates a Workspace with you as its only owner, named after
+you, or **My workspace** if your account has no name.
+
+Workspace controls exist only in a Volli Cloud launch. See [Volli Cloud
+preview](/cloud/).
+
+## Create and switch Workspaces
+
+The Workspace tile at the top of the rail shows the current Workspace's
+initial. Select it to open the Workspace menu.
+
+- **Switch:** choose a Workspace from the list. The rail, board and member
+  list reload for that Workspace.
+- **Create:** choose **New workspace…**, enter a name of up to 64
+  characters, and select **Create**. You become its owner and it opens.
+- **Join with a code:** choose **Join a workspace…**. See [Accept an
+  invite](#accept-an-invite).
+- **Settings:** choose **Workspace settings…** to open **Settings →
+  Workspace**.
+
+Volli reopens the Workspace you used last. If you are removed from the
+Workspace you are viewing, Volli shows **You're no longer a member of** that
+Workspace and opens another one.
+
+While Volli Cloud is unreachable, the menu says **Volli Cloud is offline.**
+and Workspace changes are refused with **Can’t reach Volli Cloud ·
+Read-only**.
+
+## Workspace settings
+
+Open **Settings → Workspace**.
+
+- **Workspace** shows the **Name**, **Your role** and **Membership**. Owners
+  and admins can rename the Workspace here.
+- **Members** lists each person's name, email and role; **You** marks your
+  own row.
+- **Invites** lists pending invites.
+- **Sharing** holds **Make everything shared** and **Who can invite**. See
+  [Share Sessions](/cloud/sharing/).
+- **Invitations to you** lists email invites waiting for you.
+
+Workspaces cannot be deleted in the preview.
+
+## Roles
+
+| Action | Member | Admin | Owner |
+| --- | --- | --- | --- |
+| See every project, ticket and ticket Session | Yes | Yes | Yes |
+| See the member list, invites and sharing settings | Yes | Yes | Yes |
+| Invite | As Member, when **Who can invite** is **Members** | As Member or Admin | As any role |
+| Revoke an invite | Their own | Any | Any |
+| Rename the Workspace, change **Sharing** settings | No | Yes | Yes |
+| Change roles, remove Members | No | Yes, except owners | Yes |
+
+**Who can invite** is **Members** by default. An admin cannot change an
+owner's role, remove an owner, or make anyone an owner.
+
+A Workspace always keeps at least one owner. To step down as the only
+owner, make someone else an owner first.
+
+## Invite people
+
+1. In **Settings → Workspace → Members**, select **Invite**.
+2. Choose **Email** or **Code**. For **Email**, enter the address.
+3. Choose a **Role**. The list offers only roles you may grant.
+4. Select **Create invite**.
+5. Select **Copy invite** and send the copied message yourself. Volli does
+   not send email.
+
+The copied message tells the invitee how to join. Every invite expires
+after 7 days.
+
+- **A code** is single-use: the first person to use it joins.
+- **An email invite** can be accepted only by someone signed in with that
+  verified email address.
+
+Pending invites appear under **Invites** with the role and whether the
+invitee can join the preview. **New code** replaces the invite with a fresh
+one and a new 7-day expiry; the old code stops working. **Revoke** cancels
+it.
+
+An invite depends on the person who sent it. If they leave, are removed, or
+lose the right to invite at that role, the invite stops working.
+
+## Accept an invite
+
+- **New to the preview, with a code:** paste the code into **Invite code
+  (optional)** when you sign in. See [Join the preview](/cloud/join/).
+- **Already signed in, with a code:** in the Workspace menu, choose **Join a
+  workspace…**, enter the code, and select **Preview**. Check the Workspace,
+  role and sender it shows, then select **Join**.
+- **An email invite:** sign in with the invited address. A notice names the
+  person and the Workspace with a **Join** action, and the invite waits under
+  **Settings → Workspace → Invitations to you** with its own **Join**.
+
+The Workspace opens when you join.
+
+## Preview access and the sponsor allowance
+
+An invite can also bring the invitee into the preview. Each person can
+sponsor up to **5** people this way, across all their Workspaces.
+
+The status on an invite tells you which applies:
+
+| Status | Meaning |
+| --- | --- |
+| **Can join** | The invitee already has preview access, or this invite gives it to them |
+| **Needs preview access** | You have no sponsorships left, so the invitee needs access another way |
+
+- A sponsorship is held while its invite is pending. Revoking the invite, or
+  letting it expire, gives it back.
+- Once someone joins with it, it stays theirs and keeps counting.
+- Inviting someone who already has preview access uses none.
+- Removing someone from your Workspace later does not take away their
+  preview access.
+
+A person without access who signs in with a **Needs preview access** code is
+refused with **This invite doesn't include Volli Cloud preview access. Ask the
+person who invited you.**, followed by the waitlist message.
+
+## Change roles and remove Members
+
+In **Settings → Workspace → Members**, open a row's **More** menu.
+
+- Choose a role to change it. The menu lists only the changes you may make.
+- Choose **Remove…**, then **Remove** to confirm.
+
+A removed Member's shared work stays in the Workspace; their private chats
+are hidden. Their armed Automations pause until someone
+re-arms them; see [Automations in Volli Cloud](/cloud/automations/). You can
+invite them back later.
+
+## Leave a Workspace
+
+In **Settings → Workspace**, select **Leave…** in **Membership**, then
+**Leave**. Your shared work stays; your private chats are hidden, and your
+armed Automations pause.
+
+The only owner cannot leave. Their **Leave…** button is disabled and
+marked **Sole owner**, even when they are the only Member.

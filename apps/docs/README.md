@@ -33,6 +33,12 @@ sidebar and `/llms.txt` use that definition. The build rejects an unlisted or
 missing page. Every page also has a Markdown mirror at `/<slug>.md`, used by
 **Copy page**.
 
+Volli Cloud guides (`runners/`, `cloud/`) are `draft: true` while the
+`cloud` flag is experimental: they render in `pnpm -C apps/docs dev` but stay
+out of the build, the sidebar, `/llms.txt` and the sitemap, and
+`check:docs` fails if one is published. To publish them, remove `draft`,
+list them in `src/data/navigation.ts`, and drop them from the draft checks.
+
 To rename or move a page, add its old route, trailing-slash form, and `.md`
 mirror to `public/_redirects`. Cloudflare Pages serves those as 301s. Astro's
 `redirects` option is not used here: it would emit a stub page that the docs

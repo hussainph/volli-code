@@ -134,7 +134,17 @@ function checkBuild() {
       problems.push(`${path}: generated reference content missing`);
   }
   // Draft guides must stay out of every public representation, not only the sidebar.
-  for (const route of ["runners", "runners/linux", "runners/vps"]) {
+  for (const route of [
+    "runners",
+    "runners/linux",
+    "runners/vps",
+    "cloud",
+    "cloud/join",
+    "cloud/workspaces",
+    "cloud/sharing",
+    "cloud/move-projects",
+    "cloud/automations",
+  ]) {
     if (files.has(`/${route}/index.html`) || files.has(`/${route}.md`)) {
       problems.push(`Draft guide published: ${route}`);
     }

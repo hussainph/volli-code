@@ -1,0 +1,72 @@
+---
+title: Volli Cloud preview
+draft: true
+description: What changes when you sign in to the Volli Cloud preview, what stays on your Mac, and how signed-out Volli keeps working locally.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+Volli Cloud keeps your board, tickets, Session history and Automations in a
+shared Workspace, so teammates can follow the same work. Agents still run on
+machines you own: this Mac, or a [runner](/runners/) you add. Volli Cloud
+runs no agent code itself.
+
+The preview is invite-only. Without it, or signed out, Volli works exactly as
+it does today, on this Mac alone.
+
+<Aside type="note">
+  Volli Cloud controls appear only when the build offers the preview. In a
+  canary build, turn on **Settings → Experimental → Volli Cloud
+  (unstable)**. Release builds have no Experimental page.
+</Aside>
+
+## Two kinds of launch
+
+Volli opens one of two boards when it starts. It never switches boards inside
+a running window.
+
+| Launch | Board | When |
+| --- | --- | --- |
+| Local | Your projects on this Mac, from this Mac's database | Signed out, waitlisted, or the preview is off |
+| Volli Cloud | The selected Workspace's projects | Signed in with preview access, after a restart |
+
+Signing in does not change your local projects. It saves the sign-in and
+marks the next launch as a Volli Cloud launch. A Volli Cloud launch shows only
+the projects in your Workspace; local projects you have not moved stay on
+this Mac and come back when you sign out. Moving a project is a separate step:
+see [Move projects to Volli Cloud](/cloud/move-projects/).
+
+In a Volli Cloud launch, the rail shows a laptop tile when local projects are
+not in Volli Cloud yet. Its popover counts them, for example **2 projects on this Mac aren’t on
+Volli Cloud yet**, and offers **Sign out to open them**.
+
+## Signed-out mode stays local
+
+Signed out, Volli opens this Mac's database exactly as before: your projects,
+tickets and Sessions stay here. These controls are absent:
+
+- the Workspace menu at the top of the rail;
+- **Settings → Runners** and **Settings → Workspace**.
+
+A release build also starts locally when it cannot confirm your preview access
+within about two seconds of launch: offline, too slow, or no longer granted.
+You get your unchanged local board rather than a stale cloud one.
+
+## What stays on this Mac
+
+Some things never leave the machine they live on, signed in or not:
+
+- provider sign-ins, project secrets, API keys and MCP credentials;
+- personal Skills and command templates.
+
+When you use another machine or share a project with teammates, each person
+signs in to their own model providers and supplies their own credentials.
+
+## Guides
+
+- [Join the preview](/cloud/join/)
+- [Workspaces and members](/cloud/workspaces/)
+- [Share Sessions](/cloud/sharing/)
+- [Move projects to Volli Cloud](/cloud/move-projects/)
+- [Automations in Volli Cloud](/cloud/automations/)
+- [Runners](/runners/)
