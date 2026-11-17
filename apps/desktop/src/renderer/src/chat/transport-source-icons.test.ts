@@ -3,7 +3,7 @@ import { TRPCClientError } from "@trpc/client";
 import type { IpcEvent, IpcResponse } from "@volli/host-protocol/ipc";
 import type { SourceIconsSnapshot } from "@volli/shared";
 import { createSessionRpcClient, type SessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
-import { sourceIconsFor } from "./transport";
+import { sessionDoorFor } from "./transport";
 
 const state = vi.hoisted(() => ({
   client: null as SessionRpcClient | null,
@@ -72,7 +72,7 @@ describe("source icon subscription adapter through the actual generic IPC client
   it("subscribes once to the approved door and delivers snapshots", async () => {
     const wire = bridge();
     const receive = vi.fn();
-    const stop = sourceIconsFor(null)!.watch(input, receive);
+    const stop = sessionDoorFor(null).sourceIcons()!.watch(input, receive);
     await turn();
     wire.ack();
     await turn();
@@ -91,7 +91,7 @@ describe("source icon subscription adapter through the actual generic IPC client
   it("cancels before asynchronous host setup acknowledges and discards late frames", async () => {
     const wire = bridge();
     const receive = vi.fn();
-    const stop = sourceIconsFor(null)!.watch(input, receive);
+    const stop = sessionDoorFor(null).sourceIcons()!.watch(input, receive);
     await turn();
     stop();
     wire.emit();
@@ -104,7 +104,7 @@ describe("source icon subscription adapter through the actual generic IPC client
 
   it("does not even start setup when cancelled in the same turn", async () => {
     const wire = bridge();
-    const stop = sourceIconsFor(null)!.watch(input, vi.fn());
+    const stop = sessionDoorFor(null).sourceIcons()!.watch(input, vi.fn());
     stop();
     await turn();
     expect(wire.request).not.toHaveBeenCalled();
@@ -113,7 +113,7 @@ describe("source icon subscription adapter through the actual generic IPC client
   it("degrades old-host errors to a truthful tile", async () => {
     const wire = bridge();
     const receive = vi.fn();
-    const stop = sourceIconsFor(null)!.watch(input, receive);
+    const stop = sessionDoorFor(null).sourceIcons()!.watch(input, receive);
     await turn();
     wire.oldHost();
     await turn();
@@ -131,7 +131,7 @@ describe("source icon subscription adapter through the actual generic IPC client
       return { unsubscribe };
     };
     const receive = vi.fn();
-    const stop = sourceIconsFor(null)!.watch(input, receive);
+    const stop = sessionDoorFor(null).sourceIcons()!.watch(input, receive);
     await turn();
     state.remote = true;
     callbacks!.onData?.(snapshot);
@@ -154,7 +154,7 @@ describe("source icon subscription adapter through the actual generic IPC client
       return { unsubscribe };
     };
     const receive = vi.fn();
-    stop = sourceIconsFor(null)!.watch(input, receive);
+    stop = sessionDoorFor(null).sourceIcons()!.watch(input, receive);
     await turn();
     expect(unsubscribe).toHaveBeenCalledTimes(1);
     expect(receive).not.toHaveBeenCalled();
@@ -165,10 +165,10 @@ describe("source icon subscription adapter through the actual generic IPC client
   it("never falls back to this Mac for cloud or remote Sessions", () => {
     const wire = bridge();
     state.cloud = true;
-    expect(sourceIconsFor(null)).toBeNull();
+    expect(sessionDoorFor(null).sourceIcons()).toBeNull();
     state.cloud = false;
     state.remote = true;
-    expect(sourceIconsFor("project")).toBeNull();
+    expect(sessionDoorFor("project").sourceIcons()).toBeNull();
     expect(wire.request).not.toHaveBeenCalled();
   });
 });

@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { LOCAL_LAUNCH } from "@volli/shared";
 import { adoptLaunch } from "@renderer/stores/launch";
-import { chatTransportFor, sessionCommandFor, sessionPictureFor } from "@renderer/chat/transport";
+import { sessionDoorFor } from "@renderer/chat/transport";
 import { renameChatSession } from "@renderer/chat/rename";
 import { markSessionRead } from "@renderer/stores/session-read-mark";
 import { subscribeProjectSessionActivity } from "@renderer/stores/project-sessions";
@@ -41,20 +41,20 @@ describe("cloud Session routing", () => {
     expect(
       await sessionListingReaderForTicket("unknown").listForTicket({ ticketId: "unknown" }),
     ).toMatchObject({ ok: false });
-    const transport = chatTransportFor("p");
+    const transport = sessionDoorFor("p").transport();
     await expect(transport.rpc.session.snapshot.query({ sessionId: "s" })).rejects.toThrow(
       "not connected",
     );
     await expect(
-      sessionCommandFor("p")({
+      sessionDoorFor("p").command()({
         commandId: "c",
         sessionId: "s",
         command: { kind: "session.interrupt" },
       } as never),
     ).rejects.toThrow("Not available yet in cloud");
-    await expect(sessionPictureFor("p")({ sessionId: "s", name: "p" } as never)).rejects.toThrow(
-      "Saved pictures are not available yet in cloud",
-    );
+    await expect(
+      sessionDoorFor("p").picture()({ sessionId: "s", name: "p" } as never),
+    ).rejects.toThrow("Saved pictures are not available yet in cloud");
     subscribeProjectSessionActivity()();
     subscribeTicketSessionActivity()();
     expect(await renameChatSession("s", "New title")).toBe(false);

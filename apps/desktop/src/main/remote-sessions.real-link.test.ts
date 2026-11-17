@@ -49,7 +49,7 @@ import { startHostProtocolListener } from "@volli/session-rpc/websocket";
 import type { ModelSelection, SessionListingRow } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { chatTransportFor } from "../renderer/src/chat/transport";
+import { sessionDoorFor } from "../renderer/src/chat/transport";
 import { relayHostLink } from "../renderer/src/lib/relay-host-link";
 import { hostNotConnected, resetRemoteOwnersForTest } from "../renderer/src/lib/remote-owners";
 import { createRemoteSessionStreams } from "../renderer/src/lib/remote-session-streams";
@@ -770,7 +770,7 @@ describe(
       cleanups.push(bindRemoteSessionsWhileCloud(cloud.store, path.deps));
 
       // A Session on the box, attached to its executor, resident in this window.
-      const transport = chatTransportFor(PROJECT);
+      const transport = sessionDoorFor(PROJECT).transport();
       expect(transport.streamRecovery).toBe("host-link");
       const { sessionId } = await transport.createSession({
         operationId: randomUUID(),

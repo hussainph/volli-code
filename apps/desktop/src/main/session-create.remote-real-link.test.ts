@@ -31,7 +31,7 @@ import { toast } from "sonner";
 
 import { createSqliteSessionFollowUpLedger } from "../../../../packages/host-core/src/db/session-follow-up-repo";
 
-import { chatTransportFor } from "@renderer/chat/transport";
+import { sessionDoorFor } from "@renderer/chat/transport";
 import { bootChatSession } from "@renderer/components/sessions/session-create";
 import { flushAllPendingAppState } from "@renderer/lib/app-state-storage";
 import { relayHostLink } from "@renderer/lib/relay-host-link";
@@ -348,7 +348,7 @@ describe(
       "opens and promotes a %s Draft, then sends to the box with its default model",
       async (kind) => {
         const remote = await path();
-        expect(chatTransportFor(PROJECT).streamRecovery).toBe("host-link");
+        expect(sessionDoorFor(PROJECT).transport().streamRecovery).toBe("host-link");
         const scope = kind === "project" ? projectScope(PROJECT) : ticketScope(PROJECT, ticket.id);
         const land = vi.fn((id: string, isSession: boolean) => {
           useChatSessionsStore.getState().openChatTab(kind === "project" ? PROJECT : ticket.id, id);
@@ -463,7 +463,7 @@ describe(
       // A direct transport caller cannot bypass the absent negotiated grant;
       // the real relay refuses it with the older host's named unavailable reason.
       await expect(
-        chatTransportFor(PROJECT).createSession({
+        sessionDoorFor(PROJECT).transport().createSession({
           operationId: randomUUID(),
           projectId: PROJECT,
           ticketId: null,

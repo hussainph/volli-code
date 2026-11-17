@@ -8,7 +8,7 @@
  */
 import { useEffect, useState } from "react";
 import type { SessionStartedNotice } from "../../../../ipc/contract";
-import { chatTransportFor } from "@renderer/chat/transport";
+import { sessionDoorFor } from "@renderer/chat/transport";
 import { sessionTitleOf, useProjectSessionsStore } from "@renderer/stores/project-sessions";
 
 export interface SessionStartToastModel {
@@ -99,7 +99,8 @@ export function SessionStartToastTitle({ notice }: { notice: SessionStartedNotic
     if (
       sessionTitleOf(useProjectSessionsStore.getState().byProject[projectId], sessionId) === null
     ) {
-      void chatTransportFor(projectId)
+      void sessionDoorFor(projectId)
+        .transport()
         .rpc.session.projection.query({ sessionId })
         .then((result) => {
           const session = result.projection.session;

@@ -1,4 +1,4 @@
-import { sessionCommandFor, type SessionCommandDoor } from "@renderer/chat/transport";
+import { sessionDoorFor, type SessionCommandDoor } from "@renderer/chat/transport";
 import { projectOfSession } from "@renderer/lib/session-project";
 
 /** The stop door the island mount can replace for a non-Electron client. */
@@ -49,7 +49,7 @@ export function browserIslandAgentsApi(parentProjectId?: string): IslandAgentsAp
   return islandAgentsApi(
     (input) => {
       const own = input.sessionId === undefined ? null : projectOfSession(input.sessionId);
-      return sessionCommandFor(own ?? parentProjectId ?? null)(input);
+      return sessionDoorFor(own ?? parentProjectId ?? null).command()(input);
     },
     () => crypto.randomUUID(),
   );
