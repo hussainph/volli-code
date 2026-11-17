@@ -449,6 +449,11 @@ The fixture cannot reach a cloud deployment, even with a deploy key in
 
 A unit test runs the real CLI against a stand-in control plane to prove this.
 
+The suite is also hermetic from what has been released: the `runners: release
+feed` cron's poll returns without fetching on a deployment that sets
+`VOLLI_TEST_JWKS`, so no live minimum version can mark the suite's test-version
+runners `upgrade_required` (`test/runnerReleases.test.ts` pins this).
+
 The binary is about 174 MB unpacked. It is cached outside the repository, in
 `$VOLLI_CONVEX_BACKEND_CACHE`, or else `${XDG_CACHE_HOME:-~/.cache}/volli/convex-local-backend/<release>/<platform>/`.
 Each run starts one backend and stops it when the run ends. Set

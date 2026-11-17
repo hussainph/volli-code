@@ -224,6 +224,17 @@ describe("public runner release feed", () => {
     expect((await channels(t)).map((row) => row.version)).toEqual(["0.4.0", "0.4.0"]);
   });
 
+  test("the pinned test backend never reads the live feed, whatever was last released", async () => {
+    // Backend-suite runners report test versions (`0.3.0-test`); a live floor
+    // above them would mark every one `upgrade_required` mid-run (VC-1263).
+    const t = setup();
+    vi.stubEnv("VOLLI_TEST_JWKS", "data:test");
+    const fetch = fakeFetch([[release("99.0.0")]], { "99.0.0": manifest("99.0.0", "99.0.0") });
+    await t.action(internal.runnerReleases.poll, {});
+    expect(fetch).not.toHaveBeenCalled();
+    expect(await channels(t)).toEqual([]);
+  });
+
   test("public clients have no operator pin or poll function", () => {
     // The generated API's public projection excludes these internal functions.
     expectTypeNotPublic(api);
