@@ -35,12 +35,9 @@ vi.mock("@renderer/lib/cloud-session-transport", async (original) => ({
   cloudChatTransport: cloud.transport,
 }));
 
-import {
-  browserChatTransport,
-  chatTransportFor,
-  sessionCommandFor,
-  setRemoteChatTransports,
-} from "./transport";
+import { remoteSessionClient } from "@renderer/lib/remote-session-wire";
+
+import { browserChatTransport, sessionDoorFor, setRemoteChatTransports } from "./transport";
 
 describe("browserChatTransport", () => {
   it("routes product starts and retries without renderer runtime identity", async () => {
@@ -187,39 +184,93 @@ function stubWindow() {
   });
 }
 
-describe("chatTransportFor (VC-713)", () => {
+/**
+ * The one routing decision, through the door's interface: each route hands
+ * every capability from the same place — This Mac's IPC, the remote host's
+ * Workspace (closed in its name when unbound), or Volli Cloud.
+ */
+describe("sessionDoorFor: This Mac and remote hosts (VC-713)", () => {
   afterEach(() => {
     resetRemoteOwnersForTest();
     vi.unstubAllGlobals();
   });
 
-  it("answers a remote project's registered transport, and IPC for This Mac's", () => {
+  it("routes a project never seen remote to This Mac's IPC for every capability", async () => {
+    stubWindow();
+    const door = sessionDoorFor(null);
+    expect(door.transport().streamRecovery).toBeUndefined();
+    expect(sessionDoorFor("local").transport().streamRecovery).toBeUndefined();
+    expect(door.sourceIcons()).not.toBeNull();
+    const answer = { data: "YWJj", mimeType: "image/png", nextOffset: null };
+    vi.mocked(window.api.sessionRpc.request).mockResolvedValueOnce({ ok: true, data: answer });
+    const input = { sessionId: "s", pictureId: "pic", offset: 0 };
+    expect(await door.picture()(input)).toEqual(answer);
+    vi.mocked(window.api.sessionRpc.request).mockResolvedValueOnce({
+      ok: true,
+      data: { sessionId: "s" },
+    });
+    expect(
+      await door.command()({ commandId: "c", sessionId: "s", command: { kind: "session.stop" } }),
+    ).toEqual({ sessionId: "s" });
+    expect(
+      vi.mocked(window.api.sessionRpc.request).mock.calls.map(([request]) => request.path),
+    ).toEqual(["session.picture", "session.command"]);
+    expect(window.api.sessionRpc.request).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "session.picture", input }),
+    );
+  });
+
+  it("answers a remote project's registered Workspace for every capability, never IPC", async () => {
     stubWindow();
     rememberRemoteProject("remote", { hostId: "box", hostName: "hetzner-1" });
     const remote = { streamRecovery: "host-link" } as ChatSessionTransport;
+    const answer = { data: "YWJj", mimeType: "image/png", nextOffset: null };
+    const query = vi.fn(async () => answer);
+    const client = remoteSessionClient(
+      { query, mutate: query, subscribe: () => ({ unsubscribe() {} }) },
+      "hetzner-1",
+    );
     const unregister = setRemoteChatTransports({
       forProject: (projectId) => (projectId === "remote" ? remote : null),
-      clientFor: () => null,
+      clientFor: (projectId) => (projectId === "remote" ? client : null),
     });
     const stale = setRemoteChatTransports({ forProject: () => null, clientFor: () => null });
     stale();
     // Removing a registration that was replaced leaves the newer one alone.
-    expect(chatTransportFor("remote")).not.toBe(remote);
+    expect(sessionDoorFor("remote").transport()).not.toBe(remote);
     const again = setRemoteChatTransports({
       forProject: (projectId) => (projectId === "remote" ? remote : null),
-      clientFor: () => null,
+      clientFor: (projectId) => (projectId === "remote" ? client : null),
     });
     unregister();
-    expect(chatTransportFor("remote")).toBe(remote);
-    expect(chatTransportFor("local").streamRecovery).toBeUndefined();
-    expect(chatTransportFor(null).streamRecovery).toBeUndefined();
+    const door = sessionDoorFor("remote");
+    expect(door.transport()).toBe(remote);
+    expect(door.sourceIcons()).toBeNull();
+    const input = { sessionId: "s", pictureId: "pic", offset: 0 };
+    expect(await door.picture()(input)).toEqual(answer);
+    expect(query).toHaveBeenCalledWith("session.picture", input, {});
+    await door.command()({ commandId: "c", sessionId: "s", command: { kind: "session.stop" } });
+    expect(query).toHaveBeenCalledWith(
+      "session.command",
+      { commandId: "c", sessionId: "s", command: { kind: "session.stop" } },
+      {},
+    );
+    expect(window.api.sessionRpc.request).not.toHaveBeenCalled();
     again();
+    // Once its Workspace is unbound, the same host fails closed, never This Mac's.
+    query.mockClear();
+    await expect(sessionDoorFor("remote").picture()(input)).rejects.toThrow(
+      "hetzner-1 isn’t connected",
+    );
+    expect(query).not.toHaveBeenCalled();
+    expect(window.api.sessionRpc.request).not.toHaveBeenCalled();
   });
 
   it("fails a project known remote closed in the host's name, never over IPC (B1)", async () => {
     stubWindow();
     rememberRemoteProject("remote", { hostId: "box", hostName: "hetzner-1" });
-    const closed = chatTransportFor("remote");
+    const door = sessionDoorFor("remote");
+    const closed = door.transport();
     expect(closed.streamRecovery).toBe("host-link");
     await expect(closed.rpc.session.snapshot.query({ sessionId: "s" })).rejects.toThrow(
       "hetzner-1 isn’t connected",
@@ -227,20 +278,21 @@ describe("chatTransportFor (VC-713)", () => {
     await expect(
       closed.createSession({ operationId: "o", projectId: "remote", ticketId: null, title: null }),
     ).rejects.toThrow("hetzner-1 isn’t connected");
-    expect(window.api.sessionRpc.request).not.toHaveBeenCalled();
     await expect(
-      sessionCommandFor("remote")({
-        commandId: "c",
-        sessionId: "s",
-        command: { kind: "session.stop" },
-      }),
+      door.command()({ commandId: "c", sessionId: "s", command: { kind: "session.stop" } }),
     ).rejects.toThrow("hetzner-1 isn’t connected");
+    await expect(door.picture()({ sessionId: "s", pictureId: "pic", offset: 0 })).rejects.toThrow(
+      "hetzner-1 isn’t connected",
+    );
+    expect(door.sourceIcons()).toBeNull();
+    expect(window.api.sessionRpc.request).not.toHaveBeenCalled();
   });
 });
 
-describe("chatTransportFor in a cloud launch (VC-895)", () => {
+describe("sessionDoorFor in a cloud launch (VC-895)", () => {
   afterEach(() => {
     adoptLaunch(LOCAL_LAUNCH);
+    resetRemoteOwnersForTest();
     cloud.session = null;
     cloud.transport.mockClear();
     vi.unstubAllGlobals();
@@ -252,7 +304,8 @@ describe("chatTransportFor in a cloud launch (VC-895)", () => {
     cloud.session = { client: {}, api: {} };
     // Even a project this window once knew on a remote host is Volli Cloud's here.
     rememberRemoteProject("remote", { hostId: "box", hostName: "hetzner-1" });
-    expect(chatTransportFor("remote").streamRecovery).toBe("host-link");
+    const door = sessionDoorFor("remote");
+    expect(door.transport().streamRecovery).toBe("host-link");
     expect(cloud.transport).toHaveBeenCalledTimes(1);
     const [session, local] = cloud.transport.mock.calls[0]! as [
       unknown,
@@ -264,8 +317,12 @@ describe("chatTransportFor in a cloud launch (VC-895)", () => {
     expect(typeof local.attachSession).toBe("function");
     // The Island's Stop has no cloud outcome to report yet: it stays refused.
     await expect(
-      sessionCommandFor("p")({ commandId: "c", sessionId: "s", command: { kind: "session.stop" } }),
+      door.command()({ commandId: "c", sessionId: "s", command: { kind: "session.stop" } }),
     ).rejects.toThrow("Not available yet in cloud");
+    await expect(door.picture()({ sessionId: "s", pictureId: "pic", offset: 0 })).rejects.toThrow(
+      "Saved pictures are not available yet in cloud",
+    );
+    expect(door.sourceIcons()).toBeNull();
     expect(window.api.sessionRpc.request).not.toHaveBeenCalled();
     // Merely reading a cloud Session never even opens the IPC link. Only
     // explicit runner-originated create/attach reaches these machine doors.

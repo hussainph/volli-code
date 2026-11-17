@@ -50,7 +50,7 @@ import { toast } from "sonner";
 import { renameChatSession } from "@renderer/chat/rename";
 import { remoteHostNow } from "@renderer/stores/remote-project";
 import { useHostModelSheet } from "@renderer/stores/host-model-sheet";
-import { chatTransportFor } from "@renderer/chat/transport";
+import { sessionDoorFor } from "@renderer/chat/transport";
 import { toastError } from "@renderer/lib/toast";
 import { flushPendingAppStateKey } from "@renderer/lib/app-state-storage";
 import {
@@ -303,7 +303,8 @@ const RESIDENCY_SWEEP_MS = 2_000;
  * over its Workspace's link, everything else over IPC exactly as before.
  */
 export function createChatSessionsStore(
-  transport: (projectId: string | null) => ChatSessionTransport = chatTransportFor,
+  transport: (projectId: string | null) => ChatSessionTransport = (projectId) =>
+    sessionDoorFor(projectId).transport(),
 ) {
   return create<ChatSessionsState>()((set, get, api) => {
     // Which project each Session belongs to, so its client — created once,

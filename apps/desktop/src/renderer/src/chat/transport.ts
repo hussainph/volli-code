@@ -98,40 +98,14 @@ export function setRemoteChatTransports(transports: RemoteChatTransports): () =>
   };
 }
 
-/**
- * The transport a project's Sessions use: its host's for a remote project,
- * IPC for This Mac's. A project this window has known on a remote host whose
- * Workspace is not bound now (forgotten, unreachable, `cloud` off) fails
- * closed in the host's name; it never falls to This Mac's IPC (VC-713, B1).
- */
-export function chatTransportFor(projectId: string | null): ChatSessionTransport {
-  if (launchStore() === "cloud") return cloudChatTransport(cloudSession(), thisMacStarts());
-  const owner = remoteOwnerOf(projectId);
-  if (owner === null) return browserChatTransport();
-  return remoteTransports?.forProject(projectId!) ?? closedRemoteTransport(owner.hostName, window);
-}
-
 /** Preserve the router's input/answer, not tRPC's client-only error promise tag. */
 export type SessionCommandDoor = (
   input: Parameters<RemoteSessionClient["session"]["command"]["mutate"]>[0],
 ) => Promise<Awaited<ReturnType<RemoteSessionClient["session"]["command"]["mutate"]>>>;
 
-/**
- * `session.command` for one Session, by its project (VC-713, B2): its host's
- * for a remote Session, IPC for This Mac's, and a refusal in the host's name
- * for a remote one whose Workspace is not bound now. For the doors outside the
- * chat core that command a Session by id (the Island's subagent Stop).
- */
-export function sessionCommandFor(projectId: string | null): SessionCommandDoor {
-  if (launchStore() === "cloud") return () => Promise.reject(new Error(CLOUD_SESSION_READ_ONLY));
-  const owner = remoteOwnerOf(projectId);
-  if (owner === null) return (input) => sessionRpcClient().session.command.mutate(input);
-  const client = remoteTransports?.clientFor(projectId!) ?? null;
-  if (client === null) {
-    return () => Promise.reject(new Error(hostNotConnected(owner.hostName)));
-  }
-  return (input) => client.session.command.mutate(input);
-}
+type SessionPictureDoor = (
+  input: Parameters<RemoteSessionClient["session"]["picture"]["query"]>[0],
+) => Promise<Awaited<ReturnType<RemoteSessionClient["session"]["picture"]["query"]>>>;
 
 /** The transcript context's cache-only source-icon subscription seam. */
 export interface TranscriptSourceIconsTransport {
@@ -141,10 +115,97 @@ export interface TranscriptSourceIconsTransport {
   ): () => void;
 }
 
-/** Local decoration only. Never route a remote/cloud Session to this Mac. */
-export function sourceIconsFor(projectId: string | null): TranscriptSourceIconsTransport | null {
-  const local = () => launchStore() !== "cloud" && remoteOwnerOf(projectId) === null;
-  if (!local()) return null;
+/**
+ * One project's Session door: every way the renderer reaches that project's
+ * Sessions, behind the one routing decision {@link sessionDoorFor} makes.
+ * Each capability is built when asked, so asking for one never opens another
+ * path's link.
+ */
+export interface SessionDoor {
+  /** The chat core's transport. */
+  transport(): ChatSessionTransport;
+  /** `session.command` for the doors outside the chat core that command a Session by id (the Island's Stop). */
+  command(): SessionCommandDoor;
+  /** Saved images: the Session's host's, never This Mac's by fallback. */
+  picture(): SessionPictureDoor;
+  /** Local decoration only: `null` for a remote or cloud Session, never routed to This Mac. */
+  sourceIcons(): TranscriptSourceIconsTransport | null;
+}
+
+type SessionRoute =
+  | { readonly kind: "cloud" }
+  | { readonly kind: "this-mac" }
+  | { readonly kind: "remote"; readonly projectId: string; readonly hostName: string };
+
+/**
+ * The one routing decision: Volli Cloud for a cloud launch, else the remote
+ * host a project was ever seen on (VC-713, B1), else This Mac. A project known
+ * remote stays its host's even while its Workspace is not bound here.
+ */
+function sessionRouteOf(projectId: string | null): SessionRoute {
+  if (launchStore() === "cloud") return { kind: "cloud" };
+  const owner = remoteOwnerOf(projectId);
+  if (owner === null) return { kind: "this-mac" };
+  // Only a project id has a remote owner.
+  return { kind: "remote", projectId: projectId!, hostName: owner.hostName };
+}
+
+/**
+ * A project's Session door. The route, host name included, is fixed when this
+ * runs, so ask for a door at the point of use and never hold one across time:
+ * a held door keeps a stale route. A remote Workspace is looked up when a
+ * capability is asked for.
+ */
+export function sessionDoorFor(projectId: string | null): SessionDoor {
+  const route = sessionRouteOf(projectId);
+  switch (route.kind) {
+    case "cloud":
+      return cloudDoor;
+    case "this-mac":
+      return thisMacDoor(projectId);
+    case "remote":
+      return remoteDoor(route.projectId, route.hostName);
+  }
+}
+
+const cloudDoor: SessionDoor = {
+  transport: () => cloudChatTransport(cloudSession(), thisMacStarts()),
+  command: () => () => Promise.reject(new Error(CLOUD_SESSION_READ_ONLY)),
+  picture: () => () => Promise.reject(new Error("Saved pictures are not available yet in cloud")),
+  sourceIcons: () => null,
+};
+
+/** A remote host's Session; one whose Workspace is not bound now fails closed in the host's name. */
+function remoteDoor(projectId: string, hostName: string): SessionDoor {
+  const client = () => remoteTransports?.clientFor(projectId) ?? null;
+  const notConnected = () => Promise.reject(new Error(hostNotConnected(hostName)));
+  return {
+    transport: () =>
+      remoteTransports?.forProject(projectId) ?? closedRemoteTransport(hostName, window),
+    command: () => {
+      const bound = client();
+      return bound === null ? notConnected : (input) => bound.session.command.mutate(input);
+    },
+    picture: () => {
+      const bound = client();
+      return bound === null ? notConnected : (input) => bound.session.picture.query(input);
+    },
+    sourceIcons: () => null,
+  };
+}
+
+function thisMacDoor(projectId: string | null): SessionDoor {
+  return {
+    transport: () => browserChatTransport(),
+    command: () => (input) => sessionRpcClient().session.command.mutate(input),
+    picture: () => (input) => sessionRpcClient().session.picture.query(input),
+    sourceIcons: () => thisMacSourceIcons(projectId),
+  };
+}
+
+function thisMacSourceIcons(projectId: string | null): TranscriptSourceIconsTransport {
+  // Re-asked at each step: a project that leaves This Mac mid-watch stops here.
+  const local = () => sessionRouteOf(projectId).kind === "this-mac";
   return {
     watch(input, onSnapshot) {
       let cancelled = false;
@@ -185,19 +246,4 @@ export function sourceIconsFor(projectId: string | null): TranscriptSourceIconsT
       };
     },
   };
-}
-
-type SessionPictureDoor = (
-  input: Parameters<RemoteSessionClient["session"]["picture"]["query"]>[0],
-) => Promise<Awaited<ReturnType<RemoteSessionClient["session"]["picture"]["query"]>>>;
-
-/** Saved images belong to the Session's host, never This Mac by fallback. */
-export function sessionPictureFor(projectId: string | null): SessionPictureDoor {
-  if (launchStore() === "cloud")
-    return () => Promise.reject(new Error("Saved pictures are not available yet in cloud"));
-  const owner = remoteOwnerOf(projectId);
-  if (owner === null) return (input) => sessionRpcClient().session.picture.query(input);
-  const client = remoteTransports?.clientFor(projectId!) ?? null;
-  if (client === null) return () => Promise.reject(new Error(hostNotConnected(owner.hostName)));
-  return (input) => client.session.picture.query(input);
 }

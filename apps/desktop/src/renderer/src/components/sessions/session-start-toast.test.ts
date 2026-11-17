@@ -6,7 +6,9 @@ import { EMPTY_SESSION_USAGE_SUMMARY, PERSON_STARTED, type ChatSessionRecord } f
 
 const projection = vi.hoisted(() => vi.fn());
 vi.mock("@renderer/chat/transport", () => ({
-  chatTransportFor: () => ({ rpc: { session: { projection: { query: projection } } } }),
+  sessionDoorFor: () => ({
+    transport: () => ({ rpc: { session: { projection: { query: projection } } } }),
+  }),
 }));
 
 import type { SessionStartedNotice } from "../../../../ipc/contract";

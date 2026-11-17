@@ -9,7 +9,7 @@
  * device drafts and unsent recovery live in `stores/chat-drafts.ts`. This view
  * owns only measurements and which controls have a command in flight.
  */
-import { sessionPictureFor, sourceIconsFor } from "@renderer/chat/transport";
+import { sessionDoorFor } from "@renderer/chat/transport";
 import { CodeModePictureHostContext } from "./activity-ui";
 import { readCodeModePicture } from "./code-mode-output-model";
 import * as React from "react";
@@ -391,7 +391,11 @@ function ChatPlaneContent({
     () => ({
       picture: async ({ pictureId }: { pictureId: string }) => ({
         ok: true as const,
-        dataUrl: await readCodeModePicture(sessionPictureFor(projectId), sessionId, pictureId),
+        dataUrl: await readCodeModePicture(
+          sessionDoorFor(projectId).picture(),
+          sessionId,
+          pictureId,
+        ),
       }),
     }),
     [projectId, sessionId],
@@ -1959,7 +1963,7 @@ function ChatPlaneContent({
     () => indexInteractionResolutionMessages(transcriptFrames ?? EMPTY_TRANSCRIPT.frames),
     [transcriptFrames],
   );
-  const sourceIconsAvailable = sourceIconsFor(projectId) !== null;
+  const sourceIconsAvailable = sessionDoorFor(projectId).sourceIcons() !== null;
   const mcpToolsKey = React.useMemo(
     () =>
       JSON.stringify(
@@ -2021,7 +2025,8 @@ function ChatPlaneContent({
     return { sessionNames: names, sessionIds: ids, sessionParents, mcpNames };
   }, [namedSessions, mcpNames]);
   const sourceIconsApi = React.useMemo(
-    () => (sourceIconsAvailable ? (sourceIconsFor(projectId) ?? undefined) : undefined),
+    () =>
+      sourceIconsAvailable ? (sessionDoorFor(projectId).sourceIcons() ?? undefined) : undefined,
     [projectId, sourceIconsAvailable],
   );
   const sourceMessages = React.useMemo(

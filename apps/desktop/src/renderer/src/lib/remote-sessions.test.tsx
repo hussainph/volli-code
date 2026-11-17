@@ -10,7 +10,7 @@ import {
 import type { ChatSessionTransport } from "@volli/session-presentation";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { chatTransportFor, sessionCommandFor } from "@renderer/chat/transport";
+import { sessionDoorFor } from "@renderer/chat/transport";
 import { useBoardStore } from "@renderer/stores/board";
 import {
   createHostConnectionStore,
@@ -291,8 +291,8 @@ describe("binding remote Sessions (VC-713)", () => {
   it("routes a remote project's chat and listing to its Workspace, and This Mac's to IPC", () => {
     const bound = bindRemoteSessions(deps());
     try {
-      expect(chatTransportFor("remote").streamRecovery).toBe("host-link");
-      expect(chatTransportFor("remote")).toBe(chatTransportFor("remote"));
+      expect(sessionDoorFor("remote").transport().streamRecovery).toBe("host-link");
+      expect(sessionDoorFor("remote").transport()).toBe(sessionDoorFor("remote").transport());
       expect(sessionListingReaderForProject("remote")).toBe(workspaces.get("remote")!.listing);
       expect(sessionListingReaderForTicket("remote-ticket")).toBe(
         workspaces.get("remote")!.listing,
@@ -309,7 +309,7 @@ describe("binding remote Sessions (VC-713)", () => {
         ...window,
         api: { sessionRpc: { request: vi.fn(), onEvent: () => () => {}, cancel: vi.fn() } },
       });
-      expect(chatTransportFor("local").streamRecovery).toBeUndefined();
+      expect(sessionDoorFor("local").transport().streamRecovery).toBeUndefined();
       expect([...workspaces.keys()]).toEqual(["remote"]);
     } finally {
       bound.stop();
@@ -361,8 +361,8 @@ describe("binding remote Sessions (VC-713)", () => {
 
   it("lets go of a Workspace whose project stops being remote, and of every one on stop", () => {
     const bound = bindRemoteSessions(deps());
-    chatTransportFor("remote");
-    chatTransportFor("other");
+    sessionDoorFor("remote").transport();
+    sessionDoorFor("other").transport();
     const remote = workspaces.get("remote")!;
     source.set(hostSnapshot([remoteHost(HOST, "box")], { other: HOST }));
     expect(remote.dispose).toHaveBeenCalledOnce();
@@ -392,7 +392,7 @@ describe("binding remote Sessions (VC-713)", () => {
   it("ends everything it owns when the window goes", async () => {
     const options = deps();
     bindRemoteSessions(options);
-    chatTransportFor("remote");
+    sessionDoorFor("remote").transport();
     const target = options.window as unknown as EventTarget;
     target.dispatchEvent(new Event("focus"));
     await vi.advanceTimersByTimeAsync(0);
@@ -409,7 +409,7 @@ describe("binding remote Sessions (VC-713)", () => {
     const bound = bindRemoteSessions(deps());
     // Bound, its Island Stop goes to the Workspace's own client.
     await expect(
-      sessionCommandFor("remote")({
+      sessionDoorFor("remote").command()({
         commandId: "c",
         sessionId: "s",
         command: { kind: "session.stop" },
@@ -417,13 +417,13 @@ describe("binding remote Sessions (VC-713)", () => {
     ).rejects.toThrow();
     source.set(hostSnapshot([remoteHost(HOST, "box")], { other: HOST }));
     await expect(
-      sessionCommandFor("remote")({
+      sessionDoorFor("remote").command()({
         commandId: "c",
         sessionId: "s",
         command: { kind: "session.stop" },
       }),
     ).rejects.toThrow("box isn’t connected");
-    const closed = chatTransportFor("remote");
+    const closed = sessionDoorFor("remote").transport();
     await expect(closed.rpc.session.snapshot.query({ sessionId: "s" })).rejects.toThrow(
       "box isn’t connected",
     );
@@ -434,7 +434,7 @@ describe("binding remote Sessions (VC-713)", () => {
     bound.stop();
     // After the binding too: still the host's, still closed.
     await expect(
-      chatTransportFor("other").rpc.session.projection.query({ sessionId: "s" }),
+      sessionDoorFor("other").transport().rpc.session.projection.query({ sessionId: "s" }),
     ).rejects.toThrow("box isn’t connected");
   });
 
@@ -461,7 +461,7 @@ describe("binding remote Sessions (VC-713)", () => {
   it("says an older host's Sessions are not available, once, and asks it nothing until its link changes (B3)", async () => {
     const options = deps();
     const bound = bindRemoteSessions(options);
-    chatTransportFor("remote");
+    sessionDoorFor("remote").transport();
     const listing = workspaces.get("remote")!.listing;
     expect(sessionListingReaderForProject("remote")).toBe(listing);
     notGranted.get("remote")!();
@@ -500,7 +500,7 @@ describe("binding remote Sessions (VC-713)", () => {
     notGranted.get("remote")!();
     expect(availability.getState().unavailable).toEqual({});
     // Refused and the binding stops: the state goes too.
-    chatTransportFor("other");
+    sessionDoorFor("other").transport();
     notGranted.get("other")!();
     bound.stop();
     expect(availability.getState().unavailable).toEqual({});

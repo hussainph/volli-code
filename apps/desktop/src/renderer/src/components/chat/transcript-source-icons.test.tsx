@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import type { IpcEvent, IpcRequest, IpcResponse } from "@volli/host-protocol/ipc";
 import type { SourceIconsSnapshot } from "@volli/shared";
 import { createSessionRpcClient, type SessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
-import { sourceIconsFor, sessionPictureFor } from "@renderer/chat/transport";
+import { sessionDoorFor, type SessionDoor } from "@renderer/chat/transport";
 import { forgetBrowserPictures } from "@renderer/components/browser/browser-tab-card";
 import { readCodeModePicture } from "./code-mode-output-model";
 import { PresentedToolRow } from "./presented-tool-row";
@@ -98,12 +98,12 @@ function reader(sessionId: string) {
   return {
     picture: async ({ pictureId }: { pictureId: string }) => ({
       ok: true as const,
-      dataUrl: await readCodeModePicture(sessionPictureFor("project"), sessionId, pictureId),
+      dataUrl: await readCodeModePicture(sessionDoorFor("project").picture(), sessionId, pictureId),
     }),
   };
 }
 function render(
-  api: ReturnType<typeof sourceIconsFor>,
+  api: ReturnType<SessionDoor["sourceIcons"]>,
   picture = reader("session"),
   origins = [ORIGIN],
   sessionId = "session",
@@ -145,11 +145,11 @@ const icon = (pictureId: string | null): SourceIconsSnapshot["icons"] => [
   { origin: ORIGIN, pictureId, registrableDomain: "example.org" },
 ];
 
-/** Real sourceIconsFor + real IPC link/codec + Session-bound chunk reader, not a fake watch. */
+/** Real sessionDoorFor(...).sourceIcons() + real IPC link/codec + Session-bound chunk reader, not a fake watch. */
 describe("transcript icon receiving integration", () => {
   it("keeps a PSL letter on miss, reads cached bytes through the Session path, and drops expired pixels", async () => {
     const wire = bridge();
-    const api = sourceIconsFor("project");
+    const api = sessionDoorFor("project").sourceIcons();
     const picture = reader("session");
     render(api, picture);
     await flush();
@@ -179,7 +179,7 @@ describe("transcript icon receiving integration", () => {
 
   it("holds one bounded observer across reordered, duplicate and freshly allocated origin arrays", async () => {
     const wire = bridge();
-    const api = sourceIconsFor("project");
+    const api = sessionDoorFor("project").sourceIcons();
     const picture = reader("session");
     const origins = Array.from({ length: 50 }, (_, index) => `https://source-${index}.example.org`);
     render(api, picture, [
@@ -201,7 +201,7 @@ describe("transcript icon receiving integration", () => {
 
   it("cancels before host setup and rejects a late acknowledgement and emission", async () => {
     const wire = bridge();
-    render(sourceIconsFor("project"));
+    render(sessionDoorFor("project").sourceIcons());
     await flush();
     stop();
     wire.emit(icon("late"));
@@ -214,7 +214,7 @@ describe("transcript icon receiving integration", () => {
 
   it("does not set up a watch if unmounted in the same turn", async () => {
     const wire = bridge();
-    render(sourceIconsFor("project"));
+    render(sessionDoorFor("project").sourceIcons());
     stop();
     await flush();
     expect(wire.requests).toHaveLength(0);
@@ -222,18 +222,18 @@ describe("transcript icon receiving integration", () => {
 
   it("falls back for an old host and never borrows this Mac for cloud or remote Sessions", async () => {
     const wire = bridge();
-    render(sourceIconsFor("project"));
+    render(sessionDoorFor("project").sourceIcons());
     await flush();
     wire.old();
     await flush();
     expect(container.querySelector("img")).toBeNull();
     expect(container.querySelector(".transcript-identity")?.textContent).toBe("?");
     state.cloud = true;
-    render(sourceIconsFor("project"));
+    render(sessionDoorFor("project").sourceIcons());
     await flush();
     state.cloud = false;
     state.remote = true;
-    render(sourceIconsFor("project"));
+    render(sessionDoorFor("project").sourceIcons());
     await flush();
     expect(wire.requests.filter((request) => request.path === "sourceIcons.watch")).toHaveLength(1);
     expect(wire.requests.filter((request) => request.path === "session.picture")).toHaveLength(0);
@@ -241,14 +241,19 @@ describe("transcript icon receiving integration", () => {
 
   it("never flashes a previous Session's pixels while the new subscription is setting up", async () => {
     const wire = bridge();
-    render(sourceIconsFor("project"));
+    render(sessionDoorFor("project").sourceIcons());
     await flush();
     wire.ack("first");
     await flush();
     wire.emit(icon("shared-id"), "first");
     await flush();
     expect(container.querySelector("img")).not.toBeNull();
-    render(sourceIconsFor("project"), reader("other-session"), [ORIGIN], "other-session");
+    render(
+      sessionDoorFor("project").sourceIcons(),
+      reader("other-session"),
+      [ORIGIN],
+      "other-session",
+    );
     expect(container.querySelector("img")).toBeNull();
     wire.emit(icon("shared-id"), "first");
     await flush();
@@ -267,7 +272,7 @@ describe("transcript icon receiving integration", () => {
 
   it("does not retry a broken cached image or accept an unsolicited origin", async () => {
     const wire = bridge();
-    render(sourceIconsFor("project"));
+    render(sessionDoorFor("project").sourceIcons());
     await flush();
     wire.ack();
     await flush();
