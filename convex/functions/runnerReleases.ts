@@ -232,12 +232,26 @@ export const apply = internalMutation({
   },
 });
 
+/** The pinned test backend (the only deployment that sets `VOLLI_TEST_JWKS`;
+ * no cloud deployment may) never reads the live feed: its runners report test
+ * versions such as `0.3.0-test`, and a floor taken from whatever was last
+ * published would mark them `upgrade_required` mid-suite (VC-1263).
+ */
+function testDeployment(): boolean {
+  try {
+    return Boolean(process.env["VOLLI_TEST_JWKS"]);
+  } catch {
+    return false;
+  }
+}
+
 /** Called every 15 minutes. Conditional requests are per page, so an edit to
  * an older release is noticed even when page one's ETag did not change.
  */
 export const poll = internalAction({
   args: {},
   handler: async (ctx): Promise<null> => {
+    if (testDeployment()) return null;
     const repo = releaseRepo();
     const cached = await ctx.runQuery(internal.runnerReleases.cache, { repo });
     const pages: CachedPage[] = [];
