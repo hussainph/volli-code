@@ -35,8 +35,8 @@ import type { BoardApi } from "@renderer/lib/board-api";
 import type { BoardSource, CreateFields, UpdateFields } from "./board-source";
 import { writeThrough } from "./mutate";
 
-/** The subset of the preload API this Mac's board writes need — narrow and fake-able for tests. */
-export interface BoardGateway {
+/** The subset of the preload API this Mac's board writes need. */
+interface BoardGateway {
   createTicket(input: {
     projectId: string;
     status: TicketStatus;
@@ -106,7 +106,7 @@ const windowBoardGateway: BoardGateway = {
  * The per-surface door over `window.api`'s own functions, untouched, each
  * read when called.
  */
-function windowBoardApi(): BoardApi {
+export function windowBoardApi(): BoardApi {
   return {
     tickets: {
       events: (input) => window.api.tickets.events(input),
@@ -190,12 +190,11 @@ export class LocalBoardSource implements BoardSource {
   readonly deliversOwnRows = false;
   readonly api: BoardApi = windowBoardApi();
   readonly #view: LocalBoardView;
-  readonly #gateway: BoardGateway;
+  readonly #gateway: BoardGateway = windowBoardGateway;
   readonly #moveLanes = new Map<string, MoveLane>();
 
-  constructor(view: LocalBoardView, gateway: BoardGateway = windowBoardGateway) {
+  constructor(view: LocalBoardView) {
     this.#view = view;
-    this.#gateway = gateway;
   }
 
   /** This Mac's database always holds its boards: there is nothing to start following. */

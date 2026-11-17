@@ -197,12 +197,22 @@ describe("this Mac's board source", () => {
 
   it("writes nothing for a ticket or label it cannot find, or a change that changes nothing", async () => {
     const gateway = {
-      setTicketPriority: vi.fn(),
-      setLabelColor: vi.fn(),
-      archiveTicket: vi.fn(),
-      updateTicket: vi.fn(),
+      setPriority: vi.fn(),
+      setColor: vi.fn(),
+      archive: vi.fn(),
+      update: vi.fn(),
     };
-    const source = new LocalBoardSource(memoryView([ticket("a")]), gateway as never);
+    vi.stubGlobal("window", {
+      api: {
+        tickets: {
+          setPriority: gateway.setPriority,
+          archive: gateway.archive,
+          update: gateway.update,
+        },
+        labels: { setColor: gateway.setColor },
+      },
+    });
+    const source = new LocalBoardSource(memoryView([ticket("a")]));
     await source.setPriority("p1", "nowhere", "high");
     await source.setPriority("p1", "a", "medium");
     await source.setPriority("gone", "a", "high");

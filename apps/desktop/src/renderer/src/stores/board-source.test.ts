@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import type { BoardApi } from "@renderer/lib/board-api";
 import { LOCAL_LAUNCH } from "@volli/shared";
 
 import { startBoardProtocol, stopBoardProtocol } from "@renderer/lib/board-protocol";
@@ -8,7 +9,6 @@ import {
   boardSourceForComment,
   boardSourceForTicket,
   cloudBoardSource,
-  deliveringBoardSource,
   installCloudBoardSource,
   installLocalBoardSource,
   type BoardRowSource,
@@ -64,24 +64,55 @@ describe("where a project's board goes (VC-889, VC-1260)", () => {
     expect(boardSourceForComment("c")).toBe(local);
   });
 
-  it("answers this Mac's door before the board store loads, and refuses its writes loudly", async () => {
+  it("answers this Mac's door before the board store loads, and refuses every row call before any IPC", async () => {
+    const board = new Proxy({} as Record<string, ReturnType<typeof vi.fn>>, {
+      get: (calls, name: string) => (calls[name] ??= vi.fn(async () => ({ ok: true }))),
+    });
+    vi.stubGlobal("window", { api: { tickets: board, labels: board, comments: board } });
     vi.resetModules();
     const fresh = await import("./board-source");
     const source = fresh.boardSourceFor("p1");
-    expect(source).toBeInstanceOf((await import("./local-board-source")).LocalBoardSource);
     expect(fresh.boardSourceFor("p2")).toBe(source);
-    expect(() => source.projectOf("t")).toThrow("The board store has not loaded");
-    await expect(source.archiveTicket("p1", "t")).rejects.toThrow("The board store has not loaded");
+    expect(source.deliversOwnRows).toBe(false);
+    const archived = { id: "t" } as never;
+    const rowCalls: (() => unknown)[] = [
+      () => source.follows("p1"),
+      () => source.projectOf("t"),
+      () => source.open("p1"),
+      () => source.close("p1"),
+      () => source.closeAll(),
+      () => source.adoptBody("t", "b"),
+      () => source.createTicket("p1", { status: "todo", title: "T" }),
+      () => source.moveTicket("p1", "t", "doing", 0),
+      () => source.moveTickets("p1", ["t"], "doing", 0),
+      () => source.setPriority("p1", "t", "high"),
+      () => source.updateTicket("p1", { ticketId: "t", title: "T" }),
+      () => source.setLabels("p1", "t", ["bug"]),
+      () => source.setLabelColor("p1", "l", null),
+      () => source.archiveTicket("p1", "t"),
+      () => source.unarchiveTicket("p1", archived),
+      () => source.deleteTicket("p1", "t"),
+      () => source.archivedTickets("p1"),
+    ];
+    for (const call of rowCalls) expect(call).toThrow("The board store has not loaded");
+    expect(Object.keys(board)).toEqual([]);
+    // The per-surface door needs no store.
+    await source.api.comments.list({ ticketId: "t" });
+    expect(Object.keys(board)).toEqual(["list"]);
+    vi.unstubAllGlobals();
   });
 
   it("is the protocol engine's for a remote host's project, or one it still follows", () => {
-    const { sync, source, commentTickets } = startBoardProtocol({
+    const { sync, commentTickets } = startBoardProtocol({
       view: silentView(),
       client: {} as never,
     });
     expect(boardSourceFor("mine")).toBe(local);
     expect(boardSourceFor(undefined)).toBe(local);
     const undo = remoteProject("remote");
+    const source = boardSourceFor("remote");
+    expect(source).not.toBe(local);
+    expect(source.deliversOwnRows).toBe(true);
     expect(boardSourceFor("remote")).toBe(source);
     undo();
     vi.spyOn(sync, "follows").mockImplementation((id) => id === "left");
@@ -123,6 +154,7 @@ describe("where a project's board goes (VC-889, VC-1260)", () => {
 
 describe("a source that delivers its own rows", () => {
   it("hands every row call to its row source as made, and moves one card as a one-card group", async () => {
+    adoptLaunch({ store: "cloud", userId: "u", backendUrl: "http://127.0.0.1:1" });
     const calls: unknown[][] = [];
     const rows = new Proxy({} as BoardRowSource, {
       get:
@@ -132,10 +164,11 @@ describe("a source that delivers its own rows", () => {
           return name === "follows" ? true : undefined;
         },
     });
-    const api = {} as never;
-    const source = deliveringBoardSource(rows, api);
+    installCloudBoardSource(rows as never);
+    const source = boardSourceFor("p");
     expect(source.deliversOwnRows).toBe(true);
-    expect(source.api).toBe(api);
+    const api: BoardApi = source.api;
+    expect(api.projects.update).toBeTypeOf("function");
 
     const archived = { id: "a" } as never;
     expect(source.follows("p")).toBe(true);

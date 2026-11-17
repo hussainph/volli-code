@@ -17,7 +17,6 @@ import {
   planningChangeAffects,
   preserveIdentities,
 } from "./board";
-import type { BoardGateway } from "./local-board-source";
 import { startBoardProtocol, stopBoardProtocol } from "@renderer/lib/board-protocol";
 import type { BoardSyncTransport } from "./board-sync";
 import { useChatSessionsStore } from "./chat-sessions";
@@ -79,6 +78,23 @@ function archivedTicket(
   overrides: Partial<ArchivedTicket> & { status: TicketStatus },
 ): ArchivedTicket {
   return { ...ticket(overrides), archivedAt: overrides.archivedAt ?? 0 };
+}
+
+type Api = Window["api"];
+
+/** The `window.api` board calls this Mac's board source makes, by the store's names for them. */
+interface BoardGateway {
+  createTicket: Api["tickets"]["create"];
+  moveTicket: Api["tickets"]["move"];
+  moveTickets: Api["tickets"]["moveMany"];
+  setTicketPriority: Api["tickets"]["setPriority"];
+  updateTicket: Api["tickets"]["update"];
+  setLabels: Api["tickets"]["setLabels"];
+  setLabelColor: Api["labels"]["setColor"];
+  archiveTicket: Api["tickets"]["archive"];
+  unarchiveTicket: Api["tickets"]["unarchive"];
+  deleteTicket: Api["tickets"]["delete"];
+  listArchived: Api["tickets"]["listArchived"];
 }
 
 /** A fake in-memory gateway implementing BoardGateway's result unions, controllable per test. */
@@ -144,12 +160,34 @@ function fakeGateway(overrides: Partial<BoardGateway> = {}): BoardGateway {
 }
 
 /**
- * A board store with this Mac's board (the local IPC adapter) over `gateway`
- * behind it — by default `window.api`, as the app's own store has.
+ * A board store with this Mac's board (the local IPC adapter) behind it, as
+ * the app's own store has; with a `gateway`, `window.api`'s board calls are
+ * it (beside whatever else the test stubbed there).
  */
 function localStore(gateway?: BoardGateway) {
+  if (gateway !== undefined) {
+    const current = (globalThis as { window?: { api?: Partial<Api> } }).window?.api ?? {};
+    vi.stubGlobal("window", {
+      api: {
+        ...current,
+        tickets: {
+          create: (input: never) => gateway.createTicket(input),
+          move: (input: never) => gateway.moveTicket(input),
+          moveMany: (input: never) => gateway.moveTickets(input),
+          setPriority: (input: never) => gateway.setTicketPriority(input),
+          update: (input: never) => gateway.updateTicket(input),
+          setLabels: (input: never) => gateway.setLabels(input),
+          archive: (input: never) => gateway.archiveTicket(input),
+          unarchive: (input: never) => gateway.unarchiveTicket(input),
+          delete: (input: never) => gateway.deleteTicket(input),
+          listArchived: (projectId: string) => gateway.listArchived(projectId),
+        },
+        labels: { setColor: (input: never) => gateway.setLabelColor(input) },
+      },
+    });
+  }
   const store = createBoardStore();
-  installLocalBoard(store, gateway);
+  installLocalBoard(store);
   return store;
 }
 

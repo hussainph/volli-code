@@ -36,12 +36,7 @@ import { killTicketSessions } from "@renderer/terminal/session-lifecycle";
 
 import { boardSourceFor, installLocalBoardSource, type BoardSource } from "./board-source";
 import { useChatSessionsStore } from "./chat-sessions";
-import {
-  LocalBoardSource,
-  restoreAt,
-  type BoardGateway,
-  type LocalBoardView,
-} from "./local-board-source";
+import { LocalBoardSource, restoreAt, type LocalBoardView } from "./local-board-source";
 
 /**
  * The scope of the last planning refresh the board published — see
@@ -453,7 +448,7 @@ function withoutMark(
 }
 
 /** A board store: the singleton below, or a test's. */
-export type BoardStore = ReturnType<typeof createBoardStore>;
+type BoardStore = ReturnType<typeof createBoardStore>;
 
 /**
  * The board store's slices as this Mac's board writes paint and reconcile
@@ -505,9 +500,12 @@ function localBoardView(
   };
 }
 
-/** Puts this Mac's board, over its own IPC (or a test's `gateway`), behind `store`'s slices. */
-export function installLocalBoard(store: BoardStore, gateway?: BoardGateway): void {
-  installLocalBoardSource(new LocalBoardSource(localBoardView(store), gateway));
+/**
+ * Puts this Mac's board, over its own IPC, behind `store`'s slices: the app's
+ * store below, at module load (a test's own store the same way).
+ */
+export function installLocalBoard(store: BoardStore): void {
+  installLocalBoardSource(new LocalBoardSource(localBoardView(store)));
 }
 
 /**

@@ -7,7 +7,7 @@
  *   ({@link ConvexBoardSource}, `cloud-board/source.ts`).
  * - **A local launch:** a project a remote host serves (VC-711, flag on,
  *   until that host model is retired) goes through the board protocol's sync
- *   engine (`board-sync.ts`, wrapped in `lib/board-protocol.ts`); every other
+ *   engine (`board-sync.ts`, with `lib/board-protocol.ts`'s door); every other
  *   project is this Mac's, over its own IPC (`local-board-source.ts`), with
  *   the `cloud` flag on as with it off.
  *
@@ -24,13 +24,13 @@ import type {
 } from "@volli/shared";
 
 import type { BoardApi } from "@renderer/lib/board-api";
-import { boardProtocol } from "@renderer/lib/board-protocol";
+import { boardProtocol, protocolBoardApi } from "@renderer/lib/board-protocol";
 import { cloudBoardApi } from "@renderer/lib/cloud-board-api";
 
 import type { BoardSync } from "./board-sync";
 import type { ConvexBoardSource } from "./cloud-board/source";
 import { launchStore } from "./launch";
-import { LocalBoardSource } from "./local-board-source";
+import { windowBoardApi } from "./local-board-source";
 import { projectPlaceNow } from "./project-place";
 
 /** A ticket's create fields, as `addTicket` hands them over. */
@@ -124,7 +124,7 @@ function composeBoardSource(
  * A source that delivers its own rows (the sync engine, Volli Cloud's),
  * with `api` as its door: one card's move is a one-card group.
  */
-export function deliveringBoardSource(rows: BoardRowSource, api: BoardApi): BoardSource {
+function deliveringBoardSource(rows: BoardRowSource, api: BoardApi): BoardSource {
   return composeBoardSource(rows, {
     deliversOwnRows: true,
     api,
@@ -146,20 +146,52 @@ const storeNotLoaded = (): never => {
 };
 
 /**
- * This Mac's board. Until the board store installs its own, its door still
- * answers (it needs no store), and a write fails loudly.
+ * This Mac's board before the board store installs its own: the per-surface
+ * door answers (it needs no store), and every row call throws at once, so
+ * nothing reaches main from a store that is not there.
  */
+const unloadedRows: BoardRowSource = {
+  follows: storeNotLoaded,
+  projectOf: storeNotLoaded,
+  open: storeNotLoaded,
+  close: storeNotLoaded,
+  closeAll: storeNotLoaded,
+  adoptBody: storeNotLoaded,
+  createTicket: storeNotLoaded,
+  moveTickets: storeNotLoaded,
+  setPriority: storeNotLoaded,
+  updateTicket: storeNotLoaded,
+  setLabels: storeNotLoaded,
+  setLabelColor: storeNotLoaded,
+  archiveTicket: storeNotLoaded,
+  unarchiveTicket: storeNotLoaded,
+  deleteTicket: storeNotLoaded,
+  archivedTickets: storeNotLoaded,
+};
+
+/** This Mac's board (until the store loads, {@link unloadedRows} under its door). */
 function local(): BoardSource {
-  localSource ??= new LocalBoardSource({
-    tickets: storeNotLoaded,
-    setTickets: storeNotLoaded,
-    reconcileTickets: storeNotLoaded,
-    labels: storeNotLoaded,
-    reconcileLabels: storeNotLoaded,
-    findTicket: storeNotLoaded,
-    markBodyLoaded: storeNotLoaded,
+  localSource ??= composeBoardSource(unloadedRows, {
+    deliversOwnRows: false,
+    api: windowBoardApi(),
+    moveTicket: storeNotLoaded,
   });
   return localSource;
+}
+
+type ActiveProtocol = NonNullable<ReturnType<typeof boardProtocol>>;
+
+/** The protocol engine's board source, one per start of the protocol path. */
+const protocolSources = new WeakMap<ActiveProtocol, BoardSource>();
+
+function protocolSource(protocol: ActiveProtocol): BoardSource {
+  let source = protocolSources.get(protocol);
+  if (source === undefined) {
+    const { clientFor, sync, commentTickets } = protocol;
+    source = deliveringBoardSource(sync, protocolBoardApi(clientFor, sync, commentTickets));
+    protocolSources.set(protocol, source);
+  }
+  return source;
 }
 
 let cloudSource: ConvexBoardSource | null = null;
@@ -169,7 +201,8 @@ let awaitingCloud: BoardSource | null = null;
 /** Boot's one call in a cloud launch: the source every project's board goes through. */
 export function installCloudBoardSource(source: ConvexBoardSource | null): void {
   cloudSource = source;
-  cloudBoard = source === null ? null : deliveringBoardSource(source, cloudBoardApi());
+  cloudBoard =
+    source === null ? null : deliveringBoardSource(source, cloudBoardApi(cloudBoardSource));
 }
 
 /** The cloud launch's board source, once boot installed it; `null` otherwise. */
@@ -188,7 +221,7 @@ function cloudBoardNow(): BoardSource {
     const rows = local();
     awaitingCloud = composeBoardSource(rows, {
       deliversOwnRows: rows.deliversOwnRows,
-      api: cloudBoardApi(),
+      api: cloudBoardApi(cloudBoardSource),
       moveTicket: (projectId, ticketId, toStatus, toIndex, choice) =>
         rows.moveTicket(projectId, ticketId, toStatus, toIndex, choice),
     });
@@ -208,7 +241,7 @@ export function boardSourceFor(projectId: string | null | undefined): BoardSourc
   // A board the engine still follows stays its own until it is closed, even
   // once its host's claim has gone.
   return protocol.sync.follows(projectId) || projectPlaceNow(projectId) === "remote-host"
-    ? protocol.source
+    ? protocolSource(protocol)
     : local();
 }
 
@@ -217,7 +250,7 @@ export function boardSourceForTicket(ticketId: string): BoardSource {
   if (launchStore() === "cloud") return cloudBoardNow();
   const protocol = boardProtocol();
   return protocol !== null && protocol.sync.projectOf(ticketId) !== undefined
-    ? protocol.source
+    ? protocolSource(protocol)
     : local();
 }
 
@@ -228,6 +261,6 @@ export function boardSourceForComment(commentId: string): BoardSource {
   if (protocol === null) return local();
   const ticketId = protocol.commentTickets.get(commentId);
   return ticketId !== undefined && protocol.sync.projectOf(ticketId) !== undefined
-    ? protocol.source
+    ? protocolSource(protocol)
     : local();
 }

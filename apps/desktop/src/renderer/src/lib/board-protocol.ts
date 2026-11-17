@@ -33,7 +33,6 @@ import { hostLinkTrpcLink } from "@volli/host-protocol/client-link";
 import type { BoardRouter } from "@volli/session-rpc";
 
 import type { BoardApi } from "./board-api";
-import { deliveringBoardSource, type BoardSource } from "../stores/board-source";
 import { isRemoteProject, useHostConnectionStore } from "../stores/host-connection";
 import { relayHostLink } from "./relay-host-link";
 import { sessionRpcClient } from "./session-rpc-ipc-link";
@@ -136,8 +135,6 @@ interface ActiveProtocol {
   readonly sync: BoardSync;
   /** Which ticket each comment the facade has seen is on: how an edit finds its host. */
   readonly commentTickets: CommentTickets;
-  /** The engine as a board source, with {@link protocolBoardApi} as its door (`board-source.ts`). */
-  readonly source: BoardSource;
 }
 
 let active: ActiveProtocol | null = null;
@@ -177,14 +174,7 @@ export function startBoardProtocol(options: {
     transport: options.sync?.transport ?? transportOf,
     view: options.view,
   });
-  const comments = commentTickets();
-  active = {
-    client,
-    clientFor,
-    sync,
-    commentTickets: comments,
-    source: deliveringBoardSource(sync, protocolBoardApi(clientFor, sync, comments)),
-  };
+  active = { client, clientFor, sync, commentTickets: commentTickets() };
   return active;
 }
 
