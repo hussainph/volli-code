@@ -3,14 +3,14 @@
  * history, bodies, the sidebar's signals, project settings), in the legacy
  * channels' shapes (VC-565, VC-889).
  *
- * {@link boardApi} routes each call by the place of the project it is for
- * (`stores/project-place.ts`), decided when the call is made:
- *
- * - **a cloud launch:** Volli Cloud's (`cloud-board-api.ts`), for every call;
- * - **a local launch:** `window.api`'s own functions for this Mac's projects,
- *   with the `cloud` flag on as with it off; the board protocol's facade
- *   (`board-protocol.ts`) for a project a remote host serves (VC-711), by the
- *   project, the ticket's project, or a comment's ticket.
+ * {@link boardApi} sends each call to the door of the board source
+ * (`stores/board-source.ts`) of the project it is for, decided when the call
+ * is made: by the project, the ticket's project, or a comment's ticket.
+ * Volli Cloud's door in a cloud launch (`cloud-board-api.ts`); in a local
+ * launch, the board protocol's facade (`board-protocol.ts`) for a project a
+ * remote host serves (VC-711), and `window.api`'s own functions
+ * (`stores/local-board-source.ts`) for this Mac's, with the `cloud` flag on
+ * as with it off.
  */
 import type { ModelSelection } from "@volli/shared";
 
@@ -25,10 +25,11 @@ import type {
   TicketLatestSignalsResult,
   TicketStatusEntriesResult,
 } from "../../../ipc/contract";
-import { launchStore } from "../stores/launch";
-import { boardSourceFor } from "../stores/board-source";
-import { boardProtocol, protocolBoardApi } from "./board-protocol";
-import { cloudBoardApi } from "./cloud-board-api";
+import {
+  boardSourceFor,
+  boardSourceForComment,
+  boardSourceForTicket,
+} from "../stores/board-source";
 
 /** The board surfaces' reads and writes, in the legacy channels' shapes. */
 export interface BoardApi {
@@ -66,88 +67,40 @@ export interface BoardApi {
   };
 }
 
-/**
- * The legacy door: `window.api`'s own functions, untouched, each read when
- * called (a door built for a remote host's call never touches `window.api`).
- */
-export function legacyBoardApi(): BoardApi {
+/** Each call to the door its project, ticket or comment names. */
+export function routedBoardApi(doors: {
+  forProject(projectId: string): BoardApi;
+  forTicket(ticketId: string): BoardApi;
+  forComment(commentId: string): BoardApi;
+}): BoardApi {
+  const { forProject, forTicket, forComment } = doors;
   return {
     tickets: {
-      events: (input) => window.api.tickets.events(input),
-      body: (input) => window.api.tickets.body(input),
-      latestSignals: (input) => window.api.tickets.latestSignals(input),
-      statusEntries: (input) => window.api.tickets.statusEntries(input),
+      events: (input) => forTicket(input.ticketId).tickets.events(input),
+      body: (input) => forTicket(input.ticketId).tickets.body(input),
+      latestSignals: (input) => forProject(input.projectId).tickets.latestSignals(input),
+      statusEntries: (input) => forProject(input.projectId).tickets.statusEntries(input),
     },
     comments: {
-      list: (input) => window.api.comments.list(input),
-      create: (input) => window.api.comments.create(input),
-      update: (input) => window.api.comments.update(input),
-      remove: (input) => window.api.comments.remove(input),
+      list: (input) => forTicket(input.ticketId).comments.list(input),
+      create: (input) => forTicket(input.ticketId).comments.create(input),
+      update: (input) => forComment(input.commentId).comments.update(input),
+      remove: (input) => forComment(input.commentId).comments.remove(input),
     },
     projects: {
-      update: (input) => window.api.projects.update(input),
-      setSkillModes: (input) => window.api.projects.setSkillModes(input),
-      setSessionDefaults: (input) => window.api.projects.setSessionDefaults(input),
-      checkFolder: (projectId) => window.api.projects.checkFolder(projectId),
+      update: (input) => forProject(input.id).projects.update(input),
+      setSkillModes: (input) => forProject(input.id).projects.setSkillModes(input),
+      setSessionDefaults: (input) => forProject(input.id).projects.setSessionDefaults(input),
+      checkFolder: (projectId) => forProject(projectId).projects.checkFolder(projectId),
     },
   };
 }
 
-/**
- * Each call to whichever of two doors its project's place names: `remote`
- * when `isRemote` says the project (a ticket's, a comment's ticket's) is a
- * remote host's, `local` otherwise.
- */
-export function routedBoardApi(
-  local: BoardApi,
-  remote: BoardApi,
-  places: {
-    projectIsRemote(projectId: string): boolean;
-    ticketIsRemote(ticketId: string): boolean;
-    commentIsRemote(commentId: string): boolean;
-  },
-): BoardApi {
-  const byProject = (projectId: string) => (places.projectIsRemote(projectId) ? remote : local);
-  const byTicket = (ticketId: string) => (places.ticketIsRemote(ticketId) ? remote : local);
-  const byComment = (commentId: string) => (places.commentIsRemote(commentId) ? remote : local);
-  return {
-    tickets: {
-      events: (input) => byTicket(input.ticketId).tickets.events(input),
-      body: (input) => byTicket(input.ticketId).tickets.body(input),
-      latestSignals: (input) => byProject(input.projectId).tickets.latestSignals(input),
-      statusEntries: (input) => byProject(input.projectId).tickets.statusEntries(input),
-    },
-    comments: {
-      list: (input) => byTicket(input.ticketId).comments.list(input),
-      create: (input) => byTicket(input.ticketId).comments.create(input),
-      update: (input) => byComment(input.commentId).comments.update(input),
-      remove: (input) => byComment(input.commentId).comments.remove(input),
-    },
-    projects: {
-      update: (input) => byProject(input.id).projects.update(input),
-      setSkillModes: (input) => byProject(input.id).projects.setSkillModes(input),
-      setSessionDefaults: (input) => byProject(input.id).projects.setSessionDefaults(input),
-      checkFolder: (projectId) => byProject(projectId).projects.checkFolder(projectId),
-    },
-  };
-}
-
-/** The board surfaces' door, routed by each call's project (module comment). */
+/** The board surfaces' door, routed by each call's board source (module comment). */
 export function boardApi(): BoardApi {
-  if (launchStore() === "cloud") return cloudBoardApi();
-  const protocol = boardProtocol();
-  if (protocol === null) return legacyBoardApi();
-  const { sync, commentTickets } = protocol;
-  return routedBoardApi(
-    legacyBoardApi(),
-    protocolBoardApi(protocol.clientFor, sync, commentTickets),
-    {
-      projectIsRemote: (projectId) => boardSourceFor(projectId) !== null,
-      ticketIsRemote: (ticketId) => sync.projectOf(ticketId) !== undefined,
-      commentIsRemote: (commentId) => {
-        const ticketId = commentTickets.get(commentId);
-        return ticketId !== undefined && sync.projectOf(ticketId) !== undefined;
-      },
-    },
-  );
+  return routedBoardApi({
+    forProject: (projectId) => boardSourceFor(projectId).api,
+    forTicket: (ticketId) => boardSourceForTicket(ticketId).api,
+    forComment: (commentId) => boardSourceForComment(commentId).api,
+  });
 }

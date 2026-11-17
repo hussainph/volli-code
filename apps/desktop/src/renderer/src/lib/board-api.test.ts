@@ -1,11 +1,14 @@
 /**
- * The board's per-surface door (VC-889): `window.api`'s own functions for
- * this Mac's projects, the protocol facade for a remote host's, and Volli
- * Cloud's in a cloud launch, each call routed by its project.
+ * The board's per-surface door (VC-889, VC-1260): each call goes to the door
+ * of its project's board source — `window.api`'s own functions for this Mac's
+ * projects, the protocol facade for a remote host's, and Volli Cloud's in a
+ * cloud launch.
  */
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { LOCAL_LAUNCH } from "@volli/shared";
 
+import { installCloudBoardSource } from "@renderer/stores/board-source";
+import { ConvexBoardSource } from "@renderer/stores/cloud-board/source";
 import { adoptLaunch } from "@renderer/stores/launch";
 import { boardApi, routedBoardApi, type BoardApi } from "./board-api";
 import { startBoardProtocol, stopBoardProtocol } from "./board-protocol";
@@ -15,6 +18,7 @@ vi.mock("./cloud-client", () => ({ cloudSession: () => null }));
 afterEach(() => {
   stopBoardProtocol();
   adoptLaunch(LOCAL_LAUNCH);
+  installCloudBoardSource(null);
   vi.unstubAllGlobals();
 });
 
@@ -117,10 +121,12 @@ function namedDoor(name: string): BoardApi {
 
 describe("routing each call by its project's place", () => {
   it("sends a remote project's, ticket's or comment's call to the remote door, the rest local", async () => {
-    const api = routedBoardApi(namedDoor("local"), namedDoor("remote"), {
-      projectIsRemote: (id) => id === "r",
-      ticketIsRemote: (id) => id === "rt",
-      commentIsRemote: (id) => id === "rc",
+    const local = namedDoor("local");
+    const remote = namedDoor("remote");
+    const api = routedBoardApi({
+      forProject: (id) => (id === "r" ? remote : local),
+      forTicket: (id) => (id === "rt" ? remote : local),
+      forComment: (id) => (id === "rc" ? remote : local),
     });
     expect(
       await Promise.all([
@@ -197,11 +203,36 @@ describe("routing each call by its project's place", () => {
     expect(remove).toHaveBeenCalledTimes(2);
   });
 
-  it("sends everything to Volli Cloud's door in a cloud launch", async () => {
+  it("sends everything to Volli Cloud's door in a cloud launch, before boot installs its source too", async () => {
+    vi.stubGlobal("window", { api: {} });
     adoptLaunch({ store: "cloud", userId: "u", backendUrl: "http://127.0.0.1:1" });
-    expect(await boardApi().tickets.body({ ticketId: "t" })).toEqual({
-      ok: false,
-      error: "Volli Cloud isn’t connected yet.",
+    const notConnected = { ok: false, error: "Volli Cloud isn’t connected yet." };
+    expect(await boardApi().tickets.body({ ticketId: "t" })).toEqual(notConnected);
+    expect(await boardApi().comments.update({ commentId: "c", body: "b" })).toEqual(notConnected);
+    expect(await boardApi().projects.checkFolder("p")).toEqual({
+      ok: true,
+      path: "",
+      state: "present",
+    });
+
+    installCloudBoardSource(
+      new ConvexBoardSource(
+        {
+          paint: vi.fn(),
+          notePlanningChange: vi.fn(),
+          failed: vi.fn(),
+          refused: vi.fn(),
+          unconfirmed: vi.fn(),
+          readOnly: () => null,
+          dropped: vi.fn(),
+        },
+        "user-1",
+      ),
+    );
+    expect(await boardApi().tickets.body({ ticketId: "t" })).toEqual(notConnected);
+    expect(await boardApi().tickets.latestSignals({ projectId: "p" })).toEqual({
+      ok: true,
+      signals: [],
     });
   });
 });

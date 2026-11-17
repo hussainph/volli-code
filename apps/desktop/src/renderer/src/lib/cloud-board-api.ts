@@ -13,8 +13,11 @@
  */
 import type { TicketComment } from "@volli/shared";
 
-import { cloudBoardSource } from "../stores/board-source";
-import { CLOUD_WRITES_UNAVAILABLE, cloudFailure } from "../stores/cloud-board/source";
+import {
+  CLOUD_WRITES_UNAVAILABLE,
+  cloudFailure,
+  type ConvexBoardSource,
+} from "../stores/cloud-board/source";
 import {
   projectComments,
   projectEvents,
@@ -56,7 +59,8 @@ async function read<Answer>(
 const refused = async () => ({ ok: false as const, error: CLOUD_WRITES_UNAVAILABLE });
 const notConnected = () => ({ ok: false as const, error: NOT_CONNECTED });
 
-export function cloudBoardApi(): BoardApi {
+/** Volli Cloud's door, its comment writes through the source `cloudBoardSource` answers. */
+export function cloudBoardApi(cloudBoardSource: () => ConvexBoardSource | null): BoardApi {
   return {
     tickets: {
       events: async ({ ticketId }) => {

@@ -7,7 +7,7 @@ import { getFunctionName } from "convex/server";
 import { api } from "@volli/convex/api";
 
 import type { CloudSession } from "./cloud-client";
-import { KNOWN_COMMENTS_MAX, cloudBoardApi } from "./cloud-board-api";
+import { KNOWN_COMMENTS_MAX, cloudBoardApi as cloudDoor } from "./cloud-board-api";
 
 let session: CloudSession | null = null;
 vi.mock("./cloud-client", () => ({ cloudSession: () => session }));
@@ -18,7 +18,8 @@ const source = {
   removeComment: vi.fn(),
 };
 let installed: typeof source | null = null;
-vi.mock("../stores/board-source", () => ({ cloudBoardSource: () => installed }));
+/** The door over whichever source the test installed. */
+const cloudBoardApi = () => cloudDoor(() => installed as never);
 
 afterEach(() => {
   session = null;

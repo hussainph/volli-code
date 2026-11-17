@@ -1,8 +1,8 @@
 /**
  * The board protocol path (VC-565), which a local launch with `cloud` on
  * keeps for the projects a remote host serves (VC-711) until that host model
- * is retired. This Mac's own projects stay on the legacy per-channel IPC with
- * the flag on as with it off, and a cloud launch's board is Volli Cloud's
+ * is retired. This Mac's own projects stay on their per-channel IPC
+ * (`stores/local-board-source.ts`) with the flag on as with it off, and a cloud launch's board is Volli Cloud's
  * (VC-889, `stores/board-source.ts`).
  *
  * For a board it follows, the board store paints what {@link BoardSync}
@@ -10,7 +10,8 @@
  * the project's change feed keeps it current, and every per-surface board
  * read and write (comments, activity, bodies, project settings, the
  * sidebar's signals) goes through {@link protocolBoardApi}, each write under
- * a fresh `commandId` (`board-api.ts` routes them here).
+ * a fresh `commandId` (`board-api.ts` routes them here, through the
+ * engine's board source).
  *
  * The client is the board router's procedures over either link: the desktop's
  * generic IPC bridge for this Mac's in-process host (`sessionRpcClient()`,
