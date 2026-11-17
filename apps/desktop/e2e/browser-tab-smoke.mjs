@@ -31,10 +31,12 @@ import {
   assertBuiltRendererLoaded,
   assertProfileIsolated,
   createRunner,
+  exitWatchRecord,
   HOME_TAB_STRIP,
   launch,
   makeGitRepo,
   makeScratch,
+  quitEndedByApp,
   REPO,
   tabStrip,
   tabStripChooser,
@@ -634,6 +636,7 @@ const secondUrl = `${fixture.origin}/second`;
 const popupUrl = `${fixture.origin}/popup`;
 
 let app = null;
+let appOutput = "";
 let code = 1;
 
 async function main() {
@@ -644,6 +647,13 @@ async function main() {
     dbPath,
     userDataDir,
     extraEnv: { HOME: scratchHome, VOLLI_BROWSER_PROBE: "1" },
+  });
+  // Main's log, both streams: the quit's exit line says how it ended (check 10).
+  app.process().stdout?.on("data", (chunk) => {
+    appOutput = `${appOutput}${chunk}`.slice(-64000);
+  });
+  app.process().stderr?.on("data", (chunk) => {
+    appOutput = `${appOutput}${chunk}`.slice(-64000);
   });
   await assertProfileIsolated(app, userDataDir);
   // Match the macOS CI work area, including the overflowing top tab strip.
@@ -1262,6 +1272,12 @@ async function main() {
       const exit = await waitForChildExit(child, "clean Browser Tab smoke app exit", {
         timeout: 15000,
       });
+      // Ended by the app: exit 0, or its own exit watch's SIGKILL once
+      // Electron's native teardown outlived the 5 s bound (VC-652). The
+      // watch's record says how long the process lingered either way.
+      const closed = { kind: "graceful", pid: child.pid, exit, closeFailures: [] };
+      const endedByApp = quitEndedByApp(closed, appOutput, { userDataDir });
+      const watch = exitWatchRecord(userDataDir, child.pid);
       await waitUntil(
         "fixture HTTP sockets to drain",
         () => (fixture.openSockets() === 0 ? true : null),
@@ -1270,8 +1286,8 @@ async function main() {
       await fixture.stop();
 
       return {
-        ok: exit.code === 0 && exit.signal === null && fixture.openSockets() === 0,
-        detail: `exit=${exit.code} signal=${exit.signal ?? "none"} sockets=${fixture.openSockets()}`,
+        ok: endedByApp && fixture.openSockets() === 0,
+        detail: `exit=${exit.code} signal=${exit.signal ?? "none"} endedByApp=${endedByApp} watch=${JSON.stringify(watch)} sockets=${fixture.openSockets()}`,
       };
     },
   );
