@@ -151,9 +151,10 @@ function sessionRouteOf(projectId: string | null): SessionRoute {
 }
 
 /**
- * A project's Session door. Ask it at the point of use: the route is decided
- * when the door is asked for, and a remote Workspace is looked up when a
- * capability is.
+ * A project's Session door. The route, host name included, is fixed when this
+ * runs, so ask for a door at the point of use and never hold one across time:
+ * a held door keeps a stale route. A remote Workspace is looked up when a
+ * capability is asked for.
  */
 export function sessionDoorFor(projectId: string | null): SessionDoor {
   const route = sessionRouteOf(projectId);

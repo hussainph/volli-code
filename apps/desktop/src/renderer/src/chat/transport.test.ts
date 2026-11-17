@@ -215,6 +215,9 @@ describe("sessionDoorFor: This Mac and remote hosts (VC-713)", () => {
     expect(
       vi.mocked(window.api.sessionRpc.request).mock.calls.map(([request]) => request.path),
     ).toEqual(["session.picture", "session.command"]);
+    expect(window.api.sessionRpc.request).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "session.picture", input }),
+    );
   });
 
   it("answers a remote project's registered Workspace for every capability, never IPC", async () => {
@@ -254,6 +257,13 @@ describe("sessionDoorFor: This Mac and remote hosts (VC-713)", () => {
     );
     expect(window.api.sessionRpc.request).not.toHaveBeenCalled();
     again();
+    // Once its Workspace is unbound, the same host fails closed, never This Mac's.
+    query.mockClear();
+    await expect(sessionDoorFor("remote").picture()(input)).rejects.toThrow(
+      "hetzner-1 isn’t connected",
+    );
+    expect(query).not.toHaveBeenCalled();
+    expect(window.api.sessionRpc.request).not.toHaveBeenCalled();
   });
 
   it("fails a project known remote closed in the host's name, never over IPC (B1)", async () => {
