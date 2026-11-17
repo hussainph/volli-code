@@ -110,10 +110,11 @@ describe("safeStopMessage", () => {
     expect(safeStopMessage('{"message":"upstream timeout"}')).toBe("upstream timeout");
   });
 
-  it("withholds ambiguous braces and envelopes without request material", () => {
-    expect(safeStopMessage("expected { but found }")).toContain("withheld");
-    expect(safeStopMessage('{"code":400}')).toBe("Provider error (no message stated).");
-    expect(safeStopMessage("not json {")).toContain("withheld");
+  it("reads braces as prose and summarizes envelopes without a sentence", () => {
+    // Braces are punctuation, not evidence of a request (VC-1244).
+    expect(safeStopMessage("expected { but found }")).toBe("expected { but found }");
+    expect(safeStopMessage('{"code":400}')).toBe("Provider error (code 400).");
+    expect(safeStopMessage("not json {")).toBe("not json {");
     // An `error` that is not an object, or one with nothing to say, yields to
     // the top-level sentence; an envelope with neither is not an envelope.
     expect(safeStopMessage('{"error":null,"message":"top-level sentence"}')).toBe(

@@ -22,6 +22,7 @@ export {
   type PiStoredCredential,
 } from "./pi/host-credentials";
 export { createPiAgentRuntime, type PiRuntimeHostOptions } from "./pi/runtime";
+export type { ProviderDiagnosticSink, ProviderFailureDiagnostic } from "./pi/safe-diagnostic";
 export { codeModeSandboxAssetsFrom } from "./codemode/assets";
 export type { CodeModeDetails, CodeModeSandboxAssets } from "./codemode/tool";
 export {

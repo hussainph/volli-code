@@ -259,8 +259,9 @@ const SIGN_IN_STOP = {
 describe("subscription (OAuth) login", () => {
   it("a refresh the token endpoint refuses stops as a sign-in failure, not unknown", async () => {
     // Reproduces the stop that read `unknown` with null type and status: the
-    // refused refresh's sentence embeds the endpoint's JSON body, so its text
-    // is withheld, and no request ever reached the Messages API.
+    // refused refresh's sentence embeds the endpoint's JSON body, which is
+    // read for its error (VC-1244), and no request ever reached the Messages
+    // API. Its stack, and the home-directory paths in it, are cut.
     const { handle, observations } = await session({
       type: "oauth",
       access: SUBSCRIPTION_ACCESS,
@@ -278,14 +279,16 @@ describe("subscription (OAuth) login", () => {
           ...SIGN_IN_STOP.stopDetail,
           providerType: "volli.credential-refresh-failed",
           httpStatus: null,
-          // Only the free text is withheld; the cause above survives it.
-          message: "[Provider text withheld: possible request content.]",
+          message:
+            "OAuth refresh failed for anthropic: Anthropic token refresh request failed. url=[redacted URL] details=Error: HTTP request failed. status=400; url=[redacted URL] body= invalid_grant",
         },
       });
       expect(attention).toMatchObject({ kind: "attention", reason: "auth" });
-      // Nothing from the fixture credential or the endpoint's body leaks.
+      // Neither fixture credential leaks; the endpoint's error code is the
+      // point of the sentence (VC-1244).
       const recorded = JSON.stringify(observations);
-      for (const secret of [SUBSCRIPTION_ACCESS, SUBSCRIPTION_REFRESH, "invalid_grant"]) {
+      expect(recorded).not.toContain("file://");
+      for (const secret of [SUBSCRIPTION_ACCESS, SUBSCRIPTION_REFRESH]) {
         expect(recorded).not.toContain(secret);
       }
     } finally {

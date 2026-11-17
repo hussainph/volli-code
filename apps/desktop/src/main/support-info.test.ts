@@ -28,6 +28,7 @@ import {
   describeCloudRunner,
   describeLastUpdateCheck,
   describePerfStalls,
+  describeProviderFailure,
   registerSupportIpcHandlers,
   type SupportInfoDeps,
 } from "./support-info";
@@ -77,6 +78,42 @@ function invoke(channel: VolliIpcChannel): Promise<unknown> {
   // `ipcMain.handle` hands the event first; the registry appends the sender.
   return Promise.resolve(handler(...([{ sender: {} }] as never[])));
 }
+
+describe("provider failures (VC-1244)", () => {
+  const failure = {
+    at: Date.UTC(2026, 0, 1),
+    provider: "anthropic",
+    model: "claude-fixture",
+    category: "bad-request",
+    httpStatus: 400,
+    raw: '400 {"error":{"message":"messages: text content blocks must be non-empty"}}',
+  } as const;
+
+  it("names when, which model, the category and status, then what the provider said", () => {
+    expect(describeProviderFailure(failure)).toBe(
+      '2026-01-01T00:00:00.000Z anthropic/claude-fixture bad-request 400: 400 {"error":{"message":"messages: text content blocks must be non-empty"}}',
+    );
+    expect(
+      describeProviderFailure({ ...failure, category: "network", httpStatus: null, raw: "reset" }),
+    ).toBe("2026-01-01T00:00:00.000Z anthropic/claude-fixture network: reset");
+  });
+
+  it("adds the failures line only when one failed", () => {
+    const db = testDb();
+    expect(collectSupportInfo(deps({ database: () => db }))).not.toHaveProperty("providerFailures");
+    expect(
+      collectSupportInfo(deps({ database: () => db, providerFailures: () => [] })),
+    ).not.toHaveProperty("providerFailures");
+    const info = collectSupportInfo(
+      deps({ database: () => db, providerFailures: () => [failure, failure] }),
+    );
+    expect(Object.keys(info).toSorted()).toEqual([...ALLOWLIST, "providerFailures"].toSorted());
+    expect(info.providerFailures).toEqual([
+      describeProviderFailure(failure),
+      describeProviderFailure(failure),
+    ]);
+  });
+});
 
 describe("collectSupportInfo", () => {
   it("answers exactly the allowlisted fields", () => {

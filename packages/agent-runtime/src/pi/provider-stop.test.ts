@@ -6,6 +6,7 @@ import {
   safeStopMessage,
   safeProviderMessage,
 } from "./provider-stop";
+import { localProviderDiagnostic } from "./safe-diagnostic";
 import { isTransientTransportFailure } from "./transcript";
 
 const message = (extra: Partial<AssistantMessage> = {}): AssistantMessage => ({
@@ -91,10 +92,11 @@ describe("provider stop facts", () => {
     "keeps a credential that could not be had (ModelsError %s) as a typed sign-in stop",
     async (code, providerType) => {
       // Pi's own sentence for a refused refresh embeds the endpoint's body
-      // between other fields, so it is withheld whole.
+      // between other fields. The body's error is read out of it; a token
+      // the endpoint echoed still redacts (VC-1244).
       const thrown = Object.assign(
         new Error(
-          `OAuth refresh failed for fixture: token refresh request failed. details=Error: HTTP request failed. status=400; body={"error":"invalid_grant"}; stack=Error: HTTP request failed.`,
+          `OAuth refresh failed for fixture: token refresh request failed. details=Error: HTTP request failed. status=400; body={"error":"invalid_grant","refresh_token":"dummy-refresh-1244"}; stack=Error: HTTP request failed.`,
         ),
         { code },
       );
@@ -103,11 +105,13 @@ describe("provider stop facts", () => {
       expect(capture.detail(message({ errorMessage: thrown.message }))).toEqual({
         category: "auth-failed",
         providerType,
-        message: "[Provider text withheld: possible request content.]",
+        message:
+          "OAuth refresh failed for fixture: token refresh request failed. details=Error: HTTP request failed. status=400; body= invalid_grant",
         httpStatus: null,
         retry: "not-retried",
         resetsAt: null,
       });
+      expect(localProviderDiagnostic(thrown.message)).toContain('"refresh_token":"[redacted]"');
     },
   );
 
@@ -286,7 +290,7 @@ describe("provider stop facts", () => {
             '401 {"error":{"type":"invalid_request_error","message":"Wrong key"},"request":{"secret":"private"}}',
         }),
       ),
-    ).toMatchObject({ category: "auth-failed", httpStatus: 401, message: "Wrong key" });
+    ).toMatchObject({ category: "auth-failed", httpStatus: 401, message: "401 Wrong key" });
     expect(
       new ProviderStopCapture().detail(
         message({ errorMessage: "refusal overload auth network context_length_exceeded 429" }),
@@ -300,6 +304,42 @@ describe("provider stop facts", () => {
     expect(new ProviderStopCapture().detail(message({ errorMessage: "{oops}" })).category).toBe(
       "unknown",
     );
+  });
+
+  it("reads an envelope wrapped in SDK prose, keeping the body's own sentence (VC-1244)", () => {
+    expect(
+      new ProviderStopCapture().detail(
+        message({
+          errorMessage:
+            '400 {"error":{"type":"invalid_request_error","message":"bad"}} (request id req_123)',
+        }),
+      ),
+    ).toMatchObject({
+      category: "bad-request",
+      providerType: "invalid_request_error",
+      httpStatus: 400,
+      message: "400 bad (request id req_123)",
+    });
+    expect(
+      new ProviderStopCapture().detail(
+        message({ errorMessage: 'Codex error: {"type":"error","status":400}' }),
+      ),
+    ).toMatchObject({
+      httpStatus: null,
+      message: "Codex error: Provider error (type error, status 400).",
+    });
+    expect(
+      new ProviderStopCapture().detail(
+        message({ errorMessage: '529: {"error":{"type":"overloaded_error"}}' }),
+      ),
+    ).toMatchObject({ category: "provider-overloaded", httpStatus: 529 });
+    // The response this request already read wins over the SDK's restatement.
+    const fetched = new ProviderStopCapture();
+    fetched.response({ status: 400, headers: {} }, 0);
+    fetched.event({ error: { type: "invalid_request_error", message: "from the body" } });
+    expect(
+      fetched.detail(message({ errorMessage: '401 {"error":{"message":"from the SDK"}}' })),
+    ).toMatchObject({ httpStatus: 400, message: "from the body" });
   });
 
   it("accepts direct SDK error bodies and Google's status field", () => {
@@ -347,7 +387,8 @@ describe("provider stop facts", () => {
     expect(detail.providerType!.length).toBeLessThanOrEqual(80);
     for (const secret of ["short", "secret123", "tiny", "abc", "private", "sk-credential"])
       expect(detail.message).not.toContain(secret);
-    expect(safeStopMessage("a plain brace { in text")).toContain("withheld");
+    // A brace is punctuation, not evidence of a request (VC-1244).
+    expect(safeStopMessage("a plain brace { in text")).toBe("a plain brace { in text");
   });
 
   it("keeps only provider-stated retry instants and current-request facts", () => {
@@ -557,7 +598,11 @@ it.each([
     'Rejected request: {"messages":[{"content":"private-request-sentinel"}]}',
     "private-request-sentinel",
   ],
-  ["Request body: private-request-sentinel", "private-request-sentinel"],
+  ["Received request: private-request-sentinel", "private-request-sentinel"],
+  [
+    'Bad input {"model":"x","messages":[{"role":"user","content":"private-request-sentinel"}]',
+    "private-request-sentinel",
+  ],
 ])("withholds secrets and echoed request material in %s", (raw, secret) => {
   expect(safeStopMessage(raw)).not.toContain(secret);
 });

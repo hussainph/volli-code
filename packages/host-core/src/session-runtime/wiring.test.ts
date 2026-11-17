@@ -86,6 +86,7 @@ async function composedHost() {
     completeUtility: async () => {
       throw new Error("wiring test does not complete");
     },
+    recentProviderFailures: () => [],
   });
   return { host: composed, ports, models, root };
 }
